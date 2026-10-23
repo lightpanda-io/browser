@@ -4996,6 +4996,83 @@ test "login: the recorded selectors are filled and submitted without the model" 
     try std.testing.expect(std.mem.find(u8, tree.text, "*****") != null);
 }
 
+test "acceptCookies: the control Jev picks is clicked and the re-read verifies it" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("consent_banner.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    testing.test_app.dropTypesafeClients();
+    defer testing.test_app.dropTypesafeClients();
+    _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
+    defer _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+    // zenai talks std.http, which libcurl's test port remap doesn't reach.
+    const base_url = try aa.printSentinel("http://127.0.0.1:{d}", .{testing.testHttpPort()}, 0);
+    _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
+    defer _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+
+    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
+    // The answer is recorded as a selector, so a replay asks nothing.
+    try std.testing.expect(result.replay_args != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+}
+
+test "login: Jev picks the identifier, the password field and the submit control" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    testing.test_app.dropTypesafeClients();
+    defer testing.test_app.dropTypesafeClients();
+    _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
+    defer _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+    const base_url = try aa.printSentinel("http://127.0.0.1:{d}", .{testing.testHttpPort()}, 0);
+    _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
+    defer _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+
+    // decideOnly, so nothing is typed and the decoy newsletter form is the
+    // only thing that could have been picked by mistake.
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","decideOnly":true}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"usernameSelector\":\"#user\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+}
+
+test "acceptCookies: a missing key is reported so the REPL can ask a model instead" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("consent_banner.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    testing.test_app.dropTypesafeClients();
+    _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+
+    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+    try std.testing.expect(result.is_error);
+    // What `/acceptCookies` reads to fall back to the prompt it used to send.
+    try std.testing.expect(result.needs_api_key);
+    try std.testing.expect(std.mem.find(u8, result.text, zenai.typesafe.env_var_name) != null);
+}
+
 test "login: a passwordSelector that is not a password field is refused" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();

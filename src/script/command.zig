@@ -385,6 +385,15 @@ test "parse: bare prose errors" {
     try testing.expectError(error.NotASlashCommand, Command.parse(arena.allocator(), "goto https://x"));
 }
 
+test "fallbackPrompt: only the tools that ask Jev have a prompt form" {
+    // What the REPL sends when TYPESAFE_API_KEY is not set.
+    try testing.expect(Command.fallbackPrompt(.acceptCookies) != null);
+    try testing.expect(std.mem.find(u8, Command.fallbackPrompt(.login).?, "$LP_") != null);
+    // `logout` is still an LlmCommand, so it never reaches here as a tool.
+    try testing.expectEqual(null, Command.fallbackPrompt(.tree));
+    try testing.expectEqual(null, Command.fallbackPrompt(.classify));
+}
+
 test "parse: /logout is an LLM command, /login and /acceptCookies are tools" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
