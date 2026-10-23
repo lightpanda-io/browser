@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
@@ -43,6 +44,7 @@ _ctrl_key: bool = false,
 _shift_key: bool = false,
 // The touch input dispatched this event for, whose target dispatch retargets.
 _trusted_touch: ?*Touch = null,
+// Each entry holds a ref on its Touch, released in deinit.
 _touches: []const *Touch = &.{},
 _target_touches: []const *Touch = &.{},
 _changed_touches: []const *Touch = &.{},
@@ -77,14 +79,20 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent
 /// active one unless it's being lifted (touchend, touchcancel).
 pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, target: *Element, point: Touch.Point, frame: *Frame) !*TouchEvent {
     const event = try initWithTrusted(typ, _opts, true, frame);
+    // The lists are replaced below, which would leak refs taken on given ones.
+    std.debug.assert(event._touches.len == 0 and event._target_touches.len == 0 and event._changed_touches.len == 0);
+    const one = try event.asEvent()._arena.allocator().alloc(*Touch, 1);
     const touch = try Touch.initTrusted(target.asEventTarget(), point, frame);
-    const lifted = std.mem.eql(u8, typ, "touchend") or std.mem.eql(u8, typ, "touchcancel");
-    const one = try event.asEvent()._arena.allocator().dupe(*Touch, &.{touch});
+    one[0] = touch;
     event._trusted_touch = touch;
     event._changed_touches = one;
+    touch.acquireRef();
+    const lifted = std.mem.eql(u8, typ, "touchend") or std.mem.eql(u8, typ, "touchcancel");
     if (!lifted) {
         event._touches = one;
         event._target_touches = one;
+        touch.acquireRef();
+        touch.acquireRef();
     }
     return event;
 }
@@ -110,8 +118,18 @@ fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Fram
         },
     );
 
+    for ([_][]const *Touch{ event._touches, event._target_touches, event._changed_touches }) |list| {
+        for (list) |touch| touch.acquireRef();
+    }
+
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *TouchEvent, page: *Page) void {
+    for ([_][]const *Touch{ self._touches, self._target_touches, self._changed_touches }) |list| {
+        for (list) |touch| touch.releaseRef(page);
+    }
 }
 
 pub fn asEvent(self: *TouchEvent) *Event {
@@ -205,4 +223,21 @@ test "WebApi: TouchEvent caches its touch lists" {
 
 test "WebApi: TouchEvent" {
     try testing.htmlRunner("event/touch.html", .{});
+}
+
+test "WebApi: TouchEvent releases its touches" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const target = frame.document.getDocumentElement().?;
+
+    const event = try initTrustedWithTouch("touchstart", null, target, .{ .x = 10, .y = 20 }, frame);
+    const touch = event._trusted_touch.?;
+    touch.acquireRef();
+    defer touch.releaseRef(frame.page);
+
+    // One ref per list, plus ours.
+    try testing.expectEqual(4, touch._rc._refs.load(.monotonic));
+    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+    try testing.expectEqual(1, touch._rc._refs.load(.monotonic));
 }

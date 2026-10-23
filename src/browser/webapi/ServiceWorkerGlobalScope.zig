@@ -411,7 +411,7 @@ fn dispatchExtendable(
 fn releasePendingEvent(self: *ServiceWorkerGlobalScope) void {
     const event = self._pending_event orelse return;
     self._pending_event = null;
-    event.releaseRef(self._proto.page);
+    event.asEvent().releaseRef(self._proto.page);
 }
 
 fn setState(self: *ServiceWorkerGlobalScope, state: ServiceWorker.State) void {

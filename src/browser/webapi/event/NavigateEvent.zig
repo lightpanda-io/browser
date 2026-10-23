@@ -117,15 +117,6 @@ pub fn deinit(self: *NavigateEvent, page: *Page) void {
     if (self._form_data) |fd| {
         fd.releaseRef(page);
     }
-    self._proto.deinit(page);
-}
-
-pub fn acquireRef(self: *NavigateEvent) void {
-    self._proto.acquireRef();
-}
-
-pub fn releaseRef(self: *NavigateEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
 }
 
 pub fn asEvent(self: *NavigateEvent) *Event {
