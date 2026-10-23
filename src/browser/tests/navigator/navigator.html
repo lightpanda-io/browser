@@ -182,4 +182,25 @@
   testing.expectEqual(true, navigator.sendBeacon('/analytics'));
   testing.expectEqual(true, navigator.sendBeacon('/analytics', 'payload'));
   testing.expectEqual(true, navigator.sendBeacon('/analytics', new Blob(['x'])));
+  // The URL and data are checked even when beacons aren't sent.
+  testing.expectError('TypeError', () => navigator.sendBeacon('ftp://example.com/'));
+  testing.expectError('TypeError', () => navigator.sendBeacon('data:text/plain,hi'));
+  testing.expectError('TypeError', () => navigator.sendBeacon('http://['));
+  testing.expectError('TypeError', () => navigator.sendBeacon('/analytics', new ReadableStream()));
+  testing.expectEqual(false, navigator.sendBeacon('/analytics', 'x'.repeat(65537)));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', 'x'.repeat(65536)));
 </script>
+
+<script id=sendBeacon-not-sent type=module>
+  // Without --load-resources beacon, nothing is sent.
+  const state = await testing.async();
+  const sent = navigator.sendBeacon('/beacon/store/disabled', 'payload');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const record = await (await fetch('/beacon/read/disabled')).text();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, sent);
+    testing.expectEqual('(missing)', record);
+  });
+</script>
+

@@ -43,6 +43,26 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+// /beacon/store/<id> records the request it gets, /beacon/read/<id> answers
+// "METHOD|content-type|body" for it, or "(missing)". The test HTTP server runs
+// a thread per connection, so access goes through beacon_mutex.
+const BeaconRecord = struct {
+    id: [32]u8 = undefined,
+    id_len: usize = 0,
+    record: [256]u8 = undefined,
+    record_len: usize = 0,
+};
+var beacon_mutex: std.Io.Mutex = .init;
+var beacon_records: [32]BeaconRecord = @splat(.{});
+var beacon_record_count: usize = 0;
+
+fn beaconRecord(id: []const u8) ?*BeaconRecord {
+    for (beacon_records[0..beacon_record_count]) |*r| {
+        if (std.mem.eql(u8, r.id[0..r.id_len], id)) return r;
+    }
+    return null;
+}
+
 fn origin(req: *std.http.Server.Request) ?[]const u8 {
     var it = req.iterateHeaders();
     while (it.next()) |h| {
@@ -67,6 +87,11 @@ pub fn handle(req: *std.http.Server.Request) !void {
         for (&serve_counts) |*sc| sc.count = 0;
         sse_flag.store(false, .release);
         sse_reconnect_hits.store(0, .release);
+        {
+            beacon_mutex.lockUncancelable(lp.io);
+            defer beacon_mutex.unlock(lp.io);
+            beacon_record_count = 0;
+        }
         return req.respond("", .{});
     }
 
@@ -764,6 +789,53 @@ pub fn handle(req: *std.http.Server.Request) !void {
         return req.respond(html, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/beacon/store/")) {
+        // Copied: reading the body invalidates the head's strings.
+        const id = try req_allocator.dupe(u8, path["/beacon/store/".len..]);
+        var content_type: []const u8 = "(missing)";
+        var it = req.iterateHeaders();
+        while (it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "content-type")) content_type = try req_allocator.dupe(u8, h.value);
+        }
+        var body_buf: [4096]u8 = undefined;
+        const body = if (req.head.method.requestHasBody())
+            try (try req.readerExpectContinue(&body_buf)).allocRemaining(req_allocator, .limited(128 * 1024))
+        else
+            "";
+
+        if (id.len <= 32) {
+            beacon_mutex.lockUncancelable(lp.io);
+            defer beacon_mutex.unlock(lp.io);
+            if (beacon_record_count < beacon_records.len) {
+                const r = &beacon_records[beacon_record_count];
+                beacon_record_count += 1;
+                @memcpy(r.id[0..id.len], id);
+                r.id_len = id.len;
+                const shown = body[0..@min(body.len, 64)];
+                const line = std.mem.print(&r.record, "{s}|{s}|{d}|{s}", .{ @tagName(req.head.method), content_type, body.len, shown }) catch "";
+                r.record_len = line.len;
+            }
+        }
+        return req.respond("", .{});
+    }
+
+    if (std.mem.startsWith(u8, path, "/beacon/read/")) {
+        var buf: [256]u8 = undefined;
+        const record = blk: {
+            beacon_mutex.lockUncancelable(lp.io);
+            defer beacon_mutex.unlock(lp.io);
+            const r = beaconRecord(path["/beacon/read/".len..]) orelse break :blk "(missing)";
+            const len = r.record_len;
+            @memcpy(buf[0..len], r.record[0..len]);
+            break :blk buf[0..len];
+        };
+        return req.respond(record, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
             },
         });
     }

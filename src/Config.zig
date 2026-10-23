@@ -231,11 +231,13 @@ pub const HttpVersion = enum {
     @"1.1",
 };
 
-pub const LoadResources = packed struct(u5) {
+pub const LoadResources = packed struct(u6) {
     image: bool = false,
     iframe: bool = false,
     worker: bool = false,
     stylesheet: bool = false,
+    // navigator.sendBeacon sends its request (otherwise it only validates).
+    beacon: bool = false,
     // Only marks the option as given, so `--load-resources none` turns off a
     // mode's default.
     none: bool = false,
@@ -1855,18 +1857,20 @@ test "Config: parseArgs --load-resources defaults stylesheets on for mcp and age
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const cases = [_]struct { argv: []const [*:0]const u8, stylesheet: bool, image: bool }{
+    const cases = [_]struct { argv: []const [*:0]const u8, stylesheet: bool, image: bool, beacon: bool = false }{
         .{ .argv = &.{ "lightpanda", "mcp" }, .stylesheet = true, .image = false },
         .{ .argv = &.{ "lightpanda", "agent", "--no-llm" }, .stylesheet = true, .image = false },
         .{ .argv = &.{ "lightpanda", "fetch", "https://example.com" }, .stylesheet = false, .image = false },
         .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "none" }, .stylesheet = false, .image = false },
         .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "image" }, .stylesheet = false, .image = true },
+        .{ .argv = &.{ "lightpanda", "fetch", "--load-resources", "beacon", "https://example.com" }, .stylesheet = false, .image = false, .beacon = true },
     };
     for (cases) |case| {
         const config = try parseArgs(arena.allocator(), .{ .vector = case.argv });
         const resources = config.loadResources();
         try std.testing.expectEqual(case.stylesheet, resources.stylesheet);
         try std.testing.expectEqual(case.image, resources.image);
+        try std.testing.expectEqual(case.beacon, resources.beacon);
     }
 }
 

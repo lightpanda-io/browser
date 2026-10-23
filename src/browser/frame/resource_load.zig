@@ -28,6 +28,7 @@ const Factory = @import("../Factory.zig");
 const Element = @import("../webapi/Element.zig");
 const image_dimensions = @import("../image_dimensions.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
+const CorsGate = @import("../../network/CorsGate.zig");
 
 const log = lp.log;
 
@@ -109,6 +110,85 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         log.debug(.http, "image fetch", .{ .err = err, .url = resolved });
     };
 }
+
+// A navigator.sendBeacon request: a POST whose response nobody reads. Its body
+// counts against the sending document's keepalive quota, `in_flight`, until it
+// settles.
+// https://w3c.github.io/beacon/#sec-processing-model
+//
+// A keepalive request outlives the document that made it: a beacon sent by an
+// iframe that's then removed still goes out. So the request is owned by the
+// page's main frame, not `frame`, which supplies its origin, referrer and site
+// for cookies, and `in_flight` must outlive `frame` too (it's in the page
+// arena). The owner still attributes it to the main frame in CDP events.
+pub fn beacon(frame: *Frame, in_flight: *usize, url: [:0]const u8, body: []const u8, content_type: ?[]const u8) !void {
+    const root = &frame.page.frame;
+
+    // A body with a Content-Type that isn't CORS-safelisted makes it a CORS
+    // request; anything else (no body, a Blob without a type, ...) is no-cors.
+    const cors = if (content_type) |ct| !CorsGate.isSafelistedHeader("content-type", ct) else false;
+
+    const load = try root._factory.create(BeaconLoad{
+        .root = root,
+        .size = body.len,
+        .in_flight = in_flight,
+    });
+    errdefer root._factory.destroy(load);
+
+    const transfer = try frame._session.browser.http_client.newRequest(.{
+        .ctx = load,
+        .url = url,
+        .method = .POST,
+        .body = body,
+        .origin = frame.origin,
+        .cookie_origin = frame._http_owner.siteForCookies(),
+        .request_mode = if (cors) .cors else .no_cors,
+        .credentials_mode = .include,
+        .resource_type = .beacon,
+        .done_callback = BeaconLoad.doneCallback,
+        .error_callback = BeaconLoad.errorCallback,
+        .shutdown_callback = BeaconLoad.shutdownCallback,
+    }, &root._http_owner);
+    {
+        errdefer transfer.deinit();
+        if (content_type) |ct| {
+            try transfer.setHeader("Content-Type", ct, .{ .source = .author });
+        }
+        try frame.headersForRequest(transfer, .{});
+    }
+
+    in_flight.* += body.len;
+    // From here the transfer owns `load`, which gives the quota back.
+    transfer.submit() catch |err| {
+        log.debug(.http, "beacon", .{ .err = err, .url = url });
+    };
+}
+
+// One in-flight beacon. Exactly one of done/error/shutdown runs.
+const BeaconLoad = struct {
+    root: *Frame,
+    size: usize,
+    in_flight: *usize,
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        settle(ctx);
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        log.info(.http, "beacon", .{ .err = err });
+        settle(ctx);
+    }
+
+    fn shutdownCallback(ctx: *anyopaque) void {
+        settle(ctx);
+    }
+
+    fn settle(ctx: *anyopaque) void {
+        const self: *BeaconLoad = @ptrCast(@alignCast(ctx));
+        self.in_flight.* -|= self.size;
+        self.root._factory.destroy(self);
+    }
+};
 
 // One in-flight image fetch. Exactly one of done/error/shutdown runs, and each
 // releases the `_pending_loads` slot taken above.

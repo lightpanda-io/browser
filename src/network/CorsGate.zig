@@ -142,7 +142,7 @@ fn isSafelistedLanguageValue(value: []const u8) bool {
 }
 
 // https://fetch.spec.whatwg.org/#cors-safelisted-request-header
-fn isSafelistedHeader(name: []const u8, value: []const u8) bool {
+pub fn isSafelistedHeader(name: []const u8, value: []const u8) bool {
     if (value.len > 128) return false;
 
     if (std.ascii.eqlIgnoreCase(name, "accept")) {
