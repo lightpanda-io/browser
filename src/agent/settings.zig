@@ -268,7 +268,7 @@ pub const Remembered = struct {
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
     stream: ?bool = null,
-    search_engine: ?lp.tools.SearchEngine = null,
+    search_engine: ?lp.tools.search.Engine = null,
 };
 
 /// The result's strings live in `arena`.
@@ -371,7 +371,7 @@ pub fn resolveStream(remembered: ?Remembered) bool {
 
 /// Precedence: `--search-engine` > remembered `.lp-agent.zon` value >
 /// default (auto). The REPL `/searchEngine` command also sets and persists it.
-pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
+pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.search.Engine {
     if (remembered) |r| if (r.search_engine) |e| return e;
     return .auto;
 }

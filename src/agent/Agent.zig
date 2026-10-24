@@ -319,18 +319,18 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
-    browser_tools.search_engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
+    browser_tools.search.engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
     // A keyless engine over its cap fails every search; silence reads as a bad
     // agent rather than a missing key.
-    if (browser_tools.searchKeyStatus(browser_tools.search_engine)) |key| switch (key.state) {
+    if (browser_tools.search.keyStatus(browser_tools.search.engine)) |key| switch (key.state) {
         .set => {},
         .keyless => log.info(.app, "keyless search endpoint", .{ .env_var = key.env_var, .limit = "rate-limited per client IP" }),
-        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search_engine) }),
+        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search.engine) }),
     };
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
+            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search.engine }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -765,18 +765,33 @@ fn runRepl(self: *Agent) void {
         switch (cmd) {
             .comment => continue :repl,
             .llm => |lc| {
-                var label_buf: [32]u8 = undefined;
-                const label = std.mem.print(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
-                if (!self.requireLlm(label)) continue :repl;
-                _ = self.runTurn(.{ .prompt = lc.prompt(), .record_comment = line, .capture_for_save = true, .label = label });
+                _ = self.runPromptTurn(aa, @tagName(lc), lc.prompt(), line);
             },
             .tool_call => |tc| {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
                 const result = self.runCommand(aa, tc);
                 self.terminal.endTool();
+
+                // Jev settles these in one call. Without its key a model can
+                // still do it the long way, which is what the command did
+                // before the tool existed. Asking first rather than checking
+                // the key keeps the replay path, which needs no key at all.
+                if (result.failure == .missing_api_key) fallback: {
+                    const prompt = Command.fallbackPrompt(tc.tool) orelse break :fallback;
+                    self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                    if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
+                        // No model either, so say which key was missing too.
+                        self.printCommandResult(tc, result);
+                    }
+                    continue :repl;
+                }
+
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
-                    const replayable = Command.fromToolCall(tc.tool, withSelector(aa, tc.args, result.selector));
+                    const replayable = Command.fromToolCall(tc.tool, replayArgs(aa, tc.args, .{
+                        .selector = result.selector,
+                        .replay_args = result.replay_args,
+                    }));
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args, result.navigated) orelse replayable);
                 }
                 self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
@@ -846,9 +861,9 @@ fn handleStream(self: *Agent, rest: []const u8) void {
 /// `/searchEngine`: bare prints the current engine; an argument sets and
 /// persists it, warning when the chosen engine's API key is unset.
 fn handleSearchEngine(self: *Agent, rest: []const u8) void {
-    self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
-    const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
-    const key = browser_tools.searchKeyStatus(selected) orelse return;
+    self.setEnumOption("searchEngine", &browser_tools.search.engine, rest);
+    const selected = std.meta.stringToEnum(browser_tools.search.Engine, rest) orelse return;
+    const key = browser_tools.search.keyStatus(selected) orelse return;
     switch (key.state) {
         .set => {},
         .keyless => self.terminal.printInfo("{s} is not set; using the keyless endpoint (rate-limited per client IP)", .{key.env_var}),
@@ -928,6 +943,15 @@ const provider_off_keyword = "null";
 /// Parallel to `local_completable`.
 const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
 
+/// Send a prebuilt prompt as a turn, the way `/logout` and the fallback for
+/// `/acceptCookies` and `/login` do. False when there is no model to send to.
+fn runPromptTurn(self: *Agent, arena: std.mem.Allocator, name: []const u8, prompt: []const u8, line: []const u8) bool {
+    const label = arena.print("/{s}", .{name}) catch "/?";
+    if (!self.requireLlm(label)) return false;
+    _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
+    return true;
+}
+
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.credential == null) {
         self.terminal.printError("{s} requires an LLM — " ++ llm_setup_hint ++ ".", .{name});
@@ -967,7 +991,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search_engine })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search.engine })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -1170,6 +1194,7 @@ const PathAndMode = struct { path: []const u8, mode: save.Mode };
 
 const SavedCall = struct {
     selector: ?[]const u8 = null,
+    replay_args: ?[]const u8 = null,
     navigated: bool = false,
 };
 
@@ -1452,6 +1477,36 @@ fn logSaveBufferError(self: *Agent, err: anyerror) void {
     self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
 }
 
+/// The args a replay should use: the call's own, with any locators the tool
+/// resolved for itself merged over them, and an ephemeral `backendNodeId`
+/// swapped for the selector the tool layer resolved. A decision the tool made
+/// by asking a model — which control dismisses a banner, which field takes the
+/// password — is written into the script this way, so the script repeats the
+/// act instead of paying to decide it again.
+fn replayArgs(arena: std.mem.Allocator, args: ?std.json.Value, saved: SavedCall) ?std.json.Value {
+    return withSelector(arena, withResolved(arena, args, saved.replay_args), saved.selector);
+}
+
+/// `resolved` (a JSON object) put over `args`. Merged, not substituted: the
+/// call's own arguments include the `$LP_*` placeholders, which must stay
+/// placeholders in a recording.
+fn withResolved(arena: std.mem.Allocator, args: ?std.json.Value, resolved: ?[]const u8) ?std.json.Value {
+    const json = resolved orelse return args;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{}) catch return args;
+    if (parsed != .object) return args;
+
+    var merged: std.json.ObjectMap = blk: {
+        const original = args orelse break :blk .empty;
+        if (original != .object) return args;
+        break :blk original.object.clone(arena) catch return args;
+    };
+    var it = parsed.object.iterator();
+    while (it.next()) |entry| {
+        merged.put(arena, entry.key_ptr.*, entry.value_ptr.*) catch return args;
+    }
+    return .{ .object = merged };
+}
+
 /// Swap a call's ephemeral `backendNodeId` for the selector the tool layer
 /// resolved, so the call can be replayed.
 fn withSelector(arena: std.mem.Allocator, args: ?std.json.Value, selector: ?[]const u8) ?std.json.Value {
@@ -1555,8 +1610,8 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search_cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
-                .{ @tagName(browser_tools.search_engine), settings.remembered_path },
+                "/searchEngine " ++ Config.tagHint(browser_tools.search.Engine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search.cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                .{ @tagName(browser_tools.search.engine), settings.remembered_path },
             ),
         }
         return;
@@ -1878,7 +1933,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
             const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
-            const replayable = withSelector(ca, args, saved.selector);
+            const replayable = replayArgs(ca, args, saved);
             const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
                 cmd
@@ -2056,7 +2111,12 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         // turn that reads them; `allocator` here is zenai's per-call arena.
         const ca = self.conversation.arena.allocator();
         const kept = if (saved.selector) |sel| ca.dupe(u8, sel) catch null else null;
-        self.save_calls.append(self.allocator, .{ .selector = kept, .navigated = saved.navigated }) catch {};
+        const kept_replay = if (saved.replay_args) |json| ca.dupe(u8, json) catch null else null;
+        self.save_calls.append(self.allocator, .{
+            .selector = kept,
+            .replay_args = kept_replay,
+            .navigated = saved.navigated,
+        }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
@@ -2072,7 +2132,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
         .nav_note = true,
         .source = .llm,
     });
-    saved.* = .{ .selector = result.selector, .navigated = result.navigated };
+    saved.* = .{ .selector = result.selector, .replay_args = result.replay_args, .navigated = result.navigated };
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,
@@ -2265,4 +2325,35 @@ test "capToolOutput: extract is exempt from the default cap" {
 
     try std.testing.expectEqual(extract_output_max_bytes, toolOutputCap("extract"));
     try std.testing.expectEqual(tool_output_max_bytes, toolOutputCap("html"));
+}
+
+test "replayArgs: the tool's own locators go over the call's args" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"$LP_PASSWORD","username":"$LP_USERNAME"}
+    , .{});
+    const merged = replayArgs(aa, args, .{
+        .replay_args = "{\"passwordSelector\":\"#pass\",\"submitSelector\":\"#submit\"}",
+    }).?;
+
+    // The placeholders stay placeholders: the tool was handed the resolved
+    // secret, and a recording must not be.
+    try std.testing.expectEqualStrings("$LP_PASSWORD", merged.object.get("password").?.string);
+    try std.testing.expectEqualStrings("$LP_USERNAME", merged.object.get("username").?.string);
+    try std.testing.expectEqualStrings("#pass", merged.object.get("passwordSelector").?.string);
+    try std.testing.expectEqualStrings("#submit", merged.object.get("submitSelector").?.string);
+}
+
+test "replayArgs: a backendNodeId still becomes the resolved selector" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"backendNodeId\":7}", .{});
+    const rewritten = replayArgs(aa, args, .{ .selector = "#main" }).?;
+    try std.testing.expect(rewritten.object.get("backendNodeId") == null);
+    try std.testing.expectEqualStrings("#main", rewritten.object.get("selector").?.string);
 }

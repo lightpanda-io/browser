@@ -17,8 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! A parsed slash command: a tool slash command, a `#`-comment, or an
-//! `LlmCommand` trigger (`/login`, `/logout`, `/acceptCookies`). Multi-line
-//! `'''…'''` blocks are assembled by the REPL before parse.
+//! `LlmCommand` trigger (`/logout`). Multi-line `'''…'''` blocks are
+//! assembled by the REPL before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -70,23 +70,17 @@ pub const Command = union(enum) {
     /// each value owns its `prompt()` (sent to the model) and `description()`
     /// (shown in `/help`) — mirroring how `tool_call` wraps `BrowserTool`.
     pub const LlmCommand = enum {
-        login,
         logout,
-        acceptCookies,
 
         pub fn prompt(self: LlmCommand) []const u8 {
             return switch (self) {
-                .login => login_prompt,
                 .logout => logout_prompt,
-                .acceptCookies => accept_cookies_prompt,
             };
         }
 
         pub fn description(self: LlmCommand) []const u8 {
             return switch (self) {
-                .login => "Log in using $LP_* credentials",
                 .logout => "Log out of the current site",
-                .acceptCookies => "Dismiss the cookie consent banner",
             };
         }
     };
@@ -183,6 +177,18 @@ pub const Command = union(enum) {
         }
     }
 
+    /// How a model would drive a tool that asks Jev instead, for the REPL to
+    /// fall back to when there is no TypeSafe key. Not `LlmCommand` values:
+    /// the slash name has to reach the tool, and `parseDiag` resolves
+    /// `LlmCommand` first.
+    pub fn fallbackPrompt(tool: BrowserTool) ?[]const u8 {
+        return switch (tool) {
+            .acceptCookies => accept_cookies_prompt,
+            .login => login_prompt,
+            else => null,
+        };
+    }
+
     /// `arguments` must outlive the returned Command. Callers that hand the
     /// Command to anything past the args' arena lifetime (e.g. heal, which
     /// reuses cmds after `RunToolsResult.deinit`) must deep-copy the arguments
@@ -244,8 +250,10 @@ fn writeJsFieldValue(
     field: []const u8,
     value: std.json.Value,
 ) (std.Io.Writer.Error || error{OutOfMemory})!void {
-    if (tool == .extract and std.mem.eql(u8, field, "schema") and value == .string) {
-        try writeExtractSchema(arena, writer, value.string);
+    const json_source = (tool == .extract and std.mem.eql(u8, field, "schema")) or
+        (tool == .classify and std.mem.eql(u8, field, "questions"));
+    if (json_source and value == .string) {
+        try writeJsonSource(arena, writer, value.string);
         return;
     }
     const prefer_template = (tool == .evaluate and std.mem.eql(u8, field, "script")) or
@@ -302,19 +310,18 @@ fn writeJsValue(
     }
 }
 
-fn writeExtractSchema(
+/// Anything that is not a JSON object or array stays a string literal.
+fn writeJsonSource(
     arena: std.mem.Allocator,
     writer: *std.Io.Writer,
-    schema_src: []const u8,
+    source: []const u8,
 ) (std.Io.Writer.Error || error{OutOfMemory})!void {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, schema_src, .{}) catch {
-        return writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.findScalar(u8, schema_src, '\n') != null });
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, source, .{}) catch null;
+    if (parsed) |value| switch (value) {
+        .object, .array => return writeJsValue(arena, writer, value, .{}),
+        else => {},
     };
-    if (parsed == .object) {
-        try writeJsValue(arena, writer, parsed, .{});
-    } else {
-        try writeJsValue(arena, writer, .{ .string = schema_src }, .{ .prefer_template = std.mem.findScalar(u8, schema_src, '\n') != null });
-    }
+    try writeJsValue(arena, writer, .{ .string = source }, .{ .prefer_template = std.mem.findScalar(u8, source, '\n') != null });
 }
 
 fn writeJsObjectKey(writer: *std.Io.Writer, key: []const u8) std.Io.Writer.Error!void {
@@ -364,11 +371,26 @@ test "parse: bare prose errors" {
     try testing.expectError(error.NotASlashCommand, Command.parse(arena.allocator(), "goto https://x"));
 }
 
-test "parse: /login and /acceptCookies" {
+test "fallbackPrompt: only the tools that ask Jev have a prompt form" {
+    // What the REPL sends when TYPESAFE_API_KEY is not set.
+    try testing.expect(Command.fallbackPrompt(.acceptCookies) != null);
+    try testing.expect(std.mem.find(u8, Command.fallbackPrompt(.login).?, "$LP_") != null);
+    // `logout` is still an LlmCommand, so it never reaches here as a tool.
+    try testing.expectEqual(null, Command.fallbackPrompt(.tree));
+    try testing.expectEqual(null, Command.fallbackPrompt(.classify));
+}
+
+test "parse: /logout is an LLM command, /login and /acceptCookies are tools" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectEqual(Command.LlmCommand.login, (try Command.parse(arena.allocator(), "/login")).llm);
-    try testing.expectEqual(Command.LlmCommand.acceptCookies, (try Command.parse(arena.allocator(), "/acceptCookies")).llm);
+    const aa = arena.allocator();
+    try testing.expectEqual(Command.LlmCommand.logout, (try Command.parse(aa, "/logout")).llm);
+
+    const cookies = try Command.parse(aa, "/acceptCookies");
+    try testing.expectEqual(BrowserTool.acceptCookies, cookies.tool_call.tool);
+    const login = try Command.parse(aa, "/login password=$LP_PASSWORD");
+    try testing.expectEqual(BrowserTool.login, login.tool_call.tool);
+    try testing.expectString("$LP_PASSWORD", login.tool_call.args.?.object.get("password").?.string);
 }
 
 test "parse: /goto positional" {
@@ -485,6 +507,32 @@ test "formatJs: evaluate and extract strings" {
     }
 }
 
+test "formatJs: classify questions replay as literals" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    {
+        const cmd = try Command.parse(aa, "/classify '{\"isBlocked\":true}'");
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("classify({ isBlocked: true });", aw.written());
+    }
+    {
+        var questions: std.json.ObjectMap = .empty;
+        try questions.put(aa, "isBlocked", .{ .bool = true });
+        var args: std.json.ObjectMap = .empty;
+        try args.put(aa, "questions", .{ .object = questions });
+        try args.put(aa, "selector", .{ .string = "main" });
+        const cmd = Command.fromToolCall(.classify, .{ .object = args });
+        var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer aw.deinit();
+        try cmd.formatJs(aa, &aw.writer);
+        try testing.expectString("classify({ questions: { isBlocked: true }, selector: \"main\" });", aw.written());
+    }
+}
+
 test "isRecorded / producesData via tool flags" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -497,8 +545,8 @@ test "isRecorded / producesData via tool flags" {
     try testing.expect(!tree.isRecorded());
     try testing.expect(tree.producesData());
 
-    const login: Command = .{ .llm = .login };
-    try testing.expect(!login.isRecorded());
+    const logout: Command = .{ .llm = .logout };
+    try testing.expect(!logout.isRecorded());
 }
 
 test "isRecorded: screenshot needs a path to replay" {
