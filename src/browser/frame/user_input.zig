@@ -1655,23 +1655,26 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
 
 /// Plain text typed into editable content (contenteditable): cancellable
 /// through beforeinput like a control's edit, then replaces the selection and
-/// leaves the caret after the text. A selection outside the editable content
-/// of `target` puts the text at the end of `target`. Only text insertion is
-/// supported: line breaks, deletion and formatting need an editing pipeline.
-/// Returns whether the edit happened.
+/// leaves the caret after the text. The events target the editing host of
+/// `target`, as in Chrome. A selection outside the editable content of the
+/// host puts the text at the start of the host, where Chrome places the caret
+/// when the host is focused. Only text insertion is supported: line breaks,
+/// deletion and formatting need an editing pipeline. Returns whether the edit
+/// happened.
 fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !bool {
-    if (!try allowEdit(frame, target, text, text, "insertText")) {
+    const host_el = outermostEditingHost(target) orelse return false;
+    if (!try allowEdit(frame, host_el, text, text, "insertText")) {
         return false;
     }
-    // a beforeinput or textInput listener can make it non-editable
-    if (!target.isEditable()) {
+    const host = host_el.asNode();
+    // a beforeinput or textInput listener can make it non-editable or remove it
+    if (!host_el.isEditable() or !host.isConnected()) {
         return false;
     }
 
-    const host = target.asNode();
     const selection = &frame.document._selection;
     var container = host;
-    var offset: u32 = @intCast(host.getChildrenCount());
+    var offset: u32 = 0;
     if (selection._range) |range| {
         const abstract = range.asAbstractRange();
         if (isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer())) {
@@ -1686,7 +1689,11 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
     // Join the text node at the caret, as Chrome does, rather than adding a
     // sibling next to it.
     var text_node: ?*Node.CData.Text = container.is(Node.CData.Text);
-    if (text_node == null) {
+    if (text_node) |t| {
+        // a caret inside a surrogate pair: before the pair
+        const data = t.asCData().getData().str();
+        offset = @intCast(Node.CData.utf16Len(data[0..Node.CData.utf16OffsetToUtf8Floor(data, offset)]));
+    } else {
         if (container.is(Node.CData) != null) {
             // a caret in a comment or processing instruction: after it
             offset = @intCast(container.parentNode().?.getChildIndex(container).? + 1);
@@ -1710,16 +1717,15 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
         }
     }
 
-    var caret: u32 = undefined;
-    if (text_node) |t| {
-        try t.asCData().replaceData(offset, 0, text, frame);
-        caret = offset + @as(u32, @intCast(Node.CData.utf16Len(text)));
-    } else {
+    const caret: u32 = if (text_node) |t| blk: {
+        try t.asCData().insertData(offset, text, frame);
+        break :blk offset + @as(u32, @intCast(Node.CData.utf16Len(text)));
+    } else blk: {
         const new_node = try frame.document.createTextNode(text);
         _ = try container.insertBefore(new_node, container.getChildAt(offset), frame);
         text_node = new_node.is(Node.CData.Text).?;
-        caret = @intCast(Node.CData.utf16Len(text));
-    }
+        break :blk @intCast(Node.CData.utf16Len(text));
+    };
     try selection.collapse(text_node.?.asCData().asNode(), caret, frame);
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
@@ -1728,12 +1734,12 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
         .data = text,
         .inputType = "insertText",
     }, frame);
-    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
     return true;
 }
 
-// `node` is inside `host` and editable: the nearest contenteditable attribute
-// of its element (or of its parent, for a text node) allows editing.
+// Whether `node` is inside `host` and editable: the nearest contenteditable
+// attribute of its element (or of its parent, for a text node) allows editing.
 fn isEditableIn(host: *Node, node: *Node) bool {
     if (!host.contains(node)) {
         return false;

@@ -3554,7 +3554,9 @@ const EditingHostInput = union(enum) {
 
 // Loads a page, runs `setup` (which builds an editing host and a selection),
 // sends `input` to the focused element and checks `expected`, a JS expression.
-// Every test records the events the host sees in `window.seen`.
+// Every test records the events the document sees in `window.seen` as
+// `type:target id:inputType or key:data:cancelable:composed:bubbles:isTrusted`;
+// `window.types()` lists only `type:target id`.
 fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: []const u8) !void {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -3578,8 +3580,10 @@ fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: 
     _ = try ls.local.compileAndRun(
         \\window.seen = [];
         \\for (const t of ['keypress', 'beforeinput', 'textInput', 'input']) {
-        \\  document.addEventListener(t, (e) => window.seen.push(t + ':' + (e.inputType || e.key || e.data)));
+        \\  document.addEventListener(t, (e) => window.seen.push(
+        \\    `${t}:${e.target.id}:${e.inputType || e.key}:${e.data}:${e.cancelable}:${e.composed}:${e.bubbles}:${e.isTrusted}`));
         \\}
+        \\window.types = () => window.seen.map((s) => s.split(':', 2).join(':')).join(',');
     , null);
     _ = try ls.local.compileAndRun(setup, null);
 
@@ -3599,17 +3603,35 @@ fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: 
     try testing.expect((try ls.local.compileAndRun(expected, null)).isTrue());
 }
 
-test "cdp.input: typing into an editing host without a selection appends the text" {
+test "cdp.input: typing into an editing host without a selection inserts at its start" {
     try expectEditingHostInput(
         \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable="true">ab</div>');
         \\const host = document.getElementById('host');
         \\host.focus();
         \\getSelection().removeAllRanges();
     , .{ .key = "c" },
-        \\host.innerHTML === 'abc' &&
-        \\window.seen.join(',') === 'keypress:c,beforeinput:insertText,textInput:c,input:insertText' &&
+        \\host.innerHTML === 'cab' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'keypress:host:c:undefined:true:true:true:true',
+        \\  'beforeinput:host:insertText:c:true:true:true:true',
+        \\  'textInput:host:undefined:c:true:false:true:true',
+        \\  'input:host:insertText:c:false:true:true:true',
+        \\]) &&
         \\getSelection().isCollapsed &&
-        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 3
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: text typed into an editing host's descendant targets the host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><span id="s" tabindex="0">ab</span></div>');
+        \\const host = document.getElementById('host');
+        \\const s = document.getElementById('s');
+        \\s.focus();
+        \\getSelection().collapse(s.firstChild, 1);
+    , .{ .key = "c" },
+        \\document.activeElement === s && s.textContent === 'acb' &&
+        \\window.types() === 'keypress:s,beforeinput:host,textInput:host,input:host'
     );
 }
 
@@ -3621,8 +3643,45 @@ test "cdp.input: insertText into an editing host inserts at the caret" {
         \\getSelection().collapse(host.firstChild, 2);
     , .{ .insert_text = "XY" },
         \\host.innerHTML === 'abXYcd' &&
-        \\window.seen.join(',') === 'beforeinput:insertText,textInput:XY,input:insertText' &&
+        \\window.types() === 'beforeinput:host,textInput:host,input:host' &&
         \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 4
+    );
+}
+
+test "cdp.input: insertText into an editing host counts the caret in UTF-16 code units" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>abcd</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 2);
+    , .{ .insert_text = "é😀" },
+        \\host.textContent === 'abé😀cd' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 5
+    );
+}
+
+test "cdp.input: typing after non-ASCII text in an editing host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>é😀x</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 3);
+    , .{ .key = "Z" },
+        \\host.textContent === 'é😀Zx' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 4
+    );
+}
+
+test "cdp.input: a caret inside a surrogate pair inserts before the pair" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>a😀b</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 2);
+    , .{ .insert_text = "X" },
+        \\host.textContent === 'aX😀b' &&
+        \\window.types() === 'beforeinput:host,textInput:host,input:host' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 2
     );
 }
 
@@ -3636,6 +3695,30 @@ test "cdp.input: typing into an empty editing element creates a text node" {
     , .{ .key = "z" },
         \\host.innerHTML === '<p id="p">z</p>' &&
         \\getSelection().anchorNode === p.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: text before a text node in an editing host joins it" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><b>x</b>tail</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host, 1);
+    , .{ .insert_text = "Y" },
+        \\host.innerHTML === '<b>x</b>Ytail' && host.childNodes.length === 2 &&
+        \\getSelection().anchorNode === host.lastChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: a caret in a comment of an editing host inserts after the comment" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<!--c--><b>cd</b></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.childNodes[1], 1);
+    , .{ .insert_text = "X" },
+        \\host.innerHTML === 'ab<!--c-->X<b>cd</b>' &&
+        \\getSelection().anchorNode === host.childNodes[2] && getSelection().anchorOffset === 1
     );
 }
 
@@ -3665,7 +3748,33 @@ test "cdp.input: a cancelled beforeinput leaves an editing host unchanged" {
         \\host.addEventListener('beforeinput', (e) => e.preventDefault());
     , .{ .key = "c" },
         \\host.innerHTML === 'ab' &&
-        \\window.seen.join(',') === 'keypress:c,beforeinput:insertText'
+        \\window.types() === 'keypress:host,beforeinput:host'
+    );
+}
+
+test "cdp.input: a beforeinput listener that ends editing leaves an editing host unchanged" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', () => host.removeAttribute('contenteditable'));
+    , .{ .insert_text = "c" },
+        \\host.innerHTML === 'ab' &&
+        \\window.types() === 'beforeinput:host,textInput:host'
+    );
+}
+
+test "cdp.input: a beforeinput listener that removes an editing host leaves it unchanged" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', () => host.remove());
+    , .{ .insert_text = "c" },
+        \\host.innerHTML === 'ab' && !host.isConnected &&
+        \\!window.seen.some((s) => s.startsWith('input:'))
     );
 }
 
@@ -3678,7 +3787,7 @@ test "cdp.input: a cancelled keypress fires no beforeinput on an editing host" {
         \\host.addEventListener('keypress', (e) => e.preventDefault());
     , .{ .key = "c" },
         \\host.innerHTML === 'ab' &&
-        \\window.seen.join(',') === 'keypress:c'
+        \\window.types() === 'keypress:host'
     );
 }
 
@@ -3690,7 +3799,7 @@ test "cdp.input: text for an editing host stays out of a contenteditable=false i
         \\getSelection().collapse(document.getElementById('island').firstChild, 2);
     , .{ .insert_text = "X" },
         \\document.getElementById('island').textContent === 'lock' &&
-        \\host.textContent === 'locktailX'
+        \\host.textContent === 'Xlocktail' && host.firstChild.data === 'X'
     );
 }
 
@@ -3701,6 +3810,6 @@ test "cdp.input: typing into a non-editable focused element inserts nothing" {
         \\host.focus();
         \\getSelection().collapse(host.firstChild, 1);
     , .{ .key = "c" },
-        \\host.innerHTML === 'ab' && window.seen.join(',') === 'keypress:c'
+        \\host.innerHTML === 'ab' && window.types() === 'keypress:host'
     );
 }
