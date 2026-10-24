@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
@@ -248,6 +249,11 @@ fn opensocketCallback(
         @intCast(address.socktype),
         @intCast(address.protocol),
     ) catch return libcurl.CURL_SOCKET_BAD;
+    if (comptime builtin.os.tag == .windows) {
+        // socket_t is a HANDLE on Windows; curl_socket_t
+        // is an integer type there.
+        return @intFromPtr(fd);
+    }
     return fd;
 }
 
@@ -584,8 +590,8 @@ pub const Connection = struct {
     }
 
     // -1 when the transfer used no connection.
-    pub fn getConnId(self: *const Connection) !c_long {
-        var conn_id: c_long = undefined;
+    pub fn getConnId(self: *const Connection) !libcurl.CurlOffT {
+        var conn_id: libcurl.CurlOffT = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .conn_id, &conn_id);
         return conn_id;
     }
@@ -597,8 +603,8 @@ pub const Connection = struct {
     }
 
     // Total transfer time (name lookup to completion) in microseconds.
-    pub fn getTotalTimeMicros(self: *const Connection) !c_long {
-        var micros: c_long = undefined;
+    pub fn getTotalTimeMicros(self: *const Connection) !libcurl.CurlOffT {
+        var micros: libcurl.CurlOffT = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .total_time_t, &micros);
         return micros;
     }
@@ -628,13 +634,13 @@ pub const Connection = struct {
     }
 
     fn getInfoMicros(self: *const Connection, comptime info: libcurl.CurlInfo) !u64 {
-        var micros: c_long = undefined;
+        var micros: libcurl.CurlOffT = undefined;
         try libcurl.curl_easy_getinfo(self._easy, info, &micros);
         return @intCast(@max(0, micros));
     }
 
     pub fn getDownloadSize(self: *const Connection) !u64 {
-        var size: c_long = undefined;
+        var size: libcurl.CurlOffT = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .size_download_t, &size);
         return @intCast(@max(0, size));
     }
