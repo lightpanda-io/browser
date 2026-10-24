@@ -102,7 +102,7 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
         ._proto = undefined,
         ._url = resolved,
         ._with_credentials = if (opts_) |o| o.withCredentials else false,
-        ._max_response_size = exec.session.browser.http_client.max_response_size,
+        ._max_response_size = exec.session.http_client.max_response_size,
     });
 
     // deactivate() releases it.

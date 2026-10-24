@@ -734,7 +734,7 @@ test "ScriptManager: preload whose submit fails synchronously releases its arena
 // adblock_verdicts twice. Unblocking before the <script>s and import() run
 // makes a refetch observable: it would succeed and run the script.
 test "ScriptManager: a failed preload is consumed, not refetched" {
-    const client = &testing.test_session.browser.http_client;
+    const client = testing.test_session.http_client;
     try client.setBlockedUrls(&.{ "*/preload_failed.js", "*/preload_failed_module.js" });
     defer client.setBlockedUrls(&.{}) catch unreachable;
 
