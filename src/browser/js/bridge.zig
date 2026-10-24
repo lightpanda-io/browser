@@ -46,6 +46,10 @@ pub fn Builder(comptime T: type) type {
             return Function.init(T, func, opts);
         }
 
+        pub fn fastFunction(comptime func: anytype, comptime opts: Caller.FastFunction.Options) FastFunction {
+            return FastFunction.init(T, func, opts);
+        }
+
         pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
             return Indexed.init(T, getter_func, null, null, null, null, enumerator_func, opts);
         }
@@ -218,6 +222,41 @@ pub const Function = struct {
     }
 };
 
+pub const FastFunction = struct {
+    static: bool,
+    exposed: Caller.Function.Opts.Exposed,
+    /// V8 still requires us to create a slow variant.
+    slow: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
+    fast: *const v8.CFunction,
+
+    fn init(
+        comptime T: type,
+        comptime func: anytype,
+        comptime opts: Caller.FastFunction.Options,
+    ) FastFunction {
+        return .{
+            .static = opts.static,
+            .exposed = opts.exposed,
+            .slow = struct {
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    return Caller.Function.call(T, handle.?, func, .{
+                        .static = opts.static,
+                        .exposed = opts.exposed,
+                    });
+                }
+            }.wrap,
+            .fast = Caller.FastFunction.create(func, .{
+                .static = opts.static,
+                .exposed = opts.exposed,
+            }),
+        };
+    }
+
+    pub inline fn arity(self: FastFunction) c_uint {
+        return self.fast.type_info.*.arg_count - 2;
+    }
+};
+
 pub const Accessor = struct {
     static: bool = false,
     deletable: bool = true,
@@ -226,7 +265,13 @@ pub const Accessor = struct {
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+    fast_getter: ?*const v8.CFunction = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+
+    // Can only take 1 arg.
+    const fast_method_args = [_]v8.CTypeInfo{
+        .{ .type = v8.kCTypeInfoType_V8Value },
+    };
 
     fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
         var accessor = Accessor{

@@ -453,6 +453,7 @@ fn countExternalReferences() comptime_int {
                     continue;
                 }
                 count += 1;
+                if (value.fast_getter) |_| count += 1;
                 if (value.setter != null) {
                     count += 1;
                 }
@@ -461,6 +462,9 @@ fn countExternalReferences() comptime_int {
                     continue;
                 }
                 count += 1;
+            } else if (T == bridge.FastFunction) {
+                // slow callback + v8.CFunction
+                count += 2;
             } else if (T == bridge.Iterator) {
                 count += 1;
             } else if (T == bridge.Indexed) {
@@ -544,6 +548,10 @@ fn collectExternalReferences() *const ExternalReferences {
 
                 references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
+                if (value.fast_getter) |fast_getter| {
+                    references[idx] = @bitCast(@intFromPtr(fast_getter));
+                    idx += 1;
+                }
                 if (value.setter) |setter| {
                     references[idx] = @bitCast(@intFromPtr(setter));
                     idx += 1;
@@ -553,6 +561,13 @@ fn collectExternalReferences() *const ExternalReferences {
                     continue;
                 }
                 references[idx] = @bitCast(@intFromPtr(value.func));
+                idx += 1;
+            } else if (T == bridge.FastFunction) {
+                references[idx] = @bitCast(@intFromPtr(value.slow));
+                idx += 1;
+                // V8 stores a pointer to the v8.CFunction itself (not its
+                // .address) as a Foreign in the template's C function overloads.
+                references[idx] = @bitCast(@intFromPtr(value.fast));
                 idx += 1;
             } else if (T == bridge.Iterator) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
@@ -874,6 +889,25 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), v8.None);
                 }
             },
+            bridge.FastFunction => {
+                const func_signature = if (value.static) null else signature;
+                const function_template = v8.v8__FunctionTemplate__New__CFunction(isolate, &.{
+                    .callback = value.slow,
+                    .signature = func_signature,
+                    .length = @intCast(value.arity()),
+                    .behavior = v8.kConstructorBehavior_Throw,
+                    .side_effect_type = v8.kSideEffectType_HasSideEffect,
+                }, value.fast, 0, 0, 0).?;
+                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
+                if (value.static and !own_properties) {
+                    v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
+                } else {
+                    // Web IDL: operations on the interface prototype object
+                    // (and mirrored onto [Global] instances) are enumerable.
+                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), v8.None);
+                }
+            },
             bridge.Indexed => {
                 var configuration: v8.IndexedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
@@ -1025,10 +1059,27 @@ const unforgeables: []const Unforgeable = blk: {
 fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
     const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
     const getter_signature = if (value.static) null else signature;
-    const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
-        .callback = value.getter,
-        .signature = getter_signature,
-    }).?;
+
+    const getter_callback: *const v8.FunctionTemplate = blk: {
+        if (value.fast_getter) |fast_getter| {
+            // You can pass `data` through this constructor:
+            // https://v8docs.nodesource.com/node-25.0/d5/dfd/structv8_1_1_fast_api_callback_options.html#ad3be03826a4a0cfbf72eab7eac9cc3db
+            // For our use cases, this make no sense though.
+            break :blk v8.v8__FunctionTemplate__New__CFunction(isolate, &.{
+                .callback = value.getter,
+                .signature = getter_signature,
+                .length = 0,
+                .behavior = v8.kConstructorBehavior_Throw, // Required with a fast function.
+                .side_effect_type = v8.kSideEffectType_HasSideEffect,
+            }, fast_getter, 0, 0, 0).?;
+        } else {
+            break :blk v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                .callback = value.getter,
+                .signature = getter_signature,
+            }).?;
+        }
+    };
+
     // WebIDL: getter function's .name should be "get X"
     const getter_name_str = "get " ++ name;
     const getter_name_v8 = v8.v8__String__NewFromUtf8(isolate, getter_name_str.ptr, v8.kNormal, @intCast(getter_name_str.len));
