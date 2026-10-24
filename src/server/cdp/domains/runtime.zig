@@ -271,27 +271,6 @@ test "cdp.runtime: inspector responses go to the session that sent the command" 
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 6, .description = "6" } }, .{ .id = 63, .session_id = "SID-PRIMARY" });
 }
 
-// Number of `method` events the client received on `session_id`.
-fn countSentEvents(ctx: *testing.TestContext, method: []const u8, session_id: []const u8) !usize {
-    var count: usize = 0;
-    var i: usize = 0;
-    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
-        const obj = switch (msg) {
-            .object => |o| o,
-            else => continue,
-        };
-        const sent_method = obj.get("method") orelse continue;
-        if (sent_method != .string or !std.mem.eql(u8, sent_method.string, method)) {
-            continue;
-        }
-        const sent_session_id = obj.get("sessionId") orelse continue;
-        if (sent_session_id == .string and std.mem.eql(u8, sent_session_id.string, session_id)) {
-            count += 1;
-        }
-    }
-    return count;
-}
-
 // V8 keeps Runtime.enable per inspector session: a session only gets the
 // executionContextCreated events it asked for, stamped with its own id.
 test "cdp.runtime: inspector events go to the session that enabled them" {
@@ -304,14 +283,14 @@ test "cdp.runtime: inspector events go to the session that enabled them" {
     try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 70, .session_id = "SID-AUX" });
     try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{ .auxData = .{ .isDefault = true, .type = "default" } } }, .{ .session_id = "SID-AUX" });
-    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-AUX"));
-    try testing.expectEqual(0, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-PRIMARY"));
+    try testing.expectEqual(1, try ctx.countSentEvents("Runtime.executionContextCreated", "SID-AUX"));
+    try testing.expectEqual(0, try ctx.countSentEvents("Runtime.executionContextCreated", "SID-PRIMARY"));
 
     try ctx.processMessage(.{ .id = 71, .method = "Runtime.enable", .sessionId = "SID-PRIMARY" });
     try ctx.expectSentResult(null, .{ .id = 71, .session_id = "SID-PRIMARY" });
     try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{ .auxData = .{ .isDefault = true, .type = "default" } } }, .{ .session_id = "SID-PRIMARY" });
-    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-AUX"));
-    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-PRIMARY"));
+    try testing.expectEqual(1, try ctx.countSentEvents("Runtime.executionContextCreated", "SID-AUX"));
+    try testing.expectEqual(1, try ctx.countSentEvents("Runtime.executionContextCreated", "SID-PRIMARY"));
 }
 
 test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
@@ -392,7 +371,7 @@ test "cdp.runtime: an exception whose error event is cancelled is not reported" 
     try ctx.expectSentEvent("Runtime.exceptionThrown", .{
         .exceptionDetails = .{ .exception = .{ .type = "string", .value = "loud" } },
     }, .{});
-    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    try testing.expectEqual(1, try ctx.countSentEvents("Runtime.exceptionThrown", "SID-X"));
 }
 
 test "cdp.runtime: an unhandled rejection emits Runtime.exceptionThrown once" {
