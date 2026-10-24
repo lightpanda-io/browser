@@ -1,0 +1,127 @@
+name: nix-deps
+
+# Checks the flake, then regenerates nix/v8-deps.nix (hashes for the
+# prebuilt V8 archives pinned in .github/actions/install/action.yml) and
+# nix/zig-deps.nix (the build.zig.zon fetch hash), opening a pull request
+# with each result, every night or on demand from the Actions tab.
+#
+# Mirrors orderfile.yml's regen-and-PR pattern. See orderfile.yml for the
+# token/permission rationale.
+
+on:
+  schedule:
+    - cron: "5 0 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  flake-check:
+    name: nix flake check
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: DeterminateSystems/nix-installer-action@dbbcd8c3ec10ff26bded0022d5b9c00c1c3b687a # v23
+      - run: nix flake check
+
+  v8-deps:
+    name: regenerate v8 deps
+
+    needs: flake-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Generate token for browser
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: browser
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: DeterminateSystems/nix-installer-action@dbbcd8c3ec10ff26bded0022d5b9c00c1c3b687a # v23
+
+      - name: regenerate nix/v8-deps.nix
+        run: nix run .#generate-v8-deps
+
+      - name: open a pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: v8-deps-regen
+        run: |
+          if git diff --quiet -- nix/v8-deps.nix; then
+            echo "v8 deps unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nix/v8-deps.nix
+          git commit -m "nix: regenerate v8-deps.nix"
+          # One fixed branch, force-pushed: a re-run refreshes the open PR
+          # instead of stacking a second one.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
+            echo "refreshed the open pull request"
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "nix: regenerate v8-deps.nix" \
+            --body "Picks up the prebuilt V8 archive hashes for the versions pinned in .github/actions/install/action.yml."
+
+  zig-deps:
+    name: regenerate zig deps
+
+    needs: flake-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Generate token for browser
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: browser
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: DeterminateSystems/nix-installer-action@dbbcd8c3ec10ff26bded0022d5b9c00c1c3b687a # v23
+
+      - name: regenerate nix/zig-deps.nix
+        run: nix run .#generate-zig-deps
+
+      - name: open a pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: zig-deps-regen
+        run: |
+          if git diff --quiet -- nix/zig-deps.nix; then
+            echo "zig deps unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nix/zig-deps.nix
+          git commit -m "nix: regenerate zig-deps.nix"
+          # One fixed branch, force-pushed: a re-run refreshes the open PR
+          # instead of stacking a second one.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
+            echo "refreshed the open pull request"
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "nix: regenerate zig-deps.nix" \
+            --body "Picks up the fixed-output hash for build.zig.zon's current dependency set."
