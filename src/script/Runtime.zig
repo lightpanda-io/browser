@@ -45,6 +45,9 @@ console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 console_observer: ?ConsoleObserver = null,
 /// When set, every console line writes here — stderr-bound methods included.
 console_sink: ?*std.Io.Writer = null,
+/// When set, the script's return value writes here instead of as a console
+/// line, so a caller can cap console output without losing it.
+result_sink: ?*std.Io.Writer = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
@@ -171,6 +174,13 @@ pub fn deinit(self: *Runtime) void {
 
 pub fn terminate(self: *Runtime) void {
     self.env.terminate();
+}
+
+/// Like `terminate`, but through a V8 interrupt, so it also stops code that
+/// runs after an `await`, inside a microtask checkpoint that `terminate`
+/// would wait out.
+pub fn requestTerminate(self: *Runtime) void {
+    self.env.requestTerminate();
 }
 
 pub fn cancelTerminate(self: *Runtime) void {
@@ -369,6 +379,10 @@ fn printCompletion(self: *Runtime, context: *const v8.Context, value: *const v8.
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena_state.deinit();
     const text = self.displayString(arena_state.allocator(), context, value) catch return;
+    if (self.result_sink) |sink| {
+        sink.print("{s}\n", .{text}) catch {};
+        return;
+    }
     self.writeConsoleLine(.log, text);
 }
 

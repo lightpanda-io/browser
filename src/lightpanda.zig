@@ -41,6 +41,7 @@ pub const ToolSession = @import("ToolSession.zig");
 pub const Notification = @import("Notification.zig");
 pub const Server = @import("server/Server.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
+pub const LimitedWriter = @import("LimitedWriter.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const crash_handler = @import("crash_handler.zig");

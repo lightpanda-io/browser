@@ -92,6 +92,17 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
+const run_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "script": { "type": "string", "description": "The agent script source, as `save` writes it or `lightpanda run` takes it." },
+    \\    "timeout": { "type": "integer", "description": "Optional. Milliseconds before the script is stopped and reported as an error with its output so far. At least 1; defaults to 60000." }
+    \\  },
+    \\  "required": ["script"]
+    \\}
+);
+
 /// MCP-only tools, absent from the agent and scripts.
 pub const extra_tools = [_]McpTool{
     .{
@@ -100,6 +111,13 @@ pub const extra_tools = [_]McpTool{
         .annotations = .{ .idempotentHint = true, .openWorldHint = false },
         .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — `const page = new Page(); await page.goto(url);` then call the builtins you used as tools (extract, click, fill, …) as methods on `page` with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = save_schema,
+    },
+    .{
+        .name = "run",
+        .title = "Run an agent script",
+        .annotations = .{},
+        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
+        .inputSchema = run_schema,
     },
     .{
         .name = "session_new",
@@ -133,6 +151,7 @@ const ExtraTool = enum(u8) {
     session_new = 201,
     session_list = 202,
     session_close = 203,
+    run = 204,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -156,6 +175,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .session_new => handleSessionNew(server, arena, call_params.arguments),
             .session_list => handleSessionList(server, arena),
             .session_close => handleSessionClose(server, arena, call_params.arguments),
+            .run => handleRun(server, arena, call_params.arguments),
         };
         server.app.telemetry.recordTool(@backingInt(tool), .mcp, switch (result) {
             .ok => .ok,
@@ -254,6 +274,127 @@ fn handleSave(arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult 
     const lines = std.mem.count(u8, script, "\n") + 1;
     return okFmt(arena, "saved {d} line(s) to {s}", .{ lines, where });
 }
+
+const default_run_timeout_ms = 60_000;
+const max_run_console_bytes = 64 * 1024;
+
+fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
+    const Args = struct { script: []const u8, timeout: ?u32 = null };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch
+        return .{ .invalid_params = "expected { script: string, timeout?: integer }" };
+    if (args.timeout == 0) return .{ .invalid_params = "timeout must be at least 1 ms" };
+    return runScript(server, arena, args.script, args.timeout orelse default_run_timeout_ms) catch .{ .fail = "out of memory" };
+}
+
+fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, timeout_ms: u32) error{OutOfMemory}!ExtraResult {
+    const active = server.active_session;
+    const session = active.session;
+
+    // A long-lived session would keep every page a script opens, so those are
+    // closed after it, on success and on error. Cookies and storage stay.
+    var before: std.ArrayList(u32) = .empty;
+    for (session.pages.items) |page| try before.append(arena, page.frame._frame_id);
+    defer closePagesOpenedSince(arena, session, &active.registry, before.items);
+
+    const runtime = lp.Runtime.init(server.allocator, server.app, session, &active.registry) catch |err|
+        return .{ .fail = @errorName(err) };
+    defer runtime.deinit();
+
+    var console: std.Io.Writer.Allocating = .init(arena);
+    var capped: lp.LimitedWriter = .init(&console.writer, max_run_console_bytes);
+    runtime.console_sink = &capped.writer;
+    // Separate from the console so the cap can't drop it.
+    var returned: std.Io.Writer.Allocating = .init(arena);
+    runtime.result_sink = &returned.writer;
+
+    var timer: RunTimer = .{ .runtime = runtime, .browser_env = &session.browser.env, .timeout_ms = timeout_ms };
+    // Interrupts stop JavaScript; the hook also ends navigations the script
+    // is waiting on.
+    const previous_hook = session.cancel_hook;
+    session.cancel_hook = .{ .context = @ptrCast(&timer), .check = RunTimer.isFired };
+    defer session.cancel_hook = previous_hook;
+    const thread = std.Thread.spawn(.{}, RunTimer.run, .{&timer}) catch
+        return .{ .fail = "could not start the script timer" };
+    const result = runtime.runSource(script, "<mcp>");
+    timer.finish();
+    thread.join();
+    const timed_out = timer.fired.load(.acquire);
+    if (timed_out) {
+        runtime.cancelTerminate();
+        session.browser.env.cancelTerminate();
+    }
+    const message = try result;
+
+    var output = console.toArrayList();
+    if (capped.truncated) {
+        if (!std.mem.endsWith(u8, output.items, "\n")) try output.append(arena, '\n');
+        try output.print(arena, "[console output truncated at {d} bytes]\n", .{max_run_console_bytes});
+    }
+    try output.appendSlice(arena, returned.written());
+    if (timed_out) {
+        try output.print(arena, "script timed out after {d} ms\n", .{timeout_ms});
+    } else if (message) |m| {
+        try output.print(arena, "{s}\n", .{m});
+    }
+    return if (timed_out or message != null) .{ .fail = output.items } else .{ .ok = output.items };
+}
+
+fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registry: *lp.NodeRegistry, before: []const u32) void {
+    var opened: std.ArrayList(u32) = .empty;
+    for (session.pages.items) |page| {
+        const id = page.frame._frame_id;
+        if (std.mem.findScalar(u32, before, id) == null) opened.append(arena, id) catch return;
+    }
+    for (opened.items) |id| browser_tools.closePage(arena, session, registry, id);
+}
+
+/// Stops a `run` script that outlives its timeout, the way Ctrl-C stops
+/// `lightpanda run`: page JS can loop too, so both isolates are stopped.
+const RunTimer = struct {
+    runtime: *lp.Runtime,
+    browser_env: *js.Env,
+    timeout_ms: u32,
+    mutex: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
+    finished: bool = false,
+    fired: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *RunTimer) void {
+        const deadline: std.Io.Clock.Timestamp = .fromNow(lp.io, .{
+            .raw = .fromMilliseconds(self.timeout_ms),
+            .clock = .awake,
+        });
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+        while (!self.finished) {
+            const left = deadline.durationFromNow(lp.io).raw.toNanoseconds();
+            if (left > 0) {
+                lp.timedWait(&self.cond, &self.mutex, @intCast(left)) catch {};
+                continue;
+            }
+            // Past the deadline. Both stops go through V8 interrupts, like the
+            // watchdog's: script code after an `await` runs inside a microtask
+            // checkpoint, where a direct terminate waits for the checkpoint
+            // to end. Ask again until the run returns.
+            self.fired.store(true, .release);
+            self.browser_env.requestTerminate();
+            self.runtime.requestTerminate();
+            lp.timedWait(&self.cond, &self.mutex, 100 * std.time.ns_per_ms) catch {};
+        }
+    }
+
+    fn isFired(context: *anyopaque) bool {
+        const self: *RunTimer = @ptrCast(@alignCast(context));
+        return self.fired.load(.acquire);
+    }
+
+    fn finish(self: *RunTimer) void {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+        self.finished = true;
+        self.cond.signal(lp.io);
+    }
+};
 
 /// The session tools need a transport that routes by session id (HTTP's
 /// `Mcp-Session-Id`). Over stdio they are all unsupported, kept uniform so
@@ -355,6 +496,7 @@ test "MCP - tools/list carries titles and annotations" {
         .{ .name = "markdown", .title = "Render the page or a subtree as markdown", .read_only = false, .destructive = false },
         .{ .name = "click", .title = "Click an element", .read_only = false, .destructive = true },
         .{ .name = "save", .title = "Save the session as an agent script", .read_only = false, .destructive = true },
+        .{ .name = "run", .title = "Run an agent script", .read_only = false, .destructive = true },
         .{ .name = "session_list", .title = "List browser sessions", .read_only = true, .destructive = false },
     };
 
@@ -1237,6 +1379,211 @@ test "MCP - save writes the script to disk" {
 
     const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
+}
+
+test "MCP - run: a script drives the session and returns its output" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('btn:', page.evaluate(\"document.getElementById('btn').textContent\"));\nreturn page.extract({ btn: '#btn' });"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .isError = false,
+        .content = &.{.{ .type = "text", .text = "btn: Click Me\n{\"btn\":\"Click Me\"}\n" }},
+    } }, out.written());
+
+    try testing.expectEqual(0, server.active_session.session.pages.items.len);
+}
+
+test "MCP - run: closes the pages it opened, keeps cookies and earlier pages" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html"}}}
+    );
+    const session = server.active_session.session;
+    try testing.expectEqual(1, session.pages.items.len);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate(\"document.cookie = 'login=1'\");\nthrow new Error('stop');"}}}
+    );
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expectEqual(1, session.pages.items.len);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.evaluate('document.cookie');"}}}
+    );
+    try testing.expectEqual("login=1\n", try testToolText(aa, out.written()));
+    try testing.expectEqual(1, session.pages.items.len);
+}
+
+test "MCP - run: closing its pages drops their registry nodes" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.waitForSelector({ selector: '#btn' });"}}}
+    );
+    try testing.expectEqual(0, server.active_session.registry.lookup_by_id.count());
+
+    // A re-goto runs resetFrame over every registry entry.
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn 'ok';"}}}
+    );
+    try testing.expectEqual("ok\n", try testToolText(aa, out.written()));
+}
+
+test "MCP - run: console output is capped" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"for (let i = 0; i < 100; i++) console.log('x'.repeat(1000));\nreturn 'done';"}}}
+    );
+    const text = try testToolText(aa, out.written());
+    const note = "\n[console output truncated at 65536 bytes]\ndone\n";
+    try testing.expect(std.mem.endsWith(u8, text, note));
+    try testing.expectEqual(max_run_console_bytes, text.len - note.len);
+}
+
+test "MCP - run: a zero timeout is rejected" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"timeout":0,"script":"return 1;"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .@"error" = .{ .code = -32602 } }, out.written());
+}
+
+test "MCP - run: a script that outlives its timeout is stopped" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"timeout":200,"script":"console.log('before');\nwhile (true) {}"}}}
+    );
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expectEqual("before\nscript timed out after 200 ms\n", try testToolText(aa, out.written()));
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate('while (true) {}');"}}}
+    );
+    try testing.expect(std.mem.find(u8, out.written(), "script timed out after 300 ms") != null);
+    try testing.expectEqual(0, server.active_session.session.pages.items.len);
+
+    // A loop in script code after an `await`: it runs inside a microtask
+    // checkpoint.
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('loaded');\nwhile (true) {}"}}}
+    );
+    try testing.expectEqual("loaded\nscript timed out after 300 ms\n", try testToolText(aa, out.written()));
+
+    // /xhr/hang replies after 2 s.
+    out.clearRetainingCapacity();
+    const started = std.Io.Timestamp.now(lp.io, .boot);
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"await new Page().goto('http://localhost:9582/xhr/hang');"}}}
+    );
+    try testing.expectEqual("script timed out after 300 ms\n", try testToolText(aa, out.written()));
+    try testing.expect(started.untilNow(lp.io, .boot).toMilliseconds() < 1500);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.evaluate(\"document.getElementById('btn').textContent\");"}}}
+    );
+    try testing.expectEqual("Click Me\n", try testToolText(aa, out.written()));
+}
+
+test "MCP - run: an error ends the script and follows its output" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"console.log('before');\nthrow new Error('boom');\nconsole.log('after');"}}}
+    );
+    const text = try testToolText(aa, out.written());
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.startsWith(u8, text, "before\n"));
+    try testing.expect(std.mem.find(u8, text, "boom") != null);
+    try testing.expect(std.mem.find(u8, text, "after") == null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"new Page().click('#btn');"}}}
+    );
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "call page.goto(url) first") != null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 3, .@"error" = .{ .code = -32602 } }, out.written());
+}
+
+test "MCP - run: script variables do not carry over between calls" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"globalThis.seen = 1; return typeof seen;"}}}
+    );
+    try testing.expectEqual("number\n", try testToolText(aa, out.written()));
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"return typeof seen;"}}}
+    );
+    try testing.expectEqual("undefined\n", try testToolText(aa, out.written()));
+}
+
+test "MCP - run: acts on the caller's session only" {
+    const aa = testing.arena_allocator;
+    var out_a: std.Io.Writer.Allocating = .init(aa);
+    var a = try Server.init(testing.allocator, testing.test_app, &out_a.writer);
+    defer a.deinit();
+    var out_b: std.Io.Writer.Allocating = .init(aa);
+    var b = try Server.init(testing.allocator, testing.test_app, &out_b.writer);
+    defer b.deinit();
+
+    const set_cookie =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate(\"document.cookie = 'who=a'\");"}}}
+    ;
+    const read_cookie =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.evaluate('document.cookie') || '(none)';"}}}
+    ;
+    try router.handleMessage(a, aa, set_cookie);
+    try testing.expect(std.mem.find(u8, out_a.written(), "\"isError\":false") != null);
+
+    out_a.clearRetainingCapacity();
+    try router.handleMessage(a, aa, read_cookie);
+    try testing.expectEqual("who=a\n", try testToolText(aa, out_a.written()));
+    try router.handleMessage(b, aa, read_cookie);
+    try testing.expectEqual("(none)\n", try testToolText(aa, out_b.written()));
 }
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {
