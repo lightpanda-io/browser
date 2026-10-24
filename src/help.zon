@@ -532,8 +532,10 @@
     \\          perfectly well what you are doing.
     \\          Script set headers via CDP or JS can't override a CLI set header.
     \\  --http-max-concurrent <INT>
-    \\          Maximum number of concurrent HTTP requests.
-    \\          Defaults to 40.
+    \\          Maximum number of concurrent HTTP requests, shared by every
+    \\          session.
+    \\          Defaults to 40. For serve, defaults to 8 per
+    \\          --cdp-max-connections with a min of 40 and a max of 256.
     \\  --http-max-host-open <INT>
     \\          Maximum open connections to a given host:port.
     \\          Defaults to 6.
