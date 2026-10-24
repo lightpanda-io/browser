@@ -63,6 +63,7 @@ github:
         - Swatinem/rust-cache
         - dtolnay/rust-toolchain
         - getplumber/plumber
+        - DeterminateSystems/nix-installer-action
 
     # ===========================================
     # Container images must not use forbidden tags
