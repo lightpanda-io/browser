@@ -676,6 +676,9 @@ pub fn navigateInner(
 
     if (is_same_document) {
         frame.url = new_url;
+        try frame.window._location._url.setHref(new_url, &frame.js.execution);
+        // `:target` matches off the fragment, which might have just changed.
+        frame.styleChanged();
 
         frame._session.notification.dispatch(.frame_navigated_within_document, &.{
             .url = new_url,
@@ -693,7 +696,7 @@ pub fn navigateInner(
     switch (kind) {
         .push => |state| {
             if (is_same_document) {
-                _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
+                _ = try self.pushEntry(new_url, .{ .source = .navigation, .value = state }, frame, true);
                 try self.settleSameDocument(finished, signal, frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
@@ -701,7 +704,7 @@ pub fn navigateInner(
         },
         .replace => |state| {
             if (is_same_document) {
-                _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
+                _ = try self.replaceEntry(new_url, .{ .source = .navigation, .value = state }, frame, true);
                 try self.settleSameDocument(finished, signal, frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
@@ -711,10 +714,6 @@ pub fn navigateInner(
             self._index = index;
 
             if (is_same_document) {
-                try frame.window._location._url.setHref(new_url, &frame.js.execution);
-                // `:target` matches off the fragment, which might have just changed.
-                frame.styleChanged();
-
                 try self.fireCurrentEntryChangeEvent(previous, kind, frame);
                 try self.settleSameDocument(finished, signal, frame);
             } else {
