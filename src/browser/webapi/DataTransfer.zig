@@ -58,6 +58,16 @@ _item_list: *DataTransferItemList,
 _files: *FileList,
 _drop_effect: []const u8 = "none",
 _effect_allowed: []const u8 = "none",
+_mode: Mode = .read_write,
+
+// https://html.spec.whatwg.org/multipage/dnd.html#drag-data-store-mode
+// A drag's dragenter/dragover/dragleave see the item types but not their data,
+// and only a dragstart may change the items.
+pub const Mode = enum {
+    read_write,
+    read_only,
+    protected,
+};
 
 pub fn init(frame: *Frame) !*DataTransfer {
     const arena = try frame.getArena(.medium, "DataTransfer");
@@ -102,6 +112,9 @@ fn normalizeFormat(arena: Allocator, format: []const u8) ![]const u8 {
 }
 
 pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]const u8 {
+    if (self._mode == .protected) {
+        return "";
+    }
     const norm = try normalizeFormat(frame.local_arena, format);
     for (self._items.items) |it| {
         if (it._kind == .string and std.mem.eql(u8, it._type, norm)) {
@@ -112,6 +125,9 @@ pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]
 }
 
 pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void {
+    if (self._mode != .read_write) {
+        return;
+    }
     const norm = try normalizeFormat(self._arena.allocator(), format);
     const owned_data = try self._arena.dupe(u8, data);
     for (self._items.items) |it| {
@@ -126,6 +142,9 @@ pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void 
 }
 
 fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
+    if (self._mode != .read_write) {
+        return;
+    }
     if (format_) |format| {
         const norm = try normalizeFormat(frame.local_arena, format);
         var i: usize = 0;
@@ -154,6 +173,9 @@ fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
 
 // add(File) -> file item ; add(DOMString, DOMString) -> string item.
 pub fn addItem(self: *DataTransfer, data: js.Value, type_: ?[]const u8, frame: *Frame) !?*DataTransferItem {
+    if (self._mode != .read_write) {
+        return null;
+    }
     if (data.toZig(*File)) |file| {
         return try self.addFileItem(file, frame);
     } else |_| {}
@@ -176,7 +198,7 @@ fn addFileItem(self: *DataTransfer, file: *File, frame: *Frame) !*DataTransferIt
 }
 
 pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
-    if (index >= self._items.items.len) {
+    if (self._mode != .read_write or index >= self._items.items.len) {
         return;
     }
     const it = self._items.orderedRemove(index);
@@ -187,6 +209,9 @@ pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
 }
 
 pub fn clearItems(self: *DataTransfer, frame: *Frame) !void {
+    if (self._mode != .read_write) {
+        return;
+    }
     for (self._items.items) |it| {
         if (it._kind == .file) {
             it._payload.file._proto.releaseRef(frame.page);
