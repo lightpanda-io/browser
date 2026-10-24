@@ -33,6 +33,9 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   zig-fmt:
     name: zig fmt
@@ -44,6 +47,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       # Zig version used from the `minimum_zig_version` field in build.zig.zon
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
@@ -64,6 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: ./.github/actions/install
@@ -85,6 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: ./.github/actions/install
@@ -108,6 +115,11 @@ jobs:
   bench-fmt:
     name: perf-fmt
     needs: zig-test-release
+    # The perf-fmt image is private to the organisation, so pulling it
+    # with GITHUB_TOKEN needs packages read on this job.
+    permissions:
+      contents: read
+      packages: read
 
     runs-on: ubuntu-latest
     timeout-minutes: 15

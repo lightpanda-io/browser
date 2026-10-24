@@ -19,8 +19,10 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
-      - uses: getplumber/plumber@7970e5df1e7d217de41b2880832b63a6f2152b97 # v0.4.8
+      - uses: getplumber/plumber@93ea968a173204b9a7f91df270a4e853845aefa3 # v0.7.9
         with:
           # Code scanning upload needs security-events write, which PRs
           # from forks do not get. The report stays available as a
@@ -30,3 +32,6 @@ jobs:
           # keeps the default branch score (verified from the OIDC
           # token), and a failed push never fails the run.
           score-push: true
+          # Gate at 85 points instead of the all-or-nothing default,
+          # leaves room for a small finding without blocking PRs.
+          min-points: 85

@@ -48,6 +48,7 @@ jobs:
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: ./.github/actions/install
@@ -61,6 +62,7 @@ jobs:
       - name: open a pull request
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OUT: ${{ steps.orderfile.outputs.out-dir }}
           BRANCH: orderfile-regen
         run: |
@@ -74,7 +76,7 @@ jobs:
           git commit -m "orderfile: regenerate the hot-code profile" -m "$(cat "$OUT/result.txt")"
           # One fixed branch, force-pushed: a re-run refreshes the open PR
           # instead of stacking a second one.
-          git push --force origin "HEAD:refs/heads/$BRANCH"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
           if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
             echo "refreshed the open pull request"
             exit 0
