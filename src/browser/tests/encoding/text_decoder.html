@@ -171,3 +171,19 @@
     testing.expectEqual('B', d.decode(new Uint8Array([66])));
   }
 </script>
+
+<script id=stream_pending_bytes>
+  {
+    // Bytes held from the last call can decode to more than the new input
+    // alone would: here one byte gives two U+FFFD.
+    let d = new TextDecoder();
+    testing.expectEqual('', d.decode(new Uint8Array([0xF0]), { stream: true }));
+    testing.expectEqual('\uFFFD\uFFFD', d.decode(new Uint8Array([0x8F]), { stream: true }));
+    testing.expectEqual('\uFFFD', d.decode(new Uint8Array([0x92]), { stream: true }));
+    testing.expectEqual('', d.decode());
+
+    testing.expectEqual('', d.decode(new Uint8Array([0xF0, 0x9F]), { stream: true }));
+    testing.expectEqual('\uFFFDA', d.decode(new Uint8Array([0x41]), { stream: true }));
+    testing.expectEqual('', d.decode());
+  }
+</script>
