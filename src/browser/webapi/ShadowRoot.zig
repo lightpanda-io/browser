@@ -163,6 +163,50 @@ fn setAdoptedStyleSheets(self: *ShadowRoot, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
 
+// DocumentOrShadowRoot: the topmost element at the point, retargeted against
+// this shadow root. A hit in a shadow tree nested in this one reports its host
+// in this tree; a hit outside this tree is returned as is, as in Chrome.
+fn elementFromPoint(self: *ShadowRoot, x: f64, y: f64, frame: *Frame) !?*Element {
+    const document = self.asNode().ownerDocument(frame) orelse return null;
+    const hit = (try document.hitTest(x, y, frame)) orelse return null;
+    var current = hit;
+    while (current.asNode().containingShadowRoot()) |shadow| {
+        if (self.isInTreeOf(shadow)) {
+            break;
+        }
+        current = shadow._host;
+    }
+    return current;
+}
+
+// Whether this shadow root is `shadow` or sits in a tree inside it.
+fn isInTreeOf(self: *ShadowRoot, shadow: *ShadowRoot) bool {
+    var current: ?*ShadowRoot = self;
+    while (current) |root| : (current = root._host.asNode().containingShadowRoot()) {
+        if (root == shadow) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The element at the point and its ancestors, leaving each shadow tree through
+// its host, like Document.elementsFromPoint.
+fn elementsFromPoint(self: *ShadowRoot, x: f64, y: f64, frame: *Frame) ![]const *Element {
+    var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
+    const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
+    var result: std.ArrayList(*Element) = .empty;
+    while (current) |el| {
+        const parent = el.parentElement() orelse if (el.asNode().containingShadowRoot()) |shadow| shadow._host else null;
+        // Chrome always ends the list with the root element.
+        if (parent == null or style_manager.isHitTestable(el)) {
+            try result.append(frame.local_arena, el);
+        }
+        current = parent;
+    }
+    return result.items;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ShadowRoot);
 
@@ -190,6 +234,8 @@ pub const JsApi = struct {
         return self.getElementById(try value.toZig([]const u8));
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
+    pub const elementFromPoint = bridge.function(ShadowRoot.elementFromPoint, .{});
+    pub const elementsFromPoint = bridge.function(ShadowRoot.elementsFromPoint, .{});
     pub const setHTML = bridge.function(ShadowRoot.setHTML, .{ .ce_reactions = true });
     pub const setHTMLUnsafe = bridge.function(ShadowRoot.setHTMLUnsafe, .{ .ce_reactions = true });
     pub const getHTML = bridge.function(_getHTML, .{});
