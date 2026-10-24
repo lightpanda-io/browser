@@ -25,6 +25,7 @@ const c = @import("curl");
 
 pub const Curl = c.CURL;
 pub const CurlM = c.CURLM;
+pub const CurlSH = c.CURLSH;
 pub const CurlCode = c.CURLcode;
 pub const CurlSList = c.curl_slist;
 pub const CurlHeader = c.curl_header;
@@ -234,6 +235,8 @@ const CurlOption = enum(c.CURLoption) {
     ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
     ssl_ec_curves = c.CURLOPT_SSL_EC_CURVES,
     connect_to = c.CURLOPT_CONNECT_TO,
+    share = c.CURLOPT_SHARE,
+    resolve = c.CURLOPT_RESOLVE,
 };
 
 pub const CurlHttpVersion = enum(c_long) {
@@ -469,6 +472,15 @@ const ErrorMulti = error{
     Unknown,
 };
 
+const ErrorShare = error{
+    BadOption,
+    InUse,
+    Invalid,
+    OutOfMemory,
+    NotBuiltIn,
+    Unknown,
+};
+
 const ErrorHeader = error{
     OutOfMemory,
     BadArgument,
@@ -645,6 +657,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
 
         .http_header,
         .connect_to,
+        .resolve,
         => @as(?*CurlSList, value),
 
         .private,
@@ -655,6 +668,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         => @as(?*anyopaque, @ptrCast(value)),
 
         .ssl_ctx_data => @as(*crypto.X509_STORE, value),
+        .share => @as(?*CurlSH, value),
 
         .http_version => @as(c_long, @backingInt(@as(CurlHttpVersion, value))),
 
@@ -753,6 +767,54 @@ pub fn curl_easy_nextheader(
     const ptr = c.curl_easy_nextheader(easy, @backingInt(origin), request, prev);
     if (ptr == null) return null;
     return @ptrCast(ptr);
+}
+
+pub const CurlLockData = enum(c.curl_lock_data) {
+    share = c.CURL_LOCK_DATA_SHARE,
+    dns = c.CURL_LOCK_DATA_DNS,
+    _,
+};
+
+pub const CurlLockAccess = c.curl_lock_access;
+pub const CurlLockFunction = *const fn (?*Curl, CurlLockData, CurlLockAccess, ?*anyopaque) callconv(.c) void;
+pub const CurlUnlockFunction = *const fn (?*Curl, CurlLockData, ?*anyopaque) callconv(.c) void;
+
+const CurlSHOption = enum(c.CURLSHoption) {
+    share = c.CURLSHOPT_SHARE,
+    lock_function = c.CURLSHOPT_LOCKFUNC,
+    unlock_function = c.CURLSHOPT_UNLOCKFUNC,
+    user_data = c.CURLSHOPT_USERDATA,
+};
+
+pub fn curl_share_init() ?*CurlSH {
+    return c.curl_share_init();
+}
+
+pub fn curl_share_cleanup(share: *CurlSH) ErrorShare!void {
+    try errorSHCheck(c.curl_share_cleanup(share));
+}
+
+pub fn curl_share_setopt(share: *CurlSH, comptime option: CurlSHOption, value: anytype) ErrorShare!void {
+    const opt: c.CURLSHoption = @backingInt(option);
+    const code = switch (option) {
+        .share => c.curl_share_setopt(share, opt, @as(c_int, @intCast(@backingInt(@as(CurlLockData, value))))),
+        .lock_function => c.curl_share_setopt(share, opt, @as(CurlLockFunction, value)),
+        .unlock_function => c.curl_share_setopt(share, opt, @as(CurlUnlockFunction, value)),
+        .user_data => c.curl_share_setopt(share, opt, @as(?*anyopaque, @ptrCast(value))),
+    };
+    try errorSHCheck(code);
+}
+
+fn errorSHCheck(code: c.CURLSHcode) ErrorShare!void {
+    return switch (code) {
+        c.CURLSHE_OK => {},
+        c.CURLSHE_BAD_OPTION => ErrorShare.BadOption,
+        c.CURLSHE_IN_USE => ErrorShare.InUse,
+        c.CURLSHE_INVALID => ErrorShare.Invalid,
+        c.CURLSHE_NOMEM => ErrorShare.OutOfMemory,
+        c.CURLSHE_NOT_BUILT_IN => ErrorShare.NotBuiltIn,
+        else => ErrorShare.Unknown,
+    };
 }
 
 pub fn curl_multi_init() ?*CurlM {
