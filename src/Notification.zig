@@ -102,6 +102,7 @@ const EventListeners = struct {
     cookie_changed: List = .{},
     download_will_begin: List = .{},
     download_progress: List = .{},
+    download_data: List = .{},
 };
 
 const Events = union(enum) {
@@ -136,6 +137,7 @@ const Events = union(enum) {
     cookie_changed: *const CookieChanged,
     download_will_begin: *const DownloadWillBegin,
     download_progress: *const DownloadProgress,
+    download_data: *const DownloadData,
 };
 pub const EventType = std.meta.FieldEnum(Events);
 
@@ -327,10 +329,12 @@ pub const DownloadWillBegin = struct {
     guid: []const u8,
     url: []const u8,
     suggested_filename: []const u8,
+    // The response's Content-Type, if it had one.
+    content_type: ?[]const u8,
 };
 
-// Emitted by Frame as a download is written to disk: once when it starts
-// (`.in_progress`) and once when the body is fully written (`.completed`).
+// Emitted by Download: once when it starts (`.in_progress`) and once when it
+// ends (`.completed`, or `.canceled` if it failed).
 // The CDP browser domain turns this into a `Browser.downloadProgress` event.
 pub const DownloadProgress = struct {
     guid: []const u8,
@@ -343,6 +347,11 @@ pub const DownloadProgress = struct {
         completed,
         canceled,
     };
+};
+
+pub const DownloadData = struct {
+    guid: []const u8,
+    data: []const u8,
 };
 
 pub const DialogResponse = struct {

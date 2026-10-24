@@ -93,6 +93,8 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         }
     }
 
+    const events_enabled = params.eventsEnabled orelse false;
+
     // `default` defers the choice to the browser; we map it to `deny` (no
     // download is written unless a driver explicitly opts in).
     const behavior: Session.DownloadBehavior = if (std.mem.eql(u8, params.behavior, "allow"))
@@ -101,8 +103,16 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         .allow_and_name
     else if (std.mem.eql(u8, params.behavior, "deny") or std.mem.eql(u8, params.behavior, "default"))
         .deny
+    else if (std.mem.eql(u8, params.behavior, "stream") and events_enabled == true)
+        // Our extension to download behavior.
+        .stream
     else
         return error.InvalidParams;
+
+    // These write to disk, so they need to know where.
+    if ((behavior == .allow or behavior == .allow_and_name) and params.downloadPath == null) {
+        return error.InvalidParams;
+    }
 
     // Drivers (notably Playwright) send Browser.setDownloadBehavior at the
     // browser level during connection setup, before any target/context has
@@ -119,7 +129,12 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     // downloadPath comes from the (transient) command arena; persist it on the
     // session arena since Frame reads it on later navigations.
     session.download_path = if (params.downloadPath) |p| try session.arena.dupe(u8, p) else null;
-    session.download_events_enabled = params.eventsEnabled orelse false;
+    session.download_events_enabled = events_enabled;
+    bc.download_session_id = blk: {
+        if (behavior != .stream) break :blk null;
+        const sid = cmd.input.session_id orelse break :blk null;
+        break :blk cmd.cdp.resolveSessionId(sid);
+    };
 
     if (session.download_events_enabled) {
         try bc.downloadEventsEnable();
@@ -140,7 +155,10 @@ pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.Dow
         .guid = event.guid,
         .url = event.url,
         .suggestedFilename = event.suggested_filename,
-    }, .{});
+        // Not in Chrome's event; clients can't otherwise get the type of a
+        // download, e.g. one streamed as LP.downloadData (issue #3861).
+        .contentType = event.content_type,
+    }, .{ .session_id = bc.download_session_id });
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadProgress
@@ -155,7 +173,7 @@ pub fn downloadProgress(bc: *CDP.BrowserContext, msg: *const Notification.Downlo
             .completed => "completed",
             .canceled => "canceled",
         },
-    }, .{});
+    }, .{ .session_id = bc.download_session_id });
 }
 
 fn getWindowForTarget(cmd: *CDP.Command) !void {
@@ -460,6 +478,12 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     try ctx.expectSentEvent("Browser.downloadWillBegin", .{
         .url = "http://127.0.0.1:9582/download/report.csv",
         .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "inProgress",
+        .totalBytes = 30,
+        .receivedBytes = 0,
     }, .{});
     try ctx.expectSentEvent("Browser.downloadProgress", .{
         .state = "completed",
@@ -470,4 +494,284 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     const written = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
     defer testing.allocator.free(written);
     try testing.expectEqualSlices(u8, "col1,col2\nhello,world\n42,1337\n", written);
+}
+
+test "cdp.browser: stream behavior streams an attachment navigation as LP.downloadData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 38,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 38 });
+
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/report.csv", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{});
+    try ctx.expectSentEvent("LP.downloadData", .{
+        // "col1,col2\nhello,world\n42,1337\n"
+        .data = "Y29sMSxjb2wyCmhlbGxvLHdvcmxkCjQyLDEzMzcK",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{});
+
+    // The body went over CDP, so it isn't rendered as a page.
+    try ctx.processMessage(.{ .id = 39, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.textContent",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "" } }, .{ .id = 39 });
+}
+
+test "cdp.browser: a failed attachment navigation renders instead of downloading" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40 });
+
+    // Like Chrome, which shows an error page rather than downloading a 404.
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/missing.csv", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.processMessage(.{ .id = 41, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.textContent",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "not found" } }, .{ .id = 41 });
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing.csv", .{}));
+}
+
+// Clicks a link of cdp/download_link.html, then waits for the network to go
+// idle, which includes the download.
+fn clickDownloadLink(ctx: *testing.TestContext, bc: *CDP.BrowserContext, message_id: usize, comptime link: []const u8) !void {
+    try ctx.processMessage(.{ .id = message_id, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.getElementById('" ++ link ++ "').click()",
+    } });
+    try testing.waitForPage(bc);
+}
+
+test "cdp.browser: setDownloadBehavior stream requires eventsEnabled" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-LPS" });
+
+    // Events are the only way the bytes reach the client.
+    try ctx.processMessage(.{
+        .id = 42,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+
+    try ctx.processMessage(.{
+        .id = 43,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 43 });
+    try testing.expectEqual(.stream, bc.session.download_behavior);
+    try testing.expect(bc.session.download_path == null);
+}
+
+test "cdp.browser: setDownloadBehavior allow requires downloadPath" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DLP" });
+
+    // With nowhere to write, every download would fail unannounced.
+    try ctx.processMessage(.{
+        .id = 54,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allow", .eventsEnabled = true },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 54 });
+
+    try ctx.processMessage(.{
+        .id = 55,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allowAndName" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 55 });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+}
+
+test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    // Sent on the page session, like lightpanda-io/demo puppeteer/download.js,
+    // which listens on the root connection: the events must stay sessionless.
+    try ctx.processMessage(.{
+        .id = 44,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 44 });
+    try testing.expect(bc.download_session_id == null);
+
+    try clickDownloadLink(&ctx, bc, 45, "csv");
+    // The guid is random, so it's omitted from these subset matches.
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "data:text/csv,name%2Cvalue%0Aexample%2C42",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 21,
+        .receivedBytes = 21,
+    }, .{});
+
+    // download="../../evil.txt" is reduced to its basename, so the file
+    // still lands in downloadPath.
+    try clickDownloadLink(&ctx, bc, 46, "traversal");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{ .suggestedFilename = "evil.txt" }, .{});
+
+    const csv = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
+    defer testing.allocator.free(csv);
+    try testing.expectEqualSlices(u8, "name,value\nexample,42", csv);
+
+    const evil = try tmp.dir.readFileAlloc(testing.io, "evil.txt", testing.allocator, .limited(1024));
+    defer testing.allocator.free(evil);
+    try testing.expectEqualSlices(u8, "x", evil);
+}
+
+test "cdp.browser: a failed <a download> is canceled and nothing is written" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    try ctx.processMessage(.{
+        .id = 49,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 49 });
+
+    // Like Chrome: the 404 is announced, then canceled with 0/0 bytes, even
+    // though its body advertised a Content-Length.
+    try clickDownloadLink(&ctx, bc, 50, "missing");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/missing.csv",
+        .suggestedFilename = "missing.csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "canceled",
+        .totalBytes = 0,
+        .receivedBytes = 0,
+    }, .{});
+
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing.csv", .{}));
+}
+
+test "cdp.browser: stream behavior streams an <a download> as LP.downloadData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    // Sent on SID-DL, so every download event must come back on it.
+    try ctx.processMessage(.{
+        .id = 47,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 47 });
+
+    // Over HTTP, so the body takes the streaming transfer path.
+    try clickDownloadLink(&ctx, bc, 48, "attachment");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("LP.downloadData", .{
+        // "col1,col2\nhello,world\n42,1337\n"
+        .data = "Y29sMSxjb2wyCmhlbGxvLHdvcmxkCjQyLDEzMzcK",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{ .session_id = "SID-DL" });
+}
+
+test "cdp.browser: download events leave a detached stream session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 51,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 51 });
+    try testing.expectEqualSlices(u8, "SID-DL", bc.download_session_id.?);
+
+    // Events must not keep going to a sessionId the client dropped.
+    try ctx.processMessage(.{
+        .id = 52,
+        .method = "Target.detachFromTarget",
+        .params = .{ .sessionId = "SID-DL" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 52 });
+    try testing.expect(bc.download_session_id == null);
+    try testing.expectEqual(.stream, bc.session.download_behavior);
 }
