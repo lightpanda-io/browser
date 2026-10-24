@@ -522,6 +522,7 @@ const Server = @import("server/Server.zig");
 const TestWSServer = @import("TestWSServer.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 const test_routes = @import("test_routes.zig");
+pub const raw_responses = test_routes.raw_responses;
 
 pub var test_cdp_server: ?*Server = null;
 pub var test_cdp_port: u16 = 0;
