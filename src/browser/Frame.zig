@@ -266,6 +266,10 @@ charset: []const u8 = "UTF-8",
 // access to the JavaScript engine
 js: *JS.Context,
 
+// The main world's context. `js` is an isolated world's context while that
+// world calls into Zig.
+main_js: *JS.Context,
+
 // The Page's arena (page.arena), NOT one tied to this Frame. An iframe or
 // popup that re-navigates is torn down and re-initialized in place while the
 // Page lives on, and much of what's allocated here must survive.
@@ -360,6 +364,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     self.* = .{
         .js = undefined,
+        .main_js = undefined,
         .page = page,
         .page_arena = page_arena,
         .parent = parent,
@@ -438,6 +443,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .local_arena = self.local_arena,
     });
     errdefer browser.env.destroyContext(self.js);
+    self.main_js = self.js;
     self.window._performance.attach(self.js);
 
     const location = try Location.init("about:blank", self);
