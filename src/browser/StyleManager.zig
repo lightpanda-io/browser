@@ -731,6 +731,8 @@ pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
 pub fn stackingProps(self: *StyleManager, el: *Element) Stacking.Computed {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{};
+    // Boxless wrappers pass their ancestors' paint context to flat-tree children.
+    if (self.visibilityProps(el).box == .contents) return .{};
     return self.stacking.ownProps(self.arena.allocator(), el, self.frame);
 }
 
@@ -3027,6 +3029,10 @@ test "StyleManager: stacking shares parsed position keywords" {
 
     try el.setStyle("position: fixed; position: unset", frame);
     try testing.expectEqual(.static, sm.stackingProps(el).position);
+
+    try el.setStyle("display: contents; position: relative", frame);
+    try testing.expectEqual(.relative, sm.position(el));
+    try testing.expectEqual(false, sm.stackingProps(el).positioned());
 }
 
 // Every element of a deep chain probed in document order, the shape of an

@@ -95,6 +95,9 @@ testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'isolation:
 </script>
 <script id="display_contents_does_not_isolate">
 testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'display:contents;z-index:0'));
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'display:contents;opacity:0.5'));
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'display:contents;transform:translateX(0)'));
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'display:contents;isolation:isolate'));
 </script>
 <script id="boxless_slot_does_not_isolate">
 document.body.innerHTML = '<div id="slotHost" style="position:absolute;width:0;height:0"><button id="slotUnder" style="position:absolute;width:100px;height:100px;z-index:999">Under</button></div><button id="slotCover" style="position:absolute;width:100px;height:100px;z-index:1">Cover</button>';
