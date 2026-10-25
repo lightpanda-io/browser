@@ -78,3 +78,26 @@
   testing.expectFalse(stack.includes(document.getElementById('hidden_wrap')));
 }
 </script>
+
+<script id="hit_skips_display_contents">
+{
+  const contents = document.createElement('div');
+  contents.style.display = 'contents';
+  contents.innerHTML = '<div style="width:100px;height:40px">inside</div>';
+  document.body.appendChild(contents);
+  const inside = contents.firstChild;
+  const r = inside.getBoundingClientRect();
+  const [x, y] = [r.x + 1, r.y + 1];
+  testing.expectEqual(inside, document.elementFromPoint(x, y));
+  testing.expectFalse(document.elementsFromPoint(x, y).includes(contents));
+
+  // display:contents on the root computes to block, so it can still be hit
+  const html = document.documentElement;
+  html.style.display = 'contents';
+  document.body.style.pointerEvents = 'none';
+  testing.expectEqual(html, document.elementFromPoint(x, y));
+  html.style.display = '';
+  document.body.style.pointerEvents = '';
+  contents.remove();
+}
+</script>

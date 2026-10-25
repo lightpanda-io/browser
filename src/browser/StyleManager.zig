@@ -730,7 +730,7 @@ pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return true;
     const p = self.visibilityProps(el);
-    return !p.visibility_hidden and !p.pointer_events_none and p.box != .contents;
+    return !p.visibility_hidden and !p.pointer_events_none and self.generatesBox(el);
 }
 
 /// Computed text-transform, which inherits: the nearest of `el` and its
