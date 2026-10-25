@@ -289,6 +289,44 @@ pub extern "C" fn encoding_decoder_new(handle: *const c_void) -> *mut c_void {
     Box::into_raw(decoder) as *mut c_void
 }
 
+/// The size and alignment of a streaming decoder, for `encoding_decoder_init`.
+#[no_mangle]
+pub extern "C" fn encoding_decoder_size() -> usize {
+    std::mem::size_of::<Decoder>()
+}
+
+#[no_mangle]
+pub extern "C" fn encoding_decoder_align() -> usize {
+    std::mem::align_of::<Decoder>()
+}
+
+/// Like `encoding_decoder_new`, but in `out`, which the caller owns: at least
+/// `encoding_decoder_size()` bytes aligned to `encoding_decoder_align()`. A
+/// Decoder holds no heap memory, so it's never freed.
+#[no_mangle]
+pub extern "C" fn encoding_decoder_init(handle: *const c_void, out: *mut c_void) -> u8 {
+    if handle.is_null() || out.is_null() {
+        return 0;
+    }
+    let encoding: &'static Encoding = unsafe { &*(handle as *const Encoding) };
+    unsafe { std::ptr::write(out as *mut Decoder, encoding.new_decoder_without_bom_handling()) };
+    1
+}
+
+/// The most UTF-8 a streaming decoder can write for `input_len` more bytes,
+/// counting what it holds from earlier input.
+#[no_mangle]
+pub extern "C" fn encoding_decoder_max_utf8_buffer_length(
+    decoder_ptr: *const c_void,
+    input_len: usize,
+) -> usize {
+    if decoder_ptr.is_null() {
+        return 0;
+    }
+    let decoder: &Decoder = unsafe { &*(decoder_ptr as *const Decoder) };
+    decoder.max_utf8_buffer_length(input_len).unwrap_or(0)
+}
+
 /// Decode using a streaming decoder (maintains state for incomplete sequences)
 #[no_mangle]
 pub extern "C" fn encoding_decoder_decode(

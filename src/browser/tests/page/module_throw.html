@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script>
+  // A module script that throws while it evaluates is reported like a classic
+  // script's exception: an "error" event, not an "unhandledrejection".
+  const reported = [];
+  window.addEventListener('error', (e) => {
+    reported.push('error:' + e.error.message);
+    e.preventDefault();
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    reported.push('unhandledrejection:' + e.reason.message);
+    e.preventDefault();
+  });
+</script>
+
+<script type=module>
+  throw new Error('module-throw');
+</script>
+
+<script id=module_throw>
+  testing.onload(() => testing.expectEqual(['error:module-throw'], reported));
+</script>
+
+<script id=dynamic_import_throw type=module>
+  // A module that throws under import() rejects the import() promise. The
+  // module's own evaluation promise isn't the page's: no unhandledrejection.
+  const state = await testing.async();
+  let outcome = 'resolved';
+  try {
+    await import('./modules/throws.js');
+  } catch (e) {
+    outcome = 'rejected';
+  }
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('rejected', outcome);
+    testing.expectEqual(['error:module-throw'], reported);
+  });
+</script>

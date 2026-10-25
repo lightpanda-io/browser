@@ -208,9 +208,8 @@ pub const Function = struct {
                 break;
             }
 
-            // A slice of js.Value is always bound as variadic (see
-            // Caller.getArgs) and variadics contribute 0 to length.
-            if (@typeInfo(PT) == .pointer and @typeInfo(PT).pointer.size == .slice and @typeInfo(PT).pointer.child == js.Value) {
+            // a rest parameter contributes 0 to length
+            if (@typeInfo(PT) == .@"struct" and @hasDecl(PT, "js_variadic")) {
                 break;
             }
             count += 1;
@@ -721,10 +720,6 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 
     const local = &caller.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
         return js.Intercepted.no;
     };
@@ -733,7 +728,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     switch (local.ctx.global) {
         .frame => |frame| {
             const document = frame.document;
-            if (document.getElementById(property, frame)) |el| {
+            if (document.getElementById(property)) |el| {
                 const js_val = local.zigValueToJs(el, .{}) catch return js.Intercepted.no;
                 var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
                 pc.getReturnValue().set(js_val);
@@ -1183,6 +1178,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/MessageEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
     @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
+    @import("../webapi/event/NavigateEvent.zig"),
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
     @import("../webapi/event/HashChangeEvent.zig"),
@@ -1284,6 +1280,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/navigation/Navigation.zig"),
     @import("../webapi/navigation/NavigationHistoryEntry.zig"),
     @import("../webapi/navigation/NavigationActivation.zig"),
+    @import("../webapi/navigation/NavigationDestination.zig"),
     @import("../webapi/canvas/CanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),

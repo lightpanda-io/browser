@@ -135,26 +135,26 @@ fn getChildElementCount(self: *DocumentFragment) usize {
     return count;
 }
 
-pub fn append(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+pub fn append(self: *DocumentFragment, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
     const parent = self.asNode();
-    for (nodes) |node_or_text| {
+    for (nodes.values) |node_or_text| {
         const child = try node_or_text.toNode(parent.getDocument(frame));
         _ = try parent.appendChild(child, frame);
     }
 }
 
-pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+pub fn prepend(self: *DocumentFragment, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
     const parent = self.asNode();
-    var i = nodes.len;
+    var i = nodes.values.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(parent.getDocument(frame));
+        const child = try nodes.values[i].toNode(parent.getDocument(frame));
         _ = try parent.insertBefore(child, parent.firstChild(), frame);
     }
 }
 
-pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().replaceChildren(nodes, frame);
+pub fn replaceChildren(self: *DocumentFragment, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().replaceChildren(nodes.values, frame);
 }
 
 pub fn moveBefore(self: *DocumentFragment, node: js.Value, child: js.Value, frame: *Frame) !void {

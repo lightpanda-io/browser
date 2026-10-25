@@ -84,7 +84,6 @@ origin: ?[]const u8 = null,
 // can outlive it. Always true for a service worker: only a secure context can
 // register one.
 _secure_context: bool,
-buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
 js: *JS.Context,
@@ -335,27 +334,29 @@ pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
     return value.structuredClone();
 }
 
-pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rejection: JS.PromiseRejection) !void {
+// See Window.unhandledPromiseRejection.
+pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, promise: JS.Promise, reason: ?JS.Value) !bool {
     const event_name = if (no_handler) "unhandledrejection" else "rejectionhandled";
 
-    if (no_handler) {
-        self.page.recordJsError(error.JsException);
-        if (rejection.reason()) |reason| {
-            self.page.status.noteException(reason.toStringSlice() catch "");
-        }
+    const target = self.asEventTarget();
+    if (!self._event_manager.hasDirectListeners(target, event_name)) {
+        return false;
     }
 
-    const target = self.asEventTarget();
-    if (self._event_manager.hasDirectListeners(target, event_name)) {
-        const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
-            .reason = if (rejection.reason()) |r| try r.persist() else null,
-            .promise = try rejection.promise().persist(),
-        }, self.page)).asEvent();
-        try self.dispatch(target, event, .{});
-    }
+    const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
+        .reason = if (reason) |r| try r.persist() else null,
+        .promise = try promise.persist(),
+        .cancelable = no_handler,
+    }, self.page)).asEvent();
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer event.releaseRef(self.page);
+
+    try self.dispatch(target, event, .{});
+    return event._prevent_default;
 }
 
-fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
+fn importScripts(self: *WorkerGlobalScope, urls: JS.Variadic([:0]const u8)) !void {
     if (self._is_module) {
         // not allowed to be called when the worker type is module (scripts should
         // use actual imports).
@@ -367,7 +368,7 @@ fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
     const arena = try session.getArena(.small, "importScript");
     defer arena.release();
 
-    for (urls) |url| {
+    for (urls.values) |url| {
         defer arena.resetRetain();
         try self.importScript(arena.allocator(), url);
     }
@@ -481,11 +482,11 @@ fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
-pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: JS.Variadic(JS.Value.Global), exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = false,
-        .params = params,
+        .params = params.values,
         .name = "worker.setTimeout",
     });
 }
@@ -494,11 +495,11 @@ fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: []JS.Value.Global, exec: *JS.Execution) !u32 {
+pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay_ms: ?i32, params: JS.Variadic(JS.Value.Global), exec: *JS.Execution) !u32 {
     const cb = try handler.resolve(exec);
     return self._timers.schedule(exec, cb, Timers.delayFromJs(delay_ms), .{
         .repeat = true,
-        .params = params,
+        .params = params.values,
         .name = "worker.setInterval",
     });
 }

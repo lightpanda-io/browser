@@ -10,9 +10,9 @@
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
-            // v1.2.0
-            .url = "https://github.com/google/brotli/archive/028fb5a23661f123017c060daa546b55cf4bde29.tar.gz",
-            .hash = "N-V-__8AAJudKgCQCuIiH6MJjAiIJHfg_tT_Ew-0vZwVkCo_",
+            // v1.2.1
+            .url = "https://github.com/google/brotli/archive/db24a98aed38a16de78cc05ca15cdd8dc2a0d92d.tar.gz",
+            .hash = "N-V-__8AAHajKgD1oXsbBWLJka_y0ZSKZnQaTc6L-KURx6-j",
         },
         .zlib = .{
             .url = "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",

@@ -52,6 +52,7 @@ const State = struct {
     list_depth: usize = 0,
     list_stack: [32]ListState = undefined,
     pre_node: ?*Node = null,
+    in_code: bool = false,
     in_table: bool = false,
     table_row_index: usize = 0,
     table_col_count: usize = 0,
@@ -92,6 +93,16 @@ fn classLanguage(el: *Element) ?[]const u8 {
     return null;
 }
 
+fn longestBacktickRun(text: []const u8) usize {
+    var longest: usize = 0;
+    var run: usize = 0;
+    for (text) |c| {
+        run = if (c == '`') run + 1 else 0;
+        longest = @max(longest, run);
+    }
+    return longest;
+}
+
 // Iterative else large trees will stackoverflow
 const Context = struct {
     state: State,
@@ -114,6 +125,7 @@ const Context = struct {
         element: Element.Tag,
         block_anchor: struct { href: []const u8, label: ?[]const u8 },
         inline_anchor: struct { href: []const u8, standalone: bool },
+        inline_code: struct { ticks: usize, href: ?[]const u8 },
     };
 
     fn deinit(self: *Context) void {
@@ -125,6 +137,17 @@ const Context = struct {
             try self.writer.writeByte('\n');
             self.state.last_char_was_newline = true;
         }
+    }
+
+    fn resolveHref(self: *Context, raw: []const u8) []const u8 {
+        const frame = self.frame;
+        return URL.resolve(frame.local_arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
+    }
+
+    fn writeLinkTarget(self: *Context, href: []const u8) !void {
+        try self.writer.writeAll("](");
+        try self.writer.writeAll(href);
+        try self.writer.writeByte(')');
     }
 
     fn render(self: *Context, node: *Node) Error!void {
@@ -185,6 +208,21 @@ const Context = struct {
             try self.ensureNewline();
         }
 
+        // Markdown syntax is literal inside a code span or fence, so inline
+        // markup keeps only its text.
+        if (self.state.pre_node != null or self.state.in_code) {
+            switch (tag) {
+                .a, .b, .strong, .i, .em, .s, .del, .code => return self.open(.init(self.tree.content(el, boxed)), .none),
+                .img => {
+                    const alt = el.getAttributeInterned("alt") orelse return;
+                    try self.writer.writeAll(alt);
+                    self.state.last_char_was_newline = false;
+                    return;
+                },
+                else => {},
+            }
+        }
+
         switch (tag) {
             .h1 => try self.writer.writeAll("# "),
             .h2 => try self.writer.writeAll("## "),
@@ -242,10 +280,26 @@ const Context = struct {
                 self.state.last_char_was_newline = true;
             },
             .code => {
-                if (self.state.pre_node == null) {
-                    try self.writer.writeByte('`');
-                    self.state.last_char_was_newline = false;
+                // An empty span would read as a literal pair of backticks.
+                const text = try RenderTree.codeText(self.frame.call_arena, el.asNode(), self.frame);
+                if (isAllWhitespace(text)) {
+                    return self.open(.init(self.tree.content(el, boxed)), .none);
                 }
+                // A code span can't hold a link, so a link holding the whole
+                // span is written around it instead.
+                const href = if (RenderTree.soleHref(el.asNode(), self.frame)) |raw| self.resolveHref(raw) else null;
+                if (href != null) try self.writer.writeByte('[');
+                // Backslash escapes are literal inside a code span, so its
+                // text is written as-is. The fence has to be longer than any
+                // run of backticks in the text, and is padded with a space
+                // (stripped by the reader) so a leading or trailing backtick
+                // doesn't merge with it.
+                const ticks = longestBacktickRun(text) + 1;
+                try self.writer.splatByteAll('`', ticks);
+                if (ticks > 1) try self.writer.writeByte(' ');
+                self.state.in_code = true;
+                self.state.last_char_was_newline = false;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .inline_code = .{ .ticks = ticks, .href = href } });
             },
             .b, .strong => {
                 try self.writer.writeAll("**");
@@ -301,7 +355,7 @@ const Context = struct {
 
                 const info = RenderTree.analyzeContent(el.asNode(), frame);
                 const label = getAnchorLabel(el);
-                const href = URL.resolve(frame.local_arena, frame.base(), href_raw, .{ .encoding = frame.charset }) catch href_raw;
+                const href = self.resolveHref(href_raw);
 
                 if (info.has_block) {
                     return self.open(.init(self.tree.content(el, boxed)), .{ .block_anchor = .{
@@ -352,21 +406,26 @@ const Context = struct {
                 try self.ensureNewline();
                 try self.writer.writeByte('[');
                 try self.writer.writeAll(anchor.label orelse anchor.href);
-                try self.writer.writeAll("](");
-                try self.writer.writeAll(anchor.href);
-                try self.writer.writeAll(")\n");
+                try self.writeLinkTarget(anchor.href);
+                try self.writer.writeByte('\n');
                 return;
             },
             .inline_anchor => |anchor| {
-                try self.writer.writeAll("](");
-                try self.writer.writeAll(anchor.href);
-                try self.writer.writeByte(')');
+                try self.writeLinkTarget(anchor.href);
                 if (anchor.standalone) {
                     try self.writer.writeByte('\n');
                     self.state.last_char_was_newline = true;
                 } else {
                     self.state.last_char_was_newline = false;
                 }
+                return;
+            },
+            .inline_code => |code| {
+                if (code.ticks > 1) try self.writer.writeByte(' ');
+                try self.writer.splatByteAll('`', code.ticks);
+                if (code.href) |href| try self.writeLinkTarget(href);
+                self.state.in_code = false;
+                self.state.last_char_was_newline = false;
                 return;
             },
         };
@@ -376,12 +435,6 @@ const Context = struct {
                 try self.ensureNewline();
                 try self.writer.writeAll("```\n");
                 self.state.pre_node = null;
-            },
-            .code => {
-                if (self.state.pre_node == null) {
-                    try self.writer.writeByte('`');
-                    self.state.last_char_was_newline = false;
-                }
             },
             .b, .strong => {
                 try self.writer.writeAll("**");
@@ -452,7 +505,11 @@ const Context = struct {
                 try self.writer.writeByte(' ');
             }
 
-            try self.escape(word);
+            if (self.state.in_code) {
+                try self.writeCode(word);
+            } else {
+                try self.escape(word);
+            }
             self.state.last_char_was_newline = false;
             first = false;
         }
@@ -461,6 +518,20 @@ const Context = struct {
         if (!first and !self.state.last_char_was_newline and std.ascii.isWhitespace(text[text.len - 1])) {
             try self.writer.writeByte(' ');
         }
+    }
+
+    // A GFM table splits a row into cells before it parses code spans, so
+    // a `|` inside a code span in a table still has to be escaped.
+    fn writeCode(self: *Context, text: []const u8) !void {
+        if (!self.state.in_table) return self.writer.writeAll(text);
+        var start: usize = 0;
+        for (text, 0..) |c, i| {
+            if (c != '|') continue;
+            if (i > start) try self.writer.writeAll(text[start..i]);
+            try self.writer.writeAll("\\|");
+            start = i + 1;
+        }
+        if (start < text.len) try self.writer.writeAll(text[start..]);
     }
 
     fn escape(self: *Context, text: []const u8) !void {
@@ -722,6 +793,57 @@ test "browser.markdown: code" {
         \\```
         \\line 1
         \\line 2
+        \\```
+        \\
+    );
+}
+
+test "browser.markdown: inline code" {
+    try testMarkdownHTML("<p>Set <code>max_retries</code> to <code>2*n</code></p>",
+        \\
+        \\Set `max_retries` to `2*n`
+        \\
+    );
+    try testMarkdownHTML("<p><code>a`b</code> and <code>``x``</code></p>",
+        \\
+        \\`` a`b `` and ``` ``x`` ```
+        \\
+    );
+    try testMarkdownHTML(
+        \\<table><thead><tr><th>Type</th></tr></thead>
+        \\<tbody><tr><td><code>string | null</code></td></tr></tbody></table>
+    ,
+        \\
+        \\| Type |
+        \\|---|
+        \\| `string \| null` |
+        \\
+    );
+}
+
+test "browser.markdown: empty inline code" {
+    try testMarkdownHTML("<p>a<code></code>b<code> </code>c<code><img src=\"/x.png\"></code>d</p>",
+        \\
+        \\ab c![](http://localhost/x.png)d
+        \\
+    );
+}
+
+test "browser.markdown: links inside inline code" {
+    try testMarkdownHTML("<p>See <code><a href=\"/vec\">Vec</a></code> and <code><a href=\"/vec\">Vec</a>&lt;<a href=\"/t\">T</a>&gt;</code></p>",
+        \\
+        \\See [`Vec`](http://localhost/vec) and `Vec<T>`
+        \\
+    );
+}
+
+test "browser.markdown: inline markup inside code is literal" {
+    try testMarkdownHTML("<p><code><b>x</b> <i>y</i> <img src=\"/e.png\" alt=\"z\"></code> <code>a<img alt=\"``\"></code></p><pre><a href=\"/f\">f</a>(<em>a</em>)</pre>",
+        \\
+        \\`x y z` ``` a`` ```
+        \\
+        \\```
+        \\f(a)
         \\```
         \\
     );

@@ -90,4 +90,8 @@ pub const Global = struct {
             .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
         };
     }
+
+    pub fn isEqual(self: Global, other: Promise) bool {
+        return v8.v8__Global__IsEqual(&self.slot.handle, @ptrCast(other.handle));
+    }
 };

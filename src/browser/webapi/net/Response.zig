@@ -590,8 +590,8 @@ const StreamConsumer = struct {
         try self.pumpRead();
     }
 
-    fn onReadRejected(self: *StreamConsumer) void {
-        self.finish(self.execution.js.local.?, null);
+    fn onReadRejected(self: *StreamConsumer, reason: js.Value) void {
+        self.finishWithReason(self.execution.js.local.?, reason);
     }
 
     fn concatenateChunks(self: *StreamConsumer, allocator: Allocator) ![]const u8 {
@@ -607,6 +607,11 @@ const StreamConsumer = struct {
     fn finish(self: *StreamConsumer, local: *const js.Local, err: ?[]const u8) void {
         self.reader.releaseLock();
         local.toLocal(self.resolver).rejectError("stream body", .{ .type_error = err orelse "Failed to read stream" });
+    }
+
+    fn finishWithReason(self: *StreamConsumer, local: *const js.Local, reason: js.Value) void {
+        self.reader.releaseLock();
+        local.toLocal(self.resolver).reject("stream body", reason);
     }
 };
 

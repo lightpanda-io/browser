@@ -20,10 +20,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Arena = @import("Arena.zig");
+const ArenaAllocator = @import("ArenaAllocator.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const ArenaPool = @This();
 

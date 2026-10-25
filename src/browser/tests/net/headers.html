@@ -155,6 +155,47 @@
 }
 </script>
 
+<script id=iterable-initialization>
+// A sequence<sequence<ByteString>> takes any iterable, not only an Array:
+// a Map, a Set of pairs, a generator. A plain object is still a record.
+{
+  testing.expectEqual("1", new Headers(new Map([["a", "1"]])).get("a"));
+  testing.expectEqual("2", new Headers(new Set([["b", "2"]])).get("b"));
+  testing.expectEqual("3", new Headers((function* () { yield ["c", "3"]; })()).get("c"));
+  testing.expectEqual("4", new Request("http://example.com/", { headers: new Map([["d", "4"]]) }).headers.get("d"));
+  testing.expectEqual("5", new Response("", { headers: new Map([["e", "5"]]) }).headers.get("e"));
+  testing.expectEqual("6", new Headers({ f: "6" }).get("f"));
+  // A platform object that iterates pairs is a sequence too, not a record.
+  testing.expectEqual("7", new Headers(new URLSearchParams("g=7")).get("g"));
+  const form = new FormData();
+  form.append("h", "8");
+  testing.expectEqual("8", new Headers(form).get("h"));
+}
+
+// Each item must itself be a pair, and an exception from the page's
+// iterator propagates.
+{
+  const errorName = (fn) => {
+    try {
+      fn();
+      return null;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  testing.expectEqual("TypeError", errorName(() => new Headers(new Set([5]))));
+  testing.expectEqual("TypeError", errorName(() => new Headers(new Set([["a"]]))));
+  const boom = new RangeError("boom");
+  let thrown = null;
+  try {
+    new Headers({ [Symbol.iterator]() { throw boom; } });
+  } catch (err) {
+    thrown = err;
+  }
+  testing.expectEqual(boom, thrown);
+}
+</script>
+
 <script id=value-validation>
 // The constructor validates names/values and normalizes values per Fetch.
 {
@@ -164,18 +205,11 @@
 }
 
 // An invalid header name throws a TypeError.
-{
-  let threw = false;
-  try { new Headers([["a b", "x"]]); } catch (e) { threw = e instanceof TypeError; }
-  testing.expectEqual(true, threw);
-}
+testing.expectError('TypeError: Invalid header name', () => new Headers([["a b", "x"]]));
+testing.expectError('TypeError: Invalid header name', () => new Headers({ "a b": "x" }));
 
 // A value with a forbidden byte (here an interior newline) throws a TypeError.
-{
-  let threw = false;
-  try { new Headers([["x", "a\nb"]]); } catch (e) { threw = e instanceof TypeError; }
-  testing.expectEqual(true, threw);
-}
+testing.expectError('TypeError: Invalid header value', () => new Headers([["x", "a\nb"]]));
 
 // A value with a code point above U+00FF cannot be a byte string: TypeError.
 {
@@ -454,5 +488,16 @@
     testing.expectEqual(3, threw);
     testing.expectEqual(null, headers.get('x-a'));
   }
+}
+</script>
+
+<script id=long_name>
+{
+  // longer than the 1024-byte buffer names used to be lowercased into
+  const name = 'x-' + 'a'.repeat(2000);
+  const headers = new Headers({ [name.toUpperCase()]: '1' });
+  testing.expectEqual('1', headers.get(name));
+  headers.append(name.toUpperCase(), '2');
+  testing.expectEqual('1, 2', headers.get(name));
 }
 </script>

@@ -220,3 +220,14 @@
   testing.expectEqual('teal', c.style.color);
 }
 </script>
+
+<script id="longPropertyName">
+{
+  // longer than the 1024-byte buffer names used to be lowercased into
+  const div = $('#test-div');
+  const name = 'a'.repeat(2000);
+  testing.expectEqual(undefined, div.style[name]);
+  testing.expectEqual(undefined, div.style[name.toUpperCase()]);
+  testing.expectEqual('', div.style.getPropertyValue(name.toUpperCase()));
+}
+</script>

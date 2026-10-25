@@ -150,6 +150,7 @@ pub const Request = struct {
             .image => .{ .image = true },
             .eventsource, .text_track => .{ .other = true },
             .worker => .{ .script = true },
+            .beacon => .{ .ping = true },
         };
 
         return .init(req.url, &buffers.url, source, resource_type);

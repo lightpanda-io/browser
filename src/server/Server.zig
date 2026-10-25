@@ -2113,6 +2113,15 @@ test "server: HTTP page commands" {
         try testing.expectEqual(try testing.arena_allocator.print("{{\"value\":[\"{s}\"]}}", .{handle}), body);
     }
 
+    // The W3C switch-to-window command accepts only the existing handle.
+    const select_current = try testing.arena_allocator.print("{{\"handle\":\"{s}\"}}", .{handle});
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/window", select_current)));
+    // A wrong handle must not create or switch to a new context.
+    const bad = try sessionCommand(&c, "POST", &session_id, "/window", "{\"handle\":\"not-a-window\"}");
+    try testing.expect(std.mem.startsWith(u8, bad, "HTTP/1.1 404 Not Found\r\n"));
+    try testing.expect(std.mem.find(u8, responseBody(bad), "\"no such window\"") != null);
+    try testing.expectEqual(try testing.arena_allocator.print("{{\"value\":\"{s}\"}}", .{handle}), responseBody(try sessionCommand(&c, "GET", &session_id, "/window", "")));
+
     const url = "http://127.0.0.1:9582/src/browser/tests/bidi/input.html";
     try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
     try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));

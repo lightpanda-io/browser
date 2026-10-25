@@ -81,18 +81,6 @@ pub const Associated = struct {
     }
 };
 
-// Removes the cookies `matches` accepts, `context` being its first argument.
-pub fn remove(jar: *Cookie.Jar, context: anytype, comptime matches: fn (@TypeOf(context), *const Cookie) bool) void {
-    const cookies = &jar.cookies;
-    var i = cookies.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (matches(context, &cookies.items[i])) {
-            cookies.swapRemove(i).deinit();
-        }
-    }
-}
-
 // A cookie in the HTTP session's shape.
 pub const HttpCookie = struct {
     cookie: *const Cookie,
@@ -277,7 +265,8 @@ fn getCookies(cmd: *BiDi.Command) !void {
     jar.removeExpired(null);
 
     var cookies: std.ArrayList(BiDiCookie) = .empty;
-    for (jar.cookies.items) |*cookie| {
+    var it = jar.iterator();
+    while (it.next()) |cookie| {
         if (filter.matches(cookie)) {
             try cookies.append(cmd.arena, .{ .cookie = cookie });
         }
@@ -337,7 +326,7 @@ fn deleteCookies(cmd: *BiDi.Command) !void {
     var filter = p.filter;
     filter.decode(cmd.arena) catch return cmd.sendError("invalid argument", "invalid filter.value");
 
-    remove(&cmd.bidi.user_context.session.cookie_jar, &filter, Filter.matches);
+    cmd.bidi.user_context.session.cookie_jar.removeWhere(&filter, Filter.matches);
     return cmd.sendResult(.{ .partitionKey = .{ .userContext = user_context } });
 }
 
@@ -386,8 +375,9 @@ test "bidi.storage: cookies" {
 
     try ctx.processMessage(.{ .id = 5, .method = "storage.deleteCookies", .params = .{ .filter = .{ .name = "a" } } });
     try ctx.expectSentResult(.{ .partitionKey = .{ .userContext = "default" } }, .{ .id = 5 });
-    try testing.expectEqual(1, ctx.bidi().user_context.session.cookie_jar.cookies.items.len);
-    try testing.expectEqual("b", ctx.bidi().user_context.session.cookie_jar.cookies.items[0].name);
+    try testing.expectEqual(1, ctx.bidi().user_context.session.cookie_jar.len);
+    var it = ctx.bidi().user_context.session.cookie_jar.iterator();
+    try testing.expectEqual("b", it.next().?.name);
 
     // SameSite=None needs Secure
     try ctx.processMessage(.{
@@ -419,5 +409,5 @@ test "bidi.storage: cookies" {
     // clears the rest
     try ctx.processMessage(.{ .id = 11, .method = "storage.deleteCookies", .params = struct {}{} });
     try ctx.expectSentResult(.{ .partitionKey = .{ .userContext = "default" } }, .{ .id = 11 });
-    try testing.expectEqual(0, ctx.bidi().user_context.session.cookie_jar.cookies.items.len);
+    try testing.expectEqual(0, ctx.bidi().user_context.session.cookie_jar.len);
 }

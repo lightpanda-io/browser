@@ -374,7 +374,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         &ls.local,
         params.objectGroup orelse "",
         node.dom,
-    );
+    ) orelse return error.ContextNotFound;
     defer remote_object.deinit();
 
     const arena = cmd.arena;
@@ -1216,8 +1216,8 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_iframe.html" });
     const child = bc.mainFrame().?.child_frames.items[0];
 
-    const text = child.document.getElementById("text", child) orelse unreachable;
-    const upload = child.document.getElementById("upload", child) orelse unreachable;
+    const text = child.document.getElementById("text") orelse unreachable;
+    const upload = child.document.getElementById("upload") orelse unreachable;
     const text_node = try bc.node_registry.register(text.asNode());
     const upload_node = try bc.node_registry.register(upload.asNode());
 
@@ -1529,7 +1529,7 @@ test "cdp.dom: getContentQuads of a node in a nested iframe is in the top-level 
     const main = bc.mainFrame().?;
     const child = main.child_frames.items[0];
     const nested = child.child_frames.items[0];
-    const inner = nested.document.getElementById("inner", nested).?;
+    const inner = nested.document.getElementById("inner").?;
     const inner_rect = inner.boundingClientRectValues(nested);
     const child_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     const nested_rect = nested.iframe.?.asElement().boundingClientRectValues(child);

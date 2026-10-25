@@ -1969,6 +1969,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn, .{});
+    transfer.captureEncodedDataLength(msg.conn);
     if (self.enforceCorsResponse(msg, transfer)) return true;
 
     // Latency is only meaningful for responses that hit the network (cache
@@ -2104,6 +2105,8 @@ pub const Request = struct {
         image,
         text_track,
         worker,
+        // navigator.sendBeacon
+        beacon,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -2120,6 +2123,7 @@ pub const Request = struct {
                 .image => "Image",
                 .text_track => "TextTrack",
                 .worker => "Script",
+                .beacon => "Ping",
             };
         }
     };
@@ -2673,8 +2677,13 @@ pub const Transfer = struct {
     // rewrote it). Only meaningful while _cache_intent != .none.
     _cache_key: [:0]const u8 = "",
 
-    // Content length reported on the CDP loadingFinished event.
+    // Content length reported on the CDP responseReceived event, and the
+    // resource-timing size of a partial fetch.
     _content_length: usize = 0,
+
+    // encodedDataLength of the CDP loadingFinished event: the header and body
+    // bytes received, the body still compressed.
+    _encoded_data_length: usize = 0,
 
     // Length of the body data_callback will receive. Can be different than
     // Content-Length if the content was compressed
@@ -2729,7 +2738,7 @@ pub const Transfer = struct {
         return switch (self.req.resource_type) {
             // The owner of a document request is the frame being navigated.
             .document => if (self.owner != null and self.owner.?.parent != null) "iframe" else "document",
-            .xhr, .fetch, .eventsource => "empty",
+            .xhr, .fetch, .eventsource, .beacon => "empty",
             .script => "script",
             .stylesheet => "style",
             .image => "image",
@@ -3063,6 +3072,12 @@ pub const Transfer = struct {
     // to end a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
+        if (self.state == .aborted) {
+            // Already detached mid-delivery (e.g. the owner was torn down from
+            // inside a callback); deliver() does the teardown.
+            return;
+        }
+
         const page_scope = self.logScope();
         defer page_scope.exit();
 
@@ -3090,6 +3105,7 @@ pub const Transfer = struct {
         }
 
         self.materializeResponse(conn, .{}) catch return false;
+        self.captureEncodedDataLength(conn);
         self.client.removeConn(conn);
         self._conn = null;
         self._content_length = self.res.buffer.items.len;
@@ -3334,6 +3350,12 @@ pub const Transfer = struct {
         self.client.dispatch_count += 1;
     }
 
+    fn captureEncodedDataLength(self: *Transfer, conn: *const http.Connection) void {
+        const header_size = conn.getHeaderSize() catch 0;
+        const body_size = conn.getDownloadSize() catch 0;
+        self._encoded_data_length = @intCast(header_size + body_size + self.res.partial_refused);
+    }
+
     fn captureTiming(self: *Transfer, conn: *const http.Connection) void {
         const t = &self._timing;
         const ct = conn.getTiming() catch return;
@@ -3481,6 +3503,7 @@ pub const Transfer = struct {
                 .eventsource, .worker => "other",
                 .image => "img",
                 .text_track => "track",
+                .beacon => "beacon",
             },
             .protocol = t.protocol,
             .start = t.start_time,
@@ -3609,6 +3632,10 @@ pub const Transfer = struct {
         self._from_cache = true;
         self._timing.cache = cache_state;
         self._content_length = body.len;
+        // A revalidated entry keeps the size of the 304 that crossed the wire.
+        if (cache_state == .local) {
+            self._encoded_data_length = body.len;
+        }
         return body;
     }
 
@@ -3639,6 +3666,7 @@ pub const Transfer = struct {
         // It may replace a cached response paused at the response stage.
         self._from_cache = false;
         self._content_length = owned_body.len;
+        self._encoded_data_length = owned_body.len;
         try self.bufferEvents(owned_body);
     }
 
@@ -4299,6 +4327,7 @@ pub const Transfer = struct {
             // flag and treats the resulting CURLE_WRITE_ERROR as a completed
             // response with the kept prefix as its body.
             res.partial_abort = true;
+            res.partial_refused = chunk_len;
             return http.writefunc_error;
         }
 
@@ -4543,7 +4572,7 @@ pub const Transfer = struct {
                     if (transfer._notify_cdp) {
                         transfer.notify(.http_request_done, &.{
                             .transfer = transfer,
-                            .content_length = transfer._content_length,
+                            .encoded_data_length = transfer._encoded_data_length,
                         });
                     }
                     // Before done_callback: a load handler can already see
@@ -4664,6 +4693,9 @@ const Response = struct {
     // status, kept prefix) as a success.
     partial_abort: bool = false,
 
+    // The read refused to end a partial fetch: libcurl doesn't count it.
+    partial_refused: usize = 0,
+
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
     buffer: std.ArrayList(u8) = .empty,
@@ -4758,6 +4790,7 @@ const Synthetic = struct {
             transfer.setResponseHeaders(h);
         }
         transfer._content_length = body.len;
+        transfer._encoded_data_length = body.len;
         try transfer.bufferEvents(body);
     }
 };
@@ -6466,4 +6499,69 @@ test "HttpClient: bodyless status announcing a body" {
     try testing.expectEqual(false, Transfer.announcesBody("Content-Length: 0\r\n"));
     try testing.expectEqual(false, Transfer.announcesBody("Content-Type: text/html\r\n"));
     try testing.expectEqual(false, Transfer.announcesBody("\r\n"));
+}
+
+// Fetches `url` with the test browser's client and returns the
+// encodedDataLength it reports in http_request_done (CDP's loadingFinished).
+const EncodedLength = struct {
+    reported: ?usize = null,
+    bytes_received: usize = 0,
+
+    fn onRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
+        const self: *EncodedLength = @ptrCast(@alignCast(ctx));
+        self.reported = msg.encoded_data_length;
+        self.bytes_received = msg.transfer.res.bytes_received;
+    }
+
+    fn fetch(self: *EncodedLength, url: [:0]const u8, partial: ?u32) !usize {
+        const notification = try Notification.init(testing.allocator);
+        defer notification.deinit();
+        try notification.register(.http_request_done, self, onRequestDone);
+
+        const client = &testing.test_browser.http_client;
+        self.reported = null;
+        try client.request(.{
+            .method = .GET,
+            .url = url,
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .xhr,
+            .partial = partial,
+            .notification = notification,
+            .shutdown_callback = noopShutdown,
+        }, null);
+        for (0..250) |_| {
+            if (self.reported != null) break;
+            _ = try client.tick(20);
+        }
+        // The delivering tick retired the transfer; the next one releases it.
+        _ = try client.tick(0);
+        return self.reported orelse error.NotReported;
+    }
+};
+
+test "HttpClient: encodedDataLength of an early-stopped partial fetch is the bytes that arrived" {
+    const large = testing.raw_responses.large;
+    var e: EncodedLength = .{};
+    const reported = try e.fetch("http://127.0.0.1:9582/raw/large", 16 * 1024);
+    try testing.expect(e.bytes_received < large.body.len);
+    try testing.expectEqual(large.head.len + e.bytes_received, reported);
+}
+
+test "HttpClient: encodedDataLength of a cache hit is the stored body, of a revalidation the 304's bytes" {
+    const client = &testing.test_browser.http_client;
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    const previous = client.cache;
+    client.cache = &cache;
+    defer client.cache = previous;
+
+    const raw = testing.raw_responses;
+    var e: EncodedLength = .{};
+    _ = try e.fetch("http://127.0.0.1:9582/raw/cacheable", null);
+    try testing.expectEqual(raw.cacheable.body.len, try e.fetch("http://127.0.0.1:9582/raw/cacheable", null));
+
+    _ = try e.fetch("http://127.0.0.1:9582/raw/revalidated", null);
+    try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
 }

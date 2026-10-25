@@ -269,7 +269,7 @@ pub fn src(self: *const Function) ![]const u8 {
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
     const local = self.local;
-    const key = local.isolate.initStringHandle(name);
+    const key = try local.isolate.initStringHandle(name);
     const handle = v8.v8__Object__Get(self.handle, self.local.handle, key) orelse {
         return error.JsException;
     };

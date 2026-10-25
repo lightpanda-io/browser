@@ -314,6 +314,35 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
     try testing.expectEqual(@as(usize, 0), browser.permissions.count());
 }
 
+test "cdp.browser: disposing a context clears its permission overrides" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-PERM-OLD" });
+    const browser = &ctx.cdp().browser;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"}, .browserContextId = "BID-PERM-OLD" },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Browser.setPermission",
+        .params = .{ .permission = .{ .name = "notifications" }, .setting = "denied", .browserContextId = "BID-PERM-OLD" },
+    });
+    try testing.expectEqual(@as(usize, 2), browser.permissions.count());
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
+    try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 3 });
+    try testing.expectEqual(@as(usize, 2), browser.permissions.count());
+
+    try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-PERM-OLD" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-PERM-NEW" });
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+}
+
 test "cdp.browser: setDownloadBehavior stores config on the session" {
     var ctx = try testing.context();
     defer ctx.deinit();

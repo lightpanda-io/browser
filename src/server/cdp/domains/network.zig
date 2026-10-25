@@ -280,20 +280,28 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
 
 const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
-// Only matches the cookie on provided parameters
-fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
-    if (!std.mem.eql(u8, cookie.name, name)) return false;
+// Only matches the cookie on provided parameters. We do not want to use
+// Cookie.appliesTo here, as a Cookie with a shorter path would match. Similar
+// to deduplicating with areCookiesEqual, except domain and path are optional.
+const CookieMatch = struct {
+    name: []const u8,
+    domain: ?[]const u8,
+    path: ?[]const u8,
 
-    if (domain) |domain_| {
-        const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
-        const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
-        if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+    fn matches(self: *const CookieMatch, cookie: *const Cookie) bool {
+        if (!std.mem.eql(u8, cookie.name, self.name)) return false;
+
+        if (self.domain) |domain_| {
+            const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
+            const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
+            if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+        }
+        if (self.path) |path_| {
+            if (!std.mem.eql(u8, cookie.path, path_)) return false;
+        }
+        return true;
     }
-    if (path) |path_| {
-        if (!std.mem.eql(u8, cookie.path, path_)) return false;
-    }
-    return true;
-}
+};
 
 fn deleteCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -311,21 +319,12 @@ fn deleteCookies(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const cookies = &bc.session.cookie_jar.cookies;
-
-    var index = cookies.items.len;
-    while (index > 0) {
-        index -= 1;
-        const cookie = &cookies.items[index];
-        const domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain);
-        const path = try Cookie.parsePath(cmd.arena, params.url, params.path);
-
-        // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
-        // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
-        if (cookieMatches(cookie, params.name, domain, path)) {
-            cookies.swapRemove(index).deinit();
-        }
-    }
+    const match: CookieMatch = .{
+        .name = params.name,
+        .domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain),
+        .path = try Cookie.parsePath(cmd.arena, params.url, params.path),
+    };
+    bc.session.cookie_jar.removeWhere(&match, CookieMatch.matches);
     return cmd.sendResult(null, .{});
 }
 
@@ -401,7 +400,7 @@ fn getCookies(cmd: *CDP.Command) !void {
 
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items, .urls = urls.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar, .urls = urls.items };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -413,7 +412,7 @@ fn getAllCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -560,7 +559,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
-        .encodedDataLength = msg.content_length,
+        .encodedDataLength = msg.encoded_data_length,
     }, .{ .session_id = session_id });
 }
 
@@ -697,7 +696,7 @@ const ResponseWriter = struct {
             try jws.objectField("statusText");
             // The server's own phrase, not a canonical one: Chrome reports the
             // wire, empty included.
-            try jws.write(transfer.statusText() orelse "");
+            try jws.write(SafeString.wrap(transfer.statusText() orelse ""));
         }
 
         {
@@ -794,6 +793,7 @@ fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
         .document, .stylesheet => "VeryHigh",
         .script, .worker, .xhr, .fetch, .eventsource => "High",
         .image, .text_track => "Low",
+        .beacon => "VeryLow",
     };
 }
 
@@ -1386,6 +1386,37 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
 }
 
+test "cdp.Network: loadingFinished reports the bytes received, not the decoded body" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-ED", .session_id = "SID-ED" });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/raw/gzip",
+        .origin = bc.security_origin,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
+        .resource_type = .fetch,
+        .notification = bc.session.notification,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    // The header block and the 29 gzipped bytes, not the 1000 decoded ones.
+    const r = testing.base.raw_responses.gzip;
+    try ctx.expectSentEvent("Network.loadingFinished", .{
+        .encodedDataLength = r.head.len + r.body.len,
+    }, .{ .session_id = "SID-ED" });
+}
+
 test "cdp.Network: POST body exposed as postData" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1580,6 +1611,34 @@ test "cdp.Network: getResponseBody base64-encodes a non-UTF-8 body" {
         .params = .{ .requestId = &request_id },
     });
     try ctx.expectSentResult(.{ .body = "/2Fi/g==", .base64Encoded = true }, .{ .id = 2 });
+}
+
+test "cdp.Network: responseReceived reports a non-UTF-8 status text and headers as strings" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-L1", .session_id = "SID-L1" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const url = "http://127.0.0.1:9582/latin1_response";
+    const page = try bc.session.createPage();
+    try page.navigate(url, .{});
+    try testing.waitForPage(bc);
+
+    // Latin-1 is transcoded to UTF-8, not written as an array of numbers.
+    try ctx.expectSentEvent("Network.responseReceived", .{
+        .response = .{
+            .url = url,
+            .status = 200,
+            .statusText = "Caf\xC3\xA9",
+            .headers = .{
+                .@"x-latin1" = "La\xC2\xA0Paz",
+                .@"x-caf\xC3\xA9" = "1",
+            },
+        },
+    }, .{ .session_id = "SID-L1" });
 }
 
 test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {

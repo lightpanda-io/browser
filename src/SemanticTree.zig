@@ -254,7 +254,7 @@ fn linePriority(node: *Node, data: *const NodeData, focused: ?*Node) Priority {
     if (node.is(Element)) |el| {
         if (std.mem.eql(u8, el.getAttributeSafe(comptime .wrap("aria-invalid")) orelse "", "true")) return .critical;
     }
-    if (data.value != null or data.options != null or data.checked != null) return .named;
+    if (data.value != null or data.options != null or data.checked != null or data.aria.expanded != null or data.aria.checked != null) return .named;
     const named = data.name != null and data.name.?.len > 0;
     // Headings outline the page, and a record's title is often one.
     if (named and std.mem.eql(u8, data.role, "heading")) return .heading;
@@ -420,6 +420,7 @@ const NodeData = struct {
     value: ?[]const u8,
     options: ?[]OptionData = null,
     checked: ?bool = null,
+    aria: AXNode.Writer.AriaProperties = .{},
     xpath: []const u8,
     interactive: bool,
     disabled: bool,
@@ -633,6 +634,7 @@ fn visitNode(
         .value = value,
         .options = options,
         .checked = checked,
+        .aria = if (invisible) .{} else if (node.is(Element)) |el| AXNode.Writer.ariaProperties(el, role) else .{},
         .xpath = xpath,
         .interactive = is_interactive,
         .disabled = is_disabled,
@@ -687,7 +689,7 @@ fn extractSelectOptions(node: *Node, frame: *Frame, arena: std.mem.Allocator) ![
 }
 
 fn extractDataListOptions(list_id: []const u8, frame: *Frame, arena: std.mem.Allocator) !?[]OptionData {
-    if (frame.document.getElementById(list_id, frame)) |referenced_el| {
+    if (frame.document.getElementById(list_id)) |referenced_el| {
         if (referenced_el.getTag() == .datalist) {
             return try extractSelectOptions(referenced_el.asNode(), frame, arena);
         }
@@ -763,6 +765,14 @@ const JsonVisitor = struct {
             if (data.checked) |checked| {
                 try self.jw.objectField("checked");
                 try self.jw.write(checked);
+            }
+            if (data.aria.expanded) |expanded| {
+                try self.jw.objectField("ariaExpanded");
+                try self.jw.write(expanded);
+            }
+            if (data.aria.checked) |checked| {
+                try self.jw.objectField("ariaChecked");
+                try self.jw.write(@tagName(checked));
             }
 
             if (data.options) |options| {
@@ -886,6 +896,17 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         }
     }
 
+    if (data.aria.expanded) |expanded| {
+        try writer.writeAll(if (expanded) " [expanded]" else " [collapsed]");
+    }
+    if (data.aria.checked) |checked| {
+        try writer.writeAll(switch (checked) {
+            .true => " [checked]",
+            .false => " [unchecked]",
+            .mixed => " [mixed]",
+        });
+    }
+
     if (data.options) |options| {
         try writer.writeAll(" options=[");
         for (options, 0..) |opt, i| {
@@ -900,7 +921,7 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         try writer.writeAll("]");
         return .{ .children = .none, .contentful = true }; // Native handling complete, do not walk children
     }
-    const contentful = name_to_print != null or (if (data.value) |v| v.len > 0 else false) or data.checked != null;
+    const contentful = name_to_print != null or (if (data.value) |v| v.len > 0 else false) or data.checked != null or data.aria.expanded != null or data.aria.checked != null;
 
     // A named one already says what its children say, but a heading or
     // code can still wrap a link.
@@ -1137,6 +1158,58 @@ test "SemanticTree backendDOMNodeId" {
     defer testing.allocator.free(json_str);
 
     try testing.expect(std.mem.find(u8, json_str, "\"backendDOMNodeId\":") != null);
+}
+
+test "SemanticTree: JSON exposes custom ARIA states without changing native checked" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_aria_states.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const find = struct {
+        fn named(node: std.json.Value, name: []const u8) ?std.json.Value {
+            if (node != .object) return null;
+            if (node.object.get("name")) |n| {
+                if (n == .string and std.mem.eql(u8, n.string, name)) return node;
+            }
+            if (node.object.get("children")) |children| {
+                for (children.array.items) |child| {
+                    if (named(child, name)) |found| return found;
+                }
+            }
+            return null;
+        }
+    }.named;
+
+    const expanded = find(parsed.value, "Uppercase expanded") orelse return error.NodeNotFound;
+    try testing.expect(expanded.object.get("ariaExpanded").?.bool);
+    const collapsed = find(parsed.value, "Collapsed details") orelse return error.NodeNotFound;
+    try testing.expect(!collapsed.object.get("ariaExpanded").?.bool);
+    const generic = find(parsed.value, "Generic expanded") orelse return error.NodeNotFound;
+    try testing.expect(generic.object.get("ariaExpanded") == null);
+    const mixed = find(parsed.value, "Uppercase mixed") orelse return error.NodeNotFound;
+    try testing.expectString("mixed", mixed.object.get("ariaChecked").?.string);
+    const switch_mixed = find(parsed.value, "Switch mixed") orelse return error.NodeNotFound;
+    try testing.expectString("false", switch_mixed.object.get("ariaChecked").?.string);
+    const invalid = find(parsed.value, "Invalid details") orelse return error.NodeNotFound;
+    try testing.expect(invalid.object.get("ariaExpanded").?.bool);
+    const empty_expanded = find(parsed.value, "Empty expanded") orelse return error.NodeNotFound;
+    try testing.expect(empty_expanded.object.get("ariaExpanded") == null);
+    const spaced_checked = find(parsed.value, "Spaced checked") orelse return error.NodeNotFound;
+    try testing.expectString("true", spaced_checked.object.get("ariaChecked").?.string);
+    const option_mixed = find(parsed.value, "Option mixed") orelse return error.NodeNotFound;
+    try testing.expectString("mixed", option_mixed.object.get("ariaChecked").?.string);
+    const native = find(parsed.value, "Native terms") orelse return error.NodeNotFound;
+    try testing.expect(native.object.get("checked").?.bool);
+    try testing.expect(native.object.get("ariaChecked") == null);
 }
 
 test "SemanticTree max_depth" {

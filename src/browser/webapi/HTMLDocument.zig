@@ -102,15 +102,8 @@ fn findBodyForDoc(document_element: *Element) ?*Element.Html.Body {
 pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     // Search the entire document for the first <title> element
     const root = self._proto.getDocumentElement() orelse return "";
-    const title_element = blk: {
-        var walker = TreeWalker.Full.init(root.asNode(), .{});
-        while (walker.next()) |node| {
-            if (node.is(Element.Html.Title)) |title| {
-                break :blk title;
-            }
-        }
-        return "";
-    };
+    var walker = TreeWalker.Full.ElementsOf(Element.Html.Title).init(root.asNode(), .{});
+    const title_element = walker.next() orelse return "";
 
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try title_element.asNode().getTextContent(&buf.writer);
@@ -154,9 +147,9 @@ fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
         if (node.is(Element.Html.Title)) |title_element| {
             // Replace children, but don't create text node for empty string
             if (title.len == 0) {
-                return title_element.asElement().replaceChildren(&.{}, frame);
+                return title_element.asElement().replaceChildren(.init(&.{}), frame);
             } else {
-                return title_element.asElement().replaceChildren(&.{.{ .text = title }}, frame);
+                return title_element.asElement().replaceChildren(.init(&.{.{ .text = title }}), frame);
             }
         }
     }
@@ -167,7 +160,7 @@ fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
 
     // Only add text if non-empty
     if (title.len > 0) {
-        try title_element.replaceChildren(&.{.{ .text = title }}, frame);
+        try title_element.replaceChildren(.init(&.{.{ .text = title }}), frame);
     }
 
     _ = try head.asNode().appendChild(title_node, frame);

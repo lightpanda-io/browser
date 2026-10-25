@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <head>
+  <meta name=lp-mode content=test>
   <title>DOMException Test</title>
   <script src="testing.js"></script>
 </head>
@@ -171,4 +172,13 @@
       testing.expectEqual(3, c.a.code);
     }, () => link.appendChild(content));
   }
+</script>
+
+<script id=long_message>
+{
+  // longer than the 1024-byte buffer toString used to format into
+  const msg = 'x'.repeat(2000);
+  const e = new DOMException(msg, 'SyntaxError');
+  testing.expectEqual('SyntaxError: ' + msg, e.toString());
+}
 </script>

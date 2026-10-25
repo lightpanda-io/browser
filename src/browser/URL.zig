@@ -69,72 +69,18 @@ pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
     return U.url_can_parse(url.ptr, url.len);
 }
 
-const EncodeSet = enum { path, query, query_legacy, userinfo, fragment, component };
-
-pub fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
-    // Check if encoding is needed
-    var needs_encoding = false;
-    for (segment) |c| {
-        if (shouldPercentEncode(c, encode_set)) {
-            needs_encoding = true;
-            break;
-        }
-    }
-    if (!needs_encoding) {
-        // Always dupe — the signature returns owned bytes, so a caller doing
-        // `defer allocator.free(out)` mustn't crash on the no-op path.
-        return allocator.dupe(u8, segment);
-    }
-
-    var buf = try std.ArrayList(u8).initCapacity(allocator, segment.len + 10);
-
-    var i: usize = 0;
-    while (i < segment.len) : (i += 1) {
-        const c = segment[i];
-
-        // For URL-canonicalization sets, preserve existing %XX sequences so
-        // already-encoded inputs round-trip cleanly. The `component` set treats
-        // input as opaque and re-encodes `%` itself, since the caller is
-        // embedding raw user data and a literal '%' must not be misread.
-        if (encode_set != .component and c == '%' and i + 2 < segment.len) {
-            const end = i + 2;
-            const h1 = segment[i + 1];
-            const h2 = segment[end];
-            if (std.ascii.isHex(h1) and std.ascii.isHex(h2)) {
-                try buf.appendSlice(allocator, segment[i .. end + 1]);
-                i = end;
-                continue;
-            }
-        }
-
-        if (shouldPercentEncode(c, encode_set)) {
-            try buf.print(allocator, "%{X:0>2}", .{c});
-        } else {
-            try buf.append(allocator, c);
-        }
-    }
-
-    return buf.items;
+/// Percent-encodes everything but the RFC 3986 unreserved characters
+/// (A-Z a-z 0-9 - . _ ~), so raw data can be embedded as a query value.
+pub fn percentEncodeComponent(allocator: Allocator, value: []const u8) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, value.len);
+    try std.Uri.Component.percentEncode(&aw.writer, value, isUnreserved);
+    return aw.written();
 }
 
-fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
+fn isUnreserved(c: u8) bool {
     return switch (c) {
-        // Unreserved characters (RFC 3986)
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => false,
-        // sub-delims allowed in path/query but some must be encoded in userinfo/query_legacy/component
-        '!', '$', '\'', '(', ')', '*', '+', ',' => encode_set == .component,
-        // '&' and ';' must be encoded for legacy encoding (to preserve NCRs like &#nnnnn;)
-        // and for component encoding (so a value can't break out into a new param)
-        '&', ';' => encode_set == .userinfo or encode_set == .query_legacy or encode_set == .component,
-        '=' => encode_set == .userinfo or encode_set == .component,
-        // Separators: userinfo and component must encode these
-        '/', ':', '@' => encode_set == .userinfo or encode_set == .component,
-        // '?' is allowed in queries only
-        '?' => encode_set != .query and encode_set != .query_legacy,
-        // '#' is allowed in fragments only
-        '#' => encode_set != .fragment,
-        // Everything else needs encoding (including space)
-        else => true,
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        else => false,
     };
 }
 
@@ -269,6 +215,14 @@ pub fn isLoopbackHost(hostname: []const u8) bool {
         .ip4 => |ip4| ip4.bytes[0] == 127,
         .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &(@as([15]u8, @splat(0)) ++ [_]u8{1})),
     };
+}
+
+/// Whether `hostname` is `suffix` or one of its subdomains.
+pub fn isSubdomainOf(hostname: []const u8, suffix: []const u8) bool {
+    if (hostname.len == suffix.len) return std.mem.eql(u8, hostname, suffix);
+    if (hostname.len < suffix.len + 1) return false;
+    const at = hostname.len - suffix.len;
+    return hostname[at - 1] == '.' and std.mem.eql(u8, hostname[at..], suffix);
 }
 
 pub fn getHostname(raw: []const u8) []const u8 {
@@ -421,211 +375,63 @@ pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
     return std.mem.eql(u8, first[0..first_hash_index], second[0..second_hash_index]);
 }
 
-// Helper function to build a URL from components
-fn buildUrl(
-    allocator: Allocator,
-    protocol: []const u8,
-    host: []const u8,
-    pathname: []const u8,
-    search: []const u8,
-    hash: []const u8,
-) ![:0]const u8 {
-    return allocator.printSentinel("{s}//{s}{s}{s}{s}", .{
-        protocol,
-        host,
-        pathname,
-        search,
-        hash,
-    }, 0);
+// The URL component setters (HTMLHyperlinkElementUtils) go through rust-url,
+// like the URL object, so a value it rejects leaves `current` unchanged.
+fn applySetter(current: [:0]const u8, allocator: Allocator, setter: anytype, args: anytype) ![:0]const u8 {
+    var err: i32 = 0;
+    const url = U.url_parse(current.ptr, current.len, &err) orelse return current;
+    defer U.url_free(url);
+
+    _ = @call(.auto, setter, .{url} ++ args);
+
+    var out: [*]const u8 = undefined;
+    var len: usize = 0;
+    U.url_to_string(url, &out, &len);
+    return allocator.dupeSentinel(u8, out[0..len], 0);
 }
 
 pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    // Add : suffix if not present
-    const protocol = if (value.len > 0 and value[value.len - 1] != ':')
-        try allocator.print("{s}:", .{value})
-    else
-        value;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_scheme, .{ value.ptr, value.len });
 }
 
 pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    // Check if the new value includes a port
-    const colon_pos = std.mem.findScalarLast(u8, value, ':');
-    const clean_host = if (colon_pos) |pos| blk: {
-        const port_str = value[pos + 1 ..];
-        // Remove default ports
-        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
-            break :blk value[0..pos];
-        }
-        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
-            break :blk value[0..pos];
-        }
-        break :blk value;
-    } else blk: {
-        // No port in new value - preserve existing port
-        const current_port = getPort(current);
-        if (current_port.len > 0) {
-            break :blk try allocator.print("{s}:{s}", .{ value, current_port });
-        }
-        break :blk value;
-    };
-
-    return buildUrl(allocator, protocol, clean_host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_host, .{ value.ptr, value.len });
 }
 
 pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const current_port = getPort(current);
-    const new_host = if (current_port.len > 0)
-        try allocator.print("{s}:{s}", .{ value, current_port })
-    else
-        value;
-
-    return setHost(current, new_host, allocator);
+    return applySetter(current, allocator, U.url_set_hostname, .{ value.ptr, value.len });
 }
 
-pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) ![:0]const u8 {
-    const hostname = getHostname(current);
-    const protocol = getProtocol(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    // Handle null or default ports
-    const new_host = if (value) |port_str| blk: {
-        if (port_str.len == 0) {
-            break :blk hostname;
-        }
-        // Check if this is a default port for the protocol
-        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
-            break :blk hostname;
-        }
-        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
-            break :blk hostname;
-        }
-        break :blk try allocator.print("{s}:{s}", .{ hostname, port_str });
-    } else hostname;
-
-    return buildUrl(allocator, protocol, new_host, pathname, search, hash);
+pub fn setPort(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    return applySetter(current, allocator, U.url_set_port, .{ value.ptr, value.len });
 }
 
 pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-
-    const encoded = try percentEncodeSegment(allocator, value, .path);
-
-    // Add / prefix if not present and value is not empty
-    const pathname = if (encoded.len > 0 and encoded[0] != '/')
-        try allocator.print("/{s}", .{encoded})
-    else
-        encoded;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_path, .{ value.ptr, value.len });
 }
 
 pub fn setSearch(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const hash = getHash(current);
-
-    const encoded = try percentEncodeSegment(allocator, value, .query);
-
-    // Add ? prefix if not present and value is not empty
-    const search = if (encoded.len > 0 and value[0] != '?')
-        try allocator.print("?{s}", .{encoded})
-    else
-        encoded;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    if (value.len == 0) {
+        return applySetter(current, allocator, U.url_set_query_to_null, .{});
+    }
+    const query = if (value[0] == '?') value[1..] else value;
+    return applySetter(current, allocator, U.url_set_query, .{ query.ptr, query.len });
 }
 
 pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-
-    const encoded = try percentEncodeSegment(allocator, value, .fragment);
-
-    // Add # prefix if not present and value is not empty
-    const hash = if (encoded.len > 0 and encoded[0] != '#')
-        try allocator.print("#{s}", .{encoded})
-    else
-        encoded;
-
-    return buildUrl(allocator, protocol, host, pathname, search, hash);
+    if (value.len == 0) {
+        return applySetter(current, allocator, U.url_set_fragment_to_null, .{});
+    }
+    const fragment = if (value[0] == '#') value[1..] else value;
+    return applySetter(current, allocator, U.url_set_fragment, .{ fragment.ptr, fragment.len });
 }
 
 pub fn setUsername(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-    const password = getPassword(current);
-
-    const encoded_username = try percentEncodeSegment(allocator, value, .userinfo);
-    return buildUrlWithUserInfo(allocator, protocol, encoded_username, password, host, pathname, search, hash);
+    return applySetter(current, allocator, U.url_set_username, .{ value.ptr, value.len });
 }
 
 pub fn setPassword(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
-    const protocol = getProtocol(current);
-    const host = getHost(current);
-    const pathname = getPathname(current);
-    const search = getSearch(current);
-    const hash = getHash(current);
-    const username = getUsername(current);
-
-    const encoded_password = try percentEncodeSegment(allocator, value, .userinfo);
-    return buildUrlWithUserInfo(allocator, protocol, username, encoded_password, host, pathname, search, hash);
-}
-
-fn buildUrlWithUserInfo(
-    allocator: Allocator,
-    protocol: []const u8,
-    username: []const u8,
-    password: []const u8,
-    host: []const u8,
-    pathname: []const u8,
-    search: []const u8,
-    hash: []const u8,
-) ![:0]const u8 {
-    if (username.len == 0 and password.len == 0) {
-        return buildUrl(allocator, protocol, host, pathname, search, hash);
-    } else if (password.len == 0) {
-        return allocator.printSentinel("{s}//{s}@{s}{s}{s}{s}", .{
-            protocol,
-            username,
-            host,
-            pathname,
-            search,
-            hash,
-        }, 0);
-    } else {
-        return allocator.printSentinel("{s}//{s}:{s}@{s}{s}{s}{s}", .{
-            protocol,
-            username,
-            password,
-            host,
-            pathname,
-            search,
-            hash,
-        }, 0);
-    }
+    return applySetter(current, allocator, U.url_set_password, .{ value.ptr, value.len });
 }
 
 /// Replaces the query of `url` with `query` and keeps its fragment.

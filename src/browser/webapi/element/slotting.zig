@@ -153,11 +153,9 @@ fn assignASlot(slottable: *Node, frame: *Frame) void {
 }
 
 pub fn assignSlottablesForTree(root: *Node, frame: *Frame) void {
-    var tw = TreeWalker.Full.Elements.init(root, .{});
-    while (tw.next()) |el| {
-        if (el.is(Slot)) |slot| {
-            assignSlottables(slot, frame);
-        }
+    var tw = TreeWalker.Full.ElementsOf(Slot).init(root, .{});
+    while (tw.next()) |slot| {
+        assignSlottables(slot, frame);
     }
 }
 
@@ -165,13 +163,8 @@ fn subtreeHasSlot(node: *Node) bool {
     if (node.is(Element) == null) {
         return false;
     }
-    var tw = TreeWalker.Full.Elements.init(node, .{});
-    while (tw.next()) |el| {
-        if (el.is(Slot) != null) {
-            return true;
-        }
-    }
-    return false;
+    var tw = TreeWalker.Full.ElementsOf(Slot).init(node, .{});
+    return tw.next() != null;
 }
 
 pub fn insertionSteps(parent: *Node, child: *Node, in_fragment_parse: bool, frame: *Frame) void {

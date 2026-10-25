@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<meta charset="utf-8">
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- TextArea elements -->
@@ -366,8 +368,11 @@
     });
     textarea.setSelectionRange(1, 4);
     
+    // Fires asynchronously, and changes before it fires fold into one event.
+    testing.expectEqual(0, eventCount);
+
     testing.onload(() => {
-      testing.expectEqual(5, eventCount);
+      testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
       testing.expectEqual(true, lastEvent.bubbles);
@@ -393,7 +398,10 @@
     textarea.value = 'hello';
     testing.expectEqual(5, textarea.selectionStart);
     testing.expectEqual(5, textarea.selectionEnd);
-    testing.expectEqual('none', textarea.selectionDirection);
+    // Platforms without a "none" direction report "forward" (Chrome on Linux).
+    const probe = document.createElement('textarea');
+    probe.setSelectionRange(0, 0, 'none');
+    testing.expectEqual(probe.selectionDirection, textarea.selectionDirection);
 
     // Re-assigning the same value leaves the selection alone
     // (WPT textfieldselection/selection-after-content-change.html).
@@ -432,5 +440,53 @@
     el.setSelectionRange(10, 20);
     testing.expectEqual(4, el.selectionStart);
     testing.expectEqual(4, el.selectionEnd);
+  }
+</script>
+
+<script id="setRangeText">
+  {
+    const el = document.createElement('textarea');
+    el.value = 'line1\nline2';
+    el.setSelectionRange(0, 0);
+    el.setRangeText('X\r\nY', 0, 0, 'end');
+    testing.expectEqual('X\nYline1\nline2', el.value);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+
+    el.setSelectionRange(2, 7);
+    el.setRangeText('');
+    testing.expectEqual('X\n1\nline2', el.value);
+    testing.expectEqual(2, el.selectionStart);
+    testing.expectEqual(2, el.selectionEnd);
+
+    // CRLF → LF shortens the value; the caret stays on a character boundary
+    el.value = 'éa';
+    el.setRangeText('\r\n', 0, 0, 'end');
+    testing.expectEqual(2, el.selectionStart);
+    el.setRangeText('X');
+    testing.expectEqual('\néXa', el.value);
+    testing.expectEqual(2, el.selectionStart);
+  }
+</script>
+
+<script id="selection_setters_keep_order">
+  {
+    // Setting one end past the other drags the other along (start <= end).
+    const el = document.createElement('textarea');
+    el.value = 'hello';
+    el.setSelectionRange(1, 2, 'backward');
+    el.selectionStart = 4;
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+    testing.expectEqual('backward', el.selectionDirection);
+
+    el.setSelectionRange(3, 4);
+    el.selectionEnd = 1;
+    testing.expectEqual(1, el.selectionStart);
+    testing.expectEqual(1, el.selectionEnd);
+
+    el.selectionStart = 10;
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
   }
 </script>

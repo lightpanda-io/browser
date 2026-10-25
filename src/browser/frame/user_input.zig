@@ -1284,14 +1284,15 @@ const JavascriptUrlTask = struct {
 // target is the element that's being activated. Imagine a span inside an anchor
 // the span is clicked (event_target), but it's the anchor that we're activating
 // (target).
-pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
+// user_initiated: a trusted click, for the navigate event it can start.
+pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node, user_initiated: bool) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
 
     if (element.is(Element.Svg.Graphics.A) != null) {
         const href = element.svgAnchorHref() orelse return;
         const target_name = element.getAttributeInterned("target") orelse "";
-        return followLink(frame, target, element, href, target_name);
+        return followLink(frame, target, element, href, target_name, user_initiated);
     }
 
     const html_element = element.is(Element.Html) orelse return;
@@ -1300,7 +1301,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
             const href = element.getAttributeInterned("href") orelse return;
-            return followLink(frame, target, element, href, anchor.getTarget());
+            return followLink(frame, target, element, href, anchor.getTarget(), user_initiated);
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
@@ -1315,13 +1316,13 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 if (element.isDisabled()) {
                     return;
                 }
-                return frame.submitForm(element, input.getForm(frame), .{});
+                return frame.submitForm(element, input.getForm(), .{ .user_initiated = user_initiated });
             }
             if (input._input_type == .reset) {
                 if (element.isDisabled()) {
                     return;
                 }
-                const form = input.getForm(frame) orelse return;
+                const form = input.getForm() orelse return;
                 return form.reset(frame);
             }
         },
@@ -1331,13 +1332,13 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 if (element.isDisabled()) {
                     return;
                 }
-                return frame.submitForm(element, button.getForm(frame), .{});
+                return frame.submitForm(element, button.getForm(), .{ .user_initiated = user_initiated });
             }
             if (std.mem.eql(u8, button.getType(), "reset")) {
                 if (element.isDisabled()) {
                     return;
                 }
-                const form = button.getForm(frame) orelse return;
+                const form = button.getForm() orelse return;
                 return form.reset(frame);
             }
         },
@@ -1346,7 +1347,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
             // Per HTML §4.10.4 "The label element", a label's activation
             // behavior is to run the synthetic click activation steps on the
             // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
-            const control = label.getControl(frame) orelse return;
+            const control = label.getControl() orelse return;
             if (control.asNode().contains(event_target)) {
                 // label is the only control that synthesizes another click, so
                 // we need to guard against that activation re-triggering the
@@ -1380,7 +1381,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
 }
 
 // Follow a link on activation. Shared by HTML <a> and SVG <a>.
-fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8) !void {
+fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8, user_initiated: bool) !void {
     if (href.len == 0) {
         return;
     }
@@ -1410,6 +1411,8 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     try owner.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
+        .source_element = element,
+        .user_initiated = user_initiated,
     }, .{ .anchor = target_frame });
 }
 
@@ -1495,6 +1498,8 @@ pub fn textForKey(keyboard_event: *const KeyboardEvent) ?[]const u8 {
 /// `keypress` on `target` and, unless a listener cancels it, performs the
 /// text edit it stands for.
 pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text: []const u8) !void {
+    // read before dispatch, which can free the event
+    const user_initiated = keypress.asEvent()._is_trusted;
     if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), keypress.asEvent())) {
         return;
     }
@@ -1506,7 +1511,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
             try input.dispatchChangeIfEdited(frame);
-            return implicitFormSubmission(frame, input);
+            return implicitFormSubmission(frame, input, user_initiated);
         }
         _ = try applyEdit(frame, input, .{ .insert = text });
     } else if (target.is(Element.Html.TextArea)) |textarea| {
@@ -1518,8 +1523,8 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 /// its activation submits the form with it as the submitter; otherwise the
 /// form submits itself (SubmitEvent.submitter is null).
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
-fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
-    const form = input.getForm(frame) orelse return;
+fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input, user_initiated: bool) !void {
+    const form = input.getForm() orelse return;
     if (form.getDefaultButton(frame)) |button| {
         if (button.isDisabled()) {
             return;
@@ -1529,7 +1534,7 @@ fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
     if (!form.canSubmitImplicitly(input, frame)) {
         return;
     }
-    return frame.submitForm(form.asElement(), form, .{});
+    return frame.submitForm(form.asElement(), form, .{ .user_initiated = user_initiated });
 }
 
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
@@ -1558,6 +1563,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     if (key == .Tab) {
         // tab -> forward, shift+tab -> backwards
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
+    }
+
+    if (key == .Escape) {
+        return Element.Html.Dialog.requestCloseTopModal(frame);
     }
 
     if (key == .Enter) {
@@ -1971,7 +1980,7 @@ test "user_input: mouse hit testing descends nested iframe viewports" {
     const main = page.frame().?;
     const child = main.child_frames.items[0];
     const nested = child.child_frames.items[0];
-    const target = nested.document.getElementById("inner", nested).?;
+    const target = nested.document.getElementById("inner").?;
     const rect = target.boundingClientRectValues(nested);
     const child_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     const nested_rect = nested.iframe.?.asElement().boundingClientRectValues(child);
@@ -2008,8 +2017,8 @@ test "user_input: mouse release in another document does not click" {
     const main = page.frame().?;
     const child = main.child_frames.items[0];
     const nested = child.child_frames.items[0];
-    const inner = nested.document.getElementById("inner", nested).?;
-    const outer = main.document.getElementById("outer", main).?;
+    const inner = nested.document.getElementById("inner").?;
+    const outer = main.document.getElementById("outer").?;
     const inner_rect = inner.boundingClientRectValues(nested);
     const child_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     const nested_rect = nested.iframe.?.asElement().boundingClientRectValues(child);
@@ -2030,7 +2039,7 @@ test "user_input: a blank viewport point hovers the root; only leaving the viewp
     const page = try testing.pageTest("input_mouse_frames.html", .{});
     defer page.close();
     const main = page.frame().?;
-    const outer = main.document.getElementById("outer", main).?;
+    const outer = main.document.getElementById("outer").?;
     const rect = outer.boundingClientRectValues(main);
     const viewport = main.page.getViewport();
     const blank_y: f64 = @floatFromInt(viewport.height - 1);
@@ -2067,7 +2076,7 @@ test "user_input: removing hit iframe in pointerdown stops its mouse sequence" {
     defer page.close();
     const main = page.frame().?;
     const child = main.child_frames.items[0];
-    const target = child.document.getElementById("middle", child).?;
+    const target = child.document.getElementById("middle").?;
     const rect = target.boundingClientRectValues(child);
     const iframe_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     var ls: js.Local.Scope = undefined;
@@ -2183,7 +2192,7 @@ test "user_input: excluded child roots clear hover without releasing held button
             const main = page.frame().?;
             const child = main.child_frames.items[0];
             const owner = if (from_child) child else main;
-            const target = owner.document.getElementById(if (from_child) "middle" else "outer", owner).?;
+            const target = owner.document.getElementById(if (from_child) "middle" else "outer").?;
             const rect = target.boundingClientRectValues(owner);
             const iframe_rect = child.iframe.?.asElement().boundingClientRectValues(main);
             const x = rect.x + (if (from_child) iframe_rect.x else @as(f64, 0)) + 1;
@@ -2228,8 +2237,8 @@ test "user_input: removing a pressed iframe between messages clears pointer stat
     defer page.close();
     const main = page.frame().?;
     const child = main.child_frames.items[0];
-    const target = child.document.getElementById("middle", child).?;
-    const outer = main.document.getElementById("outer", main).?;
+    const target = child.document.getElementById("middle").?;
+    const outer = main.document.getElementById("outer").?;
     const target_rect = target.boundingClientRectValues(child);
     const iframe_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     const outer_rect = outer.boundingClientRectValues(main);
@@ -2312,7 +2321,7 @@ test "user_input: wheel listener removing its iframe prevents the scroll default
         , null);
     }
 
-    const box = child.document.getElementById("wheelBox", child).?;
+    const box = child.document.getElementById("wheelBox").?;
     const box_rect = box.boundingClientRectValues(child);
     const iframe_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     const x = box_rect.x + iframe_rect.x + 1;
@@ -2337,11 +2346,11 @@ test "user_input: mouse hover transitions cross nested iframe documents" {
     const child = main.child_frames.items[0];
     const nested = child.child_frames.items[0];
 
-    const outer = main.document.getElementById("outer", main).?;
+    const outer = main.document.getElementById("outer").?;
     const child_iframe = child.iframe.?.asElement();
-    const middle = child.document.getElementById("middle", child).?;
+    const middle = child.document.getElementById("middle").?;
     const nested_iframe = nested.iframe.?.asElement();
-    const inner = nested.document.getElementById("inner", nested).?;
+    const inner = nested.document.getElementById("inner").?;
     const outer_rect = outer.boundingClientRectValues(main);
     const child_rect = child_iframe.boundingClientRectValues(main);
     const middle_rect = middle.boundingClientRectValues(child);
@@ -2463,7 +2472,7 @@ test "user_input: mouse blank iframe takes document focus" {
     defer page.close();
     const main = page.frame().?;
     const child = main.child_frames.items[0];
-    const outer = main.document.getElementById("outer", main).?;
+    const outer = main.document.getElementById("outer").?;
     var ls: js.Local.Scope = undefined;
     child.js.localScope(&ls);
     defer ls.deinit();
@@ -2491,7 +2500,7 @@ test "user_input: mouse static nested iframe takes document focus" {
     nested.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.compileAndRun("document.body.innerHTML = '<div style=width:150px;height:150px>static</div>';", null);
-    try main.document.getElementById("outer", main).?.focus(main);
+    try main.document.getElementById("outer").?.focus(main);
     const child_rect = child.iframe.?.asElement().boundingClientRectValues(main);
     const nested_rect = nested.iframe.?.asElement().boundingClientRectValues(child);
     const x = child_rect.x + nested_rect.x + 10;
@@ -2509,7 +2518,7 @@ test "user_input: mouse blank iframe cancelled press preserves focus" {
         defer page.close();
         const main = page.frame().?;
         const child = main.child_frames.items[0];
-        const outer = main.document.getElementById("outer", main).?;
+        const outer = main.document.getElementById("outer").?;
         var ls: js.Local.Scope = undefined;
         child.js.localScope(&ls);
         defer ls.deinit();
@@ -2532,7 +2541,7 @@ test "user_input: mouse removed blank iframe does not take focus" {
         defer page.close();
         const main = page.frame().?;
         const child = main.child_frames.items[0];
-        const outer = main.document.getElementById("outer", main).?;
+        const outer = main.document.getElementById("outer").?;
         var ls: js.Local.Scope = undefined;
         main.js.localScope(&ls);
         defer ls.deinit();
@@ -2559,7 +2568,7 @@ test "user_input: mouse blank sibling iframe clears old focus chain" {
     const main = page.frame().?;
     const child = main.child_frames.items[0];
     const sibling = main.child_frames.items[1];
-    const middle = child.document.getElementById("middle", child).?;
+    const middle = child.document.getElementById("middle").?;
     var ls: js.Local.Scope = undefined;
     main.js.localScope(&ls);
     defer ls.deinit();
@@ -2587,7 +2596,7 @@ test "user_input: synthetic blank iframe click preserves focus" {
     const page = try testing.pageTest("input_mouse_frames.html", .{});
     defer page.close();
     const main = page.frame().?;
-    const outer = main.document.getElementById("outer", main).?;
+    const outer = main.document.getElementById("outer").?;
     try outer.focus(main);
     var ls: js.Local.Scope = undefined;
     main.js.localScope(&ls);
@@ -2604,7 +2613,7 @@ test "user_input: shadow mouse rects are viewport relative and native clicks rea
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
-    const host = frame.document.getElementById("host", frame).?;
+    const host = frame.document.getElementById("host").?;
     const inner = try ls.local.jsValueToZig(*Element, try ls.local.compileAndRun("inner", null));
     const host_rect = host.boundingClientRectValues(frame);
     const rect = inner.boundingClientRectValues(frame);
@@ -2629,7 +2638,7 @@ test "user_input: shadow mouse hit testing respects bounds and hidden descendant
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
-    const host = frame.document.getElementById("host", frame).?;
+    const host = frame.document.getElementById("host").?;
     const inner = try ls.local.jsValueToZig(*Element, try ls.local.compileAndRun("inner", null));
     const rect = inner.boundingClientRectValues(frame);
     try testing.expect((try mouseHitTest(frame, rect.x, rect.y)).target == inner);
@@ -2663,7 +2672,7 @@ test "user_input: shadow mouse nested closed roots and window scroll share coord
         \\deep.addEventListener('click', e => { if (e.isTrusted && e.target === deep) deepClicks++; });
         \\deep;
     , null));
-    const host = frame.document.getElementById("host", frame).?;
+    const host = frame.document.getElementById("host").?;
     const host_rect = host.boundingClientRectValues(frame);
     const before = target.boundingClientRectValues(frame);
     try testing.expectEqual(host_rect.x + 25, before.x);
@@ -2719,7 +2728,7 @@ test "user_input: shadow mouse keeps host boundary path and common click target"
             \\boundaryHost.addEventListener('click', e => clicks.push({where:'host', target:e.target.id, trusted:e.isTrusted, inner:e.composedPath().includes(boundaryInner)}));
             \\boundaryInner;
         , null));
-        const host = frame.document.getElementById("boundaryHost", frame).?;
+        const host = frame.document.getElementById("boundaryHost").?;
         const rect = inner.boundingClientRectValues(frame);
         const host_rect = host.boundingClientRectValues(frame);
         try triggerMouseMove(frame, rect.x + 1, rect.y + 1);
@@ -2758,7 +2767,7 @@ test "user_input: shadow mouse wheel preserves outer scroll container" {
         \\inner;
     , null));
     const rect = inner.boundingClientRectValues(frame);
-    const scroller = frame.document.getElementById("scroller", frame).?;
+    const scroller = frame.document.getElementById("scroller").?;
     try testing.expect(scroller.getScrollHeight(frame) > scroller.getClientHeight(frame));
     try triggerMouseWheel(frame, rect.x + 1, rect.y + 1, 0, 20);
     try testing.expectEqual(@as(u32, 20), scroller.getScrollTop(frame));

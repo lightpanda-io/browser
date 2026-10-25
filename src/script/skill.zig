@@ -100,30 +100,8 @@ fn writeReference(w: *std.Io.Writer) std.Io.Writer.Error!void {
 
 fn writeRow(w: *std.Io.Writer, s: *const Schema) std.Io.Writer.Error!void {
     try w.writeAll("| `");
-    if (s.tool.isAsync()) try w.writeAll("await ");
-    try w.print("page.{s}(", .{s.tool_name});
-    for (s.positional, 0..) |p, i| {
-        const optional = positionalOptional(s, p);
-        // A trailing optional positional is bracketed; a leading one
-        // (press's selector) renders plain and its note explains `null`.
-        if (i > 0) try w.writeAll(if (optional) "[, " else ", ");
-        try w.writeAll(p);
-        if (i > 0 and optional) try w.writeAll("]");
-    }
-    // The script form of extract takes the schema as its only argument
-    // (`Runtime.extractArgs`); every other tool accepts the options object.
-    if (s.tool != .extract and hasOptions(s)) {
-        try w.writeAll(if (s.positional.len > 0) "[, { " else "[{ ");
-        var i: usize = 0;
-        for (s.fields) |f| {
-            if (!isOption(s, f.name)) continue;
-            if (i > 0) try w.writeAll(", ");
-            try w.writeAll(f.name);
-            i += 1;
-        }
-        try w.writeAll(" }]");
-    }
-    try w.writeAll(")` | ");
+    try writeSignature(w, s);
+    try w.writeAll("` | ");
 
     var wrote = false;
     if (s.tool.isAsync()) {
@@ -154,6 +132,35 @@ fn writeRow(w: *std.Io.Writer, s: *const Schema) std.Io.Writer.Error!void {
         wrote = true;
     }
     try w.writeAll(" |\n");
+}
+
+/// The script call `await page.tool(positional…[, { option… }])`, as the
+/// runtime marshals it.
+pub fn writeSignature(w: *std.Io.Writer, s: *const Schema) std.Io.Writer.Error!void {
+    if (s.tool.isAsync()) try w.writeAll("await ");
+    try w.print("page.{s}(", .{s.tool_name});
+    for (s.positional, 0..) |p, i| {
+        const optional = positionalOptional(s, p);
+        // A trailing optional positional is bracketed; a leading one
+        // (press's selector) renders plain and its note explains `null`.
+        if (i > 0) try w.writeAll(if (optional) "[, " else ", ");
+        try w.writeAll(p);
+        if (i > 0 and optional) try w.writeAll("]");
+    }
+    // The script form of extract takes the schema as its only argument
+    // (`Runtime.extractArgs`); every other tool accepts the options object.
+    if (s.tool != .extract and hasOptions(s)) {
+        try w.writeAll(if (s.positional.len > 0) "[, { " else "[{ ");
+        var i: usize = 0;
+        for (s.fields) |f| {
+            if (!isOption(s, f.name)) continue;
+            if (i > 0) try w.writeAll(", ");
+            try w.writeAll(f.name);
+            i += 1;
+        }
+        try w.writeAll(" }]");
+    }
+    try w.writeAll(")");
 }
 
 /// Non-positional schema fields surfacing in the script signature.

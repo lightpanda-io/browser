@@ -63,8 +63,8 @@ pub fn getAtIndex(self: *HTMLOptionsCollection, index: usize, frame: *Frame) ?*E
     return self._proto.getAtIndex(index, frame);
 }
 
-pub fn getByName(self: *HTMLOptionsCollection, name: []const u8, frame: *Frame) ?*Element {
-    return self._proto.getByName(name, frame);
+pub fn getByName(self: *HTMLOptionsCollection, name: []const u8) ?*Element {
+    return self._proto.getByName(name);
 }
 
 // Forward selectedIndex to the owning select element
@@ -166,8 +166,8 @@ pub const JsApi = struct {
     // Indexed access
     pub const @"[int]" = bridge.indexedReadWrite(HTMLOptionsCollection.getAtIndex, setAtIndex, null, null, null, .{ .null_as_undefined = true, .ce_reactions = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, null, struct {
-        fn wrap(self: *HTMLOptionsCollection, name: []const u8, frame: *Frame) !u32 {
-            if (self.getByName(name, frame) != null) {
+        fn wrap(self: *HTMLOptionsCollection, name: []const u8) !u32 {
+            if (self.getByName(name) != null) {
                 // Named properties are [LegacyUnenumerableNamedProperties]: the query
                 return js.v8.DontEnum;
             }

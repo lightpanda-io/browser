@@ -24,6 +24,7 @@ const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const URL = @import("../URL.zig");
+const IdMap = @import("../IdMap.zig");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
@@ -79,9 +80,7 @@ _navigated_away: bool = false,
 _iframe_load_in_progress: bool = false,
 _mute_iframe_load: bool = false,
 _current_script: ?*Element.Html.Script = null,
-_elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
-// Track IDs that were removed from the map - they might have duplicates in the tree
-_removed_ids: std.StringHashMapUnmanaged(void) = .empty,
+_ids: IdMap = .{},
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _implementation: ?*DOMImplementation = null,
@@ -100,6 +99,9 @@ _extent: ?struct {
 } = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
+// Ordered stack of dialogs opened with showModal(), topmost last. Stands in
+// for the top layer and the close watchers those dialogs establish.
+_modal_dialogs: std.ArrayList(*Element.Html.Dialog) = .empty,
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#throw-on-dynamic-markup-insertion-counter
 // Incremented during custom element reactions when parsing. When > 0,
@@ -154,7 +156,7 @@ pub fn getLocation(self: *const Document) ?*Location {
 fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
     const frame = self._frame orelse return;
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = Location.historyHandling(frame) }, .{ .script = frame });
 }
 
 // Approximation of quirks mode: an HTML document without a doctype is in quirks mode.
@@ -313,7 +315,7 @@ pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]cons
         c.deinit();
         return ""; // SameSite cookies cannot be set from a cross-site context.
     }
-    try frame._session.cookie_jar.add(c, lp.datetime.timestamp(.real), false);
+    try frame._session.cookie_jar.addFromUrl(frame.url, c, lp.datetime.timestamp(.real), false);
     return cookie_str;
 }
 
@@ -359,7 +361,11 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     try validateElementName(name);
     const ns: Element.Namespace, const normalized_name = blk: {
         if (self._type == .html) {
-            break :blk .{ .html, std.ascii.lowerString(&frame.buf, name) };
+            const lower = if (Element.Attribute.needsLowerCasing(name))
+                try std.ascii.allocLowerString(frame.local_arena, name)
+            else
+                name;
+            break :blk .{ .html, lower };
         }
         // Generic and XML documents create elements with null namespace
         break :blk .{ .null, name };
@@ -420,32 +426,11 @@ pub fn createAttributeNS(self: *const Document, namespace: []const u8, name: Str
     });
 }
 
-pub fn getElementById(self: *Document, id: []const u8, frame: *Frame) ?*Element {
+pub fn getElementById(self: *Document, id: []const u8) ?*Element {
     if (id.len == 0) {
         return null;
     }
-
-    if (self._elements_by_id.get(id)) |element| {
-        return element;
-    }
-
-    //ID was removed but might have duplicates
-    if (self._removed_ids.remove(id)) {
-        var tw = TreeWalker.Full.Elements.init(self.asNode(), .{});
-        while (tw.next()) |el| {
-            const element_id = el.getId() orelse continue;
-            if (std.mem.eql(u8, element_id, id)) {
-                // we ignore this error to keep getElementById easy to call
-                // if it really failed, then we're out of memory and nothing's
-                // going to work like it should anyways.
-                const owned_id = frame.dupeString(id) catch return null;
-                self._elements_by_id.put(frame.page_arena, owned_id, el) catch return null;
-                return el;
-            }
-        }
-    }
-
-    return null;
+    return self._ids.get(self.asNode(), id);
 }
 
 pub fn getElementsByTagName(self: *Document, tag_name: []const u8, frame: *Frame) !Node.GetElementsByTagNameResult {
@@ -635,7 +620,7 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
     if (event_type.len > 100) {
         return error.NotSupported;
     }
-    const normalized = std.ascii.lowerString(&frame.buf, event_type);
+    const normalized = try std.ascii.allocLowerString(frame.local_arena, event_type);
 
     const event: *Event = blk: {
         if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
@@ -877,13 +862,13 @@ fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !
     return node.cloneNodeInto(deep_ orelse false, self, frame);
 }
 
-pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes);
+pub fn append(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    try validateDocumentNodes(self, nodes.values);
 
     const parent = self.asNode();
     frame.domChanged();
 
-    for (nodes) |node_or_text| {
+    for (nodes.values) |node_or_text| {
         const child = try node_or_text.toNode(self);
 
         // DocumentFragments are special - append all their children
@@ -901,16 +886,16 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
     }
 }
 
-pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    try validateDocumentNodes(self, nodes);
+pub fn prepend(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    try validateDocumentNodes(self, nodes.values);
 
     const parent = self.asNode();
     frame.domChanged();
 
-    var i = nodes.len;
+    var i = nodes.values.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(self);
+        const child = try nodes.values[i].toNode(self);
 
         // DocumentFragments are special - need to insert all their children
         if (child.is(Node.DocumentFragment)) |frag| {
@@ -944,8 +929,8 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
     }
 }
 
-pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    return self.asNode().replaceChildren(nodes, frame);
+pub fn replaceChildren(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().replaceChildren(nodes.values, frame);
 }
 
 pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Frame) !void {
@@ -960,13 +945,25 @@ pub fn hitTest(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
 // document.elementFromPoint only sees the document's tree: a hit inside a
 // shadow tree reports its outermost host, as in Chrome.
 fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return null;
-    return retargetToDocumentTree(hit);
+    return self.elementFromPointIn(self.asNode(), x, y, frame);
 }
 
-fn retargetToDocumentTree(element: *Element) *Element {
+/// DocumentOrShadowRoot.elementFromPoint for `scope`, this document or one of
+/// its shadow roots.
+pub fn elementFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) !?*Element {
+    const hit = (try self.hitTest(x, y, frame)) orelse return null;
+    return retarget(hit, scope);
+}
+
+// The spec's retarget: climbs out of shadow trees until `element` is in a tree
+// that `scope` is in or inside of. A hit in a shadow tree nested in `scope`'s
+// reports its host in `scope`'s tree; a hit outside it is returned as is.
+fn retarget(element: *Element, scope: *Node) *Element {
     var current = element;
     while (current.asNode().containingShadowRoot()) |shadow| {
+        if (shadow.asNode().isHostIncludingInclusiveAncestorOf(scope)) {
+            break;
+        }
         current = shadow._host;
     }
     return current;
@@ -1077,16 +1074,32 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 }
 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
-    // Get topmost element
-    var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
+    return self.elementsFromPointIn(self.asNode(), x, y, frame);
+}
+
+/// DocumentOrShadowRoot.elementsFromPoint for `scope`, as Blink builds it: the
+/// hit and its flat-tree ancestors that can be hit, each retargeted against
+/// `scope` with repeats dropped, then the root element.
+pub fn elementsFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) ![]const *Element {
+    const hit = (try self.hitTest(x, y, frame)) orelse return &.{};
     const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
     var result: std.ArrayList(*Element) = .empty;
-    while (current) |el| {
-        // Chrome always ends the list with the root element.
-        if (el.parentElement() == null or style_manager.isHitTestable(el)) {
-            try result.append(frame.local_arena, el);
+    var current: ?*Element = hit;
+    while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
+        if (style_manager.isHitTestable(el) == false) {
+            continue;
         }
-        current = el.parentElement();
+        const target = retarget(el, scope);
+        if (result.items.len > 0 and result.items[result.items.len - 1] == target) {
+            continue;
+        }
+        try result.append(frame.local_arena, target);
+    }
+    // Chrome always ends the list with the root element.
+    if (self.getDocumentElement()) |root| {
+        if (result.items.len == 0 or result.items[result.items.len - 1] != root) {
+            try result.append(frame.local_arena, root);
+        }
     }
     return result.items;
 }
@@ -1116,15 +1129,15 @@ fn looksLikeNewDocument(html: []const u8) bool {
         std.ascii.startsWithIgnoreCase(trimmed, "<html");
 }
 
-pub fn write(self: *Document, text: []const []const u8, frame: *Frame) !void {
-    return self.writeInternal(text, false, frame);
+pub fn write(self: *Document, text: js.Variadic([]const u8), frame: *Frame) !void {
+    return self.writeInternal(text.values, false, frame);
 }
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-writeln
 // `writeln(...text)` runs the document write steps with `text` followed by a
 // U+000A LINE FEED character.
-fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
-    return self.writeInternal(text, true, frame);
+fn writeln(self: *Document, text: js.Variadic([]const u8), frame: *Frame) !void {
+    return self.writeInternal(text.values, true, frame);
 }
 
 fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool, call_frame: *Frame) !void {
@@ -1302,9 +1315,10 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     }
 
     // reset the document
-    self._elements_by_id.clearAndFree(frame.page_arena);
+    self._ids.clear(frame.page_arena);
     self.setActiveElement(null, frame);
     self._open_popovers = .empty;
+    self._modal_dialogs = .empty;
     self._style_sheets = null;
     self._implementation = null;
     self._ready_state = .loading;
@@ -1842,15 +1856,15 @@ pub const JsApi = struct {
     pub const createExpression = bridge.function(Document.createExpression, .{});
     pub const createNSResolver = bridge.function(Document.createNSResolver, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
-    fn _getElementById(self: *Document, value_: ?js.Value, frame: *Frame) !?*Element {
+    fn _getElementById(self: *Document, value_: ?js.Value) !?*Element {
         const value = value_ orelse return null;
         if (value.isNull()) {
-            return self.getElementById("null", frame);
+            return self.getElementById("null");
         }
         if (value.isUndefined()) {
-            return self.getElementById("undefined", frame);
+            return self.getElementById("undefined");
         }
-        return self.getElementById(try value.toZig([]const u8), frame);
+        return self.getElementById(try value.toZig([]const u8));
     }
     pub const querySelector = bridge.function(Document.querySelector, .{});
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{});
@@ -1959,6 +1973,23 @@ test "Document: cookie access from a cross-site frame" {
     // same visibility rules.
     top_url = "https://attacker.example/";
     try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
+}
+
+test "Document: a non-secure document can't set or overwrite a Secure cookie" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const doc = frame.document;
+    const jar = &frame._session.cookie_jar;
+    defer jar.clearRetainingCapacity();
+
+    frame.url = "http://victim.example/";
+    _ = try doc.setCookie("s=1; Secure", frame);
+    try testing.expectEqual(0, jar.len);
+
+    try jar.populateFromResponse("https://victim.example/", "s=1; Secure");
+    _ = try doc.setCookie("s=2", frame);
+    var it = jar.iterator();
+    try testing.expectEqual("1", it.next().?.value);
 }
 
 test "Document: isRelaxableTo" {

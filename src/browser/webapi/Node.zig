@@ -459,9 +459,9 @@ pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
         .element => {
             const el = self.subtype(Element);
             if (data.len == 0) {
-                return el.replaceChildren(&.{}, frame);
+                return el.replaceChildren(.init(&.{}), frame);
             }
-            return el.replaceChildren(&.{.{ .text = data }}, frame);
+            return el.replaceChildren(.init(&.{.{ .text = data }}), frame);
         },
         // Per spec, setting textContent on CharacterData runs replaceData(0, length, value)
         .cdata => {
@@ -473,17 +473,17 @@ pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
         .document_fragment => {
             const frag = self.subtype(DocumentFragment);
             if (data.len == 0) {
-                return frag.replaceChildren(&.{}, frame);
+                return frag.replaceChildren(.init(&.{}), frame);
             }
-            return frag.replaceChildren(&.{.{ .text = data }}, frame);
+            return frag.replaceChildren(.init(&.{.{ .text = data }}), frame);
         },
         .attribute => return self.subtype(Element.Attribute).setValue(.wrap(data), frame),
     }
 }
 
-pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
+pub fn getNodeName(self: *const Node, allocator: Allocator) []const u8 {
     return switch (self._type) {
-        .element => self.subtype(Element).getTagNameSpec(buf),
+        .element => self.subtype(Element).getTagNameSpec(allocator),
         .cdata => {
             const cd = self.subtype(CData);
             return switch (cd._type) {
@@ -1167,6 +1167,7 @@ const CloneError = error{
     JsException,
     ExecutionTerminated,
     QuotaExceeded,
+    InvalidStringLength,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
     return self.cloneNodeInto(deep_ orelse false, self.getDocument(frame), frame);
@@ -1422,7 +1423,10 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
         };
     }
 
-    const lower = std.ascii.lowerString(&frame.buf, tag_name);
+    const lower = if (Element.Attribute.needsLowerCasing(tag_name))
+        try std.ascii.allocLowerString(frame.local_arena, tag_name)
+    else
+        tag_name;
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparison
         return .{
@@ -1845,7 +1849,7 @@ pub const JsApi = struct {
 
     pub const nodeName = bridge.accessor(struct {
         fn wrap(self: *const Node, frame: *Frame) []const u8 {
-            return self.getNodeName(&frame.buf);
+            return self.getNodeName(frame.local_arena);
         }
     }.wrap, null, .{});
     pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <input id=num type=number value="2.5" min="0" max="10" step="0.5">
@@ -131,6 +132,16 @@
   num.value = '2.7';
   num.stepDown(3);
   testing.expectEqual('1.5', num.value);
+
+  // A large value on a fractional step moves by one step, not a snap.
+  const cents = document.createElement('input');
+  cents.type = 'number';
+  cents.step = '0.01';
+  cents.value = '1234567.89';
+  cents.stepUp();
+  testing.expectEqual('1234567.9', cents.value);
+  cents.stepDown(2);
+  testing.expectEqual('1234567.88', cents.value);
 
   // No min: the value attribute is the step base.
   const date = $('#date');

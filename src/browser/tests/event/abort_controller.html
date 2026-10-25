@@ -370,3 +370,15 @@
     });
   }
 </script>
+
+<script id=any_sequence>
+{
+  // signals is a required sequence<AbortSignal>
+  testing.expectError('TypeError', () => AbortSignal.any());
+  testing.expectError('TypeError', () => AbortSignal.any(new AbortController().signal));
+  const c = new AbortController();
+  const signal = AbortSignal.any(new Set([c.signal]));
+  c.abort();
+  testing.expectEqual(true, signal.aborted);
+}
+</script>

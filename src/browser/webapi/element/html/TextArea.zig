@@ -48,6 +48,8 @@ _value_before_edit: ?[]const u8 = null,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
+// A queued selectionchange not yet fired; later changes fold into it.
+_selectionchange_pending: bool = false,
 
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
@@ -172,6 +174,7 @@ pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
 pub const setSelectionRange = entry.setSelectionRange;
+pub const setRangeText = entry.setRangeText;
 
 // <textarea> always supports selection; <input> only does for some types.
 pub fn selectionAvailable(_: *const TextArea) bool {
@@ -187,8 +190,8 @@ fn getSelectionEnd(self: *const TextArea) u32 {
     return entry.selectionOffsetToJs(self, self._selection_end);
 }
 
-pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
-    return Form.ownerOf(self.asElement(), frame);
+pub fn getForm(self: *TextArea) ?*Form {
+    return Form.ownerOf(self.asElement());
 }
 
 fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
@@ -319,6 +322,7 @@ pub const JsApi = struct {
     pub const selectionEnd = bridge.accessor(TextArea.getSelectionEnd, TextArea.setSelectionEnd, .{});
     pub const selectionDirection = bridge.accessor(TextArea.getSelectionDirection, null, .{});
     pub const setSelectionRange = bridge.function(TextArea.setSelectionRange, .{});
+    pub const setRangeText = bridge.function(TextArea.setRangeText, .{});
 };
 
 pub const Build = struct {

@@ -38,9 +38,9 @@ const ValidityState = @This();
 // because the flag definitions are per-type in the HTML spec.
 _owner: *Element,
 
-fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
+fn getValueMissing(self: *const ValidityState) bool {
     if (self.customFlags()) |flags| return flags.valueMissing;
-    if (self._owner.is(Input)) |input| return input.suffersValueMissing(frame);
+    if (self._owner.is(Input)) |input| return input.suffersValueMissing();
     if (self._owner.is(Select)) |select| return select.suffersValueMissing();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersValueMissing();
     return false;
@@ -86,8 +86,7 @@ fn getRangeOverflow(self: *const ValidityState) bool {
 
 fn getStepMismatch(self: *const ValidityState) bool {
     if (self.customFlags()) |flags| return flags.stepMismatch;
-    // Step matching is not implemented yet (PR #2280 begins step rounding for
-    // <input type=range>). Returning false keeps well-formed values valid.
+    if (self._owner.is(Input)) |input| return input.suffersStepMismatch();
     return false;
 }
 
@@ -111,7 +110,7 @@ fn getCustomError(self: *const ValidityState) bool {
 
 pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
     if (self.customFlags()) |flags| return !flags.any();
-    return !self.getValueMissing(frame) and
+    return !self.getValueMissing() and
         !self.getTypeMismatch() and
         !self.getPatternMismatch(frame) and
         !self.getTooLong() and

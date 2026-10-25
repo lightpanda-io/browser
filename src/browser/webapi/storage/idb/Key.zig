@@ -216,7 +216,7 @@ fn toJs(value: Value, local: *const Local) !js.Value {
     switch (value) {
         .number => |n| return local.zigValueToJs(n, .{}),
         .date => |n| return local.newDate(n),
-        .string => |s| return local.newString(s).toValue(),
+        .string => |s| return (try local.newString(s)).toValue(),
         .binary => |s| return local.zigValueToJs(js.ArrayBuffer{ .values = s }, .{}),
         .array => |items| {
             const arr = local.newArray(@intCast(items.len));
@@ -319,11 +319,11 @@ pub fn extractKeyPath(local: *const Local, value: js.Value, kp: KeyPath) !?js.Va
 pub fn keyPathToJs(local: *const Local, kp: ?KeyPath) !js.Value {
     const path = kp orelse return .{ .local = local, .handle = local.isolate.initNull() };
     switch (path) {
-        .string => |s| return local.newString(s).toValue(),
+        .string => |s| return (try local.newString(s)).toValue(),
         .list => |items| {
             const arr = local.newArray(@intCast(items.len));
             for (items, 0..) |item, i| {
-                _ = try arr.set(@intCast(i), local.newString(item).toValue(), .{});
+                _ = try arr.set(@intCast(i), item, .{});
             }
             return arr.toValue();
         },

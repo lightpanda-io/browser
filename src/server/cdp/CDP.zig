@@ -654,6 +654,10 @@ pub const BrowserContext = struct {
         self.notification.unregisterAll(self);
         self.clearCapturedResponses();
 
+        if (self.cdp.app.config.cookieJarFile()) |cookie_jar_path| {
+            lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
+        }
+
         // If the session has a frame, we need to clear it first. The page
         // context is always nested inside of the isolated world context,
         // so we need to shutdown the page one first.
@@ -679,6 +683,7 @@ pub const BrowserContext = struct {
             browser.http_client.clearUserAgentOverride();
         }
         browser.http_client.clearAcceptLanguageOverride();
+        browser.clearPermissions();
         self.intercept_state.deinit();
     }
 
@@ -944,6 +949,35 @@ pub const BrowserContext = struct {
 
     pub fn consoleDisable(self: *BrowserContext) void {
         self.notification.unregister(.console_message, self);
+    }
+
+    // The Log domain is enabled per session, so the session is the receiver:
+    // the context itself already listens to these events for Network.
+    pub fn logEnable(self: *BrowserContext, attached: *AttachedSession) !void {
+        try self.notification.register(.http_response_header_done, attached, onLogResponseHeaderDone);
+        errdefer self.notification.unregister(.http_response_header_done, attached);
+        try self.notification.register(.http_request_fail, attached, onLogRequestFail);
+    }
+
+    pub fn logDisable(self: *BrowserContext, attached: *AttachedSession) void {
+        self.notification.unregister(.http_response_header_done, attached);
+        self.notification.unregister(.http_request_fail, attached);
+    }
+
+    fn onLogResponseHeaderDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
+        const attached: *AttachedSession = @ptrCast(@alignCast(ctx));
+        const self = attached.bc;
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/log.zig").httpResponseHeaderDone(arena, self, attached.id, msg);
+    }
+
+    fn onLogRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
+        const attached: *AttachedSession = @ptrCast(@alignCast(ctx));
+        const self = attached.bc;
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+        return @import("domains/log.zig").httpRequestFail(arena, self, attached.id, msg);
     }
 
     pub fn runtimeEnable(self: *BrowserContext) !void {
@@ -1282,6 +1316,7 @@ pub const BrowserContext = struct {
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
+        self.notification.unregisterAll(attached);
         attached.inspector_session.deinit();
         self.cdp.allocator.destroy(attached);
     }
@@ -1774,4 +1809,36 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .shutdown_callback = HttpClient.noopShutdown,
     }, null);
     try testing.expectError(error.ClientDisconnected, transfer.submitSync(.{}));
+}
+
+test "cdp: --cookie-jar saves on dispose and --cookie loads it back" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "cookies.json");
+
+    const opts = &testing.base.test_config.mode.serve;
+    defer {
+        opts.cookie = null;
+        opts.cookie_jar = null;
+    }
+    opts.cookie = path;
+    opts.cookie_jar = path;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    {
+        // no file yet: the context starts with an empty jar
+        const bc = try ctx.loadBrowserContext(.{});
+        try testing.expectEqual(0, bc.session.cookie_jar.len);
+        try bc.session.cookie_jar.populateFromResponse("https://example.com/", "sid=abc; Path=/; Max-Age=3600; HttpOnly");
+        ctx.cdp().disposeBrowserContext();
+    }
+
+    // a new context (a reconnect, or a restart) starts logged in
+    const bc = try ctx.loadBrowserContext(.{});
+    const jar = &bc.session.cookie_jar;
+    try testing.expectEqual(1, jar.len);
+    var it = jar.iterator();
+    try testing.expectEqualSlices(u8, "abc", it.next().?.value);
 }

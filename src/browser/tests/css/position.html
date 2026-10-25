@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<head>
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  position: computed value from the cascade, not just the inline style, and
+  the offsetParent that follows from it. offsetParent is the nearest
+  positioned ancestor, so a rule in a stylesheet decides it as much as a
+  style attribute does.
+-->
+
+<style>
+  .rel { position: relative; }
+  .abs { position: absolute; }
+  .fix { position: fixed; }
+  .stick { position: sticky; }
+  .static { position: static; }
+  #id-wins { position: fixed; }
+  .bogus { position: floating; }
+</style>
+
+<span id=inline style="position: relative">a</span>
+<span id=class class=rel>b</span>
+<span id=id-wins class=rel>c</span>
+<span id=bogus class=bogus>d</span>
+<span id=reset class="rel static">e</span>
+<span id=plain>f</span>
+<span id=sticky class=stick>g</span>
+
+<div class=rel><span id=in-rel>h</span></div>
+<div class=fix><span id=in-fix>i</span></div>
+<div class=stick><span id=in-stick>j</span></div>
+<div class=abs><span id=in-abs>k</span></div>
+<div class=rel><div><span id=deep>l</span></div></div>
+
+<script id="computedValue">
+{
+  const pos = (id) => getComputedStyle($('#' + id)).position;
+
+  // A stylesheet rule reaches the computed value, not only a style attribute.
+  testing.expectEqual('relative', pos('inline'));
+  testing.expectEqual('relative', pos('class'));
+  testing.expectEqual('sticky', pos('sticky'));
+
+  // Cascade order holds: the id rule beats the class, and `static` resets.
+  testing.expectEqual('fixed', pos('id-wins'));
+  testing.expectEqual('static', pos('reset'));
+
+  // An unknown keyword drops the declaration; the initial value is static.
+  testing.expectEqual('static', pos('bogus'));
+  testing.expectEqual('static', pos('plain'));
+
+  // It does not inherit: a child of a positioned box is static.
+  testing.expectEqual('static', pos('in-fix'));
+}
+</script>
+
+<script id="offsetParentFromStylesheet">
+{
+  // Each of the four positioned values makes the ancestor an offsetParent.
+  for (const id of ['in-rel', 'in-fix', 'in-stick', 'in-abs']) {
+    const el = $('#' + id);
+    testing.expectEqual(el.parentElement, el.offsetParent);
+  }
+
+  // The search walks past unpositioned ancestors to the positioned one.
+  testing.expectEqual($('#deep').parentElement.parentElement, $('#deep').offsetParent);
+
+  // The element's own position:fixed, from a rule, still means no
+  // offsetParent at all.
+  testing.expectEqual(null, $('#id-wins').offsetParent);
+}
+</script>

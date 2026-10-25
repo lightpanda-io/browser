@@ -35,7 +35,6 @@ const OKP = @import("crypto/OKP.zig");
 const common = @import("crypto/common.zig");
 
 const log = lp.log;
-const String = lp.String;
 const Execution = js.Execution;
 const missing_name = algorithm.missing_name;
 
@@ -50,30 +49,27 @@ _pad: bool = false,
 /// Generate a new key (for symmetric algorithms) or key pair (for public-key algorithms).
 pub fn generateKey(
     _: *const SubtleCrypto,
-    algo: algorithm.Init,
+    algo_value: js.Value,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.js.local.?;
-    switch (algo) {
+    switch (try algorithm.Init.fromJs(algo_value, exec.js.local.?)) {
         .hmac_key_gen => |params| return HMAC.init(params, extractable, key_usages, exec),
         .aes_key_gen => |params| return AES.generate(params, extractable, key_usages, exec),
         .ec_key_gen => |params| return EC.generate(params, extractable, key_usages, exec),
         .rsa_hashed_key_gen => |params| return RSA.generate(params, extractable, key_usages, exec),
-        .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, exec),
-        .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, exec),
-        .invalid => return local.typeError("invalid algorithm"),
+        .named => |name| return generateKeyFromName(name, extractable, key_usages, exec),
     }
 }
 
 fn generateKeyFromName(
-    name: String,
+    name: []const u8,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    if (OKP.curveOf(name.str())) |curve| {
+    if (OKP.curveOf(name)) |curve| {
         return OKP.generate(curve, extractable, key_usages, exec);
     }
 
@@ -83,11 +79,10 @@ fn generateKeyFromName(
         // error name; leaves real key generation to a future change.
 
         const allowed: []const []const u8 = blk: {
-            const str = name.str();
-            if (eqlIgnoreCase(str, "Ed448")) {
+            if (eqlIgnoreCase(name, "Ed448")) {
                 break :blk &.{ "sign", "verify" };
             }
-            if (eqlIgnoreCase(str, "X448")) {
+            if (eqlIgnoreCase(name, "X448")) {
                 break :blk &.{ "deriveKey", "deriveBits" };
             }
             return error.NotSupported;
@@ -119,6 +114,37 @@ fn generateKeyFromName(
 pub fn importKey(
     _: *const SubtleCrypto,
     format: []const u8,
+    key_data_value: js.Value,
+    algo_value: js.Value,
+    extractable: bool,
+    key_usages: []const []const u8,
+    exec: *const Execution,
+) !js.Promise {
+    const local = exec.js.local.?;
+    try checkFormat(format, local);
+    // keyData converts first (a JWK's members are read then), but a buffer's
+    // bytes are only read after the algorithm is normalized (bufferBytes).
+    // Any ArrayBuffer or view is the BufferSource (a Uint16Array too, which
+    // KeyData's Uint8Array wouldn't take); a shared one is one that fails its
+    // conversion (TypeError), not a JsonWebKey. Any other object is a JWK.
+    const is_buffer = key_data_value.isArrayBuffer() or key_data_value.isArrayBufferView() or key_data_value.isSharedArrayBuffer();
+    var key_data: algorithm.KeyData = if (is_buffer) blk: {
+        try checkBufferSource(key_data_value, local);
+        break :blk .{ .bytes = .{ .values = &.{} } };
+    } else local.jsValueToZig(algorithm.KeyData, key_data_value) catch |err| {
+        return algorithm.conversionError(err, local, "keyData is neither a BufferSource nor a JsonWebKey");
+    };
+    const algo = try algorithm.Import.fromJs(algo_value, local);
+    if (key_data == .bytes) {
+        key_data = .{ .bytes = .{ .values = try bufferBytes(key_data_value, local) } };
+    }
+    return importNormalized(format, key_data, algo, extractable, key_usages, exec);
+}
+
+/// importKey, once its algorithm is normalized: unwrapKey normalizes the
+/// unwrapped key's algorithm itself, before unwrapping.
+fn importNormalized(
+    requested_format: []const u8,
     key_data: algorithm.KeyData,
     algo: algorithm.Import,
     extractable: bool,
@@ -126,7 +152,11 @@ pub fn importKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const name = algo.algoName() orelse return local.typeError(missing_name);
+    const name = algo.algoName();
+    const symmetric = AES.canonicalName(name) != null or eqlIgnoreCase(name, "HMAC") or
+        eqlIgnoreCase(name, "HKDF") or eqlIgnoreCase(name, "PBKDF2");
+    const raw_public = EC.canonicalName(name) != null or OKP.curveOf(name) != null;
+    const format = rawAlias(requested_format, symmetric, raw_public);
 
     // Asymmetric algorithms (EC, OKP). Usage validation runs first (bad/empty
     // usages → SyntaxError) so the failure-path tests pass regardless of whether
@@ -162,7 +192,7 @@ pub fn importKey(
             }
         }
         if (RSA.scheme(name)) |scheme| {
-            const hash_name = try importHash(algo, local) orelse return local.typeError("RSA import requires a hash");
+            const hash_name = (try algo.hash(local)).?;
             const is_jwk = std.mem.eql(u8, format, "jwk");
             switch (key_data) {
                 .bytes => |b| {
@@ -190,8 +220,8 @@ pub fn importKey(
             return AES.importJwk(name, jwk, extractable, key_usages, exec);
         }
         if (eqlIgnoreCase(name, "HMAC")) {
-            const length = try HMAC.lengthParam(importLength(algo), local);
-            const hash_name = try importHash(algo, local) orelse return local.typeError("HMAC import requires a hash");
+            const length = try HMAC.lengthParam(algo.length(), local);
+            const hash_name = (try algo.hash(local)).?;
             return HMAC.importJwk(hash_name, jwk, length, extractable, key_usages, exec);
         }
         // HKDF and PBKDF2 keys only come in "raw".
@@ -233,8 +263,8 @@ pub fn importKey(
         }
     }
     if (eqlIgnoreCase(name, "HMAC")) {
-        const length = try HMAC.lengthParam(importLength(algo), local);
-        const hash_name = try importHash(algo, local) orelse return local.typeError("HMAC import requires a hash");
+        const length = try HMAC.lengthParam(algo.length(), local);
+        const hash_name = (try algo.hash(local)).?;
         return HMAC.import(hash_name, raw, length, extractable, key_usages, exec);
     }
 
@@ -242,32 +272,13 @@ pub fn importKey(
     return error.NotSupported;
 }
 
-/// The hash of an importKey algorithm that carries one (HMAC, RSA): those
-/// params {name, hash} match the `.hmac` variant of the Import union (same
-/// shape), so the hash is read there. Null for the other variants.
-fn importHash(algo: algorithm.Import, local: *const js.Local) !?[]const u8 {
-    return switch (algo) {
-        .hmac => |h| try h.hash.name(local),
-        else => null,
-    };
-}
-
-/// The `length` member of an HMAC importKey algorithm, unconverted (see
-/// HMAC.lengthParam). Null when absent, or for the other variants.
-fn importLength(algo: algorithm.Import) ?js.Value {
-    return switch (algo) {
-        .hmac => |h| h.length,
-        else => null,
-    };
-}
-
 /// Whether the requested format/key-data describe a private key. The format
 /// alone decides for DER/raw variants; for JWK the presence of `d` marks it.
 fn importKind(format: []const u8, key_data: algorithm.KeyData) bool {
-    if (eqlIgnoreCase(format, "pkcs8") or eqlIgnoreCase(format, "raw-private") or eqlIgnoreCase(format, "raw-seed")) {
+    if (std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "raw-private") or std.mem.eql(u8, format, "raw-seed")) {
         return true;
     }
-    if (eqlIgnoreCase(format, "jwk")) {
+    if (std.mem.eql(u8, format, "jwk")) {
         return switch (key_data) {
             .jwk => |j| j.d != null,
             .bytes => false,
@@ -307,6 +318,7 @@ pub fn exportKey(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    try checkFormat(format, local);
     return switch (try exportAs(format, key, exec)) {
         .bytes => |bytes| local.resolvePromise(js.ArrayBuffer{ .values = bytes }),
         .jwk => |jwk| local.resolvePromise(try jwk.toJs(local)),
@@ -352,11 +364,19 @@ const Jwk = union(enum) {
 };
 
 /// The "export key" steps shared by exportKey and wrapKey.
-fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Exported {
-    const local = exec.js.local.?;
+fn exportAs(requested_format: []const u8, key: *CryptoKey, exec: *const Execution) !Exported {
+    // HKDF and PBKDF2 have no export operation: that's a NotSupportedError,
+    // checked before the extractable flag (their keys never are).
+    if (key._type == .derive) {
+        return error.NotSupported;
+    }
     if (!key.canExportKey()) {
         return error.InvalidAccessError;
     }
+
+    const symmetric = key._type == .aes or key._type == .hmac;
+    const raw_public = key._type == .ec or key._type == .ed25519 or key._type == .x25519;
+    const format = rawAlias(requested_format, symmetric, raw_public);
 
     if (std.mem.eql(u8, format, "raw")) {
         // RSA keys live in `_vary.pkey`; there's no raw form.
@@ -391,7 +411,21 @@ fn exportAs(format: []const u8, key: *CryptoKey, exec: *const Execution) !Export
         return error.NotSupported;
     }
 
-    return local.typeError("invalid format");
+    // raw-private or raw-seed, or a raw-* format the key's algorithm doesn't
+    // take (see rawAlias).
+    return error.NotSupported;
+}
+
+/// The Modern Algorithms draft's raw-* formats, for the algorithms here:
+/// "raw-secret" is "raw" for a symmetric algorithm, and "raw-public" is "raw"
+/// for an EC or OKP one (a public key's point). Any other format stays as it
+/// is, so a raw-* one the algorithm doesn't take (raw-public on AES, raw-secret
+/// on ECDSA, any raw-* on RSA, raw-private, raw-seed) is NotSupportedError.
+/// https://wicg.github.io/webcrypto-modern-algos/#subtlecrypto-interface-keyformat
+fn rawAlias(format: []const u8, symmetric: bool, raw_public: bool) []const u8 {
+    if (symmetric and std.mem.eql(u8, format, "raw-secret")) return "raw";
+    if (raw_public and std.mem.eql(u8, format, "raw-public")) return "raw";
+    return format;
 }
 
 /// The JSON Web Key returned for symmetric ("oct") keys. Members are listed
@@ -448,7 +482,7 @@ pub fn deriveKey(
     _: *const SubtleCrypto,
     algo_value: js.Value,
     base_key: *const CryptoKey,
-    derived: algorithm.DerivedKey,
+    derived_value: js.Value,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
@@ -456,40 +490,44 @@ pub fn deriveKey(
     const local = exec.js.local.?;
     // The algorithm is normalized before derivedKeyType.
     const algo = try algorithm.Derive.fromJs(algo_value, local);
-    // The base key's deriveKey usage (not deriveBits) gates this operation.
+    const derived = try algorithm.DerivedKey.fromJs(derived_value, local);
+    // The base key checks come before "get key length": its algorithm must be
+    // the one given, and it must have the deriveKey usage (not deriveBits).
+    if (!eqlIgnoreCase(base_key._algorithm.name, algo.algoName())) {
+        return error.InvalidAccessError;
+    }
     const usage_ok = base_key.canDeriveKey();
+    if (!usage_ok) {
+        return error.InvalidAccessError;
+    }
 
     switch (derived) {
-        .keyed => |k| {
-            if (AES.canonicalName(k.name) == null) {
-                return error.NotSupported;
+        .aes => |a| {
+            // "Get key length": an AES key is 128, 192 or 256 bits.
+            const length = a.length.value;
+            if (length != 128 and length != 192 and length != 256) {
+                return error.OperationError;
             }
-            const bits = try deriveRaw(algo, base_key, k.length, usage_ok, exec);
-            return AES.import(k.name, bits, extractable, key_usages, exec);
+            const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
+            return AES.import(a.name, bits, extractable, key_usages, exec);
         },
         .hmac => |h| {
-            // This shape ({name, hash, length?}) also matches an AES algorithm
-            // carrying a stray `hash`, or another algorithm's: go by the name.
-            if (AES.canonicalName(h.name) != null) {
-                const length = try HMAC.lengthParam(h.length, local) orelse return local.typeError("AES requires a length");
-                const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
-                return AES.import(h.name, bits, extractable, key_usages, exec);
+            // "Get key length": a present length must be non-zero.
+            if (h.length == 0) {
+                return local.typeError("HMAC length must not be zero");
             }
-            if (!eqlIgnoreCase(h.name, "HMAC")) {
-                return error.NotSupported;
-            }
-            const requested = try HMAC.lengthParam(h.length, local);
             const hash_name = try h.hash.canonical(local);
             const hash_md = crypto.findDigest(hash_name) catch return error.NotSupported;
             // Default length, per spec, is the hash's block size (in bits).
-            const length: u32 = requested orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
+            const length: u32 = h.length orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
             const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
             return HMAC.import(hash_name, bits, length, extractable, key_usages, exec);
         },
-        .nameless => return local.typeError(missing_name),
-        .object, .name => {
-            log.debug(.not_implemented, "SubtleCrypto.deriveKey", .{});
-            return error.NotSupported;
+        // HKDF and PBKDF2 have no key length: the whole derivation, which only
+        // ECDH and X25519 can give (PBKDF2 and HKDF need a length).
+        .named => {
+            const bits = try deriveRaw(algo, base_key, null, usage_ok, exec);
+            return importNormalized("raw", .{ .bytes = .{ .values = bits } }, .{ .named = derived.named }, extractable, key_usages, exec);
         },
     }
 }
@@ -528,26 +566,32 @@ fn deriveRaw(
 /// Encrypts data with the given key and algorithm.
 pub fn encrypt(
     _: *const SubtleCrypto,
-    algo: algorithm.Encrypt,
+    algo_value: js.Value,
     key: *CryptoKey,
-    data: js.TypedArray(u8),
+    data_value: js.Value,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const out = try cryptBytes(algo, key, data.values, .encrypt, exec);
+    try checkBufferSource(data_value, local);
+    const algo = try algorithm.Encrypt.fromJs(algo_value, local, false);
+    const data = try bufferBytes(data_value, local);
+    const out = try cryptBytes(algo, key, data, .encrypt, exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = out });
 }
 
 /// Decrypts data with the given key and algorithm.
 pub fn decrypt(
     _: *const SubtleCrypto,
-    algo: algorithm.Encrypt,
+    algo_value: js.Value,
     key: *CryptoKey,
-    data: js.TypedArray(u8),
+    data_value: js.Value,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const out = try cryptBytes(algo, key, data.values, .decrypt, exec);
+    try checkBufferSource(data_value, local);
+    const algo = try algorithm.Encrypt.fromJs(algo_value, local, false);
+    const data = try bufferBytes(data_value, local);
+    const out = try cryptBytes(algo, key, data, .decrypt, exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = out });
 }
 
@@ -558,12 +602,13 @@ pub fn wrapKey(
     format: []const u8,
     key: *CryptoKey,
     wrapping_key: *CryptoKey,
-    algo: algorithm.Encrypt,
+    algo_value: js.Value,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const name = try wrapAlgorithmName(algo, local);
-    try checkWrappingKey(name, wrapping_key, .wrap);
+    try checkFormat(format, local);
+    const algo = try algorithm.Encrypt.fromJs(algo_value, local, true);
+    try checkWrappingKey(algo.algoName(), wrapping_key, .wrap);
 
     const bytes = switch (try exportAs(format, key, exec)) {
         .bytes => |bytes| bytes,
@@ -576,38 +621,68 @@ pub fn wrapKey(
 /// Unwraps a key: decrypts `wrapped_key` with `unwrapping_key` (or unwraps it
 /// with AES-KW) and imports the result in `format`, a JWK being its JSON text.
 pub fn unwrapKey(
-    self: *const SubtleCrypto,
+    _: *const SubtleCrypto,
     format: []const u8,
-    wrapped_key: js.TypedArray(u8),
+    wrapped_key_value: js.Value,
     unwrapping_key: *CryptoKey,
-    algo: algorithm.Encrypt,
-    unwrapped_key_algo: algorithm.Import,
+    algo_value: js.Value,
+    unwrapped_key_value: js.Value,
     extractable: bool,
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const name = try wrapAlgorithmName(algo, local);
-    // The unwrapped key's algorithm is normalized next, before the key checks:
-    // its name and, for HMAC and RSA, which take one, a known hash. Another
-    // algorithm's stray `hash` is ignored, as importKey does.
-    const unwrapped_name = unwrapped_key_algo.algoName() orelse return local.typeError(missing_name);
-    if (eqlIgnoreCase(unwrapped_name, "HMAC") or RSA.scheme(unwrapped_name) != null) {
-        const hash_name = try importHash(unwrapped_key_algo, local) orelse return local.typeError("the unwrapped key's algorithm requires a hash");
-        if (common.canonicalHash(hash_name) == null) {
-            return error.NotSupported;
-        }
-    }
-    try checkWrappingKey(name, unwrapping_key, .unwrap);
+    try checkFormat(format, local);
+    try checkBufferSource(wrapped_key_value, local);
+    const algo = try algorithm.Encrypt.fromJs(algo_value, local, true);
+    // The unwrapped key's algorithm is normalized next, before the key checks.
+    const unwrapped_key_algo = try algorithm.Import.fromJs(unwrapped_key_value, local);
+    const wrapped_key = try bufferBytes(wrapped_key_value, local);
+    try checkWrappingKey(algo.algoName(), unwrapping_key, .unwrap);
 
-    const bytes = try cryptBytes(algo, unwrapping_key, wrapped_key.values, .unwrap, exec);
+    const bytes = try cryptBytes(algo, unwrapping_key, wrapped_key, .unwrap, exec);
     const key_data: algorithm.KeyData = if (std.mem.eql(u8, format, "jwk"))
         .{ .jwk = try parseJwk(bytes, exec) }
     else
         .{ .bytes = .{ .values = bytes } };
     // importKey rejects a secret or private key with no usages (SyntaxError),
     // the last check unwrapKey asks for.
-    return self.importKey(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
+    return importNormalized(format, key_data, unwrapped_key_algo, extractable, key_usages, exec);
+}
+
+/// A KeyFormat, including the raw-* ones of the Modern Algorithms draft (see
+/// rawAlias for the ones supported here). Any other string fails the WebIDL
+/// enum conversion of the format argument, a TypeError before any other step.
+fn checkFormat(format: []const u8, local: *const js.Local) !void {
+    const formats = [_][]const u8{ "raw", "spki", "pkcs8", "jwk", "raw-public", "raw-private", "raw-seed", "raw-secret" };
+    for (formats) |known| {
+        if (std.mem.eql(u8, format, known)) {
+            return;
+        }
+    }
+    return local.typeError("invalid key format");
+}
+
+/// A BufferSource argument taken as a value. Its type is checked when the
+/// operation is called (a TypeError, as WebIDL's conversion gives), but its
+/// bytes are read with `bufferBytes` only once the algorithm is normalized:
+/// normalizing runs the page's getters, which can transfer the buffer, and
+/// its bytes must then read as the now-empty buffer rather than through a
+/// pointer into a moved backing store.
+///
+/// None of SubtleCrypto's BufferSource arguments is [AllowShared]: a
+/// SharedArrayBuffer, or a view onto one, is a TypeError.
+fn checkBufferSource(value: js.Value, local: *const js.Local) !void {
+    if (!value.isBufferSource()) {
+        return local.typeError("expected an ArrayBuffer or ArrayBufferView");
+    }
+}
+
+fn bufferBytes(value: js.Value, local: *const js.Local) ![]const u8 {
+    const buffer = local.jsValueToZig(js.BufferSource, value) catch |err| {
+        return algorithm.conversionError(err, local, "expected an ArrayBuffer or ArrayBufferView");
+    };
+    return buffer.bytes;
 }
 
 /// What `cryptBytes` is for, which decides the direction and the usage the key
@@ -631,17 +706,6 @@ const CryptUse = enum {
         };
     }
 };
-
-/// The name of a wrapKey/unwrapKey algorithm, normalized first: one without a
-/// name is a TypeError, one that can't wrap (AES-KW) or encrypt (RSA-OAEP,
-/// AES-CBC/CTR/GCM) NotSupportedError.
-fn wrapAlgorithmName(algo: algorithm.Encrypt, local: *const js.Local) ![]const u8 {
-    const name = algo.algoName() orelse return local.typeError(missing_name);
-    if (!eqlIgnoreCase(name, "RSA-OAEP") and AES.canonicalName(name) == null) {
-        return error.NotSupported;
-    }
-    return name;
-}
 
 /// The checks wrapKey/unwrapKey make on the wrapping key before touching the
 /// other key, in the spec's order: the same algorithm as the wrapping key, and
@@ -679,54 +743,36 @@ fn cryptBytes(
     use: CryptUse,
     exec: *const Execution,
 ) ![]const u8 {
-    const name = algo.algoName() orelse return exec.js.local.?.typeError(missing_name);
-    // RSA-OAEP is handled before the switch: it may arrive as a bare string
-    // ("RSA-OAEP"), which would hit `.name => NotSupported` below. An RSA key
-    // used with another algorithm's name falls through to AES.crypt, which
-    // rejects the key type. The other RSA algorithms don't encrypt, and end
-    // up NotSupported below.
-    if (eqlIgnoreCase(name, "RSA-OAEP")) {
-        const label: []const u8 = switch (algo) {
-            .params => |p| if (p.label) |l| l.values else "",
-            .name, .nameless => "",
-        };
-        return RSA.crypt(key, data, label, use.encrypting(), use.usage(), exec);
+    switch (algo) {
+        .rsa_oaep => |p| {
+            const label: []const u8 = if (p.label) |l| l.values else "";
+            return RSA.crypt(key, data, label, use.encrypting(), use.usage(), exec);
+        },
+        // AES-KW has no encrypt/decrypt (fromJs only allows it for wrapping).
+        .aes_kw => return AES.keyWrap(key, data, use.encrypting(), use.usage(), exec),
+        .aes => |params| return AES.crypt(params, key, data, use.encrypting(), use.usage(), exec),
     }
-
-    // AES-KW has no encrypt/decrypt, only its key wrap; its params are just
-    // the name, so a bare string is fine.
-    if (eqlIgnoreCase(name, "AES-KW")) {
-        if (use == .encrypt or use == .decrypt) {
-            return error.NotSupported;
-        }
-        return AES.keyWrap(key, data, use.encrypting(), use.usage(), exec);
-    }
-
-    const params = switch (algo) {
-        .params => |p| p,
-        // A bare string identifier carries no iv/counter, so it can't drive AES.
-        .name, .nameless => return error.NotSupported,
-    };
-    return AES.crypt(params, key, data, use.encrypting(), use.usage(), exec);
 }
 
 /// Generate a digital signature.
 pub fn sign(
     _: *const SubtleCrypto,
     /// https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/sign#algorithm
-    algo: algorithm.Sign,
+    algo_value: js.Value,
     key: *CryptoKey,
-    data: []const u8, // ArrayBuffer.
+    data_value: js.Value,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const name = algo.algoName() orelse return local.typeError(missing_name);
-    const params = try signParams(name, algo, local);
-    try checkSigningKey(name, key, CryptoKey.Usages.sign);
+    try checkBufferSource(data_value, local);
+    const algo = try algorithm.Sign.fromJs(algo_value, local);
+    const data = try bufferBytes(data_value, local);
+    const hash_name = try algo.hashName(local);
+    try checkSigningKey(algo.algoName(), key, CryptoKey.Usages.sign);
     const signature = switch (key._type) {
         .hmac => try HMAC.sign(key, data, exec),
-        .rsa => try RSA.sign(key, data, params.salt_length, exec),
-        .ec => try EC.sign(key, data, params.hash orelse return error.OperationError, exec),
+        .rsa => try RSA.sign(key, data, algo.saltLength(), exec),
+        .ec => try EC.sign(key, data, hash_name orelse return error.OperationError, exec),
         .ed25519 => try OKP.sign(key, data, exec),
         // A signing algorithm with no sign here yet (Ed448).
         else => {
@@ -740,20 +786,24 @@ pub fn sign(
 /// Verify a digital signature.
 pub fn verify(
     _: *const SubtleCrypto,
-    algo: algorithm.Sign,
+    algo_value: js.Value,
     key: *const CryptoKey,
-    signature: []const u8, // ArrayBuffer.
-    data: []const u8, // ArrayBuffer.
+    signature_value: js.Value,
+    data_value: js.Value,
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const name = algo.algoName() orelse return local.typeError(missing_name);
-    const params = try signParams(name, algo, local);
-    try checkSigningKey(name, key, CryptoKey.Usages.verify);
+    try checkBufferSource(signature_value, local);
+    try checkBufferSource(data_value, local);
+    const algo = try algorithm.Sign.fromJs(algo_value, local);
+    const signature = try bufferBytes(signature_value, local);
+    const data = try bufferBytes(data_value, local);
+    const hash_name = try algo.hashName(local);
+    try checkSigningKey(algo.algoName(), key, CryptoKey.Usages.verify);
     const valid = switch (key._type) {
         .hmac => try HMAC.verify(key, signature, data),
-        .rsa => try RSA.verify(key, signature, data, params.salt_length),
-        .ec => try EC.verify(key, signature, data, params.hash orelse return error.OperationError),
+        .rsa => try RSA.verify(key, signature, data, algo.saltLength()),
+        .ec => try EC.verify(key, signature, data, hash_name orelse return error.OperationError),
         .ed25519 => try OKP.verify(key, signature, data),
         // A signing algorithm with no verify here yet (Ed448).
         else => {
@@ -764,53 +814,11 @@ pub fn verify(
     return local.resolvePromise(valid);
 }
 
-/// The members of a sign/verify algorithm that normalization converts:
-/// RSA-PSS's `saltLength` (RsaPssParams) and ECDSA's `hash` (EcdsaParams).
-/// The other algorithms ignore them.
-const SignParams = struct {
-    salt_length: ?u32 = null,
-    /// A canonical hash name.
-    hash: ?[]const u8 = null,
-};
-
-/// Normalizes `algo`'s params, before the key checks: a missing member, a
-/// saltLength outside [EnforceRange] unsigned long or a hash that isn't an
-/// algorithm identifier is a TypeError, an unknown hash NotSupportedError.
-fn signParams(name: []const u8, algo: algorithm.Sign, local: *const js.Local) !SignParams {
-    if (eqlIgnoreCase(name, "RSA-PSS")) {
-        const value = algo.saltLength() orelse return local.typeError("RSA-PSS requires a saltLength");
-        const salt_length = js.enforceRange(u32, try value.toF64()) catch return local.typeError("saltLength is out of range");
-        return .{ .salt_length = salt_length };
-    }
-    if (eqlIgnoreCase(name, "ECDSA")) {
-        const value = algo.hash() orelse return local.typeError("ECDSA requires a hash");
-        return .{ .hash = common.canonicalHash(try hashName(value, local)) orelse return error.NotSupported };
-    }
-    return .{};
-}
-
-/// The name of a HashAlgorithmIdentifier, `(object or DOMString)`, converted
-/// as algorithm.Hash: an object's `name`, required (a TypeError without one),
-/// or the value as a string.
-fn hashName(value: js.Value, local: *const js.Local) ![]const u8 {
-    const hash = local.jsValueToZig(algorithm.Hash, value) catch |err| switch (err) {
-        // The page's own exception (a throwing getter or toString), pending.
-        error.JsException => return err,
-        else => return local.typeError("hash is not an algorithm identifier"),
-    };
-    return hash.name(local);
-}
-
-/// The checks sign/verify make before the algorithm's own, in the spec's
-/// order: an algorithm that signs (else NotSupported), the key's own algorithm,
-/// and the sign or verify usage (else InvalidAccessError). The names match
-/// case-insensitively, as algorithm normalization does.
+/// The checks sign/verify make after normalizing their algorithm, in the
+/// spec's order: the key's own algorithm, and the sign or verify usage (else
+/// InvalidAccessError). The names match case-insensitively, as normalization
+/// does.
 fn checkSigningKey(name: []const u8, key: *const CryptoKey, usage: u8) !void {
-    const signing = [_][]const u8{ "HMAC", "RSASSA-PKCS1-v1_5", "RSA-PSS", "ECDSA", "Ed25519", "Ed448" };
-    for (signing) |s| {
-        if (eqlIgnoreCase(name, s)) break;
-    } else return error.NotSupported;
-
     if (!eqlIgnoreCase(name, key._algorithm.name)) {
         return error.InvalidAccessError;
     }
@@ -835,7 +843,7 @@ const DigestInput = union(enum) {
 };
 
 /// Generates a digest of the given data, using the specified hash function.
-pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8), exec: *const Execution) !js.Promise {
+pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.BufferSource, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
     const algo_name = algo.name() orelse {
@@ -845,13 +853,13 @@ pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8)
         return error.NotSupported;
     }
 
-    const normalized = std.ascii.upperString(exec.buf, algo_name);
+    const normalized = try std.ascii.allocUpperString(exec.local_arena, algo_name);
     const digest_type = crypto.findDigest(normalized) catch return error.NotSupported;
 
-    const bytes = data.values;
-    const out = exec.buf[0..crypto.EVP_MAX_MD_SIZE];
+    const bytes = data.bytes;
+    var out: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
     var out_size: c_uint = 0;
-    const result = crypto.EVP_Digest(bytes.ptr, bytes.len, out, &out_size, digest_type, null);
+    const result = crypto.EVP_Digest(bytes.ptr, bytes.len, &out, &out_size, digest_type, null);
     lp.assert(result == 1, "SubtleCrypto.digest", .{ .algo = algo });
 
     return local.resolvePromise(js.ArrayBuffer{ .values = out[0..out_size] });

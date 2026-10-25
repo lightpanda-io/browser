@@ -909,6 +909,12 @@ pub const ToolResult = struct {
     selector: ?[]const u8 = null,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
+    /// Implies `is_error`; telemetry counts it as `invalid_params`.
+    invalid_params: bool = false,
+
+    fn invalidParams(text: []const u8) ToolResult {
+        return .{ .text = text, .is_error = true, .invalid_params = true };
+    }
 };
 
 /// Where a call left the page. MCP serializes it as `structuredContent` so a
@@ -999,6 +1005,7 @@ pub fn call(
 
 fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
     const r = result catch |err| return errorOutcome(err);
+    if (r.invalid_params) return .invalid_params;
     return if (r.is_error) .is_error else .ok;
 }
 
@@ -1032,13 +1039,16 @@ fn callInner(
         .is_error = true,
     };
     if (diagnoseArgs(arena, arguments)) |msg|
-        return .{ .text = msg, .is_error = true };
+        return .invalidParams(msg);
     // Must run before substituteStringArgs so the `key=="value"` secret-
     // redaction check there still triggers on PascalCase keys.
-    const normalized = normalizeArgKeys(arena, tool, arguments) catch |err| switch (err) {
+    const normalized = normalizeArgs(arena, tool, arguments) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.DuplicateField => return error.InvalidParams,
     };
+    // After normalizeArgs so a PascalCase `Script` or a `null` isn't missed.
+    if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
+        return .invalidParams(msg);
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
     // Before dispatch, because a navigation takes the node with it. Gated on
@@ -1269,6 +1279,14 @@ fn weaknessNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
     const iframes = status.skipped.get(.iframe);
     if (iframes > 0) {
         try notes.append(arena, try arena.print("{d} iframe(s) were not loaded: subframe loading is off.", .{iframes}));
+    }
+    if (status.resource_challenge) |challenge| {
+        try notes.append(arena, try arena.print("A {s} bot challenge blocked some of the page's own requests: content they load is missing.", .{@tagName(challenge)}));
+    } else {
+        const blocked = status.blocked.total();
+        if (blocked > 0) {
+            try notes.append(arena, try arena.print("{d} of the page's own request(s) were refused with HTTP 403/429, likely bot detection or rate limiting: content they load is missing.", .{blocked}));
+        }
     }
     if (notes.items.len == 0) {
         return null;
@@ -2615,8 +2633,8 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     const Params = struct { url: ?[]const u8 = null, all: bool = false };
     const args = try parseArgsOrDefault(Params, arena, arguments);
 
-    const cookies = session.cookie_jar.cookies.items;
-    if (cookies.len == 0) return "No cookies.";
+    const jar = &session.cookie_jar;
+    if (jar.len == 0) return "No cookies.";
 
     const filter_url: ?[:0]const u8 = blk: {
         if (args.all) break :blk null;
@@ -2629,7 +2647,8 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     var aw: std.Io.Writer.Allocating = .init(arena);
     const writer = &aw.writer;
     var count: usize = 0;
-    for (cookies) |*cookie| {
+    var it = jar.iterator();
+    while (it.next()) |cookie| {
         if (host) |h| if (!cookie.matchesHost(h)) continue;
         writer.print("{s}={s}", .{ cookie.name, cookie.value }) catch return ToolError.InternalError;
         writer.print("; domain={s}; path={s}", .{ cookie.domain, cookie.path }) catch return ToolError.InternalError;
@@ -2688,6 +2707,7 @@ pub const StartedGoto = struct {
 /// right after createPage but navigate can change/null it, so callers re-fetch.
 fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHandle {
     const page = session.createPage() catch return ToolError.NavigationFailed;
+    errdefer page.close();
     _ = page.frame().?.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
@@ -2767,6 +2787,33 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
 
 const ParseArgsError = error{ OutOfMemory, InvalidParams };
 
+/// Names the first required argument absent from the call, so a bare
+/// `InvalidParams` from `parseValue` doesn't hide which field to add — a
+/// caller sending `{"expression": ...}` to evaluate learns about `script`.
+/// Default-true booleans (setChecked.checked) parse fine when omitted, so
+/// they don't count as missing. Runs on normalized arguments.
+fn diagnoseMissingRequired(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ?[]const u8 {
+    const schemas = lp.Schema.all();
+    const tool_idx = @backingInt(tool);
+    if (tool_idx >= schemas.len) return null;
+    const schema = schemas[tool_idx];
+
+    const obj = if (arguments) |v| switch (v) {
+        .object => |o| o,
+        // A non-object shape fails in parseValue with the whole payload as
+        // context; there is no key to name here.
+        else => return null,
+    } else std.json.ObjectMap.empty;
+    for (schema.required) |name| {
+        if (obj.get(name) != null) continue;
+        if (schema.findField(name)) |f| {
+            if (f.default_true) continue;
+        }
+        return arena.print("missing required argument '{s}'", .{name}) catch null;
+    }
+    return null;
+}
+
 /// Surface field/value context for known typed args — `std.json`'s parse
 /// errors only carry the tag (`InvalidEnumTag`, …), not which field failed.
 fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]const u8 {
@@ -2831,12 +2878,10 @@ pub fn parseArgs(comptime T: type, arena: std.mem.Allocator, arguments: ?std.jso
     return parseValue(T, arena, arguments orelse return error.InvalidParams);
 }
 
-/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
-/// `fill.value` is the one exception: `execFill` resolves it internally and
-/// echoes the original placeholder so the credential never surfaces in the
-/// result text. Co-located with `execFill` so both halves of the carve-out
-/// live in one file.
-pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) !?std.json.Value {
+/// Renames keys to the schema's casing and drops `null` values, which
+/// zero-filling models send for "unset" but `std.json` rejects for a
+/// non-optional field.
+pub fn normalizeArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) !?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
 
@@ -2847,6 +2892,7 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
 
     var it = v.object.iterator();
     while (it.next()) |entry| {
+        if (entry.value_ptr.* == .null) break;
         const field = schema.findField(entry.key_ptr.*) orelse continue;
         if (!std.mem.eql(u8, field.name, entry.key_ptr.*)) break;
     } else return v;
@@ -2855,6 +2901,7 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     try new_obj.ensureTotalCapacity(arena, v.object.count());
     it = v.object.iterator();
     while (it.next()) |entry| {
+        if (entry.value_ptr.* == .null) continue;
         const canonical = if (schema.findField(entry.key_ptr.*)) |f| f.name else entry.key_ptr.*;
         const gop = try new_obj.getOrPut(arena, canonical);
         if (gop.found_existing) return error.DuplicateField;
@@ -2863,6 +2910,11 @@ pub fn normalizeArgKeys(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Va
     return .{ .object = new_obj };
 }
 
+/// Resolve `$LP_*` placeholders in every string arg before the tool runs.
+/// `fill.value` is the one exception: `execFill` resolves it internally and
+/// echoes the original placeholder so the credential never surfaces in the
+/// result text. Co-located with `execFill` so both halves of the carve-out
+/// live in one file.
 fn substituteStringArgs(arena: std.mem.Allocator, tool: Tool, args: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const v = args orelse return null;
     if (v != .object) return v;
@@ -2977,6 +3029,22 @@ test "call: unknown tool name surfaces in-band" {
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
 
+test "call: an argument diagnosis is in-band but counts as invalid_params" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const missing = call(arena.allocator(), testing.test_session, &registry, "evaluate", null, .{ .source = .user });
+    try std.testing.expectEqualStrings("missing required argument 'script'", (try missing).text);
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(missing));
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), "{\"state\":\"idle\"}", .{});
+    const bad_enum = call(arena.allocator(), testing.test_session, &registry, "waitForState", args, .{ .source = .user });
+    try std.testing.expect((try bad_enum).is_error);
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(bad_enum));
+}
+
 test "tree and nodeDetails read the node's own frame" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
@@ -3052,6 +3120,61 @@ test "goto: a navigation stuck waiting for a connection is an error" {
     , .{});
     const r = try call(aa, session, &registry, "goto", args, .{ .source = .user });
     try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", r.text);
+}
+
+test "tools: tree exposes Chrome-matched custom ARIA states" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_aria_states.html", .{});
+    defer page.close();
+
+    const result = try call(testing.arena_allocator, page.session, &registry, "tree", null, .{ .source = .user });
+    const expected = [_][]const u8{
+        "button 'Expanded details' [expanded]",
+        "button 'Collapsed details' [collapsed]",
+        "button 'Uppercase expanded' [expanded]",
+        "button 'Invalid details' [expanded]",
+        "button 'Spaced expanded' [expanded]",
+        "listitem 'Listitem expanded' [expanded]",
+        "checkbox 'Invalid state' [checked]",
+        "checkbox 'Empty checked' [unchecked]",
+        "checkbox 'Spaced checked' [checked]",
+        "option 'Option checked' [checked]",
+        "option 'Option mixed' [mixed]",
+        "treeitem 'Treeitem checked' [collapsed] [checked]",
+        "checkbox 'Padded false' [checked]",
+        "button 'Padded collapsed' [expanded]",
+        "checkbox 'Uppercase mixed' [mixed]",
+        "checkbox 'Absent checked' [unchecked]",
+        "switch 'Switch mixed' [unchecked]",
+        "menuitemcheckbox 'Menu checkbox mixed' [mixed]",
+        "button 'Custom anchor' [expanded]",
+        "checkbox 'Checked terms' [checked]",
+    };
+    for (expected) |fragment| {
+        if (std.mem.find(u8, result.text, fragment) == null) {
+            std.debug.print("missing {s} in:\n{s}\n", .{ fragment, result.text });
+            return error.MissingExpectedAriaState;
+        }
+    }
+
+    // Unsupported roles, empty expanded values, and options or tree items
+    // without aria-checked must not manufacture state.
+    const ignored = [_][]const u8{ "'Generic expanded'", "'Empty expanded'", "'Option absent'", "'Treeitem absent'" };
+    for (ignored) |name| {
+        var lines = std.mem.splitScalar(u8, result.text, '\n');
+        var found = false;
+        while (lines.next()) |line| {
+            if (std.mem.find(u8, line, name) == null) continue;
+            found = true;
+            if (std.mem.find(u8, line, " [expanded]") != null) return error.UnexpectedExpanded;
+            if (std.mem.find(u8, line, " [checked]") != null) return error.UnexpectedChecked;
+            if (std.mem.find(u8, line, " [unchecked]") != null) return error.UnexpectedUnchecked;
+        }
+        if (!found) return error.IgnoredNodeMissing;
+    }
+    try std.testing.expect(std.mem.find(u8, result.text, "'Hidden terms'") == null);
 }
 
 test "tools: goto flags an error status instead of reporting success" {
@@ -3246,6 +3369,20 @@ test "parseValue: empty optional url treated as omitted" {
         \\{"url":"https://example.com"}
     , .{});
     try std.testing.expectEqualStrings("https://example.com", (try parseValue(Params, aa, real)).url.?);
+}
+
+test "normalizeArgs: a null field takes its default" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct { selector: []const u8, checked: bool = true };
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"Selector":"#x","checked":null}
+    , .{});
+    const parsed = try parseValue(Params, aa, (try normalizeArgs(aa, .setChecked, args)).?);
+    try std.testing.expectEqualStrings("#x", parsed.selector);
+    try std.testing.expect(parsed.checked);
 }
 
 test "substituteEnvVars resolves LP_* vars" {
@@ -3591,6 +3728,21 @@ test "markdown: alternate reads the page's text/markdown link" {
     , .{}), .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, failed.text, "Rendered page") != null);
     try std.testing.expect(std.mem.find(u8, failed.text, "markdown alternate") == null);
+}
+
+test "startGoto: a navigation that fails to start leaves no page behind" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    const pages = session.pages.items.len;
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"blob:http://localhost:9582/missing"}
+    , .{});
+    try std.testing.expectError(ToolError.NavigationFailed, startGoto(aa, session, &registry, args, null));
+    try std.testing.expectEqual(pages, session.pages.items.len);
 }
 
 test "markdown: a same-url page whose navigation failed is navigated again" {

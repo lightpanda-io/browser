@@ -35,9 +35,11 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const IdMap = @import("IdMap.zig");
 const css_charset = @import("css/charset.zig");
 const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
+const FormData = @import("webapi/net/FormData.zig");
 const FileList = @import("webapi/FileList.zig");
 const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 const Node = @import("webapi/Node.zig");
@@ -67,6 +69,8 @@ const HashChangeEvent = @import("webapi/event/HashChangeEvent.zig");
 const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
+const OngoingNavigation = @import("webapi/navigation/root.zig").OngoingNavigation;
+const NavigateEventResult = @import("webapi/navigation/Navigation.zig").NavigateEventResult;
 
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -84,8 +88,6 @@ const log = lp.log;
 const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
-
-pub const BUF_SIZE = 1024;
 
 const Frame = @This();
 
@@ -233,6 +235,9 @@ _notified_network_almost_idle: IdleNotification = .init,
 // next tick.
 _queued_navigation: ?*QueuedNavigation = null,
 
+// Only on a root frame: see Navigation.fireNavigateEvent.
+_ongoing_navigate: ?OngoingNavigation = null,
+
 // Is there a <meta http-equiv=refresh> we need to fire on "load"?
 // Exactly which we need to fire can change, so rather than keeping it in sync
 // it's easier to scan for it on "load", but this is hint to avoid that scan
@@ -257,10 +262,6 @@ inherited_base_url: ?[:0]const u8 = null,
 
 // Document charset (canonical name from encoding_rs, static lifetime)
 charset: []const u8 = "UTF-8",
-
-// Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
-// guarantee - it's valid until someone else uses it.
-buf: [BUF_SIZE]u8 = undefined,
 
 // access to the JavaScript engine
 js: *JS.Context,
@@ -665,6 +666,11 @@ pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.A
 
 pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self._session.getPinnedArena(size_or_bucket, debug);
+}
+
+// HTML's "completely loaded": the load event has been dispatched.
+pub fn isCompletelyLoaded(self: *const Frame) bool {
+    return self._load_state == .complete and self._load_event_in_progress == false;
 }
 
 fn sameOrigin(a: *const Frame, b: *const Frame) bool {
@@ -1079,11 +1085,29 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         // change, no hashchange and no new history entry either. It's still a
         // fragment navigation, which Chrome reports.
         if (std.mem.eql(u8, target.url, resolved_url)) {
+            var same_url_opts = opts;
+            same_url_opts.kind = .{ .replace = null };
+            const result = try fireNavigateEvent(originator, target, resolved_url, true, same_url_opts);
+            if (result == .canceled) {
+                arena.release();
+                return;
+            }
+
             session.notification.dispatch(.frame_navigated_within_document, &.{
                 .url = target.url,
                 .frame_id = target._frame_id,
                 .navigation_type = .fragment,
             });
+            arena.release();
+
+            if (result == .fired) {
+                try session.navigationFor(target).commitSameDocument(result.fired, target);
+            }
+            return;
+        }
+
+        const result = try fireNavigateEvent(originator, target, resolved_url, true, opts);
+        if (result == .canceled) {
             arena.release();
             return;
         }
@@ -1117,6 +1141,16 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
         // don't defer this, the caller is responsible for freeing it on error
         arena.release();
+
+        if (result == .fired) {
+            try session.navigationFor(target).commitSameDocument(result.fired, target);
+        }
+        return;
+    }
+
+    if (try fireNavigateEvent(originator, target, resolved_url, false, opts) == .canceled) {
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
         return;
     }
 
@@ -1136,6 +1170,8 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // runs (processRootQueuedNavigation rebuilds the Page in-place), so
     // allocate from the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
+    nav_opts.source_element = null;
+    nav_opts.form_data = null;
     const referrer_source = originator.referrerSource();
     if (std.mem.startsWith(u8, referrer_source, "http")) {
         if (nav_opts.referer == null) {
@@ -1172,6 +1208,28 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     target._queued_navigation = qn;
     try session.scheduleNavigation(target);
     target.abortedDocumentIsComplete();
+}
+
+// The navigate event of a navigation started by the page: a script, a link or
+// a form. The browser's own (CDP) don't fire it, and the Navigation API's
+// methods fire theirs.
+fn fireNavigateEvent(originator: *Frame, target: *Frame, url: [:0]const u8, same_document: bool, opts: NavigateOpts) !NavigateEventResult {
+    switch (opts.reason) {
+        .address_bar, .history, .initialFrameNavigation, .navigation => return .not_fired,
+        .anchor, .form, .script => {},
+    }
+    // Not shown to a document of another origin.
+    if (target != originator and sameOrigin(originator, target) == false) {
+        return .not_fired;
+    }
+    return target._session.navigationFor(target).fireNavigateEvent(.{
+        .navigation_type = opts.kind.toNavigationType(),
+        .url = url,
+        .same_document = same_document,
+        .source_element = opts.source_element,
+        .form_data = opts.form_data,
+        .user_initiated = opts.user_initiated,
+    }, target);
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -1296,6 +1354,12 @@ fn neuter(self: *Frame) void {
 }
 
 pub fn stopLoading(self: *Frame) void {
+    if (self._ongoing_navigate != null) {
+        self._session.navigationFor(self).abortOngoing(self) catch |err| {
+            log.debug(.frame, "stop abort navigation", .{ .err = err });
+        };
+    }
+
     var i: usize = 0;
     while (i < self.child_frames.items.len) : (i += 1) {
         // Each frame will cancel its requests, which can fire JS callbacks
@@ -1606,9 +1670,8 @@ fn notifyParentLoadComplete(self: *Frame) void {
 
 fn metaRefreshOnLoad(self: *Frame) void {
     const root = self.document.getDocumentElement() orelse return;
-    var tw = TreeWalker.Full.init(root.asNode(), .{});
-    while (tw.next()) |node| {
-        const meta = node.is(Element.Html.Meta) orelse continue;
+    var tw = TreeWalker.Full.ElementsOf(Element.Html.Meta).init(root.asNode(), .{});
+    while (tw.next()) |meta| {
         const target = meta.refreshTarget() orelse continue;
         return self.metaRefresh(target) catch |err| {
             log.debug(.frame, "meta refresh", .{ .err = err, .type = self._type, .url = self.url });
@@ -2517,36 +2580,24 @@ pub fn styleChanged(self: *Frame) void {
     self.page.style_version += 1;
 }
 
-const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
-
-fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
-    return idMapsForRoot(node.getRootNode(.{})) orelse {
+fn getIdMap(frame: *Frame, node: *Node) *IdMap {
+    return idMapForRoot(node.getRootNode(.{})) orelse {
         // Detached nodes should not have IDs registered
         if (lp.IS_DEBUG) {
             std.debug.assert(false);
         }
-        return .{
-            .lookup = &frame.document._elements_by_id,
-            .removed_ids = &frame.document._removed_ids,
-        };
+        return &frame.document._ids;
     };
 }
 
 // Ids are registered per tree scope: a ShadowRoot or a Document each own a
 // map. A root that is neither (a detached tree) has none.
-fn idMapsForRoot(root: *Node) ?ElementIdMaps {
+fn idMapForRoot(root: *Node) ?*IdMap {
     if (root.is(ShadowRoot)) |shadow_root| {
-        return .{
-            .lookup = &shadow_root._elements_by_id,
-            .removed_ids = &shadow_root._removed_ids,
-        };
+        return &shadow_root._ids;
     }
     if (root._type == .document) {
-        const doc = root.subtype(Document);
-        return .{
-            .lookup = &doc._elements_by_id,
-            .removed_ids = &doc._removed_ids,
-        };
+        return &root.subtype(Document)._ids;
     }
     return null;
 }
@@ -2562,50 +2613,31 @@ fn rootIsConnected(root: *Node) bool {
 }
 
 pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
-    return self.addElementIdWithMaps(self.getElementIdMap(parent), element, id);
-}
-
-fn addElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, element: *Element, id: []const u8) !void {
-    const gop = try id_maps.lookup.getOrPut(self.page_arena, id);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = element;
-        return;
-    }
-
-    const existing = gop.value_ptr.*.asNode();
-    switch (element.asNode().compareDocumentPosition(existing)) {
-        0x04 => gop.value_ptr.* = element,
-        else => {},
-    }
+    return self.getIdMap(parent).add(self.page_arena, element, id);
 }
 
 pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
-    const node = element.asNode();
-    self.removeElementIdWithMaps(self.getElementIdMap(node), id);
+    self.getIdMap(element.asNode()).remove(element, id);
 }
 
-pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
-    if (id_maps.lookup.remove(id)) {
-        const gop = id_maps.removed_ids.getOrPut(self.page_arena, id) catch |err| {
-            log.warn(.frame, "removeElementIdWithMaps", .{ .err = err });
-            return;
-        };
-        if (gop.found_existing == false) {
-            gop.key_ptr.* = self.dupeString(id) catch return;
-            gop.value_ptr.* = {};
-        }
-    }
+// The element with `id` in `node`'s tree scope, when only one element there
+// has it. That element is then the only possible match below any search root,
+// which is what the selector and XPath id fast paths need.
+pub fn getUniqueElementByIdFromNode(node: *Node, id: []const u8) IdMap.Unique {
+    const root = node.getRootNode(.{});
+    const map = idMapForRoot(root) orelse return .many;
+    return map.getUnique(root, id);
 }
 
-pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Element {
+pub fn getElementByIdFromNode(node: *Node, id: []const u8) ?*Element {
     // The id map lives on the node's root: a Document, or a ShadowRoot for
     // shadow DOM. Walk to the root once and consult the matching map.
     const root = node.getRootNode(.{});
     if (root._type == .document) {
-        return root.subtype(Document).getElementById(id, self);
+        return root.subtype(Document).getElementById(id);
     }
     if (root.is(ShadowRoot)) |shadow_root| {
-        return shadow_root.getElementById(id, self);
+        return shadow_root.getElementById(id);
     }
     // Detached subtree (root is neither a Document nor a ShadowRoot): no id map
     // exists, so scan it.
@@ -2631,9 +2663,9 @@ pub fn trackFileList(self: *Frame, file_list: *FileList) !void {
 pub const QueuedEvent = struct {
     kind: Kind,
     element: *Element.Html,
-    generation: u32 = 0, // used by Image now, could be used by others though
+    generation: u32 = 0, // Image/Link request generation
 
-    pub const Kind = enum { load, @"error" };
+    pub const Kind = enum { load, @"error", select, selectionchange, close };
 };
 
 pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
@@ -2641,11 +2673,18 @@ pub fn queueLoad(self: *Frame, html: *Element.Html) !void {
 }
 
 pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent.Kind) !void {
+    if (element.is(Element.Html.Link)) |link| {
+        return self.queueLinkEvent(link, kind, link._generation);
+    }
     try self.queueEvent(.{ .element = element, .kind = kind });
 }
 
 pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEvent.Kind) !void {
     try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .generation = image._generation });
+}
+
+fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind, generation: u32) !void {
+    try self.queueEvent(.{ .element = Factory.protoOf(link), .kind = kind, .generation = generation });
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
@@ -2728,6 +2767,7 @@ pub fn queueHashChange(self: *Frame, old_url: []const u8, new_url: []const u8) !
 pub const MAX_STYLESHEET_BYTES: usize = 4 * 1024 * 1024;
 
 // Synchronously fetch and parse an external `<link rel=stylesheet>`.
+// Completion events wait until the current script has installed its listeners.
 // href is passed in as an optimization since the [currently] only callsite has
 // it, so why look it up again?
 pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []const u8) !void {
@@ -2748,6 +2788,9 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     if (self._parse_mode == .fragment) {
         return;
     }
+    // Captured up front: if the link is reprocessed while the sync fetch is
+    // in flight, this pass's outcome is stale and must not be delivered.
+    const generation = link._generation;
     const element = link.asElement();
 
     // HttpClient will take out a larger arena for the body, if necessary
@@ -2756,7 +2799,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
         log.debug(.http, "external stylesheet resolve", .{ .err = err, .href = href });
-        try self.fireElementEvent(element, comptime .wrap("error"));
+        try self.queueLinkEvent(link, .@"error", generation);
         return;
     };
 
@@ -2777,7 +2820,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueLinkEvent(link, .@"error", generation);
     };
     {
         errdefer transfer.deinit();
@@ -2799,13 +2842,13 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     var response = transfer.submitSync(.{}) catch |err| {
         log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueLinkEvent(link, .@"error", generation);
     };
     defer response.deinit();
 
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueLinkEvent(link, .@"error", generation);
     }
 
     if (response.body.items.len > MAX_STYLESHEET_BYTES) {
@@ -2814,7 +2857,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueLinkEvent(link, .@"error", generation);
     }
 
     // Reuse the cached sheet on re-fetch (href mutation on a connected
@@ -2849,11 +2892,11 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
-        return self.fireElementEvent(element, comptime .wrap("error"));
+        return self.queueLinkEvent(link, .@"error", generation);
     };
     sheet._href = try self.page_arena.dupe(u8, resolved);
 
-    try self.fireElementEvent(element, comptime .wrap("load"));
+    try self.queueLinkEvent(link, .load, generation);
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
@@ -2867,11 +2910,11 @@ fn fireIFrameLoad(self: *Frame, iframe: *IFrame) !void {
     defer if (child_doc) |doc| {
         doc._iframe_load_in_progress = false;
     };
-    try self.fireElementEvent(iframe.asElement(), comptime .wrap("load"));
+    try self.fireElementEvent(iframe.asElement(), comptime .wrap("load"), .{});
 }
 
-fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
-    const event = try Event.initTrusted(name, .{}, self.page);
+fn fireElementEvent(self: *Frame, el: *Element, name: String, opts: Event.Options) !void {
+    const event = try Event.initTrusted(name, opts, self.page);
     try self._event_manager.dispatch(el.asEventTarget(), event);
 }
 
@@ -2893,6 +2936,12 @@ fn dispatchQueuedEvents(self: *Frame) !void {
             }
         }
 
+        if (html_element.is(Element.Html.Link)) |link| {
+            if (link._generation != queued.generation) {
+                continue;
+            }
+        }
+
         const element = html_element.asElement();
         switch (queued.kind) {
             .load => {
@@ -2900,14 +2949,24 @@ fn dispatchQueuedEvents(self: *Frame) !void {
                     if (html_element.is(IFrame)) |iframe| {
                         try self.fireIFrameLoad(iframe);
                     } else {
-                        try self.fireElementEvent(element, comptime .wrap("load"));
+                        try self.fireElementEvent(element, comptime .wrap("load"), .{});
                     }
                 }
             },
             .@"error" => {
                 // errors are rare; not worth a listener-presence check
-                try self.fireElementEvent(element, comptime .wrap("error"));
+                try self.fireElementEvent(element, comptime .wrap("error"), .{});
             },
+            .select => try self.fireElementEvent(element, comptime .wrap("select"), .{ .bubbles = true }),
+            .selectionchange => {
+                if (html_element.is(Element.Html.Input)) |input| {
+                    input._selectionchange_pending = false;
+                } else if (html_element.is(Element.Html.TextArea)) |textarea| {
+                    textarea._selectionchange_pending = false;
+                }
+                try self.fireElementEvent(element, .wrap("selectionchange"), .{ .bubbles = true });
+            },
+            .close => try self.fireElementEvent(element, comptime .wrap("close"), .{}),
         }
     }
 
@@ -2970,7 +3029,7 @@ pub fn appendNew(self: *Frame, parent: *Node, child: *Node, parent_root: ?*Node)
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Frame, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(self.local_arena), .err = err, .type = self._type, .url = self.url });
         return err;
     };
     return self.nodeIsReady(true, node);
@@ -3062,7 +3121,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
     const old_root = child.getRootNode(.{});
     const was_connected = rootIsConnected(old_root);
-    const old_id_maps = idMapsForRoot(old_root);
+    const old_id_map = idMapForRoot(old_root);
 
     child._parent = null;
 
@@ -3089,15 +3148,18 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     if (opts.reconnect_to) |dest| {
         const dest_root = dest.getRootNode(.{});
         if (dest_root == old_root) {
-            // reconnected under the same root, nothing to do (e.g. if it WAS in the
-            // idmap, it'll stay there)
+            // Reconnected under the same root: its ids stay registered, but
+            // the move can reorder duplicates.
+            if (old_id_map) |id_map| {
+                id_map.moved(child);
+            }
             return;
         }
         if (rootIsConnected(dest_root)) {
             // The node is going to be reconnected to a different root which IS
             // connected, we need to remove it from the old root's idmap.
-            if (old_id_maps) |id_maps| {
-                self.unregisterSubtreeIds(child, id_maps);
+            if (old_id_map) |id_map| {
+                unregisterSubtreeIds(child, id_map);
             }
             // but it isn't a REAL disconnect (more like a move), so there's
             // nothing else to do, e.g. no disconnectedCallback
@@ -3109,8 +3171,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     if (was_connected == false) {
         // the node wasn't connected, but it could still have lived in a shadow
         // root's id map
-        if (old_id_maps) |id_maps| {
-            self.unregisterSubtreeIds(child, id_maps);
+        if (old_id_map) |id_map| {
+            unregisterSubtreeIds(child, id_map);
         }
         // and because it wasn't disconnected, there's nothing else to do.
         return;
@@ -3128,10 +3190,17 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
     // the ID map and invoking disconnectedCallback for custom elements
+    var shadow_roots: std.ArrayList(*ShadowRoot) = .empty;
+
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            self.removeElementIdWithMaps(old_id_maps.?, id);
+            old_id_map.?.remove(el, id);
+        }
+        if (el.hostedShadowRoot(self)) |shadow| {
+            shadow_roots.append(self.call_arena, shadow) catch |err| {
+                log.err(.bug, "shadow.disconnect", .{ .err = err, .type = self._type, .url = self.url });
+            };
         }
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
@@ -3176,6 +3245,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
             }
         }
     }
+    self.disconnectShadowIFrames(&shadow_roots);
 }
 
 fn removeStyleSheet(owner: ?*Frame, sheet: *CSSStyleSheet) void {
@@ -3184,13 +3254,44 @@ fn removeStyleSheet(owner: ?*Frame, sheet: *CSSStyleSheet) void {
     sheets.remove(sheet);
 }
 
+fn disconnectShadowIFrames(self: *Frame, shadow_roots: *std.ArrayList(*ShadowRoot)) void {
+    var iframes: std.ArrayList(*Node) = .empty;
+    self.collectShadowIFrames(shadow_roots, &iframes) catch |err| {
+        log.err(.bug, "shadow.disconnect", .{ .err = err, .type = self._type, .url = self.url });
+    };
+    for (iframes.items) |node| {
+        const el = node.as(Element);
+        IFrame.Build.disconnected(el, self) catch |err| {
+            log.err(.bug, "build.disconnected", .{ .tag = el.getTag(), .err = err, .type = self._type, .url = self.url });
+        };
+    }
+}
+
+// TreeWalker doesn't enter a shadow trees. So when we connect/disconnect a
+// subtree, this function lets us reach through it. `shadow_roots` is a list
+// to visit (and we might discover new ones while visiting those).
+fn collectShadowIFrames(self: *Frame, shadow_roots: *std.ArrayList(*ShadowRoot), out: *std.ArrayList(*Node)) !void {
+    var i: usize = 0;
+    while (i < shadow_roots.items.len) : (i += 1) {
+        var tw = TreeWalker.FullExcludeSelf.Elements.init(shadow_roots.items[i].asNode(), .{});
+        while (tw.next()) |el| {
+            if (el.is(IFrame) != null) {
+                try out.append(self.call_arena, el.asNode());
+            }
+            if (el.hostedShadowRoot(self)) |shadow| {
+                try shadow_roots.append(self.call_arena, shadow);
+            }
+        }
+    }
+}
+
 // The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
 // descendants (ids nested under a shadow DOM are owned by that shadow DOM).
-fn unregisterSubtreeIds(self: *Frame, node: *Node, id_maps: ElementIdMaps) void {
+fn unregisterSubtreeIds(node: *Node, id_map: *IdMap) void {
     var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            self.removeElementIdWithMaps(id_maps, id);
+            id_map.remove(el, id);
         }
     }
 }
@@ -3377,9 +3478,20 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
 
         if (child.is(Element)) |el| {
             const root = opts.parser_root orelse parent.getRootNode(.{});
-            if (idMapsForRoot(root)) |id_maps| {
-                if (el.getId()) |id| {
-                    try self.addElementIdWithMaps(id_maps, el, id);
+            if (idMapForRoot(root)) |id_map| {
+                if (child.firstChild() == null) {
+                    if (el.getId()) |id| {
+                        try id_map.add(self.page_arena, el, id);
+                    }
+                } else {
+                    // The adoption agency inserts a fresh element holding
+                    // children it took out of the tree: their ids come back.
+                    var tw = TreeWalker.Full.Elements.init(child, .{});
+                    while (tw.next()) |sub| {
+                        if (sub.getId()) |id| {
+                            try id_map.add(self.page_arena, sub, id);
+                        }
+                    }
                 }
                 if (rootIsConnected(root)) {
                     // Build.connected, parser side (JS side is in nodeIsReady).
@@ -3422,7 +3534,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     }
 
     // nothing to register, and nothing can become connected.
-    const new_id_maps = idMapsForRoot(parent_root) orelse {
+    const new_id_map = idMapForRoot(parent_root) orelse {
         // The destination has no id scope, it's detached and outside of a
         // shadow root. There's nothing left to do.
         return;
@@ -3441,7 +3553,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                 var tw = TreeWalker.Full.Elements.init(child, .{});
                 while (tw.next()) |el| {
                     if (el.getId()) |id| {
-                        try self.addElementIdWithMaps(new_id_maps, el, id);
+                        try new_id_map.add(self.page_arena, el, id);
                     }
                 }
                 // but beause it was and stays connected, we don't trigger
@@ -3461,7 +3573,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            try self.addElementIdWithMaps(new_id_maps, el, id);
+            try new_id_map.add(self.page_arena, el, id);
         }
 
         if (should_invoke_connected) {
@@ -3632,17 +3744,25 @@ fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_i
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
 fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
-    if (node._type != .element or node.firstChild() == null) {
+    if (node._type != .element) {
+        return self.nodeIsReady(false, node);
+    }
+    if (node.firstChild() == null and node.as(Element).hostedShadowRoot(self) == null) {
         return self.nodeIsReady(false, node);
     }
 
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
+    var shadow_roots: std.ArrayList(*ShadowRoot) = .empty;
     var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         try elements.append(self.call_arena, el.asNode());
+        if (el.hostedShadowRoot(self)) |shadow| {
+            try shadow_roots.append(self.call_arena, shadow);
+        }
     }
+    try self.collectShadowIFrames(&shadow_roots, &elements);
     for (elements.items) |el| {
         try self.nodeIsReady(false, el);
     }
@@ -3895,6 +4015,10 @@ pub const NavigateOpts = struct {
     initiator_origin: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
+    // For the navigate event, read by scheduleNavigation only.
+    source_element: ?*Element = null,
+    form_data: ?*FormData = null,
+    user_initiated: bool = false,
 };
 
 pub const NavigatedOpts = struct {
@@ -4020,6 +4144,8 @@ fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
 
 const SubmitFormOpts = struct {
     fire_event: bool = true,
+    // Submitted by a trusted (user) event.
+    user_initiated: bool = false,
 };
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
@@ -4100,8 +4226,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         }
     }
 
-    const FormData = @import("webapi/net/FormData.zig");
-
     // Resolved before the entry list is built: a hidden `_charset_` field
     // takes the submission encoding's name as its value.
     const charset: []const u8 = blk: {
@@ -4143,15 +4267,9 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // both reloads the page and leaves the dialog open forever.
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm
     if (std.mem.eql(u8, method, "dialog")) {
-        // A submit button always has a value (empty when unset); with no
-        // submitter at all the dialog's existing returnValue is left untouched.
-        const result: ?[]const u8 = if (submit_button) |s| blk: {
-            if (s.is(Element.Html.Form.Input)) |input| {
-                break :blk input.getValue();
-            }
-            // if not an Input, it has to be a Button (checked above by isSubmitButton)
-            break :blk s.as(Element.Html.Form.Button).getValue();
-        } else null;
+        // The submitter's optional value: its value attribute, else null. A
+        // null result leaves the dialog's returnValue untouched.
+        const result: ?[]const u8 = if (submit_button) |s| s.getAttributeSafe(comptime .wrap("value")) else null;
 
         var ancestor: ?*Element = form_element;
         while (ancestor) |el| : (ancestor = el.parentElement()) {
@@ -4195,8 +4313,11 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var opts = NavigateOpts{
         .reason = .form,
         .kind = .{ .push = null },
+        .source_element = submitter_ orelse form_element,
+        .user_initiated = submit_opts.user_initiated,
     };
     if (is_post) {
+        opts.form_data = form_data;
         opts.method = .POST;
         opts.body = buf.written();
         opts.header = switch (encoding) {
@@ -4546,7 +4667,7 @@ test "Frame: an onload handler does not dispatch load to other elements" {
     try testing.expectString("attr;prop;", (try frame.getTitle()).?);
     try testing.expectEqual(false, frame._event_manager.has_dom_load_listener);
 
-    const none = frame.document.getElementById("none", frame).?;
+    const none = frame.document.getElementById("none").?;
     try testing.expectEqual(false, frame._event_manager.hasHandler(none.asEventTarget(), "load"));
 }
 

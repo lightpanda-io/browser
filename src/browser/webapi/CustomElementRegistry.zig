@@ -350,5 +350,13 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: CustomElementRegistry" {
+    if (comptime lp.IS_DEBUG) {
+        // Our reaction stack is per frame. The test opens the scope in the
+        // caller's frame, but attributeChange queues the reaction on the
+        // element's frame. When those differ, the reaction goes into the
+        // backup queue. We should probably move it from the Frame to the Page.
+        // this only logs in debug
+        testing.expectLog(&.{ .bug, .bug, .bug });
+    }
     try testing.htmlRunner("custom_elements", .{});
 }

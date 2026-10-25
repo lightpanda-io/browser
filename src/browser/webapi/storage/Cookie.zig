@@ -33,7 +33,13 @@ const Cookie = @This();
 
 const max_cookie_size = 4 * 1024;
 const max_cookie_header_size = 8 * 1024;
-const max_jar_size = 1024;
+
+// Chrome's limits (net/cookies/cookie_monster.cc): past `max_*` cookies in
+// the jar or for one site, `purge_*` are evicted.
+const max_cookies = 3300;
+const purge_cookies = 300;
+const max_domain_cookies = 180;
+const purge_domain_cookies = 30;
 
 arena: ArenaAllocator,
 name: []const u8,
@@ -53,6 +59,8 @@ same_site_default: bool = false,
 // replaces, so a site re-setting a cookie on every response can't keep it
 // "recently created" forever.
 creation_time: u64 = 0,
+// Seconds since the epoch. Set by Jar.add and updated by forRequest.
+last_access_time: u64 = 0,
 
 pub const SameSite = enum {
     strict,
@@ -606,27 +614,19 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, opts: MatchOpts) 
 
     if (!self.matchesHost(url.host)) return false;
 
-    {
-        if (self.path[self.path.len - 1] == '/') {
-            // If our cookie has a trailing slash, we can only match is
-            // the target path is a prefix. I.e., if our path is
-            // /doc/  we can only match /doc/*
-            if (std.mem.startsWith(u8, url.path, self.path) == false) {
-                return false;
-            }
-        } else {
-            // Our cookie path is something like /hello
-            if (std.mem.startsWith(u8, url.path, self.path) == false) {
-                // The target path has to either be /hello (it isn't)
-                return false;
-            } else if (url.path.len < self.path.len or (url.path.len > self.path.len and url.path[self.path.len] != '/')) {
-                // Or it has to be something like /hello/* (it isn't)
-                // it isn't!
-                return false;
-            }
-        }
+    return pathMatches(url.path, self.path);
+}
+
+// RFC 6265bis 5.1.4 path-match.
+fn pathMatches(request_path: []const u8, cookie_path: []const u8) bool {
+    if (std.mem.startsWith(u8, request_path, cookie_path) == false) {
+        return false;
     }
-    return true;
+    // The paths are equal, or the cookie path is a directory of the
+    // request path: /doc/ matches /doc/*, /hello matches /hello/*.
+    return request_path.len == cookie_path.len or
+        cookie_path[cookie_path.len - 1] == '/' or
+        request_path[cookie_path.len] == '/';
 }
 
 // RFC 6265bis "site for cookies" of a request's initiator.
@@ -639,7 +639,10 @@ pub const SiteForCookies = union(enum) {
 
 pub const Jar = struct {
     allocator: Allocator,
-    cookies: std.ArrayList(Cookie),
+    // site => cookie list
+    sites: std.StringArrayHashMapUnmanaged(std.ArrayList(Cookie)),
+    // Cookies across all sites.
+    len: usize,
     // Optional notifier for cookie change events. When set, `add` dispatches
     // `cookie_changed` after a real mutation. Session populates this; the
     // standalone test construction leaves it null.
@@ -647,24 +650,81 @@ pub const Jar = struct {
 
     pub fn init(allocator: Allocator, notification: ?*Notification) Jar {
         return .{
-            .cookies = .empty,
+            .len = 0,
+            .sites = .empty,
             .allocator = allocator,
             .notification = notification,
         };
     }
 
     pub fn deinit(self: *Jar) void {
-        for (self.cookies.items) |c| {
-            c.deinit();
-        }
-        self.cookies.deinit(self.allocator);
+        self.freeSites();
+        self.sites.deinit(self.allocator);
     }
 
     pub fn clearRetainingCapacity(self: *Jar) void {
-        for (self.cookies.items) |c| {
-            c.deinit();
+        self.freeSites();
+        self.sites.clearRetainingCapacity();
+        self.len = 0;
+    }
+
+    fn freeSites(self: *Jar) void {
+        var it = self.sites.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |c| {
+                c.deinit();
+            }
+            entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
         }
-        self.cookies.clearRetainingCapacity();
+    }
+
+    /// The only cookies that can apply to `host` (lower case, as in
+    /// PreparedUri): those of its site, in send order.
+    pub fn siteCookies(self: *const Jar, host: []const u8) []Cookie {
+        const group = self.sites.getPtr(siteKey(host)) orelse return &.{};
+        return group.items;
+    }
+
+    /// Every cookie, site by site. The jar must not change while iterating.
+    pub fn iterator(self: *const Jar) Iterator {
+        return .{ .groups = self.sites.values() };
+    }
+
+    pub const Iterator = struct {
+        group: usize = 0,
+        index: usize = 0,
+        groups: []std.ArrayList(Cookie),
+
+        pub fn next(self: *Iterator) ?*Cookie {
+            while (self.group < self.groups.len) {
+                const items = self.groups[self.group].items;
+                if (self.index < items.len) {
+                    defer self.index += 1;
+                    return &items[self.index];
+                }
+                self.group += 1;
+                self.index = 0;
+            }
+            return null;
+        }
+    };
+
+    /// Removes the cookies `matches` accepts, `context` being its first argument.
+    pub fn removeWhere(self: *Jar, context: anytype, comptime matches: fn (@TypeOf(context), *const Cookie) bool) void {
+        var g = self.sites.count();
+        while (g > 0) {
+            g -= 1;
+            // Going backwards, a group is only dropped once its last cookie,
+            // index 0, is removed, and only groups already visited shift.
+            var i = self.sites.values()[g].items.len;
+            while (i > 0) {
+                i -= 1;
+                if (matches(context, &self.sites.values()[g].items[i])) {
+                    self.remove(g, i);
+                }
+            }
+        }
     }
 
     pub fn add(
@@ -676,67 +736,207 @@ pub const Jar = struct {
     ) !void {
         var cookie = new_cookie;
         cookie.creation_time = request_time;
+        cookie.last_access_time = request_time;
 
         // `add` takes ownership of `cookie` unconditionally on entry.
         var stored = false;
         defer if (!stored) cookie.deinit();
 
-        if (self.cookies.items.len >= max_jar_size) {
-            return error.CookieJarQuotaExceeded;
-        }
         if (cookie.value.len > max_cookie_size) {
             return error.CookieSizeExceeded;
         }
 
         const is_expired = isCookieExpired(&cookie, request_time);
+        const key = siteKey(cookie.domain);
+        const site = self.sites.getIndex(key);
 
-        for (self.cookies.items, 0..) |*c, i| {
-            // We're only looking for the equal one.
-            if (areCookiesEqual(&cookie, c) == false) {
-                continue;
-            }
+        if (site) |g| {
+            const group = &self.sites.values()[g];
+            for (group.items, 0..) |*c, i| {
+                // We're only looking for the equal one.
+                if (areCookiesEqual(&cookie, c) == false) {
+                    continue;
+                }
 
-            // RFC 6265bis 5.7.2: a non-HTTP API (e.g. document.cookie) must
-            // not replace an HttpOnly cookie.
-            if (c.http_only and is_http == false) {
+                // RFC 6265bis 5.7.2: a non-HTTP API (e.g. document.cookie) must
+                // not replace an HttpOnly cookie.
+                if (c.http_only and is_http == false) {
+                    return;
+                }
+
+                if (is_expired) {
+                    self.remove(g, i);
+                } else {
+                    // RFC 6265bis 5.7 step 23: the replacement keeps the
+                    // creation time of the cookie it replaces.
+                    cookie.creation_time = c.creation_time;
+                    // Free the old cookie's arena before overwriting the slot;
+                    // after the assignment, c points at the new cookie.
+                    c.deinit();
+                    group.items[i] = cookie;
+                    stored = true;
+                    self.dispatchChange(.changed, g, i);
+                }
                 return;
             }
-
-            if (is_expired) {
-                // Dispatch while c still points at the live old cookie,
-                // then free its arena, then remove from the array. After
-                // swapRemove, items[i] holds a different (still-live)
-                // entry, so deinit must happen before that.
-                self.dispatchChange(.deleted, c);
-                c.deinit();
-                _ = self.cookies.swapRemove(i);
-            } else {
-                // RFC 6265bis 5.7 step 23: the replacement keeps the
-                // creation time of the cookie it replaces.
-                cookie.creation_time = c.creation_time;
-                // Free the old cookie's arena before overwriting the slot;
-                // after the assignment, c points at the new cookie.
-                c.deinit();
-                self.cookies.items[i] = cookie;
-                stored = true;
-                self.dispatchChange(.changed, &self.cookies.items[i]);
-            }
-            return;
         }
 
         if (!is_expired) {
-            try self.cookies.append(self.allocator, cookie);
+            // Chrome's CookieMonster::GarbageCollect, before the insert so the
+            // new cookie is never evicted: expired cookies go first, then the
+            // least recently accessed (RFC 6265bis 5.7).
+            if (site) |g| {
+                if (self.sites.values()[g].items.len >= max_domain_cookies) {
+                    self.removeExpiredAt(g, request_time);
+                    self.evictSite(key);
+                }
+            }
+            if (self.len >= max_cookies) {
+                self.removeExpired(request_time);
+                self.evictJar();
+            }
+
+            // Looked up after eviction, which can drop this site's group.
+            const g = self.sites.getIndex(key) orelse blk: {
+                const owned_key = try self.allocator.dupe(u8, key);
+                errdefer self.allocator.free(owned_key);
+                try self.sites.putNoClobber(self.allocator, owned_key, .empty);
+                break :blk self.sites.count() - 1;
+            };
+            const group = &self.sites.values()[g];
+
+            // keep it in send order: longest path then creation time.
+            var pos = group.items.len;
+            while (pos > 0 and sendsBefore(&cookie, &group.items[pos - 1])) {
+                pos -= 1;
+            }
+            try group.insert(self.allocator, pos, cookie);
             stored = true;
-            self.dispatchChange(.changed, &self.cookies.items[self.cookies.items.len - 1]);
+            self.len += 1;
+            self.dispatchChange(.changed, g, pos);
         }
     }
 
+    /// Stores a cookie set by a response from `url`, or by a script of a
+    /// document at `url`. RFC 6265bis 5.7: a non-secure origin can't set a
+    /// Secure cookie, nor shadow or overwrite one.
+    pub fn addFromUrl(
+        self: *Jar,
+        url: [:0]const u8,
+        cookie: Cookie,
+        request_time: u64,
+        comptime is_http: bool,
+    ) !void {
+        if (!URL.isPotentiallyTrustworthy(url) and (cookie.secure or self.shadowsSecureCookie(&cookie, request_time))) {
+            cookie.deinit();
+            return;
+        }
+        return self.add(cookie, request_time, is_http);
+    }
+
+    // A Secure cookie with the same name, a domain that domain-matches
+    // cookie's or the other way around (a leading `.` isn't compared), and
+    // a path that cookie's path path-matches. An expired cookie is already
+    // gone as far as the RFC is concerned, even if the jar still holds it.
+    // Domains that domain-match are of the same site.
+    fn shadowsSecureCookie(self: *const Jar, cookie: *const Cookie, now: u64) bool {
+        const domain = std.mem.trimStart(u8, cookie.domain, ".");
+        for (self.siteCookies(cookie.domain)) |*c| {
+            if (isCookieExpired(c, now)) {
+                continue;
+            }
+            const c_domain = std.mem.trimStart(u8, c.domain, ".");
+            if (c.secure and
+                std.mem.eql(u8, c.name, cookie.name) and
+                (URL.isSubdomainOf(domain, c_domain) or URL.isSubdomainOf(c_domain, domain)) and
+                pathMatches(cookie.path, c.path))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // RFC 6265bis 5.7 and Chrome: non-Secure cookies go first, then the least
+    // recently accessed.
+    fn evictsBefore(a: *const Cookie, b: *const Cookie) bool {
+        if (a.secure != b.secure) return b.secure;
+        return a.last_access_time < b.last_access_time;
+    }
+
+    // Past `max_domain_cookies` for the site, evicts down to `purge_domain_cookies`
+    // fewer, counting the one being added. Never empties the group.
+    fn evictSite(self: *Jar, key: []const u8) void {
+        const g = self.sites.getIndex(key) orelse return;
+        const count = self.sites.values()[g].items.len;
+        if (count < max_domain_cookies) return;
+        for (max_domain_cookies - purge_domain_cookies - 1..count) |_| {
+            const items = self.sites.values()[g].items;
+            var oldest: usize = 0;
+            for (items[1..], 1..) |*c, i| {
+                if (evictsBefore(c, &items[oldest])) oldest = i;
+            }
+            self.remove(g, oldest);
+        }
+    }
+
+    // The same, past `max_cookies` in the jar, across sites.
+    fn evictJar(self: *Jar) void {
+        const count = self.len;
+        if (count < max_cookies) return;
+        for (max_cookies - purge_cookies - 1..count) |_| {
+            var oldest: ?struct { g: usize, i: usize } = null;
+            for (self.sites.values(), 0..) |*group, g| {
+                for (group.items, 0..) |*c, i| {
+                    if (oldest) |o| {
+                        if (!evictsBefore(c, &self.sites.values()[o.g].items[o.i])) continue;
+                    }
+                    oldest = .{ .g = g, .i = i };
+                }
+            }
+            const o = oldest.?;
+            self.remove(o.g, o.i);
+        }
+    }
+
+    // Removes cookie `i` of group `g`, and the group once empty, which
+    // shifts the groups after it.
+    fn remove(self: *Jar, g: usize, i: usize) void {
+        self.dispatchChange(.deleted, g, i);
+        const group = &self.sites.values()[g];
+        const c = &group.items[i];
+        c.deinit();
+        _ = group.orderedRemove(i);
+        self.len -= 1;
+        if (group.items.len == 0) {
+            self.dropSite(g);
+        }
+    }
+
+    fn dropSite(self: *Jar, g: usize) void {
+        self.sites.values()[g].deinit(self.allocator);
+        const key = self.sites.keys()[g];
+        self.sites.orderedRemoveAt(g);
+        self.allocator.free(key);
+    }
+
+    // Listeners run while the caller can be mid-loop over the jar, so they
+    // must not change it synchronously. In safe builds, the locks turn a
+    // change that would move the cookie or the groups into a panic.
     fn dispatchChange(
         self: *Jar,
         kind: Notification.CookieChanged.Kind,
-        cookie: *const Cookie,
+        g: usize,
+        i: usize,
     ) void {
         const notification = self.notification orelse return;
+        const group = &self.sites.values()[g];
+        self.sites.lockPointers();
+        defer self.sites.unlockPointers();
+        group.lockPointers();
+        defer group.unlockPointers();
+
+        const cookie = &group.items[i];
         notification.dispatch(.cookie_changed, &.{
             .kind = kind,
             .name = cookie.name,
@@ -750,15 +950,27 @@ pub const Jar = struct {
     }
 
     pub fn removeExpired(self: *Jar, request_time: ?u64) void {
-        if (self.cookies.items.len == 0) return;
         const time = request_time orelse lp.datetime.timestamp(.real);
-        var i: usize = self.cookies.items.len;
+        var g = self.sites.count();
+        while (g > 0) {
+            g -= 1;
+            self.removeExpiredAt(g, time);
+        }
+    }
+
+    // Can drop group `g`, shifting the groups after it.
+    fn removeExpiredAt(self: *Jar, g: usize, now: u64) void {
+        const group = &self.sites.values()[g];
+        var i: usize = group.items.len;
         while (i > 0) {
             i -= 1;
-            const cookie = &self.cookies.items[i];
-            if (isCookieExpired(cookie, time)) {
-                self.cookies.swapRemove(i).deinit();
+            if (isCookieExpired(&group.items[i], now)) {
+                group.orderedRemove(i).deinit();
+                self.len -= 1;
             }
+        }
+        if (group.items.len == 0) {
+            self.dropSite(g);
         }
     }
 
@@ -776,10 +988,13 @@ pub const Jar = struct {
         const same_site = areSameSite(opts.origin_url, target.host);
         const now = opts.request_time orelse lp.datetime.timestamp(.real);
 
-        removeExpired(self, now);
+        const key = siteKey(target.host);
+        if (self.sites.getIndex(key)) |g| {
+            self.removeExpiredAt(g, now);
+        }
 
         var first = true;
-        for (self.cookies.items) |*cookie| {
+        for (self.siteCookies(target.host)) |*cookie| {
             const applies = cookie.appliesTo(&target, .{
                 .same_site = same_site,
                 .is_http = opts.is_http,
@@ -789,6 +1004,7 @@ pub const Jar = struct {
             if (!applies) {
                 continue;
             }
+            cookie.last_access_time = now;
 
             // we have a match!
             if (first) {
@@ -803,6 +1019,13 @@ pub const Jar = struct {
         }
     }
 
+    fn sendsBefore(a: *const Cookie, b: *const Cookie) bool {
+        if (a.path.len != b.path.len) {
+            return a.path.len > b.path.len;
+        }
+        return a.creation_time < b.creation_time;
+    }
+
     pub fn populateFromResponse(self: *Jar, url: [:0]const u8, set_cookie: []const u8) !void {
         const c = Cookie.parse(self.allocator, url, set_cookie) catch |err| {
             log.debug(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
@@ -810,7 +1033,7 @@ pub const Jar = struct {
         };
 
         const now = lp.datetime.timestamp(.real);
-        try self.add(c, now, true);
+        try self.addFromUrl(url, c, now, true);
     }
 
     fn writeCookie(cookie: *const Cookie, writer: anytype) !void {
@@ -857,7 +1080,19 @@ pub fn areHostsSameSite(target_host: []const u8, origin_host: []const u8) bool {
     return std.mem.eql(u8, findSecondLevelDomain(target_host), findSecondLevelDomain(origin_host));
 }
 
+// The site of a cookie domain or a host: its registrable domain, like
+// Chrome's CookieMonster key. A cookie only applies to hosts with its key.
+fn siteKey(domain: []const u8) []const u8 {
+    const host = if (domain.len > 0 and domain[0] == '.') domain[1..] else domain;
+    // findSecondLevelDomain keeps a single label as is, and Domain=localhost
+    // is the one single-label domain parseDomain accepts.
+    if (std.mem.endsWith(u8, host, ".localhost")) return "localhost";
+    return findSecondLevelDomain(host);
+}
+
 fn findSecondLevelDomain(host: []const u8) []const u8 {
+    // An IP address is its own site, not one per last two octets.
+    if (isIpLiteral(host)) return host;
     var i = std.mem.findScalarLast(u8, host, '.') orelse return host;
     while (true) {
         i = std.mem.findScalarLast(u8, host[0..i], '.') orelse return host;
@@ -976,9 +1211,10 @@ test "cookie: findSecondLevelDomain" {
 test "Jar: add" {
     const expectCookies = struct {
         fn expect(expected: []const struct { []const u8, []const u8 }, jar: Jar) !void {
-            try testing.expectEqual(expected.len, jar.cookies.items.len);
+            try testing.expectEqual(expected.len, jar.len);
             LOOP: for (expected) |e| {
-                for (jar.cookies.items) |c| {
+                var it = jar.iterator();
+                while (it.next()) |c| {
                     if (std.mem.eql(u8, e.@"0", c.name) and std.mem.eql(u8, e.@"1", c.value)) {
                         continue :LOOP;
                     }
@@ -1027,16 +1263,16 @@ test "Jar: non-HTTP add must not replace or duplicate an HttpOnly cookie" {
     defer jar.deinit();
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "session=REAL;Path=/;HttpOnly"), now, true);
-    try testing.expectEqual(@as(usize, 1), jar.cookies.items.len);
+    try testing.expectEqual(@as(usize, 1), jar.len);
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "session=ATTACKER;Path=/"), now, false);
-    try testing.expectEqual(@as(usize, 1), jar.cookies.items.len);
-    try testing.expectEqual("REAL", jar.cookies.items[0].value);
-    try testing.expectEqual(true, jar.cookies.items[0].http_only);
+    try testing.expectEqual(@as(usize, 1), jar.len);
+    try testing.expectEqual("REAL", nthCookie(&jar, 0).value);
+    try testing.expectEqual(true, nthCookie(&jar, 0).http_only);
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "session=REFRESHED;Path=/;HttpOnly"), now, true);
-    try testing.expectEqual(@as(usize, 1), jar.cookies.items.len);
-    try testing.expectEqual("REFRESHED", jar.cookies.items[0].value);
+    try testing.expectEqual(@as(usize, 1), jar.len);
+    try testing.expectEqual("REFRESHED", nthCookie(&jar, 0).value);
 }
 
 test "Jar: add limit" {
@@ -1054,39 +1290,187 @@ test "Jar: add limit" {
         .expires = null,
         .value = repeat("v", 4096) ++ "v",
     }, now, true));
+}
 
-    // generate unique names.
-    const names = comptime blk: {
-        @setEvalBranchQuota(max_jar_size * 10);
-        var result: [max_jar_size][]const u8 = undefined;
-        for (0..max_jar_size) |i| {
-            result[i] = repeat("v", i);
-        }
-        break :blk result;
-    };
+fn jarHas(jar: *const Jar, name: []const u8) bool {
+    var it = jar.iterator();
+    while (it.next()) |c| {
+        if (std.mem.eql(u8, c.name, name)) return true;
+    }
+    return false;
+}
 
-    // test the max number limit
-    for (names) |name| {
-        const c = Cookie{
-            .arena = std.heap.ArenaAllocator.init(testing.allocator),
-            .name = name,
-            .domain = "lightpanda.io",
-            .path = "/",
-            .expires = null,
-            .value = "v",
-        };
+fn nthCookie(jar: *const Jar, n: usize) *Cookie {
+    var it = jar.iterator();
+    for (0..n) |_| _ = it.next();
+    return it.next().?;
+}
 
-        try jar.add(c, now, true);
+test "Jar: past the limit of a site, the least recently accessed are evicted" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    var url_buf: [64]u8 = undefined;
+    var buf: [16]u8 = undefined;
+
+    // Another site's cookie, older than all, is not evicted for this one.
+    try jar.add(try Cookie.parse(testing.allocator, "http://lightpanda.dev/", "o=v"), now, true);
+
+    // Subdomains share lightpanda.io's limit. c1...c10 are Secure.
+    for (0..max_domain_cookies) |i| {
+        const url = try std.fmt.bufPrintSentinel(&url_buf, "http://s{d}.lightpanda.io/", .{i}, 0);
+        const set_cookie = try std.fmt.bufPrint(&buf, "c{d}=v{s}", .{ i, if (i > 0 and i <= 10) "; Secure" else "" });
+        try jar.add(try Cookie.parse(testing.allocator, url, set_cookie), now + 1 + i, true);
     }
 
-    try testing.expectError(error.CookieJarQuotaExceeded, jar.add(.{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
-        .name = "last",
-        .domain = "lightpanda.io",
-        .path = "/",
-        .expires = null,
-        .value = "v",
-    }, now, true));
+    // Reading c0, the oldest, makes it the most recently accessed.
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try jar.forRequest("http://s0.lightpanda.io/", &aw.writer, .{
+        .is_http = true,
+        .origin_url = .{ .url = "http://s0.lightpanda.io/" },
+        .request_time = now + 1000,
+    });
+    try testing.expectEqual("c0=v", aw.written());
+
+    try jar.add(try Cookie.parse(testing.allocator, "http://lightpanda.io/", "new=v"), now + 1001, true);
+
+    // Down to 150 for lightpanda.io, the new cookie included: the 31 least
+    // recently accessed non-Secure cookies, c11...c41, go.
+    try testing.expectEqual(max_domain_cookies - purge_domain_cookies + 1, jar.len);
+    try testing.expectEqual(true, jarHas(&jar, "o"));
+    try testing.expectEqual(true, jarHas(&jar, "new"));
+    for (0..max_domain_cookies) |i| {
+        const name = try std.fmt.bufPrint(&buf, "c{d}", .{i});
+        try testing.expectEqual(i <= 10 or i > 41, jarHas(&jar, name));
+    }
+}
+
+test "Jar: past a limit, expired cookies are evicted first" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    var buf: [32]u8 = undefined;
+
+    // The 10 most recent cookies expire first.
+    for (0..max_domain_cookies) |i| {
+        const set_cookie = try std.fmt.bufPrint(&buf, "c{d}=v{s}", .{ i, if (i >= 170) "; Max-Age=500" else "" });
+        try jar.add(try Cookie.parse(testing.allocator, test_url, set_cookie), now + i, true);
+    }
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "new=v"), now + 1000, true);
+
+    // Removing them is enough: nothing else goes.
+    try testing.expectEqual(max_domain_cookies - 10 + 1, jar.len);
+    for (0..max_domain_cookies) |i| {
+        const name = try std.fmt.bufPrint(&buf, "c{d}", .{i});
+        try testing.expectEqual(i < 170, jarHas(&jar, name));
+    }
+}
+
+test "Jar: past the limit of the jar, the least recently accessed are evicted" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    var url_buf: [32]u8 = undefined;
+    var buf: [16]u8 = undefined;
+
+    // 100 cookies per site, under the limit of a site. c0...c9 are Secure.
+    for (0..max_cookies) |i| {
+        const url = try std.fmt.bufPrintSentinel(&url_buf, "http://d{d}.test/", .{i / 100}, 0);
+        const set_cookie = try std.fmt.bufPrint(&buf, "c{d}=v{s}", .{ i, if (i < 10) "; Secure" else "" });
+        try jar.add(try Cookie.parse(testing.allocator, url, set_cookie), now + i, true);
+    }
+
+    try jar.add(try Cookie.parse(testing.allocator, "http://new.test/", "new=v"), now + max_cookies, true);
+    try testing.expectEqual(max_cookies - purge_cookies, jar.len);
+    try testing.expectEqual(true, jarHas(&jar, "new"));
+    for (0..max_cookies) |i| {
+        const name = try std.fmt.bufPrint(&buf, "c{d}", .{i});
+        try testing.expectEqual(i < 10 or i > purge_cookies + 10, jarHas(&jar, name));
+    }
+
+    // Replacing a cookie evicts nothing.
+    try jar.add(try Cookie.parse(testing.allocator, "http://new.test/", "new=w"), now + max_cookies + 1, true);
+    try testing.expectEqual(max_cookies - purge_cookies, jar.len);
+}
+
+test "Jar: cookies are grouped by site" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    try jar.populateFromResponse("http://lightpanda.io/", "a=1");
+    try jar.populateFromResponse("http://www.lightpanda.io/", "b=2; Domain=lightpanda.io");
+    try jar.populateFromResponse("http://docs.lightpanda.io/", "c=3");
+    try jar.populateFromResponse("http://lightpanda.dev/", "d=4");
+    // Domain=localhost applies to its subdomains, which findSecondLevelDomain
+    // alone would put in sites of their own.
+    try jar.populateFromResponse("http://localhost/", "e=5; Domain=localhost");
+    try testing.expectEqual(5, jar.len);
+    try testing.expectEqual(3, jar.sites.count());
+
+    try testing.expectEqual(3, jar.siteCookies("www.lightpanda.io").len);
+    try testing.expectEqual(1, jar.siteCookies("lightpanda.dev").len);
+    try testing.expectEqual(0, jar.siteCookies("lightpanda.com").len);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try jar.forRequest("http://a.b.localhost/", &aw.writer, .{
+        .origin_url = .{ .url = "http://a.b.localhost/" },
+        .is_http = true,
+    });
+    try testing.expectEqual("e=5", aw.written());
+
+    // Removing a site's last cookie drops its group.
+    try jar.populateFromResponse("http://lightpanda.dev/", "d=; Max-Age=0");
+    try testing.expectEqual(4, jar.len);
+    try testing.expectEqual(2, jar.sites.count());
+}
+
+test "Jar: a non-secure origin can't set or overwrite a Secure cookie" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    try jar.populateFromResponse("http://lightpanda.io/", "s=1; Secure");
+    try testing.expectEqual(0, jar.len);
+    try jar.populateFromResponse("https://lightpanda.io/", "s=1; Secure");
+
+    // No overwrite, no shadowing on a matching domain or a longer path, no
+    // deletion.
+    try jar.populateFromResponse("http://lightpanda.io/", "s=2");
+    try jar.populateFromResponse("http://lightpanda.io/", "s=3; Path=/sub");
+    try jar.populateFromResponse("http://lightpanda.io/", "s=4; Domain=lightpanda.io");
+    try jar.populateFromResponse("http://www.lightpanda.io/", "s=5");
+    try jar.populateFromResponse("http://lightpanda.io/", "s=; Max-Age=0");
+    try testing.expectEqual(1, jar.len);
+    try testing.expectEqual("1", nthCookie(&jar, 0).value);
+
+    // Another name, domain, or a path the Secure cookie's path doesn't cover.
+    try jar.populateFromResponse("http://lightpanda.io/", "t=1");
+    try jar.populateFromResponse("http://lightpanda.dev/", "s=6");
+    try jar.populateFromResponse("https://lightpanda.io/", "u=1; Secure; Path=/sub");
+    try jar.populateFromResponse("http://lightpanda.io/", "u=2");
+    try testing.expectEqual(5, jar.len);
+
+    // Like Chrome, loopback origins are secure ones.
+    try jar.populateFromResponse("http://localhost:3000/", "s=7; Secure");
+    try testing.expectEqual(6, jar.len);
+}
+
+test "Jar: an expired Secure cookie doesn't block a non-secure origin" {
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    try jar.add(try Cookie.parse(testing.allocator, "https://lightpanda.io/", "s=1; Secure; Max-Age=10"), now, true);
+
+    // Still in the jar (nothing purged it), but expired by `later`.
+    const later = now + 20;
+    try jar.addFromUrl("http://lightpanda.io/", try Cookie.parse(testing.allocator, "http://lightpanda.io/", "s=2"), later, true);
+    try testing.expectEqual(1, jar.len);
+    try testing.expectEqual("2", nthCookie(&jar, 0).value);
+    try testing.expectEqual(false, nthCookie(&jar, 0).secure);
 }
 
 test "Jar: forRequest" {
@@ -1134,7 +1518,7 @@ test "Jar: forRequest" {
     });
 
     // matching path without trailing /
-    try expectCookies("global1=1; global2=2; path1=3", &jar, "http://lightpanda.io/about", .{
+    try expectCookies("path1=3; global1=1; global2=2", &jar, "http://lightpanda.io/about", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
@@ -1158,13 +1542,13 @@ test "Jar: forRequest" {
     });
 
     // exact directory match
-    try expectCookies("global1=1; global2=2; path2=4", &jar, "http://lightpanda.io/docs/", .{
+    try expectCookies("path2=4; global1=1; global2=2", &jar, "http://lightpanda.io/docs/", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // sub directory match
-    try expectCookies("global1=1; global2=2; path2=4", &jar, "http://lightpanda.io/docs/more", .{
+    try expectCookies("path2=4; global1=1; global2=2", &jar, "http://lightpanda.io/docs/more", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
@@ -1176,14 +1560,14 @@ test "Jar: forRequest" {
     });
 
     // navigational cross domain, secure
-    try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, "https://lightpanda.io/x/", .{
+    try expectCookies("sitenone=6; sitelax=7; global1=1; global2=2; secure=5", &jar, "https://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
         .kind = .navigation,
     });
 
     // navigational cross domain, insecure
-    try expectCookies("global1=1; global2=2; sitelax=7", &jar, "http://lightpanda.io/x/", .{
+    try expectCookies("sitelax=7; global1=1; global2=2", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
         .kind = .navigation,
@@ -1204,7 +1588,7 @@ test "Jar: forRequest" {
     });
 
     // non-navigational same origin
-    try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, "http://lightpanda.io/x/", .{
+    try expectCookies("sitelax=7; sitestrict=8; global1=1; global2=2", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://lightpanda.io/" },
         .is_http = true,
         .kind = .subresource,
@@ -1228,16 +1612,39 @@ test "Jar: forRequest" {
         .is_http = true,
     });
 
-    const l = jar.cookies.items.len;
+    const l = jar.len;
     try expectCookies("global1=1", &jar, test_url, .{
         .request_time = now + 100,
         .origin_url = .{ .url = test_url },
         .is_http = true,
     });
-    try testing.expectEqual(l - 1, jar.cookies.items.len);
+    try testing.expectEqual(l - 1, jar.len);
 
     // If you add more cases after this point, note that the above test removes
     // the 'global2' cookie
+}
+
+test "Jar: forRequest orders cookies by path length, then creation time" {
+    const now = lp.datetime.timestamp(.real);
+
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=root"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "old=1;Max-Age=10"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "session=app;Path=/app"), now + 1, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "a=2"), now + 2, true);
+    try jar.add(try Cookie.parse(testing.allocator, test_url, "b=3"), now + 2, true);
+
+    // `old` expires before the request; removing it must not reorder `a` and `b`.
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try jar.forRequest("http://lightpanda.io/app/x", &aw.writer, .{
+        .origin_url = .{ .url = test_url },
+        .is_http = true,
+        .request_time = now + 20,
+    });
+    try testing.expectEqual("session=app; session=root; a=2; b=3", aw.written());
 }
 
 test "Jar: forRequest Secure cookies on loopback origins" {
@@ -1548,6 +1955,14 @@ test "Cookie: parse HttpOnly" {
     try expectAttribute(.{ .http_only = true }, null, "b; httpOnly=Off  ");
     try expectAttribute(.{ .http_only = true }, null, "b; httpOnly=Off  ");
     try expectAttribute(.{ .http_only = true }, null, "b;    HttpOnly=Off  ");
+}
+
+test "Cookie: an IP address is its own site" {
+    try testing.expectEqual(true, areHostsSameSite("127.0.0.1", "127.0.0.1"));
+    try testing.expectEqual(false, areHostsSameSite("127.0.0.1", "10.0.0.1"));
+    try testing.expectEqual(false, areHostsSameSite("192.168.0.1", "10.0.0.1"));
+    try testing.expectEqual(false, areHostsSameSite("10.0.0.1", "a.0.1"));
+    try testing.expectEqual(true, areHostsSameSite("a.lightpanda.io", "b.lightpanda.io"));
 }
 
 test "Cookie: parse SameSite" {

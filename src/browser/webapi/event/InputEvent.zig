@@ -107,15 +107,6 @@ pub fn deinit(self: *InputEvent, page: *Page) void {
     if (self._data_transfer) |dt| {
         dt.releaseRef(page);
     }
-    self.asEvent().deinit(page);
-}
-
-pub fn acquireRef(self: *InputEvent) void {
-    self.asEvent().acquireRef();
-}
-
-pub fn releaseRef(self: *InputEvent, page: *Page) void {
-    self.asEvent()._rc.release(self, page);
 }
 
 pub fn asEvent(self: *InputEvent) *Event {

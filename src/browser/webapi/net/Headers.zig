@@ -5,6 +5,7 @@ const js = @import("../../js/js.zig");
 const Mime = @import("../../Mime.zig");
 
 const KeyValueList = @import("../KeyValueList.zig");
+const Attribute = @import("../element/Attribute.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -49,13 +50,13 @@ pub fn initGuarded(opts_: ?InitOpts, guard: Guard, exec: *const Execution) !*Hea
         switch (opts) {
             .obj => |obj| break :blk try KeyValueList.copy(exec.page_arena, obj._list),
             .js_obj => |js_obj| {
-                var list = try KeyValueList.fromJsObject(exec.page_arena, js_obj, normalizeHeaderName, exec.buf);
-                try validateAndNormalize(&list);
+                var list = try KeyValueList.fromJsObject(exec.page_arena, js_obj, normalizeHeaderName, exec.local_arena);
+                try validateAndNormalize(&list, exec);
                 break :blk list;
             },
             .strings => |kvs| {
-                var list = try KeyValueList.fromArray(exec.page_arena, kvs, normalizeHeaderName, exec.buf);
-                try validateAndNormalize(&list);
+                var list = try KeyValueList.fromArray(exec.page_arena, kvs, normalizeHeaderName, exec.local_arena);
+                try validateAndNormalize(&list, exec);
                 break :blk list;
             },
         }
@@ -371,14 +372,14 @@ fn validateAndNormalizeName(name: []const u8, exec: *const Execution) ![]const u
     if (Mime.isHttpToken(name) == false) {
         return exec.js.typeError("Invalid header name");
     }
-    return normalizeHeaderName(name, exec.buf);
+    return normalizeHeaderName(exec.local_arena, name);
 }
 
-fn normalizeHeaderName(name: []const u8, buf: []u8) []const u8 {
-    if (name.len > buf.len) {
+fn normalizeHeaderName(allocator: Allocator, name: []const u8) Allocator.Error![]const u8 {
+    if (!Attribute.needsLowerCasing(name)) {
         return name;
     }
-    return std.ascii.lowerString(buf, name);
+    return std.ascii.allocLowerString(allocator, name);
 }
 
 fn normalizeValue(value: []const u8, exec: *const Execution) ![]const u8 {
@@ -392,16 +393,16 @@ fn normalizeValue(value: []const u8, exec: *const Execution) ![]const u8 {
 /// Validate names and normalize/validate values for a script-provided header
 /// init, trimming values in place. The trim is allocation-free (see
 /// `String.trim`), so an untrimmed value keeps its original storage.
-fn validateAndNormalize(list: *KeyValueList) !void {
+fn validateAndNormalize(list: *KeyValueList, exec: *const Execution) !void {
     for (list._entries.items) |*entry| {
         // A valid header name is exactly a non-empty HTTP token.
         if (Mime.isHttpToken(entry.name.str()) == false) {
-            return error.TypeError;
+            return exec.js.typeError("Invalid header name");
         }
         // A valid header value is a byte string without NUL, LF or CR.
         const trimmed = entry.value.trim(&Mime.HTTP_WHITESPACE);
         if (Mime.isHttpHeaderValue(trimmed.str()) == false) {
-            return error.TypeError;
+            return exec.js.typeError("Invalid header value");
         }
         entry.value = trimmed;
     }

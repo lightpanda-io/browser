@@ -355,7 +355,7 @@ fn matchCookies(
 
     const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
     var items: std.ArrayList(CookieListItem) = .empty;
-    for (session.cookie_jar.cookies.items) |*cookie| {
+    for (session.cookie_jar.siteCookies(target.host)) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
         if (cookie.appliesTo(&target, .{ .same_site = same_site, .is_http = false }) == false) {
@@ -520,7 +520,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     };
 
     // CookieStore is a script API, so is_http = false.
-    try session.cookie_jar.add(cookie, lp.datetime.timestamp(.real), false);
+    try session.cookie_jar.addFromUrl(url, cookie, lp.datetime.timestamp(.real), false);
 }
 
 // Control characters (U+0000–U+001F and U+007F DEL) and `;` cannot appear in

@@ -25,10 +25,11 @@ local scope at that point.
   decoder.configure({codec: 'opus', sampleRate: 48000, numberOfChannels: 2});
   const flush = iframe.contentWindow.AudioDecoder.prototype.flush.call(decoder);
   const unconfigured = iframe.contentWindow.VideoEncoder.prototype.flush.call(new VideoEncoder({output: () => {}, error: () => {}}));
-  state.resolve([
-    await flush.then(() => 'resolved', (e) => e.name),
-    await unconfigured.then(() => 'resolved', (e) => e.name),
-  ]);
+  // Both handled now: awaiting one leaves the other unhandled meanwhile.
+  state.resolve(await Promise.all([
+    flush.then(() => 'resolved', (e) => e.name),
+    unconfigured.then(() => 'resolved', (e) => e.name),
+  ]));
 
   await state.done((names) => {
     // the codec is unsupported, so the pending configure closes it

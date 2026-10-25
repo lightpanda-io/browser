@@ -845,3 +845,43 @@
   });
 }
 </script>
+
+<script id=send_non_buffer_object type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    // Anything that isn't a buffer is sent as its string, iterable or not
+    ws.send(new Set([1]));
+    ws.send([1, 2]);
+  });
+
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    if (received.length === 2) {
+      ws.close();
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['echo-[object Set]', 'echo-1,2'], received);
+  });
+}
+</script>
+
+<script id=protocols>
+{
+  // `optional (DOMString or sequence<DOMString>) protocols`
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', 'a b'));
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', ['ok', 'a b']));
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', new Set(['a b'])));
+  testing.expectEqual(1, WebSocket.length);
+}
+</script>

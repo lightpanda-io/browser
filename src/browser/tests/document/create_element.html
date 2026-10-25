@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <body></body>
 <script src="../testing.js"></script>
 <script id=createElement>
@@ -17,3 +18,26 @@
   testing.expectEqual(div1, $('#hello'));
 </script>
 
+
+<script id=longName>
+{
+  // longer than the 1024-byte buffer names used to be case-mapped into
+  const name = 'x-' + 'a'.repeat(2000);
+  const el = document.createElement(name.toUpperCase());
+  testing.expectEqual(name, el.localName);
+  testing.expectEqual(name.toUpperCase(), el.tagName);
+  testing.expectEqual(name.toUpperCase(), el.nodeName);
+}
+</script>
+
+<script id=knownTagNames>
+{
+  // one per element type that stores its tag: generic, heading, mod, quote,
+  // table cell, table col, table section
+  for (const name of ['section', 'h1', 'del', 'blockquote', 'td', 'colgroup', 'tbody']) {
+    const el = document.createElement(name);
+    testing.expectEqual(name.toUpperCase(), el.tagName);
+    testing.expectEqual(name.toUpperCase(), el.nodeName);
+  }
+}
+</script>

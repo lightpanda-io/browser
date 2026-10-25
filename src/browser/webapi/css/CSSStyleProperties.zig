@@ -23,6 +23,8 @@ const Element = @import("../Element.zig");
 const Frame = @import("../../Frame.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 
+const Allocator = std.mem.Allocator;
+
 const CSSStyleProperties = @This();
 
 pub const Proto = CSSStyleDeclaration;
@@ -49,7 +51,7 @@ fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, fram
     if (method_names.has(name)) {
         return error.NotHandled;
     }
-    const dash_case = camelCaseToDashCase(name, &frame.buf);
+    const dash_case = try camelCaseToDashCase(frame.local_arena, name);
     try self._proto.setProperty(dash_case, value, null, frame);
 }
 
@@ -58,7 +60,7 @@ fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const
         return error.NotHandled;
     }
 
-    const dash_case = camelCaseToDashCase(name, &frame.buf);
+    const dash_case = try camelCaseToDashCase(frame.local_arena, name);
 
     // Only apply vendor prefix filtering for camelCase access (no dashes in input)
     // Bracket notation with dash-case (e.g., div.style['-moz-user-select']) should return the actual value
@@ -322,26 +324,25 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
     return known_properties.has(dash_case);
 }
 
-fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
+fn camelCaseToDashCase(allocator: Allocator, name: []const u8) ![]const u8 {
     if (name.len == 0) {
         return name;
     }
 
     // Special case: cssFloat -> float
-    const lower_name = std.ascii.lowerString(buf, name);
-    if (std.mem.eql(u8, lower_name, "cssfloat")) {
+    if (std.ascii.eqlIgnoreCase(name, "cssfloat")) {
         return "float";
     }
 
     // If already contains dashes, just return lowercased
     if (std.mem.findScalar(u8, name, '-')) |_| {
-        return lower_name;
+        return std.ascii.allocLowerString(allocator, name);
     }
 
     // Check if this looks like proper camelCase (starts with lowercase)
     // If not (e.g. "COLOR", "BackgroundColor"), just lowercase it
     if (name.len == 0 or !std.ascii.isLower(name[0])) {
-        return lower_name;
+        return std.ascii.allocLowerString(allocator, name);
     }
 
     // Check for vendor prefixes: webkitTransform -> -webkit-transform
@@ -354,6 +355,13 @@ fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
         break :blk false;
     };
 
+    // Every character, plus a dash before each uppercase one and the vendor
+    // prefix's leading dash.
+    var len = name.len + @intFromBool(has_vendor_prefix);
+    for (name) |c| {
+        len += @intFromBool(std.ascii.isUpper(c));
+    }
+    const buf = try allocator.alloc(u8, len);
     var write_pos: usize = 0;
 
     if (has_vendor_prefix) {
@@ -362,19 +370,13 @@ fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
     }
 
     for (name, 0..) |c, i| {
-        if (write_pos >= buf.len) {
-            return lower_name;
-        }
-
         if (std.ascii.isUpper(c)) {
             const skip_dash = has_vendor_prefix and i < 10 and write_pos == 1;
 
             if (i > 0 and !skip_dash) {
-                if (write_pos >= buf.len) break;
                 buf[write_pos] = '-';
                 write_pos += 1;
             }
-            if (write_pos >= buf.len) break;
             buf[write_pos] = std.ascii.toLower(c);
             write_pos += 1;
         } else {

@@ -206,6 +206,29 @@ pub fn TreeWalker(comptime mode: Mode, comptime tree: Tree) type {
                 self.tw.reset();
             }
         };
+
+        pub fn ElementsOf(comptime T: type) type {
+            return struct {
+                tw: Self,
+
+                const It = @This();
+
+                pub fn init(root: *Node, opts: Opts) It {
+                    return .{
+                        .tw = Self.init(root, opts),
+                    };
+                }
+
+                pub fn next(self: *It) ?*T {
+                    while (self.tw.next()) |node| {
+                        if (node.is(T)) |t| {
+                            return t;
+                        }
+                    }
+                    return null;
+                }
+            };
+        }
     };
 }
 

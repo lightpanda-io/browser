@@ -191,7 +191,7 @@ pub fn removeFromOpen(el: *Element, frame: *Frame) void {
 
 // The popover targeted by an invoker (a <button>, or input button), resolving
 // the explicitly IDL-set element or the `popovertarget` IDREF content attribute.
-pub fn invokerTarget(invoker: *Node, explicit: ?*Element, frame: *Frame) ?*Element {
+pub fn invokerTarget(invoker: *Node, explicit: ?*Element) ?*Element {
     if (explicit) |target| {
         if (target.asNode().getRootNode(.{}) == invoker.getRootNode(.{})) {
             // The invoker and target must share the same root
@@ -201,7 +201,7 @@ pub fn invokerTarget(invoker: *Node, explicit: ?*Element, frame: *Frame) ?*Eleme
     }
     const el = invoker.is(Element) orelse return null;
     const id = el.getAttributeSafe(.wrap("popovertarget")) orelse return null;
-    return frame.getElementByIdFromNode(el.asNode(), id);
+    return Frame.getElementByIdFromNode(el.asNode(), id);
 }
 
 pub fn runInvokerActivation(invoker: *HtmlElement, explicit: ?*Element, frame: *Frame) !void {
@@ -216,7 +216,7 @@ pub fn runInvokerActivation(invoker: *HtmlElement, explicit: ?*Element, frame: *
     const invoker_elem = invoker.asElement();
     const invoker_node = invoker_elem.asNode();
 
-    const target = invokerTarget(invoker_node, explicit, frame) orelse return;
+    const target = invokerTarget(invoker_node, explicit) orelse return;
 
     if (getState(target) == null) {
         return;

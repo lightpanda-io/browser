@@ -24,16 +24,15 @@ const posix = std.posix;
 
 const TestWSServer = @This();
 
+port: u16,
 shutdown: std.atomic.Value(bool),
 listener: ?posix.socket_t,
-// ephemeral, known once run() has signaled the wait group
-port: u16,
 
-pub fn init() TestWSServer {
+pub fn init(port: u16) TestWSServer {
     return .{
+        .port = port,
         .shutdown = .init(true),
         .listener = null,
-        .port = 0,
     };
 }
 
@@ -57,7 +56,7 @@ fn runImpl(self: *TestWSServer, wg: *lp.WaitGroup) !void {
     const socket = try sys_net.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
     errdefer _ = std.c.close(socket);
 
-    const addr: sys_net.IpAddress = .{ .ip4 = .loopback(0) };
+    const addr: sys_net.IpAddress = .{ .ip4 = .loopback(self.port) };
 
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
     const sa = sys_net.sockaddrFromAddress(&addr);

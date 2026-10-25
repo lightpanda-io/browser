@@ -915,10 +915,11 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.DontEnum);
             },
             bridge.Property => {
+                // Comptime-known property values: never an over-long string.
                 const js_value = switch (value.value) {
                     .null => js.simpleZigValueToJs(.{ .handle = isolate }, null, true, false),
                     inline .bool, .int, .float, .string => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
-                };
+                } catch unreachable;
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
 
                 {

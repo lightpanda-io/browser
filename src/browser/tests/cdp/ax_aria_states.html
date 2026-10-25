@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><title>AX ARIA states</title></head><body>
+<button aria-label="Expanded details" aria-expanded="true">Details</button>
+<button aria-label="Collapsed details" aria-expanded="false">Details</button>
+<button aria-label="Invalid details" aria-expanded="sometimes">Details</button>
+<div role="checkbox" aria-checked="mixed" tabindex="0">Mixed terms</div>
+<div role="checkbox" aria-checked="true" tabindex="-1">Checked terms</div>
+<div role="checkbox" aria-checked="false">Unfocusable terms</div>
+<div role="checkbox" aria-checked="garbage" tabindex="xyz">Invalid state</div>
+<input type="checkbox" role="checkbox" checked aria-checked="false" aria-label="Native terms">
+<div role="checkbox" aria-checked="mixed" tabindex="0" inert>Inert terms</div>
+<div role="checkbox" aria-checked="mixed" tabindex="0" hidden>Hidden terms</div>
+<button aria-label="Uppercase expanded" aria-expanded="TRUE">Uppercase</button>
+<button aria-label="Uppercase collapsed" aria-expanded="FALSE">Uppercase</button>
+<div aria-label="Generic expanded" aria-expanded="true" tabindex="0">Generic</div>
+<div role="checkbox" aria-label="Uppercase mixed" aria-checked="MIXED" tabindex="0">Mixed uppercase</div>
+<div role="checkbox" aria-label="Absent checked" tabindex="0">Absent</div>
+<div role="switch" aria-checked="TRUE" tabindex="0">Switch checked</div>
+<div role="menuitemcheckbox" aria-checked="true" tabindex="0">Menu checkbox checked</div>
+<div role="radio" aria-checked="FALSE" tabindex="0">Radio unchecked</div>
+<div role="menuitemradio" aria-checked="true" tabindex="0">Menu radio checked</div>
+<a role="button" aria-label="Custom anchor" aria-expanded="true" tabindex="0">Anchor widget</a>
+<img role="button" aria-label="Custom image" aria-expanded="true" tabindex="0" alt="Image widget">
+<div role="radio" aria-label="Radio absent" tabindex="0">Radio absent</div>
+<div role="switch" aria-label="Switch mixed" aria-checked="mixed" tabindex="0">Switch mixed</div>
+<div role="menuitemcheckbox" aria-label="Menu checkbox mixed" aria-checked="mixed" tabindex="0">Menu checkbox mixed</div>
+<div role="switch" aria-label="Expanded switch" aria-expanded="true" tabindex="0">Expanded switch</div>
+<button aria-label="Spaced expanded" aria-expanded=" true ">Spaced expanded</button>
+<button aria-label="Empty expanded" aria-expanded="">Empty expanded</button>
+<ul><li aria-label="Listitem expanded" aria-expanded="true">Listitem expanded</li></ul>
+<div role="checkbox" aria-label="Empty checked" aria-checked="" tabindex="0">Empty checked</div>
+<div role="checkbox" aria-label="Spaced checked" aria-checked=" true " tabindex="0">Spaced checked</div>
+<div role="listbox"><div role="option" aria-label="Option checked" aria-checked="true">Option checked</div><div role="option" aria-label="Option mixed" aria-checked="mixed">Option mixed</div></div>
+<div role="tree"><div role="treeitem" aria-label="Treeitem checked" aria-checked="true" aria-expanded="false">Treeitem checked</div></div>
+<button aria-label="Padded collapsed" aria-expanded=" false ">Padded collapsed</button>
+<button aria-label="Blank expanded" aria-expanded="   ">Blank expanded</button>
+<div role="checkbox" aria-label="Padded false" aria-checked=" false " tabindex="0">Padded false</div>
+<div role="checkbox" aria-label="Blank checked" aria-checked="   " tabindex="0">Blank checked</div>
+<div role="listbox"><div role="option" aria-label="Option absent">Option absent</div></div>
+<div role="tree"><div role="treeitem" aria-label="Treeitem absent">Treeitem absent</div></div>
+<select aria-label="Native select"><option>Native option</option></select>
+<a href="/target" aria-label="Plain link">Plain link</a>
+</body></html>

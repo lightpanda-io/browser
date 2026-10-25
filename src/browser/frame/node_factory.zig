@@ -946,8 +946,13 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                 else => {},
             }
 
-            const lower = std.ascii.lowerString(&frame.buf, name);
-            const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
+            // No local_arena: the parser calls this outside of a JS call, where
+            // nothing resets it. A name longer than any Tag can't match one.
+            var lower_buf: [max_tag_len]u8 = undefined;
+            const tag: Element.Tag = if (name.len > lower_buf.len)
+                .unknown
+            else
+                std.meta.stringToEnum(Element.Tag, std.ascii.lowerString(&lower_buf, name)) orelse .unknown;
             return createSvgElementT(document, Element.Svg.Generic, name, attribute_iterator, .{ ._tag = tag });
         },
         else => {
@@ -1063,7 +1068,7 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
             return node;
         }
         @call(.auto, @field(E.Build, "created"), .{ node, frame }) catch |err| {
-            log.debug(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "build.created", .{ .tag = node.getNodeName(frame.local_arena), .err = err, .type = frame._type, .url = frame.url });
             return err;
         };
     }
@@ -1146,7 +1151,7 @@ fn noteEventHandlerAttributes(element: *Element, frame: *Frame) !void {
 // attribute (`xlink:href` in foreign content, `xml:id` in XML) must keep its
 // prefix — that is what `getAttribute("xlink:href")` and `Attr.name` see in
 // browsers. The joined name only has to outlive putNew, which canonicalizes
-// it into the frame arena. (Not frame.buf: name normalization writes there.)
+// it into the frame arena.
 fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
     const local = qname.local.slice();
     const prefix = (qname.prefix.unwrap() orelse return local).slice();
@@ -1300,6 +1305,14 @@ fn isXmlNameChar(c: u21) bool {
         (c >= 0x300 and c <= 0x36F) or
         (c >= 0x203F and c <= 0x2040);
 }
+
+const max_tag_len = blk: {
+    var max: usize = 0;
+    for (std.meta.fieldNames(Element.Tag)) |tag_name| {
+        max = @max(max, tag_name.len);
+    }
+    break :blk max;
+};
 
 fn asUint(comptime string: anytype) @Int(
     .unsigned,

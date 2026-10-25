@@ -72,6 +72,22 @@ self.onmessage = async function(e) {
       return;
     }
 
+    if (cmd.kind === 'posted-keys') {
+      const es256 = { name: 'ECDSA', hash: 'SHA-256' };
+      const signature = await crypto.subtle.sign(es256, cmd.privateKey, cmd.data);
+      const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+      const theirs = await crypto.subtle.sign(es256, pair.privateKey, cmd.data);
+      postMessage({
+        ok: true,
+        type: cmd.privateKey.type,
+        extractable: cmd.privateKey.extractable,
+        signature,
+        publicKey: pair.publicKey,
+        theirs,
+      });
+      return;
+    }
+
     if (cmd.kind === 'generateKey-rejection') {
       let err_name = null;
       try {

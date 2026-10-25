@@ -104,12 +104,37 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
     const id = anchor.id;
     const segment_index = anchor.segment_index;
 
-    // Look up the element by ID (O(1) hash map lookup)
-    const id_element = frame.getElementByIdFromNode(root, id) orelse return null;
+    // id fast-path (O(1) hash map lookup). That's the common case, but
+    // if the id actually isn't unique (it happens) or isn't under the root,
+    // we need to walk
+    const id_element = switch (Frame.getUniqueElementByIdFromNode(root, id)) {
+        .none => return null,
+        .one => |el| el,
+        .many => {
+            // multiple elements with the same id, can't be optimized
+            return .{
+                .root = root,
+                .selector = selector.*,
+                .exclude_root = true,
+            };
+        },
+    };
     const id_node = id_element.asNode();
 
-    if (!root.contains(id_node)) {
-        return null;
+    if (id_node == root or !root.contains(id_node)) {
+        // When the id is in the rightmost compound, the only possible match
+        // is id_node itself, and it isn't a descendant of root.
+        const id_is_subject = if (segment_index) |i| i + 1 == selector.segments.len else selector.segments.len == 0;
+        if (id_is_subject) {
+            return null;
+        }
+        // Otherwise matches can still be below root (`#outer p` with #outer
+        // an ancestor of root), so walk it.
+        return .{
+            .root = root,
+            .selector = selector.*,
+            .exclude_root = true,
+        };
     }
 
     // If the ID is in the first compound
@@ -661,6 +686,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .only_of_type => return isFirstOfType(el) and isLastOfType(el),
         .nth_child => |pattern| return matchesNthChild(el, pattern, nth),
         .nth_last_child => |pattern| return matchesNthLastChild(el, pattern, nth),
+        .nth_child_of => |nth_of| return matchesNthChildOf(el, nth_of, false, scope, nth, frame),
+        .nth_last_child_of => |nth_of| return matchesNthChildOf(el, nth_of, true, scope, nth, frame),
         .nth_of_type => |pattern| return matchesNthOfType(el, pattern, nth),
         .nth_last_of_type => |pattern| return matchesNthLastOfType(el, pattern, nth),
 
@@ -849,6 +876,40 @@ fn matchesNthChild(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*NthCa
 
 fn matchesNthLastChild(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*NthCache) bool {
     return matchesNthPattern(getChildIndexFromEnd(el, nth), pattern);
+}
+
+fn matchesNthChildOf(el: *Node.Element, nth_of: Selector.NthOf, from_end: bool, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
+    // With a <= 0 (":nth-child(2 of .y)", "-n+3 of .y") only indexes up to b
+    // can match, so stop counting once past it.
+    const max_index: usize = if (nth_of.pattern.a > 0) std.math.maxInt(usize) else blk: {
+        if (nth_of.pattern.b < 1) return false;
+        break :blk @intCast(nth_of.pattern.b);
+    };
+
+    const node = el.asNode();
+    if (!matchesAny(node, nth_of.selectors, scope, nth, frame)) {
+        return false;
+    }
+
+    var index: usize = 1;
+    var sibling = if (from_end) node.nextSibling() else node.previousSibling();
+    while (sibling) |s| {
+        if (s.is(Node.Element) != null and matchesAny(s, nth_of.selectors, scope, nth, frame)) {
+            index += 1;
+            if (index > max_index) return false;
+        }
+        sibling = if (from_end) s.nextSibling() else s.previousSibling();
+    }
+    return matchesNthPattern(index, nth_of.pattern);
+}
+
+fn matchesAny(node: *Node, selectors: []const Selector.Selector, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
+    for (selectors) |selector| {
+        if (matches(node, selector, scope, nth, frame)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn matchesNthOfType(el: *Node.Element, pattern: Selector.NthPattern, nth: ?*NthCache) bool {

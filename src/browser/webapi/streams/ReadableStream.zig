@@ -83,7 +83,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const 
 
     if (src_) |src| {
         if (src.start) |start| {
-            try start.call(void, .{self._controller});
+            try start.callRethrow(void, .{self._controller});
         }
 
         if (src.cancel) |callback| {
@@ -209,10 +209,18 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         exec.js.localScope(&ls);
         defer ls.deinit();
 
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
         // Call the pull function
         // Note: In a complete implementation, we'd handle the promise returned by pull
         // and set _pulling = false when it resolves
-        try ls.toLocal(func).call(void, .{self._controller});
+        ls.toLocal(func).callRethrow(void, .{self._controller}) catch |err| {
+            if (err != error.TryCatchRethrow) return err;
+            const exc = try_catch.exceptionValue() orelse return err;
+            try self._controller.fail(&ls.local, exc);
+        };
     }
 
     self._pulling = false;

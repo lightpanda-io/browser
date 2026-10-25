@@ -109,15 +109,15 @@ fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !auth.Toke
 
 fn refreshBody(arena: std.mem.Allocator, refresh_token: []const u8) ![]u8 {
     return arena.print("grant_type=refresh_token&client_id=" ++ client_id ++ "&refresh_token={s}", .{
-        try lp.URL.percentEncodeSegment(arena, refresh_token, .component),
+        try lp.URL.percentEncodeComponent(arena, refresh_token),
     });
 }
 
 fn exchangeBody(arena: std.mem.Allocator, code: []const u8, code_verifier: []const u8) ![]u8 {
     return arena.print("grant_type=authorization_code&client_id=" ++ client_id ++
         "&redirect_uri=" ++ device_redirect_uri ++ "&code={s}&code_verifier={s}", .{
-        try lp.URL.percentEncodeSegment(arena, code, .component),
-        try lp.URL.percentEncodeSegment(arena, code_verifier, .component),
+        try lp.URL.percentEncodeComponent(arena, code),
+        try lp.URL.percentEncodeComponent(arena, code_verifier),
     });
 }
 

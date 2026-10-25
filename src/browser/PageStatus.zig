@@ -19,6 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const http = @import("../network/http.zig");
+const HttpClient = @import("../network/HttpClient.zig");
+
 const log = lp.log;
 
 const PageStatus = @This();
@@ -33,11 +36,28 @@ pub const Skipped = enum {
     worker,
     image,
     stylesheet,
+    beacon,
+};
+
+// The sub-resources the page itself asks for, and which we load.
+pub const Loaded = enum {
+    script,
+    fetch,
+    xhr,
 };
 
 js_errors: u32 = 0,
 skipped: Counts(Skipped) = .{},
 unsupported: Counts(Unsupported) = .{},
+// Sub-resource loads that got a status >= 400 or a network error. Aborts and
+// requests we refused ourselves (robots, --block-urls, adblock) aren't the
+// site failing, so they don't count.
+failed: Counts(Loaded) = .{},
+// The 403s and 429s among `failed`: a bot wall or rate limit on the page's
+// own API calls often leaves the document itself a 200.
+blocked: Counts(Loaded) = .{},
+// The first recognized bot challenge on a sub-resource.
+resource_challenge: ?HttpClient.BotChallenge = null,
 // Globals that uncaught ReferenceErrors named. Most of what a page needs and
 // we lack shows up here first, before any call we could count: TradingView
 // dies at `new Path2D()` and never reaches getContext. Deduped and capped;
@@ -99,11 +119,48 @@ pub fn noteSkipped(self: *PageStatus, what: Skipped) void {
 
     const level: log.Level = switch (what) {
         .iframe, .worker => .warn,
-        .image, .stylesheet => .debug,
+        .image, .stylesheet, .beacon => .debug,
     };
 
     switch (what) {
         inline else => |w| log.log(.disabled, level, "resource skipped", .{ .resource = w, .hint = "enable via --load-resources " ++ @tagName(w) }),
+    }
+}
+
+// A sub-resource's final response headers.
+pub fn noteResponse(self: *PageStatus, what: Loaded, transfer: *const HttpClient.Transfer) void {
+    const status = transfer.responseStatus() orelse return;
+
+    // Before the status check: AWS WAF challenges with a 202.
+    if (self.resource_challenge == null) {
+        if (transfer.botChallenge()) |challenge| {
+            self.resource_challenge = challenge;
+            log.warn(.http, "sub-resource bot challenge", .{ .challenge = challenge, .resource = what, .url = transfer.req.url });
+        }
+    }
+
+    if (status < 400) {
+        return;
+    }
+    _ = self.failed.incr(what);
+
+    if (status == 403 or status == 429) {
+        if (self.blocked.incr(what) == 1) {
+            log.info(.http, "sub-resource blocked", .{ .resource = what, .status = status, .url = transfer.req.url });
+        }
+    }
+}
+
+// A sub-resource load that ended without a usable response. Callers only
+// report errors that came before any response headers, which noteResponse
+// has already counted.
+pub fn noteError(self: *PageStatus, what: Loaded, err: anyerror) void {
+    if (err == error.UrlBlocked) {
+        return;
+    }
+    switch (http.errorReason(err)) {
+        .aborted, .robots_blocked => return,
+        else => _ = self.failed.incr(what),
     }
 }
 
@@ -163,6 +220,12 @@ fn Counts(comptime E: type) type {
             return self._values.get(tag);
         }
 
+        pub fn total(self: *const Self) u32 {
+            var sum: u32 = 0;
+            for (self._values.values) |v| sum += v;
+            return sum;
+        }
+
         fn incr(self: *Self, tag: E) u32 {
             const ptr = self._values.getPtr(tag);
             ptr.* += 1;
@@ -182,7 +245,7 @@ fn Counts(comptime E: type) type {
 
 const testing = @import("../testing.zig");
 test "PageStatus: missing globals from uncaught ReferenceErrors" {
-    testing.expectLog(&.{ .page_error, .page_error, .page_error, .page_error });
+    testing.expectLog(&.{ .page_error, .page_error, .page_error, .page_error, .page_error });
     const page = try testing.pageTest("page_missing_global.html", .{});
     defer page.close();
 
@@ -194,6 +257,25 @@ test "PageStatus: missing globals from uncaught ReferenceErrors" {
     const json = try std.json.Stringify.valueAlloc(testing.allocator, status.missing_globals, .{});
     defer testing.allocator.free(json);
     try testing.expectEqual("[\"Path2D\",\"someUndefinedThing\",\"WebGL2RenderingContext\"]", json);
+}
+
+test "PageStatus: failed and blocked sub-resources" {
+    testing.expectLog(&.{.http});
+    const page = try testing.pageTest("page_subresource_status.html", .{ .wait_until_done = true });
+    defer page.close();
+
+    const status = &page.frame().?.page.status;
+    try testing.expectEqual(1, status.failed.get(.script));
+    try testing.expectEqual(0, status.blocked.get(.script));
+
+    // 403, 429 and the unreachable host; the 204 and the abort don't count.
+    try testing.expectEqual(3, status.failed.get(.fetch));
+    try testing.expectEqual(2, status.blocked.get(.fetch));
+
+    try testing.expectEqual(1, status.failed.get(.xhr));
+    try testing.expectEqual(0, status.blocked.get(.xhr));
+
+    try testing.expectEqual(.vercel, status.resource_challenge.?);
 }
 
 test "PageStatus: noteException only takes well-formed ReferenceErrors" {
@@ -232,5 +314,5 @@ test "PageStatus: counts serialize as an object with every tag" {
     try testing.expectEqual("{\"webgl\":2,\"canvas2d\":0}", json);
 
     const skipped = try std.json.Stringify.valueAlloc(testing.arena_allocator, status.skipped, .{});
-    try testing.expectEqual("{\"iframe\":1,\"worker\":0,\"image\":0,\"stylesheet\":0}", skipped);
+    try testing.expectEqual("{\"iframe\":1,\"worker\":0,\"image\":0,\"stylesheet\":0,\"beacon\":0}", skipped);
 }

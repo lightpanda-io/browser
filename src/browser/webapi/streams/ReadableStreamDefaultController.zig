@@ -316,7 +316,8 @@ test "ReadableStreamDefaultController: chunks and pending reads release their gl
         \\}
         \\{
         \\  let c;
-        \\  new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader().read();
+        \\  // handled, so the rejection isn't held until a microtask checkpoint
+        \\  new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader().read().catch(() => {});
         \\  c.error('boom');
         \\}
         \\{

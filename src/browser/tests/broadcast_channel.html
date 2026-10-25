@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <body>
 <script src="testing.js"></script>
 
@@ -276,8 +277,12 @@
 
     const blob = new Blob([
         'const c = new BroadcastChannel("x-p2w");' +
-        'c.onmessage = (e) => postMessage({ got: e.data });' +
-        'postMessage({ ready: true });'
+        'let timer = null;' +
+        'c.onmessage = (e) => {' +
+        '  clearInterval(timer);' +
+        '  postMessage({ got: e.data });' +
+        '};' +
+        'timer = setInterval(() => { postMessage({ ready: true }) }, 5);'
     ], { type: "text/javascript" });
     const worker = new Worker(URL.createObjectURL(blob));
 

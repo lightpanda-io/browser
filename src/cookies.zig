@@ -91,20 +91,25 @@ pub fn saveToFile(jar: *Cookie.Jar, path: []const u8) void {
 fn _saveToFile(jar: *Cookie.Jar, path: []const u8) !void {
     jar.removeExpired(null);
 
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{});
-    defer file.close(lp.io);
+    // Concurrent serve connections may save the same path: the last rename
+    // wins, but no reader sees a torn file.
+    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .replace = true });
+    defer af.deinit(lp.io);
 
     var buf: [8192]u8 = undefined;
-    var writer = file.writer(lp.io, &buf);
+    var writer = af.file.writer(lp.io, &buf);
     try writeJson(jar, &writer.interface);
     try writer.end();
+    try af.replace(lp.io);
 
-    log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.cookies.items.len });
+    log.info(.app, "Cookie.saveToFile", .{ .path = path, .count = jar.len });
 }
 
 fn writeJson(jar: *const Cookie.Jar, w: *std.Io.Writer) !void {
     try w.writeByte('[');
-    for (jar.cookies.items, 0..) |c, i| {
+    var it = jar.iterator();
+    var i: usize = 0;
+    while (it.next()) |c| : (i += 1) {
         if (i > 0) {
             try w.writeByte(',');
         }
@@ -124,7 +129,7 @@ fn writeJson(jar: *const Cookie.Jar, w: *std.Io.Writer) !void {
         }, .{ .emit_null_optional_fields = false }, w);
     }
 
-    if (jar.cookies.items.len > 0) {
+    if (jar.len > 0) {
         try w.writeByte('\n');
     }
     try w.writeAll("]\n");
@@ -148,7 +153,8 @@ const JsonCookie = struct {
         // Allocate before the struct literal copies `arena` into the result.
         const name = try a.dupe(u8, self.name);
         const value = try a.dupe(u8, self.value);
-        const domain = try a.dupe(u8, self.domain);
+        // Cookie domains are case-insensitive; the jar keys them lower case.
+        const domain = std.ascii.lowerString(try a.alloc(u8, self.domain.len), self.domain);
         const path = if (self.path) |p| try a.dupe(u8, p) else "/";
 
         // A missing or unrecognised sameSite leaves the cookie unspecified.
@@ -286,6 +292,8 @@ pub const NetscapeFormat = struct {
                 try allocator.print(".{s}", .{bare_domain})
             else
                 try allocator.dupe(u8, bare_domain);
+            // Cookie domains are case-insensitive; the jar keys them lower case.
+            _ = std.ascii.lowerString(domain, domain);
 
             // Bake a cookie.
             const cookie = Cookie{
@@ -321,6 +329,12 @@ pub const NetscapeFormat = struct {
     }
 };
 
+fn nthCookie(jar: *const Cookie.Jar, n: usize) *Cookie {
+    var it = jar.iterator();
+    for (0..n) |_| _ = it.next();
+    return it.next().?;
+}
+
 test "cookies: netscape include_subdomains drives the domain's leading dot" {
     var jar = Cookie.Jar.init(std.testing.allocator, null);
     defer jar.deinit();
@@ -335,15 +349,15 @@ test "cookies: netscape include_subdomains drives the domain's leading dot" {
         ".example.com\tFALSE\t/\tFALSE\t4102444800\td\t4\n";
 
     try std.testing.expectEqual(@as(usize, 4), try NetscapeFormat.parse(&jar, content));
-    try std.testing.expectEqualStrings(".example.com", jar.cookies.items[0].domain);
-    try std.testing.expectEqualStrings(".example.com", jar.cookies.items[1].domain);
-    try std.testing.expectEqualStrings("example.com", jar.cookies.items[2].domain);
-    try std.testing.expectEqualStrings("example.com", jar.cookies.items[3].domain);
+    try std.testing.expectEqualStrings(".example.com", nthCookie(&jar, 0).domain);
+    try std.testing.expectEqualStrings(".example.com", nthCookie(&jar, 1).domain);
+    try std.testing.expectEqualStrings("example.com", nthCookie(&jar, 2).domain);
+    try std.testing.expectEqualStrings("example.com", nthCookie(&jar, 3).domain);
 
     // That dot is what `Cookie.matchesHost` keys tail-matching off.
-    try std.testing.expect(jar.cookies.items[0].matchesHost("www.example.com"));
-    try std.testing.expect(jar.cookies.items[2].matchesHost("www.example.com") == false);
-    try std.testing.expect(jar.cookies.items[2].matchesHost("example.com"));
+    try std.testing.expect(nthCookie(&jar, 0).matchesHost("www.example.com"));
+    try std.testing.expect(nthCookie(&jar, 2).matchesHost("www.example.com") == false);
+    try std.testing.expect(nthCookie(&jar, 2).matchesHost("example.com"));
 }
 
 test "cookies: netscape #HttpOnly_ prefix sets http_only" {
@@ -359,13 +373,13 @@ test "cookies: netscape #HttpOnly_ prefix sets http_only" {
 
     try std.testing.expectEqual(@as(usize, 3), try NetscapeFormat.parse(&jar, content));
 
-    try std.testing.expect(jar.cookies.items[0].http_only);
-    try std.testing.expectEqualStrings("example.com", jar.cookies.items[0].domain);
+    try std.testing.expect(nthCookie(&jar, 0).http_only);
+    try std.testing.expectEqualStrings("example.com", nthCookie(&jar, 0).domain);
 
-    try std.testing.expect(jar.cookies.items[1].http_only);
-    try std.testing.expectEqualStrings(".example.com", jar.cookies.items[1].domain);
+    try std.testing.expect(nthCookie(&jar, 1).http_only);
+    try std.testing.expectEqualStrings(".example.com", nthCookie(&jar, 1).domain);
 
-    try std.testing.expect(jar.cookies.items[2].http_only == false);
+    try std.testing.expect(nthCookie(&jar, 2).http_only == false);
 }
 
 test "cookies: netscape treats #HttpOnly_ near-misses as comments" {
@@ -384,7 +398,7 @@ test "cookies: netscape treats #HttpOnly_ near-misses as comments" {
         "#HttpOnly_\n";
 
     try std.testing.expectEqual(@as(usize, 0), try NetscapeFormat.parse(&jar, content));
-    try std.testing.expectEqual(@as(usize, 0), jar.cookies.items.len);
+    try std.testing.expectEqual(@as(usize, 0), jar.len);
 }
 
 test "cookies: netscape 0 and empty expires load as session cookies" {
@@ -405,16 +419,16 @@ test "cookies: netscape 0 and empty expires load as session cookies" {
         "example.com\tFALSE\t/\tFALSE\t4102444800\tfuture\t6\n";
 
     _ = try NetscapeFormat.parse(&jar, content);
-    try std.testing.expectEqual(@as(usize, 3), jar.cookies.items.len);
+    try std.testing.expectEqual(@as(usize, 3), jar.len);
 
-    try std.testing.expectEqualStrings("session", jar.cookies.items[0].name);
-    try std.testing.expectEqual(@as(?f64, null), jar.cookies.items[0].expires);
+    try std.testing.expectEqualStrings("session", nthCookie(&jar, 0).name);
+    try std.testing.expectEqual(@as(?f64, null), nthCookie(&jar, 0).expires);
 
-    try std.testing.expectEqualStrings("python", jar.cookies.items[1].name);
-    try std.testing.expectEqual(@as(?f64, null), jar.cookies.items[1].expires);
+    try std.testing.expectEqualStrings("python", nthCookie(&jar, 1).name);
+    try std.testing.expectEqual(@as(?f64, null), nthCookie(&jar, 1).expires);
 
-    try std.testing.expectEqualStrings("future", jar.cookies.items[2].name);
-    try std.testing.expectEqual(@as(?f64, 4102444800), jar.cookies.items[2].expires);
+    try std.testing.expectEqualStrings("future", nthCookie(&jar, 2).name);
+    try std.testing.expectEqual(@as(?f64, 4102444800), nthCookie(&jar, 2).expires);
 }
 
 test "cookies: load JSON accepts CDP SameSite casing" {
@@ -449,6 +463,6 @@ test "cookies: load JSON keeps a session cookie with expires -1" {
     var jar = Cookie.Jar.init(std.testing.allocator, null);
     defer jar.deinit();
     try jar.add(try parsed[0].toCookie(jar.allocator), lp.datetime.timestamp(.real), true);
-    try std.testing.expectEqual(1, jar.cookies.items.len);
-    try std.testing.expectEqual(null, jar.cookies.items[0].expires);
+    try std.testing.expectEqual(1, jar.len);
+    try std.testing.expectEqual(null, nthCookie(&jar, 0).expires);
 }

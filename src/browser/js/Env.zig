@@ -384,7 +384,6 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     context.execution = .{
         .js = context,
         .url = &global.url,
-        .buf = &global.buf,
         .charset = &global.charset,
         .page_arena = if (comptime is_frame) global.page_arena else global.arena,
         .page = context.page,
@@ -506,19 +505,102 @@ pub fn runMicrotasks(self: *Env) void {
         var i: usize = 0;
         while (i < self.contexts.items.len) : (i += 1) {
             const ctx = self.contexts.items[i];
-            const page_scope = ctx.page.logScope();
-            v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
-            page_scope.exit();
+            // Reporting a rejection runs the page's listeners, which can queue
+            // microtasks: checkpoint again, a bounded number of times.
+            var rounds: u8 = 0;
+            while (true) : (rounds += 1) {
+                const page_scope = ctx.page.logScope();
+                v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+                const reported = !self.terminatePending() and rounds < max_rejection_rounds and self.reportRejectedPromises(ctx);
+                page_scope.exit();
 
-            if (self.terminatePending()) {
-                if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
-                    // No context is entered (checked above), so it's safe to
-                    // clear the termination flag.
-                    v8.v8__Isolate__CancelTerminateExecution(v8_isolate);
+                if (self.terminatePending()) {
+                    if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+                        // No context is entered (checked above), so it's safe to
+                        // clear the termination flag.
+                        v8.v8__Isolate__CancelTerminateExecution(v8_isolate);
+                    }
+                    return;
                 }
-                return;
+                if (!reported) {
+                    break;
+                }
             }
         }
+    }
+}
+
+// Bounds the checkpoints a chain of unhandled rejections can trigger in a row.
+// What is left waits for the next checkpoint.
+const max_rejection_rounds = 16;
+
+// HTML's "notify about rejected promises", at the end of the microtask
+// checkpoint: a promise still rejected without a handler is unhandled. The
+// global gets "unhandledrejection" and, unless that is cancelled, the
+// rejection is reported as uncaught. Returns whether there was any, in which
+// case page code may have run and queued microtasks, and the context is still
+// alive.
+fn reportRejectedPromises(self: *Env, ctx: *Context) bool {
+    if (ctx.rejected_promises.items.len == 0) {
+        return false;
+    }
+
+    var batch = ctx.rejected_promises;
+    ctx.rejected_promises = .empty;
+    defer batch.deinit(self.allocator);
+    defer for (batch.items) |promise| promise.release();
+
+    for (batch.items) |global| {
+        if (self.terminatePending()) {
+            break;
+        }
+        // A listener removed the frame this context belonged to.
+        if (std.mem.findScalar(*Context, self.contexts.items, ctx) == null) {
+            return false;
+        }
+
+        var ls: js.Local.Scope = undefined;
+        ctx.localScope(&ls);
+        defer ls.deinit();
+
+        const promise = global.local(&ls.local);
+        reportRejectedPromise(ctx, promise, promise.result());
+    }
+    return true;
+}
+
+fn reportRejectedPromise(ctx: *Context, promise: js.Promise, reason: js.Value) void {
+    // Reporting calls back into Zig (the listeners, the reason's toString). At
+    // call_depth 0 that resets the call_arena, which holds the location.
+    const call_depth = ctx.call_depth;
+    ctx.call_depth = call_depth + 1;
+    defer ctx.call_depth = call_depth;
+
+    ctx.page.recordJsError(error.JsException);
+    ctx.page.status.noteException(reason.toStringSlice() catch "");
+
+    const canceled = switch (ctx.global) {
+        .frame => |frame| frame.window.unhandledPromiseRejection(true, promise, reason, frame),
+        .worker => |wsg| wsg.unhandledPromiseRejection(true, promise, reason),
+    } catch |err| {
+        log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = if (ctx.global == .frame) "window" else "worker" });
+        return;
+    };
+    if (canceled) {
+        return;
+    }
+
+    const location = reason.errorLocation(ctx.call_arena) catch js.Value.ErrorLocation{};
+    log.warn(.page_error, "unhandled rejection", .{
+        .reason = reason.toStringSlice() catch "Unknown reason",
+        .url = location.url,
+        .line = location.line,
+        .column = location.column,
+    });
+    switch (ctx.global) {
+        .frame => |frame| Window.notifyExceptionThrown(reason, location, .rejection, frame),
+        // As with a worker's reportError, logged only.
+        .worker => {},
     }
 }
 
@@ -836,45 +918,38 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     ctx.call_depth += 1;
     defer ctx.call_depth -= 1;
 
-    const no_handler = promise_event == v8.kPromiseRejectWithNoHandler;
-    if (no_handler and log.enabled(.page_error, .debug)) {
-        // debug because it can still get a handler later, so it might get handled
-        logUnhandledRejection(&local, v8.v8__PromiseRejectMessage__GetValue(&message_handle));
+    const rejection: js.PromiseRejection = .{ .local = &local, .handle = &message_handle };
+    const promise = rejection.promise();
+
+    if (promise_event == v8.kPromiseRejectWithNoHandler) {
+        // Not unhandled yet: a handler can still come before the end of the
+        // microtask checkpoint (see reportRejectedPromises).
+        ctx.addRejectedPromise(promise) catch |err| {
+            log.debug(.browser, "queue rejected promise", .{ .err = err });
+        };
+        return;
+    }
+
+    // A handler came for a rejection still waiting to be reported: it was
+    // never unhandled, and the page hears of neither.
+    for (ctx.env.contexts.items) |c| {
+        if (c.withdrawRejectedPromise(promise)) {
+            return;
+        }
     }
 
     switch (ctx.global) {
         .frame => |frame| {
-            frame.window.unhandledPromiseRejection(no_handler, .{
-                .local = &local,
-                .handle = &message_handle,
-            }, frame) catch |err| {
+            _ = frame.window.unhandledPromiseRejection(false, promise, rejection.reason(), frame) catch |err| {
                 log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = "window" });
             };
         },
         .worker => |wsg| {
-            wsg.unhandledPromiseRejection(no_handler, .{
-                .local = &local,
-                .handle = &message_handle,
-            }) catch |err| {
+            _ = wsg.unhandledPromiseRejection(false, promise, rejection.reason()) catch |err| {
                 log.debug(.browser, "unhandled rejection handler", .{ .err = err, .target = "worker" });
             };
         },
     }
-}
-
-fn logUnhandledRejection(local: *const js.Local, reason_handle: ?*const v8.Value) void {
-    const handle = reason_handle orelse {
-        log.debug(.page_error, "unhandled rejection", .{ .reason = "undefined" });
-        return;
-    };
-    const reason = js.Value{ .local = local, .handle = handle };
-    const location = reason.errorLocation(local.call_arena) catch js.Value.ErrorLocation{};
-    log.debug(.page_error, "unhandled rejection", .{
-        .reason = reason.toStringSlice() catch "Unknown reason",
-        .url = location.url,
-        .line = location.line,
-        .column = location.column,
-    });
 }
 
 // V8 reports an exception that escapes to the top without a TryCatch. We
@@ -947,15 +1022,21 @@ const PrivateSymbols = struct {
     const Private = @import("Private.zig");
 
     child_nodes: Private,
+    crypto_key_algorithm: Private,
+    crypto_key_usages: Private,
 
     fn init(isolate: *v8.Isolate) PrivateSymbols {
         return .{
             .child_nodes = Private.init(isolate, "child_nodes"),
+            .crypto_key_algorithm = Private.init(isolate, "crypto_key_algorithm"),
+            .crypto_key_usages = Private.init(isolate, "crypto_key_usages"),
         };
     }
 
     fn deinit(self: *PrivateSymbols) void {
         self.child_nodes.deinit();
+        self.crypto_key_algorithm.deinit();
+        self.crypto_key_usages.deinit();
     }
 };
 

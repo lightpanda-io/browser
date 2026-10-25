@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <map name="m">
@@ -64,5 +65,16 @@
     testing.expectEqual('origin', a.referrerPolicy);
     a.setAttribute('referrerpolicy', 'bogus');
     testing.expectEqual('', a.referrerPolicy);
+  }
+</script>
+
+<script id="area-setters-keep-userinfo">
+  {
+    const a = document.createElement('area');
+    a.href = 'https://u:p@h.com/p';
+    a.port = '7';
+    testing.expectEqual('https://u:p@h.com:7/p', a.href);
+    a.hostname = 'z.org';
+    testing.expectEqual('https://u:p@z.org:7/p', a.href);
   }
 </script>

@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<body>
+<!-- Fixture for Log.entryAdded: a request the page aborts while it waits for
+     the response. -->
+<script>
+  const controller = new AbortController();
+  fetch('/xhr/slow', { signal: controller.signal }).catch(() => {});
+  setTimeout(() => controller.abort(), 10);
+</script>
+</body>

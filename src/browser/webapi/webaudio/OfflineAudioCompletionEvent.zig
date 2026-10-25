@@ -65,15 +65,6 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, options: Options, trusted: boo
 
 pub fn deinit(self: *OfflineAudioCompletionEvent, page: *Page) void {
     self._rendered_buffer.releaseRef(page);
-    self._proto.deinit(page);
-}
-
-pub fn acquireRef(self: *OfflineAudioCompletionEvent) void {
-    self._proto.acquireRef();
-}
-
-pub fn releaseRef(self: *OfflineAudioCompletionEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
 }
 
 pub fn asEvent(self: *OfflineAudioCompletionEvent) *Event {

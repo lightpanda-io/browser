@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<div id="root"></div>
+
+<script id="attributes">
+{
+  const root = document.getElementById("root");
+  const observer = new IntersectionObserver(() => {}, { root, rootMargin: "10px 5%", threshold: [1, 0, 0.5] });
+  testing.expectEqual(root, observer.root);
+  testing.expectEqual("10px 5% 10px 5%", observer.rootMargin);
+  testing.expectEqual("0px 0px 0px 0px", observer.scrollMargin);
+  testing.expectEqual("0,0.5,1", observer.thresholds.join());
+  testing.expectEqual(0, observer.delay);
+  testing.expectEqual(false, observer.trackVisibility);
+
+  const defaults = new IntersectionObserver(() => {});
+  testing.expectEqual(null, defaults.root);
+  testing.expectEqual("0px 0px 0px 0px", defaults.rootMargin);
+  testing.expectEqual("0", defaults.thresholds.join());
+  testing.expectEqual(document, new IntersectionObserver(() => {}, { root: document }).root);
+}
+</script>
+
+<script id="margins">
+{
+  // One to four px lengths or percentages, expanded like CSS margins.
+  const margin = (value) => {
+    try {
+      return new IntersectionObserver(() => {}, { rootMargin: value }).rootMargin;
+    } catch (err) {
+      return err.name;
+    }
+  };
+  testing.expectEqual("7px 7px 7px 7px", margin("7px"));
+  testing.expectEqual("10px 20px 30px 20px", margin("10px 20px 30px"));
+  testing.expectEqual("1px 2px 3px 4px", margin(" 1px  2px 3px\t4px "));
+  testing.expectEqual("-10px 5% -10px 5%", margin("-10px 5%"));
+  testing.expectEqual("10px 10px 10px 10px", margin("10PX"));
+  testing.expectEqual("10px 10px 10px 10px", margin("1e1px"));
+  testing.expectEqual("3px 3px 3px 3px", margin("+3px"));
+  testing.expectEqual("0px 0px 0px 0px", margin(""));
+  testing.expectEqual("5.5% 5.5% 5.5% 5.5%", margin("5.5%"));
+  testing.expectEqual("10px 20px 10px 20px", margin("10px/**/20px"));
+  for (const bad of ["0", "10em", "calc(10px)", "10px,20px", "10 px", "1px 2px 3px 4px 5px", "px", "1.px"]) {
+    testing.expectEqual(`${bad}: SyntaxError`, `${bad}: ${margin(bad)}`);
+  }
+  testing.expectEqual("-4px 5% -4px 5%", new IntersectionObserver(() => {}, { scrollMargin: "-4px 5%" }).scrollMargin);
+}
+</script>
+
+<script id="thresholds-and-delay">
+{
+  const outcome = (options, read) => {
+    try {
+      return read(new IntersectionObserver(() => {}, options));
+    } catch (err) {
+      return err.name;
+    }
+  };
+  const thresholds = (threshold) => outcome({ threshold }, (o) => o.thresholds.join());
+  testing.expectEqual("0", thresholds([]));
+  // Sorted, duplicates kept. Values exact as floats: Chrome stores floats.
+  testing.expectEqual("0.25,0.75,0.75", thresholds([0.75, 0.25, 0.75]));
+  testing.expectEqual("0", thresholds(null));
+  testing.expectEqual("RangeError", thresholds(-0.1));
+  testing.expectEqual("RangeError", thresholds([0.5, 1.5]));
+  testing.expectEqual("TypeError", thresholds(Infinity));
+  testing.expectEqual("TypeError", thresholds([0.5, NaN]));
+
+  const delay = (options) => outcome(options, (o) => `${o.delay} ${o.trackVisibility}`);
+  testing.expectEqual("50 false", delay({ delay: 50 }));
+  testing.expectEqual("1 false", delay({ delay: 1.7 }));
+  testing.expectEqual("150 true", delay({ trackVisibility: true, delay: 150 }));
+  testing.expectEqual("TypeError", outcome({ root: document.createTextNode("x") }, (o) => o.root));
+
+  // The options' conversion errors (a root of the wrong type, a non-finite
+  // threshold) come before a rootMargin's SyntaxError, which comes before a
+  // threshold's RangeError.
+  const margin = (options) => outcome(options, (o) => o.rootMargin);
+  testing.expectEqual("TypeError", margin({ root: document.createTextNode("x"), rootMargin: "x" }));
+  testing.expectEqual("TypeError", margin({ threshold: NaN, rootMargin: "x" }));
+  testing.expectEqual("SyntaxError", margin({ threshold: 2, rootMargin: "x" }));
+  testing.expectEqual("0px 0px 0px 0px", margin({ rootMargin: "-0px" }));
+}
+</script>
+
+<script id="diverges">
+{
+  const outcome = (options, read) => {
+    try {
+      return read(new IntersectionObserver(() => {}, options));
+    } catch (err) {
+      return err.name;
+    }
+  };
+
+  testing.diverges("Chrome rounds px margins down to whole pixels", () => {
+    testing.expectEqual("1.5px 1.5px 1.5px 1.5px", outcome({ rootMargin: "1.50px" }, (o) => o.rootMargin));
+  });
+  testing.diverges("Chrome stores thresholds as floats (0.10000000149011612)", () => {
+    testing.expectEqual("0.1,0.3", outcome({ threshold: [0.3, 0.1] }, (o) => o.thresholds.join()));
+  });
+
+  // Tracking visibility raises the delay to 100ms.
+  const delay = (options) => outcome(options, (o) => `${o.delay} ${o.trackVisibility}`);
+  testing.diverges("Chrome throws NotSupportedError for trackVisibility with a delay under 100, as an earlier draft did", () => {
+    testing.expectEqual("100 true", delay({ trackVisibility: true }));
+    testing.expectEqual("100 true", delay({ trackVisibility: true, delay: 20 }));
+  });
+}
+</script>

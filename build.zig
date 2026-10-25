@@ -189,6 +189,16 @@ pub fn build(b: *Build) !void {
         run_step.dependOn(&run_cmd.step);
     }
 
+    {
+        // fixture server, for opening src/browser/tests in another browser
+        const exe = addExe(b, exe_config, "lightpanda-test-server", "test_server_check", "src/main_test_server.zig");
+        const run_cmd = b.addRunArtifact(exe);
+        // fixtures are served relative to the cwd
+        run_cmd.setCwd(b.path("."));
+        const run_step = b.step("test-server", "Serve the test fixtures on 127.0.0.1:9582 (WebSocket 9584)");
+        run_step.dependOn(&run_cmd.step);
+    }
+
     addGenerator(b, exe_config, "skills", "Generate LLM skill docs (zig-out/skills/<name>/SKILL.md)");
     addGenerator(b, exe_config, "docs", "Generate reference partials for the docs site (zig-out/docs/*.mdx)");
 

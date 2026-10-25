@@ -132,7 +132,22 @@ const BinaryType = enum {
     arraybuffer,
 };
 
-pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*WebSocket {
+// WebIDL: `optional (DOMString or sequence<DOMString>) protocols = []`
+const Protocols = union(enum) {
+    list: []const []const u8,
+    one: []const u8,
+};
+
+pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*WebSocket {
+    var one: [1][]const u8 = undefined;
+    const protocols: []const []const u8 = if (protocols_) |p| switch (p) {
+        .list => |list| list,
+        .one => |protocol| blk: {
+            one[0] = protocol;
+            break :blk &one;
+        },
+    } else &.{};
+
     {
         if (std.mem.findScalar(u8, url, '#') != null) {
             // Fragments are not allowed in WebSocket URLs.
@@ -209,7 +224,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     return self;
 }
 
-fn connect(self: *WebSocket, protocols: [][]const u8) !void {
+fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     const exec = self._exec;
     const arena = self._arena;
     const resolved_url = self._url;
@@ -539,31 +554,6 @@ const SendData = union(enum) {
     js_val: js.Value,
 };
 
-/// Union for extracting bytes from ArrayBuffer/TypedArray
-const BinaryData = union(enum) {
-    int8: []i8,
-    uint8: []u8,
-    int16: []i16,
-    uint16: []u16,
-    int32: []i32,
-    uint32: []u32,
-    int64: []i64,
-    uint64: []u64,
-    float16: []f16,
-    float32: []f32,
-    float64: []f64,
-
-    fn asBuffer(self: BinaryData) []u8 {
-        return switch (self) {
-            .int8 => |b| @as([*]u8, @ptrCast(b.ptr))[0..b.len],
-            .uint8 => |b| b,
-            inline .int16, .uint16, .float16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
-            inline .int32, .uint32, .float32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
-            inline .int64, .uint64, .float64 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 8],
-        };
-    }
-};
-
 pub fn send(self: *WebSocket, data: SendData) !void {
     if (self._ready_state != .open) {
         return error.InvalidStateError;
@@ -579,7 +569,9 @@ pub fn send(self: *WebSocket, data: SendData) !void {
             } });
         },
         .js_val => |js_val| {
-            if (js_val.isString()) |str| {
+            if (js_val.isArrayBuffer() == false and js_val.isArrayBufferView() == false) {
+                // Anything that isn't a buffer is sent as its string, as in Chrome
+                const str = try js_val.toString();
                 const arena = try self._exec.getArena(str.len(), "WebSocket.message");
                 errdefer arena.release();
                 try self.queueMessage(.{ .text = .{
@@ -587,8 +579,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                     .data = try str.toSliceWithAlloc(arena.allocator()),
                 } });
             } else {
-                const binary = try js_val.toZig(BinaryData);
-                const buffer = binary.asBuffer();
+                const buffer = (try js_val.toZig(js.BufferSource)).bytes;
 
                 const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
                 errdefer arena.release();
@@ -1004,8 +995,7 @@ test "WebApi: WebSocket send owns its message arena once when the unpause fails"
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    var protocols: [0][]const u8 = .{};
-    const ws = try WebSocket.init("ws://127.0.0.1:9582/ws", &protocols, &frame.js.execution);
+    const ws = try WebSocket.init("ws://127.0.0.1:9582/ws", null, &frame.js.execution);
     try testing.expect(ws._conn != null);
 
     // connect() tracked the easy handle but no tick has performed it, so

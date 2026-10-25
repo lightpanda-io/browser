@@ -115,18 +115,21 @@ fn assertOwns(self: *const StyleManager, el_: ?*const Element) void {
 /// at-rule nesting; without a cap a hostile inline stylesheet could blow the
 /// Zig stack via the mutually-recursive `applyMediaAtRule` / `applyLayerAtRule`
 /// `applyInnerRules` frames. 32 is well past anything seen in the wild.
-const MAX_AT_RULE_NESTING: u8 = 32;
+pub const MAX_AT_RULE_NESTING: u8 = 32;
 
 fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet) !void {
     if (sheet._css_rules) |css_rules| {
         for (css_rules._rules.items) |rule| {
             switch (rule._type) {
-                .style => |sr| _ = try self.addRule(sr),
+                .style => |sr| {
+                    _ = try self.addRule(sr);
+                    try self.addNestedCssomRules(build_arena, sr, sr._selector_text, 0);
+                },
                 // Re-parse the stored source so an `@media` rule inserted via
                 // `insertRule` / `replaceSync` participates in the cascade
                 // when its query matches the viewport.
-                .media => try self.applyMediaAtRule(build_arena, rule._text, 0, NO_LAYER),
-                .layer => try self.applyLayerAtRule(build_arena, rule._text, 0, NO_LAYER),
+                .media => try self.applyMediaAtRule(build_arena, rule._text, 0, NO_LAYER, null),
+                .layer => try self.applyLayerAtRule(build_arena, rule._text, 0, NO_LAYER, null),
                 else => {},
             }
         }
@@ -139,21 +142,22 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
             switch (parsed_rule) {
-                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, NO_LAYER),
-                .at_rule => |a| {
-                    // Only `@media` and `@layer` participate in the cascade
-                    // here. Other at-rules (`@keyframes`, `@supports`,
-                    // `@font-face`, …) don't carry top-level declarations
-                    // relevant to the visibility filter and stay skipped as
-                    // before.
-                    if (std.ascii.eqlIgnoreCase(a.keyword, "media")) {
-                        try self.applyMediaAtRule(build_arena, a.text, 0, NO_LAYER);
-                    } else if (std.ascii.eqlIgnoreCase(a.keyword, "layer")) {
-                        try self.applyLayerAtRule(build_arena, a.text, 0, NO_LAYER);
-                    }
-                },
+                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, 0, NO_LAYER),
+                .at_rule => |a| try self.applyAtRule(build_arena, a.keyword, a.text, 0, NO_LAYER, null),
             }
         }
+    }
+}
+
+/// Apply an at-rule that takes part in the cascade. Only `@media` and `@layer`
+/// do here. Other at-rules (`@keyframes`, `@supports`, `@font-face`, …) don't
+/// carry declarations relevant to the visibility filter and are skipped.
+fn applyAtRule(self: *StyleManager, build_arena: Allocator, keyword: []const u8, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    if (std.ascii.eqlIgnoreCase(keyword, "media")) {
+        return self.applyMediaAtRule(build_arena, text, depth, layer, nest);
+    }
+    if (std.ascii.eqlIgnoreCase(keyword, "layer")) {
+        return self.applyLayerAtRule(build_arena, text, depth, layer, nest);
     }
 }
 
@@ -162,7 +166,10 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
 /// lived at the top level. Non-matching queries silently drop the inner
 /// rules. Inline-only by design: external `<link rel="stylesheet">` is out
 /// of scope for the headless engine.
-fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16) Allocator.Error!void {
+///
+/// `nest` is the selector of the style rule the at-rule is nested in (CSS
+/// Nesting), whose block the inner block then is; null at the top level.
+fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
     if (depth >= MAX_AT_RULE_NESTING) {
         return;
     }
@@ -174,7 +181,7 @@ fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
         return;
     }
 
-    try self.applyInnerRules(build_arena, block.body, depth + 1, layer);
+    try self.applyAtRuleBody(build_arena, block.body, depth + 1, layer, nest);
 }
 
 /// Apply an `@layer` rule (css-cascade-5). Layers have two forms:
@@ -185,8 +192,8 @@ fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
 /// The layer parameter is the enclosing layer, or NO_LAYER at the top level.
 /// Priority is not assigned here, we need all the layers parsed to do that
 /// (since a layer statement can alter the ordering). So we'll do one final pass
-// in finalizerLayerRanks
-fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16) Allocator.Error!void {
+// in finalizerLayerRanks. `nest` is as for applyMediaAtRule.
+fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
     if (depth >= MAX_AT_RULE_NESTING) {
         return;
     }
@@ -228,7 +235,16 @@ fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
     else
         try self.registerLayerPath(build_arena, layer, prelude);
 
-    try self.applyInnerRules(build_arena, block.body, depth + 1, id);
+    try self.applyAtRuleBody(build_arena, block.body, depth + 1, id, nest);
+}
+
+/// The block of an at-rule nested in a style rule is a block of that rule:
+/// `.a { @media (…) { color: red } }` is `@media (…) { .a { color: red } }`.
+fn applyAtRuleBody(self: *StyleManager, build_arena: Allocator, body: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    if (nest) |selector| {
+        return self.addRawRule(build_arena, selector, body, depth, layer);
+    }
+    return self.applyInnerRules(build_arena, body, depth, layer);
 }
 
 /// Parse a conditional at-rule's inner block, adding style rules to the
@@ -239,14 +255,8 @@ fn applyInnerRules(self: *StyleManager, build_arena: Allocator, inner: []const u
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
-            .style => |s| try self.addRawRule(build_arena, s.selector, s.block, layer),
-            .at_rule => |nested| {
-                if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
-                    try self.applyMediaAtRule(build_arena, nested.text, depth, layer);
-                } else if (std.ascii.eqlIgnoreCase(nested.keyword, "layer")) {
-                    try self.applyLayerAtRule(build_arena, nested.text, depth, layer);
-                }
-            },
+            .style => |s| try self.addRawRule(build_arena, s.selector, s.block, depth, layer),
+            .at_rule => |nested| try self.applyAtRule(build_arena, nested.keyword, nested.text, depth, layer, null),
         }
     }
 }
@@ -472,13 +482,34 @@ fn layerRank(self: *const StyleManager, priority: u64) u64 {
     return rank;
 }
 
-fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
+/// `depth` bounds the recursion through nested rules and at-rules, as
+/// MAX_AT_RULE_NESTING does for at-rules alone.
+fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, depth: u8, layer: u16) Allocator.Error!void {
     if (selector_text.len == 0) {
         return;
     }
     var customs: CustomSink = .{ .allocator = build_arena };
     const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &customs);
     _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), customs.map.values(), layer);
+
+    // CSS Nesting: the rules nested in the block follow their parent in
+    // cascade order. Most blocks have none, and every nested rule needs a `{`.
+    if (depth >= MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block_text, '{') == null) {
+        return;
+    }
+    var it = CssParser.parseStyleBlock(block_text);
+    while (it.nextItem()) |item| {
+        switch (item) {
+            .declaration => {},
+            .rule => |nested| {
+                // The arena, not build_arena: a custom property's rule keeps
+                // its selector text past the rebuild.
+                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), selector_text, nested.selector) orelse continue;
+                try self.addRawRule(build_arena, selector, nested.block, depth + 1, layer);
+            },
+            .at_rule => |nested| try self.applyAtRule(build_arena, nested.keyword, nested.text, depth + 1, layer, selector_text),
+        }
+    }
 }
 
 // Tracked rules get one group Rule per selector (not per selector list)
@@ -686,13 +717,13 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(el).pointer_events_none;
 }
 
-/// Blink's VisibleToHitTestRequest. Ignores display:none, which callers handle
-/// for the whole subtree.
+/// Blink's VisibleToHitTestRequest, plus display:contents, which generates no
+/// box to hit. Ignores display:none, which callers handle for the whole subtree.
 pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return true;
     const p = self.visibilityProps(el);
-    return !p.visibility_hidden and !p.pointer_events_none;
+    return !p.visibility_hidden and !p.pointer_events_none and p.box != .contents;
 }
 
 /// Cascaded paint-order inputs; shares normal inline/stylesheet priority and
@@ -798,8 +829,8 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
     if (vis.box != .block_level or el.getTag().isReplacedOrControl()) {
         return .shrink;
     }
-    const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
-    if (flow.absolutely_positioned or flow.floated) {
+    const flow = self.flowProps(el);
+    if (flow.position.outOfFlow() or flow.floated) {
         return .shrink;
     }
     const parent = self.boxParent(el) orelse return .fill;
@@ -838,8 +869,22 @@ pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
         .block_level, .table => {},
         .inline_level, .contents => return false,
     }
-    const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
-    return flow.absolutely_positioned == false and flow.floated == false;
+    const flow = self.flowProps(el);
+    return flow.position.outOfFlow() == false and flow.floated == false;
+}
+
+/// Own property, not inherited.
+pub fn position(self: *StyleManager, el: *Element) Position {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .static;
+    return self.flowProps(el).position;
+}
+
+/// `position: fixed` on `el` or on a box above it.
+pub fn inFixedBox(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.flowProps(el).in_fixed;
 }
 
 /// Overflow along x is clipped or scrolled within the box, so it doesn't
@@ -930,6 +975,11 @@ fn visibilityProps(self: *StyleManager, el: *Element) Visibility.Computed {
 /// Callers must have run rebuildIfDirty, which resets the memo.
 fn geometryProps(self: *StyleManager, el: *Element) Geometry.Computed {
     return self.geometry.ownProps(self.arena.allocator(), el, self.frame);
+}
+
+/// Callers must have run rebuildIfDirty, which resets the memo.
+fn flowProps(self: *StyleManager, el: *Element) Flow.Computed {
+    return self.flow.inheritedProps(self.arena.allocator(), el, self.frame);
 }
 
 /// Taken before the arena resets, to presize the new containers.
@@ -1245,7 +1295,12 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
 /// The CSSOM twin of addRawRule; returns whether the rule set any tracked
 /// property.
 fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
-    const selector_text = style_rule._selector_text;
+    return self.addRuleAs(style_rule, style_rule._selector_text);
+}
+
+/// Add a style rule's declarations under `selector_text`: its own selector,
+/// or for a nested rule, that selector resolved against its parent's.
+fn addRuleAs(self: *StyleManager, style_rule: *CSSStyleRule, selector_text: []const u8) !bool {
     if (selector_text.len == 0) {
         return false;
     }
@@ -1261,6 +1316,29 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     return self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), customs, NO_LAYER);
 }
 
+/// The CSSOM counterpart to the nested rules addRawRule adds: a style rule
+/// keeps the rules nested in its block in `_rules`. `parent_selector` is the
+/// parent's selector, already resolved when the parent is itself nested.
+fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSSStyleRule, parent_selector: []const u8, depth: u8) Allocator.Error!void {
+    const nested_rules = parent._rules orelse return;
+    if (depth >= MAX_AT_RULE_NESTING) {
+        return;
+    }
+    for (nested_rules._rules.items) |rule| {
+        switch (rule._type) {
+            .style => |sr| {
+                // The arena, as in addRawRule.
+                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, sr._selector_text) orelse continue;
+                _ = try self.addRuleAs(sr, selector);
+                try self.addNestedCssomRules(build_arena, sr, selector, depth + 1);
+            },
+            .media => try self.applyMediaAtRule(build_arena, rule._text, depth + 1, NO_LAYER, parent_selector),
+            .layer => try self.applyLayerAtRule(build_arena, rule._text, depth + 1, NO_LAYER, parent_selector),
+            else => {},
+        }
+    }
+}
+
 /// A style rule appended at or after the sheet that emitted the last rule is
 /// last in cascade order, so it joins the buckets directly. Anything else
 /// takes the rebuild path.
@@ -1273,7 +1351,8 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
         .style => |s| s,
         else => return self.sheetModified(),
     };
-    if (!self.appendable(sheet, rule)) {
+    // A rule with nested rules takes the rebuild path, which adds them.
+    if (style_rule._rules != null or !self.appendable(sheet, rule)) {
         return self.sheetModified();
     }
     const added = self.addRule(style_rule) catch return self.sheetModified();
@@ -1434,6 +1513,17 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
                         classes.* += (max_nested >> 10) & 0x3FF;
                         elements.* += max_nested & 0x3FF;
                     },
+                    // :nth-child(An+B of S) is a pseudo-class plus its most specific argument
+                    .nth_child_of, .nth_last_child_of => |nth_of| {
+                        var max_nested: u32 = 0;
+                        for (nth_of.selectors) |nested_sel| {
+                            const spec = computeSpecificity(nested_sel);
+                            if (spec > max_nested) max_nested = spec;
+                        }
+                        ids.* += (max_nested >> 20) & 0x3FF;
+                        classes.* += 1 + ((max_nested >> 10) & 0x3FF);
+                        elements.* += max_nested & 0x3FF;
+                    },
                     // All other pseudo-classes count as class-level specificity
                     else => classes.* += 1,
                 }
@@ -1498,6 +1588,7 @@ const Box = enum(u2) {
     fn uaDefault(tag: Tag) Box {
         return switch (tag) {
             .table => .table,
+            .slot => .contents,
             .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
             else => if (tag.isBlock()) .block_level else .inline_level,
         };
@@ -1873,17 +1964,49 @@ const Text = struct {
     };
 };
 
-/// Whether a box is out of normal flow, which sizes it to its content.
+/// `inherit`, `unset` and `revert` are not handled, so they drop the
+/// declaration. `initial` is the initial value, static.
+pub const Position = enum(u3) {
+    static,
+    relative,
+    absolute,
+    fixed,
+    sticky,
+
+    // Null for an invalid value, which drops the declaration.
+    fn parse(value: []const u8) ?Position {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(trimmed, "static") or std.ascii.eqlIgnoreCase(trimmed, "initial")) return .static;
+        if (std.ascii.eqlIgnoreCase(trimmed, "relative")) return .relative;
+        if (std.ascii.eqlIgnoreCase(trimmed, "absolute")) return .absolute;
+        if (std.ascii.eqlIgnoreCase(trimmed, "fixed")) return .fixed;
+        if (std.ascii.eqlIgnoreCase(trimmed, "sticky") or std.ascii.eqlIgnoreCase(trimmed, "-webkit-sticky")) return .sticky;
+        return null;
+    }
+
+    /// Out of flow, so the box sizes to its content. Sticky is not: it lays
+    /// out in flow and is only offset when painted.
+    fn outOfFlow(self: Position) bool {
+        return self == .absolute or self == .fixed;
+    }
+
+    /// The computed-value keyword, as getComputedStyle reports it.
+    pub fn keyword(self: Position) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// Where a box sits: its position and whether it floats.
 const Flow = struct {
     const Declared = struct {
         const names = [_][]const u8{ "position", "float" };
 
-        absolutely_positioned: ?bool = null,
+        position: ?Position = null,
         floated: ?bool = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "position")) {
-                self.absolutely_positioned = std.ascii.eqlIgnoreCase(value, "absolute") or std.ascii.eqlIgnoreCase(value, "fixed");
+                self.position = Position.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "float")) {
                 self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
                     std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
@@ -1891,16 +2014,29 @@ const Flow = struct {
         }
     };
 
-    const Computed = packed struct(u2) {
-        absolutely_positioned: bool = false,
+    pub const Cascaded = struct {
+        position: Position = .static,
         floated: bool = false,
+    };
+
+    const Computed = packed struct(u5) {
+        position: Position = .static,
+        floated: bool = false,
+        in_fixed: bool = false, // This element or an ancestor
+
+        fn resolve(own: Cascaded, parent: Computed) Computed {
+            return .{
+                .position = own.position,
+                .floated = own.floated,
+                .in_fixed = own.position == .fixed or parent.in_fixed,
+            };
+        }
     };
 };
 
 /// Paint-order inputs for the renderless hit tester. This is not a CSS renderer:
 /// geometry, floats, flex/grid order, top-layer and 3D painting remain approximate.
 const Stacking = struct {
-    const Position = enum { static, relative, absolute, fixed, sticky };
     const Declared = struct {
         const names = [_][]const u8{ "position", "z-index", "opacity", "transform", "isolation" };
         position: ?Position = null,
@@ -1912,9 +2048,10 @@ const Stacking = struct {
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "position")) {
-                if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) self.position = .static;
-                inline for (@typeInfo(Position).@"enum".field_names) |field| {
-                    if (std.ascii.eqlIgnoreCase(value, field)) self.position = @field(Position, field);
+                if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, &std.ascii.whitespace), "unset")) {
+                    self.position = .static;
+                } else if (Position.parse(value)) |position| {
+                    self.position = position;
                 }
             } else if (std.ascii.eqlIgnoreCase(name, "z-index")) {
                 if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
@@ -2406,6 +2543,10 @@ test "StyleManager: text-transform" {
     try testing.htmlRunner("css/text_transform.html", .{});
 }
 
+test "StyleManager: position" {
+    try testing.htmlRunner("css/position.html", .{});
+}
+
 test "StyleManager: text-transform without rules skips the memo" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -2653,8 +2794,8 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .width = .{} } },
         .{ .visibility = .{ .display = .flex, .box = .block_level } },
         .{ .visibility = .{ .display = .grid, .box = .inline_level } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true }, .stacking = .{ .position = .absolute } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false }, .stacking = .{ .position = .relative } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true }, .stacking = .{ .position = .absolute } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .relative, .floated = false }, .stacking = .{ .position = .relative } },
     };
 
     var i: usize = 0;
@@ -2872,6 +3013,20 @@ test "StyleManager: revert on visibility and pointer-events inherits" {
         try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(el));
         try testing.expectEqual(false, sm.hasPointerEventsNone(el));
     }
+}
+
+test "StyleManager: stacking shares parsed position keywords" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const el = try frame.document.createElement("div", null, frame);
+    const sm = &frame._style_manager;
+
+    try el.setStyle("position: -webkit-sticky", frame);
+    try testing.expectEqual(.sticky, sm.position(el));
+    try testing.expectEqual(.sticky, sm.stackingProps(el).position);
+
+    try el.setStyle("position: fixed; position: unset", frame);
+    try testing.expectEqual(.static, sm.stackingProps(el).position);
 }
 
 // Every element of a deep chain probed in document order, the shape of an
