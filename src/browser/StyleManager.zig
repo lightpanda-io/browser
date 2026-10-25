@@ -1967,6 +1967,8 @@ const Visibility = struct {
         visibility_hidden: ?bool = null,
         opacity_zero: bool = false,
         pointer_events_none: ?bool = null,
+        // see Node.isOutsideFlatTree. Hidden like display:none
+        outside_flat_tree: bool = false,
     };
 
     const Computed = packed struct(u10) {
@@ -1987,7 +1989,7 @@ const Visibility = struct {
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
-                .in_display_none = own.display == .none or parent.in_display_none,
+                .in_display_none = own.display == .none or own.outside_flat_tree or parent.in_display_none,
                 .in_opacity_zero = own.opacity_zero or parent.in_opacity_zero,
             };
         }
@@ -2005,6 +2007,7 @@ const Visibility = struct {
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
     pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
+        p.outside_flat_tree = el.asNode().isOutsideFlatTree();
         p.author_display = priorities.get(.display) != 0;
         if (priorities.get(.box) == 0) {
             p.box = Box.uaDefault(el.getTag());
