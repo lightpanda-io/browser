@@ -189,7 +189,7 @@ fn setGeolocationOverride(cmd: *CDP.Command) !void {
     // back to all-null defaults rather than erroring.
     const params = (try cmd.params(Params)) orelse Params{};
 
-    const browser = &cmd.cdp.browser;
+    const browser = (cmd.browser_context orelse return error.BrowserContextNotLoaded).session;
     if (params.latitude) |lat| {
         if (params.longitude) |lon| {
             browser.geolocation_override = .{
@@ -205,7 +205,7 @@ fn setGeolocationOverride(cmd: *CDP.Command) !void {
 }
 
 fn clearGeolocationOverride(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.geolocation_override = null;
+    (cmd.browser_context orelse return error.BrowserContextNotLoaded).session.geolocation_override = null;
     return cmd.sendResult(null, .{});
 }
 
@@ -533,7 +533,7 @@ test "cdp.Emulation: setGeolocationOverride and clear" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO", .url = "cdp/dom1.html" });
-    const browser = bc.session.browser;
+    const browser = bc.session;
 
     try ctx.processMessage(.{
         .id = 1,

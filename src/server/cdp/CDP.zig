@@ -683,7 +683,6 @@ pub const BrowserContext = struct {
             browser.http_client.clearUserAgentOverride();
         }
         browser.http_client.clearAcceptLanguageOverride();
-        browser.clearPermissions();
         self.intercept_state.deinit();
     }
 
