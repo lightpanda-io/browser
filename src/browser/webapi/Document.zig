@@ -2033,8 +2033,8 @@ test "Document: stacking order routes trusted mouse input" {
         \\window.clicks = [];
         \\document.addEventListener('click', e => clicks.push({id:e.target.id, trusted:e.isTrusted}));
     , null);
-    const cover = frame.document.getElementById("cover", frame).?;
-    const under = frame.document.getElementById("under", frame).?;
+    const cover = frame.document.getElementById("cover").?;
+    const under = frame.document.getElementById("under").?;
     const c = cover.boundingClientRectValues(frame);
     const u = under.boundingClientRectValues(frame);
     const left = @max(c.x, u.x);
