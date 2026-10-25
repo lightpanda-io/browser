@@ -1700,7 +1700,7 @@ fn boxWidth(self: *Element, owner: *Frame) f64 {
             .fixed => |width| width,
             .percent => |fraction| fraction * self.containingBlockWidth(owner),
             .fill => self.containingBlockWidth(owner),
-            .grow => @max(self.growShare(owner), self.contentWidth(owner)),
+            .grow => @max(own.value, self.growShare(owner), self.contentWidth(owner)),
             .shrink => @max(own.value, self.contentWidth(owner)),
             .contents => break :blk 0,
         };
@@ -1825,14 +1825,22 @@ pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
 
 // Some cases need the bounding rect but have already done the visibility check.
 pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
-    // Client rects are viewport-relative: offset the faux-layout document
-    // position by the owning window's scroll position.
+    const origin = self.clientOrigin(frame);
+    return .{
+        .x = origin.x,
+        .y = origin.y,
+        .width = self.boxAxis(frame, .width),
+        .height = self.boxAxis(frame, .height),
+    };
+}
+
+// Client rects are viewport-relative: offset the faux-layout document
+// position by the owning window's scroll position.
+pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     const window = (self.ownerFrame(frame) orelse frame).window;
     return .{
         .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
         .y = calculateDocumentPosition(self.asNode(), frame) - @as(f64, @floatFromInt(window.getScrollY())),
-        .width = self.boxAxis(frame, .width),
-        .height = self.boxAxis(frame, .height),
     };
 }
 
@@ -1982,7 +1990,11 @@ pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (axis == .height) {
         const width = self.getElementAxis(frame, .width);
         if (width.explicit) {
-            wrap = .{ .line_width = width.value, .font_size = style_manager.computedFontSize(self) };
+            wrap = .{
+                .line_width = width.value,
+                .font_size = style_manager.computedFontSize(self),
+                .white_space = style_manager.whiteSpace(self),
+            };
         }
     }
 

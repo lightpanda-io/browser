@@ -20,11 +20,12 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const text_measure = @import("../text_measure.zig");
 
 const Node = @import("Node.zig");
 const DOMRect = @import("DOMRect.zig");
-const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
+const DocumentFragment = @import("DocumentFragment.zig");
 
 const Range = @This();
 
@@ -830,30 +831,119 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
 }
 
 pub fn getBoundingClientRect(self: *const Range, frame: *Frame) !*DOMRect {
-    if (self._proto.getCollapsed()) {
-        return DOMRect.create(.{}, frame._factory);
-    }
-    const element = self.getContainerElement() orelse {
-        return DOMRect.create(.{}, frame._factory);
-    };
-    return element.getBoundingClientRect(frame);
+    const rect = try self.clientRect(frame) orelse DOMRect.Data{};
+    return DOMRect.create(rect, frame._factory);
 }
 
 fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
-    if (self._proto.getCollapsed()) {
-        return &.{};
-    }
-    const element = self.getContainerElement() orelse {
-        return &.{};
-    };
-    return element.getClientRects(frame);
+    const rect = try self.clientRect(frame) orelse return &.{};
+    const rects = try frame.local_arena.alloc(*DOMRect, 1);
+    rects[0] = try DOMRect.create(rect, frame._factory);
+    return rects;
 }
 
-fn getContainerElement(self: *const Range) ?*Node.Element {
+// null when nothing in the range has a box
+fn clientRect(self: *const Range, frame: *Frame) !?DOMRect.Data {
+    if (self._proto.getCollapsed()) {
+        return null;
+    }
+
+    if (self.textParent()) |parent| {
+        // The range is over text that is covered by a single element
+        return measureText(parent, try self.toString(frame), frame);
+    }
+    const element = self.getContainerElement(frame) orelse return null;
+    if (element.isVisible(frame) == false) {
+        return null;
+    }
+    return element.boundingClientRectValuesForVisible(frame);
+}
+
+// null if the range is contained within a single element
+fn textParent(self: *const Range) ?*Node.Element {
+    const start = self._proto._start_container;
+    const end = self._proto._end_container;
+    const start_is_text = start.is(Node.CData) != null;
+    const end_is_text = end.is(Node.CData) != null;
+
+    const parent = (if (start_is_text) start.parentNode() else start) orelse return null;
+    const end_parent = (if (end_is_text) end.parentNode() else end) orelse return null;
+    if (parent != end_parent) {
+        return null;
+    }
+    const element = layoutElement(parent) orelse return null;
+    if (start == end and start_is_text) {
+        return element;
+    }
+
+    // Every child between the boundaries must be text
+    const until: ?*Node = if (end_is_text) end else end.getChildAt(self._proto._end_offset);
+    var current = if (start_is_text) start.nextSibling() else start.getChildAt(self._proto._start_offset);
+    while (current) |node| : (current = node.nextSibling()) {
+        if (node == until) {
+            break;
+        }
+        if (node.is(Node.CData) == null) {
+            return null;
+        }
+    }
+    return element;
+}
+
+// Text inside a `display: contents` element has a box even though the element
+// doesn't.
+fn measureText(parent: *Node.Element, text: []const u8, frame: *Frame) ?DOMRect.Data {
+    if (parent.isVisible(frame) == false) {
+        return null;
+    }
+    const owner = parent.ownerFrame(frame) orelse return null;
+    const style_manager = &owner._style_manager;
+    const box = style_manager.boxElement(parent) orelse return null;
+
+    const font_size = style_manager.computedFontSize(parent);
+    const lines = text_measure.layout(text, font_size, lineWidth(box, owner), style_manager.whiteSpace(parent));
+    if (lines.count == 0) {
+        return null;
+    }
+
+    const origin = box.clientOrigin(frame);
+    return .{
+        .x = origin.x,
+        .y = origin.y,
+        .width = lines.width,
+        .height = lines.height(font_size),
+    };
+}
+
+fn lineWidth(box: *Node.Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    var current: ?*Node.Element = box;
+    while (current) |el| : (current = style_manager.boxParent(el)) {
+        if (style_manager.isBlockLevel(el)) {
+            return el.boxAxis(owner, .width);
+        }
+    }
+    return @floatFromInt(owner.page.getViewport().width);
+}
+
+fn getContainerElement(self: *const Range, frame: *Frame) ?*Node.Element {
     const container = self._proto.getCommonAncestorContainer();
-    if (container.is(Node.Element)) |el| return el;
-    const parent = container.parentNode() orelse return null;
-    return parent.is(Node.Element);
+    const el = layoutElement(container) orelse blk: {
+        const parent = container.parentNode() orelse return null;
+        break :blk layoutElement(parent) orelse return null;
+    };
+    const owner = el.ownerFrame(frame) orelse return el;
+    return owner._style_manager.boxElement(el);
+}
+
+// The element a node's children are laid out in: a shadow root's are its
+// host's.
+fn layoutElement(node: *Node) ?*Node.Element {
+    if (node.is(Node.Element)) |el| {
+        return el;
+    }
+    const shadow_root = node.is(Node.ShadowRoot) orelse return null;
+    return shadow_root.getHost();
 }
 
 pub const JsApi = struct {

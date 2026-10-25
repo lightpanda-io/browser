@@ -422,6 +422,20 @@
   testing.expectEqual(5, fixedItem.offsetWidth);
   row.remove();
 
+  // A growing item keeps its content's width when there's no space left to
+  // share, like any shrink-to-fit item
+  const full = document.createElement('div');
+  full.style.cssText = 'display: flex; width: 300px';
+  const filler = document.createElement('div');
+  filler.style.cssText = 'width: 300px; flex-shrink: 0';
+  const grower = document.createElement('div');
+  grower.style.flex = '1';
+  grower.textContent = 'Text';
+  full.append(filler, grower);
+  document.body.appendChild(full);
+  testing.expectTrue(grower.getBoundingClientRect().width > 0);
+  full.remove();
+
   const column = document.createElement('div');
   column.style.cssText = 'display: flex; flex-direction: column; width: 600px';
   const item = document.createElement('div');
@@ -1030,5 +1044,19 @@
   const before = small.clientHeight;
   small.style.fontSize = '4px';
   testing.expectTrue(small.clientHeight < before);
+}
+</script>
+
+<div id="textWrapped" style="width: 100px">one two three four five six seven eight nine ten</div>
+<div id="textNowrap" style="width: 100px; white-space: nowrap">one two three four five six seven eight nine ten</div>
+<div id="textWrapModeNowrap" style="width: 100px; text-wrap: nowrap">one two three four five six seven eight nine ten</div>
+
+<script id="textNowrapIsOneLine">
+{
+  // nowrap text stays on one line, overflowing its width
+  const wrapped = $('#textWrapped').clientHeight;
+  const nowrap = $('#textNowrap').clientHeight;
+  testing.expectTrue(nowrap < wrapped);
+  testing.expectEqual(nowrap, $('#textWrapModeNowrap').clientHeight);
 }
 </script>
