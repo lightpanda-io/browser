@@ -133,7 +133,7 @@ fn createBrowserContext(cmd: *CDP.Command) !void {
     if (params) |p| {
         if (p.proxyServer) |proxy| {
             // For now the http client is not in the browser context so we assume there is just 1.
-            try cmd.cdp.browser.http_client.changeProxy(proxy);
+            try cmd.httpClient().changeProxy(proxy);
             bc.http_proxy_changed = true;
         }
     }
