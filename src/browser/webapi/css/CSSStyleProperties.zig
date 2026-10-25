@@ -47,12 +47,14 @@ pub fn asCSSStyleDeclaration(self: *CSSStyleProperties) *CSSStyleDeclaration {
     return self._proto;
 }
 
-fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, frame: *Frame) !void {
+fn setNamed(self: *CSSStyleProperties, name: []const u8, value: js.Value, frame: *Frame) !void {
     if (method_names.has(name)) {
         return error.NotHandled;
     }
     const dash_case = try camelCaseToDashCase(frame.local_arena, name);
-    try self._proto.setProperty(dash_case, value, null, frame);
+    // `[LegacyNullToEmptyString] CSSOMString`: a JS null becomes "", which
+    // removes the declaration, instead of the string "null".
+    try self._proto.setProperty(dash_case, if (value.isNull()) "" else try value.toZig([]const u8), null, frame);
 }
 
 fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const u8 {
