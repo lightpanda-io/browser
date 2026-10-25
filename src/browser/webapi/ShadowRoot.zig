@@ -163,6 +163,16 @@ fn setAdoptedStyleSheets(self: *ShadowRoot, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
 
+fn elementFromPoint(self: *ShadowRoot, x: f64, y: f64, frame: *Frame) !?*Element {
+    const node = self.asNode();
+    return node.getDocument(frame).elementFromPointIn(node, x, y, frame);
+}
+
+fn elementsFromPoint(self: *ShadowRoot, x: f64, y: f64, frame: *Frame) ![]const *Element {
+    const node = self.asNode();
+    return node.getDocument(frame).elementsFromPointIn(node, x, y, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ShadowRoot);
 
@@ -190,6 +200,8 @@ pub const JsApi = struct {
         return self.getElementById(try value.toZig([]const u8));
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
+    pub const elementFromPoint = bridge.function(ShadowRoot.elementFromPoint, .{});
+    pub const elementsFromPoint = bridge.function(ShadowRoot.elementsFromPoint, .{});
     pub const setHTML = bridge.function(ShadowRoot.setHTML, .{ .ce_reactions = true });
     pub const setHTMLUnsafe = bridge.function(ShadowRoot.setHTMLUnsafe, .{ .ce_reactions = true });
     pub const getHTML = bridge.function(_getHTML, .{});
