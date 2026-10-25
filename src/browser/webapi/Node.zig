@@ -1796,6 +1796,18 @@ pub fn flatTreeParent(self: *Node, frame: *const Frame) ?*Node {
     return self._parent;
 }
 
+/// A shadow host's child that no slot takes, or the fallback content that isn't
+// used. flatTreeParent returns the parent for these, so we can't use that.
+pub fn isOutsideFlatTree(self: *const Node) bool {
+    const parent = self._parent orelse return false;
+    const el = parent.is(Element) orelse return false;
+    if (el._flags.shadow_host) {
+        return self._flags.assigned_slot == false;
+    }
+    const slot = parent.is(Element.Html.Slot) orelse return false;
+    return slot._assigned.items.len > 0;
+}
+
 /// The flat-tree parent element: shadow content inherits from its host, a
 /// slotted node from its slot.
 pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {

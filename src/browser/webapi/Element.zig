@@ -954,6 +954,8 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     const page = frame.page;
     try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
+    // The host's children leave the flat tree until a slot takes them
+    frame.renderingChanged();
     return shadow_root;
 }
 

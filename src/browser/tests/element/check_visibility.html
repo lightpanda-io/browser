@@ -903,3 +903,54 @@
     host.remove();
   }
 </script>
+
+<script id="outside_flat_tree_is_not_rendered">
+  {
+    const host = document.createElement("div");
+    host.innerHTML = '<span id="title" slot="title">Title</span><span id="lost" slot="nope"><b>Lost</b></span><span id="body">Body</span>';
+    document.body.appendChild(host);
+    const title = host.querySelector("#title");
+    const lost = host.querySelector("#lost");
+    const body = host.querySelector("#body");
+    testing.expectEqual(true, body.checkVisibility());
+
+    // No slots yet: attaching takes every child out of the flat tree
+    const shadow = host.attachShadow({ mode: "open" });
+    testing.expectEqual(false, body.checkVisibility());
+    testing.expectEqual(false, lost.firstChild.checkVisibility());
+    testing.expectEqual(0, body.getBoundingClientRect().width);
+
+    shadow.innerHTML = '<h2><slot name="title"></slot></h2><slot id="def"><i>Fallback</i></slot>';
+    const fallback = shadow.querySelector("i");
+    testing.expectEqual(true, title.checkVisibility());
+    testing.expectEqual(true, body.checkVisibility());
+    // a slot name nothing matches
+    testing.expectEqual(false, lost.checkVisibility());
+    testing.expectEqual(false, lost.firstChild.checkVisibility());
+    // the default slot has assigned nodes, so its fallback isn't rendered
+    testing.expectEqual(false, fallback.checkVisibility());
+
+    body.remove();
+    testing.expectEqual(true, fallback.checkVisibility());
+
+    host.remove();
+  }
+</script>
+
+<script id="manual_slot_unassigned_is_not_rendered">
+  {
+    const host = document.createElement("div");
+    const child = document.createElement("span");
+    host.appendChild(child);
+    document.body.appendChild(host);
+
+    const shadow = host.attachShadow({ mode: "open", slotAssignment: "manual" });
+    shadow.innerHTML = "<slot></slot>";
+    testing.expectEqual(false, child.checkVisibility());
+
+    shadow.querySelector("slot").assign(child);
+    testing.expectEqual(true, child.checkVisibility());
+
+    host.remove();
+  }
+</script>
