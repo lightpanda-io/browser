@@ -945,13 +945,25 @@ pub fn hitTest(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
 // document.elementFromPoint only sees the document's tree: a hit inside a
 // shadow tree reports its outermost host, as in Chrome.
 fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return null;
-    return retargetToDocumentTree(hit);
+    return self.elementFromPointIn(self.asNode(), x, y, frame);
 }
 
-fn retargetToDocumentTree(element: *Element) *Element {
+/// DocumentOrShadowRoot.elementFromPoint for `scope`, this document or one of
+/// its shadow roots.
+pub fn elementFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) !?*Element {
+    const hit = (try self.hitTest(x, y, frame)) orelse return null;
+    return retarget(hit, scope);
+}
+
+// The spec's retarget: climbs out of shadow trees until `element` is in a tree
+// that `scope` is in or inside of. A hit in a shadow tree nested in `scope`'s
+// reports its host in `scope`'s tree; a hit outside it is returned as is.
+fn retarget(element: *Element, scope: *Node) *Element {
     var current = element;
     while (current.asNode().containingShadowRoot()) |shadow| {
+        if (shadow.asNode().isHostIncludingInclusiveAncestorOf(scope)) {
+            break;
+        }
         current = shadow._host;
     }
     return current;
@@ -1038,16 +1050,32 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 }
 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
-    // Get topmost element
-    var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
+    return self.elementsFromPointIn(self.asNode(), x, y, frame);
+}
+
+/// DocumentOrShadowRoot.elementsFromPoint for `scope`, as Blink builds it: the
+/// hit and its flat-tree ancestors that can be hit, each retargeted against
+/// `scope` with repeats dropped, then the root element.
+pub fn elementsFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) ![]const *Element {
+    const hit = (try self.hitTest(x, y, frame)) orelse return &.{};
     const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
     var result: std.ArrayList(*Element) = .empty;
-    while (current) |el| {
-        // Chrome always ends the list with the root element.
-        if (el.parentElement() == null or style_manager.isHitTestable(el)) {
-            try result.append(frame.local_arena, el);
+    var current: ?*Element = hit;
+    while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
+        if (style_manager.isHitTestable(el) == false) {
+            continue;
         }
-        current = el.parentElement();
+        const target = retarget(el, scope);
+        if (result.items.len > 0 and result.items[result.items.len - 1] == target) {
+            continue;
+        }
+        try result.append(frame.local_arena, target);
+    }
+    // Chrome always ends the list with the root element.
+    if (self.getDocumentElement()) |root| {
+        if (result.items.len == 0 or result.items[result.items.len - 1] != root) {
+            try result.append(frame.local_arena, root);
+        }
     }
     return result.items;
 }

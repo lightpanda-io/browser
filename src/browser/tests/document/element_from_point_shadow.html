@@ -72,6 +72,27 @@
 }
 </script>
 
+<script id="shadow_root_elements_from_point_slotted">
+{
+  const host = document.createElement('div');
+  host.innerHTML = '<span style="display:block;width:100px;height:40px">light</span>';
+  document.body.appendChild(host);
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<div id="wrap"><slot></slot></div>';
+  const light = host.firstChild;
+  const wrap = root.getElementById('wrap');
+  const r = light.getBoundingClientRect();
+  const html = document.documentElement;
+
+  // slotted content's ancestors in the shadow tree count, the <slot> doesn't:
+  // it's display:contents
+  testing.expectEqual(light, root.elementFromPoint(r.x + 1, r.y + 1));
+  testing.expectEqual([light, wrap, host, document.body, html], root.elementsFromPoint(r.x + 1, r.y + 1));
+  testing.expectEqual([light, host, document.body, html], document.elementsFromPoint(r.x + 1, r.y + 1));
+  host.remove();
+}
+</script>
+
 <script id="slotted_content_laid_out_in_slot">
 {
   const host = document.getElementById('slot_host');

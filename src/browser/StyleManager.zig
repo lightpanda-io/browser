@@ -716,13 +716,13 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(el).pointer_events_none;
 }
 
-/// Blink's VisibleToHitTestRequest. Ignores display:none, which callers handle
-/// for the whole subtree.
+/// Blink's VisibleToHitTestRequest, plus display:contents, which generates no
+/// box to hit. Ignores display:none, which callers handle for the whole subtree.
 pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return true;
     const p = self.visibilityProps(el);
-    return !p.visibility_hidden and !p.pointer_events_none;
+    return !p.visibility_hidden and !p.pointer_events_none and p.box != .contents;
 }
 
 /// Computed text-transform, which inherits: the nearest of `el` and its
@@ -1579,6 +1579,7 @@ const Box = enum(u2) {
     fn uaDefault(tag: Tag) Box {
         return switch (tag) {
             .table => .table,
+            .slot => .contents,
             .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
             else => if (tag.isBlock()) .block_level else .inline_level,
         };
