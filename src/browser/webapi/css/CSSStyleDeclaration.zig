@@ -101,6 +101,9 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                     if (style_manager.hasDisplayNone(element)) {
                         return "none";
                     }
+                    if (style_manager.hasDisplayContents(element)) {
+                        return "contents";
+                    }
                 } else if (wrapped.eql(comptime .wrap("visibility"))) {
                     if (style_manager.hasVisibilityHiddenInherited(element)) {
                         return "hidden";

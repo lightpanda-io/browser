@@ -1042,12 +1042,123 @@
   range.selectNodeContents(p);
   const rect = range.getBoundingClientRect();
   testing.expectTrue(rect instanceof DOMRect);
-  // Non-collapsed range delegates to the container element
+  // The text starts where its paragraph does, and has its own size
   const elemRect = p.getBoundingClientRect();
   testing.expectEqual(elemRect.x, rect.x);
   testing.expectEqual(elemRect.y, rect.y);
-  testing.expectEqual(elemRect.width, rect.width);
-  testing.expectEqual(elemRect.height, rect.height);
+  testing.expectTrue(rect.width > 0);
+  testing.expectTrue(rect.height > 0);
+}
+</script>
+
+<script id=getBoundingClientRect_text>
+{
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+
+  // How Playwright decides a display: contents element's text is visible
+  function textRect(html) {
+    host.innerHTML = html;
+    const range = new Range();
+    range.selectNode(host.firstChild.firstChild);
+    return range.getBoundingClientRect();
+  }
+
+  // Text inside a display: contents element still has a box
+  for (const html of [
+    '<div style="display:contents">Role</div>',
+    '<div style="display:contents;visibility:hidden">Role</div>',
+    '<div style="display:contents">&nbsp;</div>',
+    '<div style="display:contents;white-space:pre">   </div>',
+    '<pre style="display:contents">   </pre>',
+    '<div style="display:contents;white-space:preserve nowrap">   </div>',
+    '<div style="display:contents;white-space-collapse:preserve">   </div>',
+    '<div style="display:contents;white-space:break-spaces">   </div>',
+  ]) {
+    const rect = textRect(html);
+    testing.expectTrue(rect.width > 0);
+    testing.expectTrue(rect.height > 0);
+  }
+
+  // Collapsed spaces and a zero font have no size
+  for (const html of [
+    '<div style="display:contents">   </div>',
+    '<div style="display:contents;white-space:nowrap">   </div>',
+    '<div style="display:contents;font-size:0">Role</div>',
+    '<div style="display:none">Role</div>',
+  ]) {
+    const rect = textRect(html);
+    testing.expectEqual(0, rect.width);
+    testing.expectEqual(0, rect.height);
+  }
+
+  // A word wider than its block overflows it
+  {
+    const rect = textRect('<div style="width:2px">abc</div>');
+    testing.expectTrue(rect.width > 2);
+  }
+
+  // Words wrap: two lines, as wide as the longer word
+  {
+    const one = textRect('<div style="width:2px">abc</div>');
+    const two = textRect('<div style="width:2px">abc ab</div>');
+    testing.expectEqual(one.width, two.width);
+    testing.expectTrue(two.height > one.height);
+    const nowrap = textRect('<div style="width:2px;white-space:nowrap">abc ab</div>');
+    testing.expectTrue(nowrap.width > one.width);
+    testing.expectEqual(one.height, nowrap.height);
+  }
+
+  // A range that only covers part of the text measures that part
+  {
+    host.innerHTML = '<div>abcdef</div>';
+    const text = host.firstChild.firstChild;
+    const range = new Range();
+    range.setStart(text, 0);
+    range.setEnd(text, 3);
+    const part = range.getBoundingClientRect().width;
+    range.setEnd(text, 6);
+    testing.expectTrue(range.getBoundingClientRect().width > part);
+  }
+
+  // Text directly in a shadow root lays out in its host
+  {
+    host.innerHTML = '<div></div>';
+    const shadow = host.firstChild.attachShadow({ mode: 'open' });
+    shadow.innerHTML = 'Shadow text';
+    const range = new Range();
+    range.selectNode(shadow.firstChild);
+    const rect = range.getBoundingClientRect();
+    testing.expectTrue(rect.width > 0);
+    testing.expectTrue(rect.height > 0);
+  }
+
+  // Collapsed spaces have no client rects
+  host.innerHTML = '<div>   </div>';
+  const range = new Range();
+  range.selectNodeContents(host.firstChild);
+  testing.expectEqual(0, range.getClientRects().length);
+
+  host.remove();
+}
+</script>
+
+<script id=getBoundingClientRect_display_contents_root>
+{
+  // display: contents on the root element computes to block
+  const html = document.documentElement;
+  html.style.display = 'contents';
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'contents';
+  wrapper.textContent = 'Role';
+  html.appendChild(wrapper);
+  const range = new Range();
+  range.selectNodeContents(wrapper.firstChild);
+  const rect = range.getBoundingClientRect();
+  testing.expectTrue(rect.width > 0);
+  testing.expectTrue(rect.height > 0);
+  wrapper.remove();
+  html.style.display = '';
 }
 </script>
 

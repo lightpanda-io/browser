@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
+const text_measure = @import("text_measure.zig");
 
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
@@ -683,6 +684,13 @@ pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
     return self.display(el) == .none;
 }
 
+/// `display: contents`. On the root element it computes to block instead.
+pub fn hasDisplayContents(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.generatesBox(el) == false;
+}
+
 /// Own property, not inherited; honors the UA hidden-element rules.
 pub fn display(self: *StyleManager, el: *Element) Display {
     self.assertOwns(el);
@@ -748,6 +756,50 @@ pub fn ownTextTransform(self: *StyleManager, el: *Element) TextTransform {
         return .inherit;
     }
     return self.text.ownProps(self.arena.allocator(), el, self.frame).text_transform;
+}
+
+/// The two parts of computed white-space: white-space-collapse and
+/// text-wrap-mode.
+pub fn whiteSpace(self: *StyleManager, el: *Element) text_measure.WhiteSpace {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+
+    var wrap: WrapMode = .inherit;
+    var collapse: SpaceCollapse = .inherit;
+
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
+        const own = self.ownWhiteSpace(elem);
+        if (collapse == .inherit) {
+            collapse = own.collapse;
+        }
+        if (wrap == .inherit) {
+            wrap = own.wrap;
+        }
+        if (collapse != .inherit and wrap != .inherit) {
+            break;
+        }
+    }
+    return .{
+        .collapse = switch (collapse) {
+            .inherit, .collapse, .preserve_breaks => true,
+            .preserve, .preserve_spaces, .break_spaces => false,
+        },
+        .newlines = switch (collapse) {
+            .preserve, .preserve_breaks, .break_spaces => true,
+            .inherit, .collapse, .preserve_spaces => false,
+        },
+        .wrap = wrap != .nowrap,
+    };
+}
+
+fn ownWhiteSpace(self: *StyleManager, el: *Element) WhiteSpace {
+    if (!self.text.hasRules() and !el._flags.has_inline_style) {
+        // Most pages declare no white-space: skip the cascade and the memo.
+        return WhiteSpace.uaDefault(el.getTag()) orelse .{};
+    }
+    const p = self.text.ownProps(self.arena.allocator(), el, self.frame);
+    return .{ .collapse = p.white_space_collapse, .wrap = p.text_wrap_mode };
 }
 
 /// The axes along which `el` is a scroll container: its own computed overflow
@@ -833,15 +885,33 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
     return if (self.geometryProps(el).flex_grow) .grow else .shrink;
 }
 
+/// The nearest element to el that generates a box, or `el` itself it it does
+pub fn boxElement(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    if (self.generatesBox(el)) {
+        return el;
+    }
+    return self.boxParent(el);
+}
+
 /// The nearest ancestor that generates a box
 pub fn boxParent(self: *StyleManager, el: *Element) ?*Element {
     var parent = el.asNode().flatTreeParentElement(self.frame);
     while (parent) |p| : (parent = p.asNode().flatTreeParentElement(self.frame)) {
-        if (self.visibilityProps(p).box != .contents) {
+        if (self.generatesBox(p)) {
             return p;
         }
     }
     return null;
+}
+
+fn generatesBox(self: *StyleManager, el: *Element) bool {
+    if (self.visibilityProps(el).box != .contents) {
+        return true;
+    }
+    const parent = el.asNode().parentNode() orelse return false;
+    // if we're at the root, and we have `display: contents`, we still force a block
+    return parent._type == .document;
 }
 
 /// The children lay out side by side: a flex row or a grid. Elsewhere block
@@ -1643,6 +1713,166 @@ pub const TextTransform = enum(u3) {
     }
 };
 
+// white-space-collapse
+const SpaceCollapse = enum(u3) {
+    inherit,
+    collapse,
+    preserve,
+    preserve_breaks,
+    preserve_spaces,
+    break_spaces,
+
+    // null when invalid
+    fn parse(value: []const u8) ?SpaceCollapse {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+            return .collapse;
+        }
+        return keyword(trimmed);
+    }
+
+    fn keyword(token: []const u8) ?SpaceCollapse {
+        if (std.ascii.eqlIgnoreCase(token, "collapse") or std.ascii.eqlIgnoreCase(token, "discard")) {
+            return .collapse;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "preserve")) {
+            return .preserve;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "preserve-breaks")) {
+            return .preserve_breaks;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "preserve-spaces")) {
+            return .preserve_spaces;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "break-spaces")) {
+            return .break_spaces;
+        }
+        return null;
+    }
+};
+
+/// text-wrap-mode
+pub const WrapMode = enum(u2) {
+    inherit,
+    wrap,
+    nowrap,
+
+    // null when invalid
+    fn parse(value: []const u8) ?WrapMode {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+            return .wrap;
+        }
+        return keyword(trimmed);
+    }
+
+    /// The `text-wrap` shorthand
+    fn parseTextWrap(value: []const u8) ?WrapMode {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+            return .wrap;
+        }
+
+        var any = false;
+        var mode: ?WrapMode = null;
+
+        var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+        while (it.next()) |token| {
+            any = true;
+            if (keyword(token)) |m| {
+                if (mode != null) {
+                    return null;
+                }
+                mode = m;
+            } else if (isWrapStyle(token) == false) {
+                return null;
+            }
+        }
+        if (any == false) {
+            return null;
+        }
+        return mode orelse .wrap;
+    }
+
+    fn keyword(token: []const u8) ?WrapMode {
+        if (std.ascii.eqlIgnoreCase(token, "wrap")) return .wrap;
+        if (std.ascii.eqlIgnoreCase(token, "nowrap")) return .nowrap;
+        return null;
+    }
+
+    fn isWrapStyle(token: []const u8) bool {
+        inline for (.{ "auto", "balance", "pretty", "stable" }) |style| {
+            if (std.ascii.eqlIgnoreCase(token, style)) return true;
+        }
+        return false;
+    }
+};
+
+/// The `white-space` shorthand: a legacy keyword, or any of a
+/// white-space-collapse and a text-wrap-mode keyword. white-space-trim's
+/// keywords are accepted but not applied.
+const WhiteSpace = struct {
+    collapse: SpaceCollapse = .inherit,
+    wrap: WrapMode = .inherit,
+
+    // Null for an invalid value, which drops the declaration.
+    fn parse(value: []const u8) ?WhiteSpace {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) return .{};
+        if (std.ascii.eqlIgnoreCase(trimmed, "normal") or std.ascii.eqlIgnoreCase(trimmed, "initial")) return .{ .collapse = .collapse, .wrap = .wrap };
+        if (std.ascii.eqlIgnoreCase(trimmed, "pre")) return .{ .collapse = .preserve, .wrap = .nowrap };
+        if (std.ascii.eqlIgnoreCase(trimmed, "pre-wrap")) return .{ .collapse = .preserve, .wrap = .wrap };
+        if (std.ascii.eqlIgnoreCase(trimmed, "pre-line")) return .{ .collapse = .preserve_breaks, .wrap = .wrap };
+
+        var collapse: ?SpaceCollapse = null;
+        var wrap: ?WrapMode = null;
+        var any = false;
+        var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+        while (it.next()) |token| {
+            any = true;
+            if (SpaceCollapse.keyword(token)) |c| {
+                if (collapse != null) return null;
+                collapse = c;
+            } else if (WrapMode.keyword(token)) |w| {
+                if (wrap != null) return null;
+                wrap = w;
+            } else if (isTrimKeyword(token) == false) {
+                return null;
+            }
+        }
+        if (any == false) return null;
+        return .{ .collapse = collapse orelse .collapse, .wrap = wrap orelse .wrap };
+    }
+
+    fn uaDefault(tag: Tag) ?WhiteSpace {
+        return switch (tag) {
+            .pre => .{ .collapse = .preserve, .wrap = .nowrap },
+            .textarea => .{ .collapse = .preserve, .wrap = .wrap },
+            else => null,
+        };
+    }
+
+    fn isTrimKeyword(token: []const u8) bool {
+        inline for (.{ "discard-before", "discard-after", "discard-inner" }) |trim| {
+            if (std.ascii.eqlIgnoreCase(token, trim)) return true;
+        }
+        return false;
+    }
+};
+
+fn isInheritKeyword(value: []const u8) bool {
+    return inheritsKeyword(value) or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer");
+}
+
 /// A declared width or height. Values that need layout (auto, em, calc) are
 /// `auto`: they win the cascade but give no size. The intrinsic sizes, which
 /// follow the content, are `content`. A `percent` resolves against the
@@ -1939,20 +2169,51 @@ const TouchAction = struct {
 /// value; `.inherit` means it takes its parent's.
 const Text = struct {
     const Declared = struct {
-        const names = [_][]const u8{"text-transform"};
+        const names = [_][]const u8{ "text-transform", "white-space", "white-space-collapse", "text-wrap-mode", "text-wrap" };
 
+        text_wrap_mode: ?WrapMode = null,
         text_transform: ?TextTransform = null,
+        white_space_collapse: ?SpaceCollapse = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "text-transform")) {
                 self.text_transform = TextTransform.parse(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "white-space")) {
+                if (WhiteSpace.parse(value)) |white_space| {
+                    self.white_space_collapse = white_space.collapse;
+                    self.text_wrap_mode = white_space.wrap;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "white-space-collapse")) {
+                if (SpaceCollapse.parse(value)) |collapse| {
+                    self.white_space_collapse = collapse;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap-mode")) {
+                if (WrapMode.parse(value)) |mode| {
+                    self.text_wrap_mode = mode;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap")) {
+                if (WrapMode.parseTextWrap(value)) |mode| {
+                    self.text_wrap_mode = mode;
+                }
             }
         }
     };
 
-    const Computed = packed struct(u3) {
+    const Computed = packed struct(u8) {
+        text_wrap_mode: WrapMode = .inherit,
         text_transform: TextTransform = .inherit,
+        white_space_collapse: SpaceCollapse = .inherit,
     };
+
+    pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
+        const ua = WhiteSpace.uaDefault(el.getTag()) orelse return;
+        if (priorities.get(.white_space_collapse) == 0) {
+            p.white_space_collapse = ua.collapse;
+        }
+        if (priorities.get(.text_wrap_mode) == 0) {
+            p.text_wrap_mode = ua.wrap;
+        }
+    }
 };
 
 /// `inherit`, `unset` and `revert` are not handled, so they drop the
