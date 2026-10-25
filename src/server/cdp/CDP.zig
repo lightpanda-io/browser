@@ -548,7 +548,7 @@ pub const BrowserContext = struct {
             browser.http_client.clearUserAgentOverride();
         }
         browser.http_client.clearAcceptLanguageOverride();
-        browser.clearPermissions();
+        browser.clearOverrides();
     }
 
     // A new target, not bound to a page yet: the next page created in the

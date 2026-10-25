@@ -227,6 +227,12 @@ pub fn clearPermissions(self: *Browser) void {
     self.permissions.clearRetainingCapacity();
 }
 
+pub fn clearOverrides(self: *Browser) void {
+    self.clearPermissions();
+    self.setViewportOverride(null);
+    self.geolocation_override = null;
+}
+
 // The viewport every consumer should read: the runtime override if set,
 // otherwise the compile-time default.
 pub fn setViewportOverride(self: *Browser, viewport: ?Viewport) void {

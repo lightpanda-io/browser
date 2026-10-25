@@ -109,7 +109,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     }
 
     // The override is stored on the Browser so it persists across page
-    // navigations for the whole CDP connection.
+    // navigations until the browser context is disposed.
     const browser = &cmd.cdp.browser;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
@@ -526,6 +526,50 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+test "cdp.Emulation: context disposal clears viewport and geolocation overrides" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-OLD" });
+    const browser = &ctx.cdp().browser;
+    const defaults = browser.getViewport();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 321, .height = 543, .deviceScaleFactor = 2, .screenWidth = 642, .screenHeight = 1086 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 47.25, .longitude = 19.75, .accuracy = 10 },
+    });
+    try testing.expectEqual(321, browser.getViewport().width);
+    try testing.expectEqual(47.25, browser.geolocation_override.?.latitude);
+
+    try browser.setPermission("geolocation", .granted);
+    try ctx.processMessage(.{ .id = 20, .method = "Browser.resetPermissions" });
+    try ctx.expectSentResult(null, .{ .id = 20 });
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+    try testing.expectEqual(321, browser.getViewport().width);
+    try testing.expectEqual(47.25, browser.geolocation_override.?.latitude);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
+    try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 3 });
+    try testing.expectEqual(321, browser.getViewport().width);
+    try testing.expectEqual(47.25, browser.geolocation_override.?.latitude);
+
+    try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-EMULATION-OLD" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expectEqual(null, browser.viewport_override);
+    try testing.expectEqual(null, browser.geolocation_override);
+    try std.testing.expectEqualDeep(defaults, browser.getViewport());
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-NEW" });
+    try testing.expectEqual(null, browser.viewport_override);
+    try testing.expectEqual(null, browser.geolocation_override);
+    try std.testing.expectEqualDeep(defaults, browser.getViewport());
 }
 
 test "cdp.Emulation: setGeolocationOverride and clear" {
