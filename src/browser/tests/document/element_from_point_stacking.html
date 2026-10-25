@@ -93,3 +93,25 @@ testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'opacity:1'
 testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'transform:none'));
 testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'isolation:auto'));
 </script>
+<script id="display_contents_does_not_isolate">
+testing.expectEqual('under', overlap('z-index:1', 'z-index:999', '', 'display:contents;z-index:0'));
+</script>
+<script id="boxless_slot_does_not_isolate">
+document.body.innerHTML = '<div id="slotHost" style="position:absolute;width:0;height:0"><button id="slotUnder" style="position:absolute;width:100px;height:100px;z-index:999">Under</button></div><button id="slotCover" style="position:absolute;width:100px;height:100px;z-index:1">Cover</button>';
+const slotRoot = document.getElementById('slotHost').attachShadow({mode:'open'});
+slotRoot.innerHTML = '<slot style="position:relative;z-index:0"></slot>';
+const slotBox = slotRoot.querySelector('slot');
+const slotUnderRect = document.getElementById('slotUnder').getBoundingClientRect();
+const slotCoverRect = document.getElementById('slotCover').getBoundingClientRect();
+const slotLeft = Math.max(slotUnderRect.left, slotCoverRect.left);
+const slotRight = Math.min(slotUnderRect.right, slotCoverRect.right);
+const slotTop = Math.max(slotUnderRect.top, slotCoverRect.top);
+const slotBottom = Math.min(slotUnderRect.bottom, slotCoverRect.bottom);
+testing.expectTrue(slotRight > slotLeft && slotBottom > slotTop);
+const slotPoint = [(slotLeft + slotRight) / 2, slotTop + Math.min(10, (slotBottom - slotTop) / 2)];
+testing.expectEqual('slotUnder', document.elementFromPoint(...slotPoint)?.id);
+slotBox.style.display = 'block';
+testing.expectEqual('slotCover', document.elementFromPoint(...slotPoint)?.id);
+slotBox.style.display = 'contents';
+testing.expectEqual('slotUnder', document.elementFromPoint(...slotPoint)?.id);
+</script>

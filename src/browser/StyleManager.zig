@@ -2050,8 +2050,8 @@ const Stacking = struct {
             if (std.ascii.eqlIgnoreCase(name, "position")) {
                 if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, &std.ascii.whitespace), "unset")) {
                     self.position = .static;
-                } else if (Position.parse(value)) |position| {
-                    self.position = position;
+                } else if (Position.parse(value)) |parsed_position| {
+                    self.position = parsed_position;
                 }
             } else if (std.ascii.eqlIgnoreCase(name, "z-index")) {
                 if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
