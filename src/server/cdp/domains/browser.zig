@@ -130,8 +130,9 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
     // session arena since Frame reads it on later navigations.
     session.download_path = if (params.downloadPath) |p| try session.arena.dupe(u8, p) else null;
     session.download_events_enabled = events_enabled;
+    // Like Chrome, download events go to the session that asked for them, and
+    // stay sessionless when asked at the browser level (as Playwright does).
     bc.download_session_id = blk: {
-        if (behavior != .stream) break :blk null;
         const sid = cmd.input.session_id orelse break :blk null;
         break :blk cmd.cdp.resolveSessionId(sid);
     };
@@ -638,7 +639,7 @@ test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits 
     const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
 
     // Sent on the page session, like lightpanda-io/demo puppeteer/download.js,
-    // which listens on the root connection: the events must stay sessionless.
+    // so the events must come back on it, as in Chrome.
     try ctx.processMessage(.{
         .id = 44,
         .method = "Browser.setDownloadBehavior",
@@ -650,7 +651,7 @@ test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits 
         },
     });
     try ctx.expectSentResult(null, .{ .id = 44 });
-    try testing.expect(bc.download_session_id == null);
+    try testing.expectEqualSlices(u8, "SID-DL", bc.download_session_id.?);
 
     try clickDownloadLink(&ctx, bc, 45, "csv");
     // The guid is random, so it's omitted from these subset matches.
@@ -658,17 +659,17 @@ test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits 
         .url = "data:text/csv,name%2Cvalue%0Aexample%2C42",
         .suggestedFilename = "report.csv",
         .contentType = "text/csv",
-    }, .{});
+    }, .{ .session_id = "SID-DL" });
     try ctx.expectSentEvent("Browser.downloadProgress", .{
         .state = "completed",
         .totalBytes = 21,
         .receivedBytes = 21,
-    }, .{});
+    }, .{ .session_id = "SID-DL" });
 
     // download="../../evil.txt" is reduced to its basename, so the file
     // still lands in downloadPath.
     try clickDownloadLink(&ctx, bc, 46, "traversal");
-    try ctx.expectSentEvent("Browser.downloadWillBegin", .{ .suggestedFilename = "evil.txt" }, .{});
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{ .suggestedFilename = "evil.txt" }, .{ .session_id = "SID-DL" });
 
     const csv = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
     defer testing.allocator.free(csv);
@@ -750,7 +751,7 @@ test "cdp.browser: stream behavior streams an <a download> as LP.downloadData" {
     }, .{ .session_id = "SID-DL" });
 }
 
-test "cdp.browser: download events leave a detached stream session" {
+test "cdp.browser: detaching the download session resets the download behavior" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -765,7 +766,8 @@ test "cdp.browser: download events leave a detached stream session" {
     try ctx.expectSentResult(null, .{ .id = 51 });
     try testing.expectEqualSlices(u8, "SID-DL", bc.download_session_id.?);
 
-    // Events must not keep going to a sessionId the client dropped.
+    // Like Chrome, which drops the behavior along with the session that set
+    // it, so events never go to a sessionId the client dropped.
     try ctx.processMessage(.{
         .id = 52,
         .method = "Target.detachFromTarget",
@@ -773,5 +775,6 @@ test "cdp.browser: download events leave a detached stream session" {
     });
     try ctx.expectSentResult(null, .{ .id = 52 });
     try testing.expect(bc.download_session_id == null);
-    try testing.expectEqual(.stream, bc.session.download_behavior);
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+    try testing.expectEqual(false, bc.session.download_events_enabled);
 }

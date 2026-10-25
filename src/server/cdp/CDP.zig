@@ -1327,7 +1327,12 @@ pub const BrowserContext = struct {
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
         if (self.download_session_id) |download_session_id| {
             if (std.mem.eql(u8, download_session_id, attached.id)) {
+                // Like Chrome, the download behavior goes away with the
+                // session that set it.
                 self.download_session_id = null;
+                self.session.download_behavior = .deny;
+                self.session.download_events_enabled = false;
+                self.downloadEventsDisable();
             }
         }
         self.notification.unregisterAll(attached);
