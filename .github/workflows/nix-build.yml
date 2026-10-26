@@ -1,0 +1,33 @@
+name: nix-build
+
+# Builds .#lightpanda natively on every supported platform, every night or
+# on demand from the Actions tab. Not run on PRs: most changes don't touch
+# anything platform-specific.
+
+on:
+  schedule:
+    - cron: "5 0 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: nix build (${{ matrix.system }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+          - os: ubuntu-24.04-arm
+            system: aarch64-linux
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: DeterminateSystems/nix-installer-action@dbbcd8c3ec10ff26bded0022d5b9c00c1c3b687a # v23
+      - run: nix build .#lightpanda -L
