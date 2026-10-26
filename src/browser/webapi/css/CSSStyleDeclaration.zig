@@ -19,10 +19,11 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const CssParser = @import("../../css/Parser.zig");
-
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const color = @import("../../color.zig");
+const CssParser = @import("../../css/Parser.zig");
+
 const Element = @import("../Element.zig");
 const DOMMatrixReadOnly = @import("../DOMMatrixReadOnly.zig");
 
@@ -78,12 +79,32 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const wrapped = String.wrap(normalized);
     const value = self.propertyValue(normalized, wrapped, frame);
 
-    // The resolved transform is always a matrix: animation libraries
-    // (popmotion) regex it as matrix()/matrix3d() and crash on anything else.
-    if (self._is_computed and wrapped.eql(comptime .wrap("transform"))) {
+    if (self._is_computed == false) {
+        return value;
+    }
+
+    if (wrapped.eql(comptime .wrap("transform"))) {
+        // The resolved transform is always a matrix: animation libraries
+        // (popmotion) regex it as matrix()/matrix3d() and crash on anything
+        // else.
         return resolvedTransform(value, frame);
     }
+
+    if (isColorProperty(normalized)) {
+        return computedColor(value, frame);
+    }
+
     return value;
+}
+
+fn computedColor(value: []const u8, frame: *Frame) []const u8 {
+    const parsed = switch (color.parse(value)) {
+        .value => |v| v,
+        .invalid, .unsupported => return value,
+    };
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    parsed.writeComputed(&buf.writer) catch return value;
+    return buf.written();
 }
 
 fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapped: String, frame: *Frame) []const u8 {
@@ -355,7 +376,21 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     }
 
     // Normalize the value for canonical serialization
-    const normalized_value = try normalizePropertyValue(frame.local_arena, normalized, value);
+    const normalized_value = blk: {
+        if (isColorProperty(normalized)) {
+            switch (color.parse(value)) {
+                // An invalid value leaves the declaration as it was.
+                .invalid => return false,
+                .value => |parsed| {
+                    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+                    try parsed.writeSpecified(&buf.writer);
+                    break :blk buf.written();
+                },
+                .unsupported => {},
+            }
+        }
+        break :blk try normalizePropertyValue(frame.local_arena, normalized, value);
+    };
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
@@ -546,6 +581,29 @@ fn normalizePropertyName(allocator: Allocator, name: []const u8) []const u8 {
         return name;
     }
     return std.ascii.allocLowerString(allocator, name) catch name;
+}
+
+fn isColorProperty(name: []const u8) bool {
+    const color_properties: std.StaticStringMap(void) = .initComptime(.{
+        .{ "background-color", {} },
+        .{ "border-block-end-color", {} },
+        .{ "border-block-start-color", {} },
+        .{ "border-bottom-color", {} },
+        .{ "border-inline-end-color", {} },
+        .{ "border-inline-start-color", {} },
+        .{ "border-left-color", {} },
+        .{ "border-right-color", {} },
+        .{ "border-top-color", {} },
+        .{ "color", {} },
+        .{ "column-rule-color", {} },
+        .{ "flood-color", {} },
+        .{ "lighting-color", {} },
+        .{ "outline-color", {} },
+        .{ "stop-color", {} },
+        .{ "text-decoration-color", {} },
+        .{ "text-emphasis-color", {} },
+    });
+    return color_properties.has(name);
 }
 
 fn isCustomProperty(name: []const u8) bool {
