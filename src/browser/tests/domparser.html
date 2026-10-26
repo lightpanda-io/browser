@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 <body></body>
 
@@ -13,7 +14,7 @@
   {
     const parser = new DOMParser();
     let d = parser.parseFromString('', 'text/xml');
-    testing.expectEqual('<parsererror>error</parsererror>', new XMLSerializer().serializeToString(d));
+    testing.expectEqual(1, d.getElementsByTagName('parsererror').length);
   }
 }
 </script>
@@ -515,12 +516,18 @@
 <script id=xml-parsererror>
 {
   const p = new DOMParser();
-  const isError = (doc) => {
-    const root = doc.documentElement;
-    return root.localName === 'parsererror'
-      && root.namespaceURI === 'http://www.mozilla.org/newlayout/xml/parsererror.xml'
-      && doc.childNodes.length === 1;
-  };
+  // Chrome renders its own error page instead (an XHTML <parsererror>, in
+  // the partial document when there is one), so it is detected by name.
+  const isError = (doc) => doc.getElementsByTagName('parsererror').length !== 0;
+
+  // The spec's error document: <parsererror>, in the Mozilla error
+  // namespace, as its only child.
+  const errorDoc = p.parseFromString('<a>', 'text/xml');
+  testing.expectEqual(1, errorDoc.childNodes.length);
+  testing.diverges("Chrome's error document is an XHTML page", () => {
+    testing.expectEqual('parsererror', errorDoc.documentElement.localName);
+    testing.expectEqual('http://www.mozilla.org/newlayout/xml/parsererror.xml', errorDoc.documentElement.namespaceURI);
+  });
 
   // well-formedness errors -> <parsererror> document
   for (const bad of [
@@ -538,12 +545,16 @@
     '<?1x?><a/>',
     '<?xml version="2.0"?><a/>', // only 1.x versions are accepted
     '<?xml version="10.0"?><a/>',
-    '<?xml version="1."?><a/>',
     '<?xml version=1.0?><a/>',
     '<?xml encoding="UTF-8"?><a/>', // version is required
+    '<a>&undefined;</a>',        // no DTD declares the entity
   ]) {
     testing.expectEqual(bad + ' -> error', bad + (isError(p.parseFromString(bad, 'text/xml')) ? ' -> error' : ' -> ok'));
   }
+  // VersionNum is '1.' [0-9]+.
+  testing.diverges("Chrome accepts version=\"1.\"", () => {
+    testing.expectEqual(true, isError(p.parseFromString('<?xml version="1."?><a/>', 'text/xml')));
+  });
 
   // legal documents must not be flagged
   for (const good of [
@@ -559,7 +570,8 @@
     // DOCTYPE internal subset (old Illustrator exports); xml5ever has no DTD
     // support, so the entities stay unexpanded, but the document must parse.
     '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [\n\t<!ENTITY ns_svg "http://www.w3.org/2000/svg">\n]>\n<svg xmlns="&ns_svg;"><rect/></svg>',
-    '<a>&undefined;</a>',
+    // A DTD could declare it.
+    '<!DOCTYPE a SYSTEM "a.dtd"><a>&undefined;</a>',
     '<a>\x7F</a>',       // discouraged but legal code points
   ]) {
     testing.expectEqual(good + ' -> ok', good + (isError(p.parseFromString(good, 'text/xml')) ? ' -> error' : ' -> ok'));

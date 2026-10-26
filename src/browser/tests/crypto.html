@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
 <script id=getRandomValues>
@@ -153,22 +154,31 @@
     // [EnforceRange]: -8 used to wrap to 2^32 - 8 bits.
     nan: await derive(NaN),
     infinity: await derive(Infinity),
-    negative: await derive(-8),
     tooLarge: await derive(2 ** 32 + 8),
+  };
+  // Lightpanda only: Chrome has neither [EnforceRange] here nor a PBKDF2 cost
+  // limit, so each of these is a huge job that stalls its crypto thread.
+  const costly = testing.IS_TEST_RUNNER ? {
+    negative: await derive(-8),
     // Valid lengths whose cost (blocks * iterations) is over the PBKDF2 limit.
     hugeLength: await derive(2 ** 32 - 8, 100000),
     hugeIterations: await derive(256, 2 ** 24 + 1),
-  };
+  } : null;
 
   state.resolve();
   await state.done(() => {
     testing.expectEqual(null, results.ok);
     testing.expectEqual("OperationError", results.nullLength);
-    for (const name of ["nan", "infinity", "negative", "tooLarge"]) {
-      testing.expectEqual(`${name}: TypeError`, `${name}: ${results[name]}`);
+    testing.diverges("Chrome doesn't apply [EnforceRange] to deriveBits' length", () => {
+      for (const name of ["nan", "infinity", "tooLarge"]) {
+        testing.expectEqual(`${name}: TypeError`, `${name}: ${results[name]}`);
+      }
+    });
+    if (costly) {
+      testing.expectEqual("TypeError", costly.negative);
+      testing.expectEqual("OperationError", costly.hugeLength);
+      testing.expectEqual("OperationError", costly.hugeIterations);
     }
-    testing.expectEqual("OperationError", results.hugeLength);
-    testing.expectEqual("OperationError", results.hugeIterations);
   });
 </script>
 
@@ -311,11 +321,12 @@
   // A pair whose private key would have no usages is rejected.
   const emptyPrivate = await errorName(() => gen("SHA-256", ["encrypt"]));
   // Generation blocks the main thread, so the modulus is capped at 4096 bits.
-  const tooLarge = await errorName(() => crypto.subtle.generateKey(
+  // Lightpanda only: Chrome has no cap, and takes seconds to generate one.
+  const tooLarge = testing.IS_TEST_RUNNER ? await errorName(() => crypto.subtle.generateKey(
     { name: "RSA-OAEP", modulusLength: 8192, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
     true,
     ["encrypt", "decrypt"],
-  ));
+  )) : null;
   const rawExport = await errorName(() => crypto.subtle.exportKey("raw", k.publicKey));
 
   state.resolve();
@@ -327,7 +338,9 @@
     testing.expectEqual("InvalidAccessError", aesNameOnRsa);
     testing.expectEqual("InvalidAccessError", rsaNameOnAes);
     testing.expectEqual("SyntaxError", emptyPrivate);
-    testing.expectEqual("OperationError", tooLarge);
+    if (testing.IS_TEST_RUNNER) {
+      testing.expectEqual("OperationError", tooLarge);
+    }
     testing.expectEqual("NotSupportedError", rawExport);
   });
 </script>
@@ -932,7 +945,9 @@
     testing.expectEqual(null, results.maxSalt);
     testing.expectEqual("OperationError", results.saltTooLong);
     testing.expectEqual(false, results.longSaltVerify);
-    testing.expectEqual(false, results.hugeSaltVerify);
+    testing.diverges("Chrome rejects a saltLength past 2^31 - 1", () => {
+      testing.expectEqual(false, results.hugeSaltVerify);
+    });
     testing.expectEqual("TypeError", results.noSalt);
     testing.expectEqual("TypeError", results.noSaltObject);
     testing.expectEqual("TypeError", results.negativeSalt);
@@ -1392,7 +1407,9 @@
     testing.expectEqual("NotSupportedError", results.encryptWithKw);
     testing.expectEqual("OperationError", results.wrongKwKey);
     testing.expectEqual("OperationError", results.kwTooShort);
-    testing.expectEqual("OperationError", results.kwNotMultipleOf8);
+    testing.diverges("Chrome reports DataError for AES-KW input that isn't a multiple of 8 bytes", () => {
+      testing.expectEqual("OperationError", results.kwNotMultipleOf8);
+    });
     testing.expectEqual("DataError", results.notJson);
     testing.expectEqual("DataError", results.jwkWithoutKty);
     testing.expectEqual("DataError", results.extFalseExtractable);
@@ -1478,9 +1495,12 @@
   state.resolve();
   await state.done(() => {
     // Compared with the case name, so a failure says which one.
-    for (const ok of ["aes", "aesWithoutAlg", "kw", "cbc192", "ctr256", "hmac", "hmacSha1", "useMatches", "extFalseLocked", "keyOpsWider"]) {
+    for (const ok of ["aes", "aesWithoutAlg", "kw", "ctr256", "hmac", "hmacSha1", "useMatches", "extFalseLocked", "keyOpsWider"]) {
       testing.expectEqual(`${ok}: null`, `${ok}: ${results[ok]}`);
     }
+    testing.diverges("Chrome doesn't support 192-bit AES keys", () => {
+      testing.expectEqual("cbc192: null", `cbc192: ${results.cbc192}`);
+    });
     for (const bad of ["ktyMissing", "ktyRsa", "kMissing", "algLength", "algMode", "algLowercase", "hmacAlgHash",
       "aesUseSig", "hmacUseEnc", "keyOpsMissing", "keyOpsDuplicate", "aesExtFalse", "hmacExtFalse", "unwrapExtFalse"]) {
       testing.expectEqual(`${bad}: DataError`, `${bad}: ${results[bad]}`);
@@ -1532,8 +1552,9 @@
     testing.expectEqual(ks1.join(","), full.slice(0, 16).join(","));
     testing.expectEqual(ks2.join(","), full.slice(16).join(","));
 
+    // The spec doesn't name the error: ours is OperationError, Chrome's
+    // DataError.
     testing.expectEqual(true, overLengthError !== null);
-    testing.expectEqual("OperationError", overLengthError.name);
   });
 </script>
 
@@ -1930,8 +1951,10 @@
     testing.expectEqual("OperationError", results.genNull);
     testing.expectEqual("DataError", results.importNull);
     testing.expectEqual(null, results.genMax);
-    testing.expectEqual("OperationError", results.genOverMax);
-    testing.expectEqual("OperationError", results.genGigantic);
+    testing.diverges("Lightpanda caps generated HMAC keys at 2^16 bits; Chrome has no cap", () => {
+      testing.expectEqual("OperationError", results.genOverMax);
+      testing.expectEqual("OperationError", results.genGigantic);
+    });
     testing.expectEqual("NotSupportedError", results.deriveUnknown);
     testing.expectEqual("AES-GCM 128", `${aesWithHash.algorithm.name} ${aesWithHash.algorithm.length}`);
   });
@@ -1943,13 +1966,18 @@
   // Empty usages: SyntaxError.
   const results = [
     await captureGenKeyReject("Ed25519", true, ["encrypt"], "SyntaxError"),
+    await captureGenKeyReject("Ed25519", true, [], "SyntaxError"),
+  ];
+  const results448 = [
     await captureGenKeyReject({ name: "Ed448" }, true, ["deriveBits"], "SyntaxError"),
     await captureGenKeyReject("X448", true, ["sign"], "SyntaxError"),
-    await captureGenKeyReject("Ed25519", true, [], "SyntaxError"),
   ];
   state.resolve();
   await state.done(() => {
     assertGenKeyRejects(results);
+    testing.diverges("Chrome doesn't implement Ed448/X448: NotSupportedError", () => {
+      assertGenKeyRejects(results448);
+    });
   });
 </script>
 
@@ -2271,7 +2299,9 @@
     testing.expectEqual(true, results.verify);
     testing.expectEqual(false, results.verifyOther);
     testing.expectEqual(false, results.verifyShort);
-    testing.expectEqual(false, results.smallOrder);
+    testing.diverges("Chrome (BoringSSL) accepts a small-order Ed25519 key", () => {
+      testing.expectEqual(false, results.smallOrder);
+    });
     testing.expectEqual(hex(pub), results.raw);
     testing.expectEqual("302a300506032b6570032100" + hex(pub), results.spki);
     testing.expectEqual("302e020100300506032b657004220420" + hex(seed), results.pkcs8);
@@ -2732,14 +2762,18 @@
     "sign string data=TypeError",
     "encrypt bad data bad algo=TypeError",
     "hkdf info transferred by salt=true",
-    "gcm iv transferred by tagLength=OperationError"
   ];
+  const gcmIv = out.pop();
 
   state.resolve();
   await state.done(() => {
+    testing.expectEqual(expected.length, out.length);
     for (let i = 0; i < expected.length; i++) {
       testing.expectEqual(expected[i], out[i]);
     }
+    testing.diverges("Chrome reads AES-GCM's tagLength before its iv", () => {
+      testing.expectEqual("gcm iv transferred by tagLength=OperationError", gcmIv);
+    });
   });
 </script>
 
@@ -2930,12 +2964,13 @@
   const results = {};
   // HKDF and PBKDF2 have no export operation: NotSupportedError comes before
   // the extractable check (Chrome 152 still gives InvalidAccessError).
+  const noExport = {};
   for (const format of ["raw", "jwk", "spki", "pkcs8"]) {
-    results[`hkdf ${format}`] = await outcome(() => subtle.exportKey(format, hkdf));
-    results[`pbkdf2 ${format}`] = await outcome(() => subtle.exportKey(format, pbkdf2));
+    noExport[`hkdf ${format}`] = await outcome(() => subtle.exportKey(format, hkdf));
+    noExport[`pbkdf2 ${format}`] = await outcome(() => subtle.exportKey(format, pbkdf2));
   }
-  results["wrap hkdf"] = await outcome(() => subtle.wrapKey("raw", hkdf, kw, "AES-KW"));
-  results["wrap pbkdf2"] = await outcome(() => subtle.wrapKey("raw", pbkdf2, kw, "AES-KW"));
+  noExport["wrap hkdf"] = await outcome(() => subtle.wrapKey("raw", hkdf, kw, "AES-KW"));
+  noExport["wrap pbkdf2"] = await outcome(() => subtle.wrapKey("raw", pbkdf2, kw, "AES-KW"));
   // The wrapping key's checks come first.
   results["wrap hkdf, unwrap-only key"] = await outcome(() => subtle.wrapKey("raw", hkdf, unwrapOnly, "AES-KW"));
   // An exportable algorithm still checks extractable before the format.
@@ -2961,17 +2996,21 @@
 
   state.resolve();
   await state.done(() => {
+    testing.diverges("Chrome checks extractable before the export operation", () => {
+      testing.expectEqual({
+        "hkdf raw": "NotSupportedError",
+        "pbkdf2 raw": "NotSupportedError",
+        "hkdf jwk": "NotSupportedError",
+        "pbkdf2 jwk": "NotSupportedError",
+        "hkdf spki": "NotSupportedError",
+        "pbkdf2 spki": "NotSupportedError",
+        "hkdf pkcs8": "NotSupportedError",
+        "pbkdf2 pkcs8": "NotSupportedError",
+        "wrap hkdf": "NotSupportedError",
+        "wrap pbkdf2": "NotSupportedError",
+      }, noExport);
+    });
     testing.expectEqual({
-      "hkdf raw": "NotSupportedError",
-      "pbkdf2 raw": "NotSupportedError",
-      "hkdf jwk": "NotSupportedError",
-      "pbkdf2 jwk": "NotSupportedError",
-      "hkdf spki": "NotSupportedError",
-      "pbkdf2 spki": "NotSupportedError",
-      "hkdf pkcs8": "NotSupportedError",
-      "pbkdf2 pkcs8": "NotSupportedError",
-      "wrap hkdf": "NotSupportedError",
-      "wrap pbkdf2": "NotSupportedError",
       "wrap hkdf, unwrap-only key": "InvalidAccessError",
       "aes locked raw": "InvalidAccessError",
       "aes locked spki": "InvalidAccessError",
@@ -3012,16 +3051,18 @@
   const counter = new Uint8Array(16);
   const encrypted = await subtle.encrypt({ name: "AES-CTR", counter, length: 64 }, aes, new Uint8Array(4));
   const results = {
-    algorithmSame: aes.algorithm === algorithm,
-    usagesSame: aes.usages === usages,
-    algorithmSeen: `${aes.algorithm.name}/${aes.algorithm.length}`,
-    usagesSeen: aes.usages.join(),
     stillEncrypts: encrypted.byteLength,
     stillNotSigning: await subtle.sign("HMAC", aes, new Uint8Array(1)).then(() => "signed", (e) => e.name),
     exportedAlg: (await subtle.exportKey("jwk", aes)).alg,
     // Each key has its own objects, even the two keys of a pair.
     pairAlgorithmsDiffer: pair.publicKey.algorithm !== pair.privateKey.algorithm,
     pairUsagesDiffer: pair.publicKey.usages !== pair.privateKey.usages,
+  };
+  const cached = {
+    algorithmSame: aes.algorithm === algorithm,
+    usagesSame: aes.usages === usages,
+    algorithmSeen: `${aes.algorithm.name}/${aes.algorithm.length}`,
+    usagesSeen: aes.usages.join(),
     publicAlgorithmSame: pair.publicKey.algorithm === pair.publicKey.algorithm,
     privateUsagesSame: pair.privateKey.usages === pair.privateKey.usages,
     // So are its nested members.
@@ -3033,21 +3074,25 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual({
-      algorithmSame: true,
-      usagesSame: true,
-      algorithmSeen: "HMAC/1",
-      usagesSeen: "encrypt,decrypt,sign",
       stillEncrypts: 4,
       stillNotSigning: "InvalidAccessError",
       exportedAlg: "A256CTR",
       pairAlgorithmsDiffer: true,
       pairUsagesDiffer: true,
-      publicAlgorithmSame: true,
-      privateUsagesSame: true,
-      hmacHashSame: true,
-      rsaHashSame: true,
-      rsaExponentSame: true,
     }, results);
+    testing.diverges("Chrome builds a new algorithm/usages object on every read", () => {
+      testing.expectEqual({
+        algorithmSame: true,
+        usagesSame: true,
+        algorithmSeen: "HMAC/1",
+        usagesSeen: "encrypt,decrypt,sign",
+        publicAlgorithmSame: true,
+        privateUsagesSame: true,
+        hmacHashSame: true,
+        rsaHashSame: true,
+        rsaExponentSame: true,
+      }, cached);
+    });
   });
 </script>
 
@@ -3123,7 +3168,7 @@
   results["publicExponent Uint16Array"] = await rsa(new Uint16Array([1, 1]));
   results["publicExponent DataView"] = await rsa(new DataView(new Uint8Array([1, 0, 1]).buffer));
   results["publicExponent ArrayBuffer"] = await rsa(new Uint8Array([1, 0, 1]).buffer);
-  results["publicExponent shared"] = await rsa(new Uint8Array(new SharedArrayBuffer(3)));
+  const sharedExponent = await rsa(new Uint8Array(new SharedArrayBuffer(3)));
   // A shared keyData is a TypeError of its conversion, before the algorithm.
   results["import view, unknown algorithm"] = await outcome(() => subtle.importKey("raw", view, "NOPE", false, ["encrypt"]));
   // A SharedArrayBuffer is a BufferSource that fails its conversion, not a
@@ -3156,7 +3201,6 @@
   expected["publicExponent Uint16Array"] = "TypeError";
   expected["publicExponent DataView"] = "TypeError";
   expected["publicExponent ArrayBuffer"] = "TypeError";
-  expected["publicExponent shared"] = "TypeError";
   expected["import view, unknown algorithm"] = "TypeError";
   expected["import jwk sab"] = "TypeError";
   expected["import jwk sab, unknown algorithm"] = "TypeError";
@@ -3167,6 +3211,9 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual(expected, results);
+    testing.diverges("Chrome takes a shared publicExponent", () => {
+      testing.expectEqual("TypeError", sharedExponent);
+    });
   });
 </script>
 
@@ -3194,6 +3241,8 @@
   // A length that doesn't fill the last byte is kept (Chrome 152 clones this
   // key as null).
   await same("hmac", await subtle.generateKey({ name: "HMAC", hash: "SHA-384", length: 100 }, true, ["sign"]), "jwk");
+  const hmacPartialByte = results["hmac"];
+  delete results["hmac"];
   const ec = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-384" }, true, ["sign", "verify"]);
   await same("ecdsa public", ec.publicKey, "spki");
   await same("ecdsa private", ec.privateKey, "pkcs8");
@@ -3233,7 +3282,6 @@
     testing.expectEqual({
       "aes-gcm": true,
       "aes-kw": true,
-      "hmac": true,
       "ecdsa public": true,
       "ecdsa private": true,
       "ecdh public": true,
@@ -3250,6 +3298,9 @@
       "hkdf": true,
       "one clone": true,
     }, results);
+    testing.diverges("Chrome clones an HMAC key whose length isn't whole bytes as null", () => {
+      testing.expectEqual(true, hmacPartialByte);
+    });
   });
 </script>
 
@@ -3341,7 +3392,7 @@
   results["import raw-public ec sign"] = await outcome(() => subtle.importKey("raw-public", ecRaw, { name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]));
   // HKDF and PBKDF2 still have no export operation.
   const hkdf = await subtle.importKey("raw-secret", bytes16, "HKDF", false, ["deriveBits"]);
-  results["export raw-secret hkdf"] = await outcome(() => subtle.exportKey("raw-secret", hkdf));
+  const hkdfExport = await outcome(() => subtle.exportKey("raw-secret", hkdf));
 
   state.resolve();
   await state.done(() => {
@@ -3363,7 +3414,9 @@
       "export raw-public rsa": "NotSupportedError",
       "import raw-public rsa": "NotSupportedError",
       "import raw-public ec sign": "SyntaxError",
-      "export raw-secret hkdf": "NotSupportedError",
     }, results);
+    testing.diverges("Chrome checks extractable before the export operation", () => {
+      testing.expectEqual("NotSupportedError", hkdfExport);
+    });
   });
 </script>
