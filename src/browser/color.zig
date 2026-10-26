@@ -201,13 +201,13 @@ pub const RGBA = packed struct(u32) {
         pub const yellowgreen: RGBA = .init(154, 205, 50, 1);
     };
 
-   fn init(r: u8, g: u8, b: u8, a: f32) RGBA {
+    fn init(r: u8, g: u8, b: u8, a: f32) RGBA {
         const clamped = std.math.clamp(a, 0, 1);
         return .{ .r = r, .g = g, .b = b, .a = @trunc(clamped * 255) };
     }
 
     /// Finds a color by its name.
-   fn find(name: []const u8) ?RGBA {
+    fn find(name: []const u8) ?RGBA {
         const match = std.meta.stringToEnum(std.meta.DeclEnum(Named), name) orelse return null;
 
         return switch (match) {

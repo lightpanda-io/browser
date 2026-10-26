@@ -79,7 +79,6 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const wrapped = String.wrap(normalized);
     const value = self.propertyValue(normalized, wrapped, frame);
 
-
     if (self._is_computed == false) {
         return value;
     }
@@ -96,7 +95,6 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     }
 
     return value;
-
 }
 
 fn computedColor(value: []const u8, frame: *Frame) []const u8 {
