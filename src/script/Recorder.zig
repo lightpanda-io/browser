@@ -243,7 +243,7 @@ test "record emits multi-line extract as JavaScript" {
     var recorder: Recorder = .init(std.testing.allocator);
     defer recorder.deinit();
 
-    const cmd_str = "/extract '{\n  \"title\": \"span.title\",\n  \"desc\": \"p.description\"\n}'";
+    const cmd_str = "/extract schema='{\n  \"title\": \"span.title\",\n  \"desc\": \"p.description\"\n}'";
     try recorder.record(parseLine(aa, cmd_str));
 
     try std.testing.expectEqualStrings(
@@ -292,7 +292,7 @@ test "record downgrades goto before waitForSelector to domcontentloaded" {
     defer recorder.deinit();
 
     try recorder.record(parseLine(aa, "/goto https://example.com"));
-    try recorder.record(parseLine(aa, "/waitForSelector .story"));
+    try recorder.record(parseLine(aa, "/waitForSelector selector=.story"));
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"domcontentloaded\" });\npage.waitForSelector(\".story\");\n",
@@ -309,7 +309,7 @@ test "record keeps the load wait when goto is followed by extract" {
     defer recorder.deinit();
 
     try recorder.record(parseLine(aa, "/goto https://example.com"));
-    try recorder.record(parseLine(aa, "/extract '{\"title\": \"h1\"}'"));
+    try recorder.record(parseLine(aa, "/extract schema='{\"title\": \"h1\"}'"));
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\nawait page.goto(\"https://example.com\");\npage.extract({ title: \"h1\" });\n",
@@ -326,7 +326,7 @@ test "record preserves an explicit waitUntil on goto" {
     defer recorder.deinit();
 
     try recorder.record(parseLine(aa, "/goto https://example.com waitUntil=networkidle"));
-    try recorder.record(parseLine(aa, "/waitForSelector .story"));
+    try recorder.record(parseLine(aa, "/waitForSelector selector=.story"));
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"networkidle\" });\npage.waitForSelector(\".story\");\n",

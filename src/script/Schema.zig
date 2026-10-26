@@ -117,6 +117,17 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
     };
 }
 
+/// Tools whose slash form reads leading text as a prompt: the model locates the
+/// element or writes the script/schema, and the call it makes is what gets
+/// recorded. Their slash fields are keyword-only, so a prompt can't be
+/// mistaken for a selector.
+pub fn takesPrompt(tool: BrowserTool) bool {
+    return switch (tool) {
+        .click, .fill, .hover, .selectOption, .setChecked, .waitForSelector, .extract, .evaluate, .waitForScript => true,
+        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+    };
+}
+
 pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
     for (self.fields) |f| {
         if (std.ascii.eqlIgnoreCase(f.name, key)) return f;
@@ -190,6 +201,7 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
 /// `name`). Null when there's no required field and more than one optional
 /// field, since the target would be ambiguous (click's selector/backendNodeId).
 pub fn leadingPositionalField(self: Schema) ?[]const u8 {
+    if (takesPrompt(self.tool)) return null;
     if (self.required.len == 1) return self.required[0];
     if (self.required.len == 0 and self.fields.len == 1) return self.fields[0].name;
     return null;
@@ -211,9 +223,47 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
 /// callers can render a user-facing message like
 /// "y: expected integer, got 'fast'".
 pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag) ParseError!?std.json.Value {
+    return self.parseArgs(arena, rest_raw, diag, true);
+}
+
+/// A slash command's leading prompt and the `key=value` tail pinned beside it.
+pub const PromptSplit = struct {
+    prompt: []const u8,
+    args: ?std.json.Value,
+};
+
+/// Splits `rest` for a `takesPrompt` tool. Null when there is no leading text,
+/// so the caller parses `rest` as ordinary arguments. Required fields may be
+/// missing from `args`: the model supplies them.
+pub fn parsePrompt(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag) ParseError!?PromptSplit {
+    std.debug.assert(takesPrompt(self.tool));
+    const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
+    if (rest.len == 0 or rest[0] == '{') return null;
+
+    // Split on bare words, not `tokenize`: a prompt is prose, and the
+    // apostrophe in "the user's menu" is not an opening quote.
+    var tail_start = rest.len;
+    var it = std.mem.tokenizeAny(u8, rest, &std.ascii.whitespace);
+    while (it.next()) |word| {
+        if (looksLikeKv(word)) {
+            tail_start = it.index - word.len;
+            break;
+        }
+    }
+
+    const text = std.mem.trimEnd(u8, rest[0..tail_start], &std.ascii.whitespace);
+    if (text.len == 0) return null;
+    const whole_quoted = (text[0] == '\'' or text[0] == '"') and quotedSpanEnd(text, 0) == text.len;
+    return .{
+        .prompt = if (whole_quoted) stripQuotes(text) else text,
+        .args = try self.parseArgs(arena, rest[tail_start..], diag, false),
+    };
+}
+
+fn parseArgs(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag, require: bool) ParseError!?std.json.Value {
     const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
     if (rest.len == 0) {
-        if (self.required.len > 0) return error.MissingRequired;
+        if (require and self.required.len > 0) return error.MissingRequired;
         return null;
     }
 
@@ -257,6 +307,9 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     // selector='#a'` works without `checked=true`.
     required: for (self.required) |req| {
         for (list.items) |p| if (std.mem.eql(u8, p.key, req)) continue :required;
+        // Beside a prompt, a missing field is the model's to fill: defaulting
+        // `checked=true` would pin it and rule out "uncheck the newsletter box".
+        if (!require) continue;
         if (!self.isFieldDefaultTrue(req)) return error.MissingRequired;
         list.appendAssumeCapacity(.{ .key = req, .value = "true" });
     }
@@ -417,13 +470,15 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
         }
     }
 
-    info.hints = try buildHints(arena, info.required, info.fields);
+    info.hints = try buildHints(arena, info.required, info.fields, takesPrompt(tool));
     std.debug.assert(info.hints.len <= max_hint_slots);
 
     return info;
 }
 
-fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const HintSlot {
+/// `keyword_only`: a required field renders as `name=…`, since bare text is a
+/// prompt rather than its value.
+fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry, keyword_only: bool) ![]const HintSlot {
     if (fields.len == 0 and required.len == 0) return &.{};
     var optional_count: usize = 0;
     for (fields) |f| {
@@ -436,7 +491,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = name,
             .required = true,
-            .fragment = try arena.print("<{s}>", .{name}),
+            .fragment = if (keyword_only) try arena.print("{s}=…", .{name}) else try arena.print("<{s}>", .{name}),
         };
         idx += 1;
     }
@@ -813,7 +868,7 @@ test "parseValue: double-quoted script with embedded single-quoted argument" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const evaluate = Schema.find(Schema.all(), "evaluate").?;
-    const v = (try evaluate.parseValue(arena.allocator(), "\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
+    const v = (try evaluate.parseValue(arena.allocator(), "script=\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
     try testing.expectString("setTimeout(() => document.querySelector('a'), 1000)", v.object.get("script").?.string);
 }
 
@@ -878,4 +933,37 @@ test "parseValue: rejects non-object JSON payloads" {
     // "\"hello\"" is a valid positional argument, not a JSON payload, so it should succeed
     const v = (try goto.parseValue(arena.allocator(), "\"hello\"")).?;
     try testing.expectString("hello", v.object.get("url").?.string);
+}
+
+test "parsePrompt: splits the prompt from the key=value tail" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const fill = Schema.find(Schema.all(), "fill").?;
+
+    const p = (try fill.parsePrompt(aa, "  the email field   value='a b'  ", null)).?;
+    try testing.expectString("the email field", p.prompt);
+    try testing.expectString("a b", p.args.?.object.get("value").?.string);
+
+    // A wholly quoted prompt loses its quotes; one that only starts quoted keeps them.
+    try testing.expectString("the email field", (try fill.parsePrompt(aa, "\"the email field\"", null)).?.prompt);
+    try testing.expectString("'a' then b", (try fill.parsePrompt(aa, "'a' then b", null)).?.prompt);
+
+    // No leading text, or a JSON payload: ordinary arguments.
+    try testing.expect((try fill.parsePrompt(aa, "selector=#e value=x", null)) == null);
+    try testing.expect((try fill.parsePrompt(aa, "{\"selector\":\"#e\",\"value\":\"x\"}", null)) == null);
+    try testing.expect((try fill.parsePrompt(aa, "", null)) == null);
+
+    try testing.expectError(error.UnknownField, fill.parsePrompt(aa, "the email field valu=x", null));
+}
+
+test "takesPrompt: prompt tools have keyword-only hints and no positional" {
+    const click = Schema.find(Schema.all(), "click").?;
+    try testing.expect(click.leadingPositionalField() == null);
+    const extract = Schema.find(Schema.all(), "extract").?;
+    try testing.expect(extract.leadingPositionalField() == null);
+    try testing.expectString("schema=…", extract.hints[0].fragment);
+    const goto = Schema.find(Schema.all(), "goto").?;
+    try testing.expectString("url", goto.leadingPositionalField().?);
+    try testing.expectString("<url>", goto.hints[0].fragment);
 }
