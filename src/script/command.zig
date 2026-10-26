@@ -16,10 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! A parsed slash command: a tool slash command, a tool command given a
-//! prompt instead of its fields, a `#`-comment, or an `LlmCommand` trigger
-//! (`/login`, `/logout`, `/acceptCookies`). Multi-line
-//! `'''…'''` blocks are assembled by the REPL before parse.
+//! A parsed slash command: a tool call, a prompt-form tool command, a
+//! `#`-comment, or an `LlmCommand` trigger (`/login`, `/logout`,
+//! `/acceptCookies`). Multi-line `'''…'''` blocks are assembled by the REPL
+//! before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -68,13 +68,11 @@ pub const Command = union(enum) {
     prompt: Prompt,
     comment: void,
 
-    /// A `takesPrompt` tool given leading text (`/click the sign in button`):
-    /// the model fills in the arguments `args` leaves out, and its call is
-    /// what gets recorded.
+    /// Leading text for a `takesPrompt` tool (`/click the sign in button`).
     pub const Prompt = struct {
         tool: BrowserTool,
         text: []const u8,
-        /// Fields typed as `key=value` beside the prompt; the model can't change them.
+        /// Pinned key=value beside the prompt.
         args: ?std.json.Value,
     };
 
@@ -406,7 +404,6 @@ test "parse: leading text on a prompt tool is a prompt, key=value stays literal"
     try testing.expectString("Login", quoted.text);
     try testing.expect(quoted.args == null);
 
-    // An apostrophe in prose is not an opening quote.
     try testing.expectString("the user's menu", (try Command.parse(aa, "/click the user's menu")).prompt.text);
 
     const fill = (try Command.parse(aa, "/fill the email field value=$LP_EMAIL")).prompt;
@@ -414,7 +411,6 @@ test "parse: leading text on a prompt tool is a prompt, key=value stays literal"
     try testing.expectString("$LP_EMAIL", fill.args.?.object.get("value").?.string);
     try testing.expect(fill.args.?.object.get("selector") == null);
 
-    // `checked` is left to the model rather than defaulted to true.
     try testing.expect((try Command.parse(aa, "/setChecked uncheck the newsletter box")).prompt.args == null);
 
     const extract = (try Command.parse(aa, "/extract all products with prices save=products")).prompt;
@@ -449,7 +445,6 @@ test "parse: positional must come before key=value" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     try testing.expectError(error.PositionalMustComeFirst, Command.parse(arena.allocator(), "/goto timeout=5000 https://example.com"));
-    // A prompt tool has no positional, so a bare value after key=value is malformed.
     try testing.expectError(error.MalformedKv, Command.parse(arena.allocator(), "/extract save=front '{\"karma\":\"#karma\"}'"));
     const cmd = try Command.parse(arena.allocator(), "/extract schema='{\"karma\":\"#karma\"}' save=front");
     try testing.expectString("front", cmd.tool_call.args.?.object.get("save").?.string);
@@ -548,7 +543,6 @@ test "isRecorded / producesData via tool flags" {
     const login: Command = .{ .llm = .login };
     try testing.expect(!login.isRecorded());
 
-    // Only the call the model makes is recorded, never the prompt itself.
     const prompt = try Command.parse(arena.allocator(), "/click the sign in button");
     try testing.expect(!prompt.isRecorded());
 }

@@ -117,15 +117,11 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
     };
 }
 
-/// Tools whose slash form reads leading text as a prompt: the model locates the
-/// element or writes the script/schema, and the call it makes is what gets
-/// recorded. Their slash fields are keyword-only, so a prompt can't be
-/// mistaken for a selector.
+/// Slash form reads leading text as a prompt (fields are keyword-only).
 pub fn takesPrompt(tool: BrowserTool) bool {
     return switch (tool) {
         .click, .fill, .hover, .selectOption, .setChecked, .extract, .evaluate => true,
-        // A wait targets what is not on the page yet, so the model has nothing
-        // to work from.
+        // A wait targets what is not on the page yet, so a prompt leaves the model nothing to pick from.
         .waitForSelector, .waitForScript, .waitForState => false,
         .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
     };
@@ -202,9 +198,8 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
 /// The field a single leading positional binds to: the lone required field,
 /// or — when nothing is required — the tool's only field (e.g. getEnv binds to
 /// `name`). Null when there's no required field and more than one optional
-/// field, since the target would be ambiguous (click's selector/backendNodeId),
-/// and for `takesPrompt` tools, whose leading text is a prompt. Slash input
-/// only; the script form's positionals are `positional`.
+/// field, since the target would be ambiguous (click's selector/backendNodeId).
+/// Slash input only; the script form's positionals are `positional`.
 pub fn leadingPositionalField(self: Schema) ?[]const u8 {
     if (takesPrompt(self.tool)) return null;
     if (self.required.len == 1) return self.required[0];
@@ -231,22 +226,19 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     return self.parseArgs(arena, rest_raw, diag, true);
 }
 
-/// A slash command's leading prompt and the `key=value` tail pinned beside it.
 pub const PromptSplit = struct {
     prompt: []const u8,
     args: ?std.json.Value,
 };
 
-/// Splits `rest` for a `takesPrompt` tool. Null when there is no leading text,
-/// so the caller parses `rest` as ordinary arguments. Required fields may be
-/// missing from `args`: the model supplies them.
+/// Null when there is no leading text (caller parses `rest` as ordinary args).
+/// Required fields may be missing from `args`: the model supplies them.
 pub fn parsePrompt(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag) ParseError!?PromptSplit {
     std.debug.assert(takesPrompt(self.tool));
     const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
     if (rest.len == 0 or rest[0] == '{') return null;
 
-    // Split on bare words, not `tokenize`: a prompt is prose, and the
-    // apostrophe in "the user's menu" is not an opening quote.
+    // tokenizeAny: prose may contain apostrophes ("the user's menu").
     var tail_start = rest.len;
     var it = std.mem.tokenizeAny(u8, rest, &std.ascii.whitespace);
     while (it.next()) |word| {
@@ -312,8 +304,7 @@ fn parseArgs(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag:
     // selector='#a'` works without `checked=true`.
     required: for (self.required) |req| {
         for (list.items) |p| if (std.mem.eql(u8, p.key, req)) continue :required;
-        // Beside a prompt, a missing field is the model's to fill: defaulting
-        // `checked=true` would pin it and rule out "uncheck the newsletter box".
+        // Prompt path: don't pin default-true fields (e.g. "uncheck …").
         if (!require) continue;
         if (!self.isFieldDefaultTrue(req)) return error.MissingRequired;
         list.appendAssumeCapacity(.{ .key = req, .value = "true" });
@@ -481,8 +472,6 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
     return info;
 }
 
-/// `keyword_only`: a required field renders as `name=…`, since bare text is a
-/// prompt rather than its value.
 fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry, keyword_only: bool) ![]const HintSlot {
     if (fields.len == 0 and required.len == 0) return &.{};
     var optional_count: usize = 0;
@@ -950,11 +939,9 @@ test "parsePrompt: splits the prompt from the key=value tail" {
     try testing.expectString("the email field", p.prompt);
     try testing.expectString("a b", p.args.?.object.get("value").?.string);
 
-    // A wholly quoted prompt loses its quotes; one that only starts quoted keeps them.
     try testing.expectString("the email field", (try fill.parsePrompt(aa, "\"the email field\"", null)).?.prompt);
     try testing.expectString("'a' then b", (try fill.parsePrompt(aa, "'a' then b", null)).?.prompt);
 
-    // No leading text, or a JSON payload: ordinary arguments.
     try testing.expect((try fill.parsePrompt(aa, "selector=#e value=x", null)) == null);
     try testing.expect((try fill.parsePrompt(aa, "{\"selector\":\"#e\",\"value\":\"x\"}", null)) == null);
     try testing.expect((try fill.parsePrompt(aa, "", null)) == null);

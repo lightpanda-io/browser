@@ -193,7 +193,6 @@ synthetic_tool_call_id: u32 = 0,
 /// and the navigation a read tool's `url` made.
 save_calls: std.ArrayList(SavedCall) = .empty,
 capturing_for_save: bool = false,
-/// Set while a prompt command (`/click the sign in button`) runs its turn.
 prompt_target: ?PromptTarget = null,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
@@ -674,7 +673,6 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             self.terminal.printInfo("(no response from model)", .{});
     }
     if (self.prompt_target) |target| {
-        // The model only summarizes; the data is what `/extract` would print.
         if (target.data) |d| self.printData(target.tool, d);
     }
     self.conversation.prune();
@@ -1189,25 +1187,20 @@ const PathAndMode = struct { path: []const u8, mode: save.Mode };
 const SavedCall = struct {
     selector: ?[]const u8 = null,
     navigated: bool = false,
-    /// The arguments the call ran with when they differ from the model's
-    /// (pinned prompt fields), in the conversation arena.
+    /// Pinned prompt args as the call ran (conversation arena).
     args: ?std.json.Value = null,
 };
 
+/// Active `/click the sign in…`-style turn: one target call, read-only tools only.
 const PromptTarget = struct {
     tool: BrowserTool,
-    /// Fields typed beside the prompt; they override whatever the model passes.
     pinned: ?std.json.Value,
-    /// Scoped to the REPL line, which outlives the turn.
+    /// REPL line arena; outlives the turn.
     arena: std.mem.Allocator,
-    /// Set once a target call succeeds; later tool calls are refused, so the
-    /// turn records exactly one.
     done: bool = false,
-    /// That call's output, kept for tools whose output is the answer.
     data: ?[]const u8 = null,
 };
 
-// What the model may inspect the page with before its one target call.
 const prompt_read_tools = [_]BrowserTool{ .tree, .findElement, .nodeDetails, .interactiveElements, .detectForms, .markdown, .html };
 
 fn isPromptReadTool(tool: BrowserTool) bool {
@@ -1222,7 +1215,6 @@ fn promptTools(arena: std.mem.Allocator, target: BrowserTool) ![]const ProviderT
     return out;
 }
 
-/// The call's `url` argument when it is a non-empty string.
 fn urlArg(args: ?std.json.Value) ?std.json.Value {
     const a = args orelse return null;
     if (a != .object) return null;
@@ -1231,7 +1223,6 @@ fn urlArg(args: ?std.json.Value) ?std.json.Value {
     return url;
 }
 
-/// `args` with every `pinned` field set over it.
 fn pinArgs(arena: std.mem.Allocator, args: ?std.json.Value, pinned: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const p = pinned orelse return args;
     var obj: std.json.ObjectMap = if (args) |a| (if (a == .object) try a.object.clone(arena) else .empty) else .empty;
@@ -1240,8 +1231,8 @@ fn pinArgs(arena: std.mem.Allocator, args: ?std.json.Value, pinned: ?std.json.Va
     return .{ .object = obj };
 }
 
-/// The user turn for a prompt command. Pinned fields are named but their values
-/// stay out of the conversation: a `fill` value may be a literal secret.
+/// User turn for a prompt command. Names pinned fields but not their values
+/// (a `fill` value may be a literal secret).
 fn promptCommandText(arena: std.mem.Allocator, p: Command.Prompt) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
@@ -2153,10 +2144,9 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     if (self.prompt_target) |t| {
         if (t.done) return .{ .content = "Error: the request is already done. Reply without calling more tools.", .is_error = true };
         const tool = std.meta.stringToEnum(BrowserTool, tool_name);
-        is_target = if (tool) |tl| tl == t.tool else false;
+        is_target = tool == t.tool;
         if (is_target) {
             if (t.pinned != null) {
-                // In the conversation arena: `/save` records the call as it ran.
                 args = try pinArgs(self.conversation.arena.allocator(), args, t.pinned);
                 saved.args = args;
             }
