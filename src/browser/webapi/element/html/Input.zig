@@ -425,7 +425,10 @@ pub fn suffersTypeMismatch(self: *const Input) bool {
     const value = self._value orelse return false;
     if (value.len == 0) return false;
     return switch (self._input_type) {
-        .email => !isValidEmail(value),
+        .email => if (self.asConstElement().getAttributeInterned("multiple") != null)
+            !isValidEmailList(value)
+        else
+            !isValidEmail(value),
         .url => !isValidAbsoluteURL(value),
         else => false,
     };
@@ -582,18 +585,48 @@ fn sameFormOwner(self_form: ?*Form, other: *Input) bool {
     return false;
 }
 
-/// Liberal email validation: ASCII local part + "@" + dotted ASCII host. Mirrors
-/// the WHATWG "valid e-mail address" production loosely — sufficient for most
-/// constraint-validation tests; HTML browsers themselves are permissive here.
+/// With the multiple attribute, the value is the comma-separated addresses with
+/// the whitespace around each one removed.
+fn sanitizeEmailList(value: []const u8, frame: *Frame) ![]const u8 {
+    var result = try frame.page_arena.alloc(u8, value.len);
+    var len: usize = 0;
+    var addresses = std.mem.splitScalar(u8, value, ',');
+    var first = true;
+    while (addresses.next()) |address| {
+        if (!first) {
+            result[len] = ',';
+            len += 1;
+        }
+        first = false;
+        const trimmed = std.mem.trim(u8, address, &std.ascii.whitespace);
+        @memcpy(result[len..][0..trimmed.len], trimmed);
+        len += trimmed.len;
+    }
+    return result[0..len];
+}
+
+/// HTML "valid e-mail address": local part, "@", then one or more dot-separated
+/// labels of up to 63 letters, digits and hyphens that start and end with a letter
+/// or digit. A dot is not required (a@localhost is valid).
 fn isValidEmail(value: []const u8) bool {
     const at = std.mem.findScalar(u8, value, '@') orelse return false;
     if (at == 0 or at == value.len - 1) return false;
-    const local = value[0..at];
-    const host = value[at + 1 ..];
-    for (local) |c| if (!isEmailLocalChar(c)) return false;
-    if (std.mem.findScalar(u8, host, '.') == null) return false;
-    for (host) |c| if (!isEmailHostChar(c)) return false;
-    if (host[0] == '.' or host[host.len - 1] == '.') return false;
+    for (value[0..at]) |c| if (!isEmailLocalChar(c)) return false;
+    var labels = std.mem.splitScalar(u8, value[at + 1 ..], '.');
+    while (labels.next()) |label| {
+        if (label.len == 0 or label.len > 63) return false;
+        if (!std.ascii.isAlphanumeric(label[0]) or !std.ascii.isAlphanumeric(label[label.len - 1])) return false;
+        for (label) |c| if (!std.ascii.isAlphanumeric(c) and c != '-') return false;
+    }
+    return true;
+}
+
+/// With the multiple attribute, every comma-separated address must be valid.
+fn isValidEmailList(value: []const u8) bool {
+    var addresses = std.mem.splitScalar(u8, value, ',');
+    while (addresses.next()) |address| {
+        if (!isValidEmail(address)) return false;
+    }
     return true;
 }
 
@@ -603,10 +636,6 @@ fn isEmailLocalChar(c: u8) bool {
         '.', '!', '#', '$', '%', '&', '\'', '*', '+', '/', '=', '?', '^', '_', '`', '{', '|', '}', '~', '-' => true,
         else => false,
     };
-}
-
-fn isEmailHostChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '-' or c == '.';
 }
 
 /// Absolute URL check per the WHATWG URL parser: must include a scheme followed
@@ -861,6 +890,9 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
                 break :blk result[0..i];
             };
 
+            if (self._input_type == .email and self.asConstElement().getAttributeInterned("multiple") != null) {
+                return sanitizeEmailList(sanitized, frame);
+            }
             return switch (self._input_type) {
                 .url, .email => std.mem.trim(u8, sanitized, &std.ascii.whitespace),
                 else => sanitized,
