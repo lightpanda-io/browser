@@ -157,9 +157,11 @@ pub fn getValue(self: *const Input) []const u8 {
 // Spec-compliant `getValue` exposes the raw password to JS, FormData, CSS
 // `:invalid` checks, etc. — but LLM-facing dumps (semantic tree, form
 // detection, accessibility tree) must not echo what the agent just typed.
+// An empty password stays empty, so a client can tell it still needs input.
 pub fn getRedactedValue(self: *const Input) []const u8 {
-    if (self._input_type == .password) return "*****";
-    return self.getValue();
+    const value = self.getValue();
+    if (self._input_type == .password and value.len > 0) return "*****";
+    return value;
 }
 
 pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
