@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
+const Base64Body = @import("network.zig").Base64Body;
 
 const Robots = @import("../../../network/Robots.zig");
 const DOMNode = @import("../../../browser/webapi/Node.zig");
@@ -71,6 +72,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .configureLoading => return configureLoading(cmd),
         .version => return version(cmd),
     }
+}
+
+pub fn downloadData(bc: *CDP.BrowserContext, msg: *const lp.Notification.DownloadData) !void {
+    return bc.cdp.sendEvent("LP.downloadData", .{
+        .guid = msg.guid,
+        .data = Base64Body{ .data = msg.data },
+    }, .{ .session_id = bc.download_session_id });
 }
 
 fn version(cmd: *CDP.Command) !void {

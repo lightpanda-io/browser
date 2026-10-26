@@ -1390,9 +1390,11 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     // a script clicks a link in another frame.
     const owner = target.ownerFrame(frame) orelse return;
 
-    if (URL.isJavascriptUrl(href) == false and try element.hasAttribute(comptime .wrap("download"), frame)) {
-        log.debug(.browser, "a.download", .{ .type = owner._type, .url = owner.url });
-        return;
+    // <a href="/images/panda.png" download>
+    const maybe_download = try element.getAttribute(comptime .wrap("download"), frame);
+    if (URL.isJavascriptUrl(href) == false and maybe_download != null) {
+        const download = maybe_download orelse unreachable;
+        return @import("../Download.zig").fromHref(owner, href, download.str());
     }
 
     const target_frame = blk: {
