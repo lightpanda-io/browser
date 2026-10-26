@@ -675,7 +675,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
     }
     if (self.prompt_target) |target| {
         // The model only summarizes; the data is what `/extract` would print.
-        if (target.result) |r| if (target.tool.producesData()) self.printData(target.tool, r);
+        if (target.data) |d| self.printData(target.tool, d);
     }
     self.conversation.prune();
     return true;
@@ -784,7 +784,7 @@ fn runRepl(self: *Agent) void {
                     continue :repl;
                 }
                 const prompt = promptCommandText(aa, p) catch continue :repl;
-                self.prompt_target = .{ .tool = p.tool, .pinned = p.args };
+                self.prompt_target = .{ .tool = p.tool, .pinned = p.args, .arena = aa };
                 defer self.prompt_target = null;
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
             },
@@ -1189,15 +1189,22 @@ const PathAndMode = struct { path: []const u8, mode: save.Mode };
 const SavedCall = struct {
     selector: ?[]const u8 = null,
     navigated: bool = false,
+    /// The arguments the call ran with when they differ from the model's
+    /// (pinned prompt fields), in the conversation arena.
+    args: ?std.json.Value = null,
 };
 
 const PromptTarget = struct {
     tool: BrowserTool,
     /// Fields typed beside the prompt; they override whatever the model passes.
     pinned: ?std.json.Value,
-    /// The target call's output, in the conversation arena, once one succeeded.
-    /// Later tool calls are refused, so the turn records exactly one.
-    result: ?[]const u8 = null,
+    /// Scoped to the REPL line, which outlives the turn.
+    arena: std.mem.Allocator,
+    /// Set once a target call succeeds; later tool calls are refused, so the
+    /// turn records exactly one.
+    done: bool = false,
+    /// That call's output, kept for tools whose output is the answer.
+    data: ?[]const u8 = null,
 };
 
 // What the model may inspect the page with before its one target call.
@@ -1215,11 +1222,13 @@ fn promptTools(arena: std.mem.Allocator, target: BrowserTool) ![]const ProviderT
     return out;
 }
 
-fn hasUrl(args: ?std.json.Value) bool {
-    const a = args orelse return false;
-    if (a != .object) return false;
-    const url = a.object.get("url") orelse return false;
-    return url != .string or url.string.len > 0;
+/// The call's `url` argument when it is a non-empty string.
+fn urlArg(args: ?std.json.Value) ?std.json.Value {
+    const a = args orelse return null;
+    if (a != .object) return null;
+    const url = a.object.get("url") orelse return null;
+    if (url != .string or url.string.len == 0) return null;
+    return url;
 }
 
 /// `args` with every `pinned` field set over it.
@@ -1550,10 +1559,7 @@ fn recordSaveCommand(self: *Agent, cmd: Command) void {
 /// `args`/`arena` — record it before either is freed.
 fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.Value, navigated: bool) ?Command {
     if (!navigated or !tool.navigatesToUrl()) return null;
-    const a = args orelse return null;
-    if (a != .object) return null;
-    const url = a.object.get("url") orelse return null;
-    if (url != .string or url.string.len == 0) return null;
+    const url = urlArg(args) orelse return null;
     var obj: std.json.ObjectMap = .empty;
     obj.put(arena, "url", url) catch return null;
     return Command.fromToolCall(.goto, .{ .object = obj });
@@ -1949,15 +1955,11 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 if (tool == .extract and idx != i) continue;
             }
             const ca = self.conversation.arena.allocator();
-            var call_args = tc.arguments;
-            if (self.prompt_target) |t| {
-                if (tool != t.tool) continue;
-                call_args = try pinArgs(ca, call_args, t.pinned);
-            }
+            const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
+            const call_args = saved.args orelse tc.arguments;
             const args = browser_tools.normalizeArgs(ca, tool, call_args) catch call_args;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
-            const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
             const replayable = withSelector(ca, args, saved.selector);
             const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
@@ -2136,7 +2138,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         // turn that reads them; `allocator` here is zenai's per-call arena.
         const ca = self.conversation.arena.allocator();
         const kept = if (saved.selector) |sel| ca.dupe(u8, sel) catch null else null;
-        self.save_calls.append(self.allocator, .{ .selector = kept, .navigated = saved.navigated }) catch {};
+        self.save_calls.append(self.allocator, .{ .selector = kept, .navigated = saved.navigated, .args = saved.args }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
@@ -2149,14 +2151,18 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     var args = arguments;
     var is_target = false;
     if (self.prompt_target) |t| {
-        if (t.result != null) return .{ .content = "Error: the request is already done. Reply without calling more tools.", .is_error = true };
+        if (t.done) return .{ .content = "Error: the request is already done. Reply without calling more tools.", .is_error = true };
         const tool = std.meta.stringToEnum(BrowserTool, tool_name);
         is_target = if (tool) |tl| tl == t.tool else false;
         if (is_target) {
-            args = try pinArgs(allocator, args, t.pinned);
+            if (t.pinned != null) {
+                // In the conversation arena: `/save` records the call as it ran.
+                args = try pinArgs(self.conversation.arena.allocator(), args, t.pinned);
+                saved.args = args;
+            }
         } else if (tool == null or !isPromptReadTool(tool.?)) {
             return .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.tool)}) catch "Error: tool not available", .is_error = true };
-        } else if (hasUrl(args)) {
+        } else if (tool.?.navigatesToUrl() and urlArg(args) != null) {
             return .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true };
         }
     }
@@ -2167,9 +2173,12 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
         .nav_note = true,
         .source = .llm,
     });
-    saved.* = .{ .selector = result.selector, .navigated = result.navigated };
+    saved.selector = result.selector;
+    saved.navigated = result.navigated;
     if (is_target and !result.is_error) {
-        self.prompt_target.?.result = try self.conversation.arena.allocator().dupe(u8, result.text);
+        const t = &self.prompt_target.?;
+        t.done = true;
+        if (t.tool.producesData()) t.data = try t.arena.dupe(u8, result.text);
     }
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{

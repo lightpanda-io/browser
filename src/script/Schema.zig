@@ -199,7 +199,9 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
 /// The field a single leading positional binds to: the lone required field,
 /// or — when nothing is required — the tool's only field (e.g. getEnv binds to
 /// `name`). Null when there's no required field and more than one optional
-/// field, since the target would be ambiguous (click's selector/backendNodeId).
+/// field, since the target would be ambiguous (click's selector/backendNodeId),
+/// and for `takesPrompt` tools, whose leading text is a prompt. Slash input
+/// only; the script form's positionals are `positional`.
 pub fn leadingPositionalField(self: Schema) ?[]const u8 {
     if (takesPrompt(self.tool)) return null;
     if (self.required.len == 1) return self.required[0];
@@ -289,7 +291,7 @@ fn parseArgs(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag:
     }
     for (tokens[kv_start..]) |tok| {
         const eq = std.mem.findScalar(u8, tok, '=') orelse {
-            // `/extract save=x '{…}'` — the value would have bound fine as a
+            // `/goto timeout=5000 https://…` — the value would have bound fine as a
             // leading positional, so point at the ordering instead of the
             // generic kv complaint.
             if (positional_field != null and !leading_positional) return error.PositionalMustComeFirst;
