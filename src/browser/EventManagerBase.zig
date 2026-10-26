@@ -543,10 +543,9 @@ pub const Listener = struct {
                     else => log.debug(.event, context, .{ .err = err }),
                 };
             },
-            .handler, .handler_source => {
-                const handler = self.compileHandler(local.ctx, event._current_target.?) orelse return;
-                try runHandler(local.toLocal(handler), local, event, context);
-            },
+            .handler => |h| try runHandler(local.toLocal(h orelse return), local, event, context),
+            // compiled by run() before this is called
+            .handler_source => unreachable,
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
 
