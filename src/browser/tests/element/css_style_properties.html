@@ -231,3 +231,19 @@
   testing.expectEqual('', div.style.getPropertyValue(name.toUpperCase()));
 }
 </script>
+
+<script id="nullRemovesDeclaration">
+{
+  // [LegacyNullToEmptyString]: null clears the declaration instead of setting "null"
+  const div = $('#test-div');
+  div.style.cssText = 'display: none; color: red';
+
+  div.style.display = null;
+  testing.expectEqual('', div.style.display);
+  testing.expectEqual('color: red;', div.style.cssText);
+
+  div.style.setProperty('color', null);
+  testing.expectEqual('', div.style.color);
+  testing.expectEqual('', div.style.cssText);
+}
+</script>
