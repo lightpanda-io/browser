@@ -1281,6 +1281,7 @@ pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
 // the response; on an expired-with-validators entry the request becomes a
 // conditional revalidation.
 fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
+    transfer.script_cache = null;
     const cache = self.cache.active() orelse return false;
 
     const req = &transfer.req;
@@ -1441,7 +1442,9 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     }
     cache.put(req, transfer.res.buffer.items) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
+        return;
     };
+    transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
 }
 
 pub const SyncOptions = struct {
@@ -1465,6 +1468,7 @@ const SyncContext = struct {
     body: std.ArrayList(u8),
     headers: std.ArrayList(http.Header) = .empty,
     content_type: ?[]const u8 = null,
+    script_cache: ?ScriptCache = null,
 
     // Acquired on the first byte we have to buffer.
     // Ownership moves to the SyncResponse.
@@ -1488,6 +1492,15 @@ const SyncContext = struct {
 
         if (transfer.contentType()) |content_type| {
             self.content_type = try allocator.dupe(u8, content_type);
+        }
+
+        if (transfer.req.resource_type == .script) {
+            if (transfer.script_cache) |sc| {
+                self.script_cache = .{
+                    .key = try allocator.dupe(u8, sc.key),
+                    .bytes = if (sc.bytes) |b| try allocator.dupe(u8, b) else null,
+                };
+            }
         }
 
         if (self.options.copy_headers) {
@@ -2267,6 +2280,7 @@ const SyncResponse = struct {
     status_text: http.StatusText,
     headers: []const http.Header, // only captured when copy_headers = true
     content_type: ?[]const u8, // always captured (most callers need it)
+    script_cache: ?ScriptCache, // see Transfer.script_cache
     arena: ?*lp.Arena, // need only if there's a body, or we're copying the headers
 
     pub fn deinit(self: *SyncResponse) void {
@@ -2672,6 +2686,10 @@ pub const Transfer = struct {
     // What the cache wants from this transfer's response.
     _cache_intent: CacheIntent = .none,
 
+    // Set when the response body is the http cache entry under `key`, so a
+    // script consumer can use, and store, V8's compiled code for it.
+    script_cache: ?ScriptCache = null,
+
     // What a response-stage CDP pause (.intercept_response) is holding, and so
     // what releasing it unchanged does: deliver the response, follow the
     // redirect, or fail with the network error.
@@ -2964,6 +2982,7 @@ pub const Transfer = struct {
                 .body = sync_ctx.body,
                 .headers = sync_ctx.headers.items,
                 .content_type = sync_ctx.content_type,
+                .script_cache = sync_ctx.script_cache,
                 .arena = sync_ctx.arena,
             },
             .err => |e| return e,
@@ -3637,6 +3656,7 @@ pub const Transfer = struct {
         self.setResponseHead(cached.status, cached.content_type);
         self.setResponseHeaders(cached.headers);
         self._from_cache = true;
+        self.script_cache = .{ .key = self._cache_key, .bytes = cached.script_cache };
         self._timing.cache = cache_state;
         self._content_length = body.len;
         // A revalidated entry keeps the size of the 304 that crossed the wire.
@@ -3672,6 +3692,7 @@ pub const Transfer = struct {
         self.setResponseHeaders(headers);
         // It may replace a cached response paused at the response stage.
         self._from_cache = false;
+        self.script_cache = null;
         self._content_length = owned_body.len;
         self._encoded_data_length = owned_body.len;
         try self.bufferEvents(owned_body);
@@ -4748,6 +4769,15 @@ const CacheIntent = union(enum) {
     // Conditional request in flight; on a 304 the stale entry is renewed
     // and served. Owns the entry (possibly an open file) until resolved.
     revalidate: Cache.CachedResponse,
+};
+
+pub const ScriptCache = struct {
+    // any update to the cache is aimed here
+    key: []const u8,
+
+    // existing cached script bytes. When null, ScriptManagerBase will
+    // potentially create it and then use `key` to update the database
+    bytes: ?[]const u8,
 };
 
 // Non-network URL schemes whose response is synthesized in-process rather than

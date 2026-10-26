@@ -41,7 +41,7 @@ entry_limit: u32,
 
 // When the schema changes, change this value, and the DB will be deleted and
 // re-created with the schema
-const schema_version = 1;
+const schema_version = 2;
 
 // body stays last so that reading columns before it hopefully doesn't visit
 // overflow pages.
@@ -58,6 +58,7 @@ const schema = [_][:0]const u8{
     \\      last_modified     text,
     \\      vary_headers      blob not null,
     \\      headers           blob not null,
+    \\      script_cache      blob,
     \\      body              blob not null
     \\ ) strict
     ,
@@ -231,7 +232,8 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !
 fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     var entry = try conn.row(
         \\ select status, stored_at, age_at_store, max_age, must_revalidate,
-        \\     content_type, etag, last_modified, vary_headers, headers, body
+        \\     content_type, etag, last_modified, vary_headers, headers,
+        \\     script_cache, body
         \\ from cache where url = $1
     , .{req.url}) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
@@ -297,7 +299,8 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, req: CacheGetRequest) 
         .content_type = try arena.dupe(u8, raw_content_type),
         .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
         .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
-        .data = .{ .buffer = try arena.dupe(u8, entry.get(Blob, 10).data) },
+        .script_cache = if (entry.get(?Blob, 10)) |b| try arena.dupe(u8, b.data) else null,
+        .data = .{ .buffer = try arena.dupe(u8, entry.get(Blob, 11).data) },
     };
     return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
@@ -340,6 +343,20 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
     });
 
     log.debug(.cache, "put", .{ .url = req.url, .body_len = body.len });
+}
+
+pub fn putScriptCache(self: *SqliteCache, url: []const u8, body: []const u8, bytes: []const u8) !void {
+    const conn = try self.pool.acquire();
+    defer self.pool.release(conn);
+
+    // We match on the body to make sure we're setting the script_cache for
+    // the right body. It is possible, though unlikely, that this row has been
+    // updated since we read it with a new body. If so, our cached script would
+    // no longer be valid.
+    try conn.exec(
+        "update cache set script_cache = $1 where url = $2 and body = $3",
+        .{ Blob{ .data = bytes }, url, Blob{ .data = body } },
+    );
 }
 
 pub fn clear(self: *SqliteCache) !void {
@@ -1015,6 +1032,47 @@ test "SqliteCache: renew preserves body" {
     );
     try testing.expect(result == .hit);
     try testing.expectEqual("original body", result.hit.data.buffer);
+}
+
+test "SqliteCache: script cache is kept by renew and cleared by put" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
+    const req: CachePutRequest = .{
+        .url = "https://example.com/a.js",
+        .content_type = "text/javascript",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .vary_headers = &.{},
+    };
+    try cache.put(req, "var a = 1;");
+    try testing.expectEqual(null, try getScriptCache(&cache, now));
+
+    // Not written when the stored body isn't the one the bytes came from.
+    try cache.putScriptCache(req.url, "var a = 2;", "stale");
+    try testing.expectEqual(null, try getScriptCache(&cache, now));
+
+    try cache.putScriptCache(req.url, "var a = 1;", "compiled");
+    try testing.expectEqual("compiled", (try getScriptCache(&cache, now)).?);
+
+    try cache.renew(testing.arena_allocator, .{ .url = req.url, .timestamp = now + 100, .headers = &.{} });
+    try testing.expectEqual("compiled", (try getScriptCache(&cache, now + 100)).?);
+
+    try cache.put(req, "var a = 1;");
+    try testing.expectEqual(null, try getScriptCache(&cache, now));
+}
+
+fn getScriptCache(cache: *Cache, now: u64) !?[]const u8 {
+    const result = try cache.get(testing.arena_allocator, .{
+        .url = "https://example.com/a.js",
+        .timestamp = now,
+        .request_headers = &.{},
+    });
+    return result.hit.script_cache;
 }
 
 test "SqliteCache: renew merges the 304's headers into the stored ones" {

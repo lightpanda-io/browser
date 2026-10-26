@@ -87,6 +87,13 @@ pub fn put(self: *Cache, req: CachePutRequest, body: []const u8) !void {
     };
 }
 
+pub fn putScriptCache(self: *Cache, url: []const u8, body: []const u8, bytes: []const u8) !void {
+    return switch (self.kind) {
+        .noop => {},
+        inline else => |*c| c.putScriptCache(url, body, bytes),
+    };
+}
+
 pub fn evict(self: *Cache, url: []const u8) void {
     return switch (self.kind) {
         .noop => {},
@@ -289,6 +296,7 @@ pub const CachedResponse = struct {
     etag: ?[]const u8,
     last_modified: ?[]const u8,
     headers: []const Http.Header,
+    script_cache: ?[]const u8 = null,
     data: CachedData,
 
     pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
