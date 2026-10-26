@@ -60,6 +60,15 @@
 
   div.style.setProperty('float', 'right');
   testing.expectEqual('right', div.style.cssFloat);
+
+  // undefined stringifies to "undefined", an invalid value: the declaration stays
+  div.style.cssFloat = undefined;
+  testing.expectEqual('right', div.style.cssFloat);
+
+  // [LegacyNullToEmptyString]: null removes it
+  div.style.cssFloat = null;
+  testing.expectEqual('', div.style.cssFloat);
+  testing.expectEqual('', div.style.cssText);
 }
 </script>
 
