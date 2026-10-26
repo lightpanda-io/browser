@@ -97,7 +97,7 @@ inspector: ?*Inspector,
 // which an be created once per isolate.
 private_symbols: PrivateSymbols,
 
-// Interned names for `hideServiceWorker`.
+// Interned names for `hideServiceWorker` and `hideSecureContextInterfaces`.
 disabled_api_names: DisabledApiNames,
 
 microtask_queues_are_running: bool,
@@ -435,10 +435,23 @@ pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: 
     // A [Global] interface's members are on its prototype and mirrored onto the
     // global itself.
     self.deletePrototypeMember(v8_context, global_obj, if (comptime is_frame) "window" else "worker_global_scope", "caches");
+    self.deleteGlobal(v8_context, global_obj, "caches");
+}
+
+// [SecureContext] interfaces that a frame without a potentially trustworthy
+// origin must not see. Like serviceWorker, they're baked into the snapshot, so
+// they're deleted per context rather than never added.
+pub fn hideSecureContextInterfaces(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    inline for (.{ "payment_request", "payment_response", "payment_request_update_event", "payment_method_change_event" }) |name| {
+        self.deleteGlobal(v8_context, global_obj, name);
+    }
+}
+
+fn deleteGlobal(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime name: []const u8) void {
     var deleted: v8.MaybeBool = undefined;
-    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, "caches")), &deleted);
+    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, name)), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "experimental API not hidden", .{ .interface = "global", .member = "caches" });
+        log.warn(.js, "API not hidden", .{ .interface = "global", .member = name });
     }
 }
 
@@ -995,6 +1008,10 @@ const DisabledApiNames = struct {
     prototype: v8.Eternal,
     service_worker: v8.Eternal,
     caches: v8.Eternal,
+    payment_request: v8.Eternal,
+    payment_response: v8.Eternal,
+    payment_request_update_event: v8.Eternal,
+    payment_method_change_event: v8.Eternal,
 
     fn init(isolate: *v8.Isolate) DisabledApiNames {
         var self: DisabledApiNames = undefined;
@@ -1004,6 +1021,10 @@ const DisabledApiNames = struct {
         intern(isolate, &self.prototype, "prototype");
         intern(isolate, &self.service_worker, "serviceWorker");
         intern(isolate, &self.caches, "caches");
+        intern(isolate, &self.payment_request, "PaymentRequest");
+        intern(isolate, &self.payment_response, "PaymentResponse");
+        intern(isolate, &self.payment_request_update_event, "PaymentRequestUpdateEvent");
+        intern(isolate, &self.payment_method_change_event, "PaymentMethodChangeEvent");
         return self;
     }
 
