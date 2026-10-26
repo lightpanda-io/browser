@@ -148,17 +148,20 @@ fn disposeBrowserContext(cmd: *CDP.Command) !void {
         browserContextId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse {
-        return cmd.sendError(-32602, "No browser context with the given id found", .{});
-    };
+    const bc = cmd.browser_context orelse return sendContextNotFound(cmd, params.browserContextId);
     if (std.mem.eql(u8, bc.id, params.browserContextId) == false) {
-        return cmd.sendError(-32602, "No browser context with the given id found", .{});
+        return sendContextNotFound(cmd, params.browserContextId);
     }
 
     // Disposing a context closes its target; drivers wait on those events.
     try bc.closeTarget();
     cmd.cdp.disposeBrowserContext();
     try cmd.sendResult(null, .{});
+}
+
+fn sendContextNotFound(cmd: *CDP.Command, context_id: []const u8) !void {
+    const message = try std.fmt.allocPrint(cmd.arena, "Failed to find context with id {s}", .{context_id});
+    return cmd.sendError(-32000, message, .{});
 }
 
 fn createTarget(cmd: *CDP.Command) !void {
@@ -607,7 +610,7 @@ test "cdp.target: disposeBrowserContext" {
             .method = "Target.disposeBrowserContext",
             .params = .{ .browserContextId = "BID-10" },
         });
-        try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 8 });
+        try ctx.expectSentError(-32000, "Failed to find context with id BID-10", .{ .id = 8 });
     }
 
     {
@@ -681,7 +684,7 @@ test "cdp.target: disposeBrowserContext destroys an unattached target" {
 
     // An invalid context ID must leave the live target untouched.
     try ctx.processMessage(.{ .id = 2, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
-    try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 2 });
+    try ctx.expectSentError(-32000, "Failed to find context with id BID-UNKNOWN", .{ .id = 2 });
     try ctx.expectSentCount(3);
     try testing.expectEqual(&target_id, bc.target_id.?);
 
