@@ -4138,12 +4138,16 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     var buf = std.Io.Writer.Allocating.init(arena.allocator());
     try form_data.write(arena.allocator(), .{ .encoding = encoding, .charset = charset }, &buf.writer);
 
-    var action = blk: {
+    var action: []const u8 = blk: {
         if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
         }
-        break :blk form_element.getAttributeInterned("action") orelse self.url;
+        break :blk form_element.getAttributeInterned("action") orelse "";
     };
+    if (action.len == 0) {
+        // An empty action is the form document's URL, fragment included.
+        action = form_element.asNode().getDocument(self).getURL(self);
+    }
 
     var opts = NavigateOpts{
         .reason = .form,

@@ -66,3 +66,48 @@
     });
   }
 </script>
+
+<script id=get_empty_action_is_document_url type=module>
+  {
+    // An empty action is the form document's URL, so its fragment is kept.
+    const state = await testing.async();
+    const frame = await loadFrame('get_empty_action_frame', 'support/page.html?sort=name#top');
+
+    const form = frame.contentDocument.createElement('form');
+    form.setAttribute('action', '');
+    form.target = 'get_empty_action_frame';
+    form.innerHTML = '<input name=sort value=price>';
+    frame.contentDocument.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.submit();
+
+    await state.done(() => {
+      testing.expectEqual('?sort=price', frame.contentWindow.location.search);
+      testing.expectEqual('#top', frame.contentWindow.location.hash);
+    });
+  }
+</script>
+
+<script id=get_empty_formaction_is_document_url type=module>
+  {
+    // An empty formaction doesn't fall back to the form's action.
+    const state = await testing.async();
+    const frame = await loadFrame('get_empty_formaction_frame', 'support/page.html?sort=name#top');
+
+    const form = frame.contentDocument.createElement('form');
+    form.action = 'other.html';
+    form.target = 'get_empty_formaction_frame';
+    form.innerHTML = '<input name=sort value=price><button formaction="">go</button>';
+    frame.contentDocument.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.requestSubmit(form.querySelector('button'));
+
+    await state.done(() => {
+      testing.expectEqual(true, frame.contentWindow.location.pathname.endsWith('/support/page.html'));
+      testing.expectEqual('?sort=price', frame.contentWindow.location.search);
+      testing.expectEqual('#top', frame.contentWindow.location.hash);
+    });
+  }
+</script>
