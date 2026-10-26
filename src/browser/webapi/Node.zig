@@ -1831,6 +1831,34 @@ pub fn flatParent(self: *Node, frame: *const Frame) ?*Node {
     return parent;
 }
 
+/// The first child in the flat tree: a host's first shadow child, an assigned
+/// slot's first slottable, else the DOM first child.
+pub fn flatFirstChild(self: *Node, frame: *const Frame) ?*Node {
+    if (self.is(Element)) |el| {
+        if (el.hostedShadowRoot(frame)) |shadow| {
+            return shadow.asNode().firstChild();
+        }
+    }
+    if (self.is(Element.Html.Slot)) |slot| {
+        // empty while the slot isn't in a shadow tree
+        if (slot._assigned.items.len > 0) {
+            return slot._assigned.items[0];
+        }
+    }
+    return self.firstChild();
+}
+
+/// The next sibling in the flat tree: a slotted node's next slottable, else
+/// the DOM next sibling.
+pub fn flatNextSibling(self: *Node, frame: *const Frame) ?*Node {
+    if (self.assignedSlot(frame)) |slot| {
+        const assigned = slot._assigned.items;
+        const i = std.mem.indexOfScalar(*Node, assigned, self) orelse return null;
+        return if (i + 1 < assigned.len) assigned[i + 1] else null;
+    }
+    return self.nextSibling();
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Node);
 

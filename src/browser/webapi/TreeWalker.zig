@@ -23,12 +23,13 @@ const Element = @import("Element.zig");
 const Frame = @import("../Frame.zig");
 
 pub const Full = TreeWalker(.full, .dom);
-pub const FullExcludeSelf = TreeWalker(.exclude_self, .dom);
 pub const Children = TreeWalker(.children, .dom);
+pub const FullExcludeSelf = TreeWalker(.exclude_self, .dom);
 
 // Pierces the shadow roots, apply slots/fallback and skip unslotted light children
 pub const Flat = TreeWalker(.full, .flat);
 pub const FlatChildren = TreeWalker(.children, .flat);
+pub const FlatExcludeSelf = TreeWalker(.exclude_self, .flat);
 
 const Mode = enum {
     full,
@@ -151,28 +152,14 @@ pub fn TreeWalker(comptime mode: Mode, comptime tree: Tree) type {
 
         fn firstChildOf(self: *const Self, node: *Node) ?*Node {
             if (comptime tree == .flat) {
-                if (node.is(Element)) |el| {
-                    if (el.hostedShadowRoot(self._frame)) |shadow| {
-                        return shadow.asNode().firstChild();
-                    }
-                }
-                if (node.is(Element.Html.Slot)) |slot| {
-                    // empty while the slot isn't in a shadow tree
-                    if (slot._assigned.items.len > 0) {
-                        return slot._assigned.items[0];
-                    }
-                }
+                return node.flatFirstChild(self._frame);
             }
             return node.firstChild();
         }
 
         fn nextSiblingOf(self: *const Self, node: *Node) ?*Node {
             if (comptime tree == .flat) {
-                if (node.assignedSlot(self._frame)) |slot| {
-                    const assigned = slot._assigned.items;
-                    const i = std.mem.indexOfScalar(*Node, assigned, node) orelse return null;
-                    return if (i + 1 < assigned.len) assigned[i + 1] else null;
-                }
+                return node.flatNextSibling(self._frame);
             }
             return node.nextSibling();
         }
