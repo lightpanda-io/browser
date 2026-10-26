@@ -114,9 +114,15 @@ pub fn event(_: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !
     return chain.get(1);
 }
 
-pub fn uiEvent(_: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn uiEvent(self: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
+    return self.eventWithParent(UIEvent, arena, typ, child);
+}
+
+/// An Event subclass whose parent is itself an Event subclass with no fields
+/// of its own to fill in.
+pub fn eventWithParent(_: *const Factory, comptime Parent: type, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
-        &.{ Event, UIEvent, @TypeOf(child) },
+        &.{ Event, Parent, @TypeOf(child) },
     ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup

@@ -107,6 +107,7 @@ pub const Type = union(enum) {
     toggle_event: *@import("event/ToggleEvent.zig"),
     task_priority_change_event: *@import("event/TaskPriorityChangeEvent.zig"),
     offline_audio_completion_event: *@import("webaudio/OfflineAudioCompletionEvent.zig"),
+    payment_request_update_event: *@import("payment/PaymentRequestUpdateEvent.zig"),
 };
 
 pub const Options = struct {
@@ -260,6 +261,12 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .offline_audio_completion_event => |e| return if (T == @import("webaudio/OfflineAudioCompletionEvent.zig")) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
+                return e;
+            }
+            return e.is(T);
+        },
+        .payment_request_update_event => |e| {
+            if (T == @import("payment/PaymentRequestUpdateEvent.zig")) {
                 return e;
             }
             return e.is(T);

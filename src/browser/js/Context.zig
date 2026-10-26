@@ -269,10 +269,14 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
         const token_local = v8.v8__Global__Get(&origin.security_token, isolate.handle);
         v8.v8__Context__SetSecurityToken(ls.local.handle, token_local);
 
-        // navigator.serviceWorker is [SecureContext]. With the feature
-        // disabled, Env.createContext has already removed it.
-        if (self.global == .frame and self.page.session.experimental_features.serviceworker and self.execution.isSecureContext() == false) {
-            env.hideServiceWorker(true, ls.local.handle, v8.v8__Context__Global(ls.local.handle).?);
+        if (self.global == .frame and self.execution.isSecureContext() == false) {
+            const global_obj = v8.v8__Context__Global(ls.local.handle).?;
+            // navigator.serviceWorker is [SecureContext]. With the feature
+            // disabled, Env.createContext has already removed it.
+            if (self.page.session.experimental_features.serviceworker) {
+                env.hideServiceWorker(true, ls.local.handle, global_obj);
+            }
+            env.hideSecureContextInterfaces(ls.local.handle, global_obj);
         }
     }
 }

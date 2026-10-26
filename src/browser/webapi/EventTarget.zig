@@ -36,6 +36,8 @@ const MessagePort = @import("MessagePort.zig");
 const Performance = @import("Performance.zig");
 const Permissions = @import("Permissions.zig");
 const Notification = @import("Notification.zig");
+const PaymentRequest = @import("payment/PaymentRequest.zig");
+const PaymentResponse = @import("payment/PaymentResponse.zig");
 const SharedWorker = @import("SharedWorker.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
@@ -102,6 +104,8 @@ pub const Type = enum(u8) {
     navigation_history_entry,
     node,
     notification,
+    payment_request,
+    payment_response,
     performance,
     permission_status,
     screen,
@@ -148,6 +152,8 @@ pub fn Subtype(comptime tag: Type) type {
         .navigation_history_entry => NavigationHistoryEntry,
         .node => Node,
         .notification => Notification,
+        .payment_request => PaymentRequest,
+        .payment_response => PaymentResponse,
         .performance => Performance,
         .permission_status => Permissions.PermissionStatus,
         .screen => Screen,
@@ -420,6 +426,8 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .idb_database => writer.writeAll("<IDBDatabase>"),
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
+        .payment_request => writer.writeAll("<PaymentRequest>"),
+        .payment_response => writer.writeAll("<PaymentResponse>"),
         .permission_status => writer.writeAll("<PermissionStatus>"),
         .navigation_history_entry => writer.writeAll("<NavigationHistoryEntry>"),
     };
@@ -448,6 +456,8 @@ pub fn toString(self: *EventTarget) []const u8 {
         .navigation_history_entry => return "[object NavigationHistoryEntry]",
         .node => return "[object Node]",
         .notification => return "[object Notification]",
+        .payment_request => return "[object PaymentRequest]",
+        .payment_response => return "[object PaymentResponse]",
         .performance => return "[object Performance]",
         .permission_status => return "[object PermissionStatus]",
         .screen => return "[object Screen]",
