@@ -89,10 +89,18 @@ pub const Robots = @This();
 pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 
 pub const RobotStore = struct {
-    const RobotsEntry = union(enum) {
-        present: Robots,
-        allowed,
-        disallowed,
+    //a cached robots.txt SHOULD NOT be used for more than 24h.
+    const max_age_s = 24 * 60 * 60;
+
+    const RobotsEntry = struct {
+        result: Result,
+        expires_at: u64,
+
+        const Result = union(enum) {
+            present: Robots,
+            allowed,
+            disallowed,
+        };
     };
 
     allocator: std.mem.Allocator,
@@ -117,7 +125,7 @@ pub const RobotStore = struct {
     }
 
     fn freeEntry(self: *RobotStore, entry: *RobotsEntry) void {
-        switch (entry.*) {
+        switch (entry.result) {
             .present => |*robots| robots.deinit(self.allocator),
             .allowed, .disallowed => {},
         }
@@ -129,8 +137,8 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const entry = self.map.get(url) orelse return null;
-        return switch (entry.*) {
+        const entry = self.getLive(url) orelse return null;
+        return switch (entry.result) {
             .allowed => .allowed,
             .disallowed => .blocked,
             .present => |robots| if (robots.isAllowed(path)) .allowed else .blocked,
@@ -159,8 +167,8 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const entry = self.map.get(url) orelse return null;
-        const signals = switch (entry.*) {
+        const entry = self.getLive(url) orelse return null;
+        const signals = switch (entry.result) {
             .present => |robots| robots.content_signals,
             .allowed, .disallowed => return null,
         };
@@ -189,7 +197,22 @@ pub const RobotStore = struct {
         _ = try self.insert(url, .disallowed);
     }
 
-    fn insert(self: *RobotStore, url: []const u8, entry: RobotsEntry) !bool {
+    // Caller holds the mutex.
+    fn getLive(self: *RobotStore, url: []const u8) ?*RobotsEntry {
+        const entry = self.map.get(url) orelse return null;
+        if (entry.expires_at > lp.datetime.timestamp(.real)) {
+            return entry;
+        }
+        var expired = self.map.remove(url).?;
+        self.freeEntry(&expired);
+        return null;
+    }
+
+    fn insert(self: *RobotStore, url: []const u8, result: RobotsEntry.Result) !bool {
+        const entry: RobotsEntry = .{
+            .result = result,
+            .expires_at = lp.datetime.timestamp(.real) + max_age_s,
+        };
         switch (try self.map.insert(url, entry)) {
             .exists => return false,
             .inserted => |evicted| {
@@ -1270,6 +1293,29 @@ test "Robots: RobotStore.getContentSignals round-trips" {
 
     // Unknown host has no stored robots.
     try std.testing.expectEqual(null, try store.getContentSignals(allocator, "https://other.com/robots.txt"));
+}
+
+test "Robots: RobotStore drops expired entries" {
+    const allocator = std.testing.allocator;
+
+    var store = RobotStore.init(allocator, 1000);
+    defer store.deinit();
+
+    const url = "https://example.com/robots.txt";
+    const robots = try store.robotsFromBytes("MyBot",
+        \\User-agent: *
+        \\Disallow: /private
+        \\
+    );
+    try store.put(url, robots);
+    try std.testing.expectEqual(.blocked, store.checkPath(url, "/private").?);
+
+    store.map.get(url).?.expires_at = lp.datetime.timestamp(.real) - 1;
+    try std.testing.expectEqual(null, store.checkPath(url, "/private"));
+
+    // The refetch's result replaces it.
+    try store.putAllowed(url);
+    try std.testing.expectEqual(.allowed, store.checkPath(url, "/private").?);
 }
 
 fn testMatch(pattern: []const u8, path: []const u8) bool {
