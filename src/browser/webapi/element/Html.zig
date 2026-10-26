@@ -102,7 +102,6 @@ pub const Track = @import("html/Track.zig");
 pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
-const log = lp.log;
 const TextTransform = StyleManager.TextTransform;
 
 const HtmlElement = @This();
@@ -611,17 +610,8 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), frame);
 }
 
-// HTML §7.7.5.2 specifies the IDL attribute as true iff the element's effective
-// content editable state is "true" or "plaintext-only". Lightpanda has no
-// caret/keyboard editing pipeline, so a true answer cannot be honored
-// end-to-end — downstream CDP tools (notably Puppeteer's dispatchKeyEvent
-// path) would route into an input pipeline that silently no-ops. Always
-// return false, and log .not_implemented when the spec would have said true
-// so usage surfaces in telemetry rather than silently depending on an
-// unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
-// ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
-// the routing-vs-fail-loud discussion.
-/// Reflects the attribute only; `isContentEditable` stays false regardless.
+/// Reflects the attribute only; `isContentEditable` gives the state the
+/// element ends up with (see Element.isEditable).
 pub fn getContentEditable(self: *HtmlElement) []const u8 {
     const raw = self.asElement().getAttributeInterned("contenteditable") orelse return "inherit";
     if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
@@ -644,10 +634,7 @@ pub fn setContentEditable(self: *HtmlElement, value: []const u8, frame: *Frame) 
 }
 
 pub fn getIsContentEditable(self: *HtmlElement) bool {
-    if (self.asElement().isEditable()) {
-        log.info(.not_implemented, "IsContentEditable", .{});
-    }
-    return false;
+    return self.asElement().isEditable();
 }
 
 // An event handler content attribute (onclick="...") sets the handler to its

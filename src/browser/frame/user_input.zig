@@ -1166,10 +1166,8 @@ fn outermostEditingHost(target: *Element) ?*Element {
     var host: ?*Element = null;
     var current: ?*Element = target;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.getAttributeInterned("contenteditable") == null) {
-            continue;
-        }
-        if (el.isEditingHost() == false) {
+        const editable = el.contentEditableState() orelse continue;
+        if (editable == false) {
             break;
         }
         host = el;
