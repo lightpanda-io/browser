@@ -449,7 +449,7 @@ fn shouldSerializeShadow(shadow: *const Node.ShadowRoot, declarative: Opts.Shado
     return false;
 }
 
-fn isVoidElement(el: *Node.Element) bool {
+pub fn isVoidElement(el: *Node.Element) bool {
     if (el._namespace != .html) {
         // only html has void tags
         return false;
