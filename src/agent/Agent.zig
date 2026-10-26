@@ -1223,9 +1223,11 @@ fn urlArg(args: ?std.json.Value) ?std.json.Value {
     return url;
 }
 
+/// A deep copy into `arena`: the model's args live in zenai's per-call arena,
+/// freed before the turn records the call.
 fn pinArgs(arena: std.mem.Allocator, args: ?std.json.Value, pinned: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
     const p = pinned orelse return args;
-    var obj: std.json.ObjectMap = if (args) |a| (if (a == .object) try a.object.clone(arena) else .empty) else .empty;
+    var obj: std.json.ObjectMap = if (args) |a| (if (a == .object) (try zenai.json.dupeValue(arena, a)).object else .empty) else .empty;
     var it = p.object.iterator();
     while (it.next()) |entry| try obj.put(arena, entry.key_ptr.*, entry.value_ptr.*);
     return .{ .object = obj };
@@ -2362,4 +2364,25 @@ test "capToolOutput: extract is exempt from the default cap" {
 
     try std.testing.expectEqual(extract_output_max_bytes, toolOutputCap("extract"));
     try std.testing.expectEqual(tool_output_max_bytes, toolOutputCap("html"));
+}
+
+test "pinArgs: the result outlives the model's args" {
+    var dst: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer dst.deinit();
+    const da = dst.allocator();
+
+    var src: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    const sa = src.allocator();
+    var model: std.json.ObjectMap = .empty;
+    try model.put(sa, try sa.dupe(u8, "selector"), .{ .string = try sa.dupe(u8, "#email") });
+    try model.put(sa, try sa.dupe(u8, "value"), .{ .string = try sa.dupe(u8, "guess") });
+
+    var pinned: std.json.ObjectMap = .empty;
+    try pinned.put(da, "value", .{ .string = "$LP_EMAIL" });
+
+    const out = (try pinArgs(da, .{ .object = model }, .{ .object = pinned })).?;
+    src.deinit();
+
+    try std.testing.expectEqualStrings("#email", out.object.get("selector").?.string);
+    try std.testing.expectEqualStrings("$LP_EMAIL", out.object.get("value").?.string);
 }
