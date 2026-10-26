@@ -359,7 +359,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         findContext(bc, root, context_id) orelse return error.ContextNotFound
     else
         // orelse root is safe here since there's no frame-specific state being used
-        (node.dom.ownerFrame(root) orelse root).js;
+        (node.dom.ownerFrame(root) orelse root).main_js;
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -404,8 +404,8 @@ fn findContext(bc: *CDP.BrowserContext, root: *Frame, context_id: u32) ?*js.Cont
 }
 
 fn findMainWorldContext(frame: *Frame, context_id: u32) ?*js.Context {
-    if (contextIdOf(frame.js) == context_id) {
-        return frame.js;
+    if (contextIdOf(frame.main_js) == context_id) {
+        return frame.main_js;
     }
     for (frame.child_frames.items) |child| {
         if (findMainWorldContext(child, context_id)) |js_context| {

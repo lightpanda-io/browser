@@ -1512,6 +1512,50 @@ test "cdp.frame: isolated world mutation delivers main-world observers" {
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "a1,b1,c1" } }, .{ .id = 4 });
 }
 
+// An event caused from an isolated world reaches main-world listeners with
+// main-world wrappers: page expandos on the target are visible.
+test "cdp.frame: isolated world event reaches main-world listeners with main-world wrappers" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Runtime.evaluate", .params = .{
+        .expression =
+        \\ window.seen = [];
+        \\ const el = document.body.appendChild(document.createElement('input'));
+        \\ el.marker = 'main';
+        \\ const record = (kind) => (e) => seen.push(`${kind} ${e.type} ${e.target === el} ${e.target.marker}`);
+        \\ el.addEventListener('focus', record('listener'));
+        \\ el.setAttribute('onfocus', "seen.push(`attribute ${event.type} ${event.target === el} ${event.target.marker}`)");
+        \\ el.addEventListener('click', { handleEvent: record('object') });
+        \\ el.onclick = record('handler');
+        ,
+    } });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const world_ctx = try isolatedWorldContextId(bc, root);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Runtime.evaluate", .params = .{
+        .expression = "const i = document.querySelector('input'); i.focus(); i.click();",
+        .contextId = world_ctx,
+    } });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Runtime.evaluate", .params = .{
+        .expression = "seen.join(',')",
+    } });
+    try ctx.expectSentResult(.{ .result = .{
+        .type = "string",
+        .value = "listener focus true main,attribute focus true main,object click true main,handler click true main",
+    } }, .{ .id = 4 });
+}
+
 // Chrome only puts a world in a frame on an explicit trigger. A world the
 // client asked for on the root must not appear in a sibling frame just
 // because that frame navigated afterwards.
