@@ -952,8 +952,10 @@ pub const Script = struct {
             .kind = fe.kind,
         });
 
+        // A script runs in the main world, even when an isolated world
+        // inserted it (e.g. Playwright's setContent uses document.write).
         var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
+        frame.main_js.localScope(&ls);
         defer ls.deinit();
 
         const local = &ls.local;
@@ -1002,7 +1004,7 @@ pub const Script = struct {
                 },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
+                    frame.main_js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
