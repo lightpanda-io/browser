@@ -485,11 +485,13 @@ fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
     return self.getPropertyValue("float", frame);
 }
 
-fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+fn setFloat(self: *CSSStyleDeclaration, value: js.Value, frame: *Frame) !void {
     if (self._is_computed) {
         return error.NoModificationAllowed;
     }
-    if (try self.setPropertyImpl("float", value_ orelse "", false, frame)) {
+    // `[LegacyNullToEmptyString] CSSOMString`: null becomes "", undefined becomes "undefined".
+    const str = if (value.isNull()) "" else try value.toZig([]const u8);
+    if (try self.setPropertyImpl("float", str, false, frame)) {
         try self.syncStyleAttribute(frame);
     }
 }
