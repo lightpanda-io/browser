@@ -391,7 +391,7 @@
   const impDiv = document.createElement('div');
   impDiv.setAttribute('style', 'color: red !important; color: blue');
   document.body.appendChild(impDiv);
-  testing.expectEqual('red', window.getComputedStyle(impDiv).getPropertyValue('color'));
+  testing.expectEqual('rgb(255, 0, 0)', window.getComputedStyle(impDiv).getPropertyValue('color'));
   testing.expectEqual('red', impDiv.style.getPropertyValue('color'));
 }
 </script>
