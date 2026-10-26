@@ -746,12 +746,15 @@ pub const BrowserContext = struct {
         }
     }
 
-    pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
+    pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) !Node.Writer {
         return .{
             .root = root,
             .depth = opts.depth,
             .exclude_root = opts.exclude_root,
+            .pierce = opts.pierce,
             .registry = &self.node_registry,
+            // shadow roots are tracked per Page, any of its frames will do
+            .frame = self.mainFrame() orelse return error.FrameNotLoaded,
         };
     }
 
