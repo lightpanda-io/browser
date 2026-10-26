@@ -113,6 +113,8 @@ context: ?*Element = null,
 fragment: bool = false,
 
 xml_error: bool = false,
+// An XML entity that xml5ever doesn't know is only an error without a DTD.
+seen_doctype: bool = false,
 terminated: bool = false,
 appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
 inserted_since_checkpoint: u16 = 0,
@@ -484,26 +486,29 @@ fn parseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
 // xml5ever xml error callback indicating a well-formedness violating.
 fn xmlParseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    if (isWellFormednessError(err.slice())) {
+    // Without a DTD to declare it, an unknown entity breaks the "Entity
+    // Declared" well-formedness constraint.
+    if (isWellFormednessError(err.slice(), self.seen_doctype == false)) {
         self.xml_error = true;
     }
 }
 
 fn validateErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
     const has_error: *bool = @ptrCast(@alignCast(ctx));
-    if (isWellFormednessError(err.slice())) {
+    // Lenient: a page that fails this goes through the HTML parser instead.
+    if (isWellFormednessError(err.slice(), false)) {
         has_error.* = true;
     }
 }
 
-fn isWellFormednessError(msg: []const u8) bool {
+fn isWellFormednessError(msg: []const u8, unknown_entity_is_error: bool) bool {
     if (std.mem.startsWith(u8, msg, "Bad character") and msg.len > "Bad character".len) {
         // discouraged by legal code point
         return false;
     }
     if (std.mem.startsWith(u8, msg, "Invalid character reference")) {
-        // xml5ever doesn't know about this entity, but it could be valid
-        return false;
+        // xml5ever doesn't know about this entity, but a DTD could declare it
+        return unknown_entity_is_error;
     }
     return true;
 }
@@ -647,6 +652,7 @@ fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5
     if (self.terminated) {
         return;
     }
+    self.seen_doctype = true;
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendDoctypeToDocument(name.slice(), public_id.slice(), system_id.slice()) catch |err| {
