@@ -3622,6 +3622,41 @@ test "cdp.input: typing into an editing host without a selection inserts at its 
     );
 }
 
+test "cdp.input: typing into a focused editing host goes into its first paragraph" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p">hello</p><p>x</p></div>');
+        \\const host = document.getElementById('host');
+        \\const p = document.getElementById('p');
+        \\host.focus();
+    , .{ .key = "c" },
+        \\host.innerHTML === '<p id="p">chello</p><p>x</p>' &&
+        \\window.types() === 'keypress:host,beforeinput:host,textInput:host,input:host' &&
+        \\getSelection().anchorNode === p.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: the first caret position of an editing host skips whitespace and descends" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>\n  <!--c--><p>\n<b id="b">bold</b> rest</p></div>');
+        \\const host = document.getElementById('host');
+        \\const b = document.getElementById('b');
+        \\host.focus();
+    , .{ .insert_text = "X" },
+        \\b.textContent === 'Xbold' &&
+        \\getSelection().anchorNode === b.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: the first caret position of an editing host stops at a void element" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><img>t</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+    , .{ .insert_text = "X" },
+        \\host.innerHTML === 'X<img>t'
+    );
+}
+
 test "cdp.input: text typed into an editing host's descendant targets the host" {
     try expectEditingHostInput(
         \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><span id="s" tabindex="0">ab</span></div>');

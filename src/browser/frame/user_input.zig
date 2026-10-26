@@ -28,6 +28,7 @@ const lp = @import("lightpanda");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
+const dump = @import("../dump.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
@@ -1657,8 +1658,8 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
 /// through beforeinput like a control's edit, then replaces the selection and
 /// leaves the caret after the text. The events target the editing host of
 /// `target`, as in Chrome. A selection outside the editable content of the
-/// host puts the text at the start of the host, where Chrome places the caret
-/// when the host is focused. Only text insertion is supported: line breaks,
+/// host puts the text at the host's first editable position, where Chrome
+/// places the caret when the host is focused. Only text insertion is supported: line breaks,
 /// deletion and formatting need an editing pipeline. Returns whether the edit
 /// happened.
 fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !bool {
@@ -1673,8 +1674,7 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
     }
 
     const selection = &frame.document._selection;
-    var container = host;
-    var offset: u32 = 0;
+    var container: *Node, var offset: u32 = firstCaretPosition(host);
     if (selection._range) |range| {
         const abstract = range.asAbstractRange();
         if (isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer())) {
@@ -1736,6 +1736,36 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
     }, frame);
     try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
     return true;
+}
+
+// Where Chrome puts the caret when an editing host is focused: its first
+// editable position, so inside a leading <p> rather than before it. Skips
+// comments and whitespace-only text, and stops at a void or non-editable
+// element.
+fn firstCaretPosition(host: *Node) struct { *Node, u32 } {
+    var container = host;
+    descend: while (true) {
+        var index: u32 = 0;
+        var child = container.firstChild();
+        while (child) |c| : ({
+            child = c.nextSibling();
+            index += 1;
+        }) {
+            if (c.is(Node.CData.Text)) |t| {
+                if (std.mem.trim(u8, t.asCData().getData().str(), " \t\n\r\x0c").len == 0) {
+                    continue;
+                }
+                return .{ c, 0 };
+            }
+            const el = c.is(Element) orelse continue;
+            if (el.isEditable() == false or dump.isVoidElement(el)) {
+                return .{ container, index };
+            }
+            container = c;
+            continue :descend;
+        }
+        return .{ container, 0 };
+    }
 }
 
 // Whether `node` is inside `host` and editable: the nearest contenteditable
