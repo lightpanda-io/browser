@@ -431,6 +431,7 @@ test "parse: tools without a prompt form keep their positional" {
     const aa = arena.allocator();
     try testing.expectString("Enter", (try Command.parse(aa, "/press Enter")).tool_call.args.?.object.get("key").?.string);
     try testing.expectString("networkidle", (try Command.parse(aa, "/waitForState networkidle")).tool_call.args.?.object.get("state").?.string);
+    try testing.expectString("#logout", (try Command.parse(aa, "/waitForSelector '#logout'")).tool_call.args.?.object.get("selector").?.string);
 }
 
 test "parse: /getEnv positional binds to optional name" {

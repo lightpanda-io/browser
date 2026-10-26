@@ -292,7 +292,7 @@ test "record downgrades goto before waitForSelector to domcontentloaded" {
     defer recorder.deinit();
 
     try recorder.record(parseLine(aa, "/goto https://example.com"));
-    try recorder.record(parseLine(aa, "/waitForSelector selector=.story"));
+    try recorder.record(parseLine(aa, "/waitForSelector .story"));
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"domcontentloaded\" });\npage.waitForSelector(\".story\");\n",
@@ -326,7 +326,7 @@ test "record preserves an explicit waitUntil on goto" {
     defer recorder.deinit();
 
     try recorder.record(parseLine(aa, "/goto https://example.com waitUntil=networkidle"));
-    try recorder.record(parseLine(aa, "/waitForSelector selector=.story"));
+    try recorder.record(parseLine(aa, "/waitForSelector .story"));
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"networkidle\" });\npage.waitForSelector(\".story\");\n",

@@ -123,8 +123,11 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
 /// mistaken for a selector.
 pub fn takesPrompt(tool: BrowserTool) bool {
     return switch (tool) {
-        .click, .fill, .hover, .selectOption, .setChecked, .waitForSelector, .extract, .evaluate, .waitForScript => true,
-        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        .click, .fill, .hover, .selectOption, .setChecked, .extract, .evaluate => true,
+        // A wait targets what is not on the page yet, so the model has nothing
+        // to work from.
+        .waitForSelector, .waitForScript, .waitForState => false,
+        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
     };
 }
 
