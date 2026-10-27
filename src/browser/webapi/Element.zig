@@ -1745,9 +1745,9 @@ fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_per
     };
 }
 
-/// The width of the nearest ancestor with a box; the viewport above the root.
+/// The width of the containing block; the viewport above the root.
 fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
-    const parent = owner._style_manager.boxParent(self) orelse {
+    const parent = owner._style_manager.containingBlock(self) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
     return parent.boxWidth(owner);

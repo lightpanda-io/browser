@@ -916,14 +916,10 @@ fn measureText(parent: *Node.Element, text: []const u8, frame: *Frame) ?DOMRect.
 }
 
 fn lineWidth(box: *Node.Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    var current: ?*Node.Element = box;
-    while (current) |el| : (current = style_manager.boxParent(el)) {
-        if (style_manager.isBlockLevel(el)) {
-            return el.boxAxis(owner, .width);
-        }
-    }
-    return @floatFromInt(owner.page.getViewport().width);
+    const block = owner._style_manager.blockContainer(box) orelse {
+        return @floatFromInt(owner.page.getViewport().width);
+    };
+    return block.boxAxis(owner, .width);
 }
 
 fn getContainerElement(self: *const Range, frame: *Frame) ?*Node.Element {

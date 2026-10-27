@@ -914,6 +914,41 @@ fn generatesBox(self: *StyleManager, el: *Element) bool {
     return parent._type == .document;
 }
 
+/// The nearest ancestor whose width el's percentages and fill resolve
+/// against. A plain inline box is skipped: a block inside a span sizes off
+/// the block around the span.
+pub fn containingBlock(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    return self.blockContainer(self.boxParent(el) orelse return null);
+}
+
+/// el, if it's a block container (anything but a plain inline box), else
+/// its containing block. Text in el wraps at this box's width.
+pub fn blockContainer(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return el;
+    var current: ?*Element = el;
+    while (current) |c| : (current = self.boxParent(c)) {
+        if (self.isPlainInline(c) == false) {
+            return c;
+        }
+    }
+    return null;
+}
+
+fn isPlainInline(self: *StyleManager, el: *Element) bool {
+    if (self.visibilityProps(el).box != .inline_level or el.getTag().isReplacedOrControl()) {
+        return false;
+    }
+    // Floats, out-of-flow boxes and flex/grid items are blockified
+    const flow = self.flowProps(el);
+    if (flow.position.outOfFlow() or flow.floated) {
+        return false;
+    }
+    const parent = self.boxParent(el) orelse return false;
+    return self.visibilityProps(parent).display != .flex and self.visibilityProps(parent).display != .grid;
+}
+
 /// The children lay out side by side: a flex row or a grid. Elsewhere block
 /// children stack and only inline-level ones share a line.
 pub fn laysOutInRow(self: *StyleManager, el: *Element) bool {
@@ -928,7 +963,7 @@ pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
     switch (self.visibilityProps(el).box) {
         .block_level, .table => {},
-        .inline_level, .contents => return false,
+        .inline_level, .atomic_inline, .contents => return false,
     }
     const flow = self.flowProps(el);
     return flow.position.outOfFlow() == false and flow.floated == false;
@@ -1613,9 +1648,12 @@ pub const Display = enum(u2) {
     }
 };
 
-const Box = enum(u2) {
+const Box = enum(u3) {
     block_level,
+    // A plain inline box: not a block container, so not a containing block
     inline_level,
+    // inline-block, inline-flex, ...: inline outside, block container inside
+    atomic_inline,
     contents,
     table,
 
@@ -1629,8 +1667,11 @@ const Box = enum(u2) {
             return .table;
         }
 
-        if (std.ascii.startsWithIgnoreCase(trimmed, "inline")) {
+        if (std.ascii.eqlIgnoreCase(trimmed, "inline") or std.ascii.eqlIgnoreCase(trimmed, "inline flow")) {
             return .inline_level;
+        }
+        if (std.ascii.startsWithIgnoreCase(trimmed, "inline")) {
+            return .atomic_inline;
         }
 
         inline for (.{ "block", "flow-root", "list-item", "flex", "grid", "flow" }) |keyword| {
@@ -1971,7 +2012,7 @@ const Visibility = struct {
         outside_flat_tree: bool = false,
     };
 
-    const Computed = packed struct(u10) {
+    const Computed = packed struct(u11) {
         display: Display = .other,
         box: Box = .inline_level,
         flex_column: bool = false,
@@ -2981,7 +3022,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{} } },
         .{ .geometry = .{ .width = .{} } },
         .{ .visibility = .{ .display = .flex, .box = .block_level } },
-        .{ .visibility = .{ .display = .grid, .box = .inline_level } },
+        .{ .visibility = .{ .display = .grid, .box = .atomic_inline } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .relative, .floated = false } },
     };
