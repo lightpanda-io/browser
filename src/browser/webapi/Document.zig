@@ -951,8 +951,25 @@ fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
 /// DocumentOrShadowRoot.elementFromPoint for `scope`, this document or one of
 /// its shadow roots.
 pub fn elementFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) !?*Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return null;
+    const point = viewportPoint(x, y, frame) orelse return null;
+    const hit = (try self.hitTest(point.x, point.y, frame)) orelse return null;
     return retarget(hit, scope);
+}
+
+const ViewportPoint = struct { x: f64, y: f64 };
+
+// elementFromPoint/elementsFromPoint find nothing outside the viewport
+fn viewportPoint(x: f64, y: f64, frame: *Frame) ?ViewportPoint {
+    const viewport = frame.page.getViewport();
+    const rx = @round(x);
+    const ry = @round(y);
+    const inside = rx >= 0 and ry >= 0 and
+        rx < @as(f64, @floatFromInt(viewport.width)) and
+        ry < @as(f64, @floatFromInt(viewport.height));
+    if (inside == false) {
+        return null;
+    }
+    return .{ .x = rx, .y = ry };
 }
 
 // The spec's retarget: climbs out of shadow trees until `element` is in a tree
@@ -1057,7 +1074,8 @@ fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *E
 /// hit and its flat-tree ancestors that can be hit, each retargeted against
 /// `scope` with repeats dropped, then the root element.
 pub fn elementsFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) ![]const *Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return &.{};
+    const point = viewportPoint(x, y, frame) orelse return &.{};
+    const hit = (try self.hitTest(point.x, point.y, frame)) orelse return &.{};
     const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
     var result: std.ArrayList(*Element) = .empty;
     var current: ?*Element = hit;
