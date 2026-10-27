@@ -304,7 +304,19 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
         .child => matchChild(node, target_compound, root, scope, nth, frame),
         .next_sibling => matchNextSibling(node, target_compound, scope, nth, frame),
         .subsequent_sibling => {
-            // For subsequent_sibling, try all matching siblings with backtracking
+            // For subsequent_sibling, try all matching siblings with backtracking.
+            const first_decides = blk: {
+                // Given #c > .a ~ .b
+                // We don't have to visit each of .b's siblings if the parent
+                // of the first matching .a sibling isn't `#c`..because every
+                // sibling shares the same parent, so if it isn't true for one
+                // it isn't true for any of them. Only a `+`, checking each
+                // candidate's own neighbour, needs every candidate tried.
+                if (segment_index == 0) {
+                    break :blk true;
+                }
+                break :blk selector.segments[segment_index - 1].combinator != .next_sibling;
+            };
             var sibling = node.previousSibling();
             while (sibling) |s| {
                 const sibling_el = s.is(Node.Element) orelse {
@@ -320,6 +332,9 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
                     // Try to match remaining segments from this sibling
                     if (matchSegments(s, selector, segment_index - 1, root, scope, nth, frame)) {
                         return true;
+                    }
+                    if (first_decides) {
+                        return false;
                     }
                     // This sibling didn't work, try the next one
                 }
