@@ -22,6 +22,7 @@ const js = @import("../../js/js.zig");
 const Element = @import("../Element.zig");
 const Frame = @import("../../Frame.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
+const properties = @import("../../css/properties.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -81,249 +82,12 @@ fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const
 
     const value = self._proto.getPropertyValue(dash_case, frame);
 
-    // Property accessors have special handling for empty values:
-    // - Known CSS properties return '' when not set
-    // - Vendor-prefixed properties return undefined when not set
-    // - Unknown properties return undefined
-    if (value.len == 0) {
-        // Vendor-prefixed properties always return undefined when not set
-        if (std.mem.startsWith(u8, dash_case, "-")) {
-            return error.NotHandled;
-        }
-
-        // Known CSS properties return '', unknown properties return undefined
-        if (!isKnownCSSProperty(dash_case)) {
-            return error.NotHandled;
-        }
-
-        return "";
+    // Known properties read '' when not set, unknown ones are undefined (and
+    // so not `in` the declaration).
+    if (value.len == 0 and properties.isKnown(dash_case) == false) {
+        return error.NotHandled;
     }
-
     return value;
-}
-
-fn isKnownCSSProperty(dash_case: []const u8) bool {
-    const known_properties = std.StaticStringMap(void).initComptime(.{
-        // Colors & backgrounds
-        .{ "color", {} },
-        .{ "background", {} },
-        .{ "background-color", {} },
-        .{ "background-image", {} },
-        .{ "background-position", {} },
-        .{ "background-repeat", {} },
-        .{ "background-size", {} },
-        .{ "background-attachment", {} },
-        .{ "background-clip", {} },
-        .{ "background-origin", {} },
-        // Typography
-        .{ "font", {} },
-        .{ "font-family", {} },
-        .{ "font-size", {} },
-        .{ "font-style", {} },
-        .{ "font-weight", {} },
-        .{ "font-variant", {} },
-        .{ "line-height", {} },
-        .{ "letter-spacing", {} },
-        .{ "word-spacing", {} },
-        .{ "text-align", {} },
-        .{ "text-decoration", {} },
-        .{ "text-indent", {} },
-        .{ "text-transform", {} },
-        .{ "white-space", {} },
-        .{ "word-break", {} },
-        .{ "word-wrap", {} },
-        .{ "overflow-wrap", {} },
-        // Box model
-        .{ "margin", {} },
-        .{ "margin-top", {} },
-        .{ "margin-right", {} },
-        .{ "margin-bottom", {} },
-        .{ "margin-left", {} },
-        .{ "margin-block", {} },
-        .{ "margin-block-start", {} },
-        .{ "margin-block-end", {} },
-        .{ "margin-inline", {} },
-        .{ "margin-inline-start", {} },
-        .{ "margin-inline-end", {} },
-        .{ "padding", {} },
-        .{ "padding-top", {} },
-        .{ "padding-right", {} },
-        .{ "padding-bottom", {} },
-        .{ "padding-left", {} },
-        .{ "padding-block", {} },
-        .{ "padding-block-start", {} },
-        .{ "padding-block-end", {} },
-        .{ "padding-inline", {} },
-        .{ "padding-inline-start", {} },
-        .{ "padding-inline-end", {} },
-        // Border
-        .{ "border", {} },
-        .{ "border-width", {} },
-        .{ "border-style", {} },
-        .{ "border-color", {} },
-        .{ "border-top", {} },
-        .{ "border-top-width", {} },
-        .{ "border-top-style", {} },
-        .{ "border-top-color", {} },
-        .{ "border-right", {} },
-        .{ "border-right-width", {} },
-        .{ "border-right-style", {} },
-        .{ "border-right-color", {} },
-        .{ "border-bottom", {} },
-        .{ "border-bottom-width", {} },
-        .{ "border-bottom-style", {} },
-        .{ "border-bottom-color", {} },
-        .{ "border-left", {} },
-        .{ "border-left-width", {} },
-        .{ "border-left-style", {} },
-        .{ "border-left-color", {} },
-        .{ "border-radius", {} },
-        .{ "border-top-left-radius", {} },
-        .{ "border-top-right-radius", {} },
-        .{ "border-bottom-left-radius", {} },
-        .{ "border-bottom-right-radius", {} },
-        .{ "border-collapse", {} },
-        .{ "border-spacing", {} },
-        // Sizing
-        .{ "width", {} },
-        .{ "height", {} },
-        .{ "min-width", {} },
-        .{ "min-height", {} },
-        .{ "max-width", {} },
-        .{ "max-height", {} },
-        .{ "box-sizing", {} },
-        // Positioning
-        .{ "position", {} },
-        .{ "top", {} },
-        .{ "right", {} },
-        .{ "bottom", {} },
-        .{ "left", {} },
-        .{ "inset", {} },
-        .{ "inset-block", {} },
-        .{ "inset-block-start", {} },
-        .{ "inset-block-end", {} },
-        .{ "inset-inline", {} },
-        .{ "inset-inline-start", {} },
-        .{ "inset-inline-end", {} },
-        .{ "z-index", {} },
-        .{ "float", {} },
-        .{ "clear", {} },
-        // Display & visibility
-        .{ "display", {} },
-        .{ "visibility", {} },
-        .{ "opacity", {} },
-        .{ "overflow", {} },
-        .{ "overflow-x", {} },
-        .{ "overflow-y", {} },
-        .{ "clip", {} },
-        .{ "clip-path", {} },
-        // Flexbox
-        .{ "flex", {} },
-        .{ "flex-direction", {} },
-        .{ "flex-wrap", {} },
-        .{ "flex-flow", {} },
-        .{ "flex-grow", {} },
-        .{ "flex-shrink", {} },
-        .{ "flex-basis", {} },
-        .{ "order", {} },
-        // Grid
-        .{ "grid", {} },
-        .{ "grid-template", {} },
-        .{ "grid-template-columns", {} },
-        .{ "grid-template-rows", {} },
-        .{ "grid-template-areas", {} },
-        .{ "grid-auto-columns", {} },
-        .{ "grid-auto-rows", {} },
-        .{ "grid-auto-flow", {} },
-        .{ "grid-column", {} },
-        .{ "grid-column-start", {} },
-        .{ "grid-column-end", {} },
-        .{ "grid-row", {} },
-        .{ "grid-row-start", {} },
-        .{ "grid-row-end", {} },
-        .{ "grid-area", {} },
-        .{ "gap", {} },
-        .{ "row-gap", {} },
-        .{ "column-gap", {} },
-        // Alignment (flexbox & grid)
-        .{ "align-content", {} },
-        .{ "align-items", {} },
-        .{ "align-self", {} },
-        .{ "justify-content", {} },
-        .{ "justify-items", {} },
-        .{ "justify-self", {} },
-        .{ "place-content", {} },
-        .{ "place-items", {} },
-        .{ "place-self", {} },
-        // Transforms & animations
-        .{ "transform", {} },
-        .{ "transform-origin", {} },
-        .{ "transform-style", {} },
-        .{ "perspective", {} },
-        .{ "perspective-origin", {} },
-        .{ "transition", {} },
-        .{ "transition-property", {} },
-        .{ "transition-duration", {} },
-        .{ "transition-timing-function", {} },
-        .{ "transition-delay", {} },
-        .{ "animation", {} },
-        .{ "animation-name", {} },
-        .{ "animation-duration", {} },
-        .{ "animation-timing-function", {} },
-        .{ "animation-delay", {} },
-        .{ "animation-iteration-count", {} },
-        .{ "animation-direction", {} },
-        .{ "animation-fill-mode", {} },
-        .{ "animation-play-state", {} },
-        // Filters & effects
-        .{ "filter", {} },
-        .{ "backdrop-filter", {} },
-        .{ "box-shadow", {} },
-        .{ "text-shadow", {} },
-        // Outline
-        .{ "outline", {} },
-        .{ "outline-width", {} },
-        .{ "outline-style", {} },
-        .{ "outline-color", {} },
-        .{ "outline-offset", {} },
-        // Lists
-        .{ "list-style", {} },
-        .{ "list-style-type", {} },
-        .{ "list-style-position", {} },
-        .{ "list-style-image", {} },
-        // Tables
-        .{ "table-layout", {} },
-        .{ "caption-side", {} },
-        .{ "empty-cells", {} },
-        // Misc
-        .{ "cursor", {} },
-        .{ "pointer-events", {} },
-        .{ "user-select", {} },
-        .{ "resize", {} },
-        .{ "object-fit", {} },
-        .{ "object-position", {} },
-        .{ "vertical-align", {} },
-        .{ "content", {} },
-        .{ "quotes", {} },
-        .{ "counter-reset", {} },
-        .{ "counter-increment", {} },
-        // Scrolling
-        .{ "scroll-behavior", {} },
-        .{ "scroll-margin", {} },
-        .{ "scroll-padding", {} },
-        .{ "overscroll-behavior", {} },
-        .{ "overscroll-behavior-x", {} },
-        .{ "overscroll-behavior-y", {} },
-        // Containment
-        .{ "contain", {} },
-        .{ "container", {} },
-        .{ "container-type", {} },
-        .{ "container-name", {} },
-        // Aspect ratio
-        .{ "aspect-ratio", {} },
-    });
-
-    return known_properties.has(dash_case);
 }
 
 fn camelCaseToDashCase(allocator: Allocator, name: []const u8) ![]const u8 {
@@ -339,6 +103,13 @@ fn camelCaseToDashCase(allocator: Allocator, name: []const u8) ![]const u8 {
     // If already contains dashes, just return lowercased
     if (std.mem.findScalar(u8, name, '-')) |_| {
         return std.ascii.allocLowerString(allocator, name);
+    }
+
+    // The CSSOM's webkit-cased attribute: WebkitTransform -> -webkit-transform
+    if (name.len > 6 and std.mem.startsWith(u8, name, "Webkit") and std.ascii.isUpper(name[6])) {
+        const lowered = try allocator.dupe(u8, name);
+        lowered[0] = 'w';
+        return camelCaseToDashCase(allocator, lowered);
     }
 
     // Check if this looks like proper camelCase (starts with lowercase)
