@@ -4,5 +4,5 @@
 # build.zig.zon dependency). Rerun the generator whenever build.zig.zon
 # changes.
 {
-  hash = "sha256-j2VtR7/tyyUX9m5CxHpuwfRJZlYlA/851W4DkWsj6z4=";
+  hash = "sha256-1CTMAonbtdsfNp+u/q9fu1TDTdDOe7AjyU6sjce04yY=";
 }
