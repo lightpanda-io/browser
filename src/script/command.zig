@@ -401,7 +401,7 @@ test "parse: leading text on a prompt tool is a prompt, key=value stays literal"
 
     const quoted = (try Command.parse(aa, "/click 'Login'")).prompt;
     try testing.expectEqual(BrowserTool.click, quoted.tool);
-    try testing.expectString("Login", quoted.text);
+    try testing.expectString("'Login'", quoted.text);
     try testing.expect(quoted.args == null);
 
     try testing.expectString("the user's menu", (try Command.parse(aa, "/click the user's menu")).prompt.text);

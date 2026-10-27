@@ -264,9 +264,8 @@ pub fn parsePrompt(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8,
 
     const text = std.mem.trimEnd(u8, rest[0..tail_start], &std.ascii.whitespace);
     if (text.len == 0) return null;
-    const whole_quoted = (text[0] == '\'' or text[0] == '"') and quotedSpanEnd(text, 0) == text.len;
     return .{
-        .prompt = if (whole_quoted) stripQuotes(text) else text,
+        .prompt = text,
         .args = try self.parseArgs(arena, rest[tail_start..], diag, false),
     };
 }
@@ -485,13 +484,13 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
         }
     }
 
-    info.hints = try buildHints(arena, info.required, info.fields, takesPrompt(tool));
+    info.hints = try buildHints(arena, info.required, info.fields, info.leadingPositionalField());
     std.debug.assert(info.hints.len <= max_hint_slots);
 
     return info;
 }
 
-fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry, keyword_only: bool) ![]const HintSlot {
+fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry, positional: ?[]const u8) ![]const HintSlot {
     if (fields.len == 0 and required.len == 0) return &.{};
     var optional_count: usize = 0;
     for (fields) |f| {
@@ -504,7 +503,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = name,
             .required = true,
-            .fragment = if (keyword_only) try arena.print("{s}=…", .{name}) else try arena.print("<{s}>", .{name}),
+            .fragment = if (positional != null and std.mem.eql(u8, name, positional.?)) try arena.print("<{s}>", .{name}) else try arena.print("{s}=…", .{name}),
         };
         idx += 1;
     }
@@ -958,7 +957,7 @@ test "parsePrompt: splits the prompt from the key=value tail" {
     try testing.expectString("the email field", p.prompt);
     try testing.expectString("a b", p.args.?.object.get("value").?.string);
 
-    try testing.expectString("the email field", (try fill.parsePrompt(aa, "\"the email field\"", null)).?.prompt);
+    try testing.expectString("\"the email field\"", (try fill.parsePrompt(aa, "\"the email field\"", null)).?.prompt);
     try testing.expectString("'a' then b", (try fill.parsePrompt(aa, "'a' then b", null)).?.prompt);
 
     try testing.expect((try fill.parsePrompt(aa, "selector=#e value=x", null)) == null);
@@ -970,7 +969,7 @@ test "parsePrompt: splits the prompt from the key=value tail" {
     try testing.expectString("valu", diag.bad_field);
 
     const click = Schema.find(Schema.all(), "click").?;
-    try testing.expectString("the item with id=5", (try click.parsePrompt(aa, "\"the item with id=5\"", null)).?.prompt);
+    try testing.expectString("\"the item with id=5\"", (try click.parsePrompt(aa, "\"the item with id=5\"", null)).?.prompt);
     try testing.expectString("the user's menu", (try click.parsePrompt(aa, "the user's menu", null)).?.prompt);
     const cause = (try fill.parsePrompt(aa, "'cause value=x", null)).?;
     try testing.expectString("'cause", cause.prompt);

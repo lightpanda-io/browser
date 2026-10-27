@@ -673,7 +673,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             self.terminal.printInfo("(no response from model)", .{});
     }
     if (self.prompt_target) |target| {
-        if (target.data) |d| self.printData(target.tool, d);
+        if (target.data) |d| self.printData(target.cmd.tool, d);
     }
     self.conversation.prune();
     return true;
@@ -782,7 +782,7 @@ fn runRepl(self: *Agent) void {
                     continue :repl;
                 }
                 const prompt = promptCommandText(aa, p) catch continue :repl;
-                self.prompt_target = .{ .tool = p.tool, .pinned = p.args, .arena = aa };
+                self.prompt_target = .{ .cmd = p, .arena = aa };
                 defer self.prompt_target = null;
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
             },
@@ -1193,27 +1193,12 @@ const SavedCall = struct {
 
 /// Active `/click the sign in…`-style turn: one target call, read-only tools only.
 const PromptTarget = struct {
-    tool: BrowserTool,
-    pinned: ?std.json.Value,
+    cmd: Command.Prompt,
     /// REPL line arena; outlives the turn.
     arena: std.mem.Allocator,
     done: bool = false,
     data: ?[]const u8 = null,
 };
-
-const prompt_read_tools = [_]BrowserTool{ .tree, .findElement, .nodeDetails, .interactiveElements, .detectForms, .markdown, .html };
-
-fn isPromptReadTool(tool: BrowserTool) bool {
-    return std.mem.findScalar(BrowserTool, &prompt_read_tools, tool) != null;
-}
-
-fn promptTools(arena: std.mem.Allocator, target: BrowserTool) ![]const ProviderTool {
-    const all = globalTools();
-    const out = try arena.alloc(ProviderTool, prompt_read_tools.len + 1);
-    for (prompt_read_tools, out[0..prompt_read_tools.len]) |t, *o| o.* = all[@backingInt(t)];
-    out[prompt_read_tools.len] = all[@backingInt(target)];
-    return out;
-}
 
 fn urlArg(args: ?std.json.Value) ?std.json.Value {
     const a = args orelse return null;
@@ -1897,7 +1882,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
-            .tools = if (self.prompt_target) |t| try promptTools(ma, t.tool) else globalTools(),
+            // The full list even in a prompt turn: a narrower one would change
+            // the cached prefix; `toolOutcome` refuses the rest.
+            .tools = globalTools(),
             .before_request = .{ .context = @ptrCast(self), .callFn = beforeTurnRequest },
             .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
             .max_turns = 100,
@@ -2146,14 +2133,14 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     if (self.prompt_target) |t| {
         if (t.done) return .{ .content = "Error: the request is already done. Reply without calling more tools.", .is_error = true };
         const tool = std.meta.stringToEnum(BrowserTool, tool_name);
-        is_target = tool == t.tool;
+        is_target = tool == t.cmd.tool;
         if (is_target) {
-            if (t.pinned != null) {
-                args = try pinArgs(self.conversation.arena.allocator(), args, t.pinned);
+            if (t.cmd.args != null) {
+                args = try pinArgs(self.conversation.arena.allocator(), args, t.cmd.args);
                 saved.args = args;
             }
-        } else if (tool == null or !isPromptReadTool(tool.?)) {
-            return .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.tool)}) catch "Error: tool not available", .is_error = true };
+        } else if (tool == null or tool.?.group() != .reading) {
+            return .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.cmd.tool)}) catch "Error: tool not available", .is_error = true };
         } else if (tool.?.navigatesToUrl() and urlArg(args) != null) {
             return .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true };
         }
@@ -2170,7 +2157,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     if (is_target and !result.is_error) {
         const t = &self.prompt_target.?;
         t.done = true;
-        if (t.tool.producesData()) t.data = try t.arena.dupe(u8, result.text);
+        if (t.cmd.tool.producesData()) t.data = try t.arena.dupe(u8, result.text);
     }
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
