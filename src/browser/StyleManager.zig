@@ -885,6 +885,49 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
     return if (self.geometryProps(el).flex_grow) .grow else .shrink;
 }
 
+/// An in-flow child of a row flex container: one of the row's flex items.
+pub fn isFlexRowItem(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    if (self.flowProps(el).position.outOfFlow()) {
+        return false;
+    }
+    const parent = self.boxParent(el) orelse return false;
+    const parent_vis = self.visibilityProps(parent);
+    return parent_vis.display == .flex and parent_vis.flex_column == false;
+}
+
+/// A flex container that wraps its items onto new lines instead of
+/// shrinking them. The lines aren't modeled.
+pub fn flexWraps(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.visibilityProps(el).flex_wrap;
+}
+
+pub fn flexShrinks(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.geometryProps(el).flex_no_shrink == false;
+}
+
+/// The left and right margins together. A percentage resolves against the
+/// containing block's width.
+pub fn inlineMargins(self: *StyleManager, el: *Element, containing_width: ?f64) f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return 0;
+    const geometry = self.geometryProps(el);
+    const viewport = self.frame.page.getViewport();
+    var total: f64 = 0;
+    for ([_]Length{ geometry.margin_left, geometry.margin_right }) |margin| {
+        total += margin.resolve(viewport) orelse switch (margin.unit) {
+            .percent => if (containing_width) |width| @as(f64, margin.value) / 100.0 * width else 0,
+            else => 0,
+        };
+    }
+    return total;
+}
+
 /// The nearest element to el that generates a box, or `el` itself it it does
 pub fn boxElement(self: *StyleManager, el: *Element) ?*Element {
     self.assertOwns(el);
@@ -1013,7 +1056,8 @@ fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
     };
 }
 
-pub const WidthKind = enum { box, content };
+// row_shrink is a flex row's shrink ratio, not a width
+pub const WidthKind = enum { box, content, full_content, row_shrink };
 
 /// Element's computed widths (see Element.boxWidth), valid for one style
 /// version and viewport. Each read otherwise walks up to the root and down
@@ -1027,6 +1071,8 @@ const WidthMemo = struct {
     const Entry = struct {
         box: ?f64 = null,
         content: ?f64 = null,
+        full_content: ?f64 = null,
+        row_shrink: ?f64 = null,
     };
 };
 
@@ -1942,6 +1988,19 @@ pub const Length = packed struct(u35) {
         };
     }
 
+    // A margin may be negative and has no intrinsic sizes; auto is 0.
+    fn parseMargin(text: []const u8) Length {
+        const parsed = units.parse(text) catch return .{};
+        return switch (parsed.unit) {
+            inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
+            .percentage => .{ .value = @floatCast(parsed.value), .unit = .percent },
+            else => .{
+                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
+                .unit = .px,
+            },
+        };
+    }
+
     fn isIntrinsic(text: []const u8) bool {
         inline for (.{ "min-content", "max-content", "fit-content" }) |keyword| {
             if (std.ascii.eqlIgnoreCase(text, keyword)) {
@@ -1964,11 +2023,13 @@ pub const Length = packed struct(u35) {
 /// Whether an element is rendered and takes pointer input.
 const Visibility = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-direction", "flex-flow" };
+        // A shorthand comes before its longhands, so a later longhand wins
+        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap" };
 
         display: ?Display = null,
         box: ?Box = null,
         flex_column: ?bool = null,
+        flex_wrap: ?bool = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -1978,9 +2039,23 @@ const Visibility = struct {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
                 self.box = Box.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction") or std.ascii.eqlIgnoreCase(name, "flex-flow")) {
-                // flex-flow's direction keyword comes first
-                self.flex_column = std.ascii.startsWithIgnoreCase(std.mem.trimStart(u8, value, &std.ascii.whitespace), "column");
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction")) {
+                self.flex_column = isColumnDirection(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-wrap")) {
+                self.flex_wrap = isWrap(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-flow")) {
+                self.flex_column = false;
+                self.flex_wrap = false;
+                // Either order; an omitted one resets to row or nowrap
+                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                while (it.next()) |token| {
+                    if (isColumnDirection(token)) {
+                        self.flex_column = true;
+                    }
+                    if (isWrap(token)) {
+                        self.flex_wrap = true;
+                    }
+                }
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
                 self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
@@ -1993,6 +2068,16 @@ const Visibility = struct {
                 });
             }
         }
+
+        fn isColumnDirection(value: []const u8) bool {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            return std.ascii.eqlIgnoreCase(trimmed, "column") or std.ascii.eqlIgnoreCase(trimmed, "column-reverse");
+        }
+
+        fn isWrap(value: []const u8) bool {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            return std.ascii.eqlIgnoreCase(trimmed, "wrap") or std.ascii.eqlIgnoreCase(trimmed, "wrap-reverse");
+        }
     };
 
     // The element's own values, from the cascade.
@@ -2003,6 +2088,7 @@ const Visibility = struct {
         // Without an author `display` it's the tag's UA default, see finish
         box: Box = .inline_level,
         flex_column: bool = false,
+        flex_wrap: bool = false,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
@@ -2012,10 +2098,11 @@ const Visibility = struct {
         outside_flat_tree: bool = false,
     };
 
-    const Computed = packed struct(u11) {
+    const Computed = packed struct(u12) {
         display: Display = .other,
         box: Box = .inline_level,
         flex_column: bool = false,
+        flex_wrap: bool = false,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -2027,6 +2114,7 @@ const Visibility = struct {
                 .display = own.display,
                 .box = own.box,
                 .flex_column = own.flex_column,
+                .flex_wrap = own.flex_wrap,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
@@ -2062,11 +2150,12 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
         flex_grow: ?bool = null,
+        flex_no_shrink: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
@@ -2074,6 +2163,8 @@ const Geometry = struct {
         height: ?Length = null,
         min_width: ?Length = null,
         max_width: ?Length = null,
+        margin_left: ?Length = null,
+        margin_right: ?Length = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
@@ -2081,8 +2172,40 @@ const Geometry = struct {
                 self.overflow_x_clips = overflowClips(value);
             } else if (std.ascii.eqlIgnoreCase(name, "flex-grow")) {
                 self.flex_grow = flexGrows(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-shrink")) {
+                if (flexFactor(value)) |factor| {
+                    self.flex_no_shrink = factor == 0;
+                }
             } else if (std.ascii.eqlIgnoreCase(name, "flex")) {
                 self.flex_grow = flexShorthandGrows(value);
+                self.flex_no_shrink = flexShorthandNoShrink(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin")) {
+                var count: usize = 0;
+                // margin: top [right [bottom [left]]]
+                var tokens: [4][]const u8 = undefined;
+                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                while (it.next()) |token| : (count += 1) {
+                    if (count == tokens.len) {
+                        return;
+                    }
+                    tokens[count] = token;
+                }
+                if (count == 0) {
+                    return;
+                }
+                const right = tokens[@min(count - 1, 1)];
+                self.margin_right = Length.parseMargin(right);
+                self.margin_left = Length.parseMargin(if (count == 4) tokens[3] else right);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin-inline")) {
+                // margin-inline: start [end], in a left-to-right flow
+                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                const start = it.next() orelse return;
+                self.margin_left = Length.parseMargin(start);
+                self.margin_right = Length.parseMargin(it.next() orelse start);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin-left") or std.ascii.eqlIgnoreCase(name, "margin-inline-start")) {
+                self.margin_left = Length.parseMargin(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin-right") or std.ascii.eqlIgnoreCase(name, "margin-inline-end")) {
+                self.margin_right = Length.parseMargin(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
                 self.overflow_y_scrolls = overflowScrolls(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
@@ -2119,6 +2242,12 @@ const Geometry = struct {
             return number > 0;
         }
 
+        // A non-negative <number>, null for anything else (a basis, a keyword)
+        fn flexFactor(value: []const u8) ?f64 {
+            const number = std.fmt.parseFloat(f64, std.mem.trim(u8, value, &std.ascii.whitespace)) catch return null;
+            return if (number >= 0) number else null;
+        }
+
         // `flex: <grow> [<shrink>] [<basis>]`; `auto` grows, `none` and
         // `initial` don't, and a lone width (`flex: 200px`) is a basis.
         fn flexShorthandGrows(value: []const u8) bool {
@@ -2126,6 +2255,21 @@ const Geometry = struct {
             const first = it.next() orelse return false;
             if (std.ascii.eqlIgnoreCase(first, "auto")) return true;
             return flexGrows(first);
+        }
+
+        // Only `none` and an explicit 0 shrink factor stop the shrinking; an
+        // omitted shrink is 1. The shrink is the number after the grow.
+        fn flexShorthandNoShrink(value: []const u8) bool {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            const first = it.next() orelse return false;
+            if (std.ascii.eqlIgnoreCase(first, "none")) {
+                return true;
+            }
+            if (flexFactor(first) == null) {
+                return false;
+            }
+            const second = it.next() orelse return false;
+            return flexFactor(second) == 0;
         }
 
         // `contain` keeps the scroll in the box, `none` also kills the bounce we
@@ -2136,10 +2280,11 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u146) {
+    const Computed = packed struct(u217) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
+        flex_no_shrink: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
@@ -2148,6 +2293,9 @@ const Geometry = struct {
         // auto, none and the intrinsic keywords don't limit
         min_width: Length = .{},
         max_width: Length = .{},
+        // auto, and values that need layout, are 0
+        margin_left: Length = .{},
+        margin_right: Length = .{},
     };
 };
 

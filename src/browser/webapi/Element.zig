@@ -1712,13 +1712,27 @@ fn boxWidth(self: *Element, owner: *Frame) f64 {
             // html/body return their set value regardless of children.
             break :blk own.value;
         }
-        const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
+        const sizing = style_manager.widthSizing(self);
+        if (sizing == .contents) {
+            break :blk 0;
+        }
+        if (style_manager.isFlexRowItem(self)) {
+            const row = style_manager.boxParent(self).?;
+            const item = self.flexBase(row.boxWidth(owner), owner);
+            // Snapped to Chrome's 1/64px layout unit, past the float error
+            const shrunk = @round(item.base * (1 - row.rowShrinkRatio(owner)) * 64) / 64;
+            var width = @max(item.floor, shrunk);
+            if (sizing == .grow and own.explicit == false) {
+                width = @max(width, self.growShare(owner));
+            }
+            break :blk self.clampWidth(width, .box, owner);
+        }
+        const width = if (own.explicit) own.value else switch (sizing) {
             .fixed => |width| width,
             .percent => |fraction| fraction * self.containingBlockWidth(owner),
-            .fill => self.containingBlockWidth(owner),
-            .grow => @max(own.value, self.growShare(owner), self.contentWidth(owner)),
-            .shrink => @max(own.value, self.contentWidth(owner)),
-            .contents => break :blk 0,
+            .fill => self.fillWidth(owner),
+            .grow, .shrink => @max(own.value, self.contentWidth(.clipped, owner)),
+            .contents => unreachable,
         };
         break :blk self.clampWidth(width, .box, owner);
     };
@@ -1726,17 +1740,144 @@ fn boxWidth(self: *Element, owner: *Frame) f64 {
     return width;
 }
 
-// What the box adds to its parent's content width.
-fn widthContribution(self: *Element, owner: *Frame) f64 {
+// How a box that clips its overflow counts toward its ancestors' content.
+const ContentMode = enum {
+    full,
+    clipped,
+};
+
+// What the box, with its margins, adds to its parent's content width.
+fn widthContribution(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     const own = self.getElementAxis(owner, .width);
     const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
         .fixed => |width| width,
-        .shrink, .grow => @max(own.value, self.contentWidth(owner)),
-        .percent, .fill => if (style_manager.clipsOverflowX(self)) 0 else self.contentWidth(owner),
-        .contents => return self.contentWidth(owner),
+        .shrink, .grow => @max(own.value, self.contentWidth(mode, owner)),
+        .percent, .fill => if (mode == .clipped and style_manager.clipsOverflowX(self)) 0 else self.contentWidth(mode, owner),
+        .contents => return self.contentWidth(mode, owner),
     };
-    return self.clampWidth(width, .contribution, owner);
+    return self.clampWidth(width, .contribution, owner) + style_manager.inlineMargins(self, null);
+}
+
+const FlexBase = struct {
+    base: f64, // The width before the row shrinks it
+    floor: f64, // The least it shrinks to; base when it doesn't shrink
+};
+
+// Get a flex row's item hypothetical width and how far it can shrink.
+// No flex-basis (yet?)/
+fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
+    const style_manager = &owner._style_manager;
+    const own = self.getElementAxis(owner, .width);
+    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
+        .fixed => |width| width,
+        .percent => |fraction| fraction * row_width,
+        .shrink, .grow, .fill => @max(own.value, self.contentWidth(.full, owner)),
+        .contents => return .{
+            .base = self.widthContribution(.full, owner),
+            .floor = self.widthContribution(.clipped, owner),
+        },
+    };
+    const base = self.clampWidth(width, .box, owner);
+    if (style_manager.flexShrinks(self) == false) {
+        return .{ .base = base, .floor = base };
+    }
+    return .{ .base = base, .floor = self.flexMinWidth(base, owner) };
+}
+
+// min-width: auto on a flex item: no narrower than its content, or than its
+// width if that's narrower; 0 if it clips its overflow (CSS Flexbox §4.5).
+// Content its descendants clip doesn't count. A declared min-width replaces
+// it, and clampWidth applies that one.
+fn flexMinWidth(self: *Element, base: f64, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.widthLimits(self).min != null or style_manager.clipsOverflowX(self)) {
+        return 0;
+    }
+    if (self.getTag().isReplacedOrControl()) {
+        // Its intrinsic width is unknown
+        return base;
+    }
+    const own = self.getElementAxis(owner, .width);
+    const content = self.contentWidth(.clipped, owner);
+    // An auto width's fallback stands in for its text
+    return @min(base, if (own.explicit) content else @max(own.value, content));
+}
+
+// The fraction of its base each shrinking item of an overflowing flex row
+// gives up: the overflow split in proportion to the bases (a flex-shrink is
+// 0 or 1 here). Items that would drop below their floor freeze there and the
+// rest share what they couldn't give (CSS Flexbox §9.7). A wrapping row moves
+// items to a new line instead, so it shrinks nothing.
+fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.flexWraps(self)) {
+        return 0;
+    }
+    if (style_manager.cachedWidth(self, .row_shrink)) |ratio| {
+        return ratio;
+    }
+
+    const row_width = self.boxWidth(owner);
+    var total: f64 = 0;
+    var items: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
+    while (nextFlexItem(&items, style_manager)) |el| {
+        total += el.flexBase(row_width, owner).base + flexItemMargins(el, row_width, style_manager);
+    }
+
+    var ratio: f64 = 0;
+    const overflow = total - row_width;
+    if (overflow > 0) {
+        // Freezing an item leaves more for the others to give, so the ratio
+        // only grows between passes and a frozen item stays frozen: each pass
+        // freezes at least one more item, or the count holds and it's settled.
+        var frozen_before: ?usize = null;
+        while (true) {
+            var frozen: usize = 0;
+            var given: f64 = 0;
+            var shrinkable: f64 = 0;
+            items = .init(self.asNode(), .{ .frame = owner });
+            while (nextFlexItem(&items, style_manager)) |el| {
+                const item = el.flexBase(row_width, owner);
+                if (item.base <= item.floor) {
+                    continue;
+                }
+                if (item.base * (1 - ratio) < item.floor) {
+                    frozen += 1;
+                    given += item.base - item.floor;
+                } else {
+                    shrinkable += item.base;
+                }
+            }
+            ratio = if (shrinkable == 0) 1 else std.math.clamp((overflow - given) / shrinkable, 0, 1);
+            if (frozen_before) |previous| {
+                if (frozen <= previous) break;
+            }
+            frozen_before = frozen;
+        }
+    }
+    style_manager.cacheWidth(self, .row_shrink, ratio);
+    return ratio;
+}
+
+// The next child of a flex row that is one of its items: rendered and in flow.
+fn nextFlexItem(children: *TreeWalker.FlatChildren, style_manager: *StyleManager) ?*Element {
+    while (children.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (style_manager.hasDisplayNone(el) or style_manager.isFlexRowItem(el) == false) {
+            continue;
+        }
+        return el;
+    }
+    return null;
+}
+
+// display: contents has no margins; its children's are in its contribution.
+fn flexItemMargins(el: *Element, row_width: f64, style_manager: *StyleManager) f64 {
+    if (style_manager.widthSizing(el) == .contents) {
+        return 0;
+    }
+    return style_manager.inlineMargins(el, row_width);
 }
 
 // max-width caps the width, min-width wins over both.
@@ -1759,6 +1900,12 @@ fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_per
     };
 }
 
+// A block in normal flow fills its containing block, less its margins.
+fn fillWidth(self: *Element, owner: *Frame) f64 {
+    const containing = self.containingBlockWidth(owner);
+    return @max(0, containing - owner._style_manager.inlineMargins(self, containing));
+}
+
 /// The width of the containing block; the viewport above the root.
 fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
     const parent = owner._style_manager.containingBlock(self) orelse {
@@ -1768,27 +1915,25 @@ fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
 }
 
 /// A growing flex item's share: the row's free space, after the siblings
-/// that don't grow, split evenly among those that do.
+/// that don't grow and everyone's margins, split evenly among those that do.
 fn growShare(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     const parent = style_manager.boxParent(self) orelse return 0;
+    const row_width = parent.boxWidth(owner);
     var taken: f64 = 0;
     var growers: f64 = 0;
-    var children: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
-    while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(el)) {
-            continue;
-        }
+    var items: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
+    while (nextFlexItem(&items, style_manager)) |el| {
         switch (style_manager.widthSizing(el)) {
             .grow => growers += 1,
             // Its children are the row's items
-            .contents => taken += el.widthContribution(owner),
+            .contents => taken += el.widthContribution(.clipped, owner),
             // Only walks up, and the row's width never reads a child's box
             else => taken += el.boxWidth(owner),
         }
+        taken += flexItemMargins(el, row_width, style_manager);
     }
-    return @max(0, parent.boxWidth(owner) - taken) / @max(1, growers);
+    return @max(0, row_width - taken) / @max(1, growers);
 }
 
 // The width the children would take unconstrained: the sum of their
@@ -1797,9 +1942,10 @@ fn growShare(self: *Element, owner: *Frame) f64 {
 // share one line that never wraps (the dummy layout has no line breaking,
 // which keeps the "append until the lane outgrows its shell" idiom
 // terminating).
-fn contentWidth(self: *Element, owner: *Frame) f64 {
+fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
+    const kind: StyleManager.WidthKind = if (mode == .clipped) .content else .full_content;
     const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, .content)) |width| {
+    if (style_manager.cachedWidth(self, kind)) |width| {
         return width;
     }
 
@@ -1812,7 +1958,7 @@ fn contentWidth(self: *Element, owner: *Frame) f64 {
         if (style_manager.hasDisplayNone(el)) {
             continue;
         }
-        const width = el.widthContribution(owner);
+        const width = el.widthContribution(mode, owner);
         if (in_row or style_manager.isBlockLevel(el) == false) {
             line += width;
         } else {
@@ -1821,7 +1967,7 @@ fn contentWidth(self: *Element, owner: *Frame) f64 {
         }
     }
     const width = @max(widest, line);
-    style_manager.cacheWidth(self, .content, width);
+    style_manager.cacheWidth(self, kind, width);
     return width;
 }
 
@@ -1955,7 +2101,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-    return @max(self.boxWidth(owner), self.contentWidth(owner));
+    return @max(self.boxWidth(owner), self.contentWidth(.clipped, owner));
 }
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
