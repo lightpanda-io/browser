@@ -1572,6 +1572,47 @@ test "cdp.frame: isolated world event reaches main-world listeners with main-wor
     } }, .{ .id = 4 });
 }
 
+// A script inserted from an isolated world runs in the main world, as
+// Playwright's setContent (document.write from its utility world) expects.
+test "cdp.frame: script inserted from an isolated world runs in the main world" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const world_ctx = try isolatedWorldContextId(bc, root);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Runtime.evaluate", .params = .{
+        .expression =
+        \\ window.worldOnly = 1;
+        \\ const s = document.createElement('script');
+        \\ s.textContent = "window.appended = 'main ' + typeof window.worldOnly";
+        \\ document.body.appendChild(s);
+        ,
+        .contextId = world_ctx,
+    } });
+    try ctx.processMessage(.{ .id = 3, .method = "Runtime.evaluate", .params = .{
+        .expression = "String(window.appended)",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "main undefined" } }, .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.open(); document.write('<script>window.written = 1<\\/script>'); document.close();",
+        .contextId = world_ctx,
+    } });
+    try ctx.processMessage(.{ .id = 5, .method = "Runtime.evaluate", .params = .{
+        .expression = "String(window.written)",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "1" } }, .{ .id = 5 });
+}
+
 // Chrome only puts a world in a frame on an explicit trigger. A world the
 // client asked for on the root must not appear in a sibling frame just
 // because that frame navigated afterwards.
