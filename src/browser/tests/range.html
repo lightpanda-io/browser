@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 <body>
 <div id="test-content">
@@ -1172,11 +1173,53 @@
 
 <script id=getClientRects_element>
 {
+  // One rect per selected element whose parent isn't selected, plus one per
+  // selected piece of text, in tree order
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  host.innerHTML = '<p><span>a</span>b</p>';
+  const p = host.firstChild;
+  const span = p.firstChild;
   const range = new Range();
-  const p = document.getElementById('p1');
+
+  // span, its text, b
   range.selectNodeContents(p);
-  const rects = range.getClientRects();
-  const elemRects = p.getClientRects();
-  testing.expectEqual(elemRects.length, rects.length);
+  let rects = range.getClientRects();
+  testing.expectEqual(3, rects.length);
+  testing.expectEqual(span.getBoundingClientRect().width, rects[0].width);
+
+  // p covers span, so: p, a, b
+  range.selectNode(p);
+  rects = range.getClientRects();
+  testing.expectEqual(3, rects.length);
+  testing.expectEqual(p.getBoundingClientRect().width, rects[0].width);
+
+  // From inside span: only text, span is partly selected
+  range.setStart(span.firstChild, 0);
+  range.setEnd(p.lastChild, 1);
+  testing.expectEqual(2, range.getClientRects().length);
+
+  // An ancestor of the end is partly selected too: span, ab, c
+  host.innerHTML = '<div><span>ab</span><i>cd</i></div>';
+  const div = host.firstChild;
+  range.setStart(div, 0);
+  range.setEnd(div.lastChild.firstChild, 1);
+  testing.expectEqual(3, range.getClientRects().length);
+
+  // A partial text rect measures only its part
+  const text = div.lastChild.firstChild;
+  range.setStart(text, 0);
+  range.setEnd(text, 1);
+  const part = range.getClientRects();
+  testing.expectEqual(1, part.length);
+  range.setEnd(text, 2);
+  testing.expectTrue(range.getClientRects()[0].width > part[0].width);
+
+  // Comments and boxless elements add nothing
+  host.innerHTML = '<p>a<!--x--><span style="display:none">x</span>b</p>';
+  range.selectNodeContents(host.firstChild);
+  testing.expectEqual(2, range.getClientRects().length);
+
+  host.remove();
 }
 </script>
