@@ -44,8 +44,8 @@
             .hash = "zenai-0.0.0-iOY_VAJHCQBfwIoPimnpcHayNdwoN8gHtUkr6ui5lMi0",
         },
         .isocline = .{
-            .url = "git+https://github.com/arrufat/isocline#4a99434bee4a5ed04c1639514224d48cd55e1405",
-            .hash = "N-V-__8AAHxtEwB16xj2Xz-zx_uklGdTP5C2-GHXDoSzah-8",
+            .url = "git+https://github.com/arrufat/isocline#41bb0c5380950b90440e74215c3e0e4821b8bbce",
+            .hash = "N-V-__8AAJVvEwAkVMvqVhi4hrCdFIzrefNcsl_OrnW1q_E4",
         },
         .pcre2 = .{
             .url = "git+https://github.com/PCRE2Project/pcre2#9ad4a2e956876747a5022bf04614c7e39e71d4ec",
