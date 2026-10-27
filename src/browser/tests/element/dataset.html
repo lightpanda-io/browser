@@ -266,3 +266,33 @@
   testing.expectEqual('value2', el2.dataset.test2);
 }
 </script>
+
+<script id=invalidNames>
+{
+  // Results match Chrome.
+  const el = document.createElement('div');
+  testing.expectError('SyntaxError', () => { el.dataset['a-b'] = '1'; });
+  testing.expectError('SyntaxError', () => { el.dataset['-a'] = '1'; });
+  testing.expectError('InvalidCharacterError', () => { el.dataset['a b'] = '1'; });
+  testing.expectEqual(false, el.hasAttributes());
+
+  el.setAttribute('data-a-b', '1');
+  testing.expectEqual(undefined, el.dataset['a-b']);
+  testing.expectEqual(false, 'a-b' in el.dataset);
+  testing.expectEqual('1', el.dataset.aB);
+  delete el.dataset['a-b'];
+  testing.expectEqual('1', el.getAttribute('data-a-b'));
+}
+</script>
+
+<script id=leadingUppercase>
+{
+  const el = document.createElement('div');
+  el.dataset.Foo = '1';
+  testing.expectEqual('1', el.getAttribute('data--foo'));
+  testing.expectEqual('1', el.dataset.Foo);
+  testing.expectEqual(['Foo'], Object.keys(el.dataset));
+  delete el.dataset.Foo;
+  testing.expectEqual(false, el.hasAttributes());
+}
+</script>
