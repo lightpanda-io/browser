@@ -1,9 +1,11 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="anchor">anchor</div>
 
-<script id="unobserve_before_delivery">
+<script id="unobserve_before_delivery" type=module>
   {
+    const state = await testing.async();
     const t = document.createElement('div');
     t.style.width = '100px';
     document.body.appendChild(t);
@@ -14,16 +16,19 @@
     observer.unobserve(t);
     // unobserving a target we never observed is a no-op
     observer.unobserve(document.body);
+    await testing.nextFrame();
+    observer.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
         testing.expectEqual(0, count);
-        observer.disconnect();
     });
   }
 </script>
 
-<script id="disconnect_stops_notifications">
+<script id="disconnect_stops_notifications" type=module>
   {
+    const state = await testing.async();
     const t1 = document.createElement('div');
     const t2 = document.createElement('div');
     t1.style.width = '100px';
@@ -37,15 +42,18 @@
     observer.observe(t2);
     observer.disconnect();
     t1.style.width = '30px';
+    await testing.nextFrame();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
         testing.expectEqual(0, count);
     });
   }
 </script>
 
-<script id="observe_twice_is_one">
+<script id="observe_twice_is_one" type=module>
   {
+    const state = await testing.async();
     const t = document.createElement('div');
     t.style.width = '100px';
     document.body.appendChild(t);
@@ -54,11 +62,13 @@
     const observer = new ResizeObserver((entries) => { entryCount += entries.length; });
     observer.observe(t);
     observer.observe(t);
+    await testing.nextFrame();
+    observer.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
         // observing the same target twice still yields a single entry
         testing.expectEqual(1, entryCount);
-        observer.disconnect();
     });
   }
 </script>

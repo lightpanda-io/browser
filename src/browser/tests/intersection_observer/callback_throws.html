@@ -12,21 +12,24 @@
   testing.expectEqual(0, reported);
 </script>
 
-<script id=callbackThrowsDOMException>
+<script id=callbackThrowsDOMException type=module>
   {
     // Reporting reads the exception's message through a native accessor. The
     // delivered entries must survive that call.
+    const state = await testing.async();
     let calls = 0;
     const io = new IntersectionObserver(() => {
       calls += 1;
       throw new DOMException('nope', 'SyntaxError');
     });
     io.observe(document.getElementById('target'));
+    await testing.nextFrame();
+    io.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
       testing.expectEqual(1, calls);
       testing.expectEqual(1, reported);
-      io.disconnect();
     });
   }
 </script>

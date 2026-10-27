@@ -3,8 +3,9 @@
 <div id="target" style="width: 100px; height: 60px;">Target Element</div>
 <div id="hidden" style="width: 50px; display: none;">Hidden</div>
 
-<script id="initial">
+<script id="initial" type=module>
   {
+    const state = await testing.async();
     const target = document.getElementById('target');
     let count = 0;
     let entries = null;
@@ -14,8 +15,11 @@
         entries = observerEntries;
     });
     observer.observe(target);
+    await testing.nextFrame();
+    observer.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
         // observe() delivers a single initial entry
         testing.expectEqual(1, count);
         testing.expectEqual(1, entries.length);
@@ -32,23 +36,47 @@
         testing.expectEqual(60, entry.contentBoxSize[0].blockSize);
         testing.expectEqual(100, entry.borderBoxSize[0].inlineSize);
         testing.expectEqual(100, entry.devicePixelContentBoxSize[0].inlineSize);
-
-        observer.disconnect();
     });
   }
 </script>
 
-<script id="no_initial_for_zero_size">
+<script id="no_initial_for_zero_size" type=module>
   {
     // A display:none element has no box, so observe() delivers nothing.
+    const state = await testing.async();
     const hidden = document.getElementById('hidden');
     let hiddenCount = 0;
     const hiddenObserver = new ResizeObserver(() => { hiddenCount += 1; });
     hiddenObserver.observe(hidden);
+    await testing.nextFrame();
+    hiddenObserver.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
         testing.expectEqual(0, hiddenCount);
-        hiddenObserver.disconnect();
+    });
+  }
+</script>
+
+<script id="delivered_in_microtask" type=module>
+  {
+    // The spec delivers during the next rendering update, after its
+    // animation frame callbacks.
+    const state = await testing.async();
+    const target = document.getElementById('target');
+    let count = 0;
+    const observer = new ResizeObserver(() => { count += 1; });
+    observer.observe(target);
+    await Promise.resolve();
+    testing.diverges('Lightpanda delivers in a microtask, not at the next rendering update', () => {
+      testing.expectEqual(1, count);
+    });
+    await testing.nextFrame();
+    observer.disconnect();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(1, count);
     });
   }
 </script>
