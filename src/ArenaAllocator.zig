@@ -157,7 +157,10 @@ fn resetSlow(self: *ArenaAllocator, first: *Node, limit: usize) bool {
     var ok = true;
     var node = first;
     if (node.size != new_size) {
-        if (child.rawResize(node.allocatedSlice(), .of(Node), new_size, @returnAddress())) {
+        // Grow in place, but never shrink in place: std.heap.c_allocator
+        // reports any shrink as done without telling libc, so the whole block
+        // would stay allocated and the arena would keep its largest node.
+        if (new_size > node.size and child.rawResize(node.allocatedSlice(), .of(Node), new_size, @returnAddress())) {
             node.size = new_size;
         } else if (child.rawAlloc(new_size, .of(Node), @returnAddress())) |ptr| {
             child.rawFree(node.allocatedSlice(), .of(Node), @returnAddress());
@@ -201,9 +204,9 @@ noinline fn allocSlow(self: *ArenaAllocator, n: usize, alignment: Alignment) ?[*
     const size = mem.alignForward(usize, big_enough + big_enough / 2, @alignOf(Node));
 
     // Grow the current node in place by the full step rather than just
-    // enough for `n`. After a retain_with_limit reset, libc keeps the slack of
-    // the old, larger node: growing by `n` would succeed every time and send
-    // every allocation past the limit through here.
+    // enough for `n`. c_allocator grows a node in place up to its usable
+    // size: growing by just `n` would succeed and bring every allocation back
+    // here until that slack runs out.
     if (self.first) |node| {
         if (child.rawResize(node.allocatedSlice(), .of(Node), size, @returnAddress())) {
             node.size = size;
@@ -350,9 +353,80 @@ test "ArenaAllocator: limit shrinks a large single node" {
     try testing.expect(arena.first == null);
 }
 
+// Like std.heap.c_allocator: a shrink reports success but the whole block
+// stays allocated. `held` is what the child really holds.
+const KeepsBlockOnShrink = struct {
+    child: Allocator,
+    held: usize = 0,
+    blocks: std.AutoHashMapUnmanaged(usize, usize) = .empty,
+
+    fn deinit(self: *KeepsBlockOnShrink) void {
+        self.blocks.deinit(self.child);
+    }
+
+    fn allocator(self: *KeepsBlockOnShrink) Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = keepAlloc,
+            .resize = keepResize,
+            .remap = Allocator.noRemap,
+            .free = keepFree,
+        } };
+    }
+
+    fn keepAlloc(ctx: *anyopaque, n: usize, alignment: Alignment, ra: usize) ?[*]u8 {
+        const self: *KeepsBlockOnShrink = @ptrCast(@alignCast(ctx));
+        const ptr = self.child.rawAlloc(n, alignment, ra) orelse return null;
+        self.blocks.put(self.child, @intFromPtr(ptr), n) catch {
+            self.child.rawFree(ptr[0..n], alignment, ra);
+            return null;
+        };
+        self.held += n;
+        return ptr;
+    }
+
+    fn keepResize(_: *anyopaque, memory: []u8, _: Alignment, new_len: usize, _: usize) bool {
+        return new_len <= memory.len;
+    }
+
+    fn keepFree(ctx: *anyopaque, memory: []u8, alignment: Alignment, ra: usize) void {
+        const self: *KeepsBlockOnShrink = @ptrCast(@alignCast(ctx));
+        const n = self.blocks.fetchRemove(@intFromPtr(memory.ptr)).?.value;
+        self.child.rawFree(memory.ptr[0..n], alignment, ra);
+        self.held -= n;
+    }
+};
+
+test "ArenaAllocator: a reset with a limit gives back the block it can't keep" {
+    var child: KeepsBlockOnShrink = .{ .child = testing.allocator };
+    defer child.deinit();
+    var arena = ArenaAllocator.init(child.allocator());
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // One node past the limit.
+    _ = try a.alloc(u8, 64 * 1024);
+    try testing.expect(arena.reset(.{ .retain_with_limit = 1024 }));
+    try testing.expectEqual(1024, arena.queryCapacity());
+    try testing.expectEqual(@sizeOf(Node) + 1024, child.held);
+
+    // Several nodes past the limit.
+    while (arena.first.?.next == null) {
+        _ = try a.alloc(u8, 1000);
+    }
+    try testing.expect(arena.reset(.{ .retain_with_limit = 1024 }));
+    try testing.expectEqual(1024, arena.queryCapacity());
+    try testing.expectEqual(@sizeOf(Node) + 1024, child.held);
+
+    // What's kept is still usable up to the limit without the child.
+    const before = child.held;
+    const buf = try a.alloc(u8, 1024);
+    @memset(buf, 0xAA);
+    try testing.expectEqual(before, child.held);
+}
+
 test "ArenaAllocator: growth past a reset limit doesn't take the slow path per allocation" {
-    // libc can't shrink in place, so after a retain_with_limit reset the kept
-    // node still has the old node's slack behind it.
+    // With c_allocator, refilling an arena past its retain_with_limit reset:
+    // each slow path grows by a full step.
     var arena = ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
     const a = arena.allocator();
