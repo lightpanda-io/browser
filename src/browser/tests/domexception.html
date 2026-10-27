@@ -40,7 +40,7 @@
   {
     // message/name are WebIDL DOMStrings: a non-string argument is stringified
     // (ToString), never adopted as raw bytes. A TypedArray stringifies via its
-    // Array-inherited toString, so its contents are joined, not read as bytes.
+    // Array-inherited toString, so its contents are joined.
     const ex = new DOMException(new Uint8Array([65, 66, 67]), 'NotFoundError');
     testing.expectEqual('65,66,67', ex.message);
     testing.expectEqual('NotFoundError', ex.name);
@@ -54,6 +54,7 @@
 
     // null stringifies to "null"; a missing/undefined argument uses the default.
     testing.expectEqual('null', new DOMException(null).message);
+    testing.expectEqual('null', new DOMException('m', null).name);
     testing.expectEqual('', new DOMException(undefined).message);
     testing.expectEqual('Error', new DOMException(undefined, undefined).name);
   }
