@@ -396,6 +396,14 @@ pub fn printSlashParseError(self: *Terminal, err: Schema.ParseError, name: []con
             return;
         };
     }
+    if (err == error.UnknownField) {
+        if (diag) |d| if (d.bad_field.len > 0) {
+            const takes_prompt = if (Schema.findByName(name)) |s| Schema.takesPrompt(s.tool) else false;
+            const quote_hint = if (takes_prompt) " Quote the prompt if the '=' belongs to it." else "";
+            self.printError("{s}: unknown field '{s}'.{s} Try /help {s}.", .{ name, d.bad_field, quote_hint, name });
+            return;
+        };
+    }
     const reason: []const u8 = switch (err) {
         error.UnknownTool => {
             if (SlashCommand.closestCommand(name)) |near| {
@@ -410,6 +418,7 @@ pub fn printSlashParseError(self: *Terminal, err: Schema.ParseError, name: []con
         error.DuplicateField => "the same field was supplied twice (check for case-variants like Selector vs selector)",
         error.PositionalNotAllowed => "positional only works for commands with one required field. Use key=value",
         error.PositionalMustComeFirst => "the positional value must come before key=value pairs",
+        error.PromptMustComeFirst => "the prompt must come before key=value pairs",
         error.UnterminatedQuote => "unterminated quote",
         error.UnsupportedEscape => "backslash escapes aren't supported in quoted values; use the other quote style or `'''…'''`",
         error.InvalidValue => "invalid value (check argument type)",

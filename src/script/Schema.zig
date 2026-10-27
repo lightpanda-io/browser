@@ -81,6 +81,7 @@ pub const ParseError = error{
     MalformedKv,
     PositionalNotAllowed,
     PositionalMustComeFirst,
+    PromptMustComeFirst,
     UnterminatedQuote,
     UnsupportedEscape,
     InvalidValue,
@@ -92,8 +93,8 @@ pub const Split = struct {
     rest: []const u8,
 };
 
-/// Populated by `parseValueDiag` on `InvalidValue` so callers can surface
-/// the offending field/type/value to the user.
+/// Populated by `parseValueDiag` on `InvalidValue` (field/type/value) and on
+/// `UnknownField` (the key, in `bad_field`) so callers can surface it.
 pub const Diag = struct {
     bad_field: []const u8 = "",
     expected_type: FieldType = .other,
@@ -238,14 +239,27 @@ pub fn parsePrompt(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8,
     const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
     if (rest.len == 0 or rest[0] == '{') return null;
 
-    // tokenizeAny: prose may contain apostrophes ("the user's menu").
     var tail_start = rest.len;
-    var it = std.mem.tokenizeAny(u8, rest, &std.ascii.whitespace);
-    while (it.next()) |word| {
-        if (looksLikeKv(word)) {
-            tail_start = it.index - word.len;
+    var i: usize = 0;
+    while (i < rest.len) {
+        if (std.ascii.isWhitespace(rest[i])) {
+            i += 1;
+            continue;
+        }
+        // A closed quote is prose even with `=` inside ("the item with id=5");
+        // an unclosed one is an apostrophe ("'cause", "the user's menu").
+        if (rest[i] == '\'' or rest[i] == '"') {
+            if (std.mem.findScalarPos(u8, rest, i + 1, rest[i])) |close| {
+                i = close + 1;
+                continue;
+            }
+        }
+        const end = std.mem.findAnyPos(u8, rest, i, &std.ascii.whitespace) orelse rest.len;
+        if (looksLikeKv(rest[i..end])) {
+            tail_start = i;
             break;
         }
+        i = end;
     }
 
     const text = std.mem.trimEnd(u8, rest[0..tail_start], &std.ascii.whitespace);
@@ -290,13 +304,18 @@ fn parseArgs(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag:
             // leading positional, so point at the ordering instead of the
             // generic kv complaint.
             if (positional_field != null and !leading_positional) return error.PositionalMustComeFirst;
+            // `/fill value=x the password field`, or prose after the fields.
+            if (takesPrompt(self.tool)) return error.PromptMustComeFirst;
             return error.MalformedKv;
         };
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
         const key = tok[0..eq];
         // Reject typos like `checke=false` that would otherwise be silently
         // absorbed while the actual required field gets default-filled.
-        const field = self.findField(key) orelse return error.UnknownField;
+        const field = self.findField(key) orelse {
+            if (diag) |d| d.bad_field = key;
+            return error.UnknownField;
+        };
         list.appendAssumeCapacity(.{ .key = field.name, .value = stripQuotes(tok[eq + 1 ..]) });
     }
 
@@ -946,7 +965,19 @@ test "parsePrompt: splits the prompt from the key=value tail" {
     try testing.expect((try fill.parsePrompt(aa, "{\"selector\":\"#e\",\"value\":\"x\"}", null)) == null);
     try testing.expect((try fill.parsePrompt(aa, "", null)) == null);
 
-    try testing.expectError(error.UnknownField, fill.parsePrompt(aa, "the email field valu=x", null));
+    var diag: Diag = .{};
+    try testing.expectError(error.UnknownField, fill.parsePrompt(aa, "the email field valu=x", &diag));
+    try testing.expectString("valu", diag.bad_field);
+
+    const click = Schema.find(Schema.all(), "click").?;
+    try testing.expectString("the item with id=5", (try click.parsePrompt(aa, "\"the item with id=5\"", null)).?.prompt);
+    try testing.expectString("the user's menu", (try click.parsePrompt(aa, "the user's menu", null)).?.prompt);
+    const cause = (try fill.parsePrompt(aa, "'cause value=x", null)).?;
+    try testing.expectString("'cause", cause.prompt);
+    try testing.expectString("x", cause.args.?.object.get("value").?.string);
+
+    try testing.expectError(error.PromptMustComeFirst, fill.parsePrompt(aa, "the field value=x and more", null));
+    try testing.expectError(error.PromptMustComeFirst, fill.parseValue(aa, "value=spice the password field"));
 }
 
 test "takesPrompt: prompt tools have keyword-only hints and no positional" {

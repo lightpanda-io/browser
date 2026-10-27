@@ -445,7 +445,7 @@ test "parse: positional must come before key=value" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     try testing.expectError(error.PositionalMustComeFirst, Command.parse(arena.allocator(), "/goto timeout=5000 https://example.com"));
-    try testing.expectError(error.MalformedKv, Command.parse(arena.allocator(), "/extract save=front '{\"karma\":\"#karma\"}'"));
+    try testing.expectError(error.PromptMustComeFirst, Command.parse(arena.allocator(), "/extract save=front '{\"karma\":\"#karma\"}'"));
     const cmd = try Command.parse(arena.allocator(), "/extract schema='{\"karma\":\"#karma\"}' save=front");
     try testing.expectString("front", cmd.tool_call.args.?.object.get("save").?.string);
 }
