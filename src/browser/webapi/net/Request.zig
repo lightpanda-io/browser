@@ -205,6 +205,10 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         },
     };
 
+    if ((body != null or body_stream != null) and (method == .GET or method == .HEAD)) {
+        return exec.js.typeError("Request with GET/HEAD method cannot have body");
+    }
+
     const signal = if (opts.signal) |s|
         s
     else switch (input) {
