@@ -1,37 +1,56 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
-<script id=traverse_entries_of_one_document>
+<script id=traverse_entries_of_one_document type=module>
   {
     // Entries pushed by this document belong to it whatever their path or
-    // query: traversing between them must stay in the document (location
-    // updated synchronously, popstate fired) instead of loading the URL.
+    // query: traversing between them must stay in the document (popstate
+    // fired) instead of loading the URL.
+    const state = await testing.async();
     const original = location.href;
     const path = location.pathname;
     const pops = [];
-    const onpop = (e) => pops.push([location.pathname + location.search, e.state]);
-    window.addEventListener('popstate', onpop);
+    const nextPop = () => new Promise((resolve) => {
+      window.addEventListener('popstate', (e) => {
+        pops.push([location.pathname + location.search, e.state]);
+        resolve();
+      }, {once: true});
+    });
 
     history.pushState({n: 1}, '', '?n=1');
     history.pushState({n: 2}, '', '/history-traverse-path');
 
+    let popped = nextPop();
     history.back();
-    testing.expectEqual(path + '?n=1', location.pathname + location.search);
-    testing.expectEqual({n: 1}, history.state);
+    testing.diverges('Chrome queues the traversal: location and state change in a later task', () => {
+      testing.expectEqual(path + '?n=1', location.pathname + location.search);
+      testing.expectEqual({n: 1}, history.state);
+    });
+    await popped;
+    const back = [location.pathname + location.search, history.state];
 
+    popped = nextPop();
     history.forward();
-    testing.expectEqual('/history-traverse-path', location.pathname);
-    testing.expectEqual({n: 2}, history.state);
-
-    testing.expectEqual([
-      [path + '?n=1', {n: 1}],
-      ['/history-traverse-path', {n: 2}],
-    ], pops);
+    testing.diverges('Chrome queues the traversal: location and state change in a later task', () => {
+      testing.expectEqual('/history-traverse-path', location.pathname);
+      testing.expectEqual({n: 2}, history.state);
+    });
+    await popped;
+    const forward = [location.pathname, history.state];
 
     const pushed = navigation.entries().find((e) => e.url.endsWith('/history-traverse-path'));
-    testing.expectEqual(true, pushed.sameDocument);
-
-    window.removeEventListener('popstate', onpop);
     history.replaceState(null, '', original);
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual([path + '?n=1', {n: 1}], back);
+      testing.expectEqual(['/history-traverse-path', {n: 2}], forward);
+      testing.expectEqual([
+        [path + '?n=1', {n: 1}],
+        ['/history-traverse-path', {n: 2}],
+      ], pops);
+      testing.expectEqual(true, pushed.sameDocument);
+    });
   }
 </script>

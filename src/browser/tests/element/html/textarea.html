@@ -303,8 +303,10 @@
   }
 </script>
 
-<script id="select_event">
+<script id="select_event" type=module>
   {
+    // select is queued: it isn't ordered against the load event, so wait for it.
+    const state = await testing.async();
     const textarea = document.createElement('textarea');
     textarea.value = 'Hello World';
     document.body.appendChild(textarea);
@@ -321,15 +323,18 @@
     textarea.onselect = () => { onselectFired = true; };
 
     let bubbledToBody = false;
-    document.body.addEventListener('select', () => {
-      bubbledToBody = true;
+    document.body.addEventListener('select', (e) => {
+      if (e.target === textarea) {
+        bubbledToBody = true;
+        state.resolve();
+      }
     });
 
     testing.expectEqual(0, eventCount);
 
     textarea.select();
 
-    testing.onload(() => {
+    await state.done(() => {
       testing.expectEqual(1, eventCount);
       testing.expectEqual('select', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
@@ -341,37 +346,42 @@
   }
 </script>
 
-<script id="selectionchange_event">
+<script id="selectionchange_event" type=module>
   {
+    // Fires asynchronously, not ordered against the load event, and changes
+    // before it fires fold into one event.
+    const state = await testing.async();
     const textarea = document.createElement('textarea');
     textarea.value = 'Hello World';
     document.body.appendChild(textarea);
-    
+
     let eventCount = 0;
     let lastEvent = null;
-    
+
     textarea.addEventListener('selectionchange', (e) => {
       eventCount++;
       lastEvent = e;
     });
-    
+
     testing.expectEqual(0, eventCount);
-    
+
     textarea.setSelectionRange(0, 5);
     textarea.select();
     textarea.selectionStart = 3;
     textarea.selectionEnd = 8;
-    
+
     let bubbledToBody = false;
-    document.body.addEventListener('selectionchange', () => {
-      bubbledToBody = true;
+    document.body.addEventListener('selectionchange', (e) => {
+      if (e.target === textarea) {
+        bubbledToBody = true;
+        state.resolve();
+      }
     });
     textarea.setSelectionRange(1, 4);
-    
-    // Fires asynchronously, and changes before it fires fold into one event.
+
     testing.expectEqual(0, eventCount);
 
-    testing.onload(() => {
+    await state.done(() => {
       testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
