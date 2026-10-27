@@ -208,6 +208,7 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .waitForScript => "Re-evaluates page JS until truthy.",
         .waitForState => "",
         .screenshot => "`path` is required: writes a PNG of the text layout.",
+        .download => "Sends the session's cookies, so authenticated downloads work. Nothing is written for a non-2xx response.",
         .press => "Selector first! `page.press(\"Enter\")` binds \"Enter\" to `selector` and fails — use `page.press(null, \"Enter\")` or `page.press({ key: \"Enter\" })`.",
         .click, .fill, .scroll, .hover, .selectOption, .setChecked => "",
         .findElement => "`name` is a case-insensitive substring, or a JS regex literal like `/sign (in|up)/` (also case-insensitive).",

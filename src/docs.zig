@@ -212,6 +212,7 @@ fn writeGroupHeading(w: *Writer, g: Tool.Group, noun: []const u8, table_head: []
         .interaction => .{ "Interacting with the page", "dispatch real DOM events on the page" },
         .waiting => .{ "Waiting", "block until the page reaches a condition" },
         .state => .{ "State and debugging", "inspect browser state outside the DOM" },
+        .downloading => .{ "Downloading files", "save a URL's response body to a local file" },
     };
     try w.print("## {s}\n\nThese {s} {s}.\n\n{s}", .{ title, noun, scope, table_head });
 }

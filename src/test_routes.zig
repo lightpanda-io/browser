@@ -1032,6 +1032,44 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Fixture for the browser `download` tool tests. Everything is scoped to
+    // this path prefix, so its cookies can't reach the handlers other tests
+    // on the shared session rely on.
+    if (std.mem.eql(u8, path, "/download_tool/set_cookie")) {
+        return req.respond("ok", .{
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_download=1; Path=/download_tool" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/download_tool/redirect")) {
+        // The 302 sets a cookie that the followed hop must carry.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_redirect=1; Path=/download_tool" },
+                .{ .name = "Location", .value = "/download_tool/echo_headers" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/download_tool/echo_headers")) {
+        // Same contract as /echo_headers, under the fixture's cookie scope.
+        var buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+        var it = req.iterateHeaders();
+        while (it.next()) |header| {
+            const line = try std.mem.print(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
+            pos += line.len;
+        }
+        return req.respond(buf[0..pos], .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
         if (std.mem.find(u8, path, "delay_ms=")) |pos| {
             const digits_start = pos + "delay_ms=".len;
