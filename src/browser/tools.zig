@@ -3893,6 +3893,7 @@ test "download: session cookies ride along and Set-Cookie lands in the jar" {
     defer registry.deinit();
 
     const session = testing.test_session;
+    defer session.cookie_jar.clearRetainingCapacity();
     // The page makes the download same-site (same 127.0.0.1 host), so the
     // Lax cookie the server hands out flows on the next call.
     var page = try testing.pageTest("mcp_actions.html", .{});
@@ -3937,6 +3938,7 @@ test "download: a redirect's Set-Cookie lands in the jar and the next hop carrie
     defer registry.deinit();
 
     const session = testing.test_session;
+    defer session.cookie_jar.clearRetainingCapacity();
     var page = try testing.pageTest("mcp_actions.html", .{});
     defer page.close();
 
