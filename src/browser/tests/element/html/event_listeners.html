@@ -14,6 +14,7 @@
 <div id="attr-wheel" onwheel="window.x = 1"></div>
 <div id="attr-scroll" onscroll="window.x = 1"></div>
 <div id="attr-contextmenu" oncontextmenu="window.x = 1"></div>
+<div id="attr-mouseenter" onmouseenter="this.dataset.seen = event.type"></div>
 <div id="no-listeners"></div>
 
 <script id="attr_listener_returns_function">
@@ -739,6 +740,23 @@
     ac.signal.onabort = () => r.push(2);
     ac.abort();
     testing.expectEqual('1,2', r.join());
+}
+</script>
+
+<script id="mouseenter_mouseleave">
+{
+    const div = $('#attr-mouseenter');
+    testing.expectEqual('function', typeof div.onmouseenter);
+    div.dispatchEvent(new MouseEvent('mouseenter'));
+    testing.expectEqual('mouseenter', div.dataset.seen);
+
+    let left = 0;
+    div.onmouseleave = () => left++;
+    div.dispatchEvent(new MouseEvent('mouseleave'));
+    testing.expectEqual(1, left);
+
+    testing.expectEqual(true, 'onmouseenter' in window);
+    testing.expectEqual(true, 'onmouseleave' in document);
 }
 </script>
 
