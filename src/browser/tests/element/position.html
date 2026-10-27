@@ -474,6 +474,64 @@
 }
 </script>
 
+<script id="inlineBoxIsNotAContainingBlock">
+{
+  // A block inside an inline box sizes off the block around it (#4213: a
+  // width:100% flex row inside an unstyled custom element or span).
+  const outer = document.createElement('div');
+  outer.style.width = '800px';
+  document.body.appendChild(outer);
+
+  for (const wrapperTag of ['demo-app', 'span']) {
+    const wrapper = document.createElement(wrapperTag);
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; width: 100%';
+    const menu = document.createElement('div');
+    menu.style.cssText = 'width: 40px; flex-shrink: 0';
+    const pane = document.createElement('div');
+    pane.style.cssText = 'flex: 1; min-width: 0';
+    row.append(menu, pane);
+    wrapper.appendChild(row);
+    outer.appendChild(wrapper);
+    testing.expectEqual(800, row.offsetWidth);
+    testing.expectEqual(760, pane.clientWidth);
+
+    const fill = document.createElement('div');
+    wrapper.appendChild(fill);
+    testing.expectEqual(800, fill.offsetWidth);
+
+    // Nested inlines are skipped too
+    const inner = document.createElement('span');
+    const half = document.createElement('div');
+    half.style.width = '50%';
+    inner.appendChild(half);
+    wrapper.appendChild(inner);
+    testing.expectEqual(400, half.offsetWidth);
+
+    wrapper.style.display = 'inline';
+    testing.expectEqual(760, pane.clientWidth);
+    wrapper.style.display = 'block';
+    testing.expectEqual(760, pane.clientWidth);
+    wrapper.remove();
+  }
+
+  // Inline-blocks, floats and flex items are block containers
+  const box = document.createElement('span');
+  const child = document.createElement('div');
+  child.style.width = '100%';
+  box.appendChild(child);
+  outer.appendChild(box);
+  for (const css of ['display: inline-block; width: 300px', 'float: left; width: 300px', 'position: absolute; width: 300px']) {
+    box.style.cssText = css;
+    testing.expectEqual(300, child.offsetWidth);
+  }
+  box.style.cssText = 'width: 300px';
+  outer.style.display = 'flex';
+  testing.expectEqual(300, child.offsetWidth);
+  outer.remove();
+}
+</script>
+
 <script id="growShareAfterPercentSiblings">
 {
   // A percentage sibling takes its share of the row before the growers
