@@ -130,6 +130,14 @@ pub const Build = struct {
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (name.eql(comptime .wrap("async"))) {
+            // https://html.spec.whatwg.org/multipage/scripting.html#script-force-async
+            // "When an async attribute is added to a script element el, the
+            // user agent must set el's force async to false."
+            element.as(Script)._force_async = false;
+            return;
+        }
+
         if (!name.eql(comptime .wrap("src"))) {
             return;
         }

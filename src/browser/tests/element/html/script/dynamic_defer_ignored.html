@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!-- Alone in its document: this test observes DOMContentLoaded, which any
+     other script in the page could delay. -->
+<script id=dynamic_defer_attribute_ignored>
+{
+  // The defer attribute has no effect on dynamically-inserted scripts: they
+  // stay async, so they run in completion order and do not delay
+  // DOMContentLoaded.
+  window.deferIgnoredList = '';
+  let atDomContentLoaded = null;
+  document.addEventListener('DOMContentLoaded', () => {
+    atDomContentLoaded = deferIgnoredList;
+  });
+  function insertDeferred(src) {
+    const s = document.createElement('script');
+    s.src = src;
+    s.defer = true;
+    document.head.appendChild(s);
+  }
+  insertDeferred('dynamic_defer_ignored1.js?delay_ms=200');
+  insertDeferred('dynamic_defer_ignored2.js');
+  testing.onload(() => {
+    // The second script has no delay, so it can run before or after
+    // DOMContentLoaded. Only the delayed first script is checked.
+    testing.expectEqual(false, atDomContentLoaded.includes('1'));
+    testing.expectEqual('21', deferIgnoredList);
+  });
+}
+</script>

@@ -58,6 +58,13 @@ async_scripts: std.DoublyLinkedList,
 // dom_loaded == true. Workers never populate this list.
 defer_scripts: std.DoublyLinkedList,
 
+// Dynamically-inserted scripts with force-async cleared and no async
+// attribute (e.g. script.async = false). These must be executed in insertion
+// order, as soon as the head of the list is complete. Unlike defer_scripts,
+// they don't wait for parsing to finish. Workers never populate this list.
+// https://html.spec.whatwg.org/multipage/scripting.html#list-of-scripts-that-will-execute-in-order-as-soon-as-possible
+ordered_scripts: std.DoublyLinkedList,
+
 // When an async script is ready, it's queued here.
 ready_scripts: std.DoublyLinkedList,
 
@@ -82,6 +89,7 @@ pub fn init(allocator: Allocator, http_client: *HttpClient, owner: GlobalScope) 
         .owner = owner,
         .async_scripts = .{},
         .defer_scripts = .{},
+        .ordered_scripts = .{},
         .ready_scripts = .{},
         .importmap = .empty,
         .is_evaluating = false,
@@ -115,6 +123,7 @@ pub fn reset(self: *ScriptManagerBase) void {
     self.importmap = .empty;
 
     clearList(&self.defer_scripts);
+    clearList(&self.ordered_scripts);
     clearList(&self.async_scripts);
     clearList(&self.ready_scripts);
     self.static_scripts_done = false;
@@ -139,6 +148,7 @@ pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLi
         .frame => |fe| switch (fe.mode) {
             .normal => unreachable, // not added to a list, executed immediately
             .@"defer" => &self.defer_scripts,
+            .ordered => &self.ordered_scripts,
             .async => &self.async_scripts,
         },
     };
@@ -514,8 +524,9 @@ pub fn evaluate(self: *ScriptManagerBase) void {
             var script: *Script = @fieldParentPtr("node", n);
             switch (script.extra) {
                 .frame => {
-                    // Only .async mode reaches ready_scripts (defer stays in
-                    // defer_scripts, normal is sync and never queued).
+                    // Only .async mode reaches ready_scripts (defer and
+                    // ordered stay in their lists, normal is sync and never
+                    // queued).
                     defer script.deinit();
                     script.eval();
                 },
@@ -534,6 +545,20 @@ pub fn evaluate(self: *ScriptManagerBase) void {
                 .import => unreachable, // .import doesn't go through ready_scripts
                 .preload => unreachable, // .preload is buffered in the map, never queued
             }
+        }
+
+        // Ordered scripts run in insertion order, whether or not parsing is
+        // done. An incomplete head blocks the ones behind it; its
+        // doneCallback (or errorCallback, which unlinks it) re-enters evaluate.
+        while (self.ordered_scripts.first) |n| {
+            var script: *Script = @fieldParentPtr("node", n);
+            if (script.complete == false) break;
+            defer {
+                _ = self.ordered_scripts.popFirst();
+                script.deinit();
+            }
+            // Only frame scripts populate ordered_scripts.
+            script.eval();
         }
 
         if (self.static_scripts_done) {
@@ -674,12 +699,17 @@ pub const Script = struct {
                 // sync <script src="..."> — blocks parsing, evaluated
                 // immediately at the end of addFromElement via syncRequest.
                 normal,
-                // <script defer> / <script type=module> — queued in
-                // defer_scripts, drained in document order.
+                // parser-inserted <script defer> / <script type=module> —
+                // queued in defer_scripts, drained in document order.
                 @"defer",
-                // <script async> / dynamically-inserted scripts — queued in
-                // async_scripts; once HTTP completes, doneCallback moves to
-                // ready_scripts and evaluate drains them.
+                // dynamically-inserted scripts with force-async cleared and
+                // no async attribute — queued in ordered_scripts, drained in
+                // insertion order as soon as the head is complete.
+                ordered,
+                // <script async> / dynamically-inserted scripts with
+                // force-async set — queued in async_scripts; once HTTP
+                // completes, doneCallback moves to ready_scripts and evaluate
+                // drains them.
                 async,
             };
         };
@@ -833,6 +863,7 @@ pub const Script = struct {
                     manager.ready_scripts.append(&self.node);
                 },
                 .@"defer" => {}, // stays in defer_scripts; drained in order
+                .ordered => {}, // stays in ordered_scripts; drained in order
                 .normal => unreachable, // syncRequest path doesn't go through callbacks
             },
             .import_async => {

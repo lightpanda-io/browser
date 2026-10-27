@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<script id=async_attribute_clears_force_async>
+{
+  // Adding the async attribute clears force-async, so removing it
+  // leaves async false.
+  const s = document.createElement('script');
+  testing.expectEqual(true, s.async);
+  s.setAttribute('async', '');
+  testing.expectEqual(true, s.async);
+  s.removeAttribute('async');
+  testing.expectEqual(false, s.async);
+}
+</script>
+
+<script id=ordered_insertion_order>
+{
+  // Dynamic scripts with async = false run in insertion order, even when
+  // the first one finishes downloading last.
+  window.orderedList = '';
+  function insertOrdered(src) {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    document.head.appendChild(s);
+  }
+  insertOrdered('dynamic_order1.js?delay_ms=200');
+  insertOrdered('dynamic_order2.js');
+  testing.onload(() => {
+    testing.expectEqual('12', orderedList);
+  });
+}
+</script>
+
+<script id=ordered_after_async_attribute>
+{
+  // Force-async cleared through the async attribute also selects ordered
+  // execution.
+  window.attributeOrderedList = '';
+  function insertOrdered(src) {
+    const s = document.createElement('script');
+    s.setAttribute('async', '');
+    s.removeAttribute('async');
+    s.src = src;
+    document.head.appendChild(s);
+  }
+  insertOrdered('dynamic_order_attribute1.js?delay_ms=200');
+  insertOrdered('dynamic_order_attribute2.js');
+  testing.onload(() => {
+    testing.expectEqual('12', attributeOrderedList);
+  });
+}
+</script>
+
+<script id=ordered_failure_does_not_block>
+{
+  // A failed ordered script leaves the list, and the scripts behind it run.
+  window.failedOrderedError = false;
+  window.failureOrderedList = '';
+  const missing = document.createElement('script');
+  missing.src = 'dynamic_order_missing.js?delay_ms=100';
+  missing.async = false;
+  missing.onerror = () => window.failedOrderedError = true;
+  document.head.appendChild(missing);
+
+  const after = document.createElement('script');
+  after.src = 'dynamic_order3.js';
+  after.async = false;
+  document.head.appendChild(after);
+  testing.onload(() => {
+    testing.expectEqual(true, failedOrderedError);
+    testing.expectEqual('3', failureOrderedList);
+  });
+}
+</script>
+
+<script id=dynamic_inline_module_ordered>
+{
+  // An inline module with async = false waits for the ordered scripts
+  // inserted before it.
+  window.inlineOrderedList = '';
+  const remote = document.createElement('script');
+  remote.src = 'dynamic_order_before_inline_module.js?delay_ms=200';
+  remote.async = false;
+  document.head.appendChild(remote);
+
+  const inline = document.createElement('script');
+  inline.type = 'module';
+  inline.async = false;
+  inline.textContent = "inlineOrderedList += '2';";
+  document.head.appendChild(inline);
+  testing.onload(() => {
+    testing.expectEqual('12', inlineOrderedList);
+  });
+}
+</script>

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<script>
+  window.parserAsyncModuleRan = false;
+  window.dynamicAsyncModuleRan = false;
+</script>
+
+<!-- Runs after parsing ends, and records which async inline modules ran
+     before it. -->
+<script defer src="inline_module_async_defer.js"></script>
+
+<!-- An inline module with the async attribute is not deferred. -->
+<script type=module async>
+  window.parserAsyncModuleRan = true;
+</script>
+
+<script id=parser_inline_module_async>
+{
+  // An async inline module has its source already, so it runs without
+  // waiting behind the parser-inserted defer scripts. The spec does not
+  // require it to run before them, but every browser does, because the defer
+  // script must still be fetched.
+  testing.onload(() => {
+    testing.expectEqual(true, window.parserAsyncModuleRanBeforeDefer);
+  });
+}
+</script>
+
+<script id=dynamic_inline_module_async>
+{
+  // A dynamic inline module defaults to async (force-async), with the same
+  // result.
+  const s = document.createElement('script');
+  s.type = 'module';
+  s.textContent = 'window.dynamicAsyncModuleRan = true;';
+  document.head.appendChild(s);
+  testing.onload(() => {
+    testing.expectEqual(true, window.dynamicAsyncModuleRanBeforeDefer);
+  });
+}
+</script>

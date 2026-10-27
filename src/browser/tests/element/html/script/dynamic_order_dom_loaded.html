@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!-- Alone in its document: this test observes DOMContentLoaded, which any
+     other script in the page could delay. -->
+<script id=ordered_does_not_delay_dom_content_loaded>
+{
+  // Unlike parser-inserted defer scripts, ordered scripts (dynamic, with
+  // async = false) do not delay DOMContentLoaded.
+  window.domLoadedOrderedList = '';
+  let atDomContentLoaded = null;
+  document.addEventListener('DOMContentLoaded', () => {
+    atDomContentLoaded = domLoadedOrderedList;
+  });
+  function insertOrdered(src) {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    document.head.appendChild(s);
+  }
+  insertOrdered('dynamic_order_dom_loaded1.js?delay_ms=200');
+  insertOrdered('dynamic_order_dom_loaded2.js');
+  testing.onload(() => {
+    testing.expectEqual('', atDomContentLoaded);
+    testing.expectEqual('12', domLoadedOrderedList);
+  });
+}
+</script>

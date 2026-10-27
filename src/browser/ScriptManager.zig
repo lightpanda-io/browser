@@ -91,7 +91,7 @@ fn tailHook(base: *ScriptManagerBase) void {
     // Page makes this safe to call multiple times.
     frame.documentIsLoaded();
 
-    if (base.async_scripts.first == null and self.frame_notified_of_completion == false) {
+    if (base.async_scripts.first == null and base.ordered_scripts.first == null and self.frame_notified_of_completion == false) {
         self.frame_notified_of_completion = true;
         frame.scriptsCompletedLoading();
     }
@@ -256,7 +256,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const base_url = frame.base();
 
     const src = element.getAttributeInterned("src") orelse {
-        return self.addInlineScript(script_element, kind);
+        return self.addInlineScript(from_parser, script_element, kind);
     };
 
     // The script is remote (even data: and blob: are synthesized via HttpClient)
@@ -273,26 +273,28 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const remote_url = try URL.resolve(arena.allocator(), base_url, src, .{ .encoding = frame.charset });
     script_element._executed = true;
 
+    // https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
+    // (step 32, external classic and module scripts)
     const mode: Script.Extra.FrameExtra.Mode = blk: {
         if (element.getAttributeInterned("async") != null) {
             break :blk .async;
         }
 
-        // Check for defer or module (before checking dynamic script default)
-        if (kind == .module or element.getAttributeInterned("defer") != null) {
-            break :blk .@"defer";
+        if (comptime from_parser) {
+            if (kind == .module or element.getAttributeInterned("defer") != null) {
+                break :blk .@"defer";
+            }
+            break :blk .normal;
         }
 
-        // For dynamically-inserted scripts (not from parser), default to async
-        // unless async was explicitly set to false (which removes the attribute)
-        // and defer was set to true (checked above)
-        if (comptime !from_parser) {
-            // Script has src and no explicit async/defer attributes
-            // Per HTML spec, dynamically created scripts default to async
+        // Dynamically-inserted: the defer attribute has no effect. Scripts
+        // default to async (force-async), unless force-async was cleared
+        // (script.async = false, or the async attribute was added at some
+        // point), in which case they run in insertion order.
+        if (script_element._force_async) {
             break :blk .async;
         }
-
-        break :blk .normal;
+        break :blk .ordered;
     };
 
     if (comptime lp.IS_DEBUG) {
@@ -421,8 +423,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return self.evalNow(script);
     }
 
-    // async/defer: queue the script and fetch in the background; doneCallback
-    // routes it through the ready_scripts / defer_scripts draining.
+    // async/defer/ordered: queue the script and fetch in the background;
+    // doneCallback routes it through the ready_scripts / defer_scripts /
+    // ordered_scripts draining.
     self.base.scriptList(script).append(&script.node);
 
     const was_evaluating = self.base.is_evaluating;
@@ -464,10 +467,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     transfer.submit() catch {};
 }
 
-// A <script> with no src. Runs synchronously right now, except an inline
-// module during parsing, which waits its turn in defer_scripts.
-fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, kind: Script.Extra.FrameExtra.Kind) !void {
-    const node = script_element.asElement().asNode();
+// A <script> with no src. Classic scripts run synchronously right now. Inline
+// modules follow the same async / ordered / defer rules as remote scripts.
+fn addInlineScript(self: *ScriptManager, comptime from_parser: bool, script_element: *Element.Html.Script, kind: Script.Extra.FrameExtra.Kind) !void {
+    const element = script_element.asElement();
+    const node = element.asNode();
 
     const source_len = node.childTextContentLen();
     if (source_len == 0) {
@@ -490,7 +494,25 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, k
 
     script_element._executed = true;
 
-    const mode: Script.Extra.FrameExtra.Mode = if (kind == .module) .@"defer" else .normal;
+    // https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
+    // (step 32): the async and defer attributes have no effect on inline
+    // classic scripts. Inline module scripts are scheduled like remote ones.
+    const mode: Script.Extra.FrameExtra.Mode = blk: {
+        if (kind != .module) {
+            break :blk .normal;
+        }
+        if (element.getAttributeInterned("async") != null) {
+            break :blk .async;
+        }
+        if (comptime from_parser) {
+            break :blk .@"defer";
+        }
+        if (script_element._force_async) {
+            break :blk .async;
+        }
+        break :blk .ordered;
+    };
+
     const script = try arena.create(Script);
     script.* = .{
         .node = .{},
@@ -508,12 +530,28 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, k
         } },
     };
 
-    // An inline module found during parsing waits its turn in document order.
-    // Once parsing is done, the deferred batch has already drained and won't
-    // run again, so run it immediately instead.
-    if (mode == .@"defer" and self.base.static_scripts_done == false) {
-        self.base.scriptList(script).append(&script.node);
-        return;
+    switch (mode) {
+        // The source is already here, so an async inline module is ready to
+        // run immediately.
+        .normal, .async => {},
+        .@"defer" => {
+            // An inline module found during parsing waits its turn in
+            // document order. Once parsing is done, the deferred batch has
+            // already drained and won't run again, so run it immediately
+            // instead.
+            if (self.base.static_scripts_done == false) {
+                self.base.scriptList(script).append(&script.node);
+                return;
+            }
+        },
+        .ordered => {
+            // Waits for the ordered scripts inserted before it. It is
+            // already complete, so evaluate runs it as soon as it reaches
+            // the head of the list.
+            self.base.scriptList(script).append(&script.node);
+            self.base.evaluate();
+            return;
+        },
     }
 
     self.evalNow(script);
