@@ -7,11 +7,10 @@
 {
   // Window and Document include GlobalEventHandlers, like HTMLElement.
   // Window leaves out the DocumentAndElementEventHandlers (copy, cut, paste),
-  // the fullscreen handlers (Element and Document only) and the touch ones.
+  // and the fullscreen handlers (Element and Document only).
   const notOnWindow = [
     'oncopy', 'oncut', 'onpaste',
     'onfullscreenchange', 'onfullscreenerror',
-    'ontouchcancel', 'ontouchend', 'ontouchmove', 'ontouchstart',
   ];
   const names = Object.getOwnPropertyNames(HTMLElement.prototype)
     .filter((n) => n.startsWith('on'));
@@ -30,6 +29,25 @@
   testing.expectEqual(true, 'onkeydown' in window);
   testing.expectEqual(true, 'onchange' in document);
   testing.expectEqual(true, 'onsubmit' in document);
+</script>
+
+<script id=noTouchHandlers>
+{
+  // As desktop Chrome without a touch screen: pages read
+  // 'ontouchstart' in document.documentElement to detect a touch device.
+  const names = ['ontouchcancel', 'ontouchend', 'ontouchmove', 'ontouchstart'];
+  for (const n of names) {
+    testing.expectEqual([false, false, false], [n in window, n in document, n in document.documentElement]);
+  }
+
+  // the content attribute isn't a handler either, but listeners still run
+  window.seenTouch = [];
+  const div = document.createElement('div');
+  div.setAttribute('ontouchstart', 'seenTouch.push("attr")');
+  div.addEventListener('touchstart', () => seenTouch.push('listener'));
+  div.dispatchEvent(new TouchEvent('touchstart'));
+  testing.expectEqual(['listener'], seenTouch);
+}
 </script>
 
 <script id=handlersRunForBubblingEvents>
