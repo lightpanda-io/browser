@@ -404,6 +404,12 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .connect_only, value);
     }
 
+    // Keep a proxy's CONNECT response out of the header callback, so it only
+    // sees the origin's.
+    pub fn setSuppressConnectHeaders(self: *const Connection) !void {
+        try libcurl.curl_easy_setopt(self._easy, .suppress_connect_headers, true);
+    }
+
     // Close this connection when the transfer ends instead of returning it to
     // libcurl's keepalive pool. Read by libcurl when the transfer completes,
     // so it can be set while the response is being received.

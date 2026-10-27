@@ -242,6 +242,9 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
 
     try conn.setURL(resolved_url);
     try conn.setConnectOnly(false);
+    // receivedHeaderCallback reads the first status line as the upgrade's,
+    // so a proxy's CONNECT response must not reach it.
+    try conn.setSuppressConnectHeaders();
 
     try conn.setReadCallback(sendDataCallback, true);
     try conn.setWriteCallback(receivedDataCallback);
