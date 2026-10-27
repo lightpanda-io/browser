@@ -96,7 +96,10 @@ pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bo
             "allow-same-origin",                       "allow-scripts",                            "allow-storage-access-by-user-activation", "allow-top-navigation",
             "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols",
         },
-        .rel => &.{ "stylesheet", "preload", "modulepreload" },
+        .rel => switch (self._element.getTag()) {
+            .link => &.{ "stylesheet", "preload", "modulepreload" },
+            else => &.{ "noopener", "noreferrer", "opener" },
+        },
         // no supported tokens defined
         .class, .part, .sizes, .@"for" => return error.TypeError,
     };

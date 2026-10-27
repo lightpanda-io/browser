@@ -137,6 +137,15 @@ fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), frame);
 }
 
+fn getRelList(self: *Form, frame: *Frame) !*collections.DOMTokenList {
+    return self.asElement().getRelList(frame);
+}
+
+fn setRelList(self: *Form, value: lp.String, frame: *Frame) !void {
+    const list = try self.getRelList(frame);
+    try list.setValue(value, frame);
+}
+
 fn getAcceptCharset(self: *Form) []const u8 {
     return self.asElement().getAttributeSafe(.wrap("accept-charset")) orelse "";
 }
@@ -373,6 +382,8 @@ pub const JsApi = struct {
     pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{ .ce_reactions = true });
     pub const action = bridge.accessor(Form.getAction, Form.setAction, .{ .ce_reactions = true });
     pub const target = reflect.string("target");
+    pub const rel = reflect.string("rel");
+    pub const relList = bridge.accessor(Form.getRelList, Form.setRelList, .{ .ce_reactions = true });
     pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{ .ce_reactions = true });
     pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{ .ce_reactions = true });
     pub const noValidate = reflect.boolean("novalidate");
