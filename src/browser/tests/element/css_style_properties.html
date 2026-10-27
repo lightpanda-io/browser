@@ -89,7 +89,14 @@
   testing.expectEqual(undefined, div.style.oTransition);
 
   testing.expectEqual('rotate(45deg)', div.style['-webkit-transform']);
-  testing.expectEqual('none', div.style['-moz-user-select']);
+  // unknown properties are dropped, not stored
+  testing.expectEqual(undefined, div.style['-moz-user-select']);
+
+  div.style.cssText = 'not-a-property: 1; color: red; --custom: x';
+  testing.expectEqual('color: red; --custom: x;', div.style.cssText);
+  div.setAttribute('style', 'bogus: 1; margin-top: 2px');
+  testing.expectEqual('margin-top: 2px;', div.style.cssText);
+  div.removeAttribute('style');
 }
 </script>
 
@@ -128,6 +135,29 @@
 
   testing.expectEqual(undefined, div.style.webkitNotSet);
   testing.expectEqual(undefined, div.style.mozNotSet);
+}
+</script>
+
+<script id="knownPropertyPresence">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  // Known properties are present while unset, whichever spelling is used.
+  testing.expectEqual('', div.style.webkitTransform);
+  testing.expectEqual('', div.style.WebkitTransform);
+  testing.expectEqual('', div.style['-webkit-transform']);
+  testing.expectEqual(true, 'webkitTransform' in div.style);
+  testing.expectEqual(true, 'WebkitTransform' in div.style);
+  testing.expectEqual(true, 'isolation' in div.style);
+  testing.expectEqual(true, 'positionArea' in div.style);
+  testing.expectEqual(false, 'mozUserSelect' in div.style);
+  testing.expectEqual(false, '-moz-user-select' in div.style);
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual(true, 'isolation' in computed);
+  testing.expectEqual(true, 'background-blend-mode' in computed);
+  testing.expectEqual(false, 'notARealProperty' in computed);
 }
 </script>
 
