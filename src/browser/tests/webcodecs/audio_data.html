@@ -87,3 +87,27 @@
   }
 }
 </script>
+
+<script id=copy_to_detached_destination>
+{
+  // An options getter that detaches the destination must not cause a write
+  // into the freed backing store: copyTo re-reads the destination after the
+  // options are coerced, so a detached buffer fails the bounds check instead.
+  const src = new AudioData({
+    format: 'u8', sampleRate: 8000, numberOfFrames: 8,
+    numberOfChannels: 1, timestamp: 0, data: new Uint8Array(8),
+  });
+  const dest = new Uint8Array(8);
+  let threw = false;
+  try {
+    src.copyTo(dest, {
+      planeIndex: 0,
+      get frameOffset() { dest.buffer.transfer(0); return 0; },
+    });
+  } catch (e) {
+    threw = true;
+  }
+  testing.expectEqual(true, threw);
+  testing.expectEqual(0, dest.byteLength);
+}
+</script>

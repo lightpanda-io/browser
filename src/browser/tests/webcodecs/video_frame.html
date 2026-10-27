@@ -143,3 +143,24 @@
   testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(32767, 32767), {timestamp: 1}));
 }
 </script>
+
+<script id=copy_to_detached_destination type=module>
+  const state = await testing.async();
+  // An options getter that detaches the destination must not cause a write
+  // into the freed backing store: copyTo re-reads the destination after the
+  // options are coerced, so a detached buffer rejects instead.
+  const frame = new VideoFrame(new Uint8Array([1, 2, 3, 4]), {format: 'RGBA', timestamp: 0, codedWidth: 1, codedHeight: 1});
+  const dest = new Uint8Array(4);
+  let error = null;
+  try {
+    await frame.copyTo(dest, {get rect() { dest.buffer.transfer(0); return undefined; }});
+  } catch (e) {
+    error = e;
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, error !== null);
+    testing.expectEqual(0, dest.byteLength);
+  });
+</script>

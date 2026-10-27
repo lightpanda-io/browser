@@ -259,7 +259,9 @@ fn allocationSize(self: *const AudioData, options: CopyToOptions) !u32 {
     return std.math.cast(u32, copy.byteLength()) orelse error.RangeError;
 }
 
-fn copyTo(self: *const AudioData, destination: js.AllowSharedBufferSource, options: CopyToOptions) !void {
+fn copyTo(self: *const AudioData, destination_value: js.Value, options: CopyToOptions, exec: *const Execution) !void {
+    const destination = try exec.js.local.?.jsValueToZig(js.AllowSharedBufferSource, destination_value);
+
     const copy = try self.computeCopy(options);
     const byte_length = copy.byteLength();
     if (byte_length > destination.bytes.len) {
