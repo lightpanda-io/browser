@@ -1434,6 +1434,22 @@ fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
     return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
+// There's no editing pipeline or clipboard, so every execCommand command is
+// unsupported. The spec's answer for that is false (or "" for the value), not
+// an exception, which keeps callers on their fallbacks.
+fn execCommand(_: *const Document, command: []const u8) bool {
+    log.info(.not_implemented, "document.execCommand", .{ .command = command });
+    return false;
+}
+
+fn queryCommand(_: *const Document, _: []const u8) bool {
+    return false;
+}
+
+fn queryCommandValue(_: *const Document, _: []const u8) []const u8 {
+    return "";
+}
+
 pub fn hasFocus(self: *Document) bool {
     var top = self._frame orelse return false;
     while (top.parent) |parent| {
@@ -1896,6 +1912,12 @@ pub const JsApi = struct {
     pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
     pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
+    pub const execCommand = bridge.function(Document.execCommand, .{});
+    pub const queryCommandEnabled = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandIndeterm = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandState = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandSupported = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandValue = bridge.function(Document.queryCommandValue, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});
