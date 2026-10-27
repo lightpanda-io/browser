@@ -3,10 +3,11 @@
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 60px;">Target Element</div>
 
-<script id="disconnectEarlierObserver">
+<script id="disconnectEarlierObserver" type=module>
   {
     // b disconnects a while the delivery round is in progress. Each observer
     // must still be called at most once, in registration order.
+    const state = await testing.async();
     const target = document.getElementById('target');
     const calls = [];
     const a = new ResizeObserver(() => calls.push('a'));
@@ -15,17 +16,20 @@
     a.observe(target);
     b.observe(target);
     c.observe(target);
+    await testing.nextFrame();
+    b.disconnect();
+    c.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
       testing.expectEqual('a,b,c', calls.join(','));
-      b.disconnect();
-      c.disconnect();
     });
   }
 </script>
 
-<script id="disconnectLaterObserver">
+<script id="disconnectLaterObserver" type=module>
   {
+    const state = await testing.async();
     const target = document.getElementById('target');
     const calls = [];
     let c = null;
@@ -35,11 +39,13 @@
     a.observe(target);
     b.observe(target);
     c.observe(target);
+    await testing.nextFrame();
+    a.disconnect();
+    b.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
       testing.expectEqual('a,b', calls.join(','));
-      a.disconnect();
-      b.disconnect();
     });
   }
 </script>

@@ -742,16 +742,19 @@
 }
 </script>
 
-<img src="https://cdn.lightpanda.io/website/assets/images/docs/hn.png" />
+<script>
+  // Registered before the <img> so a fast local load can't be missed.
+  // We should get this fired at capturing phase when a resource loaded.
+  const documentElementLoad = new Promise((resolve) => {
+    document.documentElement.addEventListener("load", e => resolve(e.eventPhase), { capture: true, once: true });
+  });
+</script>
+
+<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
 
 <script id="document-element-load" type=module>
   const state = await testing.async();
-  const docElement = document.documentElement;
-
-  // We should get this fired at capturing phase when a resource loaded.
-  docElement.addEventListener("load", e => {
-    state.resolve(e.eventPhase);
-  }, true);
+  state.resolve(await documentElementLoad);
 
   await state.done((eventPhase) => {
     testing.expectEqual(Event.CAPTURING_PHASE, eventPhase);

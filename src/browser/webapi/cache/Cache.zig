@@ -350,7 +350,10 @@ fn toResponse(entry: *const Store.Entry, exec: *const Execution) !*Response {
         ._body = .{ .bytes = try arena.dupe(u8, entry.body) },
         ._type = entry.response_type,
         ._is_redirected = entry.is_redirected,
-        ._headers = try .initGuarded(.{ .strings = entry.headers }, .immutable, exec),
+        // pretty sure, by the spec, this should be .immutable, but both Firefox
+        // and Chrome allow mutation to the header, and I found no WPT tests that
+        // checks either way.
+        ._headers = try .initGuarded(.{ .strings = entry.headers }, .response, exec),
     };
     arena.report();
     return response;
