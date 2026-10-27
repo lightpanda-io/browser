@@ -567,7 +567,7 @@ pub fn isDefaultNamespace(self: *Node, namespace_arg: ?[]const u8, frame: *Frame
     return false;
 }
 
-pub fn isEqualNode(self: *Node, other: *Node) bool {
+pub fn isEqualNode(self: *Node, other: *Node, frame: *Frame) bool {
     if (self == other) {
         return true;
     }
@@ -577,17 +577,16 @@ pub fn isEqualNode(self: *Node, other: *Node) bool {
         return false;
     }
 
-    // TODO: Compare `localName` and prefix.
     return switch (self._type) {
-        .element => self.as(Element).isEqualNode(other.as(Element)),
+        .element => self.as(Element).isEqualNode(other.as(Element), frame),
         .attribute => self.as(Element.Attribute).isEqualNode(other.as(Element.Attribute)),
         .cdata => self.as(CData).isEqualNode(other.as(CData)),
         .document_type => self.as(DocumentType).isEqualNode(other.as(DocumentType)),
-        .document_fragment, .document => self.isEqualChildren(other),
+        .document_fragment, .document => self.isEqualChildren(other, frame),
     };
 }
 
-pub fn isEqualChildren(a: *Node, b: *Node) bool {
+pub fn isEqualChildren(a: *Node, b: *Node, frame: *Frame) bool {
     var a_count: usize = 0;
     var a_iter = a.childrenIterator();
 
@@ -597,7 +596,7 @@ pub fn isEqualChildren(a: *Node, b: *Node) bool {
     while (a_iter.next()) |a_node| : (a_count += 1) {
         const b_node = b_iter.next() orelse return false;
         b_count += 1;
-        if (a_node.isEqualNode(b_node)) {
+        if (a_node.isEqualNode(b_node, frame)) {
             continue;
         }
 
@@ -1952,8 +1951,8 @@ pub const JsApi = struct {
         return self.getRootNode(opts orelse .{});
     }
     pub const isEqualNode = bridge.function(_isEqualNode, .{});
-    fn _isEqualNode(self: *Node, other: js.Nullable(*Node)) bool {
-        return self.isEqualNode(other.value orelse return false);
+    fn _isEqualNode(self: *Node, other: js.Nullable(*Node), frame: *Frame) bool {
+        return self.isEqualNode(other.value orelse return false, frame);
     }
     pub const lookupNamespaceURI = bridge.function(_lookupNamespaceURI, .{});
     fn _lookupNamespaceURI(self: *Node, prefix: js.Nullable([]const u8), frame: *Frame) ?[]const u8 {

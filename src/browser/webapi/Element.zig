@@ -242,13 +242,16 @@ pub fn asConstNode(self: *const Element) *const Node {
     return Factory.protoOf(@constCast(self));
 }
 
-/// TODO: localName and prefix comparison.
-pub fn isEqualNode(self: *Element, other: *Element) bool {
-    const self_tag = self.getTagNameDump();
-    const other_tag = other.getTagNameDump();
-    // Compare namespaces and tags.
-    const dirty = self._namespace != other._namespace or !std.mem.eql(u8, self_tag, other_tag);
-    if (dirty) {
+pub fn isEqualNode(self: *Element, other: *Element, frame: *Frame) bool {
+    if (!optionalStringEql(self.getNamespaceUri(frame), other.getNamespaceUri(frame))) {
+        return false;
+    }
+
+    if (!optionalStringEql(self._prefix(), other._prefix())) {
+        return false;
+    }
+
+    if (!std.mem.eql(u8, self.getLocalName(), other.getLocalName())) {
         return false;
     }
 
@@ -256,7 +259,13 @@ pub fn isEqualNode(self: *Element, other: *Element) bool {
         return false;
     }
 
-    return self.asNode().isEqualChildren(other.asNode());
+    return self.asNode().isEqualChildren(other.asNode(), frame);
+}
+
+fn optionalStringEql(a: ?[]const u8, b: ?[]const u8) bool {
+    const av = a orelse return b == null;
+    const bv = b orelse return false;
+    return std.mem.eql(u8, av, bv);
 }
 
 pub fn getTagNameLower(self: *const Element) []const u8 {
