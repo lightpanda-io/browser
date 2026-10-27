@@ -29,23 +29,20 @@ pub const ParseError = Schema.ParseError || error{
     NotASlashCommand,
 };
 
-const login_prompt =
-    \\Find the login form on the current page. Fill in the credentials using
-    \\$LP_* placeholders — the substitution happens inside the Lightpanda
-    \\subprocess so the secret never enters your context. Do NOT call getEnv
+const login_prompt_head =
+    \\Sign in on the current page with the credentials below. Type each value
+    \\exactly as written: they are $LP_* placeholders that the browser
+    \\substitutes, so the secret never enters your context. Do NOT call getEnv
     \\with a credential name (it would return the value).
     \\
-    \\Call getEnv with NO `name` argument first to see which LP_* variables
-    \\are set (names only, values never included). Then pick:
-    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
-    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
-    \\  $LP_GH_TOKEN for github.com.
-    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
-    \\  (or $LP_EMAIL) form.
+;
+
+const login_prompt_tail =
     \\
-    \\Handle any cookie banners or popups first, then submit the form by
-    \\clicking its submit button or pressing Enter in a filled field — there
-    \\is no dedicated submit tool.
+    \\The login and acceptCookies tools need a TYPESAFE_API_KEY that is not
+    \\set, so do this with fill, click and press. Handle any cookie banners or
+    \\popups first, then submit the form by clicking its submit button or
+    \\pressing Enter in a filled field.
 ;
 
 const logout_prompt =
@@ -59,7 +56,36 @@ const logout_prompt =
 const accept_cookies_prompt =
     \\Find and dismiss the cookie consent banner on the current page.
     \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
+    \\The acceptCookies tool needs a TYPESAFE_API_KEY that is not set, so click
+    \\the button yourself.
 ;
+
+/// The credentials the user gave, handed to the model as they were typed.
+/// Null where a model must not take over: `decideOnly` promises nothing is
+/// typed, and a literal password would put the secret in the model's context.
+fn loginPrompt(arena: std.mem.Allocator, args: ?std.json.Value) error{OutOfMemory}!?[]const u8 {
+    const fields = switch (args orelse return null) {
+        .object => |object| object,
+        else => return null,
+    };
+    if (fields.get("decideOnly")) |v| if (v == .bool and v.bool) return null;
+    const password = placeholder(fields.get("password")) orelse return null;
+    const username: ?[]const u8 = if (fields.get("username")) |v| switch (v) {
+        .string => |name| name,
+        else => return null,
+    } else null;
+
+    if (username) |user| {
+        return try arena.print(login_prompt_head ++ "\nusername: {s}\npassword: {s}\n" ++ login_prompt_tail, .{ user, password });
+    }
+    return try arena.print(login_prompt_head ++ "\npassword: {s}\n(this page asks only for the password)\n" ++ login_prompt_tail, .{password});
+}
+
+fn placeholder(value: ?std.json.Value) ?[]const u8 {
+    const v = value orelse return null;
+    if (v != .string or !std.mem.startsWith(u8, v.string, "$LP_")) return null;
+    return v.string;
+}
 
 pub const Command = union(enum) {
     tool_call: ToolCall,
@@ -194,10 +220,10 @@ pub const Command = union(enum) {
     /// fall back to when there is no TypeSafe key. Not `LlmCommand` values:
     /// the slash name has to reach the tool, and `parseDiag` resolves
     /// `LlmCommand` first.
-    pub fn fallbackPrompt(tool: BrowserTool) ?[]const u8 {
-        return switch (tool) {
+    pub fn fallbackPrompt(arena: std.mem.Allocator, tc: ToolCall) error{OutOfMemory}!?[]const u8 {
+        return switch (tc.tool) {
             .acceptCookies => accept_cookies_prompt,
-            .login => login_prompt,
+            .login => loginPrompt(arena, tc.args),
             else => null,
         };
     }
@@ -384,13 +410,66 @@ test "parse: bare prose errors" {
     try testing.expectError(error.NotASlashCommand, Command.parse(arena.allocator(), "goto https://x"));
 }
 
+fn fallbackFor(arena: std.mem.Allocator, tool: BrowserTool, args: []const u8) !?[]const u8 {
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+    return Command.fallbackPrompt(arena, .{ .tool = tool, .args = value });
+}
+
 test "fallbackPrompt: only the tools that ask Jev have a prompt form" {
-    // What the REPL sends when TYPESAFE_API_KEY is not set.
-    try testing.expect(Command.fallbackPrompt(.acceptCookies) != null);
-    try testing.expect(std.mem.find(u8, Command.fallbackPrompt(.login).?, "$LP_") != null);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // Both prompts tell the model why the tool is out of reach, by the
+    // variable's real name.
+    const key = @import("zenai").typesafe.env_var_name;
+    try testing.expect(std.mem.find(u8, (try fallbackFor(aa, .acceptCookies, "{}")).?, key) != null);
+    const login = (try fallbackFor(aa, .login,
+        \\{"password":"$LP_PASSWORD"}
+    )).?;
+    try testing.expect(std.mem.find(u8, login, key) != null);
     // `logout` is still an LlmCommand, so it never reaches here as a tool.
-    try testing.expectEqual(null, Command.fallbackPrompt(.tree));
-    try testing.expectEqual(null, Command.fallbackPrompt(.classify));
+    try testing.expectEqual(null, try fallbackFor(aa, .tree, "{}"));
+    try testing.expectEqual(null, try fallbackFor(aa, .classify, "{}"));
+}
+
+test "fallbackPrompt: the model is given the credentials the command was" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const both = (try fallbackFor(aa, .login,
+        \\{"username":"$LP_HN_USERNAME","password":"$LP_HN_PASSWORD"}
+    )).?;
+    try testing.expect(std.mem.find(u8, both, "username: $LP_HN_USERNAME\n") != null);
+    try testing.expect(std.mem.find(u8, both, "password: $LP_HN_PASSWORD\n") != null);
+
+    const password_only = (try fallbackFor(aa, .login,
+        \\{"password":"$LP_PIN"}
+    )).?;
+    try testing.expect(std.mem.find(u8, password_only, "username:") == null);
+    try testing.expect(std.mem.find(u8, password_only, "password: $LP_PIN\n") != null);
+
+    // A username is not a secret, so one typed as-is goes to the model as-is.
+    const literal_user = (try fallbackFor(aa, .login,
+        \\{"username":"ada","password":"$LP_PASSWORD"}
+    )).?;
+    try testing.expect(std.mem.find(u8, literal_user, "username: ada\n") != null);
+}
+
+test "fallbackPrompt: no model takes over where it would break a promise" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // decideOnly types nothing, and a model asked to sign in would.
+    try testing.expectEqual(null, try fallbackFor(aa, .login,
+        \\{"password":"$LP_PASSWORD","decideOnly":true}
+    ));
+    // A literal password would land in the model's context.
+    try testing.expectEqual(null, try fallbackFor(aa, .login,
+        \\{"password":"hunter2"}
+    ));
 }
 
 test "parse: /logout is an LLM command, /login and /acceptCookies are tools" {

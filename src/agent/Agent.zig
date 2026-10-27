@@ -793,7 +793,8 @@ fn runRepl(self: *Agent) void {
                 // before the tool existed. Asking first rather than checking
                 // the key keeps the replay path, which needs no key at all.
                 if (result.failure == .missing_api_key) fallback: {
-                    const prompt = Command.fallbackPrompt(tc.tool) orelse break :fallback;
+                    const maybe = Command.fallbackPrompt(aa, tc) catch null;
+                    const prompt = maybe orelse break :fallback;
                     self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         // No model either, so say which key was missing too.
