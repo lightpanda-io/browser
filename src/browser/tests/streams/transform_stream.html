@@ -167,6 +167,7 @@
   const state = await testing.async();
 
   // controller.error(e) errors the readable and the writable side with e.
+  // close() on the errored writable rejects with a new TypeError.
   const err = new Error('boom');
   const ts = new TransformStream({ transform(chunk, controller) { controller.error(err); } });
   const writer = ts.writable.getWriter();
@@ -180,6 +181,7 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual([true, true, true], errors.map((e) => e === err));
+    testing.expectEqual([true, true, false], errors.map((e) => e === err));
+    testing.expectEqual(true, errors[2] instanceof TypeError);
   });
 </script>
