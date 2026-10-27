@@ -243,7 +243,12 @@ pub fn asConstNode(self: *const Element) *const Node {
 }
 
 pub fn isEqualNode(self: *Element, other: *Element, frame: *Frame) bool {
-    if (!optionalStringEql(self.getNamespaceUri(frame), other.getNamespaceUri(frame))) {
+    if (self._namespace != other._namespace) {
+        return false;
+    }
+
+    // Custom namespace URIs live in a page lookup, not in the enum.
+    if (self._namespace == .unknown and !optionalStringEql(self.getNamespaceUri(frame), other.getNamespaceUri(frame))) {
         return false;
     }
 
