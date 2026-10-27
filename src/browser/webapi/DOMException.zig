@@ -172,7 +172,12 @@ pub fn structuredSerialize(self: *const DOMException, writer: *js.StructuredWrit
 }
 
 pub fn structuredDeserialize(reader: *js.StructuredReader, _: *Page) !DOMException {
-    const arena = reader.local.ctx.arena.allocator();
+    // The deserialized strings must live on the identity arena, not the
+    // context arena: the identity map entry and its strong v8.Global are
+    // identity-scoped and can be exercised after this context is gone (e.g.
+    // a frame re-navigated in place), and the exception's properties must stay
+    // readable then.
+    const arena = reader.local.ctx.identity_arena;
     const name = try arena.dupe(u8, try reader.readBytes());
     const message = try arena.dupe(u8, try reader.readBytes());
     return init(message, name);
