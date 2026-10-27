@@ -206,13 +206,12 @@ fn hasRecorded(g: Tool.Group) bool {
 
 fn writeGroupHeading(w: *Writer, g: Tool.Group, noun: []const u8, table_head: []const u8) Writer.Error!void {
     const title, const scope = switch (g) {
-        .navigation => .{ "Navigation and search", "bring a page into the browser" },
+        .navigation => .{ "Navigation and search", "bring a page into the browser, or save a URL to a file" },
         .reading => .{ "Reading the page", "read the loaded page without modifying it" },
         .extraction => .{ "Data extraction and scripting", "return structured results from the loaded page" },
         .interaction => .{ "Interacting with the page", "dispatch real DOM events on the page" },
         .waiting => .{ "Waiting", "block until the page reaches a condition" },
         .state => .{ "State and debugging", "inspect browser state outside the DOM" },
-        .downloading => .{ "Downloading files", "save a URL's response body to a local file" },
     };
     try w.print("## {s}\n\nThese {s} {s}.\n\n{s}", .{ title, noun, scope, table_head });
 }

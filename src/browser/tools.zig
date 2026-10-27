@@ -70,9 +70,6 @@ pub const driver_guidance =
     \\  `goto` then `markdown` — a standalone `goto` is an extra page load and
     \\  an extra round-trip for no added information. (`extract` reads the
     \\  current page only, so navigate with one of the above first.)
-    \\- `download {url, path}` → save a response body to a file with the
-    \\  session's cookies. The way to get binary or oversized content (PDF,
-    \\  spreadsheet, archive) out of the browser — text tools can't return it.
     \\
     \\Workflow:
     \\- Inspect before interacting (tree / interactiveElements /
@@ -392,7 +389,7 @@ pub const Tool = enum {
             .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
             .waitForSelector, .waitForScript, .waitForState => .waiting,
             .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
-            .download => .downloading,
+            .download => .navigation,
         };
     }
 
@@ -403,7 +400,6 @@ pub const Tool = enum {
         interaction,
         waiting,
         state,
-        downloading,
     };
 
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
@@ -812,7 +808,7 @@ pub const Tool = enum {
                 ),
             },
             .download => .{
-                .description = "Fetch a URL and save the response body to a local file, sending the session's cookies so authenticated sites work. The way to get a binary or large document (PDF, spreadsheet, archive) out of the browser: text tools can't return it, and `evaluate`'s in-page fetch cannot read cross-origin responses. The request goes through the same pipeline as a page load — redirects, `--http-proxy`, TLS and `--block-urls` settings all apply, cookies attach per hop from the session's jar, and Set-Cookie from every response (redirect steps included) updates it. SameSite is judged from the current page, so downloading from the site the session is logged into carries its session cookies; from an unrelated origin, per cookie rules, it may not. Nothing is written for a non-2xx response — a file already at `path` survives a failed download — and the failure reports the HTTP status. The result line names the saved file's absolute path, byte size and content type.",
+                .description = "Fetch a URL and save the response body to a local file, sending the session's cookies so authenticated sites work. The way to get a binary or large document (PDF, spreadsheet, archive) out of the browser. Nothing is saved for a non-2xx response. Requires a loaded page — it fails before the first `goto`.",
                 .summary = "Fetch a URL with the session's cookies into a file",
                 .input_schema = minify(
                     \\{
@@ -2688,9 +2684,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
 }
 
 /// Generous, unlike the read tools' 10s: the body is the payload, and a slow
-/// multi-megabyte PDF is a successful download, not a timeout. The cap rides
-/// the transfer (curl's overall timeout), and since the body is buffered
-/// before the file is written, a timed-out download leaves nothing behind.
+/// multi-megabyte PDF is a successful download, not a timeout.
 const default_download_timeout_ms: u32 = 120_000;
 
 const DownloadParams = struct {
@@ -2702,15 +2696,12 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
     const args = try parseArgs(DownloadParams, arena, arguments);
     if (!isPathSafe(args.path)) return .{ .text = unsafe_path_message, .is_error = true };
 
-    // Like `search`: refuse up front what the browser would refuse anyway —
-    // the pipeline would too, but with a bare UrlBlocked error.
     if (session.browser.http_client.blocksUrl(args.url)) {
         return .{ .text = "url is refused by --block-urls", .is_error = true };
     }
 
-    // The frame owns the transfer: it attributes the request to the page for
-    // CDP, and its scope supplies the cookie jar the download authenticates
-    // with. The current page is also what SameSite judges the request by.
+    // Nothing renders, but the frame owns the cookie jar the download
+    // authenticates with, and attributes the request to the page for CDP.
     const frame = try requireFrame(session);
 
     const transfer = frame.newRequest(.{
@@ -2733,18 +2724,16 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         },
     };
     {
-        // The transfer dies inside submitSync, one way or the other: on the
-        // early-bail paths it deinits itself, and once submitted the client
-        // deinits it at delivery. Only a failure before the submit is ours.
+        // Only a pre-submit failure is ours: past the submit, the client
+        // deinits the transfer at delivery.
         errdefer transfer.deinit();
         try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
         // A Referer from the current page, like a download launched from it.
         try frame.headersForRequest(transfer, .{});
     }
 
-    // Pumps the session inline. Other transfers' callbacks for this frame are
-    // held back until the fetch settles, so nothing runs JS under us; a page
-    // or session teardown mid-fetch surfaces as an error here.
+    // Pumps the session inline: other transfers' callbacks for this frame are
+    // held back until the fetch settles, so nothing runs JS under us.
     var response = transfer.submitSync(.{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ClientDisconnected, error.SyncWaitInterrupted => return error.Cancelled,
@@ -2762,7 +2751,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         return .{
             .text = arena.print("HTTP {d} {s}; nothing saved", .{
                 response.status,
-                statusPhrase(response.status),
+                response.status_text.get() orelse "",
             }) catch return ToolError.OutOfMemory,
             .is_error = true,
         };
@@ -2782,16 +2771,6 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
             absolutePath(arena, args.path),
         }) catch return ToolError.OutOfMemory,
     };
-}
-
-/// The standard reason phrase for the code. The wire's own phrase isn't
-/// plumbed into a sync response, and the LLM-facing line only needs to say
-/// what the status means.
-fn statusPhrase(status: u16) []const u8 {
-    if (status <= 599) {
-        return @as(std.http.Status, @fromBackingInt(@intCast(status))).phrase() orelse "";
-    }
-    return "";
 }
 
 fn writeFile(path: []const u8, bytes: []const u8) !void {
@@ -3924,7 +3903,6 @@ test "download: session cookies ride along and Set-Cookie lands in the jar" {
     const path = try testing.tmpPath(&tmp, "headers.txt");
 
     const aa = testing.arena_allocator;
-    // First: the response's Set-Cookie must land in the session jar.
     var args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
         "{{\"url\":\"http://127.0.0.1:9582/download_tool/set_cookie\",\"path\":\"{s}\"}}",
         .{path},
@@ -3939,8 +3917,6 @@ test "download: session cookies ride along and Set-Cookie lands in the jar" {
     }
     try std.testing.expect(in_jar);
 
-    // Second: the jar must send the cookie, like a page load would, and the
-    // result must name the saved file.
     const echo_path = try testing.tmpPath(&tmp, "echo.txt");
     args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
         "{{\"url\":\"http://127.0.0.1:9582/download_tool/echo_headers\",\"path\":\"{s}\"}}",
@@ -3953,7 +3929,6 @@ test "download: session cookies ride along and Set-Cookie lands in the jar" {
 
     const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, echo_path, aa, .limited(8192));
     try std.testing.expect(std.mem.find(u8, body, "lp_download=1") != null);
-    // The session's User-Agent, not a client default.
     try std.testing.expect(std.mem.find(u8, body, "Lightpanda/") != null);
 }
 
@@ -3976,12 +3951,8 @@ test "download: a redirect's Set-Cookie lands in the jar and the next hop carrie
     ), .{});
     const r = try call(aa, session, &registry, "download", args, .{ .source = .user });
     try std.testing.expect(r.is_error == false);
-    // The response the tool reports is the final hop's: only a 2xx is saved,
-    // and the body is the endpoint the redirect followed.
     try std.testing.expect(std.mem.startsWith(u8, r.text, "saved "));
 
-    // The cookie set on the 302 was stored, and the redirected hop re-derived
-    // it from the jar for the final URL: the echo endpoint saw it.
     const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, aa, .limited(8192));
     try std.testing.expect(std.mem.find(u8, body, "lp_redirect=1") != null);
 }

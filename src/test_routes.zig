@@ -1044,7 +1044,6 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/download_tool/redirect")) {
-        // The 302 sets a cookie that the followed hop must carry.
         return req.respond("", .{
             .status = .found,
             .extra_headers = &.{
