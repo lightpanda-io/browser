@@ -20,7 +20,6 @@ const js = @import("../../js/js.zig");
 
 const Execution = js.Execution;
 
-
 const Path2D = @This();
 
 const Source = union(enum) {
