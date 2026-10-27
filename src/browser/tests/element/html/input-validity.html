@@ -61,6 +61,33 @@
 }
 </script>
 
+<script id="type_mismatch_email_host">
+{
+  // Results match Chrome: no dot is required, but every label must start
+  // and end with a letter or digit.
+  const email = (value, multiple) => {
+    const i = document.createElement('input');
+    i.type = 'email';
+    i.multiple = multiple;
+    i.value = value;
+    return i;
+  };
+  for (const v of ['a@b', 'a@localhost', 'a.b@c', ' a@b ', 'a@xn--b', 'a@b-c.d']) {
+    testing.expectEqual(false, email(v, false).validity.typeMismatch);
+  }
+  testing.expectEqual(false, email('a@' + 'x'.repeat(63), false).validity.typeMismatch);
+  for (const v of ['a@b..c', 'a@-b.c', 'a@b-.c', 'a@b.c-', 'a@.b', 'a@b.', 'a@@b', 'a@b_c', 'a@b,c@d', 'a@' + 'x'.repeat(64)]) {
+    testing.expectEqual(true, email(v, false).validity.typeMismatch);
+  }
+
+  const list = email(' a@b , c@d ', true);
+  testing.expectEqual('a@b,c@d', list.value);
+  testing.expectEqual(false, list.validity.typeMismatch);
+  testing.expectEqual(true, email('a@b,,c@d', true).validity.typeMismatch);
+  testing.expectEqual(true, email('a@b,c@-d', true).validity.typeMismatch);
+}
+</script>
+
 <script id="type_mismatch_url">
 {
   testing.expectEqual(true, $('#bad-url').validity.typeMismatch);
