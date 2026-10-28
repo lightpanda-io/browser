@@ -79,7 +79,11 @@ pub fn getAppCodeName(_: *const Navigator) []const u8 {
 }
 
 pub fn getAppVersion(_: *const Navigator) []const u8 {
-    return "1.0";
+    return switch (builtin.target.os.tag) {
+        .macos => "5.0 (Macintosh)",
+        .windows => "5.0 (Windows)",
+        else => "5.0 (X11)",
+    };
 }
 
 pub fn getLanguage(self: *const Navigator, exec: *const Execution) []const u8 {

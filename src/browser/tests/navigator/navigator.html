@@ -7,7 +7,7 @@
   testing.expectEqual(true, navigator.userAgent.length > 0);
   testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
   testing.expectEqual('Netscape', navigator.appName);
-  testing.expectEqual('1.0', navigator.appVersion);
+  testing.expectEqual(true, navigator.appVersion.startsWith('5.0 ('));
   testing.expectEqual(true, navigator.platform.length > 0);
 
   // Platform should be one of the known values
