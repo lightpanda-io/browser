@@ -1832,7 +1832,7 @@ pub const JsApi = struct {
     pub const onreadystatechange = EventTarget.handlerAccessor(Document, "readystatechange");
     pub const onvisibilitychange = EventTarget.handlerAccessor(Document, "visibilitychange");
     pub const URL = bridge.accessor(Document.getURL, null, .{});
-    pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
+    pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{ .unforgeable = true, .deletable = false });
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const scrollingElement = bridge.accessor(Document.getDocumentElement, null, .{});
