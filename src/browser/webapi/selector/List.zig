@@ -578,6 +578,22 @@ fn isReadWrite(el: *Node.Element) bool {
     return el.isEditable();
 }
 
+// Only input, select and textarea can be required, and an input only for the
+// types the required attribute applies to.
+fn isRequired(el: *Node.Element) bool {
+    if (!el.hasAttributeInterned("required")) return false;
+    if (el.is(Node.Element.Html.Input)) |input| {
+        return switch (input._input_type) {
+            .hidden, .range, .color, .submit, .reset, .button, .image => false,
+            else => true,
+        };
+    }
+    return switch (el.getTag()) {
+        .select, .textarea => true,
+        else => false,
+    };
+}
+
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
@@ -620,11 +636,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             }
             return ValidityState.isValid(el, frame) == false;
         },
-        .required => {
-            return el.hasAttributeInterned("required");
-        },
-        .optional => {
-            return el.hasAttributeInterned("required") == false;
+        .required => return isRequired(el),
+        .optional => return switch (el.getTag()) {
+            .button, .input, .select, .textarea => !isRequired(el),
+            else => false,
         },
         .in_range => return false,
         .out_of_range => return false,
