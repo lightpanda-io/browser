@@ -22,6 +22,9 @@ testing.expectTrue(innerWidth > 0 && innerHeight > 0);
   testing.expectEqual([innerWidth, innerHeight], [box.clientWidth, box.clientHeight]);
   testing.expectEqual([innerWidth, innerHeight], [box.offsetWidth, box.offsetHeight]);
   testing.expectEqual([innerWidth, innerHeight], [box.scrollWidth, box.scrollHeight]);
+  box.scrollTop = 100;
+  box.scrollLeft = 100;
+  testing.expectEqual([0, 0], [box.scrollLeft, box.scrollTop]);
   testing.expectEqual(box, document.elementFromPoint(100, 100));
   box.remove();
 }
@@ -118,11 +121,44 @@ testing.expectTrue(innerWidth > 0 && innerHeight > 0);
   box.style.top = '70px';
   const after = child.getBoundingClientRect();
   testing.expectEqual([30, 40], [after.x - before.x, after.y - before.y]);
+  const parentRect = box.getBoundingClientRect();
+  testing.expectEqual([after.x - parentRect.x, after.y - parentRect.y], [child.offsetLeft, child.offsetTop]);
   testing.expectEqual(child, document.elementFromPoint(after.x + 1, after.y + 1));
   const nested = fixedBox('left:5px;top:6px;width:10px;height:10px');
   child.appendChild(nested);
   expectBox(nested, 5, 6, 10, 10);
   box.remove();
+}
+</script>
+<script id="fixed_display_contents_does_not_suppress_child_scrolling">
+{
+  const spacer = document.createElement('div');
+  spacer.style.height = '4000px';
+  document.body.appendChild(spacer);
+  const wrapper = fixedBox('display:contents');
+  const child = document.createElement('div');
+  child.textContent = 'ordinary scrolling child';
+  wrapper.appendChild(child);
+  window.scrollTo(0, 500);
+  child.scrollIntoViewIfNeeded();
+  testing.expectTrue(scrollY !== 500);
+  window.scrollTo(0, 500);
+  child.scrollIntoView();
+  testing.expectTrue(scrollY !== 500);
+  window.scrollTo(0, 0);
+  wrapper.remove();
+  spacer.remove();
+}
+</script>
+<script id="fixed_replaced_auto_preserves_attribute_size">
+{
+  const image = document.createElement('img');
+  image.setAttribute('width', '120');
+  image.setAttribute('height', '60');
+  image.style.cssText = 'position:fixed;inset:0';
+  document.body.appendChild(image);
+  expectBox(image, 0, 0, 120, 60);
+  image.remove();
 }
 </script>
 <script id="fixed_late_candidate_and_invalidation_controls">

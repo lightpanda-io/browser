@@ -97,6 +97,12 @@ _extent: ?struct {
     viewport_height: u32,
     extent: Extent,
 } = null,
+_fixed_boxes: ?struct {
+    version: usize,
+    viewport_width: u32,
+    viewport_height: u32,
+    present: bool,
+} = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
 // Ordered stack of dialogs opened with showModal(), topmost last. Stands in
@@ -1001,8 +1007,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
     // monotonically increasing in document order. So we maintain a running
     // preorder counter instead of calling calculateDocumentPosition per node
-    // (which itself is O(N)). Once the counter's y passes the query y, no
-    // later element can contain the point, and we can return.
+    // (which itself is O(N)). Only documents without viewport-fixed boxes
+    // can stop when that counter passes the query: a later fixed box may
+    // extend back over the point.
     //
     // Hidden subtrees still count towards the index so positions agree with
     // getBoundingClientRect; the hidden verdict just rides down the stack.
@@ -1011,12 +1018,13 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const root = self.asNode();
     const owner = root.ownerFrame(frame) orelse return null;
     const style_manager = &owner._style_manager;
+    const has_fixed = self.hasFixedBoxes(owner);
 
     // (x, y) is viewport-relative; the faux layout is in document coordinates.
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    const Entry = struct { node: *Node, hidden: bool };
+    const Entry = struct { node: *Node, hidden: bool, fixed_y: ?f64 = null };
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
 
@@ -1026,28 +1034,37 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const entry = stack.pop() orelse break;
         const node = entry.node;
         var hidden = entry.hidden;
+        var fixed_y = entry.fixed_y;
         const pos = preorder_index * 5.0;
 
-        if (pos > y) {
+        if (!has_fixed and pos > y) {
             // Monotonic: no later element has top <= y, so none can contain (x, y).
             return topmost;
         }
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
+            if (has_fixed and style_manager.fixedAxis(element, .height) != null) {
+                fixed_y = element.clientOrigin(owner).y - pos;
+            }
             hidden = hidden or style_manager.hasDisplayNone(element);
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
             if (!hidden and style_manager.isHitTestable(element)) {
-                if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
-                    if (ignore_x) {
-                        topmost = element;
-                    } else {
-                        // only bother calculating the horiziontal position for
-                        // elements contained by the vertical band
-                        const left = element.horizontalPosition(frame);
-                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
+                const top = if (fixed_y) |delta| pos + delta else pos - @as(f64, @floatFromInt(owner.window.getScrollY()));
+                if (viewport_y >= top) {
+                    const height = element.boxAxis(owner, .height);
+                    if ((fixed_y == null or height > 0) and viewport_y <= top + height) {
+                        if (ignore_x) {
                             topmost = element;
+                        } else {
+                            // Only calculate horizontal geometry in the vertical band.
+                            const left = if (fixed_y != null) element.clientOrigin(owner).x else element.horizontalPosition(owner);
+                            const query_x = if (fixed_y != null) viewport_x else x;
+                            const width = element.boxAxis(owner, .width);
+                            if ((fixed_y == null or width > 0) and query_x >= left and query_x <= left + width) {
+                                topmost = element;
+                            }
                         }
                     }
                 }
@@ -1058,12 +1075,44 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
+            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden, .fixed_y = fixed_y });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }
 
     return topmost;
+}
+
+// A fixed box can occur after the monotonic hit-test band. Remember its
+// presence for the same style/viewport generation as the layout caches, so
+// ordinary documents keep their early-return path on subsequent input.
+fn hasFixedBoxes(self: *Document, frame: *Frame) bool {
+    const version = frame.page.style_version;
+    const viewport = frame.page.getViewport();
+    if (self._fixed_boxes) |cached| {
+        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+            return cached.present;
+        }
+    }
+    var present = false;
+    var walker: TreeWalker.Flat = .init(self.asNode(), .{ .frame = frame });
+    while (walker.next()) |node| {
+        const element = node.is(Element) orelse continue;
+        if (frame._style_manager.fixedAxis(element, .height) != null) {
+            present = true;
+            break;
+        }
+    }
+    // A failed rule rebuild must not cache a false absence; the next input
+    // can retry after the allocation failure has cleared.
+    if (frame._style_manager.dirty) return true;
+    self._fixed_boxes = .{
+        .version = frame.page.style_version,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+        .present = present,
+    };
+    return present;
 }
 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {

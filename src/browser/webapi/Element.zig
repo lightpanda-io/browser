@@ -1701,6 +1701,8 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return self.boxWidth(owner);
     }
 
+    if (self.fixedSize(frame, axis)) |size| return size;
+
     const own = self.getElementAxis(frame, axis);
     if (own.explicit) {
         // an explicitly set value always wins
@@ -1720,6 +1722,11 @@ fn boxWidth(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     if (style_manager.cachedWidth(self, .box)) |width| {
         return width;
+    }
+
+    if (self.fixedSize(owner, .width)) |size| {
+        style_manager.cacheWidth(self, .box, size);
+        return size;
     }
 
     const own = self.getElementAxis(owner, .width);
@@ -1924,6 +1931,9 @@ fn fillWidth(self: *Element, owner: *Frame) f64 {
 
 /// The width of the containing block; the viewport above the root.
 fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
+    if (owner._style_manager.position(self) == .fixed) {
+        return @floatFromInt(owner.page.getViewport().width);
+    }
     const parent = owner._style_manager.containingBlock(self) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
@@ -2012,14 +2022,69 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
     };
 }
 
-// Client rects are viewport-relative: offset the faux-layout document
-// position by the owning window's scroll position.
+// Fixed boxes anchor to the viewport; their descendants retain synthetic
+// offsets inside that box. Other client rects follow the window's scroll.
 pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
-    const window = (self.ownerFrame(frame) orelse frame).window;
+    const owner = self.ownerFrame(frame) orelse frame;
+    const window = owner.window;
+    const style_manager = &owner._style_manager;
+    if (style_manager.fixedAxis(self, .width)) |horizontal| {
+        const vertical = style_manager.fixedAxis(self, .height).?;
+        const viewport = owner.page.getViewport();
+        var x = horizontal.start orelse if (horizontal.end) |end|
+            @as(f64, @floatFromInt(viewport.width)) - end - self.boxAxis(owner, .width)
+        else
+            self.horizontalPosition(owner);
+        const y = vertical.start orelse if (vertical.end) |end|
+            @as(f64, @floatFromInt(viewport.height)) - end - self.boxAxis(owner, .height)
+        else
+            calculateDocumentPosition(self.asNode(), owner);
+        if (horizontal.start != null or horizontal.end != null) {
+            if (self.inlineStyle(owner)) |style| {
+                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", owner));
+            }
+        }
+        return .{ .x = x, .y = y };
+    }
+    if (self.fixedAnchor(owner)) |parent| {
+        const origin = parent.clientOrigin(owner);
+        return .{
+            .x = origin.x + self.horizontalPosition(owner) - parent.horizontalPosition(owner),
+            .y = origin.y + calculateDocumentPosition(self.asNode(), owner) - calculateDocumentPosition(parent.asNode(), owner),
+        };
+    }
     return .{
-        .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
-        .y = calculateDocumentPosition(self.asNode(), frame) - @as(f64, @floatFromInt(window.getScrollY())),
+        .x = self.horizontalPosition(owner) - @as(f64, @floatFromInt(window.getScrollX())),
+        .y = calculateDocumentPosition(self.asNode(), owner) - @as(f64, @floatFromInt(window.getScrollY())),
     };
+}
+
+// A fixed display:contents ancestor has no box to anchor its descendants.
+fn fixedAnchor(self: *Element, owner: *Frame) ?*Element {
+    const style_manager = &owner._style_manager;
+    if (!style_manager.inFixedBox(self)) return null;
+    var ancestor: ?*Element = self;
+    while (ancestor) |element| : (ancestor = element.asNode().flatTreeParentElement(owner)) {
+        if (style_manager.fixedAxis(element, .width) != null) return element;
+    }
+    return null;
+}
+
+/// A definite viewport-fixed size. Unsupported declared sizes retain the
+/// existing synthetic fallback rather than stretching as though they were auto.
+pub fn fixedSize(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    const owner = self.ownerFrame(frame) orelse return null;
+    const fixed = owner._style_manager.fixedAxis(self, axis) orelse return null;
+    var size = fixed.size orelse blk: {
+        if (!fixed.auto_size or self.getTag().isReplacedOrControl()) return null;
+        const start = fixed.start orelse return null;
+        const end = fixed.end orelse return null;
+        const viewport = owner.page.getViewport();
+        const available: f64 = @floatFromInt(if (axis == .width) viewport.width else viewport.height);
+        break :blk @max(0, available - start - end);
+    };
+    if (axis == .width) size = self.clampWidth(size, .box, owner);
+    return size;
 }
 
 pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
@@ -2095,7 +2160,7 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
-    const height = self.getElementAxis(frame, .height).value;
+    const height = self.fixedSize(frame, .height) orelse self.getElementAxis(frame, .height).value;
 
     // The root scroller reports what the viewport scrolls over.
     if (self.isRootContainer()) {
@@ -2124,7 +2189,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 /// without an explicit size the client and content measurements collapse onto
 /// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    if (self.isRootContainer() or !self.getElementAxis(frame, axis).explicit) {
+    if (self.isRootContainer() or (self.fixedSize(frame, axis) == null and !self.getElementAxis(frame, axis).explicit)) {
         return null;
     }
     const client = self.clientAxis(frame, axis);
@@ -2132,6 +2197,7 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
         .width => self.getScrollWidth(frame),
         .height => self.getScrollHeight(frame),
     };
+    if (self.fixedSize(frame, axis) != null) return @max(0, content - client);
     if (content <= client) {
         return null;
     }
@@ -2215,6 +2281,7 @@ pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
+    if (self.fixedOffset(frame, .height)) |offset| return offset;
     return calculateDocumentPosition(self.asNode(), frame);
 }
 
@@ -2222,7 +2289,17 @@ pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
+    if (self.fixedOffset(frame, .width)) |offset| return offset;
     return self.horizontalPosition(frame);
+}
+
+fn fixedOffset(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    const owner = self.ownerFrame(frame) orelse return null;
+    _ = self.fixedAnchor(owner) orelse return null;
+    const field = if (axis == .width) "x" else "y";
+    const origin = @field(self.clientOrigin(owner), field);
+    const parent = self.getOffsetParent(owner) orelse return origin;
+    return origin - @field(parent.clientOrigin(owner), field);
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
@@ -2422,6 +2499,9 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
 
 pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *Frame) void {
     _ = center_if_needed;
+    if (self.ownerFrame(frame)) |owner| {
+        if (self.fixedAnchor(owner) != null) return;
+    }
     const y = calculateDocumentPosition(self.asNode(), frame);
     const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
     const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
@@ -2437,6 +2517,9 @@ const ScrollIntoViewOpts = union {
 };
 pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) void {
     _ = opts;
+    if (self.ownerFrame(frame)) |owner| {
+        if (self.fixedAnchor(owner) != null) return;
+    }
     // Scroll the window so the element's top is brought into the viewport.
     // Positions come from the faux-layout document position (top = preorder
     // depth-scaled y), the same source getBoundingClientRect uses.
