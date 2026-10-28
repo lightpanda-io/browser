@@ -761,7 +761,7 @@ fn isEditable(element: *Node.Element) bool {
             else => {},
         }
     } else if (element.is(Html.TextArea) == null) {
-        return element.isEditingHost();
+        return element.isEditable();
     }
     return element.isDisabled() == false and element.getAttributeSafe(comptime .wrap("readonly")) == null;
 }

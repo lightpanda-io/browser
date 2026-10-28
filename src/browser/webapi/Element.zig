@@ -1226,19 +1226,35 @@ pub fn isSvgLink(self: *Element) bool {
     return self.is(Svg.Graphics.A) != null and self.svgAnchorHref() != null;
 }
 
+// The contenteditable attribute's own state: true for the true and
+// plaintext-only states, false for false, null for inherit (no attribute,
+// or an invalid value). The attribute only applies to HTML elements.
+pub fn contentEditableState(self: *Element) ?bool {
+    if (self.is(Html) == null) {
+        return null;
+    }
+    const value = self.getAttributeInterned("contenteditable") orelse return null;
+    if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true") or std.ascii.eqlIgnoreCase(value, "plaintext-only")) {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "false")) {
+        return false;
+    }
+    return null;
+}
+
 // An editing host takes focus like a form control does.
 pub fn isEditingHost(self: *Element) bool {
-    const value = self.getAttributeInterned("contenteditable") orelse return false;
-    return std.ascii.eqlIgnoreCase(value, "false") == false;
+    return self.contentEditableState() orelse false;
 }
 
 // An editing host or a descendant of one: the nearest contenteditable
-// attribute decides.
+// attribute in a true or false state decides.
 pub fn isEditable(self: *Element) bool {
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.getAttributeInterned("contenteditable") != null) {
-            return el.isEditingHost();
+        if (el.contentEditableState()) |editable| {
+            return editable;
         }
     }
     return false;
