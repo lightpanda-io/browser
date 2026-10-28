@@ -1059,7 +1059,7 @@ fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
 // row_shrink is a flex row's shrink ratio, not a width
 pub const WidthKind = enum { box, content, full_content, row_shrink };
 
-/// Element's computed widths (see Element.boxWidth), valid for one style
+/// Element's computed widths (see layout.boxWidth), valid for one style
 /// version and viewport. Each read otherwise walks up to the root and down
 /// the subtree.
 const WidthMemo = struct {
