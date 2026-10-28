@@ -22,6 +22,7 @@ const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
 const TelemetryTool = @import("../telemetry/telemetry.zig").Event.Tool;
+const HttpClient = @import("../network/HttpClient.zig");
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -267,6 +268,7 @@ pub const Tool = enum {
     getUrl,
     getCookies,
     getEnv,
+    download,
 
     /// Telemetry wire id: append, never renumber. 0 is reserved for a name
     /// that matched no tool.
@@ -300,6 +302,7 @@ pub const Tool = enum {
             .getUrl => 26,
             .getCookies => 27,
             .getEnv => 28,
+            .download => 29,
         };
     }
 
@@ -308,7 +311,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -320,7 +323,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
         };
     }
 
@@ -330,7 +333,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
         };
     }
 
@@ -341,7 +344,7 @@ pub const Tool = enum {
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
-            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
         };
     }
 
@@ -351,7 +354,7 @@ pub const Tool = enum {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
             .screenshot => &.{"path"},
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => &.{},
         };
     }
 
@@ -360,7 +363,7 @@ pub const Tool = enum {
     pub fn producesData(self: Tool) bool {
         return switch (self) {
             .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
-            .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
+            .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download => false,
         };
     }
 
@@ -372,7 +375,7 @@ pub const Tool = enum {
     pub fn reportsPageState(self: Tool) bool {
         return switch (self) {
             .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState => false,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download => false,
         };
     }
 
@@ -380,7 +383,7 @@ pub const Tool = enum {
     /// can't ship undocumented.
     pub fn group(self: Tool) Group {
         return switch (self) {
-            .goto, .search => .navigation,
+            .goto, .search, .download => .navigation,
             .markdown, .html, .screenshot, .tree, .links, .nodeDetails, .findElement, .interactiveElements, .structuredData, .detectForms => .reading,
             .extract, .evaluate => .extraction,
             .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
@@ -803,6 +806,20 @@ pub const Tool = enum {
                     \\}
                 ),
             },
+            .download => .{
+                .description = "Fetch a URL and save the response body to a local file, sending the session's cookies so authenticated sites work. The way to get a binary or large document (PDF, spreadsheet, archive) out of the browser. Nothing is saved for a non-2xx response. Requires a loaded page — it fails before the first `goto`.",
+                .summary = "Fetch a URL with the session's cookies into a file",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "url": { "type": "string", "description": "Absolute http(s) URL to fetch." },
+                    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) to save the response body to. Created or overwritten. The response reports the absolute location." }
+                    \\  },
+                    \\  "required": ["url", "path"]
+                    \\}
+                ),
+            },
         };
     }
 };
@@ -1147,6 +1164,7 @@ fn dispatch(
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session, substituted) },
+        .download => try execDownload(arena, session, substituted),
     };
 }
 
@@ -2664,6 +2682,94 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     return aw.written();
 }
 
+/// Generous: the body is the payload, and a slow multi-megabyte PDF is a
+/// successful download, not a timeout.
+const download_timeout_ms: u32 = 120_000;
+
+fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct {
+        url: [:0]const u8,
+        path: []const u8,
+    };
+    const args = try parseArgs(Params, arena, arguments);
+    if (!isPathSafe(args.path)) return .{ .text = unsafe_path_message, .is_error = true };
+
+    // Nothing renders, but the frame owns the cookie jar the download
+    // authenticates with, and attributes the request to the page for CDP.
+    const frame = try requireFrame(session);
+
+    const transfer = frame.newRequest(.{
+        .url = args.url,
+        .method = .GET,
+        .origin = frame.origin,
+        .initiator_origin = frame.origin,
+        // A download stands in for a top-level navigation to `url`: no CORS,
+        // redirects followed, engine defaults (proxy, TLS, blocklist) apply.
+        .request_mode = .navigate,
+        .credentials_mode = .include,
+        .resource_type = .download,
+        .timeout_ms = download_timeout_ms,
+        // Already saved to `path`; a cached copy would be a third one.
+        .skip_cache = true,
+        .shutdown_callback = HttpClient.noopShutdown, // submitSync installs its own
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            log.debug(.browser, "download request", .{ .err = err, .url = args.url });
+            return ToolError.InternalError;
+        },
+    };
+    {
+        // Only a pre-submit failure is ours: past the submit, the client
+        // deinits the transfer at delivery.
+        errdefer transfer.deinit();
+        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+        // A Referer from the current page, like a download launched from it.
+        try frame.headersForRequest(transfer, .{});
+    }
+
+    // Pumps the session inline: other transfers' callbacks for this frame are
+    // held back until the fetch settles, so nothing runs JS under us.
+    var response = transfer.submitSync(.{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ClientDisconnected, error.SyncWaitInterrupted => return error.Cancelled,
+        error.UrlBlocked => return .{ .text = "url is refused by --block-urls or --adblock-lists", .is_error = true },
+        else => {
+            log.debug(.browser, "download failed", .{ .err = err, .url = args.url });
+            return .{
+                .text = arena.print("download failed: {s}", .{@errorName(err)}) catch return ToolError.OutOfMemory,
+                .is_error = true,
+            };
+        },
+    };
+    defer response.deinit();
+
+    if (response.status < 200 or response.status >= 300) {
+        return .{
+            .text = arena.print("HTTP {d} {s}; nothing saved", .{
+                response.status,
+                response.status_text.get() orelse "",
+            }) catch return ToolError.OutOfMemory,
+            .is_error = true,
+        };
+    }
+
+    std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = args.path, .data = response.body.items }) catch |err| {
+        return .{
+            .text = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch return ToolError.OutOfMemory,
+            .is_error = true,
+        };
+    };
+
+    return .{
+        .text = arena.print("saved {d} bytes ({s}) to {s}", .{
+            response.body.items.len,
+            response.content_type orelse "unknown content type",
+            absolutePath(arena, args.path),
+        }) catch return ToolError.OutOfMemory,
+    };
+}
+
 fn requireFrame(session: *lp.Session) ToolError!*lp.Frame {
     return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
@@ -3758,4 +3864,70 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     , .{});
     try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
     try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
+}
+
+fn testDownload(registry: *NodeRegistry, url: []const u8, path: []const u8) !ToolResult {
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
+        "{{\"url\":\"{s}\",\"path\":\"{s}\"}}",
+        .{ url, path },
+    ), .{});
+    return call(aa, testing.test_session, registry, "download", args, .{ .source = .user });
+}
+
+test "download: an unsafe path is rejected without fetching" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/x", "../escape.bin");
+    try std.testing.expect(r.is_error);
+    try std.testing.expectEqualStrings(unsafe_path_message, r.text);
+}
+
+test "download: a redirect's Set-Cookie lands in the jar and the next hop carries it" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer session.cookie_jar.clearRetainingCapacity();
+    // The page makes the download same-site (same 127.0.0.1 host), so the
+    // Lax cookie the redirect hands out flows on the followed hop.
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "redirected.txt");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/redirect", path);
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved "));
+    try std.testing.expect(std.mem.find(u8, r.text, "text/plain") != null);
+
+    var in_jar = false;
+    var it = session.cookie_jar.iterator();
+    while (it.next()) |cookie| {
+        if (std.mem.eql(u8, cookie.name, "lp_redirect")) in_jar = true;
+    }
+    try std.testing.expect(in_jar);
+
+    const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(8192));
+    try std.testing.expect(std.mem.find(u8, body, "lp_redirect=1") != null);
+    try std.testing.expect(std.mem.find(u8, body, "Lightpanda/") != null);
+}
+
+test "download: a non-2xx response saves nothing" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "missing.html");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/missing", path);
+    try std.testing.expect(r.is_error);
+    try std.testing.expectEqualStrings("HTTP 404 Not Found; nothing saved", r.text);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024)));
 }

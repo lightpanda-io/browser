@@ -919,7 +919,8 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
-    if (std.mem.eql(u8, path, "/echo_headers")) {
+    // The /download_tool copy sits under that fixture's cookie scope.
+    if (std.mem.eql(u8, path, "/echo_headers") or std.mem.eql(u8, path, "/download_tool/echo_headers")) {
         if (req.head.method == .OPTIONS) {
             return req.respond("", .{
                 .extra_headers = &.{
@@ -1028,6 +1029,19 @@ pub fn handle(req: *std.http.Server.Request) !void {
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain" },
                 .{ .name = "Content-Disposition", .value = "attachment; filename=\"missing.csv\"" },
+            },
+        });
+    }
+
+    // Fixture for the browser `download` tool tests. Its cookie is scoped to
+    // this path prefix, so it can't reach the handlers other tests on the
+    // shared session rely on.
+    if (std.mem.eql(u8, path, "/download_tool/redirect")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_redirect=1; Path=/download_tool" },
+                .{ .name = "Location", .value = "/download_tool/echo_headers" },
             },
         });
     }
