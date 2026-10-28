@@ -1162,7 +1162,7 @@ fn isEditingHost(node: *Node) bool {
     return element.isEditingHost();
 }
 
-fn outermostEditingHost(target: *Element) ?*Element {
+pub fn outermostEditingHost(target: *Element) ?*Element {
     var host: ?*Element = null;
     var current: ?*Element = target;
     while (current) |el| : (current = el.parentElement()) {
@@ -1667,12 +1667,19 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
     if (!try allowEdit(frame, host_el, text, text, "insertText")) {
         return false;
     }
-    const host = host_el.asNode();
     // a beforeinput or textInput listener can make it non-editable or remove it
-    if (!host_el.isEditable() or !host.isConnected()) {
+    if (!host_el.isEditable() or !host_el.asNode().isConnected()) {
         return false;
     }
+    try insertAtSelection(frame, host_el, text);
+    return true;
+}
 
+/// The edit part of insertIntoEditingHost, without the events that can cancel
+/// it: replaces the selection in `host_el` with `text`, leaves the caret after
+/// it and fires input.
+pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !void {
+    const host = host_el.asNode();
     const selection = &frame.document._selection;
     var container: *Node, var offset: u32 = firstCaretPosition(host);
     if (selection._range) |range| {
@@ -1735,7 +1742,6 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
         .inputType = "insertText",
     }, frame);
     try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
-    return true;
 }
 
 // Where Chrome puts the caret when an editing host is focused: its first

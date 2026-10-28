@@ -46,6 +46,7 @@ const Selection = @import("Selection.zig");
 const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
+const exec_command = @import("../frame/exec_command.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -88,6 +89,8 @@ _fonts: ?*FontFaceSet = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
+// an execCommand is running: a nested one is refused
+_exec_command_running: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
 // extent() cache, keyed on style version and viewport.
@@ -1434,15 +1437,21 @@ fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
     return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
-// There's no editing pipeline or clipboard, so every execCommand command is
-// unsupported. The spec's answer for that is false (or "" for the value), not
-// an exception, which keeps callers on their fallbacks.
-fn execCommand(_: *const Document, command: []const u8) bool {
-    log.info(.not_implemented, "document.execCommand", .{ .command = command });
-    return false;
+// See frame/exec_command.zig. A null value is "" rather than "null".
+fn execCommand(self: *Document, command: []const u8, _: ?bool, value: ?[]const u8) !bool {
+    return exec_command.exec(self, command, value orelse "");
 }
 
-fn queryCommand(_: *const Document, _: []const u8) bool {
+fn queryCommandSupported(self: *const Document, command: []const u8) bool {
+    return exec_command.isSupported(self, command);
+}
+
+fn queryCommandEnabled(self: *Document, command: []const u8) bool {
+    return exec_command.isEnabled(self, command);
+}
+
+// No supported command has a state or value yet.
+fn queryCommandState(_: *const Document, _: []const u8) bool {
     return false;
 }
 
@@ -1913,10 +1922,10 @@ pub const JsApi = struct {
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
     pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
     pub const execCommand = bridge.function(Document.execCommand, .{});
-    pub const queryCommandEnabled = bridge.function(Document.queryCommand, .{});
-    pub const queryCommandIndeterm = bridge.function(Document.queryCommand, .{});
-    pub const queryCommandState = bridge.function(Document.queryCommand, .{});
-    pub const queryCommandSupported = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandEnabled = bridge.function(Document.queryCommandEnabled, .{});
+    pub const queryCommandIndeterm = bridge.function(Document.queryCommandState, .{});
+    pub const queryCommandState = bridge.function(Document.queryCommandState, .{});
+    pub const queryCommandSupported = bridge.function(Document.queryCommandSupported, .{});
     pub const queryCommandValue = bridge.function(Document.queryCommandValue, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
