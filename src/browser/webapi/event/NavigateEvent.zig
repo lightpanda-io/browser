@@ -41,7 +41,7 @@ pub const Proto = Event;
 _proto: *Event,
 _navigation_type: NavigationType,
 _destination: *NavigationDestination,
-_can_intercept: bool, // TODO. Not supported, currently always false
+_can_intercept: bool,
 _user_initiated: bool,
 _hash_change: bool,
 _signal: *AbortSignal,
@@ -50,6 +50,11 @@ _download_request: ?[]const u8,
 _info: ?js.Value.Global,
 _has_ua_visual_transition: bool,
 _source_element: ?*Element,
+
+// Set by intercept(). Only honored for same-document navigations; consumed
+// (and released) by Navigation once the commit steps run the handler.
+_intercepted: bool = false,
+_handler: ?js.Function.Global = null,
 
 const NavigateEventOptions = struct {
     canIntercept: bool = false,
@@ -116,6 +121,9 @@ pub fn deinit(self: *NavigateEvent, page: *Page) void {
     }
     if (self._form_data) |fd| {
         fd.releaseRef(page);
+    }
+    if (self._handler) |handler| {
+        handler.release();
     }
 }
 
@@ -192,19 +200,46 @@ fn sharedChecks(self: *const NavigateEvent, comptime method: []const u8, frame: 
     return local.newException(DOMException.init(method ++ "() may only be called while the navigate event is being dispatched.", "InvalidStateError"));
 }
 
-// Not supported: canIntercept is always false, so this always throws.
-fn intercept(self: *const NavigateEvent, _: ?js.Value, frame: *Frame) !Thrown {
+const InterceptOptions = struct {
+    // Not supported: we never defer scroll restoration or focus reset, so
+    // these are accepted but otherwise ignored.
+    focusReset: ?[]const u8 = null,
+    handler: ?js.Value = null,
+    scroll: ?[]const u8 = null,
+};
+
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigateevent-intercept
+fn intercept(self: *NavigateEvent, opts: ?InterceptOptions, frame: *Frame) !Thrown {
     const local = frame.js.local.?;
     if (self.sharedChecks("intercept", frame)) |exception| {
         return .{ .exception = exception };
     }
 
-    if (self._can_intercept == false) {
+    if (!self._can_intercept) {
         const message = try frame.page_arena.print(
             "A navigation with URL '{s}' cannot be intercepted by in a window with origin '{s}' and URL '{s}'.",
             .{ self._destination._url, frame.origin orelse "null", frame.url },
         );
         return .{ .exception = local.newException(DOMException.init(message, "SecurityError")) };
+    }
+
+    self._intercepted = true;
+
+    if (opts) |o| {
+        if (o.handler) |handler_value| {
+            if (!handler_value.isFunction()) {
+                return .{
+                    .exception = local.newException(
+                        DOMException.init("intercept()'s handler must be a function.", "TypeError"),
+                    ),
+                };
+            }
+            const handler_fn = js.Function{ .local = local, .handle = @ptrCast(handler_value.handle) };
+            if (self._handler) |previous| {
+                previous.release();
+            }
+            self._handler = try handler_fn.persist();
+        }
     }
     return .undefined;
 }
@@ -213,8 +248,12 @@ fn scroll(self: *const NavigateEvent, frame: *Frame) Thrown {
     if (self.sharedChecks("scroll", frame)) |exception| {
         return .{ .exception = exception };
     }
-    // Only an intercepted navigation can be scrolled, and we never intercept.
-    return .{ .exception = frame.js.local.?.newException(DOMException.init("intercept() must be called before scroll()", "InvalidStateError")) };
+    if (self._intercepted == false) {
+        return .{ .exception = frame.js.local.?.newException(
+            DOMException.init("intercept() must be called before scroll()", "InvalidStateError"),
+        ) };
+    }
+    return .undefined;
 }
 
 pub const JsApi = struct {
