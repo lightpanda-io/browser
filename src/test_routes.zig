@@ -919,7 +919,8 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
-    if (std.mem.eql(u8, path, "/echo_headers")) {
+    // The /download_tool copy sits under that fixture's cookie scope.
+    if (std.mem.eql(u8, path, "/echo_headers") or std.mem.eql(u8, path, "/download_tool/echo_headers")) {
         if (req.head.method == .OPTIONS) {
             return req.respond("", .{
                 .extra_headers = &.{
@@ -1032,39 +1033,15 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
-    // Fixture for the browser `download` tool tests. Everything is scoped to
-    // this path prefix, so its cookies can't reach the handlers other tests
-    // on the shared session rely on.
-    if (std.mem.eql(u8, path, "/download_tool/set_cookie")) {
-        return req.respond("ok", .{
-            .extra_headers = &.{
-                .{ .name = "Set-Cookie", .value = "lp_download=1; Path=/download_tool" },
-            },
-        });
-    }
-
+    // Fixture for the browser `download` tool tests. Its cookie is scoped to
+    // this path prefix, so it can't reach the handlers other tests on the
+    // shared session rely on.
     if (std.mem.eql(u8, path, "/download_tool/redirect")) {
         return req.respond("", .{
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Set-Cookie", .value = "lp_redirect=1; Path=/download_tool" },
                 .{ .name = "Location", .value = "/download_tool/echo_headers" },
-            },
-        });
-    }
-
-    if (std.mem.eql(u8, path, "/download_tool/echo_headers")) {
-        // Same contract as /echo_headers, under the fixture's cookie scope.
-        var buf: [8192]u8 = undefined;
-        var pos: usize = 0;
-        var it = req.iterateHeaders();
-        while (it.next()) |header| {
-            const line = try std.mem.print(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
-            pos += line.len;
-        }
-        return req.respond(buf[0..pos], .{
-            .extra_headers = &.{
-                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
             },
         });
     }

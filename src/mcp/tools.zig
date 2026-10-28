@@ -39,7 +39,7 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
-        // Overwrites `path` when given.
+        // Overwrite `path`.
         .screenshot, .download => .{ .idempotentHint = true },
         .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .evaluate, .click, .press => .{},

@@ -383,13 +383,12 @@ pub const Tool = enum {
     /// can't ship undocumented.
     pub fn group(self: Tool) Group {
         return switch (self) {
-            .goto, .search => .navigation,
+            .goto, .search, .download => .navigation,
             .markdown, .html, .screenshot, .tree, .links, .nodeDetails, .findElement, .interactiveElements, .structuredData, .detectForms => .reading,
             .extract, .evaluate => .extraction,
             .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
             .waitForSelector, .waitForScript, .waitForState => .waiting,
             .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
-            .download => .navigation,
         };
     }
 
@@ -2683,22 +2682,17 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     return aw.written();
 }
 
-/// Generous, unlike the read tools' 10s: the body is the payload, and a slow
-/// multi-megabyte PDF is a successful download, not a timeout.
-const default_download_timeout_ms: u32 = 120_000;
-
-const DownloadParams = struct {
-    url: [:0]const u8,
-    path: []const u8,
-};
+/// Generous: the body is the payload, and a slow multi-megabyte PDF is a
+/// successful download, not a timeout.
+const download_timeout_ms: u32 = 120_000;
 
 fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError!ToolResult {
-    const args = try parseArgs(DownloadParams, arena, arguments);
+    const Params = struct {
+        url: [:0]const u8,
+        path: []const u8,
+    };
+    const args = try parseArgs(Params, arena, arguments);
     if (!isPathSafe(args.path)) return .{ .text = unsafe_path_message, .is_error = true };
-
-    if (session.browser.http_client.blocksUrl(args.url)) {
-        return .{ .text = "url is refused by --block-urls", .is_error = true };
-    }
 
     // Nothing renders, but the frame owns the cookie jar the download
     // authenticates with, and attributes the request to the page for CDP.
@@ -2714,7 +2708,9 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         .request_mode = .navigate,
         .credentials_mode = .include,
         .resource_type = .download,
-        .timeout_ms = default_download_timeout_ms,
+        .timeout_ms = download_timeout_ms,
+        // Already saved to `path`; a cached copy would be a third one.
+        .skip_cache = true,
         .shutdown_callback = HttpClient.noopShutdown, // submitSync installs its own
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -2737,6 +2733,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
     var response = transfer.submitSync(.{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ClientDisconnected, error.SyncWaitInterrupted => return error.Cancelled,
+        error.UrlBlocked => return .{ .text = "url is refused by --block-urls or --adblock-lists", .is_error = true },
         else => {
             log.debug(.browser, "download failed", .{ .err = err, .url = args.url });
             return .{
@@ -2757,7 +2754,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         };
     }
 
-    writeFile(args.path, response.body.items) catch |err| {
+    std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = args.path, .data = response.body.items }) catch |err| {
         return .{
             .text = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch return ToolError.OutOfMemory,
             .is_error = true,
@@ -2771,12 +2768,6 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
             absolutePath(arena, args.path),
         }) catch return ToolError.OutOfMemory,
     };
-}
-
-fn writeFile(path: []const u8, bytes: []const u8) !void {
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
-    defer file.close(lp.io);
-    try file.writeStreamingAll(lp.io, bytes);
 }
 
 fn requireFrame(session: *lp.Session) ToolError!*lp.Frame {
@@ -3875,62 +3866,22 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
     try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);
 }
 
+fn testDownload(registry: *NodeRegistry, url: []const u8, path: []const u8) !ToolResult {
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
+        "{{\"url\":\"{s}\",\"path\":\"{s}\"}}",
+        .{ url, path },
+    ), .{});
+    return call(aa, testing.test_session, registry, "download", args, .{ .source = .user });
+}
+
 test "download: an unsafe path is rejected without fetching" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
-    const aa = testing.arena_allocator;
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"url":"http://127.0.0.1:9582/x","path":"../escape.bin"}
-    , .{});
-    const r = try call(aa, testing.test_session, &registry, "download", args, .{ .source = .user });
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/x", "../escape.bin");
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings(unsafe_path_message, r.text);
-}
-
-test "download: session cookies ride along and Set-Cookie lands in the jar" {
-    var registry: NodeRegistry = .init(std.testing.allocator);
-    defer registry.deinit();
-
-    const session = testing.test_session;
-    defer session.cookie_jar.clearRetainingCapacity();
-    // The page makes the download same-site (same 127.0.0.1 host), so the
-    // Lax cookie the server hands out flows on the next call.
-    var page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try testing.tmpPath(&tmp, "headers.txt");
-
-    const aa = testing.arena_allocator;
-    var args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
-        "{{\"url\":\"http://127.0.0.1:9582/download_tool/set_cookie\",\"path\":\"{s}\"}}",
-        .{path},
-    ), .{});
-    const first = try call(aa, session, &registry, "download", args, .{ .source = .user });
-    try std.testing.expect(first.is_error == false);
-    try std.testing.expect(std.mem.startsWith(u8, first.text, "saved 2 bytes"));
-    var in_jar = false;
-    var it = session.cookie_jar.iterator();
-    while (it.next()) |cookie| {
-        if (std.mem.eql(u8, cookie.name, "lp_download")) in_jar = true;
-    }
-    try std.testing.expect(in_jar);
-
-    const echo_path = try testing.tmpPath(&tmp, "echo.txt");
-    args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
-        "{{\"url\":\"http://127.0.0.1:9582/download_tool/echo_headers\",\"path\":\"{s}\"}}",
-        .{echo_path},
-    ), .{});
-    const second = try call(aa, session, &registry, "download", args, .{ .source = .user });
-    try std.testing.expect(second.is_error == false);
-    try std.testing.expect(std.mem.find(u8, second.text, "text/plain") != null);
-    try std.testing.expect(std.mem.startsWith(u8, second.text, "saved "));
-
-    const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, echo_path, aa, .limited(8192));
-    try std.testing.expect(std.mem.find(u8, body, "lp_download=1") != null);
-    try std.testing.expect(std.mem.find(u8, body, "Lightpanda/") != null);
 }
 
 test "download: a redirect's Set-Cookie lands in the jar and the next hop carries it" {
@@ -3939,6 +3890,8 @@ test "download: a redirect's Set-Cookie lands in the jar and the next hop carrie
 
     const session = testing.test_session;
     defer session.cookie_jar.clearRetainingCapacity();
+    // The page makes the download same-site (same 127.0.0.1 host), so the
+    // Lax cookie the redirect hands out flows on the followed hop.
     var page = try testing.pageTest("mcp_actions.html", .{});
     defer page.close();
 
@@ -3946,24 +3899,26 @@ test "download: a redirect's Set-Cookie lands in the jar and the next hop carrie
     defer tmp.cleanup();
     const path = try testing.tmpPath(&tmp, "redirected.txt");
 
-    const aa = testing.arena_allocator;
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
-        "{{\"url\":\"http://127.0.0.1:9582/download_tool/redirect\",\"path\":\"{s}\"}}",
-        .{path},
-    ), .{});
-    const r = try call(aa, session, &registry, "download", args, .{ .source = .user });
-    try std.testing.expect(r.is_error == false);
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/redirect", path);
     try std.testing.expect(std.mem.startsWith(u8, r.text, "saved "));
+    try std.testing.expect(std.mem.find(u8, r.text, "text/plain") != null);
 
-    const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, aa, .limited(8192));
+    var in_jar = false;
+    var it = session.cookie_jar.iterator();
+    while (it.next()) |cookie| {
+        if (std.mem.eql(u8, cookie.name, "lp_redirect")) in_jar = true;
+    }
+    try std.testing.expect(in_jar);
+
+    const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(8192));
     try std.testing.expect(std.mem.find(u8, body, "lp_redirect=1") != null);
+    try std.testing.expect(std.mem.find(u8, body, "Lightpanda/") != null);
 }
 
 test "download: a non-2xx response saves nothing" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
-    const session = testing.test_session;
     var page = try testing.pageTest("mcp_actions.html", .{});
     defer page.close();
 
@@ -3971,13 +3926,8 @@ test "download: a non-2xx response saves nothing" {
     defer tmp.cleanup();
     const path = try testing.tmpPath(&tmp, "missing.html");
 
-    const aa = testing.arena_allocator;
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print(
-        "{{\"url\":\"http://127.0.0.1:9582/download_tool/missing\",\"path\":\"{s}\"}}",
-        .{path},
-    ), .{});
-    const r = try call(aa, session, &registry, "download", args, .{ .source = .user });
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/missing", path);
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("HTTP 404 Not Found; nothing saved", r.text);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(lp.io, path, aa, .limited(1024)));
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024)));
 }
