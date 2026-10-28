@@ -291,3 +291,27 @@
     testing.expectEqual(false, $('#opt-color').validity.valueMissing);
 }
 </script>
+
+<div id=defaults>
+    <form id=default-form>
+        <button type=button id=def-plain></button>
+        <button id=def-submit></button>
+        <input type=submit id=def-second>
+        <input type=checkbox checked id=def-checked>
+        <input type=checkbox id=def-unchecked>
+        <input type=radio name=r checked id=def-radio>
+        <select><option id=def-a>a</option><option selected id=def-b>b</option></select>
+    </form>
+    <button id=def-formless></button>
+</div>
+
+<script id="default">
+{
+    const ids = () => Array.from($('#defaults').querySelectorAll(':default'), (e) => e.id).join(' ');
+    testing.expectEqual('def-submit def-checked def-radio def-b', ids());
+    // The checked attribute decides, not the current state
+    $('#def-unchecked').checked = true;
+    $('#def-checked').checked = false;
+    testing.expectEqual('def-submit def-checked def-radio def-b', ids());
+}
+</script>

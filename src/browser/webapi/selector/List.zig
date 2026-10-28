@@ -601,6 +601,23 @@ fn isOptional(el: *Node.Element) bool {
     return isRequired(el) == false;
 }
 
+// https://html.spec.whatwg.org/multipage/semantics-other.html#selector-default
+fn isDefault(el: *Node.Element, frame: *Frame) bool {
+    if (el.is(Node.Element.Html.Option) != null) {
+        return el.hasAttributeInterned("selected");
+    }
+    if (el.is(Node.Element.Html.Input)) |input| {
+        if (input._input_type == .checkbox or input._input_type == .radio) {
+            return el.hasAttributeInterned("checked");
+        }
+    }
+    if (Node.Element.Html.Form.isSubmitButton(el) == false) {
+        return false;
+    }
+    const form = Node.Element.Html.Form.ownerOf(el) orelse return false;
+    return form.getDefaultButton(frame) == el;
+}
+
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
@@ -650,7 +667,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .placeholder_shown => return false,
         .read_only => return !isReadWrite(el),
         .read_write => return isReadWrite(el),
-        .default => return false,
+        .default => return isDefault(el, frame),
 
         // User interaction
         .hover => return false,
