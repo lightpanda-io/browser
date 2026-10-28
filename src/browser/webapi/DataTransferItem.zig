@@ -76,6 +76,10 @@ fn getAsFile(self: *const DataTransferItem) ?*File {
 // The callback runs in a queued task.
 pub fn getAsString(self: *DataTransferItem, cb_: ?js.Function.Global, exec: *js.Execution) !void {
     const cb = cb_ orelse return;
+    if (self._data_transfer._mode == .protected) {
+        cb.release();
+        return;
+    }
     errdefer cb.release();
 
     const value = switch (self._payload) {
