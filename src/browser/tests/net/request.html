@@ -647,6 +647,18 @@
   }
 </script>
 
+<script id=get_head_body>
+  {
+    const url = 'https://example.com/api';
+    testing.expectError('TypeError', () => new Request(url, { body: 'x' }));
+    testing.expectError('TypeError', () => new Request(url, { method: 'HEAD', body: '' }));
+    testing.expectEqual('GET', new Request(url, { body: null }).method);
+
+    const post = new Request(url, { method: 'POST', body: 'x' });
+    testing.expectError('TypeError', () => new Request(post, { method: 'GET' }));
+  }
+</script>
+
 <script id=request_body_matches_stream>
   const open = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('x')); } });
   const r1 = new Request('https://example.com', { method: 'POST', body: open, duplex: 'half' });
