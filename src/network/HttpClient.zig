@@ -1304,6 +1304,15 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         return false;
     }
 
+    // A stored 200 is not the part of the body a Range asks for, and the key
+    // of a URL with userinfo (which curl sends as Basic auth) would write the
+    // credentials into the cache.
+    if (transfer.findRequestHeader("Range") != null or
+        URL.getUsername(req.url).len > 0 or URL.getPassword(req.url).len > 0)
+    {
+        return false;
+    }
+
     const arena = transfer.arena;
 
     // Redirects rewrite req.url; the entry must be stored/renewed under the
@@ -6639,4 +6648,31 @@ test "HttpClient: encodedDataLength of a cache hit is the stored body, of a reva
 
     _ = try e.fetch("http://127.0.0.1:9582/raw/revalidated", null);
     try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
+}
+
+test "HttpClient: a Range request and a URL with userinfo skip the cache" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    client.cache = &cache;
+
+    // A miss tags the request to be stored: one that skips the cache stays untagged.
+    const cases = [_]struct { url: [:0]const u8, range: bool, intent: std.meta.Tag(CacheIntent) }{
+        .{ .url = "http://example.com/", .range = false, .intent = .store },
+        .{ .url = "http://example.com/", .range = true, .intent = .none },
+        .{ .url = "http://u:p@example.com/", .range = false, .intent = .none },
+        .{ .url = "http://u@example.com/", .range = false, .intent = .none },
+    };
+    for (cases) |case| {
+        const arena = try pool.acquire(.small, "test");
+        defer arena.release();
+        var transfer = testTransfer(arena);
+        transfer.req.url = case.url;
+        if (case.range) try transfer.setHeader("Range", "bytes=0-3", .{});
+        try testing.expectEqual(false, try client.cacheLookup(&transfer));
+        try testing.expectEqual(case.intent, std.meta.activeTag(transfer._cache_intent));
+    }
 }
