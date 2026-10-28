@@ -81,6 +81,7 @@ pub const ParseError = error{
     MalformedKv,
     PositionalNotAllowed,
     PositionalMustComeFirst,
+    PromptMustComeFirst,
     UnterminatedQuote,
     UnsupportedEscape,
     InvalidValue,
@@ -92,8 +93,8 @@ pub const Split = struct {
     rest: []const u8,
 };
 
-/// Populated by `parseValueDiag` on `InvalidValue` so callers can surface
-/// the offending field/type/value to the user.
+/// Populated by `parseValueDiag` on `InvalidValue` (field/type/value) and on
+/// `UnknownField` (the key, in `bad_field`) so callers can surface it.
 pub const Diag = struct {
     bad_field: []const u8 = "",
     expected_type: FieldType = .other,
@@ -114,6 +115,16 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
         // Only the recorder reads this; the runtime marshals extract separately.
         .extract => &.{"schema"},
         else => &.{},
+    };
+}
+
+/// Slash form reads leading text as a prompt (fields are keyword-only).
+pub fn takesPrompt(tool: BrowserTool) bool {
+    return switch (tool) {
+        .click, .fill, .hover, .selectOption, .setChecked, .extract, .evaluate => true,
+        // A wait targets what is not on the page yet, so a prompt leaves the model nothing to pick from.
+        .waitForSelector, .waitForScript, .waitForState => false,
+        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
     };
 }
 
@@ -189,7 +200,9 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
 /// or — when nothing is required — the tool's only field (e.g. getEnv binds to
 /// `name`). Null when there's no required field and more than one optional
 /// field, since the target would be ambiguous (click's selector/backendNodeId).
+/// Slash input only; the script form's positionals are `positional`.
 pub fn leadingPositionalField(self: Schema) ?[]const u8 {
+    if (takesPrompt(self.tool)) return null;
     if (self.required.len == 1) return self.required[0];
     if (self.required.len == 0 and self.fields.len == 1) return self.fields[0].name;
     return null;
@@ -211,9 +224,56 @@ pub fn parseValue(self: Schema, arena: std.mem.Allocator, rest: []const u8) Pars
 /// callers can render a user-facing message like
 /// "y: expected integer, got 'fast'".
 pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag) ParseError!?std.json.Value {
+    return self.parseArgs(arena, rest_raw, diag, true);
+}
+
+pub const PromptSplit = struct {
+    prompt: []const u8,
+    args: ?std.json.Value,
+};
+
+/// Null when there is no leading text (caller parses `rest` as ordinary args).
+/// Required fields may be missing from `args`: the model supplies them.
+pub fn parsePrompt(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag) ParseError!?PromptSplit {
+    std.debug.assert(takesPrompt(self.tool));
+    const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
+    if (rest.len == 0 or rest[0] == '{') return null;
+
+    var tail_start = rest.len;
+    var i: usize = 0;
+    while (i < rest.len) {
+        if (std.ascii.isWhitespace(rest[i])) {
+            i += 1;
+            continue;
+        }
+        // A closed quote is prose even with `=` inside ("the item with id=5");
+        // an unclosed one is an apostrophe ("'cause", "the user's menu").
+        if (rest[i] == '\'' or rest[i] == '"') {
+            if (std.mem.findScalarPos(u8, rest, i + 1, rest[i])) |close| {
+                i = close + 1;
+                continue;
+            }
+        }
+        const end = std.mem.findAnyPos(u8, rest, i, &std.ascii.whitespace) orelse rest.len;
+        if (looksLikeKv(rest[i..end])) {
+            tail_start = i;
+            break;
+        }
+        i = end;
+    }
+
+    const text = std.mem.trimEnd(u8, rest[0..tail_start], &std.ascii.whitespace);
+    if (text.len == 0) return null;
+    return .{
+        .prompt = text,
+        .args = try self.parseArgs(arena, rest[tail_start..], diag, false),
+    };
+}
+
+fn parseArgs(self: Schema, arena: std.mem.Allocator, rest_raw: []const u8, diag: ?*Diag, require: bool) ParseError!?std.json.Value {
     const rest = std.mem.trim(u8, rest_raw, &std.ascii.whitespace);
     if (rest.len == 0) {
-        if (self.required.len > 0) return error.MissingRequired;
+        if (require and self.required.len > 0) return error.MissingRequired;
         return null;
     }
 
@@ -239,17 +299,22 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     }
     for (tokens[kv_start..]) |tok| {
         const eq = std.mem.findScalar(u8, tok, '=') orelse {
-            // `/extract save=x '{…}'` — the value would have bound fine as a
+            // `/goto timeout=5000 https://…` — the value would have bound fine as a
             // leading positional, so point at the ordering instead of the
             // generic kv complaint.
             if (positional_field != null and !leading_positional) return error.PositionalMustComeFirst;
+            // `/fill value=x the password field`, or prose after the fields.
+            if (takesPrompt(self.tool)) return error.PromptMustComeFirst;
             return error.MalformedKv;
         };
         if (eq == 0 or eq == tok.len - 1) return error.MalformedKv;
         const key = tok[0..eq];
         // Reject typos like `checke=false` that would otherwise be silently
         // absorbed while the actual required field gets default-filled.
-        const field = self.findField(key) orelse return error.UnknownField;
+        const field = self.findField(key) orelse {
+            if (diag) |d| d.bad_field = key;
+            return error.UnknownField;
+        };
         list.appendAssumeCapacity(.{ .key = field.name, .value = stripQuotes(tok[eq + 1 ..]) });
     }
 
@@ -257,6 +322,8 @@ pub fn parseValueDiag(self: Schema, arena: std.mem.Allocator, rest_raw: []const 
     // selector='#a'` works without `checked=true`.
     required: for (self.required) |req| {
         for (list.items) |p| if (std.mem.eql(u8, p.key, req)) continue :required;
+        // Prompt path: don't pin default-true fields (e.g. "uncheck …").
+        if (!require) continue;
         if (!self.isFieldDefaultTrue(req)) return error.MissingRequired;
         list.appendAssumeCapacity(.{ .key = req, .value = "true" });
     }
@@ -417,13 +484,13 @@ fn buildOne(arena: std.mem.Allocator, tool: BrowserTool, td: BrowserTool.Definit
         }
     }
 
-    info.hints = try buildHints(arena, info.required, info.fields);
+    info.hints = try buildHints(arena, info.required, info.fields, info.leadingPositionalField());
     std.debug.assert(info.hints.len <= max_hint_slots);
 
     return info;
 }
 
-fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry) ![]const HintSlot {
+fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []const FieldEntry, positional: ?[]const u8) ![]const HintSlot {
     if (fields.len == 0 and required.len == 0) return &.{};
     var optional_count: usize = 0;
     for (fields) |f| {
@@ -436,7 +503,7 @@ fn buildHints(arena: std.mem.Allocator, required: []const []const u8, fields: []
         out[idx] = .{
             .name = name,
             .required = true,
-            .fragment = try arena.print("<{s}>", .{name}),
+            .fragment = if (positional != null and std.mem.eql(u8, name, positional.?)) try arena.print("<{s}>", .{name}) else try arena.print("{s}=…", .{name}),
         };
         idx += 1;
     }
@@ -813,7 +880,7 @@ test "parseValue: double-quoted script with embedded single-quoted argument" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const evaluate = Schema.find(Schema.all(), "evaluate").?;
-    const v = (try evaluate.parseValue(arena.allocator(), "\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
+    const v = (try evaluate.parseValue(arena.allocator(), "script=\"setTimeout(() => document.querySelector('a'), 1000)\"")).?;
     try testing.expectString("setTimeout(() => document.querySelector('a'), 1000)", v.object.get("script").?.string);
 }
 
@@ -878,4 +945,47 @@ test "parseValue: rejects non-object JSON payloads" {
     // "\"hello\"" is a valid positional argument, not a JSON payload, so it should succeed
     const v = (try goto.parseValue(arena.allocator(), "\"hello\"")).?;
     try testing.expectString("hello", v.object.get("url").?.string);
+}
+
+test "parsePrompt: splits the prompt from the key=value tail" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const fill = Schema.find(Schema.all(), "fill").?;
+
+    const p = (try fill.parsePrompt(aa, "  the email field   value='a b'  ", null)).?;
+    try testing.expectString("the email field", p.prompt);
+    try testing.expectString("a b", p.args.?.object.get("value").?.string);
+
+    try testing.expectString("\"the email field\"", (try fill.parsePrompt(aa, "\"the email field\"", null)).?.prompt);
+    try testing.expectString("'a' then b", (try fill.parsePrompt(aa, "'a' then b", null)).?.prompt);
+
+    try testing.expect((try fill.parsePrompt(aa, "selector=#e value=x", null)) == null);
+    try testing.expect((try fill.parsePrompt(aa, "{\"selector\":\"#e\",\"value\":\"x\"}", null)) == null);
+    try testing.expect((try fill.parsePrompt(aa, "", null)) == null);
+
+    var diag: Diag = .{};
+    try testing.expectError(error.UnknownField, fill.parsePrompt(aa, "the email field valu=x", &diag));
+    try testing.expectString("valu", diag.bad_field);
+
+    const click = Schema.find(Schema.all(), "click").?;
+    try testing.expectString("\"the item with id=5\"", (try click.parsePrompt(aa, "\"the item with id=5\"", null)).?.prompt);
+    try testing.expectString("the user's menu", (try click.parsePrompt(aa, "the user's menu", null)).?.prompt);
+    const cause = (try fill.parsePrompt(aa, "'cause value=x", null)).?;
+    try testing.expectString("'cause", cause.prompt);
+    try testing.expectString("x", cause.args.?.object.get("value").?.string);
+
+    try testing.expectError(error.PromptMustComeFirst, fill.parsePrompt(aa, "the field value=x and more", null));
+    try testing.expectError(error.PromptMustComeFirst, fill.parseValue(aa, "value=spice the password field"));
+}
+
+test "takesPrompt: prompt tools have keyword-only hints and no positional" {
+    const click = Schema.find(Schema.all(), "click").?;
+    try testing.expect(click.leadingPositionalField() == null);
+    const extract = Schema.find(Schema.all(), "extract").?;
+    try testing.expect(extract.leadingPositionalField() == null);
+    try testing.expectString("schema=…", extract.hints[0].fragment);
+    const goto = Schema.find(Schema.all(), "goto").?;
+    try testing.expectString("url", goto.leadingPositionalField().?);
+    try testing.expectString("<url>", goto.hints[0].fragment);
 }
