@@ -501,6 +501,10 @@ pub const BrowserContext = struct {
     // (chromedp's keyDown/char/keyUp split), as Chrome does.
     suppress_next_char: bool = false,
 
+    // Input.setInterceptDrags. Nothing starts a drag from mouse input yet, so
+    // no Input.dragIntercepted is ever due.
+    intercept_drags: bool = false,
+
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,

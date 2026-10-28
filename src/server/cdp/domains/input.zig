@@ -25,17 +25,21 @@ const dom_button = Frame.user_input.mouse_button;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
+        dispatchDragEvent,
         dispatchKeyEvent,
         dispatchMouseEvent,
         dispatchTouchEvent,
         insertText,
+        setInterceptDrags,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .dispatchDragEvent => return dispatchDragEvent(cmd),
         .dispatchKeyEvent => return dispatchKeyEvent(cmd),
         .dispatchMouseEvent => return dispatchMouseEvent(cmd),
         .dispatchTouchEvent => return dispatchTouchEvent(cmd),
         .insertText => return insertText(cmd),
+        .setInterceptDrags => return setInterceptDrags(cmd),
     }
 }
 
@@ -218,6 +222,55 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
         .touchEnd => try Frame.user_input.touchEnd(frame, point, modifiers),
         .touchCancel => try Frame.user_input.touchCancel(frame, modifiers),
     }
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchDragEvent
+//
+// A drag from outside the page. DragData.files is not implemented.
+fn dispatchDragEvent(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        type: Type,
+        x: f64,
+        y: f64,
+        data: Frame.user_input.DragData,
+        modifiers: u4 = 0,
+
+        const Type = enum {
+            dragEnter,
+            dragOver,
+            drop,
+            dragCancel,
+        };
+    })) orelse return error.InvalidParams;
+
+    try cmd.sendResult(null, .{});
+
+    const bc = cmd.browser_context orelse return;
+    const frame = bc.mainFrame() orelse return;
+
+    const typ: Frame.user_input.DragType = switch (params.type) {
+        .dragEnter => .enter,
+        .dragOver => .over,
+        .drop => .drop,
+        .dragCancel => .cancel,
+    };
+    try Frame.user_input.triggerDrag(frame, typ, params.x, params.y, params.data, cdpModifiers(params.modifiers));
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-setInterceptDrags
+//
+// Playwright enables this around every mouse move with the left button down.
+// Mouse input never starts a drag here, so there is no Input.dragIntercepted
+// to send, as in Chrome when the press is not on a draggable element.
+fn setInterceptDrags(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        enabled: bool,
+    })) orelse return error.InvalidParams;
+
+    if (cmd.browser_context) |bc| {
+        bc.intercept_drags = params.enabled;
+    }
+    try cmd.sendResult(null, .{});
 }
 
 fn cdpModifiers(bits: u4) Frame.user_input.Modifiers {
@@ -3846,5 +3899,204 @@ test "cdp.input: typing into a non-editable focused element inserts nothing" {
         \\getSelection().collapse(host.firstChild, 1);
     , .{ .key = "c" },
         \\host.innerHTML === 'ab' && window.types() === 'keypress:host'
+    );
+}
+
+test "cdp.input: setInterceptDrags keeps a held-button mouse move a plain mouse move" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.moves = [];
+        \\for (const t of ['pointermove', 'mousemove', 'dragstart']) document.addEventListener(t, e => moves.push(e.type + ':' + e.buttons));
+    , null);
+    const x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y + 1", null)).toF64();
+
+    // Playwright's sequence for page.mouse.down() then page.mouse.move().
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .clickCount = 1 } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.setInterceptDrags", .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect(bc.intercept_drags);
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseMoved", .x = x + 5, .y = y, .button = "left" } });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.setInterceptDrags", .params = .{ .enabled = false } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(!bc.intercept_drags);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseReleased", .x = x + 5, .y = y, .button = "left", .clickCount = 1 } });
+
+    try testing.expect((try ls.local.compileAndRun("moves.join(',') === 'pointermove:1,mousemove:1'", null)).isTrue());
+    for (ctx.received_raw.items) |msg| {
+        try testing.expect(std.mem.indexOf(u8, msg, "dragIntercepted") == null);
+    }
+}
+
+const DragStep = struct {
+    type: []const u8,
+    over: enum { a, b, outside } = .b,
+    mask: u32 = 1,
+    modifiers: u4 = 0,
+};
+
+/// Dispatches `steps` as Input.dispatchDragEvent, carrying text/plain "hello"
+/// and a text/uri-list, over #a or #b, and checks the drag events that
+/// reached the document (each `type|target|relatedTarget|cancelable|isTrusted|
+/// shiftKey|types|getData('text/plain')|dropEffect|effectAllowed`) against
+/// `expected`. `accept` is the id whose dragenter/dragover/drop listeners
+/// call preventDefault().
+fn expectDragSequence(accept: []const u8, steps: []const DragStep, comptime expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<div id="a">A</div><div id="b">B</div>';
+        \\window.drags = [];
+        \\for (const t of ['dragenter', 'dragover', 'dragleave', 'drop']) document.addEventListener(t, e => {
+        \\  const dt = e.dataTransfer;
+        \\  // Only a dragstart may change the items.
+        \\  dt.setData('text/x-added', 'x');
+        \\  drags.push([e.type, e.target.id, e.relatedTarget?.id ?? '-', e.cancelable, e.isTrusted, e.shiftKey,
+        \\    dt.types.join('+'), dt.getData('text/plain'), dt.dropEffect, dt.effectAllowed].join('|'));
+        \\  if (e.type !== 'dragleave' && e.target.id === window.accept) e.preventDefault();
+        \\}, true);
+    , null);
+    const accept_js = try std.fmt.allocPrint(testing.arena_allocator, "window.accept = '{s}'", .{accept});
+    _ = try ls.local.compileAndRun(accept_js, null);
+
+    const ax = try (try ls.local.compileAndRun("document.getElementById('a').getBoundingClientRect().x + 1", null)).toF64();
+    const ay = try (try ls.local.compileAndRun("document.getElementById('a').getBoundingClientRect().y + 1", null)).toF64();
+    const bx = try (try ls.local.compileAndRun("document.getElementById('b').getBoundingClientRect().x + 1", null)).toF64();
+    const by = try (try ls.local.compileAndRun("document.getElementById('b').getBoundingClientRect().y + 1", null)).toF64();
+
+    for (steps, 1..) |step, id| {
+        const x: f64, const y: f64 = switch (step.over) {
+            .a => .{ ax, ay },
+            .b => .{ bx, by },
+            .outside => .{ -1000, -1000 },
+        };
+        try ctx.processMessage(.{
+            .id = @as(i32, @intCast(id)),
+            .method = "Input.dispatchDragEvent",
+            .params = .{
+                .type = step.type,
+                .x = x,
+                .y = y,
+                .modifiers = step.modifiers,
+                .data = .{
+                    .items = &.{
+                        .{ .mimeType = "text/plain", .data = "hello" },
+                        .{ .mimeType = "text/uri-list", .data = "http://example.com/" },
+                    },
+                    .dragOperationsMask = step.mask,
+                },
+            },
+        });
+        try ctx.expectSentResult(null, .{ .id = id });
+    }
+
+    const result = try ls.local.compileAndRun("JSON.stringify(drags) === JSON.stringify([" ++ expected ++ "])", null);
+    if (!result.isTrue()) {
+        const actual = try ls.local.compileAndRun("JSON.stringify(drags)", null);
+        std.debug.print("drag events: {s}\n", .{try actual.toStringSlice()});
+    }
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchDragEvent enters, moves between targets and drops" {
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "dragOver", .over = .a },
+        .{ .type = "dragOver", .over = .b },
+        .{ .type = "drop", .over = .b },
+    },
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragover|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragover|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragenter|b|a|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragleave|a|b|false|true|false|text/plain+text/uri-list||none|copy',
+        \\'dragover|b|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'drop|b|-|true|true|false|text/plain+text/uri-list|hello|copy|copy'
+    );
+}
+
+test "cdp.input: dispatchDragEvent drop runs a dragover at the target first" {
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .mask = 17, .modifiers = 8 },
+        .{ .type = "drop", .mask = 17, .modifiers = 8 },
+    },
+        \\'dragenter|b|-|true|true|true|text/plain+text/uri-list||move|copyMove',
+        \\'dragover|b|-|true|true|true|text/plain+text/uri-list||move|copyMove',
+        \\'drop|b|-|true|true|true|text/plain+text/uri-list|hello|move|copyMove'
+    );
+    // Dropped on a new target: its dragenter decides.
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "drop", .over = .b },
+    },
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragenter|b|a|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragleave|a|b|false|true|false|text/plain+text/uri-list||none|copy',
+        \\'drop|b|-|true|true|false|text/plain+text/uri-list|hello|copy|copy'
+    );
+}
+
+test "cdp.input: dispatchDragEvent a drop nobody accepted" {
+    // Ignored by the page: nothing fires.
+    try expectDragSequence("a", &.{
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "dragOver", .over = .b },
+        .{ .type = "drop", .over = .b },
+    },
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragenter|b|a|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragleave|a|b|false|true|false|text/plain+text/uri-list||none|copy',
+        \\'dragover|b|-|true|true|false|text/plain+text/uri-list||copy|copy'
+    );
+    // Accepted, but with no operation the source allows: dragleave.
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .mask = 0 },
+        .{ .type = "drop", .mask = 0 },
+    },
+        \\'dragenter|b|-|true|true|false|text/plain+text/uri-list||none|none',
+        \\'dragover|b|-|true|true|false|text/plain+text/uri-list||none|none',
+        \\'dragleave|b|-|false|true|false|text/plain+text/uri-list||none|none'
+    );
+}
+
+test "cdp.input: dispatchDragEvent dragCancel ends the drag without events" {
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .mask = 65535 },
+        .{ .type = "dragCancel", .mask = 65535 },
+        .{ .type = "dragOver", .mask = 65535 },
+        .{ .type = "drop", .mask = 65535 },
+        .{ .type = "dragCancel", .mask = 65535 },
+        .{ .type = "dragEnter", .over = .a, .mask = 2 },
+        .{ .type = "dragOver", .over = .outside, .mask = 2 },
+        .{ .type = "drop", .over = .outside, .mask = 2 },
+        .{ .type = "dragOver", .over = .a, .mask = 2 },
+    },
+        \\'dragenter|b|-|true|true|false|text/plain+text/uri-list||copy|all',
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||link|link',
+        \\'dragleave|a|-|false|true|false|text/plain+text/uri-list||none|link'
     );
 }

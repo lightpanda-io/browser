@@ -208,6 +208,10 @@ input_touch: @import("frame/user_input.zig").TouchInput = .{},
 // user_input.PointerButtons.
 input_pointer: @import("frame/user_input.zig").PointerButtons = .{},
 
+// A drag from outside the page a CDP client is driving; see
+// user_input.DragInput.
+input_drag: @import("frame/user_input.zig").DragInput = .{},
+
 // Popup Frames opened by window.open. They are top-level browsing contexts
 // (parent == null, no iframe element) but share this Page's factory, arena,
 // and identity map.

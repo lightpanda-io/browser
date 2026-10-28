@@ -42,6 +42,8 @@ const TouchEvent = @import("../webapi/event/TouchEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
 const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
+const DragEvent = @import("../webapi/event/DragEvent.zig");
+const DataTransfer = @import("../webapi/DataTransfer.zig");
 
 const log = lp.log;
 
@@ -816,6 +818,176 @@ fn deltaToScroll(d: f64) i32 {
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
+/// One string of a drag's data, for one MIME type (CDP Input.DragDataItem).
+pub const DragItem = struct {
+    mimeType: []const u8,
+    data: []const u8,
+};
+
+/// What a drag from outside the page carries: its items, and the operations
+/// its source allows, as Chrome's mask (copy 1, link 2, move 16).
+pub const DragData = struct {
+    items: []const DragItem,
+    dragOperationsMask: u32,
+};
+
+pub const DragType = enum { enter, over, drop, cancel };
+
+/// A drag from outside the page, driven message by message (CDP
+/// Input.dispatchDragEvent). Mouse input never starts a drag, so there is no
+/// source element and no dragstart, drag or dragend.
+pub const DragInput = struct {
+    /// Set by dragEnter. A drop or dragCancel ends the drag, and dragOver and
+    /// drop do nothing until the next dragEnter.
+    active: bool = false,
+    /// The element the drag is over (the spec's current target element).
+    target: ?*Element = null,
+};
+
+const drag_copy: u32 = 1;
+const drag_link: u32 = 2;
+const drag_move: u32 = 16;
+const drag_every = drag_copy | drag_link | drag_move;
+
+fn dragEffectAllowed(mask: u32) []const u8 {
+    return switch (mask & drag_every) {
+        0 => "none",
+        drag_copy => "copy",
+        drag_link => "link",
+        drag_move => "move",
+        drag_copy | drag_link => "copyLink",
+        drag_copy | drag_move => "copyMove",
+        drag_link | drag_move => "linkMove",
+        else => "all",
+    };
+}
+
+/// The dropEffect a dragenter or dragover starts with, picked as Blink does.
+fn dragDefaultDropEffect(mask: u32) []const u8 {
+    const ops = mask & drag_every;
+    if (ops == drag_every) return "copy";
+    if (ops & drag_move != 0) return "move";
+    if (ops & drag_copy != 0) return "copy";
+    if (ops & drag_link != 0) return "link";
+    return "none";
+}
+
+fn dragAllows(mask: u32, effect: []const u8) bool {
+    const bit: u32 = if (std.mem.eql(u8, effect, "copy"))
+        drag_copy
+    else if (std.mem.eql(u8, effect, "link"))
+        drag_link
+    else if (std.mem.eql(u8, effect, "move"))
+        drag_move
+    else
+        0;
+    return mask & bit != 0;
+}
+
+/// Moves, drops or cancels a drag from outside the page, as Chrome does for
+/// Input.dispatchDragEvent. dragEnter, dragOver and drop each run one step: a
+/// new target gets dragenter, then the old one dragleave; the same target gets
+/// dragover. A drop then goes to the target if that step accepted the drag
+/// with an operation the source allows. If not, the target gets dragleave only
+/// when a listener called preventDefault(). dragCancel fires nothing.
+pub fn triggerDrag(frame: *Frame, typ: DragType, x: f64, y: f64, data: DragData, modifiers: Modifiers) !void {
+    const drag = &frame.page.input_drag;
+    switch (typ) {
+        .cancel => {
+            drag.* = .{};
+            return;
+        },
+        .enter => drag.active = true,
+        .over, .drop => if (!drag.active) return,
+    }
+
+    const d: DragDispatch = .{ .x = x, .y = y, .data = data, .modifiers = modifiers };
+    const drop_effect = dragDefaultDropEffect(data.dragOperationsMask);
+    const hit = try mouseHitTest(frame, x, y);
+    var result: DragResult = .{ .cancelled = false, .drop_effect = "none" };
+    if (hit.target != drag.target) {
+        const old = drag.target;
+        drag.target = hit.target;
+        if (hit.target) |target| {
+            result = try emitDrag(frame, target, "dragenter", old, d, .protected, drop_effect);
+        }
+        if (old) |target| {
+            _ = try emitDrag(frame, target, "dragleave", hit.target, d, .protected, "none");
+        }
+    } else if (drag.target) |target| {
+        result = try emitDrag(frame, target, "dragover", null, d, .protected, drop_effect);
+    }
+    // A listener may have discarded the target's frame and reset us.
+    if (drag.target != hit.target) return;
+    if (typ != .drop) return;
+
+    drag.* = .{};
+    const target = hit.target orelse return;
+    if (result.cancelled and dragAllows(data.dragOperationsMask, result.drop_effect)) {
+        _ = try emitDrag(frame, target, "drop", null, d, .read_only, result.drop_effect);
+    } else if (result.cancelled) {
+        _ = try emitDrag(frame, target, "dragleave", null, d, .protected, "none");
+    }
+}
+
+const DragDispatch = struct {
+    x: f64,
+    y: f64,
+    data: DragData,
+    modifiers: Modifiers,
+};
+
+const DragResult = struct {
+    cancelled: bool,
+    /// dataTransfer.dropEffect once the listeners ran.
+    drop_effect: []const u8,
+};
+
+/// Dispatches a trusted DragEvent whose dataTransfer holds the drag's items.
+/// Each event gets its own DataTransfer, as in Blink.
+fn emitDrag(
+    frame: *Frame,
+    target: *Element,
+    comptime typ: []const u8,
+    related: ?*Element,
+    d: DragDispatch,
+    mode: DataTransfer.Mode,
+    drop_effect: []const u8,
+) !DragResult {
+    const owner = target.ownerFrame(frame) orelse frame;
+    if (owner.window._closed) return .{ .cancelled = true, .drop_effect = "none" };
+
+    const data_transfer = try DataTransfer.init(owner);
+    data_transfer.acquireRef();
+    defer data_transfer.releaseRef(owner.page);
+    for (d.data.items) |item| {
+        try data_transfer.setData(item.mimeType, item.data);
+    }
+    data_transfer._mode = mode;
+    data_transfer._drop_effect = drop_effect;
+    data_transfer._effect_allowed = dragEffectAllowed(d.data.dragOperationsMask);
+
+    // No relatedTarget from another document.
+    const same_document = if (related) |el| el.ownerFrame(frame) == owner else false;
+    const related_target = if (same_document) related.?.asEventTarget() else null;
+    const point = pointInFrame(frame, owner, d.x, d.y);
+    const event: *DragEvent = try .initTrusted(typ, .{
+        .bubbles = true,
+        .cancelable = comptime !std.mem.eql(u8, typ, "dragleave"),
+        .composed = true,
+        .clientX = point.x,
+        .clientY = point.y,
+        .relatedTarget = related_target,
+        .ctrlKey = d.modifiers.ctrl,
+        .shiftKey = d.modifiers.shift,
+        .altKey = d.modifiers.alt,
+        .metaKey = d.modifiers.meta,
+        .dataTransfer = data_transfer,
+    }, owner);
+    const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    return .{ .cancelled = cancelled, .drop_effect = data_transfer._drop_effect };
+}
+
 // pointerId 1 is the mouse.
 pub const first_touch_pointer_id: i32 = 2;
 // Chrome's touch slop, also the tap slop: inside it touchmove is suppressed.
@@ -1125,6 +1297,11 @@ pub fn forgetFrame(frame: *Frame) void {
     if (page.input_pointer.down_target) |el| {
         if (el.ownerFrame(frame) == frame) {
             page.input_pointer.reset();
+        }
+    }
+    if (page.input_drag.target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_drag = .{};
         }
     }
     const touch = &page.input_touch;

@@ -73,6 +73,8 @@ pub const Handler = enum {
     onloadstart,
     onlostpointercapture,
     onmousedown,
+    onmouseenter,
+    onmouseleave,
     onmousemove,
     onmouseout,
     onmouseover,
