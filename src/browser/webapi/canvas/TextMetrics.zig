@@ -20,11 +20,11 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const text_measure = @import("../../text_measure.zig");
 
 const Execution = js.Execution;
 
-/// Metrics from the deterministic text model in text_measure.zig: ascent is
-/// 0.8em and descent 0.2em, as in a generic sans-serif face.
+/// Metrics from the deterministic text model in text_measure.zig.
 const TextMetrics = @This();
 
 _rc: lp.RC = .{},
@@ -35,8 +35,8 @@ _descent: f64,
 pub fn init(width: f64, font_size: f64, exec: *const Execution) !*TextMetrics {
     return exec._factory.create(TextMetrics{
         ._width = width,
-        ._ascent = font_size * 0.8,
-        ._descent = font_size * 0.2,
+        ._ascent = font_size * text_measure.ASCENT,
+        ._descent = font_size * text_measure.DESCENT,
     });
 }
 

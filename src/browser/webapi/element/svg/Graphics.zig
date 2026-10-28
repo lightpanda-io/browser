@@ -144,8 +144,9 @@ fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
             bounds = path.bounds(.{});
         },
         .foreign_object => bounds = try self.subtype(ForeignObject).getBounds(frame),
+        .text_content => bounds = self.subtype(TextContent).getBounds(frame),
         .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
-        .defs, .symbol, .switch_element, .use, .image, .text_content => {},
+        .defs, .symbol, .switch_element, .use, .image => {},
     }
     if (bounds.isEmpty()) {
         return DOMRect.create(.{}, frame._factory);
@@ -191,33 +192,29 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
                 defer path.deinit(frame.local_arena);
                 bounds.merge(path.bounds(child_matrix));
             },
-            .foreign_object => {
-                const child_bounds = try graphics.subtype(ForeignObject).getBounds(frame);
-                if (!child_bounds.isEmpty()) {
-                    var foreign_path: PathData.Path = .{};
-                    defer foreign_path.deinit(frame.local_arena);
-                    const top_left = PathData.Point{ .x = child_bounds.min_x, .y = child_bounds.min_y };
-                    const top_right = PathData.Point{ .x = child_bounds.max_x, .y = child_bounds.min_y };
-                    const bottom_right = PathData.Point{ .x = child_bounds.max_x, .y = child_bounds.max_y };
-                    const bottom_left = PathData.Point{ .x = child_bounds.min_x, .y = child_bounds.max_y };
-                    try foreign_path.appendLine(top_left, top_right, frame.local_arena);
-                    try foreign_path.appendLine(top_right, bottom_right, frame.local_arena);
-                    try foreign_path.appendLine(bottom_right, bottom_left, frame.local_arena);
-                    try foreign_path.appendLine(bottom_left, top_left, frame.local_arena);
-                    bounds.merge(foreign_path.bounds(child_matrix));
-                }
-            },
+            .foreign_object => mergeTransformed(bounds, try graphics.subtype(ForeignObject).getBounds(frame), child_matrix),
+            // The text box covers its <tspan>s, so they aren't visited.
+            .text_content => mergeTransformed(bounds, graphics.subtype(TextContent).getBounds(frame), child_matrix),
             .g, .a => try cursors.append(frame.local_arena, .{
                 .next = graphics.asNode().firstChild(),
                 .matrix = child_matrix,
             }),
             // <defs> and <symbol> never render. Nested viewports, <switch>,
-            // <use>, <image> and text have geometry we cannot resolve yet, so
-            // they contribute nothing rather than making the whole box
-            // unavailable.
-            .defs, .symbol, .svg, .switch_element, .use, .image, .text_content => {},
+            // <use> and <image> have geometry we cannot resolve yet, so they
+            // contribute nothing rather than making the whole box unavailable.
+            .defs, .symbol, .svg, .switch_element, .use, .image => {},
         }
     }
+}
+
+fn mergeTransformed(bounds: *PathData.Bounds, rect: PathData.Bounds, matrix: PathData.Matrix) void {
+    if (rect.isEmpty()) {
+        return;
+    }
+    bounds.include(matrix.apply(.{ .x = rect.min_x, .y = rect.min_y }));
+    bounds.include(matrix.apply(.{ .x = rect.max_x, .y = rect.min_y }));
+    bounds.include(matrix.apply(.{ .x = rect.max_x, .y = rect.max_y }));
+    bounds.include(matrix.apply(.{ .x = rect.min_x, .y = rect.max_y }));
 }
 
 /// Composes `transform` attributes from the element up to, excluding, its
