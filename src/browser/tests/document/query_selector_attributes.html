@@ -93,6 +93,14 @@
   testing.expectEqual('Link 1', exampleLink.innerText);
 </script>
 
+<script id="empty_value">
+  // An empty value for ^=, $= and *= matches nothing
+  testing.expectEqual(0, document.querySelectorAll('[href^=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[href$=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[href*=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[href^="" i]').length);
+</script>
+
 <script id="compound">
   testing.expectEqual(1, document.querySelectorAll('input[type="text"]').length);
   testing.expectEqual(1, document.querySelectorAll('input[type="password"]').length);
