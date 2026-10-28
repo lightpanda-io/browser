@@ -1630,9 +1630,9 @@ fn _documentIsComplete(self: *Frame) !void {
     try self.dispatchQueuedEvents();
     if (self.loadEventsAborted()) return;
 
-    // A close() from within our own load handler: the outer dispatch
-    // finishes the load steps.
-    if (self._load_event_in_progress) return;
+    // A close() from within our own load handler, or from the iframe
+    // element's (the tail of our load steps): no nested load (as in Chrome).
+    if (self._load_event_in_progress or self.document._iframe_load_in_progress) return;
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();

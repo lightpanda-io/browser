@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <iframe id=loaded src="about:blank"></iframe>
@@ -162,7 +163,9 @@
 
 <!--
   https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
-  open() from within the iframe element's load event mutes its later ones.
+  open() from within the iframe element's load event mutes its later ones. That
+  event is the tail of the iframe document's load, so, as from a window load
+  handler, close() fires DOMContentLoaded but no nested window load (as in Chrome).
 -->
 <script id=open_during_iframe_load_mutes type=module>
   {
@@ -171,24 +174,25 @@
     const iframe = document.createElement('iframe');
     let loads = 0;
     let window_loads = 0;
+    let dcls = 0;
     iframe.addEventListener('load', () => {
       loads += 1;
       if (loads > 1) return;
       const doc = iframe.contentDocument;
       doc.open();
-      iframe.contentWindow.addEventListener('load', () => {
-        window_loads += 1;
-        // a (wrongly) unmuted element load fires right after this one
-        setTimeout(() => state.resolve(), 0);
-      });
+      doc.addEventListener('DOMContentLoaded', () => dcls += 1);
+      iframe.contentWindow.addEventListener('load', () => window_loads += 1);
       doc.write('<p>muted</p>');
       doc.close();
+      setTimeout(() => state.resolve(), 20);
     });
     document.body.appendChild(iframe);
 
     await state.done(() => {
       testing.expectEqual(1, loads);
-      testing.expectEqual(1, window_loads);
+      testing.expectEqual(1, dcls);
+      testing.expectEqual(0, window_loads);
+      testing.expectEqual('muted', iframe.contentDocument.body.textContent);
     });
   }
 </script>

@@ -10,7 +10,13 @@
 <a id=mailto href="mailto:someone@example.com">mail</a>
 <a id=tel href="TEL:+15555550100">tel</a>
 <script id=link type=module>
-{
+(async() => {
+  if (testing.IS_TEST_RUNNER === false) {
+    // Even if it's headless, chrome will still try to open these link in
+    // whatever application is registered. Annoying. Easier to just skip.
+    return testing.skipAsync();
+  }
+
   const state = await testing.async();
   window.__marker = 'kept';
   document.getElementById('mailto').click();
@@ -21,5 +27,5 @@
     testing.expectEqual('kept', window.__marker);
     testing.expectEqual(testing.BASE_URL + 'window/location_external_scheme.html', location.href);
   });
-}
+})();
 </script>

@@ -65,38 +65,46 @@ pub fn getHead(self: *HTMLDocument) ?*Element {
     return null;
 }
 
-pub fn getBody(self: *HTMLDocument) ?*Element.Html.Body {
+// The body element: the first <body> or <frameset> child of <html>.
+pub fn getBody(self: *HTMLDocument) ?*Element.Html {
     const document_element = self._proto.getDocumentElement() orelse return null;
     return findBodyForDoc(document_element);
 }
 
-pub fn setBody(self: *HTMLDocument, html: []const u8, frame: *Frame) !void {
-    const document_element = self._proto.getDocumentElement() orelse return error.HierarchyError;
-
-    // Build a fresh <body> holding the parsed HTML as its children. Fragment
-    // parsing strips any <html>/<body>/<head> wrappers the author included.
-    const new_body_node = try Frame.node_factory.createElementNS(self._proto, .html, "body", null);
-    if (html.len > 0) {
-        try Frame.parse.htmlAsChildren(frame, new_body_node, html);
+// https://html.spec.whatwg.org/multipage/dom.html#dom-document-body
+fn setBody(self: *HTMLDocument, value: ?*Element.Html, frame: *Frame) !void {
+    const new_body = value orelse return error.HierarchyError;
+    if (isBodyElement(new_body) == false) {
+        return error.HierarchyError;
     }
 
+    const document_element = self._proto.getDocumentElement() orelse return error.HierarchyError;
     const document_node = document_element.asNode();
     if (findBodyForDoc(document_element)) |current| {
-        _ = try document_node.replaceChild(new_body_node, current.asNode(), frame);
+        if (current == new_body) {
+            return;
+        }
+        _ = try document_node.replaceChild(new_body.asNode(), current.asNode(), frame);
     } else {
-        _ = try document_node.appendChild(new_body_node, frame);
+        _ = try document_node.appendChild(new_body.asNode(), frame);
     }
 }
 
-fn findBodyForDoc(document_element: *Element) ?*Element.Html.Body {
+fn findBodyForDoc(document_element: *Element) ?*Element.Html {
     var child = document_element.asNode().firstChild();
     while (child) |node| {
-        if (node.is(Element.Html.Body)) |body| {
-            return body;
+        if (node.is(Element.Html)) |html| {
+            if (isBodyElement(html)) {
+                return html;
+            }
         }
         child = node.nextSibling();
     }
     return null;
+}
+
+fn isBodyElement(html: *Element.Html) bool {
+    return html.is(Element.Html.Body) != null or html.asElement().getTag() == .frameset;
 }
 
 pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
@@ -210,18 +218,6 @@ fn setDir(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
     try html.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
-fn getLang(self: *HTMLDocument) []const u8 {
-    const el = self._proto.getDocumentElement() orelse return "";
-    const html = el.is(Element.Html) orelse return "";
-    return html.getLang();
-}
-
-fn setLang(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
-    const el = self._proto.getDocumentElement() orelse return;
-    const html = el.is(Element.Html) orelse return;
-    try html.setLang(value, frame);
-}
-
 pub fn getAll(self: *HTMLDocument, frame: *Frame) !*collections.HTMLAllCollection {
     return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
 }
@@ -270,6 +266,46 @@ fn namedItem(self: *HTMLDocument, name: []const u8, frame: *Frame) !?NamedItemRe
         return .{ .window = Window.Access.init(frame.window, iframe_window) };
     }
     return .{ .element = first };
+}
+
+// Not the only thing that applies this type of rule. The short of it is:
+// 1 - document order
+// 2 - id is prefered over name, but for X (img) only if there's no name
+//     (which is different than am empty name)
+// 3 - Drop duplicates
+// https://html.spec.whatwg.org/multipage/dom.html#dom-document-nameditem
+fn getNames(self: *HTMLDocument, frame: *Frame) !js.Array {
+    const arena = frame.local_arena;
+    var names: std.ArrayList([]const u8) = .empty;
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(self.asNode(), .{});
+    while (tw.next()) |el| {
+        const html = el.is(Element.Html) orelse continue;
+        const name = el.getName() orelse "";
+        const id: []const u8 = switch (html._type) {
+            .embed, .form, .iframe => "",
+            .img => if (name.len == 0) "" else el.getId() orelse "",
+            .object => el.getId() orelse "",
+            else => continue,
+        };
+
+        for ([_][]const u8{ id, name }) |n| {
+            if (n.len == 0) {
+                continue;
+            }
+            const gop = try seen.getOrPut(arena, n);
+            if (gop.found_existing == false) {
+                try names.append(arena, n);
+            }
+        }
+    }
+
+    var arr = frame.js.local.?.newArray(@intCast(names.items.len));
+    for (names.items, 0..) |n, i| {
+        _ = try arr.set(@intCast(i), n, .{});
+    }
+    return arr;
 }
 
 fn findNamed(tw: *TreeWalker.FullExcludeSelf.Elements, name: []const u8) ?*Element {
@@ -340,10 +376,12 @@ pub const JsApi = struct {
         const R = struct {
             fn get(self: *HTMLDocument) []const u8 {
                 const b = self.getBody() orelse return "";
+                if (b.is(Element.Html.Body) == null) return "";
                 return b.asElement().getAttributeSafe(comptime .wrap(attr)) orelse "";
             }
             fn set(self: *HTMLDocument, value: js.Value, frame: *Frame) !void {
                 const b = self.getBody() orelse return;
+                if (b.is(Element.Html.Body) == null) return;
                 const str = if (value.isNull()) "" else try value.toStringSlice();
                 try b.asElement().setAttributeSafe(comptime .wrap(attr), .wrap(str), frame);
             }
@@ -352,7 +390,6 @@ pub const JsApi = struct {
     }
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
     pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .ce_reactions = true });
-    pub const lang = bridge.accessor(HTMLDocument.getLang, HTMLDocument.setLang, .{});
     pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{ .ce_reactions = true });
     pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
     pub const scripts = bridge.accessor(HTMLDocument.getScripts, null, .{});
@@ -366,7 +403,7 @@ pub const JsApi = struct {
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
 
-    pub const @"[str]" = bridge.namedIndexed(HTMLDocument.namedItem, null, null, null, struct {
+    pub const @"[str]" = bridge.namedIndexed(HTMLDocument.namedItem, null, null, HTMLDocument.getNames, struct {
         fn query(self: *HTMLDocument, name: []const u8) !u32 {
             if (name.len == 0) {
                 return error.NotHandled;
