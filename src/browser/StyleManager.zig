@@ -570,7 +570,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Decla
         inline for (.{ @field(props, field), @field(important, field) }, .{ priority, important_priority }) |declared, p| {
             if (declaresAny(declared)) {
                 try @field(self, field).bucket(self.arena.allocator(), key, .{
-                    .props = declared,
+                    .props = .init(declared),
                     .selector = selector,
                     .priority = p,
                 });
@@ -1154,8 +1154,8 @@ fn Group(comptime Spec: type) type {
         }
 
         const Rule = struct {
+            props: RuleProps,
             selector: Selector.Selector, // Single selector, not a list
-            props: Declared,
 
             // Packed priority: important:1 | layer_rank:11 | specificity:30 |
             // doc_order:22. A layered rule's rank bits stay 0 until
@@ -1165,6 +1165,24 @@ fn Group(comptime Spec: type) type {
         };
 
         const RuleList = std.MultiArrayList(Rule);
+
+        // A rule's Declared without the optionals: which fields it sets, and
+        // their values. Read for every candidate rule, so kept small.
+        const RuleProps = struct {
+            set: std.EnumSet(Field) = .empty,
+            values: Cascaded = .{},
+
+            fn init(declared: Declared) RuleProps {
+                var self: RuleProps = .{};
+                inline for (fields) |field| {
+                    if (@field(declared, field)) |value| {
+                        @field(self.values, field) = value;
+                        self.set.insert(@field(Field, field));
+                    }
+                }
+                return self;
+            }
+        };
 
         // Bucketed rules for fast lookup - keyed by rightmost selector part
         id_rules: std.StringHashMapUnmanaged(RuleList) = .empty,
@@ -1374,25 +1392,21 @@ fn Group(comptime Spec: type) type {
         }
 
         fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
-            for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
-                // Only rules that set a property nothing stronger has set yet are
-                // worth matching.
-                var relevant = false;
+            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
+                var matched = false;
                 inline for (fields) |field| {
-                    if (@field(rule, field) != null and priority > priorities.get(@field(Field, field))) {
-                        relevant = true;
-                    }
-                }
-                if (!relevant or !matchesSelector(el, selector, frame)) {
-                    continue;
-                }
-
-                inline for (fields) |field| {
-                    if (@field(rule, field)) |value| {
-                        if (priority > priorities.get(@field(Field, field))) {
-                            @field(p, field) = value;
-                            priorities.set(@field(Field, field), priority);
+                    const f = @field(Field, field);
+                    // Only a rule that sets a property nothing stronger has set
+                    // yet is worth matching, once.
+                    if (rule.set.contains(f) and priority > priorities.get(f)) {
+                        if (matched == false) {
+                            if (matchesSelector(el, selector, frame) == false) {
+                                continue :rules;
+                            }
+                            matched = true;
                         }
+                        @field(p, field) = @field(rule.values, field);
+                        priorities.set(f, priority);
                     }
                 }
             }
