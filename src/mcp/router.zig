@@ -2,26 +2,39 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const protocol = @import("protocol.zig");
+const Queue = @import("Queue.zig").Queue;
 
 const log = lp.log;
+
+/// A queued stdio message. Owned by the queue; the worker frees the body and
+/// the node after handling it.
+const Message = struct {
+    body: []u8,
+    next: ?*Message = null,
+};
+
+const MessageQueue = Queue(Message);
 
 /// Generic over the server type. The server must expose: `allocator`, a
 /// `transport: Transport` field, and the per-method `handleInitialize`,
 /// `handleToolList`, `handleToolCall` methods. `handleResourceList` /
 /// `handleResourceRead` are optional — servers that don't expose
 /// resources can omit them and the router returns `MethodNotFound`
-/// automatically. When `input` is the file behind `reader`, the server must
-/// also expose `idle`: the router then pumps the browser session between
-/// requests instead of blocking on the read.
+/// automatically. When `input` is the file behind `reader` (stdio), the
+/// server must also expose `idle`: reading moves to its own thread so a
+/// long tool call can't block the stream (see `processRequestsConcurrent`),
+/// and the calling thread — which owns the session's isolate, like the HTTP
+/// transport's worker — drains the queue, handling one message at a time
+/// and pumping the session in between.
 pub fn processRequests(server: anytype, reader: *std.Io.Reader, input: ?std.Io.File) !void {
+    if (input != null) return processRequestsConcurrent(server, reader);
+
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();
 
     while (true) {
         _ = arena.reset(.retain_capacity);
         const aa = arena.allocator();
-
-        if (input) |file| idleUntilInput(server, reader, file);
 
         const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => {
@@ -45,24 +58,105 @@ pub fn processRequests(server: anytype, reader: *std.Io.Reader, input: ?std.Io.F
     }
 }
 
-/// Returns once `reader` holds a delimiter or the fd is readable —
-/// `takeDelimiter` may still block on a partial line, but MCP clients write
-/// whole lines. A full buffer also returns so StreamTooLong surfaces.
-fn idleUntilInput(server: anytype, reader: *std.Io.Reader, file: std.Io.File) void {
-    while (std.mem.findScalar(u8, reader.buffered(), '\n') == null and
-        reader.bufferedLen() < reader.buffer.len)
-    {
-        const wait_ms = server.idle();
-        var fds = [_]std.posix.pollfd{.{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 }};
-        const ready = std.posix.poll(&fds, wait_ms) catch return;
-        if (ready > 0) return;
+/// Stdio runs on two threads so a long tool call can't take the whole
+/// server down with it: a `waitForScript` polling for its full timeout used
+/// to block the read loop, so a caller that gave up on the request (the MCP
+/// client sends `notifications/cancelled` on timeout) was never heard, and
+/// every later call — even `ping` — queued behind the wait. The reader
+/// thread parses lines and applies a cancellation directly (it must reach
+/// the in-flight call, not queue behind it); everything else is queued for
+/// the calling thread, which dispatches serially — V8 isolates are
+/// thread-affine, so all browser work stays on this thread, like the HTTP
+/// transport's worker.
+fn processRequestsConcurrent(server: anytype, reader: *std.Io.Reader) !void {
+    var queue: MessageQueue = .{};
+    const reader_thread = try std.Thread.spawn(.{}, readLoop, .{ server, reader, &queue });
+    defer reader_thread.join();
+
+    var arena: std.heap.ArenaAllocator = .init(server.allocator);
+    defer arena.deinit();
+
+    // Drain fast while work is queued (`wait_ms == 0`), pump the session
+    // once the queue runs dry, like the HTTP transport's worker.
+    var wait_ms: u64 = 0;
+    while (true) {
+        switch (queue.pop(wait_ms)) {
+            .item => |msg| {
+                defer {
+                    server.allocator.free(msg.body);
+                    server.allocator.destroy(msg);
+                }
+                _ = arena.reset(.retain_capacity);
+                handleMessage(server, arena.allocator(), msg.body) catch |err| {
+                    log.err(.mcp, "Failed to handle message", .{ .err = err, .msg = msg.body });
+                };
+            },
+            .timeout => wait_ms = server.idle(),
+            .closed => break,
+        }
     }
+}
+
+/// Reads stdin until EOF, queueing messages for the worker. A cancellation
+/// never enters the queue: `handleCancelledRequest` runs right here, or a
+/// caller-abandoned request can't tell the server to stop.
+fn readLoop(server: anytype, reader: *std.Io.Reader, queue: *MessageQueue) void {
+    var peek_arena: std.heap.ArenaAllocator = .init(server.allocator);
+    defer peek_arena.deinit();
+
+    while (true) {
+        const buffered_line = reader.takeDelimiter('\n') catch |err| switch (err) {
+            error.StreamTooLong => {
+                log.debug(.mcp, "Message too long", .{});
+                // Both threads write through the transport's mutex.
+                server.sendError(.null, .InvalidRequest, "Message too long") catch {};
+                _ = reader.discardDelimiterInclusive('\n') catch break;
+                continue;
+            },
+            else => {
+                if (err != error.EndOfStream) log.err(.mcp, "stdin read error", .{ .err = err });
+                break;
+            },
+        } orelse break;
+
+        const trimmed = std.mem.trim(u8, buffered_line, " \r\t");
+        if (trimmed.len == 0) continue;
+
+        _ = peek_arena.reset(.retain_capacity);
+        if (cancelledRequestId(peek_arena.allocator(), trimmed)) |request_id| {
+            // The id borrows `peek_arena`; the server copies what it keeps.
+            server.handleCancelledRequest(request_id);
+            continue;
+        }
+
+        const msg = server.allocator.create(Message) catch break;
+        msg.* = .{ .body = server.allocator.dupe(u8, trimmed) catch {
+            server.allocator.destroy(msg);
+            break;
+        } };
+        queue.push(msg);
+    }
+    queue.close();
+}
+
+/// The `requestId` if `line` is a `notifications/cancelled` notification,
+/// else null (malformed ones fall through to the normal dispatch, which
+/// ignores unknown id-less methods). The returned value borrows `arena`.
+fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Value {
+    const Peek = struct { method: ?[]const u8 = null, params: ?std.json.Value = null };
+    const peek = std.json.parseFromSliceLeaky(Peek, arena, line, .{ .ignore_unknown_fields = true }) catch return null;
+    const method = peek.method orelse return null;
+    if (!std.mem.eql(u8, method, "notifications/cancelled")) return null;
+    const params = peek.params orelse return null;
+    if (params != .object) return null;
+    return params.object.get("requestId");
 }
 
 const Method = enum {
     initialize,
     ping,
     @"notifications/initialized",
+    @"notifications/cancelled",
     @"tools/list",
     @"tools/call",
     @"resources/list",
@@ -73,6 +167,7 @@ const method_map = std.StaticStringMap(Method).initComptime(.{
     .{ "initialize", .initialize },
     .{ "ping", .ping },
     .{ "notifications/initialized", .@"notifications/initialized" },
+    .{ "notifications/cancelled", .@"notifications/cancelled" },
     .{ "tools/list", .@"tools/list" },
     .{ "tools/call", .@"tools/call" },
     .{ "resources/list", .@"resources/list" },
@@ -99,11 +194,25 @@ pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8)
         .initialize => try server.handleInitialize(req),
         .ping => try handlePing(server, req),
         .@"notifications/initialized" => {},
+        .@"notifications/cancelled" => handleCancelledNotification(server, req),
         .@"tools/list" => try server.handleToolList(arena, req),
         .@"tools/call" => try server.handleToolCall(arena, req),
         .@"resources/list" => try handleOptional(server, req, "handleResourceList", .{req}),
         .@"resources/read" => try handleOptional(server, req, "handleResourceRead", .{ arena, req }),
     }
+}
+
+/// `notifications/cancelled` reaching the dispatcher (HTTP, or a stdio
+/// message the reader thread didn't intercept) still records the
+/// cancellation. Over HTTP it queues behind the in-flight call, so it
+/// usually lands too late — cancelling HTTP requests mid-flight would need
+/// the connection threads to intercept, like the stdio reader does.
+fn handleCancelledNotification(server: anytype, req: protocol.Request) void {
+    if (comptime !@hasDecl(@TypeOf(server.*), "handleCancelledRequest")) return;
+    const params = req.params orelse return;
+    if (params != .object) return;
+    const request_id = params.object.get("requestId") orelse return;
+    server.handleCancelledRequest(request_id);
 }
 
 fn handleOptional(server: anytype, req: protocol.Request, comptime method: []const u8, args: anytype) !void {
