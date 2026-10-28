@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<style>.gone { display: none; }</style>
+
+<script id=display_none type=module>
+  // A display:none subtree isn't rendered, so its targets don't intersect
+  // until they're shown. visibility:hidden still has a box, so it does.
+  const state = await testing.async();
+
+  const hiddenAttr = document.createElement('div');
+  hiddenAttr.hidden = true;
+  const hiddenParent = document.createElement('div');
+  hiddenParent.style.display = 'none';
+  const inHiddenParent = hiddenParent.appendChild(document.createElement('div'));
+  const hiddenClass = document.createElement('div');
+  hiddenClass.className = 'gone';
+  const invisible = document.createElement('div');
+  invisible.style.visibility = 'hidden';
+  document.body.append(hiddenAttr, hiddenParent, hiddenClass, invisible);
+
+  const names = new Map([
+    [hiddenAttr, 'hiddenAttr'],
+    [inHiddenParent, 'inHiddenParent'],
+    [hiddenClass, 'hiddenClass'],
+    [invisible, 'invisible'],
+  ]);
+  const seen = [];
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) seen.push(names.get(entry.target));
+    }
+  });
+  for (const target of names.keys()) observer.observe(target);
+
+  await testing.nextFrame();
+  const whileHidden = seen.splice(0);
+
+  hiddenAttr.hidden = false;
+  hiddenParent.style.display = '';
+  hiddenClass.classList.remove('gone');
+  await testing.nextFrame();
+  observer.disconnect();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['invisible'], whileHidden);
+    testing.expectEqual(['hiddenAttr', 'hiddenClass', 'inHiddenParent'], seen.sort());
+  });
+</script>
+
+<script id=hidden_sentinel type=module>
+  // A pager that re-observes a hidden "load more" sentinel from its callback
+  // must not be told it intersects: YouTube Music fetched pages forever.
+  const state = await testing.async();
+
+  const sentinel = document.body.appendChild(document.createElement('div'));
+  sentinel.hidden = true;
+  let loads = 0;
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      loads += 1;
+      observer.unobserve(sentinel);
+      observer.observe(sentinel);
+    }
+  });
+  observer.observe(sentinel);
+
+  await testing.nextFrame();
+  await testing.nextFrame();
+  observer.disconnect();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, loads);
+  });
+</script>
