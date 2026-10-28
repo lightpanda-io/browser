@@ -27,6 +27,7 @@ const AbortSignal = @import("../AbortSignal.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const Headers = @import("Headers.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -276,8 +277,19 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._type = .basic;
     }
 
-    for (transfer.responseHeaders()) |hdr| {
-        try res._headers.append(hdr.name, hdr.value, exec);
+    if (res._type == .cors) {
+        const expose_headers = HttpClient.findHeader(transfer.responseHeaders(), "access-control-expose-headers");
+        const allow_wildcard = !transfer.req.credentialsAllowed();
+        for (transfer.responseHeaders()) |hdr| {
+            if (!Headers.isCorsExposedResponseHeaderName(hdr.name, expose_headers, allow_wildcard)) {
+                continue;
+            }
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
+    } else {
+        for (transfer.responseHeaders()) |hdr| {
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
     }
 
     self._headers_done = true;
