@@ -1451,7 +1451,6 @@ pub const SyncOptions = struct {
     // Whether to copy the response headers into SyncResponse.headers.
     copy_headers: bool = false,
     // Write the body here instead of buffering it into SyncResponse.body.
-    // Pair it with Request.streaming so the transfer doesn't buffer it either.
     body_writer: ?*std.Io.Writer = null,
 };
 
@@ -1483,16 +1482,14 @@ const SyncContext = struct {
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
 
-        // A streamed body's length is unknown here, and it's written out
-        // rather than buffered.
-        const buffers_body = self.options.body_writer == null;
+        // A streamed body's length is 0 here, but its content type is still wanted.
         const body_len = transfer.bodyLen();
-        if (body_len == 0 and buffers_body and self.options.copy_headers == false) {
+        if (body_len == 0 and self.options.body_writer == null and self.options.copy_headers == false) {
             return .proceed;
         }
 
-        const allocator = try self.bodyAllocator(if (buffers_body) body_len else 0);
-        if (body_len > 0 and buffers_body) {
+        const allocator = try self.bodyAllocator(body_len);
+        if (body_len > 0) {
             try self.body.ensureTotalCapacityPrecise(allocator, body_len);
         }
 
@@ -2115,7 +2112,7 @@ pub const Request = struct {
     const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
     const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
     const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
     pub const ResourceType = enum {
         document,
@@ -2952,6 +2949,7 @@ pub const Transfer = struct {
 
         const req = &self.req;
         req.sync = true;
+        if (opts.body_writer != null) req.streaming = true;
         req.ctx = &sync_ctx;
         req.header_callback = SyncContext.headerCallback;
         req.data_callback = SyncContext.dataCallback;

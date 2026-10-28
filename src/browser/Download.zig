@@ -166,13 +166,12 @@ pub fn fromHref(frame: *Frame, href: []const u8, filename_hint: []const u8) !voi
     // `transfer.deinit()` fires no callbacks, so this is still ours on error.
     errdefer frame._factory.destroy(download);
 
-    var req = request(frame, url);
+    var req = request(frame, url, shutdownCallback);
     req.ctx = download;
     req.header_callback = headerCallback;
     req.data_callback = dataCallback;
     req.done_callback = doneCallback;
     req.error_callback = errorCallback;
-    req.shutdown_callback = shutdownCallback;
     const transfer = try newTransfer(frame, req);
 
     transfer.submit() catch |err| {
@@ -180,10 +179,9 @@ pub fn fromHref(frame: *Frame, href: []const u8, filename_hint: []const u8) !voi
     };
 }
 
-/// A download is a navigation to `url` from `frame`'s page: no CORS,
-/// redirects followed, credentials included, the body streamed. The caller
-/// sets the callbacks.
-pub fn request(frame: *Frame, url: [:0]const u8) HttpClient.Request {
+/// A download is a navigation from `frame`'s page: no CORS, redirects
+/// followed, credentials included.
+pub fn request(frame: *Frame, url: [:0]const u8, shutdown_callback: HttpClient.Request.ShutdownCallback) HttpClient.Request {
     return .{
         .url = url,
         .method = .GET,
@@ -193,16 +191,14 @@ pub fn request(frame: *Frame, url: [:0]const u8) HttpClient.Request {
         .credentials_mode = .include,
         .resource_type = .download,
         .streaming = true,
-        .shutdown_callback = HttpClient.noopShutdown,
+        .shutdown_callback = shutdown_callback,
     };
 }
 
-/// The transfer for a `request`, with the headers a download sends.
 pub fn newTransfer(frame: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
     const transfer = try frame.newRequest(req);
     errdefer transfer.deinit();
     try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
-    // Set common headers.
     try frame.headersForRequest(transfer, .{});
     return transfer;
 }

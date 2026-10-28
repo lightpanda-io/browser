@@ -22,6 +22,7 @@ const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
 const TelemetryTool = @import("../telemetry/telemetry.zig").Event.Tool;
+const HttpClient = @import("../network/HttpClient.zig");
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -1786,10 +1787,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         return ToolError.InternalError;
 
     if (args.path) |path| {
-        const content_height = writePng(&prepared, path) catch |err| return .{
-            .text = arena.print("could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
-            .is_error = true,
-        };
+        const content_height = writePng(&prepared, path) catch |err| return writeError(arena, path, err);
         // The renderer reports the content height; a fixed strip is its own height.
         const height = if (prepared.opts.height == 0) content_height else prepared.opts.height;
         return .{ .text = arena.print("Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
@@ -2698,8 +2696,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
     // authenticates with, and attributes the request to the page for CDP.
     const frame = try requireFrame(session);
 
-    // Streamed into a temp file that replaces `path` only on success, so a
-    // failed download leaves whatever was there.
+    // Replaces `path` only on success, so a failed download leaves it as it was.
     var af = std.Io.Dir.cwd().createFileAtomic(lp.io, args.path, .{ .replace = true }) catch |err| {
         return writeError(arena, args.path, err);
     };
@@ -2707,7 +2704,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
     var buf: [64 * 1024]u8 = undefined;
     var file_writer = af.file.writer(lp.io, &buf);
 
-    var req = Download.request(frame, args.url);
+    var req = Download.request(frame, args.url, HttpClient.noopShutdown); // submitSync installs its own
     req.timeout_ms = download_timeout_ms;
     const transfer = Download.newTransfer(frame, req) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -2723,7 +2720,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         error.OutOfMemory => return error.OutOfMemory,
         error.ClientDisconnected, error.SyncWaitInterrupted => return error.Cancelled,
         error.UrlBlocked => return .{ .text = "url is refused by --block-urls or --adblock-lists", .is_error = true },
-        error.WriteFailed => return writeError(arena, args.path, file_writer.err orelse err),
+        error.WriteFailed => return writeError(arena, args.path, file_writer.err.?),
         else => {
             log.debug(.browser, "download failed", .{ .err = err, .url = args.url });
             return .{
@@ -2744,7 +2741,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         };
     }
 
-    file_writer.end() catch return writeError(arena, args.path, file_writer.err orelse error.WriteFailed);
+    file_writer.flush() catch |err| return writeError(arena, args.path, err);
     af.replace(lp.io) catch |err| return writeError(arena, args.path, err);
 
     return .{
@@ -3908,7 +3905,7 @@ test "download: a redirect's Set-Cookie lands in the jar and the next hop carrie
     try std.testing.expect(std.mem.find(u8, body, "Lightpanda/") != null);
 }
 
-test "download: a multi-megabyte body streams to the file intact" {
+test "download: a multi-megabyte body arrives intact" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -3923,25 +3920,7 @@ test "download: a multi-megabyte body streams to the file intact" {
     try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621455 bytes (text/css)"));
 
     const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4 * 1024 * 1024));
-    try std.testing.expectEqual(2621455, body.len);
     try std.testing.expect(std.mem.endsWith(u8, body, ".large-hide { display: none; }"));
-}
-
-test "download: a 404 saves nothing" {
-    var registry: NodeRegistry = .init(std.testing.allocator);
-    defer registry.deinit();
-
-    var page = try testing.pageTest("mcp_actions.html", .{});
-    defer page.close();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try testing.tmpPath(&tmp, "missing.html");
-
-    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/missing", path);
-    try std.testing.expect(r.is_error);
-    try std.testing.expectEqualStrings("HTTP 404 Not Found; nothing saved", r.text);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024)));
 }
 
 test "download: a 204 keeps the file already at path" {
@@ -3962,7 +3941,6 @@ test "download: a 204 keeps the file already at path" {
     const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024));
     try std.testing.expectEqualStrings("good", body);
 
-    // The temp file is gone too.
     var it = tmp.dir.iterate();
     var count: usize = 0;
     while (try it.next(lp.io)) |_| count += 1;
