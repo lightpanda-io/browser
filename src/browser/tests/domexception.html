@@ -36,6 +36,30 @@
   }
 </script>
 
+<script id=domstring_argument_coercion>
+  {
+    // message/name are WebIDL DOMStrings: a non-string argument is stringified
+    // (ToString), never adopted as raw bytes. A TypedArray stringifies via its
+    // Array-inherited toString, so its contents are joined.
+    const ex = new DOMException(new Uint8Array([65, 66, 67]), 'NotFoundError');
+    testing.expectEqual('65,66,67', ex.message);
+    testing.expectEqual('NotFoundError', ex.name);
+
+    const ex2 = new DOMException('msg', new Uint8Array([0x7f, 0x45, 0x4c, 0x46]));
+    testing.expectEqual('127,69,76,70', ex2.name);
+    testing.expectEqual(0, ex2.code);
+
+    const ex3 = new DOMException({});
+    testing.expectEqual('[object Object]', ex3.message);
+
+    // null stringifies to "null"; a missing/undefined argument uses the default.
+    testing.expectEqual('null', new DOMException(null).message);
+    testing.expectEqual('null', new DOMException('m', null).name);
+    testing.expectEqual('', new DOMException(undefined).message);
+    testing.expectEqual('Error', new DOMException(undefined, undefined).name);
+  }
+</script>
+
 <script id=legacy_error_codes>
   {
     // Test standard errors with legacy codes

@@ -518,7 +518,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 if (js_val.isUndefined()) {
                     return null;
                 }
-                return .{ .value = try js_val.toStringSlice() };
+                return .{ .value = try self.jsValueToZig([]const u8, js_val) };
             }
 
             if (comptime o.child == js.Object) {
@@ -552,7 +552,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 }
             },
             .slice => {
-                if (ptr.sentinel() == null) {
+                if (ptr.sentinel() == null and ptr.child != u8) {
                     if (try jsValueToTypedArray(ptr.child, js_val)) |value| {
                         return value;
                     }
@@ -1054,13 +1054,8 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                 return .{ .invalid = {} };
             },
             .slice => {
-                if (js_val.isTypedArray()) {
+                if (js_val.isTypedArray() and ptr.child != u8) {
                     switch (ptr.child) {
-                        u8 => if (ptr.sentinel() == null) {
-                            if (js_val.isUint8Array() or js_val.isUint8ClampedArray()) {
-                                return .{ .ok = {} };
-                            }
-                        },
                         i8 => if (js_val.isInt8Array()) {
                             return .{ .ok = {} };
                         },
