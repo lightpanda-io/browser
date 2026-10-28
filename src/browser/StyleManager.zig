@@ -1183,6 +1183,9 @@ fn Group(comptime Spec: type) type {
         // inheritedProps' scratch, kept so each walk doesn't reallocate
         path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
 
+        // inheritedProps' cascades, so tests can count work instead of timing it
+        cascades: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+
         fn hasRules(self: *const Self) bool {
             return self.id_rules.count() != 0 or self.class_rules.count() != 0 or
                 self.tag_rules.count() != 0 or self.other_rules.len != 0;
@@ -1269,6 +1272,9 @@ fn Group(comptime Spec: type) type {
                 if (memo.get(elem)) |cached| {
                     above = cached;
                     break;
+                }
+                if (comptime lp.IS_TEST) {
+                    self.cascades += 1;
                 }
                 self.path.append(allocator, .{ .el = elem, .own = self.compute(elem, frame) }) catch |err| {
                     log.warn(.browser, "StyleManager path", .{ .err = err });
@@ -3392,30 +3398,26 @@ test "StyleManager: revert on visibility and pointer-events inherits" {
 }
 
 // Every element of a deep chain probed in document order, the shape of an
-// interactivity pass. Walking all ancestors per probe is quadratic, which only
-// the growth between two depths a factor of TIMES apart tells apart. The
-// fastest of ROUNDS so a scheduler stall on the small chain can't skew it.
+// interactivity pass. Walking all ancestors per probe would cascade each
+// element once per descendant; the memo cascades it once.
 test "StyleManager: memo: probing a deep tree stays linear" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
 
-    const SMALL = 1000;
-    const TIMES = 10;
-    // well above TIMES, well below TIMES squared
-    const LIMIT = TIMES * 3;
-    const ROUNDS = 3;
+    const DEPTH = 1000;
+    const top = try buildDivChain(frame, DEPTH);
 
-    const small = try buildDivChain(frame, SMALL);
-    const large = try buildDivChain(frame, SMALL * TIMES);
-
-    var small_us: u64 = std.math.maxInt(u64);
-    var large_us: u64 = std.math.maxInt(u64);
-    for (0..ROUNDS) |_| {
-        small_us = @min(small_us, probeChain(frame, small));
-        large_us = @min(large_us, probeChain(frame, large));
+    frame.styleChanged();
+    const before = sm.visibility.cascades;
+    var current: ?*Element = top;
+    while (current) |el| {
+        const child = if (el.asNode().firstChild()) |c| c.as(Element) else null;
+        // only the deepest one declares it
+        try testing.expectEqual(child == null, sm.hasPointerEventsNone(el));
+        current = child;
     }
-    const ratio = @as(f64, @floatFromInt(large_us)) / @as(f64, @floatFromInt(@max(small_us, 1)));
-    try testing.expect(ratio < LIMIT);
+    try testing.expectEqual(DEPTH, sm.visibility.cascades - before);
 }
 
 fn buildDivChain(frame: *Frame, depth: usize) !*Element {
@@ -3429,20 +3431,6 @@ fn buildDivChain(frame: *Frame, depth: usize) !*Element {
         top = div;
     }
     return top;
-}
-
-fn probeChain(frame: *Frame, top: *Element) u64 {
-    const sm = &frame._style_manager;
-    frame.styleChanged();
-    const start = lp.datetime.microTimestamp(.awake);
-    var current: ?*Element = top;
-    while (current) |el| {
-        const child = if (el.asNode().firstChild()) |c| c.as(Element) else null;
-        // only the deepest one declares it
-        std.debug.assert(sm.hasPointerEventsNone(el) == (child == null));
-        current = child;
-    }
-    return @intCast(lp.datetime.microTimestamp(.awake) - start);
 }
 
 test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
