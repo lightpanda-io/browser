@@ -1044,8 +1044,8 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (has_fixed and style_manager.fixedAxis(element, .height) != null) {
-                fixed_y = element.clientOrigin(owner).y - pos;
+            if (has_fixed) {
+                if (element.fixedOriginY(owner, pos)) |top| fixed_y = top - pos;
             }
             hidden = hidden or style_manager.hasDisplayNone(element);
             // Unlike display:none, a child can opt back in, so the subtree is

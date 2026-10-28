@@ -150,6 +150,22 @@ testing.expectTrue(innerWidth > 0 && innerHeight > 0);
   spacer.remove();
 }
 </script>
+<script id="fixed_auto_y_uses_the_same_preorder_origin_for_input">
+{
+  const spacer = document.createElement('div');
+  spacer.style.height = '4000px';
+  const box = fixedBox('left:10px;width:20px;height:10px');
+  document.body.appendChild(spacer);
+  const y = box.getBoundingClientRect().y;
+  testing.expectTrue(y >= 0 && y + 1 < innerHeight);
+  window.scrollTo(0, 500);
+  testing.expectEqual(y, box.getBoundingClientRect().y);
+  testing.expectEqual(box, document.elementFromPoint(15, y + 1));
+  window.scrollTo(0, 0);
+  box.remove();
+  spacer.remove();
+}
+</script>
 <script id="fixed_replaced_auto_preserves_attribute_size">
 {
   const image = document.createElement('img');

@@ -2029,16 +2029,12 @@ pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     const window = owner.window;
     const style_manager = &owner._style_manager;
     if (style_manager.fixedAxis(self, .width)) |horizontal| {
-        const vertical = style_manager.fixedAxis(self, .height).?;
         const viewport = owner.page.getViewport();
         var x = horizontal.start orelse if (horizontal.end) |end|
             @as(f64, @floatFromInt(viewport.width)) - end - self.boxAxis(owner, .width)
         else
             self.horizontalPosition(owner);
-        const y = vertical.start orelse if (vertical.end) |end|
-            @as(f64, @floatFromInt(viewport.height)) - end - self.boxAxis(owner, .height)
-        else
-            calculateDocumentPosition(self.asNode(), owner);
+        const y = self.fixedOriginY(owner, null).?;
         if (horizontal.start != null or horizontal.end != null) {
             if (self.inlineStyle(owner)) |style| {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", owner));
@@ -2057,6 +2053,18 @@ pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
         .x = self.horizontalPosition(owner) - @as(f64, @floatFromInt(window.getScrollX())),
         .y = calculateDocumentPosition(self.asNode(), owner) - @as(f64, @floatFromInt(window.getScrollY())),
     };
+}
+
+/// Viewport-relative fixed Y. Hit testing already knows the synthetic preorder
+/// position and must not re-walk preceding siblings or resolve X outside its band.
+pub fn fixedOriginY(self: *Element, frame: *Frame, synthetic_y: ?f64) ?f64 {
+    const owner = self.ownerFrame(frame) orelse return null;
+    const fixed = owner._style_manager.fixedAxis(self, .height) orelse return null;
+    if (fixed.start) |start| return start;
+    if (fixed.end) |end| {
+        return @as(f64, @floatFromInt(owner.page.getViewport().height)) - end - self.boxAxis(owner, .height);
+    }
+    return synthetic_y orelse calculateDocumentPosition(self.asNode(), owner);
 }
 
 // A fixed display:contents ancestor has no box to anchor its descendants.
