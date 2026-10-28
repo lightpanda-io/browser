@@ -246,6 +246,9 @@ pub fn set(self: *FormData, name: String, value: EntryValue, filename: ?[]const 
 
 // https://xhr.spec.whatwg.org/#create-an-entry
 pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[]const u8, exec: *Execution) !void {
+    if (filename != null and value == .bytes) {
+       return error.TypeError;
+    }
     const entry_value: Entry.Value = switch (value) {
         .blob => |blob| blk: {
             if (filename) |n| {
