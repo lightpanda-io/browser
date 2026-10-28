@@ -581,17 +581,24 @@ fn isReadWrite(el: *Node.Element) bool {
 // Only input, select and textarea can be required, and an input only for the
 // types the required attribute applies to.
 fn isRequired(el: *Node.Element) bool {
-    if (!el.hasAttributeInterned("required")) return false;
-    if (el.is(Node.Element.Html.Input)) |input| {
-        return switch (input._input_type) {
-            .hidden, .range, .color, .submit, .reset, .button, .image => false,
-            else => true,
-        };
+    if (el.hasAttributeInterned("required") == false) {
+        return false;
     }
-    return switch (el.getTag()) {
-        .select, .textarea => true,
-        else => false,
-    };
+    if (el.is(Node.Element.Html.Input)) |input| {
+        return input.requiredApplies();
+    }
+    return el.is(Node.Element.Html.Select) != null or el.is(Node.Element.Html.TextArea) != null;
+}
+
+fn isOptional(el: *Node.Element) bool {
+    if (el.is(Node.Element.Html.Input) == null and
+        el.is(Node.Element.Html.Select) == null and
+        el.is(Node.Element.Html.TextArea) == null and
+        el.is(Node.Element.Html.Button) == null)
+    {
+        return false;
+    }
+    return isRequired(el) == false;
 }
 
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
@@ -637,10 +644,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return ValidityState.isValid(el, frame) == false;
         },
         .required => return isRequired(el),
-        .optional => return switch (el.getTag()) {
-            .button, .input, .select, .textarea => !isRequired(el),
-            else => false,
-        },
+        .optional => return isOptional(el),
         .in_range => return false,
         .out_of_range => return false,
         .placeholder_shown => return false,

@@ -279,12 +279,15 @@
     <select required id=req-select></select>
     <textarea id=opt-textarea></textarea>
     <button required id=opt-button></button>
+    <input type=color required id=opt-color>
+    <svg><input id=svg-input /><textarea required id=svg-textarea /></svg>
 </div>
 
 <script id="required_optional">
 {
     const ids = (s) => Array.from($('#required').querySelectorAll(s), (e) => e.id).join(' ');
     testing.expectEqual('req-text req-checkbox req-select', ids(':required'));
-    testing.expectEqual('opt-text opt-hidden opt-range opt-textarea opt-button', ids(':optional'));
+    testing.expectEqual('opt-text opt-hidden opt-range opt-textarea opt-button opt-color', ids(':optional'));
+    testing.expectEqual(false, $('#opt-color').validity.valueMissing);
 }
 </script>
