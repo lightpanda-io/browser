@@ -691,7 +691,12 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return parent._type == .document;
         },
         .scope => {
-            // :scope matches the reference element (querySelector root)
+            // :scope matches the reference element (querySelector root);
+            // for a document that is its root element
+            if (scope._type == .document) {
+                const parent = node.parentNode() orelse return false;
+                return parent == scope;
+            }
             return node == scope;
         },
         .empty => {
