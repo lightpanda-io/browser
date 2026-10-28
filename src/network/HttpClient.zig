@@ -3422,6 +3422,7 @@ pub const Transfer = struct {
         }
         t.redirect_end = now;
         t.fetch_start = now;
+        t.redirect_count +|= 1;
         if (t.timing_allow) {
             const target = self.timingTarget() orelse return;
             t.timing_allow = timingAllowPassed(target.origin, self.req.url, headers, t.tainted);
@@ -3431,6 +3432,9 @@ pub const Transfer = struct {
     // If A -> B -> A, we sent the tainted flag (on the B -> A transition) so
     // that we know how to apply the timing-allow-origin header.
     fn redirectTaint(self: *Transfer, url: []const u8) void {
+        if (!URL.isSameOrigin(url, self.req.url)) {
+            self._timing.cross_origin_redirect = true;
+        }
         const target = self.timingTarget() orelse return;
         const origin = target.origin orelse "null";
         if (!URL.isSameOrigin(self.req.url, origin) and !URL.isSameOrigin(url, self.req.url)) {
@@ -3482,7 +3486,16 @@ pub const Transfer = struct {
             return;
         }
         t.recorded = true;
-        const target = self.timingTarget() orelse return;
+        const target = self.timingTarget();
+        // A document is also its own frame's navigation entry.
+        const navigation: ?*Performance = blk: {
+            if (self.req.resource_type != .document) break :blk null;
+            const owner = self.owner orelse break :blk null;
+            break :blk owner.scope.performance();
+        };
+        if (target == null and navigation == null) {
+            return;
+        }
 
         if (t.response_end == 0) {
             // Cache hit, interceptor-fulfilled, or failed: delivered now.
@@ -3497,11 +3510,9 @@ pub const Transfer = struct {
 
         var status: u16 = 0;
         var content_type: []const u8 = "";
-        var timing_allow = false;
         if (self.res.header) |*rh| {
             status = rh.status;
             content_type = rh.contentType() orelse "";
-            timing_allow = t.timing_allow and timingAllowPassed(target.origin, self.req.url, self.res.headers, t.tainted);
         }
 
         // A cached body is stored decoded; its wire size is long gone. A
@@ -3516,7 +3527,7 @@ pub const Transfer = struct {
             encoded_body_size = known;
         }
 
-        target.performance.addResource(.{
+        var info: Performance.ResourceInfo = .{
             .name = t.url,
             .initiator = switch (self.req.resource_type) {
                 // A document fetch only makes the timeline as a child frame.
@@ -3555,10 +3566,31 @@ pub const Transfer = struct {
             .content_type = content_type,
             .content_encoding = self.responseHeader("content-encoding") orelse "",
             .from_cache = t.cache != .none,
-            .timing_allow = timing_allow,
-        }) catch |err| {
-            log.err(.http, "resource timing", .{ .err = err, .req = self });
+            .timing_allow = false,
+            .redirect_count = t.redirect_count,
         };
+
+        if (target) |tt| {
+            info.timing_allow = self.res.header != null and t.timing_allow and timingAllowPassed(tt.origin, self.req.url, self.res.headers, t.tainted);
+            tt.performance.addResource(info) catch |err| {
+                log.err(.http, "resource timing", .{ .err = err, .req = self });
+            };
+        }
+
+        if (navigation) |perf| {
+            // Named after the final URL, as document.URL is. The document
+            // times its own fetch, so no Timing-Allow-Origin applies.
+            info.name = self.req.url;
+            info.timing_allow = self.res.header != null;
+            if (t.cross_origin_redirect) {
+                info.redirect_start = 0;
+                info.redirect_end = 0;
+                info.redirect_count = 0;
+            }
+            perf.addNavigation(info) catch |err| {
+                log.err(.http, "navigation timing", .{ .err = err, .req = self });
+            };
+        }
     }
 
     fn deliversHeaderBeforeError(self: *const Transfer, conn: *const http.Connection) !bool {
@@ -4673,6 +4705,9 @@ const ResourceTiming = struct {
     // https://fetch.spec.whatwg.org/#concept-request-tainted-origin
     tainted: bool = false,
     recorded: bool = false,
+    redirect_count: u16 = 0,
+    // A navigation only exposes its redirects if they all stayed on one origin.
+    cross_origin_redirect: bool = false,
 
     const CacheState = enum { none, local, validated };
 

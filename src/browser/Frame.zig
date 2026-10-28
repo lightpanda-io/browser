@@ -976,6 +976,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self.recordNavigateTelemetry(std.ascii.startsWithIgnoreCase(self.url, "https://"));
 
     session.navigationFor(self)._current_navigation_kind = opts.kind;
+    self.window._performance._navigation_type = switch (opts.kind) {
+        .reload => .reload,
+        .traverse => .back_forward,
+        .push, .replace => .navigate,
+    };
 
     transfer.submit() catch |err| {
         log.debug(.frame, "navigate request", .{ .url = self.url, .err = err, .type = self._type });
@@ -1422,6 +1427,7 @@ pub fn abortedDocumentIsComplete(self: *Frame) void {
         return;
     }
     self.document._ready_state = .complete;
+    self.window._performance.markNavigation(.dom_complete);
     self.dispatchReadyStateChange() catch |err| switch (err) {
         error.JsException => {}, // already logged
         else => log.err(.frame, "aborted document is complete", .{ .err = err, .type = self._type, .url = self.url }),
@@ -1476,6 +1482,7 @@ pub fn documentIsLoaded(self: *Frame) void {
 
     self._load_state = .load;
     self.document._ready_state = .interactive;
+    self.window._performance.markNavigation(.dom_interactive);
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
         // logged by whatever requested the terminate (watchdog, runaway loop)
@@ -1488,11 +1495,14 @@ fn _documentIsLoaded(self: *Frame) !void {
     try self.dispatchReadyStateChange();
     if (self.loadEventsAborted()) return;
 
+    const perf = self.window._performance;
+    perf.markNavigation(.dom_content_loaded_event_start);
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self.page);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
     );
+    perf.markNavigation(.dom_content_loaded_event_end);
 
     self._session.notification.dispatch(.frame_dom_content_loaded, &.{
         .req_id = self._req_id,
@@ -1607,9 +1617,11 @@ pub fn documentIsComplete(self: *Frame) void {
 }
 
 fn _documentIsComplete(self: *Frame) !void {
+    const perf = self.window._performance;
     // abortedDocumentIsComplete may already have done this half.
     if (self.document._ready_state != .complete) {
         self.document._ready_state = .complete;
+        perf.markNavigation(.dom_complete);
         try self.dispatchReadyStateChange();
     }
     if (self.loadEventsAborted()) return;
@@ -1624,6 +1636,7 @@ fn _documentIsComplete(self: *Frame) !void {
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
+    perf.markNavigation(.load_event_start);
     if (self._event_manager.hasDirectListeners(window_target, "load")) {
         const event = try Event.initTrusted(comptime .wrap("load"), .{}, self.page);
         // This event is weird, it's dispatched directly on the window, but
@@ -1633,6 +1646,7 @@ fn _documentIsComplete(self: *Frame) !void {
         defer self._load_event_in_progress = false;
         try self._event_manager.dispatchDirect(window_target, event, .{ .inject_target = false, .context = "page load" });
     }
+    perf.markNavigation(.load_event_end);
 
     if (self.window._closed) {
         // discarded by its own load handler: no longer active, and discard()

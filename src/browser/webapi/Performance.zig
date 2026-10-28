@@ -37,7 +37,7 @@ const DEFAULT_RESOURCE_BUFFER_SIZE = 250;
 const BUFFER_FULL = "resourcetimingbufferfull";
 
 pub fn registerTypes() []const type {
-    return &.{ Performance, Entry, Mark, Measure, ResourceTiming, PerformanceTiming, PerformanceNavigation };
+    return &.{ Performance, Entry, Mark, Measure, ResourceTiming, NavigationTiming, PerformanceTiming, PerformanceNavigation };
 }
 
 const Performance = @This();
@@ -61,6 +61,11 @@ _resources: std.ArrayList(*Entry) = .empty,
 _secondary_resources: std.ArrayList(*Entry) = .empty,
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
+// This document's PerformanceNavigationTiming, also in _entries. Null until
+// the document's response arrives, and for about:blank, srcdoc and blob:.
+_navigation_timing: ?*NavigationTiming = null,
+// Set by the Frame before it fetches the document.
+_navigation_type: NavigationTiming.Type = .navigate,
 _event_counts: EventCounts = .{},
 _resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
 _buffer_full_pending: bool = false,
@@ -262,7 +267,7 @@ fn clearResourceTimings(self: *Performance) void {
 }
 
 // All times are microseconds
-const ResourceInfo = struct {
+pub const ResourceInfo = struct {
     name: []const u8,
     initiator: []const u8, // static string
     protocol: []const u8, // static string
@@ -285,6 +290,7 @@ const ResourceInfo = struct {
     content_type: []const u8, // unsafe to reference past the function call
     content_encoding: []const u8, // unsafe to reference past the function call
     from_cache: bool,
+    redirect_count: u16 = 0,
     // Every response in the chain was same-origin or carried a matching
     // Timing-Allow-Origin.
     timing_allow: bool,
@@ -302,18 +308,80 @@ pub fn addResource(self: *Performance, info: ResourceInfo) !void {
         }
     }
 
-    const arena = self._arena;
+    const entry, const resource = try self.resourceTimingValues(info);
+    const rt = try self._factory.chained(.{ entry, resource });
+    rt._proto._type = .{ .resource = rt };
+    // Observers see every entry; only the buffer has a cap.
+    try self.notifyObservers(rt._proto);
+    if (buffer) |b| {
+        try self.insertOrdered(b, rt._proto);
+    }
+}
+
+// The document's own fetch. Its startTime is the time origin, and it only
+// gets a duration once the load event ends (see markNavigation).
+pub fn addNavigation(self: *Performance, info: ResourceInfo) !void {
+    if (self._navigation_timing != null) {
+        return;
+    }
+    var entry, var resource = try self.resourceTimingValues(info);
+    entry._start_time = 0;
+    entry._duration = 0;
+    resource._initiator_type = "navigation";
+    // The final hop's start, even when the redirects are hidden.
+    resource._fetch_start = self.relative(info.fetch_start);
+    const nt = try self._factory.chained(.{
+        entry,
+        resource,
+        NavigationTiming{
+            ._proto = undefined,
+            ._type = self._navigation_type,
+            ._redirect_count = info.redirect_count,
+        },
+    });
+    const rt = nt._proto;
+    rt._type = .{ .navigation = nt };
+    rt._proto._type = .{ .navigation = rt };
+    self._navigation_timing = nt;
+    try self.insertOrdered(&self._entries, rt._proto);
+    try self.notifyObservers(rt._proto);
+}
+
+pub const NavigationPhase = enum {
+    dom_interactive,
+    dom_content_loaded_event_start,
+    dom_content_loaded_event_end,
+    dom_complete,
+    load_event_start,
+    load_event_end,
+};
+
+// Stamps a document lifecycle step on the navigation entry. Only the first
+// time counts: document.open() can run these steps again.
+pub fn markNavigation(self: *Performance, comptime phase: NavigationPhase) void {
+    const nt = self._navigation_timing orelse return;
+    const field = &@field(nt, "_" ++ @tagName(phase));
+    if (field.* != 0) {
+        return;
+    }
+    field.* = self.now();
+    if (phase == .load_event_end) {
+        nt._proto._proto._duration = field.*;
+    }
+}
+
+fn resourceTimingValues(self: *const Performance, info: ResourceInfo) !struct { Entry, ResourceTiming } {
     const allow = info.timing_allow;
     const redirected = allow and info.redirect_start != 0; // redirects only show with a TAO
 
     const start_time = self.relative(info.start);
     const response_end = self.relative(info.response_end);
 
-    const rt = try self._factory.chained(.{
+    return .{
         Entry{
             ._start_time = start_time,
             ._duration = @max(response_end - start_time, 0),
-            ._name = try arena.dupe(u8, info.name),
+            ._name = try self._arena.dupe(u8, info.name),
             ._type = undefined,
         },
         ResourceTiming{
@@ -339,13 +407,7 @@ pub fn addResource(self: *Performance, info: ResourceInfo) !void {
             ._content_type = if (allow) minimizeMimeType(info.content_type) else "",
             ._content_encoding = if (allow) contentEncoding(info.content_encoding) else "",
         },
-    });
-    rt._proto._type = .{ .resource = rt };
-    // Observers see every entry; only the buffer has a cap.
-    try self.notifyObservers(rt._proto);
-    if (buffer) |b| {
-        try self.insertOrdered(b, rt._proto);
-    }
+    };
 }
 
 fn canAddResource(self: *const Performance) bool {
@@ -798,7 +860,7 @@ pub const Entry = struct {
         @"long-animation-frame",
         longtask,
         measure: *Measure,
-        navigation,
+        navigation: *ResourceTiming,
         paint,
         resource: *ResourceTiming,
         taskattribution,
@@ -994,6 +1056,7 @@ const ResourceTiming = struct {
     pub const Proto = Entry;
 
     _proto: *Entry,
+    _type: Type = .generic,
     _initiator_type: []const u8,
     _next_hop_protocol: []const u8,
     _delivery_type: []const u8,
@@ -1014,6 +1077,11 @@ const ResourceTiming = struct {
     _response_status: u16,
     _content_type: []const u8,
     _content_encoding: []const u8,
+
+    const Type = union(enum) {
+        generic,
+        navigation: *NavigationTiming,
+    };
 
     fn getInitiatorType(self: *const ResourceTiming) []const u8 {
         return self._initiator_type;
@@ -1205,6 +1273,172 @@ const ResourceTiming = struct {
     };
 };
 
+/// PerformanceNavigationTiming — the document's own fetch and load steps.
+/// https://w3c.github.io/navigation-timing/#sec-PerformanceNavigationTiming
+const NavigationTiming = struct {
+    pub const Proto = ResourceTiming;
+
+    _proto: *ResourceTiming,
+    _type: Type,
+    _redirect_count: u16,
+    // Milliseconds since the time origin; 0 until the step happens.
+    _dom_interactive: f64 = 0,
+    _dom_content_loaded_event_start: f64 = 0,
+    _dom_content_loaded_event_end: f64 = 0,
+    _dom_complete: f64 = 0,
+    _load_event_start: f64 = 0,
+    _load_event_end: f64 = 0,
+
+    pub const Type = enum {
+        navigate,
+        reload,
+        back_forward,
+    };
+
+    fn getUnloadEventStart(_: *const NavigationTiming) f64 {
+        // The previous document's unload isn't timed.
+        return 0;
+    }
+
+    fn getUnloadEventEnd(_: *const NavigationTiming) f64 {
+        return 0;
+    }
+
+    fn getDomInteractive(self: *const NavigationTiming) f64 {
+        return self._dom_interactive;
+    }
+
+    fn getDomContentLoadedEventStart(self: *const NavigationTiming) f64 {
+        return self._dom_content_loaded_event_start;
+    }
+
+    fn getDomContentLoadedEventEnd(self: *const NavigationTiming) f64 {
+        return self._dom_content_loaded_event_end;
+    }
+
+    fn getDomComplete(self: *const NavigationTiming) f64 {
+        return self._dom_complete;
+    }
+
+    fn getLoadEventStart(self: *const NavigationTiming) f64 {
+        return self._load_event_start;
+    }
+
+    fn getLoadEventEnd(self: *const NavigationTiming) f64 {
+        return self._load_event_end;
+    }
+
+    fn getType(self: *const NavigationTiming) []const u8 {
+        return @tagName(self._type);
+    }
+
+    fn getRedirectCount(self: *const NavigationTiming) u16 {
+        return self._redirect_count;
+    }
+
+    pub fn toJSON(self: *const NavigationTiming) struct {
+        name: []const u8,
+        entryType: []const u8,
+        startTime: f64,
+        duration: f64,
+        initiatorType: []const u8,
+        nextHopProtocol: []const u8,
+        deliveryType: []const u8,
+        workerStart: f64,
+        redirectStart: f64,
+        redirectEnd: f64,
+        fetchStart: f64,
+        domainLookupStart: f64,
+        domainLookupEnd: f64,
+        connectStart: f64,
+        connectEnd: f64,
+        secureConnectionStart: f64,
+        requestStart: f64,
+        responseStart: f64,
+        firstInterimResponseStart: f64,
+        finalResponseHeadersStart: f64,
+        responseEnd: f64,
+        transferSize: u64,
+        encodedBodySize: u64,
+        decodedBodySize: u64,
+        responseStatus: u16,
+        contentType: []const u8,
+        contentEncoding: []const u8,
+        unloadEventStart: f64,
+        unloadEventEnd: f64,
+        domInteractive: f64,
+        domContentLoadedEventStart: f64,
+        domContentLoadedEventEnd: f64,
+        domComplete: f64,
+        loadEventStart: f64,
+        loadEventEnd: f64,
+        type: []const u8,
+        redirectCount: u16,
+    } {
+        const r = self._proto.toJSON();
+        return .{
+            .name = r.name,
+            .entryType = r.entryType,
+            .startTime = r.startTime,
+            .duration = r.duration,
+            .initiatorType = r.initiatorType,
+            .nextHopProtocol = r.nextHopProtocol,
+            .deliveryType = r.deliveryType,
+            .workerStart = r.workerStart,
+            .redirectStart = r.redirectStart,
+            .redirectEnd = r.redirectEnd,
+            .fetchStart = r.fetchStart,
+            .domainLookupStart = r.domainLookupStart,
+            .domainLookupEnd = r.domainLookupEnd,
+            .connectStart = r.connectStart,
+            .connectEnd = r.connectEnd,
+            .secureConnectionStart = r.secureConnectionStart,
+            .requestStart = r.requestStart,
+            .responseStart = r.responseStart,
+            .firstInterimResponseStart = r.firstInterimResponseStart,
+            .finalResponseHeadersStart = r.finalResponseHeadersStart,
+            .responseEnd = r.responseEnd,
+            .transferSize = r.transferSize,
+            .encodedBodySize = r.encodedBodySize,
+            .decodedBodySize = r.decodedBodySize,
+            .responseStatus = r.responseStatus,
+            .contentType = r.contentType,
+            .contentEncoding = r.contentEncoding,
+            .unloadEventStart = 0,
+            .unloadEventEnd = 0,
+            .domInteractive = self._dom_interactive,
+            .domContentLoadedEventStart = self._dom_content_loaded_event_start,
+            .domContentLoadedEventEnd = self._dom_content_loaded_event_end,
+            .domComplete = self._dom_complete,
+            .loadEventStart = self._load_event_start,
+            .loadEventEnd = self._load_event_end,
+            .type = @tagName(self._type),
+            .redirectCount = self._redirect_count,
+        };
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(NavigationTiming);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceNavigationTiming";
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const unloadEventStart = bridge.accessor(NavigationTiming.getUnloadEventStart, null, .{});
+        pub const unloadEventEnd = bridge.accessor(NavigationTiming.getUnloadEventEnd, null, .{});
+        pub const domInteractive = bridge.accessor(NavigationTiming.getDomInteractive, null, .{});
+        pub const domContentLoadedEventStart = bridge.accessor(NavigationTiming.getDomContentLoadedEventStart, null, .{});
+        pub const domContentLoadedEventEnd = bridge.accessor(NavigationTiming.getDomContentLoadedEventEnd, null, .{});
+        pub const domComplete = bridge.accessor(NavigationTiming.getDomComplete, null, .{});
+        pub const loadEventStart = bridge.accessor(NavigationTiming.getLoadEventStart, null, .{});
+        pub const loadEventEnd = bridge.accessor(NavigationTiming.getLoadEventEnd, null, .{});
+        pub const @"type" = bridge.accessor(NavigationTiming.getType, null, .{});
+        pub const redirectCount = bridge.accessor(NavigationTiming.getRedirectCount, null, .{});
+        pub const toJSON = bridge.function(NavigationTiming.toJSON, .{});
+    };
+};
+
 /// PerformanceTiming — Navigation Timing Level 1 (legacy, but widely used).
 /// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceTiming
 /// All properties return 0 as stub values; the object must not be undefined
@@ -1276,6 +1510,10 @@ test "WebApi: Performance.resource_timing" {
     try testing.htmlRunner("performance_resource_timing.html", .{});
     try testing.htmlRunner("performance_resource_timing_buffer.html", .{});
     try testing.htmlRunner("performance_resource_timing_buffer_full.html", .{});
+}
+
+test "WebApi: Performance.navigation_timing" {
+    try testing.htmlRunner("performance_navigation_timing.html", .{});
 }
 
 test "Performance: minimizeMimeType" {
