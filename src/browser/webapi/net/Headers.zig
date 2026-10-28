@@ -89,6 +89,37 @@ pub fn initGuarded(opts_: ?InitOpts, guard: Guard, exec: *const Execution) !*Hea
     return self;
 }
 
+// https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name
+pub fn isCorsSafelistedResponseHeaderName(name: []const u8) bool {
+    const safelisted = [_][]const u8{
+        "cache-control",
+        "content-language",
+        "content-length",
+        "content-type",
+        "expires",
+        "last-modified",
+        "pragma",
+    };
+    for (safelisted) |s| {
+        if (std.ascii.eqlIgnoreCase(name, s)) return true;
+    }
+    return false;
+}
+
+// https://fetch.spec.whatwg.org/#concept-header-list-extract-header-list-values
+// (Access-Control-Expose-Headers component)
+pub fn isCorsExposedResponseHeaderName(name: []const u8, expose_headers: ?[]const u8, allow_wildcard: bool) bool {
+    if (isCorsSafelistedResponseHeaderName(name)) return true;
+    const list = expose_headers orelse return false;
+    var it = std.mem.splitScalar(u8, list, ',');
+    while (it.next()) |raw| {
+        const tok = std.mem.trim(u8, raw, &std.ascii.whitespace);
+        if (allow_wildcard and std.mem.eql(u8, tok, "*")) return true;
+        if (std.ascii.eqlIgnoreCase(tok, name)) return true;
+    }
+    return false;
+}
+
 pub fn isForbiddenResponseHeaderName(name: []const u8) bool {
     if (std.ascii.eqlIgnoreCase(name, "set-cookie")) {
         return true;
