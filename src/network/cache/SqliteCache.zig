@@ -399,7 +399,8 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
     assertLowercaseNames(req.headers);
 
     // The 304's headers replace stored ones with the same name, except
-    // content-length, which describes the 304 itself.
+    // content-length, which describes the 304 itself, and set-cookie, which
+    // is never stored (see Cache.tryCache).
     var encoded: std.Io.Writer.Allocating = .init(arena);
     var encoder: HeaderEncoder = .{ .writer = &encoded.writer };
     keepStoredHeaders(conn, &encoder, req) catch |err| switch (err) {
@@ -411,7 +412,7 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
         else => return err,
     };
     for (req.headers) |h| {
-        if (isContentLength(h.name) == false) {
+        if (isContentLength(h.name) == false and Cache.isSetCookie(h.name) == false) {
             try encoder.add(h);
         }
     }
@@ -1123,6 +1124,55 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
         .{ .name = "cache-control", .value = "max-age=600" },
         .{ .name = "link", .value = "</a>" },
         .{ .name = "link", .value = "</b>" },
+    };
+    const headers = result.hit.headers;
+    try testing.expectEqual(expected.len, headers.len);
+    for (expected, headers) |e, h| {
+        try testing.expectEqual(e.name, h.name);
+        try testing.expectEqual(e.value, h.value);
+    }
+}
+
+test "SqliteCache: renew doesn't store the 304's Set-Cookie" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
+    try cache.put(.{
+        .url = "https://example.com",
+        .content_type = "text/css",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 0 },
+        .etag = "\"v1\"",
+        .headers = &.{
+            .{ .name = "content-type", .value = "text/css" },
+            .{ .name = "etag", .value = "\"v1\"" },
+        },
+        .vary_headers = &.{},
+    }, "body {}");
+
+    try cache.renew(testing.arena_allocator, .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .headers = &.{
+            .{ .name = "cache-control", .value = "max-age=600" },
+            .{ .name = "set-cookie", .value = "a=1; Path=/" },
+        },
+    });
+
+    const result = try cache.get(testing.arena_allocator, .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .request_headers = &.{},
+    });
+    try testing.expect(result == .hit);
+
+    const expected = [_]Http.Header{
+        .{ .name = "content-type", .value = "text/css" },
+        .{ .name = "etag", .value = "\"v1\"" },
+        .{ .name = "cache-control", .value = "max-age=600" },
     };
     const headers = result.hit.headers;
     try testing.expectEqual(expected.len, headers.len);

@@ -6621,6 +6621,17 @@ test "HttpClient: encodedDataLength of an early-stopped partial fetch is the byt
     try testing.expectEqual(large.head.len + e.bytes_received, reported);
 }
 
+test "HttpClient: a cached response with Set-Cookie doesn't set the cookie again" {
+    const client = &testing.test_browser.http_client;
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    const previous = client.cache;
+    client.cache = &cache;
+    defer client.cache = previous;
+
+    try testing.htmlRunner("net/fetch_cache_set_cookie.html", .{});
+}
+
 test "HttpClient: encodedDataLength of a cache hit is the stored body, of a revalidation the 304's bytes" {
     const client = &testing.test_browser.http_client;
     var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };

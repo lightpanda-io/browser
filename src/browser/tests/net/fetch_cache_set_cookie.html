@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- Run with an HTTP cache, see HttpClient.zig -->
+<script id=cached_set_cookie type=module>
+  {
+    const state = await testing.async();
+    const url = 'http://127.0.0.1:9582/cache/set-cookie';
+
+    const first = await (await fetch(url)).text();
+    const set_by_network = document.cookie.includes('lp_cache_test=1');
+
+    // Drop the cookie: a response served from the cache must not set it again.
+    document.cookie = 'lp_cache_test=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/';
+    const cleared = document.cookie.includes('lp_cache_test');
+
+    const second = await (await fetch(url)).text();
+    const set_by_cache = document.cookie.includes('lp_cache_test');
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(true, set_by_network);
+      testing.expectEqual(false, cleared);
+      // same body: the second fetch came from the cache, not the network
+      testing.expectEqual(first, second);
+      testing.expectEqual(false, set_by_cache);
+    });
+  }
+</script>

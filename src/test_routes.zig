@@ -32,6 +32,8 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 // serve a different stream on the second connection.
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
+// Times /cache/set-cookie went out over the network.
+var cache_set_cookie_hits = std.atomic.Value(u32).init(0);
 
 // /serve-count/ counters; only ever touched from the test HTTP server thread.
 var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
@@ -137,6 +139,7 @@ pub fn handle(req: *std.http.Server.Request) !void {
         for (&serve_counts) |*sc| sc.count = 0;
         sse_flag.store(false, .release);
         sse_reconnect_hits.store(0, .release);
+        cache_set_cookie_hits.store(0, .release);
         {
             beacon_mutex.lockUncancelable(lp.io);
             defer beacon_mutex.unlock(lp.io);
@@ -1042,6 +1045,22 @@ pub fn handle(req: *std.http.Server.Request) !void {
         }
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);
+    }
+
+    if (std.mem.eql(u8, path, "/cache/set-cookie")) {
+        // Heuristically cacheable (Last-Modified) and sets a cookie. The body
+        // counts how many times it was served, so a fixture can tell a cache
+        // hit from a second network fetch.
+        const n = cache_set_cookie_hits.fetchAdd(1, .monotonic) + 1;
+        var buf: [32]u8 = undefined;
+        const body = try std.mem.print(&buf, "served {d}", .{n});
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Last-Modified", .value = "Mon, 01 Jan 2024 00:00:00 GMT" },
+                .{ .name = "Set-Cookie", .value = "lp_cache_test=1; Path=/" },
+            },
+        });
     }
 
     if (std.mem.startsWith(u8, path, "/raw/")) {

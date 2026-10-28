@@ -343,7 +343,7 @@ const ResponseHeaders = struct {
                 7 => if (std.mem.eql(u8, h.name, "expires")) {
                     self.expires = h.value;
                 },
-                10 => if (std.mem.eql(u8, h.name, "set-cookie")) {
+                10 => if (isSetCookie(h.name)) {
                     self.has_set_cookie = true;
                 },
                 12 => if (std.mem.eql(u8, h.name, "content-type")) {
@@ -416,11 +416,6 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
         return null;
     }
 
-    if (response.has_set_cookie) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
-        return null;
-    }
-
     if (response.has_authorization) {
         log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
         return null;
@@ -479,11 +474,29 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
         .stored_at = candidate.timestamp,
         .age_at_store = if (response.age) |a| parseDeltaSeconds(a) orelse 0 else 0,
         .cache_control = cc,
-        .headers = candidate.headers,
+        .headers = if (response.has_set_cookie) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
         .vary_headers = try varyHeaders(arena, response.vary, candidate.request_headers),
         .etag = if (response.etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (response.last_modified) |lm| try arena.dupe(u8, lm) else null,
     };
+}
+
+// A response that sets cookies is stored like any other (RFC 9111 §3 doesn't
+// forbid it, and browsers do it), but the cookies themselves are not: they were
+// applied when the response came over the network, and must not be applied again
+// (or exposed) each time the entry is served.
+fn withoutSetCookie(arena: std.mem.Allocator, headers: []const Http.Header) ![]const Http.Header {
+    var kept: std.ArrayList(Http.Header) = try .initCapacity(arena, headers.len);
+    for (headers) |h| {
+        if (isSetCookie(h.name) == false) {
+            kept.appendAssumeCapacity(h);
+        }
+    }
+    return kept.items;
+}
+
+pub fn isSetCookie(name: []const u8) bool {
+    return std.mem.eql(u8, name, "set-cookie");
 }
 
 fn heuristicallyCacheable(status: u16) bool {
@@ -580,6 +593,7 @@ const TestResponse = struct {
     date: ?[]const u8 = null,
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
+    set_cookie: ?[]const u8 = null,
 
     fn run(self: TestResponse, arena: std.mem.Allocator) !?CachePutRequest {
         var headers: std.ArrayList(Http.Header) = .empty;
@@ -589,6 +603,7 @@ const TestResponse = struct {
             .{ "date", self.date },
             .{ "etag", self.etag },
             .{ "last-modified", self.last_modified },
+            .{ "set-cookie", self.set_cookie },
         }) |field| {
             if (field[1]) |value| {
                 try headers.append(arena, .{ .name = field[0], .value = value });
@@ -712,6 +727,55 @@ test "Cache: tryCache must_revalidate without validators" {
         .etag = "\"abc\"",
     }).run(arena.allocator());
     try testing.expectEqual(true, with_etag.?.cache_control.must_revalidate);
+}
+
+test "Cache: tryCache stores a response with Set-Cookie, without the Set-Cookie" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const headers = [_]Http.Header{
+        .{ .name = "content-type", .value = "text/css" },
+        .{ .name = "set-cookie", .value = "a=1; Path=/" },
+        .{ .name = "cache-control", .value = "max-age=300" },
+        .{ .name = "set-cookie", .value = "b=2; Path=/" },
+        .{ .name = "etag", .value = "\"v1\"" },
+    };
+    const stored = try tryCache(arena.allocator(), .{
+        .timestamp = test_now,
+        .url = "https://example.com/app.css",
+        .status = 200,
+        .content_type = "text/css",
+        .headers = &headers,
+        .request_headers = &.{},
+    }) orelse return error.NotStored;
+
+    try testing.expectEqual(300, stored.cache_control.max_age);
+    const expected = [_]Http.Header{
+        .{ .name = "content-type", .value = "text/css" },
+        .{ .name = "cache-control", .value = "max-age=300" },
+        .{ .name = "etag", .value = "\"v1\"" },
+    };
+    try testing.expectEqual(expected.len, stored.headers.len);
+    for (expected, stored.headers) |e, h| {
+        try testing.expectString(e.name, h.name);
+        try testing.expectString(e.value, h.value);
+    }
+
+    // heuristic freshness from Last-Modified works the same way
+    const heuristic = try (TestResponse{
+        .last_modified = "Mon, 21 Sep 2026 04:13:20 GMT",
+        .set_cookie = "a=1",
+    }).run(arena.allocator()) orelse return error.NotStored;
+    try testing.expectEqual(1000, heuristic.cache_control.max_age);
+    for (heuristic.headers) |h| {
+        try testing.expect(isSetCookie(h.name) == false);
+    }
+
+    // private and no-store still aren't stored
+    for ([_][]const u8{ "private, max-age=300", "no-store, max-age=300" }) |cc| {
+        const result = try (TestResponse{ .cache_control = cc, .set_cookie = "a=1" }).run(arena.allocator());
+        try testing.expectEqual(null, result);
+    }
 }
 
 test "Cache: tryCache vary headers" {
