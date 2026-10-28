@@ -257,7 +257,7 @@ fn constructor(source: js.Value, init_: ?js.Value, exec: *const Execution) !*Vid
     if (source.isArrayBuffer() or source.isArrayBufferView()) {
         const data = try source.toZig(js.AllowSharedBufferSource);
         const init = (try (init_ orelse return error.TypeError).toZig(?BufferInit)) orelse return error.TypeError;
-        return fromBuffer(data.bytes, init, exec.page);
+        return fromBuffer(data.bytes(), init, exec.page);
     }
 
     const init: ImageInit = blk: {
@@ -745,12 +745,9 @@ fn allocationSize(self: *const VideoFrame, options_: ?CopyToOptions) !u32 {
     return parsed.layout.allocation_size;
 }
 
-fn copyTo(self: *const VideoFrame, destination_value: js.Value, options_: ?CopyToOptions, exec: *const Execution) !js.Promise {
+fn copyTo(self: *const VideoFrame, destination: js.AllowSharedBufferSource, options_: ?CopyToOptions, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    const destination = local.jsValueToZig(js.AllowSharedBufferSource, destination_value) catch {
-        return local.rejectPromise(.{ .type_error = "" });
-    };
-    const layouts = self.copyInto(destination.bytes, options_ orelse .{}) catch |err| {
+    const layouts = self.copyInto(destination.bytes(), options_ orelse .{}) catch |err| {
         return local.rejectPromise(switch (err) {
             error.TypeError => .{ .type_error = "" },
             else => .{ .dom_exception = .{ .err = err } },
