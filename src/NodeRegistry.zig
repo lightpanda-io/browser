@@ -40,6 +40,10 @@ allocator: Allocator,
 node_pool: std.heap.MemoryPool(Node),
 lookup_by_id: std.AutoHashMapUnmanaged(Id, *Node),
 lookup_by_node: std.HashMapUnmanaged(*DOMNode, *Node, NodeContext, std.hash_map.default_max_load_percentage),
+// Ids of the AX tree's synthetic ListMarker nodes, keyed by their <li>. They
+// come from node_id, so they never collide with a node's id.
+list_markers: std.HashMapUnmanaged(*DOMNode, Id, NodeContext, std.hash_map.default_max_load_percentage),
+list_marker_ids: std.AutoHashMapUnmanaged(Id, *DOMNode),
 
 pub fn init(allocator: Allocator) NodeRegistry {
     return .{
@@ -47,6 +51,8 @@ pub fn init(allocator: Allocator) NodeRegistry {
         .node_pool = .empty,
         .lookup_by_id = .{},
         .lookup_by_node = .{},
+        .list_markers = .{},
+        .list_marker_ids = .{},
         .allocator = allocator,
     };
 }
@@ -55,12 +61,16 @@ pub fn deinit(self: *NodeRegistry) void {
     const allocator = self.allocator;
     self.lookup_by_id.deinit(allocator);
     self.lookup_by_node.deinit(allocator);
+    self.list_markers.deinit(allocator);
+    self.list_marker_ids.deinit(allocator);
     self.node_pool.deinit(allocator);
 }
 
 pub fn reset(self: *NodeRegistry) void {
     self.lookup_by_id.clearRetainingCapacity();
     self.lookup_by_node.clearRetainingCapacity();
+    self.list_markers.clearRetainingCapacity();
+    self.list_marker_ids.clearRetainingCapacity();
     _ = self.node_pool.reset(self.allocator, .{ .retain_with_limit = 1024 });
 }
 
@@ -69,6 +79,8 @@ pub fn reset(self: *NodeRegistry) void {
 /// each node's document.
 pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
     const page = frame.page;
+    self.resetFrameListMarkers(arena, frame);
+
     var doomed: std.ArrayListUnmanaged(*Node) = .empty;
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
@@ -84,6 +96,48 @@ pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
         _ = self.lookup_by_node.remove(node.dom);
         self.node_pool.destroy(node);
     }
+}
+
+// The markers of the evicted <li>s go too: a later <li> at the same address
+// mustn't inherit one. Dropping every marker is harmless, so that's the
+// fallback when there's no memory to pick them out.
+fn resetFrameListMarkers(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
+    const page = frame.page;
+    var doomed: std.ArrayListUnmanaged(*DOMNode) = .empty;
+    var it = self.list_markers.keyIterator();
+    while (it.next()) |li| {
+        if (li.*.getDocument(frame)._page == page) {
+            doomed.append(arena, li.*) catch {
+                self.list_markers.clearRetainingCapacity();
+                self.list_marker_ids.clearRetainingCapacity();
+                return;
+            };
+        }
+    }
+    for (doomed.items) |li| {
+        const marker_id = self.list_markers.fetchRemove(li).?.value;
+        _ = self.list_marker_ids.remove(marker_id);
+    }
+}
+
+/// The id of the ListMarker AX node of `li`, the same on every call.
+pub fn listMarkerId(self: *NodeRegistry, li: *DOMNode) !Id {
+    const gop = try self.list_markers.getOrPut(self.allocator, li);
+    if (gop.found_existing) {
+        return gop.value_ptr.*;
+    }
+    errdefer _ = self.list_markers.remove(li);
+
+    const id = self.node_id;
+    try self.list_marker_ids.putNoClobber(self.allocator, id, li);
+    self.node_id = id + 1;
+    gop.value_ptr.* = id;
+    return id;
+}
+
+/// The <li> of the ListMarker AX node `id`, if `id` is a marker's.
+pub fn listMarkerOwner(self: *const NodeRegistry, id: Id) ?*DOMNode {
+    return self.list_marker_ids.get(id);
 }
 
 pub fn register(self: *NodeRegistry, dom_node: *DOMNode) !*Node {
@@ -206,4 +260,27 @@ test "NodeRegistry: reset never reuses an id" {
     registry.reset();
     try testing.expectEqual(null, registry.lookup_by_id.get(first_id));
     try testing.expect((try registry.register(dom_node)).id != first_id);
+}
+
+test "NodeRegistry: listMarkerId" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_relatives.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const li = (try frame.window._document.querySelector(.wrap("#item"), frame)).?.asNode();
+
+    const marker_id = try registry.listMarkerId(li);
+    try testing.expectEqual(marker_id, try registry.listMarkerId(li));
+    try testing.expectEqual(li, registry.listMarkerOwner(marker_id));
+
+    // Marker and node ids share one counter.
+    const node = try registry.register(li);
+    try testing.expect(node.id != marker_id);
+    try testing.expectEqual(null, registry.listMarkerOwner(node.id));
+
+    registry.reset();
+    try testing.expectEqual(null, registry.listMarkerOwner(marker_id));
 }

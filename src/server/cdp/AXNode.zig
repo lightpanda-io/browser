@@ -52,6 +52,26 @@ pub const Writer = struct {
     // match the filter, in a flat shape.
     filter: ?Filter = null,
     depth: i32 = 0,
+    scope: Scope = .subtree,
+
+    // Which nodes around `root` to emit when there's no filter.
+    pub const Scope = enum {
+        // `root` and its descendants, down to `depth` (getFullAXTree).
+        subtree,
+        // `root` alone.
+        node,
+        // `root` alone, as a bare AXNode rather than a list (getRootAXNode).
+        bare_node,
+        // `root`, its ancestors, its siblings and its children
+        // (getPartialAXTree with fetchRelatives).
+        relatives,
+        // `root`, then each ancestor up to its frame's document
+        // (getAXNodeAndAncestors). Like getFullAXTree, this stays in the
+        // frame: clients stitch frames together themselves.
+        ancestors,
+        // The children of `root` (getChildAXNodes).
+        children,
+    };
 
     pub const Filter = struct {
         role: ?[]const u8 = null,
@@ -61,6 +81,7 @@ pub const Writer = struct {
     pub const Opts = struct {
         depth: i32 = 0,
         filter: ?Filter = null,
+        scope: Scope = .subtree,
     };
 
     const ResolvedRole = struct {
@@ -70,6 +91,22 @@ pub const Writer = struct {
         // checked/disabled properties on the promoted label.
         promoted_input: ?*DOMNode.Element.Html.Input,
     };
+
+    // A writer bound to `frame`, the frame that owns `root`.
+    pub fn init(frame: *Frame, root: *const NodeRegistry.Node, registry: *NodeRegistry, temp_arena: *lp.Arena, opts: Opts) !Writer {
+        const label_index = try frame.call_arena.create(Label.LabelByForIndex);
+        label_index.* = .{};
+        return .{
+            .frame = frame,
+            .root = root,
+            .registry = registry,
+            .label_index = label_index,
+            .temp_arena = temp_arena,
+            .filter = opts.filter,
+            .depth = opts.depth,
+            .scope = opts.scope,
+        };
+    }
 
     pub fn jsonStringify(self: *const Writer, w: anytype) error{WriteFailed}!void {
         self.toJSON(w) catch |err| {
@@ -86,13 +123,133 @@ pub const Writer = struct {
         defer cache_arena.release();
         var ignore_cache: IgnoreCache = .{ .allocator = cache_arena.allocator() };
 
+        if (self.scope == .bare_node) {
+            return self.writeScope(&ignore_cache, w);
+        }
         try w.beginArray();
         if (self.filter != null) {
             try self.walkQuery(&ignore_cache, w);
         } else {
-            try self.writeTree(&ignore_cache, w);
+            try self.writeScope(&ignore_cache, w);
         }
         return w.endArray();
+    }
+
+    fn writeScope(self: *const Writer, ignore_cache: *IgnoreCache, w: anytype) !void {
+        const root = self.root.dom;
+        if (self.scope == .subtree) {
+            return self.writeTree(ignore_cache, w);
+        }
+
+        // Every other scope is about a node in the AX tree. Like Chrome, a
+        // node without an AX node is a lone ignored node, and has no children.
+        const chain = try self.axChain(root) orelse {
+            if (self.scope != .children) {
+                try self.writeNotRendered(self.root.id, w);
+            }
+            return;
+        };
+
+        switch (self.scope) {
+            .subtree => unreachable,
+            .node, .bare_node => try self.writeChain(chain[0..1], ignore_cache, w),
+            // Chrome lists the node first, then its ancestors, siblings and
+            // children.
+            .relatives => {
+                try self.writeChain(chain, ignore_cache, w);
+                if (chain.len > 1) {
+                    try self.writeChildren(chain[1].node, root, ignore_cache, w);
+                }
+                try self.writeChildren(root, null, ignore_cache, w);
+            },
+            .ancestors => try self.writeChain(chain, ignore_cache, w),
+            .children => try self.writeChildren(root, null, ignore_cache, w),
+        }
+    }
+
+    const ChainEntry = struct {
+        node: *DOMNode,
+        // Never .pruned: the node is in the AX tree.
+        hidden: Hidden,
+    };
+
+    // `node` then its AX ancestors up to its frame's document. Null when
+    // `node` isn't in the AX tree: some node on the way isn't listed in its
+    // parent's childIds.
+    fn axChain(self: *const Writer, node: *DOMNode) !?[]const ChainEntry {
+        const allocator = self.temp_arena.allocator();
+        var chain: std.ArrayList(ChainEntry) = .empty;
+        var current = node;
+        while (current.flatParent(self.frame)) |parent| : (current = parent) {
+            // An unslotted child of a host, or unused slot fallback: the
+            // flat tree skips it, though flatParent still finds the parent.
+            if (current.isOutsideFlatTree() or AXNode.fromNode(parent).ignoreChildren()) {
+                return null;
+            }
+            const hidden = axChildHidden(current, ignoreText(parent), self.frame) orelse return null;
+            try chain.append(allocator, .{ .node = current, .hidden = hidden });
+        }
+        if (current._type != .document) {
+            return null;
+        }
+        try chain.append(allocator, .{ .node = current, .hidden = .visible });
+        return chain.items;
+    }
+
+    fn writeChain(self: *const Writer, chain: []const ChainEntry, ignore_cache: *IgnoreCache, w: anytype) !void {
+        for (chain) |entry| {
+            try self.writeSingle(entry.node, entry.hidden, ignore_cache, w);
+        }
+    }
+
+    // Chrome's AXNode for a DOM node that has no AX node.
+    fn writeNotRendered(self: *const Writer, id: u32, w: anytype) !void {
+        try w.beginObject();
+        try w.objectField("nodeId");
+        try writeIdString(id, w);
+        try w.objectField("backendDOMNodeId");
+        try w.write(id);
+        try w.objectField("role");
+        try self.writeAXValue(.{ .role = "none" }, w);
+        try w.objectField("ignored");
+        try w.write(true);
+        try self.writeIgnoredReason("notRendered", w);
+        try w.endObject();
+    }
+
+    // The ignoredReasons field of an ignored node, with the one reason.
+    fn writeIgnoredReason(self: *const Writer, reason: []const u8, w: anytype) !void {
+        try w.objectField("ignoredReasons");
+        try w.beginArray();
+        try w.beginObject();
+        try w.objectField("name");
+        try w.write(reason);
+        try w.objectField("value");
+        try self.writeAXValue(.{ .boolean = true }, w);
+        try w.endObject();
+        try w.endArray();
+    }
+
+    // Write `dom`, a node in the AX tree, without its descendants. `hidden`
+    // is never .pruned for such a node.
+    fn writeSingle(self: *const Writer, dom: *DOMNode, hidden: Hidden, ignore_cache: *IgnoreCache, w: anytype) !void {
+        const node = try self.registry.register(dom);
+        _ = try self.writeNode(node.id, .fromNode(dom), hidden, ignore_cache, w);
+    }
+
+    // Write each node listed in `parent`'s childIds, except `skip`, in the
+    // same order. `parent` must be in the AX tree.
+    fn writeChildren(self: *const Writer, parent: *DOMNode, skip: ?*DOMNode, ignore_cache: *IgnoreCache, w: anytype) !void {
+        if (AXNode.fromNode(parent).ignoreChildren()) {
+            return;
+        }
+        var it: AXChildren = .init(parent, self.frame);
+        while (it.next()) |child| switch (child) {
+            .marker => try self.writeListMarker(parent, w),
+            .node => |c| if (c.dom != skip) {
+                try self.writeSingle(c.dom, c.hidden, ignore_cache, w);
+            },
+        };
     }
 
     /// Resolve the displayed role for `axn`, accounting for label-promotion
@@ -123,51 +280,44 @@ pub const Writer = struct {
     fn writeTree(self: *const Writer, ignore_cache: *IgnoreCache, w: anytype) !void {
         var walker: Walker = .init(self.root.dom, self.frame);
         var descend = try self.writeNode(self.root.id, .fromNode(self.root.dom), walker.hidden(self.root.dom), ignore_cache, w);
+        if (descend) try self.writeListMarker(self.root.dom, w);
         while (walker.next(descend)) |dom_node| {
             descend = false;
             if (self.depth > 0 and self.depth < walker.depth) continue;
 
-            switch (dom_node._type) {
-                .cdata => {
-                    if (dom_node.is(DOMNode.CData.Text) == null) {
-                        continue;
-                    }
-                    if (ignoreText(dom_node.flatParent(self.frame).?)) {
-                        continue;
-                    }
-                },
-                .element => {},
-                else => continue,
+            // Only text needs its parent's ignoreText.
+            const skip_text = dom_node._type == .cdata and ignoreText(dom_node.flatParent(self.frame).?);
+            if (!isAXChildType(dom_node, skip_text)) {
+                continue;
             }
-
             const hidden = walker.hidden(dom_node);
             if (hidden == .pruned) {
                 continue;
             }
             const node = try self.registry.register(dom_node);
             descend = try self.writeNode(node.id, .fromNode(dom_node), hidden, ignore_cache, w);
+            // The marker is a child: drop it with the others at the depth
+            // cut-off.
+            if (descend and (self.depth <= 0 or walker.depth < self.depth)) {
+                try self.writeListMarker(dom_node, w);
+            }
         }
     }
 
+    // The tree walk follows an <li> with its synthetic ListMarker node. A
+    // no-op for any other node: see hasListMarker.
     fn writeListMarker(self: *const Writer, li_node: *DOMNode, w: anytype) !void {
-        // Find the parent list element
-        const parent = li_node._parent orelse return;
-        const parent_el = parent.is(DOMNode.Element) orelse return;
-        const list_type = parent_el.getTag();
-
-        // Only create markers for actual list elements
-        switch (list_type) {
-            .ul, .ol, .menu => {},
-            else => return,
+        if (!hasListMarker(li_node)) {
+            return;
         }
+        const parent = li_node._parent.?;
+        const list_type = parent.as(DOMNode.Element).getTag();
 
         // Write the ListMarker node
         try w.beginObject();
 
-        // Use the next available ID for the marker
         try w.objectField("nodeId");
-        const marker_id = self.registry.node_id;
-        self.registry.node_id += 1;
+        const marker_id = try self.registry.listMarkerId(li_node);
         try writeIdString(marker_id, w);
 
         try w.objectField("backendDOMNodeId");
@@ -605,16 +755,7 @@ pub const Writer = struct {
         try w.write(ignore);
 
         if (ignore) {
-            // Ignore reasons
-            try w.objectField("ignoredReasons");
-            try w.beginArray();
-            try w.beginObject();
-            try w.objectField("name");
-            try w.write("uninteresting");
-            try w.objectField("value");
-            try self.writeAXValue(.{ .boolean = true }, w);
-            try w.endObject();
-            try w.endArray();
+            try self.writeIgnoredReason("uninteresting", w);
         } else {
             // Name
             try w.objectField("name");
@@ -661,39 +802,22 @@ pub const Writer = struct {
 
         // Children
         const write_children = axn.ignoreChildren() == false and hidden != .pruned;
-        const skip_text = ignoreText(axn.dom);
 
         try w.objectField("childIds");
         try w.beginArray();
         if (write_children) {
-            var registry = self.registry;
-            var it: TreeWalker.FlatChildren = .init(n, .{ .frame = self.frame });
+            var it: AXChildren = .init(n, self.frame);
             while (it.next()) |child| {
-                // ignore non-elements or text.
-                if (child.is(DOMNode.Element.Html) == null and (child.is(DOMNode.CData.Text) == null or skip_text)) {
-                    continue;
-                }
-
-                // Matches writeTree's pruning
-                if (hiddenState(child, self.frame) == .pruned) {
-                    continue;
-                }
-
-                const child_node = try registry.register(child);
-                try writeIdString(child_node.id, w);
+                const child_id = switch (child) {
+                    .marker => try self.registry.listMarkerId(n),
+                    .node => |c| (try self.registry.register(c.dom)).id,
+                };
+                try writeIdString(child_id, w);
             }
         }
         try w.endArray();
 
         try w.endObject();
-
-        if (write_children) {
-            if (n.is(DOMNode.Element)) |el| {
-                if (el.getTag() == .li) {
-                    try self.writeListMarker(n, w);
-                }
-            }
-        }
 
         return write_children;
     }
@@ -1394,6 +1518,74 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
 /// `visibility: visible`. `pruned` ignores the whole subtree.
 const Hidden = enum { visible, invisible, pruned };
 
+/// Whether the tree has a ListMarker node for `node`: an <li> of a list.
+pub fn hasListMarker(node: *DOMNode) bool {
+    const el = node.is(DOMNode.Element) orelse return false;
+    if (el.getTag() != .li) {
+        return false;
+    }
+    const parent = (node._parent orelse return false).is(DOMNode.Element) orelse return false;
+    return switch (parent.getTag()) {
+        .ul, .ol, .menu => true,
+        else => false,
+    };
+}
+
+/// Whether a flat child of this type can be an AX node: an element, or text
+/// unless `skip_text` (ignoreText of the parent). Pruning aside, these are
+/// the nodes writeTree walks and childIds lists.
+fn isAXChildType(child: *DOMNode, skip_text: bool) bool {
+    return child.is(DOMNode.Element) != null or (child.is(DOMNode.CData.Text) != null and !skip_text);
+}
+
+/// The hidden state of `child` when it appears in its parent's childIds,
+/// null when it doesn't. `skip_text` is ignoreText of the parent.
+fn axChildHidden(child: *DOMNode, skip_text: bool, frame: *Frame) ?Hidden {
+    if (!isAXChildType(child, skip_text)) {
+        return null;
+    }
+    const hidden = hiddenState(child, frame);
+    return if (hidden == .pruned) null else hidden;
+}
+
+/// The entries of a node's childIds, in order: an <li>'s ListMarker, then
+/// each flat child in the AX tree. The caller checks the node shows its
+/// children at all (ignoreChildren, pruning).
+const AXChildren = struct {
+    parent: *DOMNode,
+    frame: *Frame,
+    skip_text: bool,
+    marker_pending: bool,
+    it: TreeWalker.FlatChildren,
+
+    const Child = union(enum) {
+        marker,
+        node: struct { dom: *DOMNode, hidden: Hidden },
+    };
+
+    fn init(parent: *DOMNode, frame: *Frame) AXChildren {
+        return .{
+            .parent = parent,
+            .frame = frame,
+            .skip_text = ignoreText(parent),
+            .marker_pending = hasListMarker(parent),
+            .it = .init(parent, .{ .frame = frame }),
+        };
+    }
+
+    fn next(self: *AXChildren) ?Child {
+        if (self.marker_pending) {
+            self.marker_pending = false;
+            return .marker;
+        }
+        while (self.it.next()) |child| {
+            const hidden = axChildHidden(child, self.skip_text, self.frame) orelse continue;
+            return .{ .node = .{ .dom = child, .hidden = hidden } };
+        }
+        return null;
+    }
+};
+
 /// Text takes its flat-tree parent's state.
 fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
     const elt = node.is(DOMNode.Element) orelse node.flatTreeParentElement(frame) orelse return .visible;
@@ -1464,7 +1656,9 @@ fn ignoreChildren(self: AXNode) bool {
 
     const elt = node.as(DOMNode.Element);
     return switch (elt.getTag()) {
-        .head, .script, .style => true,
+        // An <iframe>'s content is another frame's tree; its DOM children
+        // are only fallback text.
+        .head, .script, .style, .iframe => true,
         else => false,
     };
 }
