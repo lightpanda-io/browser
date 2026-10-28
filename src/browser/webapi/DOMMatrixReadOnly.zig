@@ -451,14 +451,17 @@ pub fn parseTransformList(input: []const u8, m: *[16]f64, is_2d: *bool) !void {
     }
 }
 
+fn transformNameEquals(name: []const u8, expected: []const u8, syntax: TransformSyntax) bool {
+    return if (syntax == .css) std.ascii.eqlIgnoreCase(name, expected) else std.mem.eql(u8, name, expected);
+}
+
 pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSyntax) !ParsedTransform {
     var values: [16]f64 = undefined;
     var units: [16]ParsedValue.Unit = undefined;
     const count = try parseArguments(function.arguments, syntax, &values, &units);
     const name = function.name;
-    const Eql = std.mem.eql;
 
-    if (Eql(u8, name, "matrix")) {
+    if (transformNameEquals(name, "matrix", syntax)) {
         try requireCount(count, 6, 6);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.matrix, .{
@@ -469,72 +472,72 @@ pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSynt
         }, values, count, true);
     }
 
-    if (Eql(u8, name, "matrix3d")) {
+    if (transformNameEquals(name, "matrix3d", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 16, 16);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.matrix3d, values, values, count, false);
     }
 
-    if (Eql(u8, name, "translate")) {
+    if (transformNameEquals(name, "translate", syntax)) {
         try requireCount(count, 1, 2);
         if (syntax == .svg) try requireUnitless(units[0..count]);
         const ty = if (count == 2) values[1] else 0;
         return makeParsedTransform(.translate, translationMatrix(values[0], ty, 0), values, count, true);
     }
-    if (Eql(u8, name, "translateX")) {
+    if (transformNameEquals(name, "translateX", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         return makeParsedTransform(.translate_x, translationMatrix(values[0], 0, 0), values, count, true);
     }
-    if (Eql(u8, name, "translateY")) {
+    if (transformNameEquals(name, "translateY", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         return makeParsedTransform(.translate_y, translationMatrix(0, values[0], 0), values, count, true);
     }
-    if (Eql(u8, name, "translateZ")) {
+    if (transformNameEquals(name, "translateZ", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         return makeParsedTransform(.translate_z, translationMatrix(0, 0, values[0]), values, count, false);
     }
-    if (Eql(u8, name, "translate3d")) {
+    if (transformNameEquals(name, "translate3d", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 3, 3);
         return makeParsedTransform(.translate_3d, translationMatrix(values[0], values[1], values[2]), values, count, false);
     }
 
-    if (Eql(u8, name, "scale")) {
+    if (transformNameEquals(name, "scale", syntax)) {
         try requireCount(count, 1, 2);
         try requireUnitless(units[0..count]);
         const sy = if (count == 2) values[1] else values[0];
         return makeParsedTransform(.scale, scaleMatrix(values[0], sy, 1), values, count, true);
     }
-    if (Eql(u8, name, "scaleX")) {
+    if (transformNameEquals(name, "scaleX", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.scale_x, scaleMatrix(values[0], 1, 1), values, count, true);
     }
-    if (Eql(u8, name, "scaleY")) {
+    if (transformNameEquals(name, "scaleY", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.scale_y, scaleMatrix(1, values[0], 1), values, count, true);
     }
-    if (Eql(u8, name, "scaleZ")) {
+    if (transformNameEquals(name, "scaleZ", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.scale_z, scaleMatrix(1, 1, values[0]), values, count, false);
     }
-    if (Eql(u8, name, "scale3d")) {
+    if (transformNameEquals(name, "scale3d", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 3, 3);
         try requireUnitless(units[0..count]);
         return makeParsedTransform(.scale_3d, scaleMatrix(values[0], values[1], values[2]), values, count, false);
     }
 
-    if (Eql(u8, name, "rotate")) {
+    if (transformNameEquals(name, "rotate", syntax)) {
         try requireCount(count, 1, if (syntax == .svg) 3 else 1);
         if (count != 1 and count != 3) return error.SyntaxError;
         try requireAngle(units[0]);
@@ -547,15 +550,15 @@ pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSynt
         }
         return makeParsedTransform(.rotate, matrix, values, count, true);
     }
-    if (Eql(u8, name, "rotateX") or Eql(u8, name, "rotateY") or Eql(u8, name, "rotateZ")) {
+    if (transformNameEquals(name, "rotateX", syntax) or transformNameEquals(name, "rotateY", syntax) or transformNameEquals(name, "rotateZ", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         try requireAngle(units[0]);
-        if (Eql(u8, name, "rotateX")) return makeParsedTransform(.rotate_x, rotateXMatrix(toRadians(values[0], units[0])), values, count, false);
-        if (Eql(u8, name, "rotateY")) return makeParsedTransform(.rotate_y, rotateYMatrix(toRadians(values[0], units[0])), values, count, false);
+        if (transformNameEquals(name, "rotateX", syntax)) return makeParsedTransform(.rotate_x, rotateXMatrix(toRadians(values[0], units[0])), values, count, false);
+        if (transformNameEquals(name, "rotateY", syntax)) return makeParsedTransform(.rotate_y, rotateYMatrix(toRadians(values[0], units[0])), values, count, false);
         return makeParsedTransform(.rotate_z, rotateZMatrix(toRadians(values[0], units[0])), values, count, false);
     }
-    if (Eql(u8, name, "rotate3d")) {
+    if (transformNameEquals(name, "rotate3d", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 4, 4);
         try requireUnitless(units[0..3]);
@@ -563,7 +566,7 @@ pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSynt
         return makeParsedTransform(.rotate_3d, axisAngleMatrix(values[0], values[1], values[2], toRadians(values[3], units[3])), values, count, false);
     }
 
-    if (Eql(u8, name, "skew")) {
+    if (transformNameEquals(name, "skew", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 2);
         try requireAngle(units[0]);
@@ -571,15 +574,15 @@ pub fn parseTransformFunction(function: TransformFunction, syntax: TransformSynt
         const ay = if (count == 2) toRadians(values[1], units[1]) else 0;
         return makeParsedTransform(.skew, skewMatrix(toRadians(values[0], units[0]), ay), values, count, true);
     }
-    if (Eql(u8, name, "skewX") or Eql(u8, name, "skewY")) {
+    if (transformNameEquals(name, "skewX", syntax) or transformNameEquals(name, "skewY", syntax)) {
         try requireCount(count, 1, 1);
         try requireAngle(units[0]);
         if (syntax == .svg and units[0] != .none) return error.SyntaxError;
-        if (Eql(u8, name, "skewX")) return makeParsedTransform(.skew_x, skewMatrix(toRadians(values[0], units[0]), 0), values, count, true);
+        if (transformNameEquals(name, "skewX", syntax)) return makeParsedTransform(.skew_x, skewMatrix(toRadians(values[0], units[0]), 0), values, count, true);
         return makeParsedTransform(.skew_y, skewMatrix(0, toRadians(values[0], units[0])), values, count, true);
     }
 
-    if (Eql(u8, name, "perspective")) {
+    if (transformNameEquals(name, "perspective", syntax)) {
         if (syntax == .svg) return error.SyntaxError;
         try requireCount(count, 1, 1);
         var matrix = identity();
@@ -1038,4 +1041,14 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: DOMMatrixReadOnly" {
     try testing.htmlRunner("dommatrix.html", .{});
+}
+
+test "DOMMatrixReadOnly: CSS function names are case insensitive" {
+    var matrix = identity();
+    var is_2d = true;
+    try parseTransformList("tRaNsLaTeX(10px) ScAlEy(2)", &matrix, &is_2d);
+    try std.testing.expectEqual(@as(f64, 10), matrix[12]);
+    try std.testing.expectEqual(@as(f64, 2), matrix[5]);
+    try std.testing.expect(is_2d);
+    try std.testing.expectError(error.SyntaxError, parseTransformFunction(.{ .name = "TrAnSlAtE", .arguments = "1,2" }, .svg));
 }
