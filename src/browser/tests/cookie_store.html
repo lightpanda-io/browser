@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 <script>
   // The module scripts below interleave at each await and share cookieStore,
@@ -329,16 +330,27 @@
 <script id=change-event-from-document-cookie type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => { if (isAbout(e, 'ev-from-doc')) events.push(e); };
+  let waiter = null;
+  const handler = (e) => {
+    if (isAbout(e, 'ev-from-doc')) {
+      events.push(e);
+      waiter?.();
+    }
+  };
   cookieStore.addEventListener('change', handler);
+  // Chrome delivers document.cookie changes later than a setTimeout(0), so
+  // wait for the event itself.
+  const nextEvent = () => new Promise(r => { waiter = r; });
 
+  let next = nextEvent();
   document.cookie = 'ev-from-doc=v1; path=/';
-  await new Promise(r => setTimeout(r, 0));
+  await next;
 
   const lenAfterSet = events.length;
 
+  next = nextEvent();
   document.cookie = 'ev-from-doc=DELETED; path=/; max-age=0';
-  await new Promise(r => setTimeout(r, 0));
+  await next;
 
   const lenAfterDelete = events.length;
 
@@ -375,14 +387,15 @@
 </script>
 
 <script id=rejections type=module>
-  // Invalid calls reject with a TypeError rather than throwing.
+  // Invalid calls reject with a TypeError rather than throwing. Only the
+  // error type is checked: messages differ between browsers.
   async function rejection(fn) {
     const promise = fn();
     try {
       await promise;
       return 'resolved';
     } catch (e) {
-      return `${e.name}: ${e.message}`;
+      return e.name;
     }
   }
 
@@ -394,7 +407,7 @@
   state.resolve();
 
   await state.done(() => {
-    testing.expectEqual('TypeError: get requires a name or url', results[0]);
-    testing.expectEqual('TypeError: value is required', results[1]);
+    testing.expectEqual('TypeError', results[0]);
+    testing.expectEqual('TypeError', results[1]);
   });
 </script>

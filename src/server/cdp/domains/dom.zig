@@ -91,15 +91,11 @@ fn getDocument(cmd: *CDP.Command) !void {
     };
     const params = try cmd.params(Params) orelse Params{};
 
-    if (params.pierce) {
-        log.debug(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
-    }
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try bc.node_registry.register(frame.window._document.asNode());
-    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .root = try bc.nodeWriter(node, .{ .depth = params.depth, .pierce = params.pierce }) }, .{});
 }
 
 // Closed set of XPath 1.0 named axes. Matched literally before `::` so
@@ -235,7 +231,7 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
 
         try cmd.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
-            .nodes = .{bc.nodeWriter(node, .{})},
+            .nodes = .{try bc.nodeWriter(node, .{})},
         }, .{
             .session_id = session_id,
         });
@@ -431,14 +427,11 @@ fn describeNode(cmd: *CDP.Command) !void {
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.pierce) {
-        log.debug(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
-    }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .node = try bc.nodeWriter(node, .{ .depth = params.depth, .pierce = params.pierce }) }, .{});
 }
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
@@ -606,7 +599,7 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
 
     try cmd.sendEvent("DOM.setChildNodes", .{
         .parentId = node.id,
-        .nodes = bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
+        .nodes = try bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true, .pierce = params.pierce }),
     }, .{
         .session_id = session_id,
     });

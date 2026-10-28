@@ -5,6 +5,8 @@
 <script>
   const METHODS = [{ supportedMethods: 'https://example.com/pay' }];
   const DETAILS = { total: { label: 'Total', amount: { currency: 'USD', value: '10.00' } } };
+  // a URL method makes Chrome download its manifest before settling a promise
+  const OFFLINE = [{ supportedMethods: 'basic-card' }];
 </script>
 
 <script id=shape>
@@ -138,8 +140,8 @@
 <script id=can_make_payment type=module>
   {
     const state = await testing.async();
-    const result = await new PaymentRequest(METHODS, DETAILS).canMakePayment();
-    const enrolled = await new PaymentRequest(METHODS, DETAILS).hasEnrolledInstrument();
+    const result = await new PaymentRequest(OFFLINE, DETAILS).canMakePayment();
+    const enrolled = await new PaymentRequest(OFFLINE, DETAILS).hasEnrolledInstrument();
     state.resolve();
     await state.done(() => {
       testing.expectEqual(false, result);
@@ -151,7 +153,7 @@
 <script id=show type=module>
   {
     const state = await testing.async();
-    const req = new PaymentRequest(METHODS, DETAILS);
+    const req = new PaymentRequest(OFFLINE, DETAILS);
     const errors = [];
     await req.show().catch((e) => errors.push(e.name));
     await req.show().catch((e) => errors.push(e.name));

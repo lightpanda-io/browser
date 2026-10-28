@@ -67,6 +67,35 @@
   }
 </script>
 
+<script id="supports_unknown_properties">
+  {
+    testing.expectEqual(false, CSS.supports('not-a-property', 'red'));
+    testing.expectEqual(false, CSS.supports('-moz-user-select', 'none'));
+    testing.expectEqual(false, CSS.supports(' color', 'red'));
+    // @font-face descriptors aren't properties
+    testing.expectEqual(false, CSS.supports('src', 'inherit'));
+    testing.expectEqual(true, CSS.supports('COLOR', 'red'));
+    testing.expectEqual(true, CSS.supports('-webkit-transform', 'none'));
+    testing.expectEqual(true, CSS.supports('word-wrap', 'normal'));
+    testing.expectEqual(true, CSS.supports('--anything', 'x'));
+  }
+</script>
+
+<script id="supports_condition">
+  {
+    testing.expectEqual(true, CSS.supports('display: block'));
+    testing.expectEqual(true, CSS.supports('(display: grid) and (gap: 1px)'));
+    testing.expectEqual(true, CSS.supports('not (not-a-property: 1)'));
+    testing.expectEqual(false, CSS.supports('not-a-property: 1'));
+    testing.expectEqual(false, CSS.supports('(display: grid) and (color: red) or (gap: 1px)'));
+    testing.expectEqual(true, CSS.supports('selector(:has(a))'));
+    testing.expectEqual(true, CSS.supports('selector(div > p)'));
+    testing.expectEqual(false, CSS.supports('selector(a, b)'));
+    testing.expectEqual(false, CSS.supports('unknown-function(x)'));
+    testing.expectEqual(false, CSS.supports('color', ''));
+  }
+</script>
+
 <script id="supports_common_properties">
   {
     testing.expectEqual(true, CSS.supports('margin', '10px'));

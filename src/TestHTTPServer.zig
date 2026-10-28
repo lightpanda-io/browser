@@ -124,15 +124,40 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     };
     defer file.close(lp.io);
 
+    var headers: [8]std.http.Header = undefined;
+    headers[0] = .{ .name = "content-type", .value = getContentType(unescaped_file_path) };
+    var header_count: usize = 1;
+
+    // Like WPT, a `<file>.headers` next to the file adds its "Name: value"
+    // lines to the response.
+    var headers_buf: [1024]u8 = undefined;
+    var headers_fba = std.heap.FixedBufferAllocator.init(&headers_buf);
+    const headers_path = try std.fmt.allocPrint(fba.allocator(), "{s}.headers", .{unescaped_file_path});
+    if (std.Io.Dir.cwd().readFileAlloc(lp.io, headers_path, headers_fba.allocator(), .limited(headers_buf.len))) |content| {
+        var lines = std.mem.tokenizeAny(u8, content, "\r\n");
+        while (lines.next()) |line| {
+            const colon = std.mem.findScalar(u8, line, ':') orelse return error.InvalidHeadersFile;
+            if (header_count == headers.len) {
+                return error.TooManyHeaders;
+            }
+            headers[header_count] = .{
+                .name = std.mem.trim(u8, line[0..colon], " "),
+                .value = std.mem.trim(u8, line[colon + 1 ..], " "),
+            };
+            header_count += 1;
+        }
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
     const stat = try file.stat(lp.io);
     var send_buffer: [4096]u8 = undefined;
 
     var res = try req.respondStreaming(&send_buffer, .{
         .content_length = stat.size,
         .respond_options = .{
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = getContentType(unescaped_file_path) },
-            },
+            .extra_headers = headers[0..header_count],
         },
     });
 

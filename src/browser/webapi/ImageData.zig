@@ -183,16 +183,15 @@ pub const JsApi = struct {
     /// new ImageData(dataArray, width, height)
     /// new ImageData(dataArray, width, height, settings)
     /// ```
-    ///
-    /// We currently support only the first 2.
     pub const constructor = bridge.constructor(struct {
         fn wrap(first: js.Value, second: u32, third: ?js.Value, fourth: ?ConstructorSettings, exec: *Execution) !*ImageData {
             if (first.isUint8ClampedArray()) {
                 return initWithData(first, second, third, fourth, exec);
             }
-            if (first.isTypedArray()) {
+            if (first.isFloat16Array()) {
                 // Float16Array data needs the "rgba-float16" pixel format, which
-                // we don't support.
+                // we don't support. Other typed arrays aren't ImageDataArrays, so
+                // they take the (sw, sh) overload.
                 return error.TypeError;
             }
 

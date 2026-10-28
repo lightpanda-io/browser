@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body><div id="host" contenteditable>abc</div></body>
+
+<script id="unsupported">
+{
+  // Chrome doesn't support these either. Slack calls the first two (#4216).
+  for (const cmd of ['enableObjectResizing', 'autoUrlDetect', 'nope']) {
+    testing.expectEqual(false, document.execCommand(cmd, false, false));
+    testing.expectEqual(false, document.queryCommandSupported(cmd));
+    testing.expectEqual(false, document.queryCommandEnabled(cmd));
+    testing.expectEqual(false, document.queryCommandState(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+    testing.expectEqual('', document.queryCommandValue(cmd));
+  }
+}
+</script>
+
+<script id="editing_commands">
+{
+  const host = $('#host');
+  for (const cmd of ['bold', 'insertText']) {
+    host.innerHTML = 'abc';
+    getSelection().selectAllChildren(host);
+    testing.expectEqual(false, document.queryCommandState(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+    testing.diverges('no editing pipeline', () => {
+      testing.expectEqual(false, document.queryCommandSupported(cmd));
+      testing.expectEqual(false, document.queryCommandEnabled(cmd));
+      testing.expectEqual(false, document.execCommand(cmd, false, 'x'));
+      testing.expectEqual('abc', host.innerHTML);
+    });
+  }
+  // supported in Chrome whether or not there's a user click; exec isn't
+  testing.diverges('no clipboard', () => {
+    testing.expectEqual(false, document.queryCommandSupported('copy'));
+  });
+}
+</script>
+
+<script id="command_required">
+{
+  testing.expectError('TypeError', () => document.execCommand());
+  testing.expectError('TypeError', () => document.queryCommandSupported());
+}
+</script>

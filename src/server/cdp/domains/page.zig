@@ -28,6 +28,7 @@ const network = @import("network.zig");
 const js = @import("../../../browser/js/js.zig");
 const URL = @import("../../../browser/URL.zig");
 const Frame = @import("../../../browser/Frame.zig");
+const History = @import("../../../browser/webapi/History.zig");
 const referrer = @import("../../../browser/referrer.zig");
 const Notification = @import("../../../Notification.zig");
 
@@ -502,6 +503,21 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
 
     const idx = target_index orelse return error.InvalidParams;
     const url = target_url orelse return error.InvalidParams;
+
+    // An entry of the current document (pushState, fragment) is restored in
+    // place, as history.back() does: same document, popstate, no reload.
+    if (nav._entries.items[idx].sameDocument(frame)) {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        var caller: js.Caller = undefined;
+        caller.initWithContext(frame.js, ls.local.handle);
+        defer caller.deinit();
+
+        try History.traverse(idx, frame);
+        return cmd.sendResult(null, .{});
+    }
 
     const opts = Frame.NavigateOpts{
         .reason = .history,
@@ -1554,6 +1570,47 @@ test "cdp.frame: isolated world event reaches main-world listeners with main-wor
         .type = "string",
         .value = "listener focus true main,attribute focus true main,object click true main,handler click true main",
     } }, .{ .id = 4 });
+}
+
+// A script inserted from an isolated world runs in the main world, as
+// Playwright's setContent (document.write from its utility world) expects.
+test "cdp.frame: script inserted from an isolated world runs in the main world" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 1, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const world_ctx = try isolatedWorldContextId(bc, root);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Runtime.evaluate", .params = .{
+        .expression =
+        \\ window.worldOnly = 1;
+        \\ const s = document.createElement('script');
+        \\ s.textContent = "window.appended = 'main ' + typeof window.worldOnly";
+        \\ document.body.appendChild(s);
+        ,
+        .contextId = world_ctx,
+    } });
+    try ctx.processMessage(.{ .id = 3, .method = "Runtime.evaluate", .params = .{
+        .expression = "String(window.appended)",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "main undefined" } }, .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.open(); document.write('<script>window.written = 1<\\/script>'); document.close();",
+        .contextId = world_ctx,
+    } });
+    try ctx.processMessage(.{ .id = 5, .method = "Runtime.evaluate", .params = .{
+        .expression = "String(window.written)",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "1" } }, .{ .id = 5 });
 }
 
 // Chrome only puts a world in a frame on an explicit trigger. A world the
@@ -2951,6 +3008,45 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
 
         const test_val = try ls.local.exec("window.__test2", null);
         try testing.expectEqual(2, try test_val.toI32());
+    }
+}
+
+test "cdp.frame: navigateToHistoryEntry restores an entry of the same document in place" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-B3", .url = "hi.html", .target_id = "TID-B3-0000000".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\window.__marker = 'kept';
+            \\window.__pops = [];
+            \\addEventListener('popstate', (e) => __pops.push(location.pathname + ' ' + JSON.stringify(e.state)));
+            \\history.pushState({n: 1}, '', '/next');
+        , null);
+    }
+
+    // Entry 1 is hi.html, entry 2 the pushState one. Going back to entry 1
+    // must not reload the document: like history.back(), it restores the
+    // entry in place and fires popstate, then answers at once.
+    try ctx.processMessage(.{
+        .id = 50,
+        .method = "Page.navigateToHistoryEntry",
+        .params = .{ .entryId = 1 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 50 });
+
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", frame.url);
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("window.__marker + '|' + __pops.join(',')", null);
+        try testing.expectEqualSlices(u8, "kept|/src/browser/tests/hi.html null", try v.toStringSlice());
     }
 }
 

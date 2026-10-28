@@ -951,8 +951,25 @@ fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
 /// DocumentOrShadowRoot.elementFromPoint for `scope`, this document or one of
 /// its shadow roots.
 pub fn elementFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) !?*Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return null;
+    const point = viewportPoint(x, y, frame) orelse return null;
+    const hit = (try self.hitTest(point.x, point.y, frame)) orelse return null;
     return retarget(hit, scope);
+}
+
+const ViewportPoint = struct { x: f64, y: f64 };
+
+// elementFromPoint/elementsFromPoint find nothing outside the viewport
+fn viewportPoint(x: f64, y: f64, frame: *Frame) ?ViewportPoint {
+    const viewport = frame.page.getViewport();
+    const rx = @round(x);
+    const ry = @round(y);
+    const inside = rx >= 0 and ry >= 0 and
+        rx < @as(f64, @floatFromInt(viewport.width)) and
+        ry < @as(f64, @floatFromInt(viewport.height));
+    if (inside == false) {
+        return null;
+    }
+    return .{ .x = rx, .y = ry };
 }
 
 // The spec's retarget: climbs out of shadow trees until `element` is in a tree
@@ -1057,7 +1074,8 @@ fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *E
 /// hit and its flat-tree ancestors that can be hit, each retargeted against
 /// `scope` with repeats dropped, then the root element.
 pub fn elementsFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) ![]const *Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return &.{};
+    const point = viewportPoint(x, y, frame) orelse return &.{};
+    const hit = (try self.hitTest(point.x, point.y, frame)) orelse return &.{};
     const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
     var result: std.ArrayList(*Element) = .empty;
     var current: ?*Element = hit;
@@ -1416,6 +1434,22 @@ fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
     return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
+// There's no editing pipeline or clipboard, so every execCommand command is
+// unsupported. The spec's answer for that is false (or "" for the value), not
+// an exception, which keeps callers on their fallbacks.
+fn execCommand(_: *const Document, command: []const u8) bool {
+    log.info(.not_implemented, "document.execCommand", .{ .command = command });
+    return false;
+}
+
+fn queryCommand(_: *const Document, _: []const u8) bool {
+    return false;
+}
+
+fn queryCommandValue(_: *const Document, _: []const u8) []const u8 {
+    return "";
+}
+
 pub fn hasFocus(self: *Document) bool {
     var top = self._frame orelse return false;
     while (top.parent) |parent| {
@@ -1753,6 +1787,8 @@ pub const JsApi = struct {
     pub const onloadstart = EventTarget.handlerAccessor(Document, "loadstart");
     pub const onlostpointercapture = EventTarget.handlerAccessor(Document, "lostpointercapture");
     pub const onmousedown = EventTarget.handlerAccessor(Document, "mousedown");
+    pub const onmouseenter = EventTarget.handlerAccessor(Document, "mouseenter");
+    pub const onmouseleave = EventTarget.handlerAccessor(Document, "mouseleave");
     pub const onmousemove = EventTarget.handlerAccessor(Document, "mousemove");
     pub const onmouseout = EventTarget.handlerAccessor(Document, "mouseout");
     pub const onmouseover = EventTarget.handlerAccessor(Document, "mouseover");
@@ -1788,10 +1824,6 @@ pub const JsApi = struct {
     pub const onsuspend = EventTarget.handlerAccessor(Document, "suspend");
     pub const ontimeupdate = EventTarget.handlerAccessor(Document, "timeupdate");
     pub const ontoggle = EventTarget.handlerAccessor(Document, "toggle");
-    pub const ontouchcancel = EventTarget.handlerAccessor(Document, "touchcancel");
-    pub const ontouchend = EventTarget.handlerAccessor(Document, "touchend");
-    pub const ontouchmove = EventTarget.handlerAccessor(Document, "touchmove");
-    pub const ontouchstart = EventTarget.handlerAccessor(Document, "touchstart");
     pub const ontransitioncancel = EventTarget.handlerAccessor(Document, "transitioncancel");
     pub const ontransitionend = EventTarget.handlerAccessor(Document, "transitionend");
     pub const ontransitionrun = EventTarget.handlerAccessor(Document, "transitionrun");
@@ -1882,6 +1914,12 @@ pub const JsApi = struct {
     pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
     pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
+    pub const execCommand = bridge.function(Document.execCommand, .{});
+    pub const queryCommandEnabled = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandIndeterm = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandState = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandSupported = bridge.function(Document.queryCommand, .{});
+    pub const queryCommandValue = bridge.function(Document.queryCommandValue, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});

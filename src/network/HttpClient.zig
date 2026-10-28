@@ -1281,6 +1281,7 @@ pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
 // the response; on an expired-with-validators entry the request becomes a
 // conditional revalidation.
 fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
+    transfer.script_cache = null;
     const cache = self.cache.active() orelse return false;
 
     const req = &transfer.req;
@@ -1441,7 +1442,9 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     }
     cache.put(req, transfer.res.buffer.items) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
+        return;
     };
+    transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
 }
 
 pub const SyncOptions = struct {
@@ -1465,6 +1468,7 @@ const SyncContext = struct {
     body: std.ArrayList(u8),
     headers: std.ArrayList(http.Header) = .empty,
     content_type: ?[]const u8 = null,
+    script_cache: ?ScriptCache = null,
 
     // Acquired on the first byte we have to buffer.
     // Ownership moves to the SyncResponse.
@@ -1488,6 +1492,15 @@ const SyncContext = struct {
 
         if (transfer.contentType()) |content_type| {
             self.content_type = try allocator.dupe(u8, content_type);
+        }
+
+        if (transfer.req.resource_type == .script) {
+            if (transfer.script_cache) |sc| {
+                self.script_cache = .{
+                    .key = try allocator.dupe(u8, sc.key),
+                    .bytes = if (sc.bytes) |b| try allocator.dupe(u8, b) else null,
+                };
+            }
         }
 
         if (self.options.copy_headers) {
@@ -2267,6 +2280,7 @@ const SyncResponse = struct {
     status_text: http.StatusText,
     headers: []const http.Header, // only captured when copy_headers = true
     content_type: ?[]const u8, // always captured (most callers need it)
+    script_cache: ?ScriptCache, // see Transfer.script_cache
     arena: ?*lp.Arena, // need only if there's a body, or we're copying the headers
 
     pub fn deinit(self: *SyncResponse) void {
@@ -2672,6 +2686,10 @@ pub const Transfer = struct {
     // What the cache wants from this transfer's response.
     _cache_intent: CacheIntent = .none,
 
+    // Set when the response body is the http cache entry under `key`, so a
+    // script consumer can use, and store, V8's compiled code for it.
+    script_cache: ?ScriptCache = null,
+
     // What a response-stage CDP pause (.intercept_response) is holding, and so
     // what releasing it unchanged does: deliver the response, follow the
     // redirect, or fail with the network error.
@@ -2964,6 +2982,7 @@ pub const Transfer = struct {
                 .body = sync_ctx.body,
                 .headers = sync_ctx.headers.items,
                 .content_type = sync_ctx.content_type,
+                .script_cache = sync_ctx.script_cache,
                 .arena = sync_ctx.arena,
             },
             .err => |e| return e,
@@ -3403,6 +3422,7 @@ pub const Transfer = struct {
         }
         t.redirect_end = now;
         t.fetch_start = now;
+        t.redirect_count +|= 1;
         if (t.timing_allow) {
             const target = self.timingTarget() orelse return;
             t.timing_allow = timingAllowPassed(target.origin, self.req.url, headers, t.tainted);
@@ -3412,6 +3432,9 @@ pub const Transfer = struct {
     // If A -> B -> A, we sent the tainted flag (on the B -> A transition) so
     // that we know how to apply the timing-allow-origin header.
     fn redirectTaint(self: *Transfer, url: []const u8) void {
+        if (!URL.isSameOrigin(url, self.req.url)) {
+            self._timing.cross_origin_redirect = true;
+        }
         const target = self.timingTarget() orelse return;
         const origin = target.origin orelse "null";
         if (!URL.isSameOrigin(self.req.url, origin) and !URL.isSameOrigin(url, self.req.url)) {
@@ -3463,7 +3486,16 @@ pub const Transfer = struct {
             return;
         }
         t.recorded = true;
-        const target = self.timingTarget() orelse return;
+        const target = self.timingTarget();
+        // A document is also its own frame's navigation entry.
+        const navigation: ?*Performance = blk: {
+            if (self.req.resource_type != .document) break :blk null;
+            const owner = self.owner orelse break :blk null;
+            break :blk owner.scope.performance();
+        };
+        if (target == null and navigation == null) {
+            return;
+        }
 
         if (t.response_end == 0) {
             // Cache hit, interceptor-fulfilled, or failed: delivered now.
@@ -3478,11 +3510,9 @@ pub const Transfer = struct {
 
         var status: u16 = 0;
         var content_type: []const u8 = "";
-        var timing_allow = false;
         if (self.res.header) |*rh| {
             status = rh.status;
             content_type = rh.contentType() orelse "";
-            timing_allow = t.timing_allow and timingAllowPassed(target.origin, self.req.url, self.res.headers, t.tainted);
         }
 
         // A cached body is stored decoded; its wire size is long gone. A
@@ -3497,7 +3527,7 @@ pub const Transfer = struct {
             encoded_body_size = known;
         }
 
-        target.performance.addResource(.{
+        var info: Performance.ResourceInfo = .{
             .name = t.url,
             .initiator = switch (self.req.resource_type) {
                 // A document fetch only makes the timeline as a child frame.
@@ -3536,10 +3566,31 @@ pub const Transfer = struct {
             .content_type = content_type,
             .content_encoding = self.responseHeader("content-encoding") orelse "",
             .from_cache = t.cache != .none,
-            .timing_allow = timing_allow,
-        }) catch |err| {
-            log.err(.http, "resource timing", .{ .err = err, .req = self });
+            .timing_allow = false,
+            .redirect_count = t.redirect_count,
         };
+
+        if (target) |tt| {
+            info.timing_allow = self.res.header != null and t.timing_allow and timingAllowPassed(tt.origin, self.req.url, self.res.headers, t.tainted);
+            tt.performance.addResource(info) catch |err| {
+                log.err(.http, "resource timing", .{ .err = err, .req = self });
+            };
+        }
+
+        if (navigation) |perf| {
+            // Named after the final URL, as document.URL is. The document
+            // times its own fetch, so no Timing-Allow-Origin applies.
+            info.name = self.req.url;
+            info.timing_allow = self.res.header != null;
+            if (t.cross_origin_redirect) {
+                info.redirect_start = 0;
+                info.redirect_end = 0;
+                info.redirect_count = 0;
+            }
+            perf.addNavigation(info) catch |err| {
+                log.err(.http, "navigation timing", .{ .err = err, .req = self });
+            };
+        }
     }
 
     fn deliversHeaderBeforeError(self: *const Transfer, conn: *const http.Connection) !bool {
@@ -3637,6 +3688,7 @@ pub const Transfer = struct {
         self.setResponseHead(cached.status, cached.content_type);
         self.setResponseHeaders(cached.headers);
         self._from_cache = true;
+        self.script_cache = .{ .key = self._cache_key, .bytes = cached.script_cache };
         self._timing.cache = cache_state;
         self._content_length = body.len;
         // A revalidated entry keeps the size of the 304 that crossed the wire.
@@ -3672,6 +3724,7 @@ pub const Transfer = struct {
         self.setResponseHeaders(headers);
         // It may replace a cached response paused at the response stage.
         self._from_cache = false;
+        self.script_cache = null;
         self._content_length = owned_body.len;
         self._encoded_data_length = owned_body.len;
         try self.bufferEvents(owned_body);
@@ -4652,6 +4705,9 @@ const ResourceTiming = struct {
     // https://fetch.spec.whatwg.org/#concept-request-tainted-origin
     tainted: bool = false,
     recorded: bool = false,
+    redirect_count: u16 = 0,
+    // A navigation only exposes its redirects if they all stayed on one origin.
+    cross_origin_redirect: bool = false,
 
     const CacheState = enum { none, local, validated };
 
@@ -4748,6 +4804,15 @@ const CacheIntent = union(enum) {
     // Conditional request in flight; on a 304 the stale entry is renewed
     // and served. Owns the entry (possibly an open file) until resolved.
     revalidate: Cache.CachedResponse,
+};
+
+pub const ScriptCache = struct {
+    // any update to the cache is aimed here
+    key: []const u8,
+
+    // existing cached script bytes. When null, ScriptManagerBase will
+    // potentially create it and then use `key` to update the database
+    bytes: ?[]const u8,
 };
 
 // Non-network URL schemes whose response is synthesized in-process rather than

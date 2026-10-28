@@ -132,7 +132,7 @@ pub const Writer = struct {
                     if (dom_node.is(DOMNode.CData.Text) == null) {
                         continue;
                     }
-                    if (ignoreText(dom_node._parent.?)) {
+                    if (ignoreText(dom_node.flatParent(self.frame).?)) {
                         continue;
                     }
                 },
@@ -653,7 +653,7 @@ pub const Writer = struct {
         const n = axn.dom;
 
         // Parent
-        if (n._parent) |p| {
+        if (n.flatParent(self.frame)) |p| {
             const parent_node = try self.registry.register(p);
             try w.objectField("parentId");
             try writeIdString(parent_node.id, w);
@@ -667,7 +667,7 @@ pub const Writer = struct {
         try w.beginArray();
         if (write_children) {
             var registry = self.registry;
-            var it = n.childrenIterator();
+            var it: TreeWalker.FlatChildren = .init(n, .{ .frame = self.frame });
             while (it.next()) |child| {
                 // ignore non-elements or text.
                 if (child.is(DOMNode.Element.Html) == null and (child.is(DOMNode.CData.Text) == null or skip_text)) {
@@ -1148,7 +1148,7 @@ fn writeName(
 
             if (use_name_for_content) {
                 var buf: std.Io.Writer.Allocating = .init(scratchAllocator(temp_arena, frame));
-                try writeAccessibleNameFallback(node, &buf.writer);
+                try writeAccessibleNameFallback(node, &buf.writer, frame);
                 if (buf.written().len > 0) {
                     try writeString(buf.written(), w);
                     return .contents;
@@ -1175,10 +1175,10 @@ fn writeName(
     };
 }
 
-fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
-    var tw = TreeWalker.FullExcludeSelf.init(node, .{});
+fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *const Frame) !void {
+    var tw: TreeWalker.FlatExcludeSelf = .init(node, .{ .frame = frame });
     while (tw.next()) |child| {
-        const parent = child._parent.?;
+        const parent = child.flatParent(frame).?;
         const in_svg = if (parent.is(DOMNode.Element)) |p| p.getTag() == .svg else false;
         if (in_svg and parent != node) {
             // Inside an SVG, only a <title> names it
@@ -1222,9 +1222,9 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer) !void {
 
 /// Pre-order walk tracking the outermost aria-hidden or inert ancestor, since
 /// TreeWalker leaves subtrees without saying so. CSS needs no tracking: the
-/// StyleManager resolves it through flat-tree ancestors. The walk itself stays
-/// in the light tree; only the root's ancestors are looked up through the flat
-/// tree.
+/// StyleManager resolves it through flat-tree ancestors. Walks the flat tree,
+/// like Chrome's AX tree: shadow content under its host, slotted nodes under
+/// their slot, unslotted light children skipped.
 const Walker = struct {
     root: *DOMNode,
     current: *DOMNode,
@@ -1239,7 +1239,7 @@ const Walker = struct {
     /// `descend` false skips the current node's children.
     fn next(self: *Walker, descend: bool) ?*DOMNode {
         if (descend) {
-            if (self.current.firstChild()) |child| {
+            if (self.current.flatFirstChild(self.frame)) |child| {
                 if (self.hiding_ancestor == null and hidesSubtree(self.current)) {
                     self.hiding_ancestor = self.current;
                 }
@@ -1251,11 +1251,11 @@ const Walker = struct {
 
         var node = self.current;
         while (node != self.root) {
-            if (node.nextSibling()) |sibling| {
+            if (node.flatNextSibling(self.frame)) |sibling| {
                 self.current = sibling;
                 return sibling;
             }
-            node = node._parent.?;
+            node = node.flatParent(self.frame).?;
             self.depth -= 1;
             if (node == self.hiding_ancestor) {
                 self.hiding_ancestor = null;
@@ -1480,7 +1480,7 @@ const IgnoreCache = struct {
     fn isGenericIgnored(self: *IgnoreCache, root: *DOMNode, frame: *Frame) !bool {
         if (self.map.get(root)) |ignored| return ignored;
 
-        var tw = TreeWalker.FullExcludeSelf.init(root, .{});
+        var tw: TreeWalker.FlatExcludeSelf = .init(root, .{ .frame = frame });
         const exposed = while (tw.next()) |node| {
             const hidden = hiddenState(node, frame);
             if (hidden == .pruned) {
@@ -1504,8 +1504,8 @@ const IgnoreCache = struct {
             }
         } else return true;
 
-        var node = exposed._parent.?;
-        while (node != root) : (node = node._parent.?) {
+        var node = exposed.flatParent(frame).?;
+        while (node != root) : (node = node.flatParent(frame).?) {
             self.map.getPtr(node).?.* = false;
         }
         return false;
@@ -2466,4 +2466,50 @@ test "AXNode: custom ARIA states and tabindex focusability" {
 
     try testing.expect(findNode(nodes, "checkbox", "Inert terms") == null);
     try testing.expect(findNode(nodes, "checkbox", "Hidden terms") == null);
+}
+
+test "AXNode: writer walks the flat tree" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/shadow_dom.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+    const json = try std.json.Stringify.valueAlloc(testing.arena_allocator, Writer{
+        .root = try registry.register(doc.asNode()),
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    const nodes = (try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, json, .{})).array.items;
+
+    try testing.expect(findNode(nodes, "textbox", "Coupon code") != null);
+    try testing.expect(findNode(nodes, "button", "in-closed") != null);
+    try testing.expect(findNode(nodes, "StaticText", "slotted-text") != null);
+    try testing.expect(findNode(nodes, null, "unslotted-text") == null);
+
+    // Shadow content hangs off the host; the shadow root isn't an AX node.
+    const host = doc.getElementById("coupon").?;
+    var host_id_buf: [10]u8 = undefined;
+    const host_id = try std.fmt.bufPrint(&host_id_buf, "{d}", .{(try registry.register(host.asNode())).id});
+
+    const apply = findNode(nodes, "button", "Apply") orelse return error.ApplyNotFound;
+    try testing.expectEqual(host_id, apply.get("parentId").?.string);
+
+    const apply_id = apply.get("nodeId").?.string;
+    for (nodes) |n| {
+        if (std.mem.eql(u8, n.object.get("nodeId").?.string, host_id)) {
+            for (n.object.get("childIds").?.array.items) |cid| {
+                if (std.mem.eql(u8, cid.string, apply_id)) break;
+            } else return error.ApplyNotChildOfHost;
+            break;
+        }
+    } else return error.HostNotFound;
 }

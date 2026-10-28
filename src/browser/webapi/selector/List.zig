@@ -304,7 +304,19 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
         .child => matchChild(node, target_compound, root, scope, nth, frame),
         .next_sibling => matchNextSibling(node, target_compound, scope, nth, frame),
         .subsequent_sibling => {
-            // For subsequent_sibling, try all matching siblings with backtracking
+            // For subsequent_sibling, try all matching siblings with backtracking.
+            const first_decides = blk: {
+                // Given #c > .a ~ .b
+                // We don't have to visit each of .b's siblings if the parent
+                // of the first matching .a sibling isn't `#c`..because every
+                // sibling shares the same parent, so if it isn't true for one
+                // it isn't true for any of them. Only a `+`, checking each
+                // candidate's own neighbour, needs every candidate tried.
+                if (segment_index == 0) {
+                    break :blk true;
+                }
+                break :blk selector.segments[segment_index - 1].combinator != .next_sibling;
+            };
             var sibling = node.previousSibling();
             while (sibling) |s| {
                 const sibling_el = s.is(Node.Element) orelse {
@@ -320,6 +332,9 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
                     // Try to match remaining segments from this sibling
                     if (matchSegments(s, selector, segment_index - 1, root, scope, nth, frame)) {
                         return true;
+                    }
+                    if (first_decides) {
+                        return false;
                     }
                     // This sibling didn't work, try the next one
                 }
@@ -563,6 +578,29 @@ fn isReadWrite(el: *Node.Element) bool {
     return el.isEditable();
 }
 
+// Only input, select and textarea can be required, and an input only for the
+// types the required attribute applies to.
+fn isRequired(el: *Node.Element) bool {
+    if (el.hasAttributeInterned("required") == false) {
+        return false;
+    }
+    if (el.is(Node.Element.Html.Input)) |input| {
+        return input.requiredApplies();
+    }
+    return el.is(Node.Element.Html.Select) != null or el.is(Node.Element.Html.TextArea) != null;
+}
+
+fn isOptional(el: *Node.Element) bool {
+    if (el.is(Node.Element.Html.Input) == null and
+        el.is(Node.Element.Html.Select) == null and
+        el.is(Node.Element.Html.TextArea) == null and
+        el.is(Node.Element.Html.Button) == null)
+    {
+        return false;
+    }
+    return isRequired(el) == false;
+}
+
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
@@ -605,12 +643,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             }
             return ValidityState.isValid(el, frame) == false;
         },
-        .required => {
-            return el.hasAttributeInterned("required");
-        },
-        .optional => {
-            return el.hasAttributeInterned("required") == false;
-        },
+        .required => return isRequired(el),
+        .optional => return isOptional(el),
         .in_range => return false,
         .out_of_range => return false,
         .placeholder_shown => return false,

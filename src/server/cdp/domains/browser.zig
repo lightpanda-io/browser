@@ -352,7 +352,7 @@ test "cdp.browser: disposing a context clears its permission overrides" {
     try testing.expectEqual(@as(usize, 2), browser.permissions.count());
 
     try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
-    try ctx.expectSentError(-32602, "No browser context with the given id found", .{ .id = 3 });
+    try ctx.expectSentError(-32000, "Failed to find context with id BID-UNKNOWN", .{ .id = 3 });
     try testing.expectEqual(@as(usize, 2), browser.permissions.count());
 
     try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-PERM-OLD" } });

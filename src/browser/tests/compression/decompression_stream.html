@@ -1,8 +1,21 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script>
-  const FORMATS = ['gzip', 'deflate', 'deflate-raw', 'brotli'];
+  let SUPPORTS_BROTLI = true;
+  try {
+    new CompressionStream('brotli');
+  } catch (e) {
+    SUPPORTS_BROTLI = false;
+  }
+</script>
+
+<script>
+  const FORMATS = ['gzip', 'deflate', 'deflate-raw'];
+  if (SUPPORTS_BROTLI) {
+    FORMATS.push('brotli');
+  }
 
   // 'hello', compressed by Python's zlib/gzip modules and the brotli CLI
   // (v1.2.0).
@@ -88,13 +101,19 @@
   async function outcome(format, chunks) {
     const ds = new DecompressionStream(format);
     const writer = ds.writable.getWriter();
+    // Writes wait for reads (backpressure), so drain the readable meanwhile.
+    // `read` is how it ends.
+    const reader = ds.readable.getReader();
+    const read = rejection((async () => {
+      while ((await reader.read()).done == false);
+    })());
     const writes = [];
     for (const chunk of chunks) writes.push(rejection(writer.write(new Uint8Array(chunk))));
     const close = rejection(writer.close());
     return {
       writes: await Promise.all(writes),
       close: await close,
-      read: await rejection(ds.readable.getReader().read()),
+      read: await read,
     };
   }
 </script>
@@ -193,7 +212,9 @@
 
   // A reserved window size (RFC 7932, section 9.1). brotli has no checksum, so
   // flipped bytes often go unnoticed.
-  results['brotli'] = await outcome('brotli', [[17, 0, 0, 0]]);
+  if (SUPPORTS_BROTLI) {
+    results['brotli'] = await outcome('brotli', [[17, 0, 0, 0]]);
+  }
 
   state.resolve();
   await state.done(() => {
@@ -227,10 +248,15 @@
 </script>
 
 <script id=bad_chunks type=module>
+  const formats = ['gzip'];
+  if (SUPPORTS_BROTLI) {
+    formats.push('brotli');
+  }
+
   const state = await testing.async();
 
   const results = [];
-  for (const format of ['gzip', 'brotli']) {
+  for (const format of formats) {
     for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
       const ds = new DecompressionStream(format);
       const writer = ds.writable.getWriter();
@@ -343,48 +369,60 @@
     ['deflate', 'brotli'],
     ['deflate-raw', 'brotli'],
   ]) {
-    results[`${data} as ${format}`] = await outcome(format, [HELLO[data]]);
+    if (FORMATS.includes(format)) {
+      results[`${data} as ${format}`] = await outcome(format, [HELLO[data]]);
+    }
   }
 
   // brotli has no magic number: these bytes start a valid-looking stream that
   // never ends, so only close() notices.
-  const raw_as_brotli = await outcome('brotli', [HELLO['deflate-raw']]);
+  const raw_as_brotli = SUPPORTS_BROTLI ? await outcome('brotli', [HELLO['deflate-raw']]) : null;
 
   state.resolve();
   await state.done(() => {
     for (const result of Object.values(results)) {
       testing.expectEqual({ writes: ['TypeError'], close: 'TypeError', read: 'TypeError' }, result);
     }
-    testing.expectEqual({ writes: ['resolved'], close: 'TypeError', read: 'TypeError' }, raw_as_brotli);
+    if (SUPPORTS_BROTLI) {
+      testing.expectEqual({ writes: ['resolved'], close: 'TypeError', read: 'TypeError' }, raw_as_brotli);
+    }
   });
 </script>
 
 <script id=brotli_small_window type=module>
+  // testing.async() comes first, even when skipping: the runner waits for
+  // every module that has one.
   const state = await testing.async();
+  if (SUPPORTS_BROTLI == false) {
+    state.resolve();
+    await state.done(() => {});
+  } else {
 
-  // `brotli -q 11 -w 10` (v1.2.0) of 'hello world ' x 1000: with a 1 KiB
-  // window the decoder's ring buffer fills a dozen times within one write.
-  const compressed = [
-    161, 248, 118, 193, 111, 164, 116, 243, 38, 170, 50, 180, 4, 97, 123, 171, 89, 30, 171, 5, 50, 160, 218, 142, 38, 0,
-    0,
-  ];
-  const expected = 'hello world '.repeat(1000);
-  const results = {
-    whole: (await decompress('brotli', [compressed])) === expected,
-    split: (await decompress('brotli', compressed.map((b) => [b]))) === expected,
-  };
+    // `brotli -q 11 -w 10` (v1.2.0) of 'hello world ' x 1000: with a 1 KiB
+    // window the decoder's ring buffer fills a dozen times within one write.
+    const compressed = [
+      161, 248, 118, 193, 111, 164, 116, 243, 38, 170, 50, 180, 4, 97, 123, 171, 89, 30, 171, 5, 50, 160, 218, 142, 38, 0,
+      0,
+    ];
+    const expected = 'hello world '.repeat(1000);
+    const results = {
+      whole: (await decompress('brotli', [compressed])) === expected,
+      split: (await decompress('brotli', compressed.map((b) => [b]))) === expected,
+    };
 
-  state.resolve();
-  await state.done(() => {
-    testing.expectEqual({ whole: true, split: true }, results);
-  });
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual({ whole: true, split: true }, results);
+    });
+  }
 </script>
 
 <script id=stored_type_error type=module>
   const state = await testing.async();
 
   // A stream errored by a bad chunk rejects with one TypeError object, on
-  // both sides, starting with the write that failed.
+  // both sides, starting with the write that failed. close() is the
+  // exception: on an errored stream it rejects with a new TypeError.
   const ds = new DecompressionStream('gzip');
   const writer = ds.writable.getWriter();
   const reader = ds.readable.getReader();
@@ -401,7 +439,8 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, errors[0] instanceof TypeError);
-    testing.expectEqual([true, true, true, true, true, true], errors.map((e) => e === errors[0]));
+    testing.expectEqual([true, true, true, true, true, false], errors.map((e) => e === errors[0]));
+    testing.expectEqual(true, errors[5] instanceof TypeError);
   });
 </script>
 
@@ -409,20 +448,26 @@
   const state = await testing.async();
 
   // Truncated input only fails in close(), which rejects with the TypeError
-  // that both sides errored with.
+  // that both sides errored with. A second close() gets a new TypeError.
   const ds = new DecompressionStream('gzip');
   const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  // The write waits for a read (backpressure)
+  const first_read = reader.read();
   await writer.write(new Uint8Array(HELLO.gzip.slice(0, -1)));
+  const first = new TextDecoder().decode((await first_read).value);
   const close_error = await writer.close().catch((e) => e);
   const errors = [
-    await ds.readable.getReader().read().catch((e) => e),
+    await reader.read().catch((e) => e),
     await writer.write(new Uint8Array(1)).catch((e) => e),
     await writer.close().catch((e) => e),
   ];
 
   state.resolve();
   await state.done(() => {
+    testing.expectEqual('hello', first);
     testing.expectEqual(true, close_error instanceof TypeError);
-    testing.expectEqual([true, true, true], errors.map((e) => e === close_error));
+    testing.expectEqual([true, true, false], errors.map((e) => e === close_error));
+    testing.expectEqual(true, errors[2] instanceof TypeError);
   });
 </script>

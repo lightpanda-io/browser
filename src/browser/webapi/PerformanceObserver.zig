@@ -170,7 +170,7 @@ pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
 }
 
 fn getSupportedEntryTypes() []const []const u8 {
-    return &.{ "mark", "measure", "resource" };
+    return &.{ "mark", "measure", "navigation", "resource" };
 }
 
 /// Returns true if observer interested with given entry.

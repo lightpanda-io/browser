@@ -261,10 +261,10 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(struct {
-        fn constructor(m_: ?[]const u8, n_: ?[]const u8, exec: *const js.Execution) !DOMException {
+        fn constructor(m_: ?js.NullableString, n_: ?js.NullableString, exec: *const js.Execution) !DOMException {
             return init(
-                if (m_) |m| try exec.dupeString(m) else null,
-                if (n_) |n| try exec.dupeString(n) else null,
+                if (m_) |m| try exec.dupeString(m.value) else null,
+                if (n_) |n| try exec.dupeString(n.value) else null,
             );
         }
     }.constructor, .{});

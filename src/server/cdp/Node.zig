@@ -24,6 +24,7 @@ const lp = @import("lightpanda");
 
 const id = @import("id.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
+const Frame = @import("../../browser/Frame.zig");
 const IFrame = @import("../../browser/webapi/element/html/IFrame.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
@@ -129,12 +130,15 @@ pub const Search = struct {
 pub const Writer = struct {
     depth: i32,
     exclude_root: bool,
+    pierce: bool = false,
     root: *const NodeRegistry.Node,
     registry: *NodeRegistry,
+    frame: *const Frame,
 
     pub const Opts = struct {
         depth: i32 = 0,
         exclude_root: bool = false,
+        pierce: bool = false,
     };
 
     pub fn jsonStringify(self: *const Writer, w: anytype) error{WriteFailed}!void {
@@ -157,6 +161,7 @@ pub const Writer = struct {
     fn toJSON(self: *const Writer, node: *const NodeRegistry.Node, depth: usize, w: anytype) !void {
         try w.beginObject();
         try self.writeCommon(node, false, w);
+        try self.writeShadowRoots(node, self.pierce, depth, w);
 
         try w.objectField("children");
         const child_count = try self.writeChildren(node, depth, w);
@@ -166,12 +171,33 @@ pub const Writer = struct {
         try w.endObject();
     }
 
+    fn writeShadowRoots(self: *const Writer, node: *const NodeRegistry.Node, pierce: bool, depth: usize, w: anytype) anyerror!void {
+        const el = node.dom.is(DOMNode.Element) orelse return;
+        const shadow = el.hostedShadowRoot(self.frame) orelse return;
+        const shadow_node = try self.registry.register(shadow.asNode());
+
+        try w.objectField("shadowRoots");
+        try w.beginArray();
+        if (pierce and self.isFull(depth)) {
+            try self.toJSON(shadow_node, depth + 1, w);
+        } else {
+            try w.beginObject();
+            try self.writeCommon(shadow_node, true, w);
+            try w.endObject();
+        }
+        try w.endArray();
+    }
+
+    fn isFull(self: *const Writer, depth: usize) bool {
+        return self.depth < 0 or self.depth < depth;
+    }
+
     fn writeChildren(self: *const Writer, node: *const NodeRegistry.Node, depth: usize, w: anytype) anyerror!usize {
         var count: usize = 0;
         var it = node.dom.childrenIterator();
 
         var registry = self.registry;
-        const full_child = self.depth < 0 or self.depth < depth;
+        const full_child = self.isFull(depth);
 
         try w.beginArray();
         while (it.next()) |dom_child| {
@@ -181,6 +207,7 @@ pub const Writer = struct {
             } else {
                 try w.beginObject();
                 try self.writeCommon(child_node, true, w);
+                try self.writeShadowRoots(child_node, false, depth + 1, w);
                 try w.endObject();
             }
             count += 1;
@@ -255,6 +282,11 @@ pub const Writer = struct {
             try w.write(nv.str());
         } else {
             try w.write("");
+        }
+
+        if (dom_node.is(DOMNode.ShadowRoot)) |shadow| {
+            try w.objectField("shadowRootType");
+            try w.write(@tagName(shadow._mode));
         }
 
         if (include_child_count) {
@@ -363,6 +395,7 @@ test "cdp Node: Writer" {
             .depth = 0,
             .exclude_root = false,
             .registry = &registry,
+            .frame = frame,
         }, .{});
         defer testing.allocator.free(json);
 
@@ -403,6 +436,7 @@ test "cdp Node: Writer" {
             .depth = 1,
             .exclude_root = false,
             .registry = &registry,
+            .frame = frame,
         }, .{});
         defer testing.allocator.free(json);
 
@@ -458,6 +492,7 @@ test "cdp Node: Writer" {
             .depth = -1,
             .exclude_root = true,
             .registry = &registry,
+            .frame = frame,
         }, .{});
         defer testing.allocator.free(json);
 
@@ -516,5 +551,78 @@ test "cdp Node: Writer" {
                 .nodeValue = "\n",
             } },
         } }, json);
+    }
+}
+
+test "cdp Node: Writer shadowRoots" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/shadow_dom.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const host = try registry.register(frame.window._document.getElementById("coupon").?.asNode());
+
+    {
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = host,
+            .depth = -1,
+            .exclude_root = false,
+            .pierce = true,
+            .registry = &registry,
+            .frame = frame,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        try testing.expectJson(.{
+            .localName = "x-coupon",
+            .childNodeCount = 2,
+            .shadowRoots = &.{.{
+                .nodeType = 11,
+                .nodeName = "#document-fragment",
+                .shadowRootType = "open",
+                .childNodeCount = 3,
+                .children = &.{
+                    .{ .localName = "label", .childNodeCount = 2 },
+                    .{ .localName = "button", .attributes = &.{ "id", "apply" } },
+                    .{ .localName = "slot" },
+                },
+            }},
+        }, json);
+    }
+
+    {
+        // without pierce, the root is listed but not walked
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = host,
+            .depth = -1,
+            .exclude_root = false,
+            .registry = &registry,
+            .frame = frame,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        try testing.expectJson(.{ .shadowRoots = &.{.{ .shadowRootType = "open", .childNodeCount = 3 }} }, json);
+        try testing.expect(std.mem.find(u8, json, "\"apply\"") == null);
+    }
+
+    {
+        // closed roots too
+        const closed = try registry.register(frame.window._document.getElementById("closed-host").?.asNode());
+        const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+            .root = closed,
+            .depth = -1,
+            .exclude_root = false,
+            .pierce = true,
+            .registry = &registry,
+            .frame = frame,
+        }, .{});
+        defer testing.allocator.free(json);
+
+        try testing.expectJson(.{ .shadowRoots = &.{.{
+            .shadowRootType = "closed",
+            .children = &.{.{ .localName = "button", .attributes = &.{ "id", "in-closed" } }},
+        }} }, json);
     }
 }

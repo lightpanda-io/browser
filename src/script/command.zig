@@ -16,9 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! A parsed slash command: a tool slash command, a `#`-comment, or an
-//! `LlmCommand` trigger (`/login`, `/logout`, `/acceptCookies`). Multi-line
-//! `'''…'''` blocks are assembled by the REPL before parse.
+//! A parsed slash command: a tool call, a prompt-form tool command, a
+//! `#`-comment, or an `LlmCommand` trigger (`/login`, `/logout`,
+//! `/acceptCookies`). Multi-line `'''…'''` blocks are assembled by the REPL
+//! before parse.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -64,7 +65,16 @@ const accept_cookies_prompt =
 pub const Command = union(enum) {
     tool_call: ToolCall,
     llm: LlmCommand,
+    prompt: Prompt,
     comment: void,
+
+    /// Leading text for a `takesPrompt` tool (`/click the sign in button`).
+    pub const Prompt = struct {
+        tool: BrowserTool,
+        text: []const u8,
+        /// Pinned key=value beside the prompt.
+        args: ?std.json.Value,
+    };
 
     /// An LLM-driven command: `@tagName` is the wire-format slash name, and
     /// each value owns its `prompt()` (sent to the model) and `description()`
@@ -134,8 +144,7 @@ pub const Command = union(enum) {
 
     pub fn isRecorded(self: Command) bool {
         return switch (self) {
-            .comment => false,
-            .llm => false,
+            .comment, .llm, .prompt => false,
             .tool_call => |tc| tc.isRecorded(),
         };
     }
@@ -168,6 +177,11 @@ pub const Command = union(enum) {
         }
 
         const s = Schema.findByName(split.name) orelse return error.UnknownTool;
+        if (Schema.takesPrompt(s.tool)) {
+            if (try s.parsePrompt(arena, split.rest, diag)) |p| {
+                return .{ .prompt = .{ .tool = s.tool, .text = p.prompt, .args = p.args } };
+            }
+        }
         const args = try s.parseValueDiag(arena, split.rest, diag);
         return .{ .tool_call = .{ .tool = s.tool, .args = args } };
     }
@@ -178,7 +192,7 @@ pub const Command = union(enum) {
     /// runtime.
     pub fn formatJs(self: Command, arena: std.mem.Allocator, writer: *std.Io.Writer) (std.Io.Writer.Error || error{OutOfMemory})!void {
         switch (self) {
-            .comment, .llm => return,
+            .comment, .llm, .prompt => return,
             .tool_call => |tc| try formatJsToolCall(tc, arena, writer),
         }
     }
@@ -380,12 +394,40 @@ test "parse: /goto positional" {
     try testing.expectString("https://example.com", cmd.tool_call.args.?.object.get("url").?.string);
 }
 
-test "parse: /click rejects positional (zero required fields)" {
+test "parse: leading text on a prompt tool is a prompt, key=value stays literal" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectError(error.PositionalNotAllowed, Command.parse(arena.allocator(), "/click 'Login'"));
-    const cmd = try Command.parse(arena.allocator(), "/click selector='Login'");
-    try testing.expectString("Login", cmd.tool_call.args.?.object.get("selector").?.string);
+    const aa = arena.allocator();
+
+    const quoted = (try Command.parse(aa, "/click 'Login'")).prompt;
+    try testing.expectEqual(BrowserTool.click, quoted.tool);
+    try testing.expectString("'Login'", quoted.text);
+    try testing.expect(quoted.args == null);
+
+    try testing.expectString("the user's menu", (try Command.parse(aa, "/click the user's menu")).prompt.text);
+
+    const fill = (try Command.parse(aa, "/fill the email field value=$LP_EMAIL")).prompt;
+    try testing.expectString("the email field", fill.text);
+    try testing.expectString("$LP_EMAIL", fill.args.?.object.get("value").?.string);
+    try testing.expect(fill.args.?.object.get("selector") == null);
+
+    try testing.expect((try Command.parse(aa, "/setChecked uncheck the newsletter box")).prompt.args == null);
+
+    const extract = (try Command.parse(aa, "/extract all products with prices save=products")).prompt;
+    try testing.expectString("all products with prices", extract.text);
+    try testing.expectString("products", extract.args.?.object.get("save").?.string);
+
+    const literal = try Command.parse(aa, "/click selector='Login'");
+    try testing.expectString("Login", literal.tool_call.args.?.object.get("selector").?.string);
+}
+
+test "parse: tools without a prompt form keep their positional" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    try testing.expectString("Enter", (try Command.parse(aa, "/press Enter")).tool_call.args.?.object.get("key").?.string);
+    try testing.expectString("networkidle", (try Command.parse(aa, "/waitForState networkidle")).tool_call.args.?.object.get("state").?.string);
+    try testing.expectString("#logout", (try Command.parse(aa, "/waitForSelector '#logout'")).tool_call.args.?.object.get("selector").?.string);
 }
 
 test "parse: /getEnv positional binds to optional name" {
@@ -399,11 +441,12 @@ test "parse: /getEnv positional binds to optional name" {
     try testing.expect(list.tool_call.args == null);
 }
 
-test "parse: /extract rejects positional after key=value" {
+test "parse: positional must come before key=value" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectError(error.PositionalMustComeFirst, Command.parse(arena.allocator(), "/extract save=front '{\"karma\":\"#karma\"}'"));
-    const cmd = try Command.parse(arena.allocator(), "/extract '{\"karma\":\"#karma\"}' save=front");
+    try testing.expectError(error.PositionalMustComeFirst, Command.parse(arena.allocator(), "/goto timeout=5000 https://example.com"));
+    try testing.expectError(error.PromptMustComeFirst, Command.parse(arena.allocator(), "/extract save=front '{\"karma\":\"#karma\"}'"));
+    const cmd = try Command.parse(arena.allocator(), "/extract schema='{\"karma\":\"#karma\"}' save=front");
     try testing.expectString("front", cmd.tool_call.args.?.object.get("save").?.string);
 }
 
@@ -456,28 +499,28 @@ test "formatJs: evaluate and extract strings" {
     const aa = arena.allocator();
 
     {
-        const cmd = try Command.parse(aa, "/evaluate '''\nconst x = 1;\nreturn x;\n'''");
+        const cmd = try Command.parse(aa, "/evaluate script='''\nconst x = 1;\nreturn x;\n'''");
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
         try testing.expectString("evaluate(`\nconst x = 1;\nreturn x;\n`);", aw.written());
     }
     {
-        const cmd = try Command.parse(aa, "/evaluate 'return `tick` + ${x};'");
+        const cmd = try Command.parse(aa, "/evaluate script='return `tick` + ${x};'");
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
         try testing.expectString("evaluate(\"return `tick` + ${x};\");", aw.written());
     }
     {
-        const cmd = try Command.parse(aa, "/extract '{\"title\":\"h1\",\"bad-key\":\".x\"}'");
+        const cmd = try Command.parse(aa, "/extract schema='{\"title\":\"h1\",\"bad-key\":\".x\"}'");
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
         try testing.expectString("extract({ title: \"h1\", \"bad-key\": \".x\" });", aw.written());
     }
     {
-        const cmd = try Command.parse(aa, "/extract '{\"title\":\"h1\"}' save=snap");
+        const cmd = try Command.parse(aa, "/extract schema='{\"title\":\"h1\"}' save=snap");
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
         try cmd.formatJs(aa, &aw.writer);
@@ -499,6 +542,9 @@ test "isRecorded / producesData via tool flags" {
 
     const login: Command = .{ .llm = .login };
     try testing.expect(!login.isRecorded());
+
+    const prompt = try Command.parse(arena.allocator(), "/click the sign in button");
+    try testing.expect(!prompt.isRecorded());
 }
 
 test "isRecorded: screenshot needs a path to replay" {

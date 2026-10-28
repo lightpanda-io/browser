@@ -73,19 +73,71 @@ fn getAsFile(self: *const DataTransferItem) ?*File {
 }
 
 // https://html.spec.whatwg.org/multipage/dnd.html#dom-datatransferitem-getasstring
-// v1 invokes the callback synchronously with the string value. File items and a
-// missing callback are no-ops, per spec.
-pub fn getAsString(self: *const DataTransferItem, cb_: ?js.Function) !void {
+// The callback runs in a queued task.
+pub fn getAsString(self: *DataTransferItem, cb_: ?js.Function.Global, exec: *js.Execution) !void {
     const cb = cb_ orelse return;
-    const s = switch (self._payload) {
+    errdefer cb.release();
+
+    const value = switch (self._payload) {
         .string => |str| str,
-        .file => return,
+        .file => {
+            // noop
+            cb.release();
+            return;
+        },
     };
-    var caught: js.TryCatch.Caught = .{};
-    cb.tryCall(void, .{s}, &caught) catch {
-        log.debug(.js, "getAsString callback", .{ .caught = caught, .source = "DataTransferItem" });
-    };
+
+    const req = try exec._factory.create(StringRequest{
+        .exec = exec,
+        .callback = cb,
+        .value = value,
+        .data_transfer = self._data_transfer,
+    });
+    errdefer exec._factory.destroy(req);
+
+    try exec.js.scheduler.add(req, StringRequest.run, 0, .{
+        .name = "DataTransferItem.getAsString",
+        .finalizer = StringRequest.cancelled,
+    });
+    // `value` lives in the DataTransfer's arena.
+    self._data_transfer.acquireRef();
 }
+
+const StringRequest = struct {
+    exec: *js.Execution,
+    value: []const u8,
+    callback: js.Function.Global,
+    data_transfer: *DataTransfer,
+
+    fn deinit(self: *StringRequest) void {
+        const exec = self.exec;
+        self.callback.release();
+        self.data_transfer.releaseRef(exec.page);
+        exec._factory.destroy(self);
+    }
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *StringRequest = @ptrCast(@alignCast(ctx));
+        self.deinit();
+    }
+
+    fn run(ctx: *anyopaque) anyerror!?u32 {
+        const self: *StringRequest = @ptrCast(@alignCast(ctx));
+        defer self.deinit();
+
+        const exec = self.exec;
+        var ls: js.Local.Scope = undefined;
+        exec.js.localScope(&ls);
+        defer ls.deinit();
+
+        ls.toLocal(self.callback).call(void, .{self.value}) catch |err| {
+            exec.page.recordJsError(err);
+            log.debug(.js, "getAsString callback", .{ .err = err });
+        };
+        ls.local.runMicrotasks();
+        return null;
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DataTransferItem);

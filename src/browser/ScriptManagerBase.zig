@@ -607,6 +607,9 @@ pub const Script = struct {
     // The encoding a remote script's Content-Type charset names.
     encoding: ?h5e.EncodingInfo = null,
 
+    // Set when the body is an http cache entry. Only classic scripts use it (for now).
+    script_cache: ?HttpClient.ScriptCache = null,
+
     extra: Extra,
     node: std.DoublyLinkedList.Node,
     manager: *ScriptManagerBase,
@@ -792,6 +795,14 @@ pub const Script = struct {
         var buffer: std.ArrayList(u8) = .empty;
         try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), body_len);
         self.source = .{ .remote = buffer };
+
+        if (transfer.script_cache) |sc| {
+            const allocator = self.sourceAllocator();
+            self.script_cache = .{
+                .key = try allocator.dupe(u8, sc.key),
+                .bytes = if (sc.bytes) |b| try allocator.dupe(u8, b) else null,
+            };
+        }
         return .proceed;
     }
 
@@ -941,8 +952,10 @@ pub const Script = struct {
             .kind = fe.kind,
         });
 
+        // A script runs in the main world, even when an isolated world
+        // inserted it (e.g. Playwright's setContent uses document.write).
         var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
+        frame.main_js.localScope(&ls);
         defer ls.deinit();
 
         const local = &ls.local;
@@ -987,11 +1000,11 @@ pub const Script = struct {
             switch (fe.kind) {
                 .javascript => {
                     const text = self.classicText(fe) catch break :blk false;
-                    _ = local.eval(text, url) catch break :blk false;
+                    self.runClassic(local, text) catch break :blk false;
                 },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
+                    frame.main_js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -1039,6 +1052,50 @@ pub const Script = struct {
             .javascript => comptime .wrap("load"),
             else => comptime .wrap("error"),
         });
+    }
+
+    // currently only classic scripts participate in script caching
+    fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
+        const sc = self.script_cache orelse {
+            // wasn't in the cache and isn't cacheable
+            return local.eval(text, self.url);
+        };
+
+        if (text.ptr != self.source.content().ptr) {
+            // Cacheable from a pure HTTP point of view, but classicText()
+            // decoded the content (it wasn't UTF-8). You might think: the
+            // cached body will go through the same classicText() next time, so
+            // wouldn't bytes we generate now still apply? In most cases, yes.
+            // But when the response doesn't name its charset (BOM or
+            // Content-Type), classicText() falls back to <script charset="...">
+            // and then the document's encoding. If either differs next time,
+            // the text changes without the cache entry being invalidated.
+            // That's unlikely, but treating the script as uncacheable avoids
+            // the complexity for a rare edge case.
+            return local.eval(text, self.url);
+        }
+
+        const result = try local.compileWithCache(text, self.url, sc.bytes);
+        _ = try result.script.run();
+
+        if (sc.bytes != null) {
+            log.debug(.browser, "script cache", .{ .url = self.url, .rejected = result.cache_rejected });
+            if (result.cache_rejected == false) {
+                // We already have cached bytes and v8 didn't rectect them.
+                // Nothing else to do
+                return;
+            }
+        }
+
+        // Created after the run so it includes the functions compiled lazily
+        // while running.
+        const bytes = result.script.getUnboundScript().createCodeCache(self.sourceAllocator()) catch |err| {
+            log.debug(.browser, "create script cache", .{ .url = self.url, .err = err });
+            return;
+        };
+        self.manager.client.cache.putScriptCache(sc.key, text, bytes) catch |err| {
+            log.warn(.cache, "put script cache", .{ .url = self.url, .err = err });
+        };
     }
 
     // Frame-only: fires load/error on the <script> element itself,

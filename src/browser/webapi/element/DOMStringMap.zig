@@ -32,34 +32,48 @@ const DOMStringMap = @This();
 _element: *Element,
 
 fn getProperty(self: *DOMStringMap, name: String, frame: *Frame) !?String {
+    if (!isPropertyName(name.str())) return null;
     const attr_name = try camelToKebab(frame.local_arena, name);
     return try self._element.getAttribute(attr_name, frame);
 }
 
 fn setProperty(self: *DOMStringMap, name: String, value: String, frame: *Frame) !void {
+    if (!isPropertyName(name.str())) return error.SyntaxError;
     const attr_name = try camelToKebab(frame.local_arena, name);
-    return self._element.setAttributeSafe(attr_name, value, frame);
+    // setAttribute rejects a name that isn't a valid attribute name (dataset["a b"])
+    return self._element.setAttribute(attr_name, value, frame);
 }
 
 fn hasProperty(self: *DOMStringMap, name: String, frame: *Frame) !bool {
+    if (!isPropertyName(name.str())) return false;
     const attr_name = try camelToKebab(frame.local_arena, name);
     return self._element.hasAttribute(attr_name, frame);
 }
 
 fn deleteProperty(self: *DOMStringMap, name: String, frame: *Frame) !void {
+    if (!isPropertyName(name.str())) return;
     const attr_name = try camelToKebab(frame.local_arena, name);
     try self._element.removeAttribute(attr_name, frame);
 }
 
-// fooBar -> data-foo-bar (with SSO optimization for short strings)
+// A '-' followed by an ASCII lowercase letter never comes out of kebabToCamel,
+// so such a name maps to no data-* attribute, and setting it is a SyntaxError.
+fn isPropertyName(name: []const u8) bool {
+    for (name, 0..) |c, i| {
+        if (c == '-' and i + 1 < name.len and std.ascii.isLower(name[i + 1])) return false;
+    }
+    return true;
+}
+
+// fooBar -> data-foo-bar, Foo -> data--foo (with SSO optimization for short strings)
 fn camelToKebab(arena: Allocator, camel: String) !String {
     const camel_str = camel.str();
 
     // Calculate output length
     var output_len: usize = 5; // "data-"
-    for (camel_str, 0..) |c, i| {
+    for (camel_str) |c| {
         output_len += 1;
-        if (std.ascii.isUpper(c) and i > 0) output_len += 1; // extra char for '-'
+        if (std.ascii.isUpper(c)) output_len += 1; // extra char for '-'
     }
 
     if (output_len <= 12) {
@@ -68,12 +82,10 @@ fn camelToKebab(arena: Allocator, camel: String) !String {
         @memcpy(content[0..5], "data-");
         var idx: usize = 5;
 
-        for (camel_str, 0..) |c, i| {
+        for (camel_str) |c| {
             if (std.ascii.isUpper(c)) {
-                if (i > 0) {
-                    content[idx] = '-';
-                    idx += 1;
-                }
+                content[idx] = '-';
+                idx += 1;
                 content[idx] = std.ascii.toLower(c);
             } else {
                 content[idx] = c;
@@ -89,11 +101,9 @@ fn camelToKebab(arena: Allocator, camel: String) !String {
     try result.ensureTotalCapacityPrecise(arena, output_len);
     result.appendSliceAssumeCapacity("data-");
 
-    for (camel_str, 0..) |c, i| {
+    for (camel_str) |c| {
         if (std.ascii.isUpper(c)) {
-            if (i > 0) {
-                result.appendAssumeCapacity('-');
-            }
+            result.appendAssumeCapacity('-');
             result.appendAssumeCapacity(std.ascii.toLower(c));
         } else {
             result.appendAssumeCapacity(c);

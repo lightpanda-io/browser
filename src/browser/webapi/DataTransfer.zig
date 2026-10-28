@@ -57,7 +57,7 @@ _item_list: *DataTransferItemList,
 // holds is released at frame teardown (same path as `<input type=file>`).
 _files: *FileList,
 _drop_effect: []const u8 = "none",
-_effect_allowed: []const u8 = "uninitialized",
+_effect_allowed: []const u8 = "none",
 
 pub fn init(frame: *Frame) !*DataTransfer {
     const arena = try frame.getArena(.medium, "DataTransfer");

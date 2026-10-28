@@ -444,6 +444,8 @@
   testing.expectEqual(600, item.offsetWidth);
   column.style.flexFlow = 'column wrap';
   testing.expectEqual(600, item.offsetWidth);
+  column.style.flexFlow = 'wrap column-reverse';
+  testing.expectEqual(600, item.offsetWidth);
   column.remove();
 
   const grid = document.createElement('div');
@@ -474,6 +476,64 @@
 }
 </script>
 
+<script id="inlineBoxIsNotAContainingBlock">
+{
+  // A block inside an inline box sizes off the block around it (#4213: a
+  // width:100% flex row inside an unstyled custom element or span).
+  const outer = document.createElement('div');
+  outer.style.width = '800px';
+  document.body.appendChild(outer);
+
+  for (const wrapperTag of ['demo-app', 'span']) {
+    const wrapper = document.createElement(wrapperTag);
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; width: 100%';
+    const menu = document.createElement('div');
+    menu.style.cssText = 'width: 40px; flex-shrink: 0';
+    const pane = document.createElement('div');
+    pane.style.cssText = 'flex: 1; min-width: 0';
+    row.append(menu, pane);
+    wrapper.appendChild(row);
+    outer.appendChild(wrapper);
+    testing.expectEqual(800, row.offsetWidth);
+    testing.expectEqual(760, pane.clientWidth);
+
+    const fill = document.createElement('div');
+    wrapper.appendChild(fill);
+    testing.expectEqual(800, fill.offsetWidth);
+
+    // Nested inlines are skipped too
+    const inner = document.createElement('span');
+    const half = document.createElement('div');
+    half.style.width = '50%';
+    inner.appendChild(half);
+    wrapper.appendChild(inner);
+    testing.expectEqual(400, half.offsetWidth);
+
+    wrapper.style.display = 'inline';
+    testing.expectEqual(760, pane.clientWidth);
+    wrapper.style.display = 'block';
+    testing.expectEqual(760, pane.clientWidth);
+    wrapper.remove();
+  }
+
+  // Inline-blocks, floats and flex items are block containers
+  const box = document.createElement('span');
+  const child = document.createElement('div');
+  child.style.width = '100%';
+  box.appendChild(child);
+  outer.appendChild(box);
+  for (const css of ['display: inline-block; width: 300px', 'float: left; width: 300px', 'position: absolute; width: 300px']) {
+    box.style.cssText = css;
+    testing.expectEqual(300, child.offsetWidth);
+  }
+  box.style.cssText = 'width: 300px';
+  outer.style.display = 'flex';
+  testing.expectEqual(300, child.offsetWidth);
+  outer.remove();
+}
+</script>
+
 <script id="growShareAfterPercentSiblings">
 {
   // A percentage sibling takes its share of the row before the growers
@@ -498,6 +558,179 @@
   fixed.style.cssText = 'width: 100px; flex-shrink: 0';
   sidebar.appendChild(fixed);
   testing.expectEqual(700, pane.offsetWidth);
+  row.remove();
+}
+</script>
+
+<script id="flexItemsShrink">
+{
+  // An overflowing row takes the overflow from its items in proportion to
+  // their widths. A header's `width: 100%` menu beside a fixed logo is what
+  // the logo leaves it, so a "logo + menu fits" check holds.
+  const row = document.createElement('div');
+  row.style.cssText = 'display: flex; width: 1000px';
+  const logo = document.createElement('div');
+  logo.style.cssText = 'width: 200px; flex-shrink: 0; margin-right: 32px';
+  const menu = document.createElement('div');
+  menu.style.width = '100%';
+  row.append(logo, menu);
+  document.body.appendChild(row);
+  testing.expectEqual(200, logo.offsetWidth);
+  testing.expectEqual(768, menu.offsetWidth);
+  testing.expectEqual(768, menu.getBoundingClientRect().width);
+  row.remove();
+
+  const pair = (a, b) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; width: 600px';
+    const first = document.createElement('div');
+    first.style.cssText = 'width: 400px; ' + a;
+    const second = document.createElement('div');
+    second.style.cssText = 'width: 400px; ' + b;
+    row.append(first, second);
+    document.body.appendChild(row);
+    return { row, first, second };
+  };
+
+  {
+    const { row, first, second } = pair('', '');
+    testing.expectEqual(300, first.offsetWidth);
+    testing.expectEqual(300, second.offsetWidth);
+    row.remove();
+  }
+
+  // flex-shrink: 0 and the shorthands without a shrink keep their width
+  for (const css of ['flex-shrink: 0', 'flex: none', 'flex: 1 0 auto', 'flex: 0 0 400px']) {
+    const { row, first, second } = pair(css, '');
+    testing.expectEqual(400, first.offsetWidth, css);
+    testing.expectEqual(200, second.offsetWidth, css);
+    row.remove();
+  }
+  for (const css of ['flex: 1', 'flex: 0 1 auto', 'flex: auto', 'flex-shrink: 2']) {
+    const { row, first } = pair(css, '');
+    testing.expectEqual(300, first.offsetWidth, css);
+    row.remove();
+  }
+
+  // An item doesn't shrink below its content (min-width: auto); what it
+  // can't give, the others do
+  {
+    const { row, first, second } = pair('', '');
+    const content = document.createElement('div');
+    content.style.width = '350px';
+    first.appendChild(content);
+    testing.expectEqual(350, first.offsetWidth);
+    testing.expectEqual(250, second.offsetWidth);
+
+    // ... unless a min-width replaces that floor, or it clips its content
+    for (const css of ['min-width: 0', 'overflow: hidden']) {
+      first.style.cssText = 'width: 400px; ' + css;
+      second.style.flexShrink = '0';
+      testing.expectEqual(200, first.offsetWidth, css);
+      second.style.flexShrink = '';
+    }
+    row.remove();
+  }
+
+  // A content-sized item counts content a descendant clips (rc-menu's
+  // overflow: hidden list), and can shrink as far as the content left
+  // unclipped. Chrome stops at the widest unbreakable child instead (no
+  // min-content model here); this overflow lands on it either way.
+  {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; width: 600px';
+    const wrapper = document.createElement('div');
+    const list = document.createElement('ul');
+    list.style.overflow = 'hidden';
+    for (let i = 0; i < 3; i++) {
+      const item = document.createElement('li');
+      item.style.cssText = 'display: inline-block; width: 100px';
+      list.appendChild(item);
+    }
+    wrapper.appendChild(list);
+    row.appendChild(wrapper);
+    document.body.appendChild(row);
+    testing.expectEqual(300, wrapper.offsetWidth);
+    testing.expectEqual(300, list.offsetWidth);
+
+    const filler = document.createElement('div');
+    filler.style.cssText = 'width: 500px; flex-shrink: 0';
+    row.appendChild(filler);
+    testing.expectEqual(100, wrapper.offsetWidth);
+    testing.expectEqual(100, list.offsetWidth);
+    row.remove();
+  }
+
+  // A wrapping row moves items to new lines instead of shrinking them
+  for (const css of ['flex-wrap: wrap', 'flex-wrap: wrap-reverse', 'flex-flow: row wrap', 'flex-flow: wrap']) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; width: 600px; ' + css;
+    const items = [];
+    for (let i = 0; i < 4; i++) {
+      const item = document.createElement('div');
+      item.style.width = '200px';
+      items.push(item);
+    }
+    row.append(...items);
+    document.body.appendChild(row);
+    testing.expectEqual(200, items[0].offsetWidth, css);
+    // A later nowrap puts it back
+    row.style.flexWrap = 'nowrap';
+    testing.expectEqual(150, items[0].offsetWidth, css);
+    row.remove();
+  }
+
+  // A row with room to spare shrinks nothing
+  {
+    const { row, first } = pair('', '');
+    row.style.width = '900px';
+    testing.expectEqual(400, first.offsetWidth);
+    row.remove();
+  }
+}
+</script>
+
+<script id="horizontalMargins">
+{
+  const section = document.createElement('div');
+  section.style.width = '700px';
+  document.body.appendChild(section);
+
+  // A block fills its containing block less its margins; negative margins
+  // widen it, percentages resolve against the containing block
+  const block = document.createElement('div');
+  section.appendChild(block);
+  for (const [css, width] of [['margin: 0 50px', 600], ['margin: 0 10px 0 40px', 650], ['margin-left: -20px', 720], ['margin: 10%', 560], ['margin-inline: 25px 75px', 600], ['margin-inline: 50px; margin-left: 0', 650], ['margin: 0 auto', 700]]) {
+    block.style.cssText = css;
+    testing.expectEqual(width, block.offsetWidth, css);
+  }
+
+  // A shrink-to-fit box counts its children's margins
+  const inline = document.createElement('div');
+  inline.style.display = 'inline-block';
+  const child = document.createElement('div');
+  child.style.cssText = 'width: 40px; margin: 0 10px';
+  inline.appendChild(child);
+  section.appendChild(inline);
+  testing.expectEqual(60, inline.offsetWidth);
+  section.remove();
+
+  // Growers share what's left after everyone's margins
+  const row = document.createElement('div');
+  row.style.cssText = 'display: flex; width: 800px';
+  const menu = document.createElement('div');
+  menu.style.cssText = 'width: 40px; flex-shrink: 0; margin-right: 10px';
+  const pane = document.createElement('div');
+  pane.style.flex = '1';
+  row.append(menu, pane);
+  document.body.appendChild(row);
+  testing.expectEqual(750, pane.offsetWidth);
+
+  // Out-of-flow children aren't flex items
+  const badge = document.createElement('div');
+  badge.style.cssText = 'position: absolute; width: 100px';
+  row.appendChild(badge);
+  testing.expectEqual(750, pane.offsetWidth);
   row.remove();
 }
 </script>

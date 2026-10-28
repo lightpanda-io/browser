@@ -835,11 +835,87 @@ pub fn getBoundingClientRect(self: *const Range, frame: *Frame) !*DOMRect {
     return DOMRect.create(rect, frame._factory);
 }
 
+// One rect per selected element whose parent isn't selected, and one per
+// selected piece of text, including text inside those elements.
 fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
-    const rect = try self.clientRect(frame) orelse return &.{};
-    const rects = try frame.local_arena.alloc(*DOMRect, 1);
-    rects[0] = try DOMRect.create(rect, frame._factory);
-    return rects;
+    if (self._proto.getCollapsed()) {
+        return &.{};
+    }
+    const start_node = self._proto._start_container;
+    const end_node = self._proto._end_container;
+    const start_offset = self._proto._start_offset;
+    const end_offset = self._proto._end_offset;
+
+    var rects: std.ArrayList(*DOMRect) = .empty;
+
+    if (start_node == end_node) {
+        if (start_node.is(Node.CData)) |cdata| {
+            try appendTextRect(&rects, cdata, start_offset, end_offset, frame);
+            return rects.items;
+        }
+    }
+
+    if (start_node.is(Node.CData)) |cdata| {
+        try appendTextRect(&rects, cdata, start_offset, null, frame);
+    }
+
+    const root = self._proto.getCommonAncestorContainer();
+    var current: ?*Node = if (start_node.is(Node.CData) != null)
+        nextInTreeOrder(start_node, root)
+    else
+        start_node.getChildAt(start_offset) orelse nextAfterSubtree(start_node, root);
+    const walk_end: ?*Node = if (end_node.is(Node.CData) != null)
+        end_node
+    else
+        end_node.getChildAt(end_offset) orelse nextAfterSubtree(end_node, root);
+
+    // The last element whose rect was added: its descendants add only text
+    var covering: ?*Node = null;
+    while (current) |node| : (current = nextInTreeOrder(node, root)) {
+        if (node == walk_end) {
+            break;
+        }
+        if (node.is(Node.CData)) |cdata| {
+            try appendTextRect(&rects, cdata, 0, null, frame);
+            continue;
+        }
+        const el = node.is(Node.Element) orelse continue;
+        if (covering) |c| {
+            if (c.contains(node)) {
+                continue;
+            }
+            covering = null;
+        }
+        // An ancestor of the end boundary is only partly selected
+        if (node.contains(end_node)) {
+            continue;
+        }
+        covering = node;
+        if (el.isVisible(frame)) {
+            try rects.append(frame.local_arena, try DOMRect.create(el.boundingClientRectValuesForVisible(frame), frame._factory));
+        }
+    }
+
+    if (start_node != end_node) {
+        if (end_node.is(Node.CData)) |cdata| {
+            try appendTextRect(&rects, cdata, 0, end_offset, frame);
+        }
+    }
+    return rects.items;
+}
+
+// The rect of cdata's text between two UTF-16 offsets; a null end is its end.
+fn appendTextRect(rects: *std.ArrayList(*DOMRect), cdata: *Node.CData, start: u32, end: ?u32, frame: *Frame) !void {
+    if (isCommentOrPI(cdata)) {
+        return;
+    }
+    const parent = cdata.asNode().parentNode() orelse return;
+    const element = layoutElement(parent) orelse return;
+    const data = cdata.getData().str();
+    const s = byteOffset(data, start);
+    const e = if (end) |offset| byteOffset(data, offset) else data.len;
+    const rect = measureText(element, data[s..e], frame) orelse return;
+    try rects.append(frame.local_arena, try DOMRect.create(rect, frame._factory));
 }
 
 // null when nothing in the range has a box
@@ -916,14 +992,10 @@ fn measureText(parent: *Node.Element, text: []const u8, frame: *Frame) ?DOMRect.
 }
 
 fn lineWidth(box: *Node.Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    var current: ?*Node.Element = box;
-    while (current) |el| : (current = style_manager.boxParent(el)) {
-        if (style_manager.isBlockLevel(el)) {
-            return el.boxAxis(owner, .width);
-        }
-    }
-    return @floatFromInt(owner.page.getViewport().width);
+    const block = owner._style_manager.blockContainer(box) orelse {
+        return @floatFromInt(owner.page.getViewport().width);
+    };
+    return block.boxAxis(owner, .width);
 }
 
 fn getContainerElement(self: *const Range, frame: *Frame) ?*Node.Element {

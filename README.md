@@ -71,6 +71,18 @@ Verify the binary before running anything:
 
 [Linux aarch64 is also available](https://github.com/lightpanda-io/browser/releases/tag/nightly)
 
+If you use [**Nix**](https://nixos.org/download/), you can run Lightpanda directly from the flake without downloading a binary:
+```console
+nix run github:lightpanda-io/browser -- --help
+```
+
+Or pin it as an input in your own flake:
+```nix
+{
+  inputs.lightpanda.url = "github:lightpanda-io/browser";
+}
+```
+
 > **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
 >
 > **Android / Termux:** there is no native Android build. The Linux aarch64 binary needs the glibc loader (`/lib/ld-linux-aarch64.so.1`), which Android's Bionic libc does not provide, so it fails with the same `cannot execute: required file not found` error.
@@ -321,7 +333,7 @@ sudo apt install xz-utils ca-certificates \
 ```
 You also need to [install Rust](https://rust-lang.org/tools/install/).
 
-For systems with [**Nix**](https://nixos.org/download/), you can use the devShell:
+For systems with [**Nix**](https://nixos.org/download/), you can use the devShell.
 ```
 nix develop
 ```
