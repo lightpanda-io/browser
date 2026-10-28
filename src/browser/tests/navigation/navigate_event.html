@@ -110,6 +110,7 @@
     testing.expectEqual('', e.destination.id);
     testing.expectEqual(-1, e.destination.index);
     testing.expectTrue(e.destination.sameDocument);
+    testing.expectTrue(e.canIntercept);
     testing.expectEqual(undefined, e.destination.getState());
     testing.expectFalse(e.hashChange);
     testing.expectFalse(e.userInitiated);
@@ -398,6 +399,10 @@
       testing.expectTrue(e.cancelable);
       testing.expectFalse(e.hashChange);
       testing.expectFalse(e.userInitiated);
+      // Cross-document: canIntercept is always false. These were all
+      // canceled, so intercept() throws for that reason first.
+      testing.expectFalse(e.canIntercept);
+      testing.withError((err) => testing.expectEqual('InvalidStateError', err.name), () => e.intercept());
     }
   }
 </script>
@@ -596,27 +601,101 @@
   }
 </script>
 
-<script id=intercept_not_supported>
+<script id=intercept_errors>
   {
-    // Chrome differs: canIntercept is true there. We don't support intercept().
-    let in_dispatch;
-    let scroll_in_dispatch;
+    // Only same-document, same-origin navigations can be intercepted: a
+    // cross-document navigation (so a plain cross-document check lives in
+    // cross_document_cancel below) has canIntercept false and throws.
+    let scroll_before_intercept;
+    let handler_type_error;
     const {events} = recordNavigations(() => {
       navigation.addEventListener('navigate', (e) => {
-        try { e.intercept(); } catch (err) { in_dispatch = err; }
-        try { e.scroll(); } catch (err) { scroll_in_dispatch = err; }
+        try { e.scroll(); } catch (err) { scroll_before_intercept = err; }
+        try { e.intercept({handler: 123}); } catch (err) { handler_type_error = err; }
+        e.intercept();
+        e.scroll();
       }, {once: true});
       history.pushState(null, '', '?intercept');
     });
     const e = events[0];
-    testing.expectFalse(e.canIntercept);
-    testing.expectEqual('SecurityError', in_dispatch.name);
-    testing.expectEqual('InvalidStateError', scroll_in_dispatch.name);
-    testing.expectEqual('intercept() must be called before scroll()', scroll_in_dispatch.message);
+    testing.expectTrue(e.canIntercept);
+    testing.expectEqual('InvalidStateError', scroll_before_intercept.name);
+    testing.expectEqual('intercept() must be called before scroll()', scroll_before_intercept.message);
+    testing.expectEqual('TypeError', handler_type_error.name);
 
     testing.withError((err) => {
       testing.expectEqual('InvalidStateError', err.name);
       testing.expectEqual('intercept() may only be called while the navigate event is being dispatched.', err.message);
     }, () => e.intercept());
+  }
+</script>
+
+<script id=intercept_resolves type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let handler_called = false;
+    const order = [];
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({
+        handler: () => new Promise((resolve) => setTimeout(() => {
+          handler_called = true;
+          resolve();
+        })),
+      });
+    }, {once: true});
+    navigation.addEventListener('navigatesuccess', () => order.push('navigatesuccess'), {once: true});
+
+    const r = navigation.navigate('#intercept-resolve');
+    Promise.all([
+      r.committed.then(() => order.push('committed')),
+      r.finished.then(() => order.push('finished')),
+    ]).then(() => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(order);
+    });
+
+    state.done((order) => {
+      testing.expectTrue(handler_called);
+      testing.expectTrue(order.includes('navigatesuccess'));
+      testing.expectEqual(order.indexOf('navigatesuccess') < order.indexOf('finished'), true);
+    });
+  }
+</script>
+
+<script id=intercept_rejects type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({handler: () => Promise.reject(new Error('intercept boom'))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#intercept-reject');
+    Promise.all([
+      r.committed.then(() => 'resolved', (err) => err),
+      r.finished.then(() => 'resolved', (err) => err),
+    ]).then((results) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(results);
+    });
+
+    state.done(([committed, finished]) => {
+      // committed already resolved (same-document, not intercepted at that
+      // point); only finished rejects with the handler's rejection reason.
+      testing.expectEqual('resolved', committed);
+      testing.expectEqual('intercept boom', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
   }
 </script>
