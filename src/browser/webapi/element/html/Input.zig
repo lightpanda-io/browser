@@ -412,12 +412,12 @@ pub fn suffersValueMissing(self: *Input) bool {
         .checkbox => !self._checked,
         .radio => !self.radioGroupHasChecked(),
         .file => if (self._files) |fl| fl._files.len == 0 else true,
-        .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
+        .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week => blk: {
             const v = self._value orelse self._default_value orelse "";
             break :blk v.len == 0;
         },
-        // submit/reset/button/hidden/image/range never participate in valueMissing.
-        .submit, .reset, .button, .hidden, .image, .range => false,
+        // required doesn't apply to these (see requiredApplies).
+        .submit, .reset, .button, .hidden, .image, .range, .color => false,
     };
 }
 
@@ -710,6 +710,13 @@ pub fn readonlyApplies(self: *const Input) bool {
         .text, .password, .email, .url, .tel, .search, .number => true,
         .date, .time, .@"datetime-local", .month, .week => true,
         else => false,
+    };
+}
+
+pub fn requiredApplies(self: *const Input) bool {
+    return switch (self._input_type) {
+        .hidden, .range, .color, .submit, .reset, .button, .image => false,
+        else => true,
     };
 }
 
