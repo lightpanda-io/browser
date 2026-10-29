@@ -553,7 +553,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
             },
             .slice => {
                 if (ptr.sentinel() == null and ptr.child != u8) {
-                    if (try jsValueToTypedArray(ptr.child, js_val)) |value| {
+                    if (try self.jsValueToTypedArray(ptr.child, js_val)) |value| {
                         return value;
                     }
                 }

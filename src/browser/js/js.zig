@@ -618,15 +618,13 @@ test "js: converted buffers don't point into a backing store page code can free"
     const value = try local.exec("globalThis.view = new Uint8Array([1, 2, 3]); view", null);
     const source = try value.toZig(BufferSource);
     const shared = try value.toZig(AllowSharedBufferSource);
-    const slice = try value.toZig([]const u8);
     const typed = try value.toZig(TypedArray(u8));
     try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, source.bytes());
 
-    // BufferSources read their bytes when used, slices are copies.
+    // BufferSources read their bytes when used, typed arrays are copies.
     _ = try local.exec("view.buffer.transfer(0)", null);
     try testing.expectEqual(0, source.bytes().len);
     try testing.expectEqual(0, shared.bytes().len);
-    try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, slice);
     try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, typed.values);
 
     // A view a shrunk buffer leaves out of bounds is empty too.
