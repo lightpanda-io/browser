@@ -49,7 +49,7 @@ pub fn collect(
     allocator: std.mem.Allocator,
     root: *Node,
     selector: Selector.Selector,
-    nodes: *std.AutoArrayHashMapUnmanaged(*Node, void),
+    nodes: *std.ArrayList(*Node),
     nth: *NthCache,
     frame: *Frame,
 ) !void {
@@ -61,10 +61,40 @@ pub fn collect(
 
         while (tw.next()) |node| {
             if (matches(node, result.selector, root, nth, frame)) {
-                try nodes.put(allocator, node, {});
+                try nodes.append(allocator, node);
             }
         }
     }
+}
+
+// A selector list is matched in one walk so results come out in document
+// order. The #id shortcut narrows a single selector, so it isn't used here.
+pub fn collectAny(
+    allocator: std.mem.Allocator,
+    root: *Node,
+    selectors: []const Selector.Selector,
+    nodes: *std.ArrayList(*Node),
+    nth: *NthCache,
+    frame: *Frame,
+) !void {
+    var tw = TreeWalker.init(root, .{});
+    _ = tw.next(); // only descendants match
+    while (tw.next()) |node| {
+        if (matchesAny(node, selectors, root, nth, frame)) {
+            try nodes.append(allocator, node);
+        }
+    }
+}
+
+pub fn initOneAny(root: *Node, selectors: []const Selector.Selector, nth: *NthCache, frame: *Frame) ?*Node {
+    var tw = TreeWalker.init(root, .{});
+    _ = tw.next(); // only descendants match
+    while (tw.next()) |node| {
+        if (matchesAny(node, selectors, root, nth, frame)) {
+            return node;
+        }
+    }
+    return null;
 }
 
 // used internally to find the first match
