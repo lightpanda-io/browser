@@ -19,6 +19,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - uses: getplumber/plumber@7970e5df1e7d217de41b2880832b63a6f2152b97 # v0.4.8
         with:
