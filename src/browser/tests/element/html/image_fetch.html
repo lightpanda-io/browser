@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 <body></body>
 
@@ -28,7 +29,10 @@
     testing.expectEqual("load", evt);
     testing.expectEqual(1000, img.naturalWidth);
     testing.expectEqual(750, img.naturalHeight);
-    testing.expectEqual(0, img.width); // Natural size does not set HTML attributes.
+    // Natural size does not set HTML attributes, but an image that isn't
+    // rendered reports it as its width.
+    testing.expectEqual(null, img.getAttribute('width'));
+    testing.expectEqual(1000, img.width);
   });
 </script>
 
@@ -108,7 +112,9 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("load", evt);
-    testing.expectEqual(0, img.naturalWidth); // SVG is not parsed as a bitmap header.
+    testing.diverges('Lightpanda does not parse SVG for a natural size', () => {
+      testing.expectEqual(0, img.naturalWidth);
+    });
   });
 </script>
 
@@ -158,8 +164,9 @@
   testing.expectEqual(750, img.naturalHeight);
 
   const failed = new Promise(resolve => img.addEventListener('error', resolve, { once: true }));
-  img.src = '/images/404.png';
-  testing.expectEqual(0, img.naturalWidth); // Old dimensions are invalid immediately.
+  // a distinct URL: a browser may fail a cached 404 synchronously
+  img.src = '/images/404.png?jpeg';
+  testing.expectEqual(1000, img.naturalWidth); // The old image stands until the new one settles.
   await failed;
 
   state.resolve();
@@ -192,7 +199,8 @@
   const img = document.createElement("img");
 
   testing.expectEqual(true, img.complete);
-  img.src = "/images/ok.png";
+  // a distinct URL: a browser completes a cached image synchronously
+  img.src = "/images/ok.png?complete";
   const during = img.complete;
 
   await new Promise(resolve => {
@@ -226,8 +234,8 @@
   });
 </script>
 
-<script id="img-empty-src-does-nothing" type=module>
-  // No src, no request, no event — in any mode.
+<script id="img-empty-src-fires-error" type=module>
+  // An empty src selects nothing, which is an error, but makes no request.
   const state = await testing.async();
   const img = document.createElement("img");
   let fired = null;
@@ -240,7 +248,8 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(null, fired);
+    testing.expectEqual("error", fired);
+    testing.expectEqual(true, img.complete);
   });
 </script>
 
@@ -301,7 +310,9 @@
   div.innerHTML = '<img src="/images/404.png">';
   const img = div.querySelector('img');
   // No fetch was issued, so it never entered the in-flight state.
-  testing.expectEqual(true, img.complete);
+  testing.diverges('browsers fetch the images of a fragment parse', () => {
+    testing.expectEqual(true, img.complete);
+  });
 }
 </script>
 
