@@ -3923,6 +3923,43 @@ test "download: a multi-megabyte body arrives intact" {
     try std.testing.expect(std.mem.endsWith(u8, body, ".large-hide { display: none; }"));
 }
 
+test "download: --http-max-response-size caps memory, not a streamed body's Content-Length" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const client = &testing.test_session.browser.http_client;
+    const max = client.max_response_size;
+    defer client.max_response_size = max;
+    client.max_response_size = 1024 * 1024;
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "large.css");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/styles/large.css", path);
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621455 bytes"));
+}
+
+test "download: a 404 saves nothing" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "missing.html");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/missing", path);
+    try std.testing.expect(r.is_error);
+    try std.testing.expectEqualStrings("HTTP 404 Not Found; nothing saved", r.text);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024)));
+}
+
 test "download: a 204 keeps the file already at path" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();

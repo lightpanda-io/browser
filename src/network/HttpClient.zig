@@ -2329,9 +2329,11 @@ pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
         return transfer.failAsync(err);
     }
 
-    if (transfer.getContentLength()) |cl| {
-        if (cl > self.max_response_size) {
-            return transfer.failAsync(error.ResponseTooLarge);
+    if (!transfer.req.streaming) {
+        if (transfer.getContentLength()) |cl| {
+            if (cl > self.max_response_size) {
+                return transfer.failAsync(error.ResponseTooLarge);
+            }
         }
     }
 
@@ -3761,8 +3763,9 @@ pub const Transfer = struct {
         // A partial fetch is exempt: the cap exists to bound how much body we
         // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
         // we were never going to read would turn the size limit into a
-        // spurious `error` event on a perfectly good response.
-        if (opts.check_content_length and self.req.partial == null) {
+        // spurious `error` event on a perfectly good response. A stream's
+        // batch is capped in dataCallback instead.
+        if (opts.check_content_length and self.req.partial == null and !self.req.streaming) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -4345,7 +4348,8 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
-            if (transfer.req.partial == null) {
+            // A stream only ever buffers its undelivered batch.
+            if (transfer.req.partial == null and !transfer.req.streaming) {
                 // Headers aren't materialized yet; read them off the conn.
                 const content_length: ?usize = blk: {
                     const hdr = conn.getResponseHeader("content-length", 0) orelse break :blk null;
