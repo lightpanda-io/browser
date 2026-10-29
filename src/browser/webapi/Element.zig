@@ -1245,16 +1245,20 @@ pub fn contentEditableState(self: *Element) ?bool {
 }
 
 // An editing host takes focus like a form control does. In a designMode
-// document, the document element is one too.
+// document the body is one: the spec names the document element, but Chrome
+// edits and focuses the body, and so do we.
 pub fn isEditingHost(self: *Element) bool {
     if (self.contentEditableState()) |editable| {
         return editable;
     }
-    if (self.is(Html) == null) {
+    if (self.is(Html.Body) == null) {
         return false;
     }
-    const parent = self.asNode().parentNode() orelse return false;
-    const document = parent.is(Node.Document) orelse return false;
+    const root = self.asNode().parentNode() orelse return false;
+    if (root.is(Html.Html) == null) {
+        return false;
+    }
+    const document = (root.parentNode() orelse return false).is(Node.Document) orelse return false;
     return document._design_mode;
 }
 
