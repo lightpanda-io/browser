@@ -1154,11 +1154,9 @@ test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact
     try ResponseStageProbe.tickUntilPaused(bc, 1);
 
     // The bytes the test server sends for /images/small.png.
-    var png: [1024]u8 = undefined;
-    @memset(&png, 'x');
-    @memcpy(png[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
+    const png = @embedFile("../../../browser/tests/fixtures/images/320x240.png");
     var encoded: [std.base64.standard.Encoder.calcSize(png.len)]u8 = undefined;
-    _ = std.base64.standard.Encoder.encode(&encoded, &png);
+    _ = std.base64.standard.Encoder.encode(&encoded, png);
 
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(.{ .body = &encoded, .base64Encoded = true }, .{ .id = 2 });
@@ -1166,7 +1164,7 @@ test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
-    try testing.expectEqualSlices(u8, &png, probe.body.items);
+    try testing.expectEqualSlices(u8, png, probe.body.items);
 }
 
 test "cdp.Fetch: response stage pauses a redirect response, then the response it leads to" {
@@ -1245,7 +1243,7 @@ test "cdp.Fetch: response stage continueRequest ignores request overrides, but a
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
-    try testing.expectEqual(1024, probe.body.items.len);
+    try testing.expectEqual(@embedFile("../../../browser/tests/fixtures/images/320x240.png").len, probe.body.items.len);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 

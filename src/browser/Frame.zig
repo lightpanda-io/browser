@@ -143,6 +143,8 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
+_image_decodes: Element.Html.Image.Decodes = .{},
+
 _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
@@ -2797,6 +2799,8 @@ fn dispatchQueuedEvents(self: *Frame) !void {
             if (image._generation != queued.generation) {
                 continue;
             }
+            // Without a fetch, the image is pending until its event fires.
+            image._complete = true;
         }
 
         if (html_element.is(Element.Html.Link)) |link| {
@@ -2834,6 +2838,7 @@ fn dispatchQueuedEvents(self: *Frame) !void {
     }
 
     to_process.clearRetainingCapacity();
+    Element.Html.Image.settleDecodes(self);
 }
 
 pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {
