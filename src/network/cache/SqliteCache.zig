@@ -586,8 +586,8 @@ const HeaderIterator = struct {
 
 const testing = @import("../../testing.zig");
 
-fn setupCache(allocator: std.mem.Allocator) !Cache {
-    return Cache{ .kind = .{ .sqlite = try .init(allocator, .memory, 0) } };
+fn setupCache(allocator: std.mem.Allocator) !SqliteCache {
+    return .init(allocator, .memory, 0);
 }
 
 test "SqliteCache: basic put and get" {
@@ -1066,7 +1066,7 @@ test "SqliteCache: script cache is kept by renew and cleared by put" {
     try testing.expectEqual(null, try getScriptCache(&cache, now));
 }
 
-fn getScriptCache(cache: *Cache, now: u64) !?[]const u8 {
+fn getScriptCache(cache: *SqliteCache, now: u64) !?[]const u8 {
     const result = try cache.get(testing.arena_allocator, .{
         .url = "https://example.com/a.js",
         .timestamp = now,
@@ -1213,7 +1213,7 @@ test "SqliteCache: expired purge uses the cache_expiry index" {
 }
 
 test "SqliteCache: evicts oldest entries over the limit" {
-    var cache = Cache{ .kind = .{ .sqlite = try .init(testing.allocator, .memory, 3) } };
+    var cache = try SqliteCache.init(testing.allocator, .memory, 3);
     defer cache.deinit();
 
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
@@ -1268,7 +1268,7 @@ test "SqliteCache: starts over from an unreadable database" {
     const cache_dir = try std.Io.Dir.path.join(testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
     defer testing.allocator.free(cache_dir);
 
-    var cache = Cache{ .kind = .{ .sqlite = try .init(testing.allocator, .{ .path = cache_dir }, 0) } };
+    var cache = try SqliteCache.init(testing.allocator, .{ .path = cache_dir }, 0);
     defer cache.deinit();
 
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
@@ -1310,12 +1310,12 @@ test "SqliteCache: starts over from another schema version" {
         try conn.exec("create table cache (url text not null primary key, body blob not null) strict", .{});
     }
 
-    var cache = Cache{ .kind = .{ .sqlite = try .init(testing.allocator, .{ .path = cache_dir }, 0) } };
+    var cache = try SqliteCache.init(testing.allocator, .{ .path = cache_dir }, 0);
     defer cache.deinit();
 
     {
-        const conn = try cache.kind.sqlite.pool.acquire();
-        defer cache.kind.sqlite.pool.release(conn);
+        const conn = try cache.pool.acquire();
+        defer cache.pool.release(conn);
         try testing.expectEqual(schema_version, (try conn.scalar(i64, "pragma user_version", .{})).?);
         try testing.expectEqual(0, (try conn.scalar(i64, "select count(*) from sqlite_schema where name = 'migrations'", .{})).?);
     }
@@ -1343,7 +1343,7 @@ test "SqliteCache: starts over from another schema version" {
     try testing.expectEqual("x-test", result.hit.headers[0].name);
 }
 
-fn putCorruptible(cache: *Cache, now: u64) !void {
+fn putCorruptible(cache: *SqliteCache, now: u64) !void {
     try cache.put(.{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -1357,15 +1357,15 @@ fn putCorruptible(cache: *Cache, now: u64) !void {
     }, "hello world");
 }
 
-fn corrupt(cache: *Cache, sql: [:0]const u8) !void {
-    const conn = try cache.kind.sqlite.pool.acquire();
-    defer cache.kind.sqlite.pool.release(conn);
+fn corrupt(cache: *SqliteCache, sql: [:0]const u8) !void {
+    const conn = try cache.pool.acquire();
+    defer cache.pool.release(conn);
     try conn.exec(sql, .{});
 }
 
-fn entryCount(cache: *Cache) !i64 {
-    const conn = try cache.kind.sqlite.pool.acquire();
-    defer cache.kind.sqlite.pool.release(conn);
+fn entryCount(cache: *SqliteCache) !i64 {
+    const conn = try cache.pool.acquire();
+    defer cache.pool.release(conn);
     return (try conn.scalar(i64, "select count(*) from cache", .{})).?;
 }
 

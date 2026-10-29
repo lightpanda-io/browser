@@ -80,11 +80,18 @@ pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheG
     };
 }
 
-pub fn put(self: *Cache, req: CachePutRequest, body: []const u8) !void {
-    return switch (self.kind) {
-        .noop => {},
-        inline else => |*c| c.put(req, body),
-    };
+/// Stores the response if it is cacheable; returns whether it did. The
+/// candidate's names and values only need to outlive the call.
+pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !bool {
+    switch (self.kind) {
+        .noop => return false,
+        inline else => |*c| {
+            const req = try tryCache(arena, candidate) orelse return false;
+            log.debug(.cache, "put", .{ .put = req });
+            try c.put(req, body);
+            return true;
+        },
+    }
 }
 
 pub fn putScriptCache(self: *Cache, url: []const u8, body: []const u8, bytes: []const u8) !void {
@@ -366,7 +373,7 @@ const ResponseHeaders = struct {
     }
 };
 
-const CacheCandidate = struct {
+pub const CacheCandidate = struct {
     timestamp: u64,
     url: [:0]const u8,
     status: u16,
@@ -403,7 +410,7 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
+fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
     const url = candidate.url;
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
