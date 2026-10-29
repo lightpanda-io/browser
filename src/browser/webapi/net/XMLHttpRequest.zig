@@ -594,8 +594,9 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
                     if (!final.isHTML()) {
                         return null;
                     }
-                    const document = try exec._factory.genericDocument(.{});
-                    try Frame.parse.htmlAsChildren(frame, document.asNode(), data);
+                    const document = (try Frame.parse.htmlDocument(frame, data, .{})).asDocument();
+                    // the document can outlive this request and its arena
+                    document._url = try frame.page_arena.dupeSentinel(u8, self._response_url, 0);
                     break :blk .{ .document = document };
                 },
                 .worker => return error.NotSupportedInWorker,
