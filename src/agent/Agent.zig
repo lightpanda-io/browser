@@ -783,7 +783,24 @@ fn runRepl(self: *Agent) void {
                 defer self.prompt_target = null;
                 _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
             },
-            .tool_call => |tc| {
+            .tool_call => |parsed| {
+                var tc = parsed;
+                if (tc.tool == .login and tc.args == null) {
+                    const names = browser_tools.lpEnvNames(aa) catch continue :repl;
+                    const has_key = zenai.typesafe.Client.envApiKey(lp.environ()) != null;
+                    switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
+                        .args => |args| tc.args = args,
+                        .prompt => |prompt| {
+                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                            _ = self.runPromptTurn(aa, tc.name(), prompt, line);
+                            continue :repl;
+                        },
+                        .usage => |message| {
+                            self.terminal.printError("{s}", .{message});
+                            continue :repl;
+                        },
+                    }
+                }
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
                 const result = self.runCommand(aa, tc);
                 self.terminal.endTool();
@@ -1693,6 +1710,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         return;
     };
     self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
+    if (tool_schema.tool == .login) self.terminal.printInfo("{s}", .{Command.bare_login_help});
 }
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {

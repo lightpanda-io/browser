@@ -45,6 +45,21 @@ const login_prompt_tail =
     \\pressing Enter in a filled field.
 ;
 
+const discover_login_prompt =
+    \\Sign in on the current page using $LP_* placeholders: the browser
+    \\substitutes them, so the secret never enters your context. Do NOT call
+    \\getEnv with a credential name (it would return the value).
+    \\
+    \\Call getEnv with NO `name` argument first to see which LP_* variables
+    \\are set (names only, values never included). Then pick:
+    \\- Site-prefixed form (LP_<SITE>_<FIELD>) when the list shows one for
+    \\  the current site — e.g. $LP_HN_USERNAME for news.ycombinator.com,
+    \\  $LP_GH_TOKEN for github.com.
+    \\- Otherwise fall back to the unprefixed $LP_USERNAME / $LP_PASSWORD
+    \\  (or $LP_EMAIL) form.
+    \\
+++ login_prompt_tail;
+
 const logout_prompt =
     \\Log out of the current site. Find the logout control — often a link or
     \\button labeled "Log out", "Logout", or "Sign out", possibly inside an
@@ -79,6 +94,13 @@ fn loginPrompt(arena: std.mem.Allocator, args: ?std.json.Value) error{OutOfMemor
         return try arena.print(login_prompt_head ++ "\nusername: {s}\npassword: {s}\n" ++ login_prompt_tail, .{ user, password });
     }
     return try arena.print(login_prompt_head ++ "\npassword: {s}\n(this page asks only for the password)\n" ++ login_prompt_tail, .{password});
+}
+
+fn hasName(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
 }
 
 fn placeholder(value: ?std.json.Value) ?[]const u8 {
@@ -196,6 +218,9 @@ pub const Command = union(enum) {
         }
 
         const s = Schema.findByName(split.name) orelse return error.UnknownTool;
+        if (s.tool == .login and split.rest.len == 0) {
+            return .{ .tool_call = .{ .tool = .login, .args = null } };
+        }
         if (Schema.takesPrompt(s.tool)) {
             if (try s.parsePrompt(arena, split.rest, diag)) |p| {
                 return .{ .prompt = .{ .tool = s.tool, .text = p.prompt, .args = p.args } };
@@ -226,6 +251,47 @@ pub const Command = union(enum) {
             .login => loginPrompt(arena, tc.args),
             else => null,
         };
+    }
+
+    /// What bare `/login` stands for. `$LP_PASSWORD` is the documented
+    /// convention, so it fills in without guessing; a site-prefixed name is
+    /// never matched to the host, since a wrong match sends one site's
+    /// password to another's form. Without the convention, a model can do
+    /// that matching where there is no key, and the user names the variables
+    /// where there is one.
+    pub const BareLogin = union(enum) {
+        args: std.json.Value,
+        prompt: []const u8,
+        usage: []const u8,
+    };
+
+    pub const bare_login_help =
+        \\Bare /login uses $LP_PASSWORD with $LP_USERNAME (or $LP_EMAIL) when set.
+        \\Otherwise, without 
+    ++ @import("zenai").typesafe.env_var_name ++
+        \\ the model picks the LP_* variables for the
+        \\site; with it, pass password=$LP_… username=$LP_….
+    ;
+
+    pub fn bareLogin(arena: std.mem.Allocator, lp_names: []const []const u8, has_key: bool) error{OutOfMemory}!BareLogin {
+        if (hasName(lp_names, "LP_PASSWORD")) {
+            var fields: std.json.ObjectMap = .empty;
+            try fields.put(arena, "password", .{ .string = "$LP_PASSWORD" });
+            for ([_][]const u8{ "LP_USERNAME", "LP_EMAIL" }) |name| {
+                if (hasName(lp_names, name)) {
+                    try fields.put(arena, "username", .{ .string = try arena.print("${s}", .{name}) });
+                    break;
+                }
+            }
+            return .{ .args = .{ .object = fields } };
+        }
+        if (!has_key) return .{ .prompt = discover_login_prompt };
+        if (lp_names.len == 0) {
+            return .{ .usage = "/login: no LP_* variables are set; set LP_USERNAME and LP_PASSWORD, or pass password=$LP_… username=$LP_…" };
+        }
+        return .{ .usage = try arena.print("/login: LP_PASSWORD is not set; pass password=$LP_… username=$LP_… (set: {s})", .{
+            try std.mem.join(arena, ", ", lp_names),
+        }) };
     }
 
     /// `arguments` must outlive the returned Command. Callers that hand the
@@ -722,4 +788,33 @@ test "isRecorded: args shape and locator semantics" {
         const cmd = Command.fromToolCall(.click, .{ .object = obj });
         try testing.expect(!cmd.isRecorded());
     }
+}
+
+test "bareLogin: the conventional names fill in, anything else is the user's call" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const conventional = (try Command.bareLogin(aa, &.{ "LP_EMAIL", "LP_PASSWORD", "LP_USERNAME" }, true)).args.object;
+    try testing.expectEqual("$LP_PASSWORD", conventional.get("password").?.string);
+    try testing.expectEqual("$LP_USERNAME", conventional.get("username").?.string);
+
+    const email = (try Command.bareLogin(aa, &.{ "LP_EMAIL", "LP_PASSWORD" }, true)).args.object;
+    try testing.expectEqual("$LP_EMAIL", email.get("username").?.string);
+
+    const password_only = (try Command.bareLogin(aa, &.{"LP_PASSWORD"}, false)).args.object;
+    try testing.expectEqual(null, password_only.get("username"));
+
+    const prefixed = &[_][]const u8{ "LP_HN_PASSWORD", "LP_HN_USERNAME" };
+    const usage = (try Command.bareLogin(aa, prefixed, true)).usage;
+    try testing.expect(std.mem.find(u8, usage, "LP_HN_PASSWORD, LP_HN_USERNAME") != null);
+    try testing.expect(std.mem.find(u8, (try Command.bareLogin(aa, prefixed, false)).prompt, "getEnv with NO `name`") != null);
+}
+
+test "parse: bare /login is a login call with its arguments still to find" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const tc = (try Command.parse(arena.allocator(), "/login")).tool_call;
+    try testing.expectEqual(BrowserTool.login, tc.tool);
+    try testing.expectEqual(null, tc.args);
 }
