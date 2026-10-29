@@ -111,8 +111,7 @@ pub fn ClockCache(comptime V: type) type {
     };
 }
 
-const testing = @import("../testing.zig");
-
+const testing = @import("testing.zig");
 fn evictedOf(comptime V: type, r: ClockCache(V).InsertResult) ?V {
     return switch (r) {
         .exists => unreachable,
