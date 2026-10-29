@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><head><title>Element gesture coordinates</title>
+<style>
+body { margin: 0; }
+#target { display: block; margin-left: 12px; margin-top: 8px; width: 60px; height: 24px; }
+#hoverme { display: block; margin-left: 6px; margin-top: 40px; width: 80px; height: 30px; }
+</style></head><body>
+<button id="target">Go</button>
+<div id="hoverme"></div>
+<script>
+window.events = [];
+for (const type of ['pointerover', 'pointermove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+  document.addEventListener(type, e => {
+    events.push({type, x: e.clientX, y: e.clientY, trusted: e.isTrusted, button: e.button});
+  });
+}
+</script>
+</body></html>
