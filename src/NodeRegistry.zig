@@ -32,6 +32,9 @@ pub const Id = u32;
 
 pub const Node = struct {
     id: Id,
+    // The id of the AX tree's synthetic ListMarker node of this <li>, 0 until
+    // asked for. It comes from node_id, so it never collides with a node's.
+    list_marker_id: Id = 0,
     dom: *DOMNode,
 };
 
@@ -40,10 +43,8 @@ allocator: Allocator,
 node_pool: std.heap.MemoryPool(Node),
 lookup_by_id: std.AutoHashMapUnmanaged(Id, *Node),
 lookup_by_node: std.HashMapUnmanaged(*DOMNode, *Node, NodeContext, std.hash_map.default_max_load_percentage),
-// Ids of the AX tree's synthetic ListMarker nodes, keyed by their <li>. They
-// come from node_id, so they never collide with a node's id.
-list_markers: std.HashMapUnmanaged(*DOMNode, Id, NodeContext, std.hash_map.default_max_load_percentage),
-list_marker_ids: std.AutoHashMapUnmanaged(Id, *DOMNode),
+// The <li> of each ListMarker id handed out.
+list_marker_owners: std.AutoHashMapUnmanaged(Id, *Node),
 
 pub fn init(allocator: Allocator) NodeRegistry {
     return .{
@@ -51,8 +52,7 @@ pub fn init(allocator: Allocator) NodeRegistry {
         .node_pool = .empty,
         .lookup_by_id = .{},
         .lookup_by_node = .{},
-        .list_markers = .{},
-        .list_marker_ids = .{},
+        .list_marker_owners = .{},
         .allocator = allocator,
     };
 }
@@ -61,16 +61,14 @@ pub fn deinit(self: *NodeRegistry) void {
     const allocator = self.allocator;
     self.lookup_by_id.deinit(allocator);
     self.lookup_by_node.deinit(allocator);
-    self.list_markers.deinit(allocator);
-    self.list_marker_ids.deinit(allocator);
+    self.list_marker_owners.deinit(allocator);
     self.node_pool.deinit(allocator);
 }
 
 pub fn reset(self: *NodeRegistry) void {
     self.lookup_by_id.clearRetainingCapacity();
     self.lookup_by_node.clearRetainingCapacity();
-    self.list_markers.clearRetainingCapacity();
-    self.list_marker_ids.clearRetainingCapacity();
+    self.list_marker_owners.clearRetainingCapacity();
     _ = self.node_pool.reset(self.allocator, .{ .retain_with_limit = 1024 });
 }
 
@@ -79,8 +77,6 @@ pub fn reset(self: *NodeRegistry) void {
 /// each node's document.
 pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
     const page = frame.page;
-    self.resetFrameListMarkers(arena, frame);
-
     var doomed: std.ArrayListUnmanaged(*Node) = .empty;
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
@@ -94,50 +90,28 @@ pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
     for (doomed.items) |node| {
         _ = self.lookup_by_id.remove(node.id);
         _ = self.lookup_by_node.remove(node.dom);
+        if (node.list_marker_id != 0) {
+            _ = self.list_marker_owners.remove(node.list_marker_id);
+        }
         self.node_pool.destroy(node);
     }
 }
 
-// The markers of the evicted <li>s go too: a later <li> at the same address
-// mustn't inherit one. Dropping every marker is harmless, so that's the
-// fallback when there's no memory to pick them out.
-fn resetFrameListMarkers(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
-    const page = frame.page;
-    var doomed: std.ArrayListUnmanaged(*DOMNode) = .empty;
-    var it = self.list_markers.keyIterator();
-    while (it.next()) |li| {
-        if (li.*.getDocument(frame)._page == page) {
-            doomed.append(arena, li.*) catch {
-                self.list_markers.clearRetainingCapacity();
-                self.list_marker_ids.clearRetainingCapacity();
-                return;
-            };
-        }
-    }
-    for (doomed.items) |li| {
-        const marker_id = self.list_markers.fetchRemove(li).?.value;
-        _ = self.list_marker_ids.remove(marker_id);
-    }
-}
-
 /// The id of the ListMarker AX node of `li`, the same on every call.
-pub fn listMarkerId(self: *NodeRegistry, li: *DOMNode) !Id {
-    const gop = try self.list_markers.getOrPut(self.allocator, li);
-    if (gop.found_existing) {
-        return gop.value_ptr.*;
+pub fn listMarkerId(self: *NodeRegistry, li: *Node) !Id {
+    if (li.list_marker_id != 0) {
+        return li.list_marker_id;
     }
-    errdefer _ = self.list_markers.remove(li);
-
     const id = self.node_id;
-    try self.list_marker_ids.putNoClobber(self.allocator, id, li);
+    try self.list_marker_owners.putNoClobber(self.allocator, id, li);
     self.node_id = id + 1;
-    gop.value_ptr.* = id;
+    li.list_marker_id = id;
     return id;
 }
 
 /// The <li> of the ListMarker AX node `id`, if `id` is a marker's.
-pub fn listMarkerOwner(self: *const NodeRegistry, id: Id) ?*DOMNode {
-    return self.list_marker_ids.get(id);
+pub fn listMarkerOwner(self: *const NodeRegistry, id: Id) ?*Node {
+    return self.list_marker_owners.get(id);
 }
 
 pub fn register(self: *NodeRegistry, dom_node: *DOMNode) !*Node {
@@ -235,9 +209,14 @@ test "NodeRegistry: resetFrame" {
     const ra = try registry.register(a_node);
     const rb = try registry.register(b_node);
     try testing.expectEqual(2, registry.lookup_by_id.count());
+    const a_marker = try registry.listMarkerId(ra);
+    const b_marker = try registry.listMarkerId(rb);
 
     registry.resetFrame(arena.allocator(), frame_a);
 
+    // An evicted node's marker goes with it.
+    try testing.expectEqual(null, registry.listMarkerOwner(a_marker));
+    try testing.expectEqual(rb, registry.listMarkerOwner(b_marker).?);
     try testing.expectEqual(null, registry.lookup_by_id.get(ra.id));
     try testing.expectEqual(null, registry.lookup_by_node.get(a_node));
     try testing.expectEqual(1, registry.lookup_by_id.count());
@@ -272,12 +251,12 @@ test "NodeRegistry: listMarkerId" {
     const frame = page.frame().?;
     const li = (try frame.window._document.querySelector(.wrap("#item"), frame)).?.asNode();
 
-    const marker_id = try registry.listMarkerId(li);
-    try testing.expectEqual(marker_id, try registry.listMarkerId(li));
-    try testing.expectEqual(li, registry.listMarkerOwner(marker_id));
+    const node = try registry.register(li);
+    const marker_id = try registry.listMarkerId(node);
+    try testing.expectEqual(marker_id, try registry.listMarkerId(node));
+    try testing.expectEqual(node, registry.listMarkerOwner(marker_id));
 
     // Marker and node ids share one counter.
-    const node = try registry.register(li);
     try testing.expect(node.id != marker_id);
     try testing.expectEqual(null, registry.listMarkerOwner(node.id));
 
