@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
@@ -25,6 +26,7 @@ const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 
 const Allocator = std.mem.Allocator;
+const String = lp.String;
 
 /// Key-value pair for structured data properties.
 pub const Property = struct {
@@ -95,14 +97,11 @@ const MicrodataProperty = struct {
 const MicrodataValue = union(enum) {
     text: []const u8,
     item: *const MicrodataItem,
-    // an item that contains itself, through itemprop or itemref
-    cycle,
 
     pub fn jsonStringify(self: MicrodataValue, jw: anytype) !void {
         switch (self) {
             .text => |t| try jw.write(t),
             .item => |item| try jw.write(item),
-            .cycle => try jw.write("ERROR"),
         }
     }
 };
@@ -159,14 +158,14 @@ const StructuredData = struct {
             try jw.endArray();
         }
 
-        // Emitted only when present so existing consumers of the CDP/MCP
-        // structured-data shape see no new key on sites without a `Link:`
-        // response header.
         if (self.microdata.len > 0) {
             try jw.objectField("microdata");
             try jw.write(self.microdata);
         }
 
+        // Emitted only when present so existing consumers of the CDP/MCP
+        // structured-data shape see no new key on sites without a `Link:`
+        // response header.
         if (self.link_headers.len > 0) {
             try jw.objectField("linkHeaders");
             try jw.beginArray();
@@ -258,14 +257,14 @@ pub fn collectStructuredData(
         }
     }
 
+    var microdata_memory: std.ArrayList(*Element) = .empty;
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
 
         // Top-level items; the ones with itemprop are values of another item.
         if (isItem(el) and !el.hasAttributeSafe(comptime .wrap("itemprop"))) {
-            var memory: std.ArrayList(*Element) = .empty;
-            try microdata.append(arena, try collectMicrodataItem(el, root, arena, frame, &memory));
+            try microdata.append(arena, try collectMicrodataItem(el, arena, frame, &microdata_memory));
         }
 
         switch (el.getTag()) {
@@ -328,7 +327,7 @@ fn collectLinkHeaders(
                     }
                 } else continue;
 
-                const href = URL.resolve(arena, frame.base(), entry.target, .{ .encoding = frame.charset }) catch entry.target;
+                const href = resolveUrl(arena, frame, entry.target);
 
                 // Drop duplicate (rel, href) pairs (it happens)
                 for (out.items) |existing| {
@@ -446,7 +445,6 @@ fn isItem(el: *Element) bool {
 /// reached again through itemprop or itemref becomes a cycle, not a loop.
 fn collectMicrodataItem(
     el: *Element,
-    root: *Node,
     arena: Allocator,
     frame: *Frame,
     memory: *std.ArrayList(*Element),
@@ -464,18 +462,18 @@ fn collectMicrodataItem(
     var id: ?[]const u8 = null;
     if (types.items.len > 0) {
         if (el.getAttributeSafe(comptime .wrap("itemid"))) |itemid| {
-            id = URL.resolve(arena, frame.base(), itemid, .{ .encoding = frame.charset }) catch itemid;
+            id = resolveUrl(arena, frame, itemid);
         }
     }
 
     var properties: std.ArrayList(MicrodataProperty) = .empty;
-    for (try crawlMicrodataProperties(el, root, arena)) |prop_el| {
-        const value: MicrodataValue = if (isItem(prop_el)) blk: {
-            for (memory.items) |m| {
-                if (m == prop_el) break :blk .cycle;
-            }
-            break :blk .{ .item = try collectMicrodataItem(prop_el, root, arena, frame, memory) };
-        } else .{ .text = try microdataPropertyValue(prop_el, arena, frame) };
+    for (try crawlMicrodataProperties(el, arena)) |prop_el| {
+        const value: MicrodataValue = if (!isItem(prop_el))
+            .{ .text = try microdataPropertyValue(prop_el, arena, frame) }
+        else if (std.mem.findScalar(*Element, memory.items, prop_el) != null)
+            .{ .text = "ERROR" } // the spec's value for an item that contains itself
+        else
+            .{ .item = try collectMicrodataItem(prop_el, arena, frame, memory) };
 
         // a name repeated on the same element counts once
         const first = properties.items.len;
@@ -495,28 +493,26 @@ fn collectMicrodataItem(
 /// The elements carrying the item's properties, in tree order: its
 /// descendants and itemref targets, without descending into nested items.
 /// https://html.spec.whatwg.org/multipage/microdata.html#associating-names-with-items
-fn crawlMicrodataProperties(item: *Element, root: *Node, arena: Allocator) ![]*Element {
+fn crawlMicrodataProperties(item: *Element, arena: Allocator) ![]*Element {
     var results: std.ArrayList(*Element) = .empty;
-    var visited: std.ArrayList(*Element) = .empty;
+    var visited: std.AutoHashMapUnmanaged(*Element, void) = .empty;
     var pending: std.ArrayList(*Element) = .empty;
-    try visited.append(arena, item);
+    try visited.put(arena, item, {});
 
     try appendChildElements(item, arena, &pending);
     if (item.getAttributeSafe(comptime .wrap("itemref"))) |itemref| {
+        // the item's whole tree: a detached one is scanned from the node given
+        const tree = item.asNode().getRootNode(.{});
         var it = std.mem.tokenizeAny(u8, itemref, &std.ascii.whitespace);
         while (it.next()) |id| {
-            if (findById(item.asNode().getRootNode(.{}), root, id)) |target| {
+            if (Frame.getElementByIdFromNode(tree, id)) |target| {
                 try pending.append(arena, target);
             }
         }
     }
 
     while (pending.pop()) |candidate| {
-        const seen = for (visited.items) |v| {
-            if (v == candidate) break true;
-        } else false;
-        if (seen) continue;
-        try visited.append(arena, candidate);
+        if ((try visited.getOrPut(arena, candidate)).found_existing) continue;
 
         if (!isItem(candidate)) {
             try appendChildElements(candidate, arena, &pending);
@@ -547,39 +543,28 @@ fn appendChildElements(el: *Element, arena: Allocator, out: *std.ArrayList(*Elem
     }
 }
 
-/// An itemref target: the first element with this id in the item's tree.
-/// `root` is the collection root, searched when the tree isn't a document.
-fn findById(tree: *Node, root: *Node, id: []const u8) ?*Element {
-    if (tree.is(Node.Document)) |document| {
-        return document.getElementById(id);
-    }
-    var tw = TreeWalker.Full.init(root, .{});
-    while (tw.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (std.mem.eql(u8, el.getId() orelse continue, id)) return el;
-    }
-    return null;
-}
-
 /// https://html.spec.whatwg.org/multipage/microdata.html#values
 fn microdataPropertyValue(el: *Element, arena: Allocator, frame: *Frame) ![]const u8 {
-    const url_attr: ?[]const u8 = switch (el.getTag()) {
+    switch (el.getTag()) {
         .meta => return el.getAttributeInterned("content") orelse "",
-        .audio, .embed, .iframe, .img, .source, .track, .video => "src",
-        .a, .area, .link => "href",
-        .object => "data",
+        .audio, .embed, .iframe, .img, .source, .track, .video => return urlAttribute(el, comptime .wrap("src"), arena, frame),
+        .a, .area, .link => return urlAttribute(el, comptime .wrap("href"), arena, frame),
+        .object => return urlAttribute(el, comptime .wrap("data"), arena, frame),
         .data, .meter => return el.getAttributeSafe(comptime .wrap("value")) orelse "",
-        .time => if (el.getAttributeSafe(comptime .wrap("datetime"))) |datetime| return datetime else null,
-        else => null,
-    };
-    if (url_attr) |name| {
-        const raw = el.getAttributeSafe(.wrap(name)) orelse return "";
-        return URL.resolve(arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
+        .time => if (el.getAttributeSafe(comptime .wrap("datetime"))) |datetime| return datetime,
+        else => {},
     }
+    const text = el.asNode().getTextContentAlloc(arena) catch return error.OutOfMemory;
+    return std.mem.trim(u8, text, &std.ascii.whitespace);
+}
 
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    el.asNode().getTextContent(&buf.writer) catch return error.OutOfMemory;
-    return std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
+fn urlAttribute(el: *Element, name: String, arena: Allocator, frame: *Frame) []const u8 {
+    return resolveUrl(arena, frame, el.getAttributeSafe(name) orelse return "");
+}
+
+/// Resolves against the frame's base URL, keeping the raw value when it can't.
+fn resolveUrl(arena: Allocator, frame: *Frame, raw: []const u8) []const u8 {
+    return URL.resolve(arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
 }
 
 fn collectJsonLd(
@@ -678,7 +663,7 @@ fn collectLink(
 ) !void {
     const rel = el.getAttributeInterned("rel") orelse return;
     const raw_href = el.getAttributeInterned("href") orelse return;
-    const href = URL.resolve(arena, frame.base(), raw_href, .{ .encoding = frame.charset }) catch raw_href;
+    const href = resolveUrl(arena, frame, raw_href);
 
     if (std.ascii.eqlIgnoreCase(rel, "alternate")) {
         try alternate.append(arena, .{
