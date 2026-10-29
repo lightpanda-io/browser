@@ -277,6 +277,7 @@ const CommonOptions = .{
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8, .path = true },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "http_cache_shared", .type = bool },
     .{ .name = "http_debug", .type = bool },
     .{ .name = "http_curves", .type = ?[:0]const u8, .validator = httpCurvesValidator },
     .{ .name = "render_font", .type = []const u8, .multiple = true, .path = true },
@@ -833,6 +834,13 @@ pub fn httpCacheEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_entry_limit.?,
         else => 1000,
+    };
+}
+
+pub fn httpCacheShared(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_shared,
+        else => false,
     };
 }
 

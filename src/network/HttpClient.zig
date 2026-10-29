@@ -1398,7 +1398,7 @@ fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse,
 
 // Everything the cache needs about this response. Names and values are
 // borrowed from the transfer arena, which outlives the put.
-fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
+fn cachePutRequest(cache: *const Cache, transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
     return Cache.tryCache(transfer.arena.allocator(), .{
         .timestamp = lp.datetime.timestamp(.real),
         .url = transfer._cache_key,
@@ -1406,6 +1406,8 @@ fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePut
         .content_type = rh.contentType(),
         .headers = transfer.res.headers,
         .request_headers = try transfer.cacheRequestHeaders(),
+        .shared = cache.shared,
+        .authorized = transfer.findRequestHeader("Authorization") != null,
     });
 }
 
@@ -1431,7 +1433,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const rh = &(transfer.res.header orelse return);
 
-    const maybe_req = cachePutRequest(transfer, rh) catch |err| {
+    const maybe_req = cachePutRequest(cache, transfer, rh) catch |err| {
         log.warn(.http, "cache eligibility", .{ .err = err });
         return;
     };
@@ -3979,12 +3981,7 @@ pub const Transfer = struct {
             return error.TooManyRedirects;
         }
 
-        if (transfer._cache_intent == .revalidate) {
-            transfer._cache_intent.revalidate.data.deinit();
-            transfer.removeHeader("If-None-Match");
-            transfer.removeHeader("If-Modified-Since");
-        }
-        transfer._cache_intent = .none;
+        transfer.dropCacheIntent();
 
         // resolve the redirect target.
         const url: [:0]const u8 = blk: {
@@ -4089,6 +4086,21 @@ pub const Transfer = struct {
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
         self.req.basic_auth_credentials = userpwd;
+        // The retry carries credentials and skips the lookup: in a shared
+        // cache, its response neither goes in under the plain URL nor renews
+        // the entry.
+        if (self.client.cache.shared) self.dropCacheIntent();
+    }
+
+    // The response is no longer the cache's business: a revalidation gives
+    // up the stale entry and the conditional headers cacheLookup put on.
+    fn dropCacheIntent(self: *Transfer) void {
+        if (self._cache_intent == .revalidate) {
+            self._cache_intent.revalidate.data.deinit();
+            self.removeHeader("If-None-Match");
+            self.removeHeader("If-Modified-Since");
+        }
+        self._cache_intent = .none;
     }
 
     const RequestHeader = struct {
@@ -6647,4 +6659,41 @@ test "HttpClient: encodedDataLength of a cache hit is the stored body, of a reva
 
     _ = try e.fetch("http://127.0.0.1:9582/raw/revalidated", null);
     try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
+}
+
+test "HttpClient: --http-cache-shared applies to Authorization requests and auth retries" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    var cache: Cache = .{ .kind = .noop };
+    client.cache = &cache;
+
+    for ([_]bool{ false, true }) |shared| {
+        cache.shared = shared;
+        const arena = try pool.acquire(.small, "test");
+        defer arena.release();
+        var transfer = testTransfer(arena);
+        transfer.client = &client;
+
+        // max-age alone does not let a shared cache store it
+        try transfer.setHeader("Authorization", "Bearer t", .{});
+        transfer.setResponseHeaders(&.{.{ .name = "cache-control", .value = "max-age=300" }});
+        var rh: http.ResponseHead = .{ .status = 200, .url = transfer.req.url, .redirect_count = 0 };
+        try testing.expectEqual(!shared, try cachePutRequest(&cache, &transfer, &rh) != null);
+
+        // a retry with credentials gives up the revalidation and its validator
+        try transfer.setHeader("If-None-Match", "\"v1\"", .{});
+        transfer._cache_intent = .{ .revalidate = .{
+            .status = 200,
+            .content_type = "text/plain",
+            .etag = "\"v1\"",
+            .last_modified = null,
+            .headers = &.{},
+            .data = .{ .buffer = "old" },
+        } };
+        transfer.updateCredentials("u:p");
+        try testing.expectEqual(shared, transfer._cache_intent == .none);
+        try testing.expectEqual(shared, transfer.findRequestHeader("If-None-Match") == null);
+    }
 }
