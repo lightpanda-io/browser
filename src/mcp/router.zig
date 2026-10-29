@@ -129,9 +129,13 @@ fn readLoop(server: anytype, reader: *std.Io.Reader, queue: *MessageQueue) void 
             continue;
         }
 
-        const msg = server.allocator.create(Message) catch break;
-        msg.* = .{ .body = server.allocator.dupe(u8, trimmed) catch {
+        const msg = server.allocator.create(Message) catch |err| {
+            log.err(.mcp, "Message queue OOM", .{ .err = err });
+            break;
+        };
+        msg.* = .{ .body = server.allocator.dupe(u8, trimmed) catch |err| {
             server.allocator.destroy(msg);
+            log.err(.mcp, "Message queue OOM", .{ .err = err });
             break;
         } };
         queue.push(msg);
@@ -143,20 +147,25 @@ fn readLoop(server: anytype, reader: *std.Io.Reader, queue: *MessageQueue) void 
 /// else null (malformed ones fall through to the normal dispatch, which
 /// ignores unknown id-less methods). The returned value borrows `arena`.
 fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Value {
-    const Peek = struct { method: ?[]const u8 = null, params: ?std.json.Value = null };
+    // Peek at the method first: parsing `params` as a full json.Value would
+    // allocate for every large tool call streaming past the reader, and
+    // only a cancellation needs it.
+    const Peek = struct { method: ?[]const u8 = null };
     const peek = std.json.parseFromSliceLeaky(Peek, arena, line, .{ .ignore_unknown_fields = true }) catch return null;
     const method = peek.method orelse return null;
     if (!std.mem.eql(u8, method, "notifications/cancelled")) return null;
-    const params = peek.params orelse return null;
-    if (params != .object) return null;
-    return params.object.get("requestId");
+
+    const Params = struct { requestId: ?std.json.Value = null };
+    const Body = struct { params: ?Params = null };
+    const body = std.json.parseFromSliceLeaky(Body, arena, line, .{ .ignore_unknown_fields = true }) catch return null;
+    const params = body.params orelse return null;
+    return params.requestId orelse null;
 }
 
 const Method = enum {
     initialize,
     ping,
     @"notifications/initialized",
-    @"notifications/cancelled",
     @"tools/list",
     @"tools/call",
     @"resources/list",
@@ -167,7 +176,6 @@ const method_map = std.StaticStringMap(Method).initComptime(.{
     .{ "initialize", .initialize },
     .{ "ping", .ping },
     .{ "notifications/initialized", .@"notifications/initialized" },
-    .{ "notifications/cancelled", .@"notifications/cancelled" },
     .{ "tools/list", .@"tools/list" },
     .{ "tools/call", .@"tools/call" },
     .{ "resources/list", .@"resources/list" },
@@ -194,25 +202,11 @@ pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8)
         .initialize => try server.handleInitialize(req),
         .ping => try handlePing(server, req),
         .@"notifications/initialized" => {},
-        .@"notifications/cancelled" => handleCancelledNotification(server, req),
         .@"tools/list" => try server.handleToolList(arena, req),
         .@"tools/call" => try server.handleToolCall(arena, req),
         .@"resources/list" => try handleOptional(server, req, "handleResourceList", .{req}),
         .@"resources/read" => try handleOptional(server, req, "handleResourceRead", .{ arena, req }),
     }
-}
-
-/// `notifications/cancelled` reaching the dispatcher (HTTP, or a stdio
-/// message the reader thread didn't intercept) still records the
-/// cancellation. Over HTTP it queues behind the in-flight call, so it
-/// usually lands too late — cancelling HTTP requests mid-flight would need
-/// the connection threads to intercept, like the stdio reader does.
-fn handleCancelledNotification(server: anytype, req: protocol.Request) void {
-    if (comptime !@hasDecl(@TypeOf(server.*), "handleCancelledRequest")) return;
-    const params = req.params orelse return;
-    if (params != .object) return;
-    const request_id = params.object.get("requestId") orelse return;
-    server.handleCancelledRequest(request_id);
 }
 
 fn handleOptional(server: anytype, req: protocol.Request, comptime method: []const u8, args: anytype) !void {
