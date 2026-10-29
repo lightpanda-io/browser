@@ -1036,6 +1036,10 @@ pub fn handle(req: *std.http.Server.Request) !void {
     // Fixture for the browser `download` tool tests. Its cookie is scoped to
     // this path prefix, so it can't reach the handlers other tests on the
     // shared session rely on.
+    if (std.mem.eql(u8, path, "/download_tool/no_content")) {
+        return req.respond("", .{ .status = .no_content });
+    }
+
     if (std.mem.eql(u8, path, "/download_tool/redirect")) {
         return req.respond("", .{
             .status = .found,

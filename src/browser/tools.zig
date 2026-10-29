@@ -26,6 +26,7 @@ const HttpClient = @import("../network/HttpClient.zig");
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
+const Download = @import("Download.zig");
 const SelectorPath = @import("SelectorPath.zig");
 const Element = @import("webapi/Element.zig");
 
@@ -807,7 +808,7 @@ pub const Tool = enum {
                 ),
             },
             .download => .{
-                .description = "Fetch a URL and save the response body to a local file, sending the session's cookies so authenticated sites work. The way to get a binary or large document (PDF, spreadsheet, archive) out of the browser. Nothing is saved for a non-2xx response. Requires a loaded page — it fails before the first `goto`.",
+                .description = "Fetch a URL and save the response body to a local file, sending the session's cookies so authenticated sites work. The way to get a binary or large document (PDF, spreadsheet, archive) out of the browser. Nothing is saved unless the status is 200-203 (like Chrome), and a failed download leaves an existing file at `path` untouched. Requires a loaded page — it fails before the first `goto`.",
                 .summary = "Fetch a URL with the session's cookies into a file",
                 .input_schema = minify(
                     \\{
@@ -1786,10 +1787,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         return ToolError.InternalError;
 
     if (args.path) |path| {
-        const content_height = writePng(&prepared, path) catch |err| return .{
-            .text = arena.print("could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
-            .is_error = true,
-        };
+        const content_height = writePng(&prepared, path) catch |err| return writeError(arena, path, err);
         // The renderer reports the content height; a fixed strip is its own height.
         const height = if (prepared.opts.height == 0) content_height else prepared.opts.height;
         return .{ .text = arena.print("Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
@@ -2698,42 +2696,31 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
     // authenticates with, and attributes the request to the page for CDP.
     const frame = try requireFrame(session);
 
-    const transfer = frame.newRequest(.{
-        .url = args.url,
-        .method = .GET,
-        .origin = frame.origin,
-        .initiator_origin = frame.origin,
-        // A download stands in for a top-level navigation to `url`: no CORS,
-        // redirects followed, engine defaults (proxy, TLS, blocklist) apply.
-        .request_mode = .navigate,
-        .credentials_mode = .include,
-        .resource_type = .download,
-        .timeout_ms = download_timeout_ms,
-        // Already saved to `path`; a cached copy would be a third one.
-        .skip_cache = true,
-        .shutdown_callback = HttpClient.noopShutdown, // submitSync installs its own
-    }) catch |err| switch (err) {
+    // Replaces `path` only on success, so a failed download leaves it as it was.
+    var af = std.Io.Dir.cwd().createFileAtomic(lp.io, args.path, .{ .replace = true }) catch |err| {
+        return writeError(arena, args.path, err);
+    };
+    defer af.deinit(lp.io);
+    var buf: [64 * 1024]u8 = undefined;
+    var file_writer = af.file.writer(lp.io, &buf);
+
+    var req = Download.request(frame, args.url, HttpClient.noopShutdown); // submitSync installs its own
+    req.timeout_ms = download_timeout_ms;
+    const transfer = Download.newTransfer(frame, req) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
             log.debug(.browser, "download request", .{ .err = err, .url = args.url });
             return ToolError.InternalError;
         },
     };
-    {
-        // Only a pre-submit failure is ours: past the submit, the client
-        // deinits the transfer at delivery.
-        errdefer transfer.deinit();
-        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
-        // A Referer from the current page, like a download launched from it.
-        try frame.headersForRequest(transfer, .{});
-    }
 
     // Pumps the session inline: other transfers' callbacks for this frame are
     // held back until the fetch settles, so nothing runs JS under us.
-    var response = transfer.submitSync(.{}) catch |err| switch (err) {
+    var response = transfer.submitSync(.{ .body_writer = &file_writer.interface }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ClientDisconnected, error.SyncWaitInterrupted => return error.Cancelled,
         error.UrlBlocked => return .{ .text = "url is refused by --block-urls or --adblock-lists", .is_error = true },
+        error.WriteFailed => return writeError(arena, args.path, file_writer.err.?),
         else => {
             log.debug(.browser, "download failed", .{ .err = err, .url = args.url });
             return .{
@@ -2744,7 +2731,7 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
     };
     defer response.deinit();
 
-    if (response.status < 200 or response.status >= 300) {
+    if (!Download.isSuccessStatus(response.status)) {
         return .{
             .text = arena.print("HTTP {d} {s}; nothing saved", .{
                 response.status,
@@ -2754,19 +2741,22 @@ fn execDownload(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.
         };
     }
 
-    std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = args.path, .data = response.body.items }) catch |err| {
-        return .{
-            .text = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch return ToolError.OutOfMemory,
-            .is_error = true,
-        };
-    };
+    file_writer.flush() catch |err| return writeError(arena, args.path, err);
+    af.replace(lp.io) catch |err| return writeError(arena, args.path, err);
 
     return .{
         .text = arena.print("saved {d} bytes ({s}) to {s}", .{
-            response.body.items.len,
+            file_writer.logicalPos(),
             response.content_type orelse "unknown content type",
             absolutePath(arena, args.path),
         }) catch return ToolError.OutOfMemory,
+    };
+}
+
+fn writeError(arena: std.mem.Allocator, path: []const u8, err: anyerror) ToolError!ToolResult {
+    return .{
+        .text = arena.print("could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
+        .is_error = true,
     };
 }
 
@@ -3915,7 +3905,45 @@ test "download: a redirect's Set-Cookie lands in the jar and the next hop carrie
     try std.testing.expect(std.mem.find(u8, body, "Lightpanda/") != null);
 }
 
-test "download: a non-2xx response saves nothing" {
+test "download: a multi-megabyte body arrives intact" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "large.css");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/styles/large.css", path);
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621455 bytes (text/css)"));
+
+    const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4 * 1024 * 1024));
+    try std.testing.expect(std.mem.endsWith(u8, body, ".large-hide { display: none; }"));
+}
+
+test "download: --http-max-response-size caps memory, not a streamed body's Content-Length" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const client = &testing.test_session.browser.http_client;
+    const max = client.max_response_size;
+    defer client.max_response_size = max;
+    client.max_response_size = 1024 * 1024;
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "large.css");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/styles/large.css", path);
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621455 bytes"));
+}
+
+test "download: a 404 saves nothing" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -3930,4 +3958,28 @@ test "download: a non-2xx response saves nothing" {
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("HTTP 404 Not Found; nothing saved", r.text);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024)));
+}
+
+test "download: a 204 keeps the file already at path" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(lp.io, .{ .sub_path = "report.pdf", .data = "good" });
+    const path = try testing.tmpPath(&tmp, "report.pdf");
+
+    const r = try testDownload(&registry, "http://127.0.0.1:9582/download_tool/no_content", path);
+    try std.testing.expectEqualStrings("HTTP 204 No Content; nothing saved", r.text);
+
+    const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024));
+    try std.testing.expectEqualStrings("good", body);
+
+    var it = tmp.dir.iterate();
+    var count: usize = 0;
+    while (try it.next(lp.io)) |_| count += 1;
+    try std.testing.expectEqual(1, count);
 }
