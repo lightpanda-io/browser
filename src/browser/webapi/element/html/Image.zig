@@ -525,6 +525,7 @@ pub const JsApi = struct {
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{ .ce_reactions = true });
     const reflect = Element.Reflect(Image);
     pub const srcset = reflect.string("srcset");
+    pub const sizes = reflect.string("sizes");
     pub const useMap = reflect.string("usemap");
     pub const isMap = reflect.boolean("ismap");
     pub const referrerPolicy = reflect.referrerPolicy();
