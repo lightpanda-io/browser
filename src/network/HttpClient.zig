@@ -1450,6 +1450,8 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 pub const SyncOptions = struct {
     // Whether to copy the response headers into SyncResponse.headers.
     copy_headers: bool = false,
+    // Write the body here instead of buffering it into SyncResponse.body.
+    body_writer: ?*std.Io.Writer = null,
 };
 
 const SyncContext = struct {
@@ -1480,8 +1482,9 @@ const SyncContext = struct {
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
 
+        // A streamed body's length is 0 here, but its content type is still wanted.
         const body_len = transfer.bodyLen();
-        if (body_len == 0 and self.options.copy_headers == false) {
+        if (body_len == 0 and self.options.body_writer == null and self.options.copy_headers == false) {
             return .proceed;
         }
 
@@ -1528,6 +1531,9 @@ const SyncContext = struct {
 
     fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
+        if (self.options.body_writer) |w| {
+            return w.writeAll(data);
+        }
         try self.body.appendSlice(try self.bodyAllocator(null), data);
     }
 
@@ -2106,7 +2112,7 @@ pub const Request = struct {
     const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
     const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
     const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
     pub const ResourceType = enum {
         document,
@@ -2323,9 +2329,11 @@ pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
         return transfer.failAsync(err);
     }
 
-    if (transfer.getContentLength()) |cl| {
-        if (cl > self.max_response_size) {
-            return transfer.failAsync(error.ResponseTooLarge);
+    if (!transfer.req.streaming) {
+        if (transfer.getContentLength()) |cl| {
+            if (cl > self.max_response_size) {
+                return transfer.failAsync(error.ResponseTooLarge);
+            }
         }
     }
 
@@ -2943,6 +2951,7 @@ pub const Transfer = struct {
 
         const req = &self.req;
         req.sync = true;
+        if (opts.body_writer != null) req.streaming = true;
         req.ctx = &sync_ctx;
         req.header_callback = SyncContext.headerCallback;
         req.data_callback = SyncContext.dataCallback;
@@ -3754,8 +3763,9 @@ pub const Transfer = struct {
         // A partial fetch is exempt: the cap exists to bound how much body we
         // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
         // we were never going to read would turn the size limit into a
-        // spurious `error` event on a perfectly good response.
-        if (opts.check_content_length and self.req.partial == null) {
+        // spurious `error` event on a perfectly good response. A stream's
+        // batch is capped in dataCallback instead.
+        if (opts.check_content_length and self.req.partial == null and !self.req.streaming) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -4338,7 +4348,8 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
-            if (transfer.req.partial == null) {
+            // A stream only ever buffers its undelivered batch.
+            if (transfer.req.partial == null and !transfer.req.streaming) {
                 // Headers aren't materialized yet; read them off the conn.
                 const content_length: ?usize = blk: {
                     const hdr = conn.getResponseHeader("content-length", 0) orelse break :blk null;
