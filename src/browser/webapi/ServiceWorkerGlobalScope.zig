@@ -295,7 +295,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
     const url = self._proto.url;
     var evaluated = true;
     if (self._proto._is_module) {
-        js_context.module(false, &ls.local, script, url, true) catch |err| {
+        js_context.module(false, &ls.local, script, url, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }
