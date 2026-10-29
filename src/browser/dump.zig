@@ -456,9 +456,7 @@ pub fn isVoidElement(el: *Node.Element) bool {
     }
 
     return switch (el.getTag()) {
-        .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track => true,
-        // <wbr> has no dedicated Tag, so it lands in Html.Unknown.
-        .unknown => el.as(Node.Element.Html.Unknown)._tag_name.eql(comptime .wrap("wbr")),
+        .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track, .wbr => true,
         else => false,
     };
 }

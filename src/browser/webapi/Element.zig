@@ -2487,6 +2487,8 @@ pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
 
 pub const Tag = enum {
     a,
+    abbr,
+    acronym,
     address,
     audio,
     area,
@@ -2498,9 +2500,15 @@ pub const Tag = enum {
     br,
     button,
     base,
+    basefont,
+    bdi,
+    bdo,
+    big,
     canvas,
     caption,
+    center,
     circle,
+    cite,
     code,
     col,
     colgroup,
@@ -2520,6 +2528,7 @@ pub const Tag = enum {
     ellipse,
     em,
     fieldset,
+    figcaption,
     figure,
     frameset,
     form,
@@ -2543,6 +2552,7 @@ pub const Tag = enum {
     img,
     input,
     ins,
+    kbd,
     label,
     legend,
     li,
@@ -2550,12 +2560,16 @@ pub const Tag = enum {
     link,
     main,
     map,
+    mark,
     marquee,
     media,
     menu,
     meta,
     meter,
     nav,
+    nobr,
+    noembed,
+    noframes,
     noscript,
     object,
     ol,
@@ -2566,19 +2580,29 @@ pub const Tag = enum {
     path,
     param,
     picture,
+    plaintext,
     polygon,
     polyline,
     pre,
     progress,
     q,
+    rb,
     rect,
+    rp,
+    rt,
+    rtc,
+    ruby,
     s,
+    samp,
     script,
+    search,
     section,
     select,
     slot,
+    small,
     source,
     span,
+    strike,
     strong,
     style,
     sub,
@@ -2598,8 +2622,12 @@ pub const Tag = enum {
     title,
     tr,
     track,
+    tt,
+    u,
     ul,
+    @"var",
     video,
+    wbr,
     unknown,
 
     // If the tag is "unknown", we can't use the optimized tag matching, but
@@ -2620,13 +2648,13 @@ pub const Tag = enum {
             // Semantic Layout
             .article, .aside, .footer, .header, .main, .nav, .section,
             // Grouping / Containers
-            .address, .div, .fieldset, .figure, .p,
+            .address, .center, .div, .fieldset, .figcaption, .figure, .p, .search,
             // Headings
             .h1, .h2, .h3, .h4, .h5, .h6,
             // Lists
             .dl, .ol, .ul,
             // Preformatted / Quotes
-            .blockquote, .pre,
+            .blockquote, .plaintext, .pre,
             // Tables
             .table,
             // Other
@@ -2655,19 +2683,20 @@ pub const Tag = enum {
 
     // UA stylesheet display:none defaults per HTML Rendering §15.3.1
     // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
-    // The spec also lists basefont, noembed, noframes, rp; those tags are
-    // obsolete and not represented in this enum, so they fall through to
-    // `.unknown`/`.custom` and aren't matched here.
     pub fn isHiddenByUaStylesheet(self: Tag) bool {
         return switch (self) {
             .area,
             .base,
+            .basefont,
             .datalist,
             .head,
             .link,
             .meta,
+            .noembed,
+            .noframes,
             .noscript,
             .param,
+            .rp,
             .script,
             .source,
             .style,

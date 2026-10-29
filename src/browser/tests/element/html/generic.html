@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../testing.js"></script>
+
+<script id="htmlElement">
+  {
+    // Elements with no interface of their own are plain HTMLElements.
+    const tags = ['abbr', 'acronym', 'address', 'article', 'aside', 'b', 'basefont', 'bdi', 'bdo', 'big', 'center', 'cite', 'code', 'dd', 'dfn', 'dt', 'em', 'figcaption', 'figure', 'footer', 'header', 'hgroup', 'i', 'kbd', 'main', 'mark', 'nav', 'nobr', 'noembed', 'noframes', 'noscript', 'plaintext', 'rb', 'rp', 'rt', 'rtc', 'ruby', 's', 'samp', 'search', 'section', 'small', 'strike', 'strong', 'sub', 'summary', 'sup', 'tt', 'u', 'var', 'wbr'];
+    for (const tag of tags) {
+      const el = document.createElement(tag);
+      testing.expectEqual(HTMLElement.prototype, Object.getPrototypeOf(el));
+      testing.expectEqual(false, el instanceof HTMLUnknownElement);
+      testing.expectEqual(tag.toUpperCase(), el.tagName);
+    }
+    testing.expectEqual(HTMLUnknownElement.prototype, Object.getPrototypeOf(document.createElement('foo')));
+  }
+</script>
+
+<p id=sel><ruby>漢<rp>(</rp><rt>kan</rt><rp>)</rp></ruby> <mark>m</mark> a<wbr>b <var>v</var></p>
+
+<script id="selectors">
+  {
+    const p = $('#sel');
+    testing.expectEqual(2, p.querySelectorAll('rp').length);
+    testing.expectEqual('kan', p.querySelector('ruby > rt').textContent);
+    testing.expectEqual('m', p.querySelector('mark').textContent);
+    testing.expectEqual('v', p.querySelector('var').textContent);
+    testing.expectEqual(1, p.getElementsByTagName('wbr').length);
+  }
+</script>
