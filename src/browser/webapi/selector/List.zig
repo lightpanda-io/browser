@@ -604,6 +604,16 @@ fn isOptional(el: *Node.Element) bool {
     return isRequired(el) == false;
 }
 
+// Null when :in-range and :out-of-range both don't apply: not an input
+// candidate for constraint validation, or no range limitations.
+fn isInRange(el: *Node.Element) ?bool {
+    const input = el.is(Node.Element.Html.Input) orelse return null;
+    if (!input.getWillValidate()) {
+        return null;
+    }
+    return input.isInRange();
+}
+
 // https://html.spec.whatwg.org/multipage/semantics-other.html#selector-default
 fn isDefault(el: *Node.Element, frame: *Frame) bool {
     if (el.is(Node.Element.Html.Option) != null) {
@@ -665,8 +675,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .required => return isRequired(el),
         .optional => return isOptional(el),
-        .in_range => return false,
-        .out_of_range => return false,
+        .in_range => return isInRange(el) == true,
+        .out_of_range => return isInRange(el) == false,
         .placeholder_shown => return false,
         .read_only => return !isReadWrite(el),
         .read_write => return isReadWrite(el),

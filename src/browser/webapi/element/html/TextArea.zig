@@ -202,7 +202,8 @@ fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 pub fn getWillValidate(self: *const TextArea) bool {
-    return !self.asConstElement().isDisabled();
+    const element = self.asConstElement();
+    return !element.isDisabled() and !element.hasAttributeInterned("readonly");
 }
 
 fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
