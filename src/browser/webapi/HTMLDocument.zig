@@ -24,7 +24,6 @@ const Node = @import("Node.zig");
 const Document = @import("Document.zig");
 const Element = @import("Element.zig");
 const Window = @import("Window.zig");
-const DocumentType = @import("DocumentType.zig");
 const TreeWalker = @import("TreeWalker.zig");
 const collections = @import("collections.zig");
 
@@ -35,7 +34,6 @@ const HTMLDocument = @This();
 pub const Proto = Document;
 
 _proto: *Document,
-_document_type: ?*DocumentType = null,
 
 pub fn asDocument(self: *HTMLDocument) *Document {
     return self._proto;
@@ -47,201 +45,6 @@ pub fn asNode(self: *HTMLDocument) *Node {
 
 pub fn asEventTarget(self: *HTMLDocument) *@import("EventTarget.zig") {
     return self._proto.asEventTarget();
-}
-
-// HTML-specific accessors
-// The head is the first html-namespace child of the document element whose
-// local name is head, whatever its Zig element type (e.g. a createElementNS
-// "blah:head" is an HTMLUnknownElement but still qualifies).
-pub fn getHead(self: *HTMLDocument) ?*Element {
-    const doc_el = self._proto.getDocumentElement() orelse return null;
-    var it = doc_el.asNode().childrenIterator();
-    while (it.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (el._namespace == .html and std.mem.eql(u8, el.getLocalName(), "head")) {
-            return el;
-        }
-    }
-    return null;
-}
-
-// The body element: the first <body> or <frameset> child of <html>.
-pub fn getBody(self: *HTMLDocument) ?*Element.Html {
-    const document_element = self._proto.getDocumentElement() orelse return null;
-    return findBodyForDoc(document_element);
-}
-
-// https://html.spec.whatwg.org/multipage/dom.html#dom-document-body
-fn setBody(self: *HTMLDocument, value: ?*Element.Html, frame: *Frame) !void {
-    const new_body = value orelse return error.HierarchyError;
-    if (isBodyElement(new_body) == false) {
-        return error.HierarchyError;
-    }
-
-    const document_element = self._proto.getDocumentElement() orelse return error.HierarchyError;
-    const document_node = document_element.asNode();
-    if (findBodyForDoc(document_element)) |current| {
-        if (current == new_body) {
-            return;
-        }
-        _ = try document_node.replaceChild(new_body.asNode(), current.asNode(), frame);
-    } else {
-        _ = try document_node.appendChild(new_body.asNode(), frame);
-    }
-}
-
-fn findBodyForDoc(document_element: *Element) ?*Element.Html {
-    var child = document_element.asNode().firstChild();
-    while (child) |node| {
-        if (node.is(Element.Html)) |html| {
-            if (isBodyElement(html)) {
-                return html;
-            }
-        }
-        child = node.nextSibling();
-    }
-    return null;
-}
-
-fn isBodyElement(html: *Element.Html) bool {
-    return html.is(Element.Html.Body) != null or html.asElement().getTag() == .frameset;
-}
-
-pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
-    // Search the entire document for the first <title> element
-    const root = self._proto.getDocumentElement() orelse return "";
-    var walker = TreeWalker.Full.ElementsOf(Element.Html.Title).init(root.asNode(), .{});
-    const title_element = walker.next() orelse return "";
-
-    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-    try title_element.asNode().getTextContent(&buf.writer);
-    const text = buf.written();
-
-    if (text.len == 0) {
-        return "";
-    }
-
-    var started = false;
-    var in_whitespace = false;
-    var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacityPrecise(frame.local_arena, text.len);
-
-    for (text) |c| {
-        const is_ascii_ws = c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0C';
-
-        if (is_ascii_ws) {
-            if (started) {
-                in_whitespace = true;
-            }
-        } else {
-            if (in_whitespace) {
-                result.appendAssumeCapacity(' ');
-                in_whitespace = false;
-            }
-            result.appendAssumeCapacity(c);
-            started = true;
-        }
-    }
-
-    return result.items;
-}
-
-fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
-    const head = self.getHead() orelse return;
-
-    // Find existing title element in head
-    var it = head.asNode().childrenIterator();
-    while (it.next()) |node| {
-        if (node.is(Element.Html.Title)) |title_element| {
-            // Replace children, but don't create text node for empty string
-            if (title.len == 0) {
-                return title_element.asElement().replaceChildren(.init(&.{}), frame);
-            } else {
-                return title_element.asElement().replaceChildren(.init(&.{.{ .text = title }}), frame);
-            }
-        }
-    }
-
-    // No title element found, create one
-    const title_node = try Frame.node_factory.createElementNS(self._proto, .html, "title", null);
-    const title_element = title_node.as(Element);
-
-    // Only add text if non-empty
-    if (title.len > 0) {
-        try title_element.replaceChildren(.init(&.{.{ .text = title }}), frame);
-    }
-
-    _ = try head.asNode().appendChild(title_node, frame);
-}
-
-fn getImages(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .img, frame);
-}
-
-fn getScripts(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .script, frame);
-}
-
-fn getLinks(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.links) {
-    return collections.NodeLive(.links).init(self.asNode(), {}, frame);
-}
-
-fn getAnchors(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.anchors) {
-    return collections.NodeLive(.anchors).init(self.asNode(), {}, frame);
-}
-
-fn getForms(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .form, frame);
-}
-
-fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
-}
-
-fn getApplets(_: *const HTMLDocument, frame: *Frame) !*collections.HTMLCollection {
-    return frame._factory.create(collections.HTMLCollection{ ._data = .empty });
-}
-
-fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
-    return self._proto._current_script;
-}
-
-pub fn getDir(self: *HTMLDocument) []const u8 {
-    const el = self._proto.getDocumentElement() orelse return "";
-    const html = el.is(Element.Html) orelse return "";
-    return html.getDir();
-}
-
-fn setDir(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
-    const el = self._proto.getDocumentElement() orelse return;
-    const html = el.is(Element.Html) orelse return;
-    try html.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
-}
-
-pub fn getAll(self: *HTMLDocument, frame: *Frame) !*collections.HTMLAllCollection {
-    return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
-}
-
-fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
-    if (self._document_type) |dt| {
-        return dt;
-    }
-
-    var tw = TreeWalker.Full.init(self.asNode(), .{});
-    while (tw.next()) |node| {
-        if (node._type == .document_type) {
-            self._document_type = node.as(DocumentType);
-            return self._document_type.?;
-        }
-    }
-
-    self._document_type = try frame._factory.node(self._proto, DocumentType{
-        ._proto = undefined,
-        ._name = "html",
-        ._public_id = "",
-        ._system_id = "",
-    });
-    return self._document_type.?;
 }
 
 const NamedItemResult = union(enum) {
@@ -362,46 +165,6 @@ pub const JsApi = struct {
             ._proto = undefined,
         });
     }
-
-    pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{ .ce_reactions = true });
-    pub const fgColor = bodyColor("text");
-    pub const linkColor = bodyColor("link");
-    pub const vlinkColor = bodyColor("vlink");
-    pub const alinkColor = bodyColor("alink");
-    pub const bgColor = bodyColor("bgcolor");
-
-    // Legacy [LegacyNullToEmptyString] attributes that reflect an attribute of
-    // the body element ("" without one).
-    fn bodyColor(comptime attr: []const u8) js.bridge.Accessor {
-        const R = struct {
-            fn get(self: *HTMLDocument) []const u8 {
-                const b = self.getBody() orelse return "";
-                if (b.is(Element.Html.Body) == null) return "";
-                return b.asElement().getAttributeSafe(comptime .wrap(attr)) orelse "";
-            }
-            fn set(self: *HTMLDocument, value: js.Value, frame: *Frame) !void {
-                const b = self.getBody() orelse return;
-                if (b.is(Element.Html.Body) == null) return;
-                const str = if (value.isNull()) "" else try value.toStringSlice();
-                try b.asElement().setAttributeSafe(comptime .wrap(attr), .wrap(str), frame);
-            }
-        };
-        return bridge.accessor(R.get, R.set, .{ .ce_reactions = true });
-    }
-    pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
-    pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .ce_reactions = true });
-    pub const title = bridge.accessor(HTMLDocument.getTitle, HTMLDocument.setTitle, .{ .ce_reactions = true });
-    pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
-    pub const scripts = bridge.accessor(HTMLDocument.getScripts, null, .{});
-    pub const links = bridge.accessor(HTMLDocument.getLinks, null, .{});
-    pub const anchors = bridge.accessor(HTMLDocument.getAnchors, null, .{});
-    pub const forms = bridge.accessor(HTMLDocument.getForms, null, .{});
-    pub const embeds = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
-    pub const applets = bridge.accessor(HTMLDocument.getApplets, null, .{});
-    pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
-    pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
-    pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
-    pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
 
     pub const @"[str]" = bridge.namedIndexed(HTMLDocument.namedItem, null, null, HTMLDocument.getNames, struct {
         fn query(self: *HTMLDocument, name: []const u8) !u32 {
