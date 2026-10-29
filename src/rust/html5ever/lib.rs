@@ -540,10 +540,6 @@ pub extern "C" fn html5ever_parse_fragment(
     attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
     allow_declarative_shadow: bool,
 ) -> () {
-    if html.is_null() || len == 0 {
-        return ();
-    }
-
     let arena = typed_arena::Arena::new();
 
     let sink = sink::Sink {
@@ -568,7 +564,13 @@ pub extern "C" fn html5ever_parse_fragment(
         allow_declarative_shadow: allow_declarative_shadow,
     };
 
-    let bytes = unsafe { std::slice::from_raw_parts(html, len) };
+    // Empty input still goes through the parser: in an <html> context it
+    // creates <head> and <body>.
+    let bytes: &[u8] = if html.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(html, len) }
+    };
 
     // The initial state of the parser is dertmined by the context element.
     // E.g., parsing the content of a script tag behaves differently than

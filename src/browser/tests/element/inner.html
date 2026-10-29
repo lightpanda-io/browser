@@ -251,6 +251,18 @@
   testing.expectEqual('B', d1.lastChild.tagName);
 </script>
 
+<script id=emptyString>
+  const div = document.createElement('div');
+  div.innerHTML = '<b>x</b>';
+  div.innerHTML = '';
+  testing.expectEqual(0, div.childNodes.length);
+
+  // In an <html> context the parser still creates <head> and <body>.
+  const html = document.createElement('html');
+  html.innerHTML = '';
+  testing.expectEqual('<head></head><body></body>', html.innerHTML);
+</script>
+
 <script id=leadingBOM>
   // A leading U+FEFF (BOM / ZWNBSP) is only stripped from a document's input
   // stream, never from a parsed fragment. innerHTML must preserve it, otherwise
