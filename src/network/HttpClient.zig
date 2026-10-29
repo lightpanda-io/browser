@@ -1396,19 +1396,6 @@ fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse,
     try transfer.bufferEvents(body);
 }
 
-// Everything the cache needs about this response. Names and values are
-// borrowed from the transfer arena, which outlives the put.
-fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
-    return Cache.tryCache(transfer.arena.allocator(), .{
-        .timestamp = lp.datetime.timestamp(.real),
-        .url = transfer._cache_key,
-        .status = rh.status,
-        .content_type = rh.contentType(),
-        .headers = transfer.res.headers,
-        .request_headers = try transfer.cacheRequestHeaders(),
-    });
-}
-
 // Store a cacheable response at completion, from the materialized response
 // headers and the buffered body. Failures are logged, never fatal — the
 // consumer gets its response either way.
@@ -1431,20 +1418,25 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const rh = &(transfer.res.header orelse return);
 
-    const maybe_req = cachePutRequest(transfer, rh) catch |err| {
-        log.warn(.http, "cache eligibility", .{ .err = err });
-        return;
-    };
-    const req = maybe_req orelse return;
-
-    if (comptime lp.IS_DEBUG) {
-        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .put = req });
-    }
-    cache.put(req, transfer.res.buffer.items) catch |err| {
+    const stored = storeResponse(cache, transfer, rh) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
         return;
     };
-    transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
+    if (stored) {
+        transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
+    }
+}
+
+fn storeResponse(cache: *Cache, transfer: *Transfer, rh: *http.ResponseHead) !bool {
+    const arena = transfer.arena.allocator();
+    return cache.put(arena, .{
+        .timestamp = lp.datetime.timestamp(.real),
+        .url = transfer._cache_key,
+        .status = rh.status,
+        .content_type = rh.contentType(),
+        .headers = transfer.res.headers,
+        .request_headers = try transfer.cacheRequestHeaders(),
+    }, transfer.res.buffer.items);
 }
 
 pub const SyncOptions = struct {
