@@ -240,6 +240,206 @@
 }
 </script>
 
+<script>
+  function del(forward) {
+    events = [];
+    return document.execCommand(forward ? 'forwardDelete' : 'delete');
+  }
+  // the caret as "node@offset", node being "#text" data or a tag name
+  function caret() {
+    const s = getSelection();
+    const n = s.anchorNode;
+    return (n.nodeType == 3 ? '#' + n.data : n.nodeName) + '@' + s.anchorOffset;
+  }
+</script>
+
+<script id="delete_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().selectAllChildren($('#plain'));
+  for (const cmd of ['delete', 'forwardDelete']) {
+    testing.expectEqual(true, document.queryCommandSupported(cmd));
+    testing.expectEqual(false, document.queryCommandEnabled(cmd));
+  }
+  testing.expectEqual(false, del(false));
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="delete_input">
+{
+  const input = $('#text');
+  input.focus();
+  input.value = 'hello';
+  input.setSelectionRange(2, 2);
+  testing.expectEqual(true, document.queryCommandEnabled('delete'));
+  testing.expectEqual(true, del(false));
+  testing.expectEqual('hllo', input.value);
+  testing.expectEqual(1, input.selectionStart);
+  testing.expectEqual(['input:text:deleteContentBackward:null'], events);
+
+  testing.expectEqual(true, del(true));
+  testing.expectEqual('hlo', input.value);
+  testing.expectEqual(1, input.selectionStart);
+  testing.expectEqual(['input:text:deleteContentForward:null'], events);
+
+  input.setSelectionRange(0, 2);
+  testing.expectEqual(true, document.execCommand('FORWARDDELETE'));
+  testing.expectEqual('o', input.value);
+
+  // nothing to delete: succeeds, no event
+  input.setSelectionRange(0, 0);
+  testing.expectEqual(true, del(false));
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, del(true));
+  testing.expectEqual('o', input.value);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_readonly">
+{
+  $('#ro').focus();
+  $('#ro').setSelectionRange(1, 1);
+  testing.expectEqual(false, document.queryCommandEnabled('delete'));
+  testing.expectEqual(false, del(false));
+  testing.expectEqual('ro', $('#ro').value);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_textarea">
+{
+  const area = $('#area');
+  area.value = 'ab\ncd';
+  area.focus();
+  area.setSelectionRange(3, 3);
+  testing.expectEqual(true, del(false));
+  testing.expectEqual('abcd', area.value);
+  testing.expectEqual(['input:area:deleteContentBackward:null'], events);
+}
+</script>
+
+<script id="delete_contenteditable">
+{
+  const host = $('#host');
+  function run(html, setup, forward) {
+    host.innerHTML = html;
+    host.focus();
+    setup(host);
+    const result = del(forward);
+    return [result, host.innerHTML, caret()];
+  }
+  const at = (node, offset) => getSelection().collapse(node, offset);
+
+  testing.expectEqual([true, 'on two', '#on two@2'], run('one two', h => at(h.firstChild, 3), false));
+  testing.expectEqual([true, 'onetwo', '#onetwo@3'], run('one two', h => at(h.firstChild, 3), true));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+
+  // into the previous text, through an inline element
+  testing.expectEqual([true, 'a<b>cd</b>ef', '#a@1'], run('ab<b>cd</b>ef', h => at(h.childNodes[1].firstChild, 0), false));
+  testing.expectEqual([true, 'a<b>cd</b>ef', '#a@1'], run('ab<b>cd</b>ef', h => at(h, 1), false));
+  testing.expectEqual([true, 'ab<b>d</b>ef', '#ab@2'], run('ab<b>cd</b>ef', h => at(h.firstChild, 2), true));
+
+  // an emptied inline element goes
+  testing.expectEqual([true, 'abef', '#ab@2'], run('ab<b>c</b>ef', h => at(h.childNodes[1].firstChild, 1), false));
+  testing.expectEqual([true, 'abef', '#ab@2'], run('ab<b>c</b>ef', h => at(h.childNodes[1].firstChild, 0), true));
+
+  // an emptied block keeps a line: <br>
+  testing.expectEqual([true, '<br>', 'DIV@0'], run('x', h => at(h.firstChild, 1), false));
+  testing.expectEqual([true, '<p><br></p><p>y</p>', 'P@0'], run('<p>x</p><p>y</p>', h => at(h.firstChild.firstChild, 0), true));
+
+  // a whole code point, surrogate pairs included
+  testing.expectEqual([true, 'ab', '#ab@1'], run('a😀b', h => at(h.firstChild, 3), false));
+  testing.expectEqual([true, 'ab', '#ab@1'], run('a😀b', h => at(h.firstChild, 1), true));
+
+  // nothing to delete at the edges of the host: succeeds, no event
+  testing.expectEqual([true, 'ab', '#ab@0'], run('ab', h => at(h.firstChild, 0), false));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, 'ab', '#ab@2'], run('ab', h => at(h.firstChild, 2), true));
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_contenteditable_selection">
+{
+  const host = $('#host');
+  function run(html, setup) {
+    host.innerHTML = html;
+    host.focus();
+    setup(host);
+    const result = del(false);
+    return [result, host.innerHTML, caret()];
+  }
+  const sel = (a, ao, f, fo) => getSelection().setBaseAndExtent(a, ao, f, fo);
+
+  testing.expectEqual([true, 'a<b>d</b>ef', '#a@1'], run('ab<b>cd</b>ef', h => sel(h.firstChild, 1, h.childNodes[1].firstChild, 1)));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, 'abef', '#ab@2'], run('ab<b>cd</b>ef', h => sel(h.firstChild, 2, h.lastChild, 0)));
+  testing.expectEqual([true, '<br>', 'DIV@0'], run('ab<b>cd</b>ef', h => sel(h.firstChild, 0, h.lastChild, 2)));
+  testing.expectEqual([true, '<p><br></p><p>cd</p>', 'P@0'], run('<p>ab</p><p>cd</p>', h => sel(h.firstChild.firstChild, 0, h.firstChild.firstChild, 2)));
+}
+</script>
+
+<script id="delete_selection_dropped">
+{
+  // a listener that drops the selection mid-command
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  getSelection().removeAllRanges();
+  document.activeElement.blur();
+  host.focus();
+  document.addEventListener('selectionchange', () => getSelection().removeAllRanges(), {once: true});
+  del(true);
+  testing.expectEqual(true, host.isConnected);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="delete_inline_host">
+{
+  // no <br> in an inline host
+  const span = document.createElement('span');
+  span.contentEditable = 'true';
+  span.textContent = 'x';
+  document.body.appendChild(span);
+  span.focus();
+  getSelection().collapse(span.firstChild, 1);
+  testing.expectEqual(true, del(false));
+  testing.expectEqual('', span.innerHTML);
+  span.remove();
+}
+</script>
+
+<script id="delete_contenteditable_not_yet_supported">
+{
+  const host = $('#host');
+  function run(html, setup, forward) {
+    host.innerHTML = html;
+    host.focus();
+    setup(host);
+    return [del(forward), host.innerHTML];
+  }
+  const at = (node, offset) => getSelection().collapse(node, offset);
+
+  testing.diverges('no block merging', () => {
+    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => at(h.lastChild.firstChild, 0), false));
+    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => at(h.firstChild.firstChild, 2), true));
+    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => getSelection().setBaseAndExtent(h.firstChild.firstChild, 1, h.lastChild.firstChild, 1), false));
+  });
+  testing.diverges('no deleting a <br> or an image', () => {
+    testing.expectEqual([false, 'a<br>b'], run('a<br>b', h => at(h.lastChild, 0), false));
+    testing.expectEqual([false, 'a<img>b'], run('a<img>b', h => at(h.firstChild, 1), true));
+  });
+  // Chrome: a&nbsp;
+  testing.diverges('no nbsp for a space left at the end', () => {
+    testing.expectEqual([true, 'a '], run('a b', h => at(h.firstChild, 3), false));
+  });
+  getSelection().removeAllRanges();
+}
+</script>
+
 <script id="command_required">
 {
   testing.expectError('TypeError', () => document.execCommand());

@@ -29,6 +29,7 @@ const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
+const StyleManager = @import("../StyleManager.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
@@ -1919,6 +1920,280 @@ pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !vo
         .inputType = "insertText",
     }, frame);
     try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+}
+
+/// Deletes the selection in `host_el`, or the character before (or after,
+/// when `forward`) a collapsed one, and fires input. Inline elements left
+/// empty go, and a block left empty gets a <br> placeholder, as in Chrome. At
+/// the edge of the host there's nothing to delete: no edit, no event. Returns
+/// false, without editing, for what needs an editing pipeline: merging blocks
+/// and deleting a <br>, an image or other non-text content.
+pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool {
+    const host = host_el.asNode();
+    const selection = &frame.document._selection;
+    const usable = if (selection._range) |range| blk: {
+        const abstract = range.asAbstractRange();
+        break :blk isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer());
+    } else false;
+    if (!usable) {
+        const container, const offset = firstCaretPosition(host);
+        try selection.collapse(container, offset, frame);
+    }
+    // Live, so it follows the edits below. A collapse replaces it, and a
+    // selectionchange listener can do anything, so there's one collapse,
+    // after the edit.
+    const live = selection._range orelse return false;
+    const range = live.asAbstractRange();
+    if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
+        return false;
+    }
+    const style_manager = &frame._style_manager;
+
+    var caret: ?struct { *Node, u32 } = null;
+    if (range.getCollapsed()) {
+        const container = range.getStartContainer();
+        const root = blockRoot(style_manager, host, container);
+        const found = if (forward)
+            charAfter(style_manager, root, container, range.getStartOffset())
+        else
+            charBefore(style_manager, root, container, range.getStartOffset());
+        const char = switch (found) {
+            .char => |c| c,
+            .edge => return root == host,
+            .unsupported => return false,
+        };
+        const cdata = char.text.asCData();
+        try cdata.replaceData(char.offset, char.len, "", frame);
+        if (cdata.getLength() == 0) {
+            try removeEmpty(frame, root, cdata.asNode());
+        } else if (!forward) {
+            caret = .{ cdata.asNode(), char.offset };
+        }
+    } else {
+        const common = range.getCommonAncestorContainer();
+        const start = range.getStartContainer();
+        const end = range.getEndContainer();
+        // a boundary inside a block (or anything but a plain inline) would
+        // leave two blocks to merge
+        if (!onlyInlinesBetween(style_manager, common, start) or !onlyInlinesBetween(style_manager, common, end)) {
+            return false;
+        }
+        const root = blockRoot(style_manager, host, common);
+        try live.deleteContents(frame);
+        for ([_]*Node{ end, start }) |node| {
+            const cdata = node.is(Node.CData.Text) orelse continue;
+            if (cdata.asCData().getLength() == 0 and root.contains(node) and node != root) {
+                try removeEmpty(frame, root, node);
+            }
+        }
+    }
+
+    if (caret == null) {
+        // Like Chrome, a caret right after a text node goes into it.
+        const container = range.getStartContainer();
+        const offset = range.getStartOffset();
+        if (container.is(Node.CData) == null and offset > 0) {
+            if (container.getChildAt(offset - 1)) |before| {
+                if (before.is(Node.CData.Text)) |t| {
+                    caret = .{ before, @intCast(t.asCData().getLength()) };
+                }
+            }
+        }
+    }
+    if (caret) |c| {
+        try selection.collapse(c[0], c[1], frame);
+    }
+
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+        .data = null,
+        .inputType = if (forward) "deleteContentForward" else "deleteContentBackward",
+    }, frame);
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+    return true;
+}
+
+// The innermost box holding `node` that text can't run out of: its nearest
+// ancestor that isn't a plain inline, or the host.
+fn blockRoot(style_manager: *StyleManager, host: *Node, node: *Node) *Node {
+    var current: *Node = if (node.is(Element) != null) node else node.parentNode() orelse return host;
+    while (current != host) {
+        const el = current.is(Element) orelse return host;
+        if (!isTextInline(style_manager, el)) {
+            return current;
+        }
+        current = current.parentNode() orelse return host;
+    }
+    return host;
+}
+
+// An element a caret moves through as if it weren't there: editable, shown,
+// plain inline, not void (<br>, <img>).
+fn isTextInline(style_manager: *StyleManager, el: *Element) bool {
+    return el.isEditable() and !dump.isVoidElement(el) and !style_manager.hasDisplayNone(el) and style_manager.isPlainInline(el);
+}
+
+fn onlyInlinesBetween(style_manager: *StyleManager, ancestor: *Node, node: *Node) bool {
+    var current: ?*Node = node;
+    while (current) |n| : (current = n.parentNode()) {
+        if (n == ancestor) {
+            return true;
+        }
+        const el = n.is(Element) orelse continue;
+        if (!isTextInline(style_manager, el)) {
+            return false;
+        }
+    }
+    return false;
+}
+
+const CharToDelete = union(enum) {
+    // a code point in `text`, as a UTF-16 offset and length
+    char: struct { text: *Node.CData.Text, offset: u32, len: u32 },
+    // nothing to delete before (or after) the caret in `root`
+    edge,
+    // a <br>, an image, a block, ...
+    unsupported,
+};
+
+fn charBefore(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) CharToDelete {
+    var parent = container;
+    var prev: ?*Node = null;
+    if (container.is(Node.CData)) |cdata| {
+        if (container.is(Node.CData.Text)) |t| {
+            if (offset > 0) {
+                return lastCodePoint(t, cdata.getData().str(), offset);
+            }
+        }
+        parent = container.parentNode() orelse return .unsupported;
+        prev = container.previousSibling();
+    } else if (offset > 0) {
+        prev = container.getChildAt(offset - 1);
+    }
+
+    while (true) {
+        const node = prev orelse {
+            if (parent == root) {
+                return .edge;
+            }
+            prev = parent.previousSibling();
+            parent = parent.parentNode() orelse return .unsupported;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text)) |t| {
+                const len = cdata.getLength();
+                if (len > 0) {
+                    return lastCodePoint(t, cdata.getData().str(), @intCast(len));
+                }
+            }
+            // empty text, comments
+            prev = node.previousSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return .unsupported;
+        if (!isTextInline(style_manager, el)) {
+            return .unsupported;
+        }
+        parent = node;
+        prev = node.lastChild();
+    }
+}
+
+fn charAfter(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) CharToDelete {
+    var parent = container;
+    var next: ?*Node = null;
+    if (container.is(Node.CData)) |cdata| {
+        if (container.is(Node.CData.Text)) |t| {
+            if (offset < cdata.getLength()) {
+                return firstCodePoint(t, cdata.getData().str(), offset);
+            }
+        }
+        parent = container.parentNode() orelse return .unsupported;
+        next = container.nextSibling();
+    } else {
+        next = container.getChildAt(offset);
+    }
+
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return .edge;
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return .unsupported;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text)) |t| {
+                if (cdata.getLength() > 0) {
+                    return firstCodePoint(t, cdata.getData().str(), 0);
+                }
+            }
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return .unsupported;
+        if (!isTextInline(style_manager, el)) {
+            return .unsupported;
+        }
+        parent = node;
+        next = node.firstChild();
+    }
+}
+
+// The code point ending at UTF-16 offset `end` (> 0). A whole code point,
+// not a grapheme, like Backspace in a text control.
+fn lastCodePoint(text: *Node.CData.Text, data: []const u8, end: u32) CharToDelete {
+    var byte = Node.CData.utf16OffsetToUtf8Floor(data, end);
+    if (Node.CData.utf16Len(data[0..byte]) < end) {
+        // inside a surrogate pair: the whole pair
+        byte = @min(byte + (std.unicode.utf8ByteSequenceLength(data[byte]) catch 1), data.len);
+    }
+    var start = byte - 1;
+    while (start > 0 and (data[start] & 0xC0) == 0x80) {
+        start -= 1;
+    }
+    const len: u32 = @intCast(Node.CData.utf16Len(data[start..byte]));
+    const offset: u32 = @intCast(Node.CData.utf16Len(data[0..start]));
+    return .{ .char = .{ .text = text, .offset = offset, .len = len } };
+}
+
+// The code point starting at UTF-16 offset `start`.
+fn firstCodePoint(text: *Node.CData.Text, data: []const u8, start: u32) CharToDelete {
+    const byte = Node.CData.utf16OffsetToUtf8Floor(data, start);
+    const seq = std.unicode.utf8ByteSequenceLength(data[byte]) catch 1;
+    const end = @min(byte + seq, data.len);
+    const len: u32 = @intCast(Node.CData.utf16Len(data[byte..end]));
+    const offset: u32 = @intCast(Node.CData.utf16Len(data[0..byte]));
+    return .{ .char = .{ .text = text, .offset = offset, .len = len } };
+}
+
+// Removes `node` (an emptied text node) along with the inline elements it
+// leaves empty. A block (or block host) left with nothing gets a <br>, so
+// it keeps a line to put the caret on.
+fn removeEmpty(frame: *Frame, root: *Node, node: *Node) !void {
+    var gone = node;
+    while (gone.parentNode()) |parent| {
+        if (parent == root or gone.previousSibling() != null or gone.nextSibling() != null) {
+            break;
+        }
+        gone = parent;
+    }
+    const parent = gone.parentNode() orelse return;
+    _ = try parent.removeChild(gone, frame);
+
+    if (root.firstChild() != null) {
+        return;
+    }
+    const root_el = root.is(Element) orelse return;
+    if (!frame._style_manager.isBlockLevel(root_el)) {
+        return;
+    }
+    // a caret in what was removed is now at (root, 0), and stays there
+    const br = try frame.document.createElement("br", null, frame);
+    _ = try root.appendChild(br.asNode(), frame);
 }
 
 // Where Chrome puts the caret when an editing host is focused: its first
