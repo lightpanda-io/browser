@@ -1351,7 +1351,14 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RS", .session_id = "SID-RS" });
-    try enableResponseStage(&ctx);
+    // Pause the probe itself, allowing the preliminary robots.txt request
+    // to fail without interception.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .params = .{ .patterns = .{.{ .urlPattern = "http://127.0.0.1:1/", .requestStage = "Response" }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
 
     var probe: ResponseStageProbe = .{};
     defer probe.deinit();
