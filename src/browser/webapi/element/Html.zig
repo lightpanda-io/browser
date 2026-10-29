@@ -482,6 +482,28 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
+// spellcheck="true"/"" enables checking, "false" disables it, anything else
+// (or no attribute) inherits from the parent. The default is UA-defined:
+// Chrome checks everything.
+pub fn getSpellcheck(self: *HtmlElement) bool {
+    var node: ?*Node = self.asElement().asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        const el = n.is(Element) orelse continue;
+        const value = el.getAttributeSafe(comptime .wrap("spellcheck")) orelse continue;
+        if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "false")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn setSpellcheck(self: *HtmlElement, spellcheck: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("spellcheck"), .wrap(if (spellcheck) "true" else "false"), frame);
+}
+
 // The draggable IDL attribute reflects the enumerated content attribute:
 // "true" => true, "false" => false, anything else (or no attribute) is the
 // auto state, which defaults to true only for <img> and <a> with an href.
@@ -1124,6 +1146,7 @@ pub const JsApi = struct {
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const inert = bridge.accessor(HtmlElement.getInert, HtmlElement.setInert, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
+    pub const spellcheck = bridge.accessor(HtmlElement.getSpellcheck, HtmlElement.setSpellcheck, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
