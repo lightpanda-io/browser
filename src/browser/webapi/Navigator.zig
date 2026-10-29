@@ -246,8 +246,8 @@ fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
-fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
-    return &frame.window._model_context;
+fn getModelContext(_: *const Navigator, frame: *Frame) !*ModelContext {
+    return frame.window.getModelContext();
 }
 
 fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
