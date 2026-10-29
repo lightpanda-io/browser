@@ -198,6 +198,41 @@
     el.style.removeProperty('width');
     testing.expectEqual(5, calls.length);
     testing.expectEqual(el.getAttribute('style'), calls[4]);
+
+    // Element.style is [PutForwards=cssText]
+    el.style = 'color: green;';
+    testing.expectEqual(6, calls.length);
+    testing.expectEqual('color: green;', calls[5]);
+}
+
+{
+    // Polymer reflects an attribute change back through `this.style = value`.
+    // Delivered late, each callback carried a stale value and the element
+    // ping-ponged between two styles forever.
+    let count = 0;
+
+    class StyleReflector extends HTMLElement {
+        static get observedAttributes() {
+            return ['style'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            if (++count > 50) {
+                return;
+            }
+            if (oldValue !== newValue) {
+                this.style = newValue;
+            }
+        }
+    }
+
+    customElements.define('style-reflector', StyleReflector);
+    const el = document.createElement('style-reflector');
+    el.setAttribute('style', 'transform: rotate(180deg);');
+    el.style.opacity = '0.3';
+
+    testing.expectEqual(4, count);
+    testing.expectEqual('transform: rotate(180deg); opacity: 0.3;', el.getAttribute('style'));
 }
 </script>
 
