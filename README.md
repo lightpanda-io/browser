@@ -315,7 +315,7 @@ For full details, see our [Web Platform Tests results](https://perf.lightpanda.i
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.17.0`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
