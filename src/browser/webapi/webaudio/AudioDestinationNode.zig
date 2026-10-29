@@ -37,6 +37,15 @@ _max_channel_count: u32,
 // channel count and mode: only the channels both the input and the rendered
 // buffer have are written.
 pub fn createOffline(context: *BaseAudioContext, channels: u32) !*AudioDestinationNode {
+    return create(context, channels, channels, .{});
+}
+
+// An AudioContext's destination: a stereo device that renders nowhere.
+pub fn createRealtime(context: *BaseAudioContext) !*AudioDestinationNode {
+    return create(context, 2, 2, .{ .max_channel_count = 2 });
+}
+
+fn create(context: *BaseAudioContext, channels: u32, max_channel_count: u32, rules: AudioNode.ChannelRules) !*AudioDestinationNode {
     const self = try Factory.chainedWithAllocator(context._arena.allocator(), .{
         EventTarget{ ._type = .audio_node },
         AudioNode.init(context, .{
@@ -45,8 +54,9 @@ pub fn createOffline(context: *BaseAudioContext, channels: u32) !*AudioDestinati
             .outputs = 1,
             .channel_count = channels,
             .channel_count_mode = .explicit,
+            .rules = rules,
         }),
-        AudioDestinationNode{ ._proto = undefined, ._max_channel_count = channels },
+        AudioDestinationNode{ ._proto = undefined, ._max_channel_count = max_channel_count },
     });
     try self._proto.setup(.{});
     return self;

@@ -86,7 +86,12 @@ pub fn setInitial(self: *AudioParam, value: f32) !void {
     self._intrinsic = std.math.clamp(value, self._min, self._max);
 }
 
+// An AudioContext doesn't render, so its params read the timeline instead.
 fn getValue(self: *const AudioParam) f32 {
+    if (self._context._type == .realtime and self._timeline.isEmpty() == false) {
+        const value = self._timeline.valueAt(self._context.currentTime(), self._intrinsic);
+        return std.math.clamp(value, self._min, self._max);
+    }
     return self._intrinsic;
 }
 
@@ -207,6 +212,10 @@ fn ramp(self: *const AudioParam, kind: Timeline.Kind, value: f32, time: f64) Tim
 }
 
 fn insert(self: *AudioParam, event: Timeline.Event) !void {
+    // Rendering prunes as it goes; without it, the past is dropped here.
+    if (self._context._type == .realtime) {
+        self._timeline.prune(self._context.currentTime());
+    }
     return self._timeline.insert(self._context._arena.allocator(), event, self._intrinsic);
 }
 

@@ -1317,6 +1317,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/PeriodicWave.zig"),
     @import("../webapi/webaudio/BaseAudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioContext.zig"),
+    @import("../webapi/webaudio/AudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioCompletionEvent.zig"),
     @import("../webapi/webaudio/AudioNode.zig"),
     @import("../webapi/webaudio/AudioDestinationNode.zig"),
@@ -1325,6 +1326,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/ConstantSourceNode.zig"),
     @import("../webapi/webaudio/OscillatorNode.zig"),
     @import("../webapi/webaudio/GainNode.zig"),
+    @import("../webapi/webaudio/ConvolverNode.zig"),
     @import("../webapi/webaudio/DynamicsCompressorNode.zig"),
 });
 
