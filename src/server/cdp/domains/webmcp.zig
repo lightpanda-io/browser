@@ -29,7 +29,6 @@ const Notification = @import("../../../Notification.zig");
 const ModelContext = @import("../../../browser/webapi/ModelContext.zig");
 
 const log = lp.log;
-const ModelContextClient = ModelContext.ModelContextClient;
 
 pub const Invocation = struct {
     id: u32,
@@ -134,16 +133,12 @@ fn invokeTool(cmd: *CDP.Command) !void {
     defer ls.deinit();
     const local = &ls.local;
 
-    const input_value = local.parseJSON(input_str) catch {
-        try respondError(cmd.cdp, bc, invocation, "failed to parse input JSON");
-        return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
-    };
-
-    const callback = local.toLocal(tool.execute);
-
     var caught: js.TryCatch.Caught = .{};
-    const result = callback.tryCall(js.Value, .{ input_value, ModelContextClient{} }, &caught) catch {
-        const msg = caught.exception orelse "tool threw";
+    const result = tool.invoke(local, input_str, &caught) catch |err| {
+        const msg = switch (err) {
+            error.InvalidInput => "failed to parse input JSON",
+            error.ToolThrew => caught.exception orelse "tool threw",
+        };
         try respondError(cmd.cdp, bc, invocation, msg);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };

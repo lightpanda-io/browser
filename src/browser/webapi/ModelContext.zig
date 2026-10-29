@@ -57,6 +57,20 @@ pub const Tool = struct {
     pub fn markAborted(self: *Tool, exec: *const Execution) !void {
         try self.ctx.markAborted(self, exec);
     }
+
+    /// Calls `execute` in `local`'s context with `input_json` parsed as its
+    /// input. The result may be a promise. On `error.ToolThrew`, `caught`
+    /// holds the exception.
+    pub fn invoke(
+        self: *const Tool,
+        local: *const js.Local,
+        input_json: []const u8,
+        caught: *js.TryCatch.Caught,
+    ) error{ InvalidInput, ToolThrew }!js.Value {
+        const input = local.parseJSON(input_json) catch return error.InvalidInput;
+        const callback = local.toLocal(self.execute);
+        return callback.tryCall(js.Value, .{ input, ModelContextClient{} }, caught) catch error.ToolThrew;
+    }
 };
 
 const ToolDict = struct {

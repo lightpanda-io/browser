@@ -45,6 +45,9 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         .evaluate, .click, .press => .{},
         .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .scroll => .{ .destructiveHint = false, .openWorldHint = false },
+        .pageTools => read_only,
+        // Runs the site's own code, which can do anything.
+        .callPageTool => .{},
     };
 }
 
@@ -624,6 +627,30 @@ test "MCP - evaluate: let declaration does not leak across calls" {
 
     try testing.expectJson(.{ .id = 2, .result = .{
         .content = &.{.{ .type = "text", .text = "2" }},
+    } }, out.written());
+}
+
+test "MCP - callPageTool returns the WebMCP tool's text content" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/webmcp/page_tools.html", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "callPageTool",
+        \\    "arguments": { "name": "mcp_error" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "no such order" }},
+        .isError = true,
     } }, out.written());
 }
 
