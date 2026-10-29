@@ -972,14 +972,22 @@ pub fn blockContainer(self: *StyleManager, el: *Element) ?*Element {
     self.rebuildIfDirty() catch return el;
     var current: ?*Element = el;
     while (current) |c| : (current = self.boxParent(c)) {
-        if (self.isPlainInline(c) == false) {
+        if (self.plainInline(c) == false) {
             return c;
         }
     }
     return null;
 }
 
-fn isPlainInline(self: *StyleManager, el: *Element) bool {
+/// A plain inline box, like <span> or <b>: text runs through it on the same
+/// line, with no box boundary of its own.
+pub fn isPlainInline(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.plainInline(el);
+}
+
+fn plainInline(self: *StyleManager, el: *Element) bool {
     if (self.visibilityProps(el).box != .inline_level or el.getTag().isReplacedOrControl()) {
         return false;
     }

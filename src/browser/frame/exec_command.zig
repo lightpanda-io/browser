@@ -37,6 +37,8 @@ const log = lp.log;
 
 const Command = enum {
     insertText,
+    delete,
+    forwardDelete,
 
     // Command names are ASCII case-insensitive.
     fn parse(name: []const u8) ?Command {
@@ -64,6 +66,8 @@ pub fn exec(doc: *Document, name: []const u8, value: []const u8) !bool {
 
     return switch (command) {
         .insertText => insertText(frame, value),
+        .delete => delete(frame, false),
+        .forwardDelete => delete(frame, true),
     };
 }
 
@@ -77,7 +81,7 @@ pub fn isEnabled(doc: *Document, name: []const u8) bool {
     }
     const command = Command.parse(name) orelse return false;
     return switch (command) {
-        .insertText => editTarget(doc) != null,
+        .insertText, .delete, .forwardDelete => editTarget(doc) != null,
     };
 }
 
@@ -164,16 +168,44 @@ fn insertText(frame: *Frame, text: []const u8) !bool {
                 log.info(.not_implemented, "execCommand.insertText", .{ .line_break = true });
                 return false;
             }
-            if (frame.document._selection._range) |range| {
-                const abstract = range.asAbstractRange();
-                if (inSelect(abstract.getStartContainer()) or inSelect(abstract.getEndContainer())) {
-                    return false;
-                }
+            if (selectionInSelect(frame.document)) {
+                return false;
             }
             try user_input.insertAtSelection(frame, host, text);
         },
     }
     return true;
+}
+
+// Like typed Backspace or Delete, with no beforeinput: just the edit and input.
+// At either end of the content there's nothing to delete; that still succeeds,
+// with no event.
+fn delete(frame: *Frame, forward: bool) !bool {
+    const target = editTarget(frame.document) orelse return false;
+    const input_type = if (forward) "deleteContentForward" else "deleteContentBackward";
+    switch (target) {
+        inline .input, .textarea => |ctl| {
+            try ctl.rememberValueBeforeEdit(frame);
+            try ctl.innerDelete(forward, input_type, frame);
+        },
+        .host => |host| {
+            if (selectionInSelect(frame.document)) {
+                return false;
+            }
+            if (try user_input.deleteAtSelection(frame, host, forward) == false) {
+                // Chrome merges blocks, deletes a <br>, an image, ...
+                log.info(.not_implemented, "execCommand.delete", .{ .forward = forward });
+                return false;
+            }
+        },
+    }
+    return true;
+}
+
+fn selectionInSelect(doc: *Document) bool {
+    const range = doc._selection._range orelse return false;
+    const abstract = range.asAbstractRange();
+    return inSelect(abstract.getStartContainer()) or inSelect(abstract.getEndContainer());
 }
 
 // Edits never land inside a <select>, no mater the selection.
