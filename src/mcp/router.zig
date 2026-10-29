@@ -159,7 +159,7 @@ fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Valu
     const Body = struct { params: ?Params = null };
     const body = std.json.parseFromSliceLeaky(Body, arena, line, .{ .ignore_unknown_fields = true }) catch return null;
     const params = body.params orelse return null;
-    return params.requestId orelse null;
+    return params.requestId;
 }
 
 const Method = enum {

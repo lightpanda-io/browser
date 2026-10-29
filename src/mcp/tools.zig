@@ -162,6 +162,9 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .fail => .is_error,
             .invalid_params => .invalid_params,
         }, start);
+        // Same rule as the browser tools below: a cancelled request gets no
+        // response.
+        if (server.inFlightCancelled()) return;
         return switch (result) {
             .ok => |text| sendToolResultText(server, id, text, false),
             .fail => |text| sendToolResultText(server, id, text, true),
@@ -184,24 +187,37 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
-        // The caller abandoned this request: the spec says a cancelled
-        // request gets no response, so don't send the Cancelled error.
-        if (err == error.Cancelled and server.inFlightCancelled()) return;
+    const Failure = struct { code: ?protocol.ErrorCode, message: []const u8 };
+    var failure: ?Failure = null;
+    const outcome: ?browser_tools.ToolResult = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| blk: {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
-            return sendToolResultText(server, id, @errorName(err), true);
+            failure = .{ .code = null, .message = @errorName(err) };
+        } else {
+            failure = .{ .code = switch (err) {
+                error.FrameNotLoaded => .FrameNotLoaded,
+                error.NodeNotFound, error.InvalidParams => .InvalidParams,
+                error.Cancelled => .Cancelled,
+                error.Timeout, error.NavigationTimeout => .Timeout,
+                error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
+            }, .message = browser_tools.errorMessage(err) };
         }
-        const code: protocol.ErrorCode = switch (err) {
-            error.FrameNotLoaded => .FrameNotLoaded,
-            error.NodeNotFound, error.InvalidParams => .InvalidParams,
-            error.Cancelled => .Cancelled,
-            error.Timeout, error.NavigationTimeout => .Timeout,
-            error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
-        };
-        return server.sendError(id, code, browser_tools.errorMessage(err));
+        break :blk null;
     };
+
+    // The caller abandoned this request: the spec says a cancelled request
+    // gets no response, so send nothing — success or failure. One gate for
+    // every reply: a tool surfaces cancellation in several shapes, and some
+    // swallow it into a regular result (evaluate reports "promise:
+    // cancelled" rather than returning error.Cancelled).
+    if (server.inFlightCancelled()) return;
+
+    if (failure) |f| {
+        if (f.code) |code| return server.sendError(id, code, f.message);
+        return sendToolResultText(server, id, f.message, true);
+    }
+    const result = outcome.?;
 
     if (result.image) |image| {
         const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };

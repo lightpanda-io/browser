@@ -472,6 +472,15 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
             const evaluate_call =
                 \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"1+1"}}}
             ;
+            const promise_call =
+                \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"new Promise(() => {})"}}}
+            ;
+            const cancel_promise =
+                \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}}
+            ;
+            const evaluate_2_call =
+                \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"2+2"}}}
+            ;
 
             // Load a page, then park in a wait that would run its full
             // 30s timeout unless the cancellation aborts it. Flush per
@@ -491,6 +500,19 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
             w.writeAll(cancel_call ++ "\n") catch {};
             w.writeAll(unrelated_cancel ++ "\n") catch {};
             w.writeAll(evaluate_call ++ "\n") catch {};
+            w.flush() catch {};
+
+            // A second abandoned call: an evaluate parked on a
+            // never-resolving promise surfaces its cancellation in-band (an
+            // is_error result reading "promise: cancelled") instead of
+            // propagating error.Cancelled. Per the spec it still gets no
+            // reply.
+            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            w.writeAll(promise_call ++ "\n") catch {};
+            w.flush() catch {};
+            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            w.writeAll(cancel_promise ++ "\n") catch {};
+            w.writeAll(evaluate_2_call ++ "\n") catch {};
             w.flush() catch {};
             write_end.close(lp.io);
         }
@@ -514,6 +536,14 @@ test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
     try testing.expect(std.mem.find(u8, output, "-32001") == null);
     // ...and the evaluate queued behind it still ran.
     try testing.expect(std.mem.find(u8, output, "\"text\":\"2\"") != null);
+
+    // The cancelled promise-waiting evaluate got no reply either, even
+    // though it reports its cancellation in-band rather than as
+    // error.Cancelled — no is_error result, no "promise: cancelled" text.
+    try testing.expect(std.mem.find(u8, output, "\"id\":4") == null);
+    try testing.expect(std.mem.find(u8, output, "promise: cancelled") == null);
+    // ...and the evaluate queued behind it still ran.
+    try testing.expect(std.mem.find(u8, output, "\"text\":\"4\"") != null);
 }
 
 test "MCP.Server - a tool call cancelled while queued is skipped without a reply" {
