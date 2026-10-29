@@ -224,7 +224,7 @@ fn parsePart(self: *Parser, arena: Allocator) !Part {
             self.input = self.input[1..];
             break :blk .universal;
         },
-        '[' => .{ .attribute = try self.attribute(arena) },
+        '[' => try self.attribute(arena),
         ':' => if (self.isPseudoElementStart()) blk: {
             try self.pseudoElement();
             break :blk .pseudo_element;
@@ -1098,7 +1098,7 @@ fn tag(self: *Parser) ![]const u8 {
     return input[0..i];
 }
 
-fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
+fn attribute(self: *Parser, arena: Allocator) !Selector.Part {
     if (comptime lp.IS_DEBUG) {
         // should have been verified by caller
         std.debug.assert(self.peek() == '[');
@@ -1134,12 +1134,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         if (self.peek() == ']') {
             self.input = self.input[1..];
         }
-        return .{
+        return .{ .attribute = .{
             .name = name,
             .matcher = .presence,
             .original_name = .wrap(attr_name),
             .value_case = .sensitive,
-        };
+        } };
     }
 
     const matcher_type = try self.attributeMatcher();
@@ -1168,6 +1168,15 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         return error.InvalidAttributeSelector;
     }
 
+    const never = switch (matcher_type) {
+        .starts_with, .ends_with, .substring => value.len == 0,
+        .word => value.len == 0 or std.mem.findAny(u8, value, &std.ascii.whitespace) != null,
+        .exact, .prefix_dash, .presence => false,
+    };
+    if (never) {
+        return .never;
+    }
+
     const matcher: Selector.AttributeMatcher = switch (matcher_type) {
         .exact => .{ .exact = value },
         .word => .{ .word = value },
@@ -1178,12 +1187,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         .presence => unreachable,
     };
 
-    return .{
+    return .{ .attribute = .{
         .name = name,
         .matcher = matcher,
         .original_name = .wrap(attr_name),
         .value_case = value_case,
-    };
+    } };
 }
 
 // Attributes whose values match ASCII case-insensitively on HTML elements
@@ -2086,6 +2095,29 @@ test "Selector: Parser escaped newline ends an identifier" {
     }
 }
 
+test "Selector: Parser.attribute values that can never match" {
+    const arena = testing.arena_allocator;
+
+    const never = [_][]const u8{ "[a^=\"\"]", "[a$=\"\"]", "[a*=\"\" i]", "[a~=\"\"]", "[a~=\"b c\"]", "[a~=\"b\\9 c\"]" };
+    for (never) |input| {
+        var parser = Parser{ .input = input };
+        const part = try parser.attribute(arena);
+        try testing.expectEqual(.never, std.meta.activeTag(part));
+    }
+
+    // = and |= with an empty value can still match an empty attribute
+    const kept = [_]struct { []const u8, std.meta.Tag(Selector.AttributeMatcher) }{
+        .{ "[a=\"\"]", .exact },
+        .{ "[a|=\"\"]", .prefix_dash },
+        .{ "[a~=b]", .word },
+    };
+    for (kept) |case| {
+        var parser = Parser{ .input = case[0] };
+        const attr = (try parser.attribute(arena)).attribute;
+        try testing.expectEqual(case[1], std.meta.activeTag(attr.matcher));
+    }
+}
+
 test "Selector: Parser.attribute unquoted escaped values" {
     const arena = testing.arena_allocator;
 
@@ -2099,7 +2131,7 @@ test "Selector: Parser.attribute unquoted escaped values" {
     };
     for (cases) |case| {
         var parser = Parser{ .input = case[0] };
-        const attr = try parser.attribute(arena);
+        const attr = (try parser.attribute(arena)).attribute;
         try testing.expectEqual(case[1], std.meta.activeTag(attr.matcher));
         const value = switch (attr.matcher) {
             .presence => unreachable,

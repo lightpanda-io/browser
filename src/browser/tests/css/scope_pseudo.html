@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<head>
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+  <style>
+    :scope:not(html) { visibility: hidden; }
+    :scope > body > #child { display: none; }
+  </style>
+</head>
+<body>
+  <div id="plain">plain</div>
+  <div id="child">child</div>
+  <script id="stylesheet_scope_is_root">
+  {
+    // Outside @scope, :scope in a stylesheet is the root element.
+    testing.expectEqual('visible', getComputedStyle(document.body).visibility);
+    testing.expectEqual('visible', getComputedStyle(document.getElementById('plain')).visibility);
+    testing.expectEqual('none', getComputedStyle(document.getElementById('child')).display);
+  }
+  </script>
+</body>

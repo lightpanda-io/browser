@@ -463,7 +463,7 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
-        .pseudo_element => return false,
+        .pseudo_element, .never => return false,
     }
 }
 
@@ -500,21 +500,18 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
                 std.mem.eql(u8, value, expected);
         },
         .substring => |expected| {
-            if (expected.len == 0) return false;
             return if (case_insensitive)
                 std.ascii.findIgnoreCase(value, expected) != null
             else
                 std.mem.find(u8, value, expected) != null;
         },
         .starts_with => |expected| {
-            if (expected.len == 0) return false;
             return if (case_insensitive)
                 std.ascii.startsWithIgnoreCase(value, expected)
             else
                 std.mem.startsWith(u8, value, expected);
         },
         .ends_with => |expected| {
-            if (expected.len == 0) return false;
             return if (case_insensitive)
                 std.ascii.endsWithIgnoreCase(value, expected)
             else
