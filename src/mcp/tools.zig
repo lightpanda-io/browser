@@ -185,6 +185,9 @@ fn dispatchBrowserTool(
 
     const active = server.active_session;
     const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
+        // The caller abandoned this request: the spec says a cancelled
+        // request gets no response, so don't send the Cancelled error.
+        if (err == error.Cancelled and server.inFlightCancelled()) return;
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
