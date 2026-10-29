@@ -511,6 +511,14 @@
     \\          soft: it is enforced at startup and when a browser session ends.
     \\          The cache can temporarily exceed it. 0 means no limit.
     \\          Defaults to 1000.
+    \\  --http-cache-shared
+    \\          Apply RFC 9111's rules for a shared cache, for a process that
+    \\          serves several users from one cache directory. A response to a
+    \\          request carrying Authorization is stored only when it is
+    \\          public, s-maxage or must-revalidate, 401 and 407 responses are
+    \\          never stored, and a request retried with credentials after a
+    \\          401 or 407 leaves the cache alone. Responses marked private are
+    \\          never stored, with or without it.
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.

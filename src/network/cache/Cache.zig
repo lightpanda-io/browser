@@ -36,6 +36,9 @@ kind: union(enum) {
     sqlite: SqliteCache,
 },
 
+/// --http-cache-shared: RFC 9111's rules for a shared cache apply (tryCache).
+shared: bool = false,
+
 pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
     const cache_path = config.httpCacheDir() orelse {
         return .{ .kind = .noop };
@@ -56,6 +59,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
 
     return .{
         .kind = .{ .sqlite = sqlite },
+        .shared = config.httpCacheShared(),
     };
 }
 
@@ -145,6 +149,7 @@ pub const ResponseDirectives = struct {
     no_cache: bool = false,
     private: bool = false,
     public: bool = false,
+    must_revalidate: bool = false,
     max_age: ?u64 = null,
     s_maxage: ?u64 = null,
 
@@ -171,6 +176,8 @@ pub const ResponseDirectives = struct {
                 directives.private = true;
             } else if (std.ascii.eqlIgnoreCase(name, "public")) {
                 directives.public = true;
+            } else if (std.ascii.eqlIgnoreCase(name, "must-revalidate")) {
+                directives.must_revalidate = true;
             } else if (std.ascii.eqlIgnoreCase(name, "max-age")) {
                 directives.max_age = parseDeltaSeconds(argument);
             } else if (std.ascii.eqlIgnoreCase(name, "s-maxage")) {
@@ -373,6 +380,8 @@ const CacheCandidate = struct {
     content_type: ?[]const u8, // from ResponseHead, can be truncated
     headers: []const Http.Header,
     request_headers: []const Http.Header, // needed for vary headers
+    shared: bool = false, // --http-cache-shared
+    authorized: bool = false, // the request carried Authorization
 };
 
 fn explicitFreshness(timestamp: u64, directives: ResponseDirectives, expires_: ?[]const u8, date: ?[]const u8) ?CacheControl {
@@ -414,6 +423,23 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
         // just writes the response instead of actually processing it.
         log.debug(.cache, "no store", .{ .url = url, .code = status, .reason = "status" });
         return null;
+    }
+
+    if (candidate.shared) {
+        // A challenge answers these credentials, or their absence, now: not
+        // one to replay to other users.
+        if (status == 401 or status == 407) {
+            log.debug(.cache, "no store", .{ .url = url, .code = status, .reason = "status" });
+            return null;
+        }
+        // RFC 9111 §3.5: a shared cache stores a response to a request
+        // carrying Authorization only if a directive allows it. The request
+        // is still looked up: any stored response may serve it.
+        const d = response.directives;
+        if (candidate.authorized and !(d.public or d.s_maxage != null or d.must_revalidate)) {
+            log.debug(.cache, "no store", .{ .url = url, .reason = "authorization" });
+            return null;
+        }
     }
 
     if (response.has_set_cookie) {
@@ -580,6 +606,8 @@ const TestResponse = struct {
     date: ?[]const u8 = null,
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
+    shared: bool = false,
+    authorized: bool = false,
 
     fn run(self: TestResponse, arena: std.mem.Allocator) !?CachePutRequest {
         var headers: std.ArrayList(Http.Header) = .empty;
@@ -602,6 +630,8 @@ const TestResponse = struct {
             .content_type = "text/html",
             .headers = headers.items,
             .request_headers = &.{},
+            .shared = self.shared,
+            .authorized = self.authorized,
         });
     }
 };
@@ -697,6 +727,35 @@ test "Cache: tryCache heuristic freshness" {
     for ([_]u16{ 206, 301, 304 }) |status| {
         const result_ = try (TestResponse{ .status = status, .cache_control = "max-age=300" }).run(arena.allocator());
         try testing.expectEqual(null, result_);
+    }
+}
+
+test "Cache: tryCache in a shared cache" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // a response to a request carrying Authorization needs a directive that
+    // lets a shared cache store it
+    const cases = [_]struct { cc: []const u8, stored: bool }{
+        .{ .cc = "max-age=300", .stored = false },
+        .{ .cc = "public, max-age=300", .stored = true },
+        .{ .cc = "s-maxage=300", .stored = true },
+        .{ .cc = "max-age=300, must-revalidate", .stored = true },
+        .{ .cc = "max-age=300, proxy-revalidate", .stored = false },
+    };
+    for (cases) |case| {
+        const shared = try (TestResponse{ .cache_control = case.cc, .shared = true, .authorized = true }).run(arena.allocator());
+        try testing.expectEqual(case.stored, shared != null);
+        const default = try (TestResponse{ .cache_control = case.cc, .authorized = true }).run(arena.allocator());
+        try testing.expect(default != null);
+    }
+
+    // an authentication challenge is not stored
+    for ([_]u16{ 401, 407 }) |status| {
+        const shared = try (TestResponse{ .status = status, .cache_control = "public, max-age=300", .shared = true }).run(arena.allocator());
+        try testing.expectEqual(null, shared);
+        const default = try (TestResponse{ .status = status, .cache_control = "public, max-age=300" }).run(arena.allocator());
+        try testing.expect(default != null);
     }
 }
 
