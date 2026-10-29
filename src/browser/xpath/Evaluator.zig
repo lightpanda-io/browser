@@ -31,6 +31,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Node = @import("../webapi/Node.zig");
+const TreeWalker = @import("../webapi/TreeWalker.zig");
 
 const ast = @import("ast.zig");
 const Parser = @import("Parser.zig");
@@ -70,7 +71,7 @@ pub fn evaluate(arena: Allocator, expr: *const ast.Expr, context_node: *Node, fr
     return res;
 }
 
-pub const SearchError = Error || Parser.Error;
+const SearchError = Error || Parser.Error;
 
 /// Convenience for `DOM.performSearch`: parse + evaluate and unwrap the
 /// node-set. Top-level scalar expressions yield an empty slice
@@ -127,19 +128,12 @@ fn evalPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!result.Result {
 
 // Recognize the very common `//tag[@id='x']` and `.//tag[@id='x']`
 // shapes (and their wildcard `//*[@id='x']` variants) and serve them
-// directly from `frame.getElementByIdFromNode`. Accepts the literal on
-// either side of `=`.
+// directly from the id map when the id is unique in its tree scope.
+// Accepts the literal on either side of `=`.
 //
-// Mirrors the same tradeoff `webapi/selector/List.zig:optimizeSelector`
-// already makes for `querySelector(All)`: the id-map only stores the
-// first element per ID in document order, so duplicate IDs (invalid
-// HTML, but possible) yield one match here where a strict tree walk
-// would find all. Acceptable because Capybara/Selenium hot paths
-// assume unique IDs and CSS has shipped this compromise for years.
-//
-// Falls through to the general path for any deviation: extra steps,
-// extra predicates, non-eq predicate, non-literal RHS, or the
-// inability to resolve a search root.
+// Falls through to the general path for duplicate ids (invalid HTML, but
+// common) and for any deviation: extra steps, extra predicates, non-eq
+// predicate, non-literal RHS, or the inability to resolve a search root.
 fn tryIdLookupFastPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!?result.Result {
     // Two acceptable AST shapes:
     //   //tag[@id='x']   parses to:  ds::node() / child::tag[pred]
@@ -166,13 +160,15 @@ fn tryIdLookupFastPath(self: *Evaluator, path: ast.Path, ctx: *Node) Error!?resu
         break :blk owner.asNode();
     } else ctx;
 
-    const id_element = self.frame.getElementByIdFromNode(search_root, id_value) orelse {
-        return .{ .node_set = &.{} };
+    const id_element = switch (Frame.getUniqueElementByIdFromNode(search_root, id_value)) {
+        .none => return .{ .node_set = &.{} },
+        .one => |el| el,
+        .many => return null,
     };
     const id_node = id_element.asNode();
 
-    // Relative paths must filter to descendants of the context.
-    // getElementByIdFromNode is doc-wide.
+    // Relative paths must filter to descendants of the context. The id map
+    // covers the whole tree scope.
     if (search_root != id_node and !search_root.contains(id_node)) {
         return .{ .node_set = &.{} };
     }
@@ -241,8 +237,8 @@ fn fusedDescend(
     lowered_name: ?[]const u8,
     out: *std.ArrayList(*Node),
 ) Error!void {
-    var it = parent.childrenIterator();
-    while (it.next()) |c| {
+    var tw = TreeWalker.FullExcludeSelf.init(parent, .{});
+    while (tw.next()) |c| {
         if (matchTest(c, target.node_test, target.axis, lowered_name)) {
             var ok = true;
             for (target.predicates) |pred| {
@@ -257,7 +253,6 @@ fn fusedDescend(
             }
             if (ok) try out.append(self.arena, c);
         }
-        try self.fusedDescend(c, target, lowered_name, out);
     }
 }
 
@@ -488,10 +483,9 @@ fn axisNodes(self: *Evaluator, node: *Node, axis: ast.Axis) Error![]const *Node 
 }
 
 fn appendDescendants(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) Error!void {
-    var it = node.childrenIterator();
-    while (it.next()) |c| {
-        try out.append(self.arena, c);
-        try self.appendDescendants(c, out);
+    var tw = TreeWalker.FullExcludeSelf.init(node, .{});
+    while (tw.next()) |n| {
+        try out.append(self.arena, n);
     }
 }
 
@@ -500,19 +494,22 @@ fn appendFollowing(self: *Evaluator, start: *Node, out: *std.ArrayList(*Node)) E
     while (n) |cur| : (n = cur.parentNode()) {
         var s = cur.nextSibling();
         while (s) |sn| : (s = sn.nextSibling()) {
-            try out.append(self.arena, sn);
-            try self.appendDescendants(sn, out);
+            var tw = TreeWalker.Full.init(sn, .{});
+            while (tw.next()) |node| {
+                try out.append(self.arena, node);
+            }
         }
     }
 }
 
 fn appendPrecedingSubtree(self: *Evaluator, n: *Node, out: *std.ArrayList(*Node)) Error!void {
-    // Reverse document order: deepest-last children first, then self.
-    var c = n.lastChild();
-    while (c) |child| : (c = child.previousSibling()) {
-        try self.appendPrecedingSubtree(child, out);
+    // Reverse document order is the subtree's pre-order, reversed.
+    const start = out.items.len;
+    var tw = TreeWalker.Full.init(n, .{});
+    while (tw.next()) |node| {
+        try out.append(self.arena, node);
     }
-    try out.append(self.arena, n);
+    std.mem.reverse(*Node, out.items[start..]);
 }
 
 fn appendPreceding(self: *Evaluator, start: *Node, out: *std.ArrayList(*Node)) Error!void {
@@ -530,7 +527,7 @@ fn appendPreceding(self: *Evaluator, start: *Node, out: *std.ArrayList(*Node)) E
 fn appendAttributes(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) Error!void {
     const el = node.is(Element) orelse return;
     for (el.attributeEntries()) |*entry| {
-        // Memoized via frame._attribute_lookup so repeated XPath queries
+        // Memoized via page.attribute_lookup so repeated XPath queries
         // (Capybara/Selenium polling) reuse the same *Attribute instead
         // of leaking fresh ones into page-lifetime storage on every call.
         const attribute = try el._attributes.getOrCreateAttribute(entry, el, self.frame);
@@ -769,7 +766,7 @@ fn predicateMatches(val: result.Result, position: usize) bool {
     };
 }
 
-pub fn sortDocOrder(nodes: []*Node) void {
+fn sortDocOrder(nodes: []*Node) void {
     if (nodes.len <= 1) return;
     std.mem.sort(*Node, nodes, {}, lessThanDocOrder);
 }

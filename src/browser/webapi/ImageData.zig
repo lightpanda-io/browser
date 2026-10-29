@@ -42,38 +42,10 @@ pub const ConstructorSettings = struct {
     pixelFormat: String = .wrap("rgba-unorm8"),
 };
 
-/// This has many constructors:
-///
-/// ```js
-/// new ImageData(width, height)
-/// new ImageData(width, height, settings)
-///
-/// new ImageData(dataArray, width)
-/// new ImageData(dataArray, width, height)
-/// new ImageData(dataArray, width, height, settings)
-/// ```
-///
-/// We currently support only the first 2.
-pub fn init(
-    width: u32,
-    height: u32,
-    maybe_settings: ?ConstructorSettings,
-    exec: *Execution,
-) !*ImageData {
-    // Though arguments are unsigned long, these are capped to max. i32 on Chrome.
-    // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/canvas/image_data.cc#L61
-    const max_i32 = std.math.maxInt(i32);
-    if (width == 0 or width > max_i32 or height == 0 or height > max_i32) {
-        return error.IndexSizeError;
-    }
-
-    const settings: ConstructorSettings = maybe_settings orelse .{};
-    if (settings.colorSpace.eql(comptime .wrap("srgb")) == false) {
-        return error.TypeError;
-    }
-    if (settings.pixelFormat.eql(comptime .wrap("rgba-unorm8")) == false) {
-        return error.TypeError;
-    }
+pub fn init(width: u32, height: u32, maybe_settings: ?ConstructorSettings, exec: *Execution) !*ImageData {
+    try validateDimension(width);
+    try validateDimension(height);
+    try validateSettings(maybe_settings);
 
     var size, var overflown = @mulWithOverflow(width, height);
     if (overflown == 1) {
@@ -90,6 +62,61 @@ pub fn init(
         ._height = height,
         ._data = try exec.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
     });
+}
+
+// The ImageData wraps the caller's array, not a copy: `imageData.data`
+// is the same object that was passed in.
+fn initWithData(
+    data: js.Value,
+    width: u32,
+    height_: ?js.Value,
+    settings: ?ConstructorSettings,
+    exec: *Execution,
+) !*ImageData {
+    try validateSettings(settings);
+
+    const array = js.ArrayBufferRef(.uint8_clamped){ .local = data.local, .handle = data.handle };
+    const length = array.slice().len;
+    if (length == 0 or length % 4 != 0) {
+        return error.InvalidStateError;
+    }
+    try validateDimension(width);
+
+    const pixels = length / 4;
+    if (pixels % width != 0) {
+        return error.IndexSizeError;
+    }
+    const height = pixels / width;
+    if (height_) |v| {
+        if (!v.isUndefined() and try v.toU32() != height) {
+            return error.IndexSizeError;
+        }
+    }
+    try validateDimension(height);
+
+    return exec._factory.create(ImageData{
+        ._width = width,
+        ._height = @intCast(height),
+        ._data = try array.persist(),
+    });
+}
+
+fn validateSettings(settings_: ?ConstructorSettings) !void {
+    const settings = settings_ orelse return;
+    if (settings.colorSpace.eql(comptime .wrap("srgb")) == false) {
+        return error.TypeError;
+    }
+    if (settings.pixelFormat.eql(comptime .wrap("rgba-unorm8")) == false) {
+        return error.TypeError;
+    }
+}
+
+fn validateDimension(value: usize) !void {
+    // Though arguments are unsigned long, these are capped to max. i32 on Chrome.
+    // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/canvas/image_data.cc#L61
+    if (value == 0 or value > std.math.maxInt(i32)) {
+        return error.IndexSizeError;
+    }
 }
 
 pub fn deinit(self: *ImageData, page: *Page) void {
@@ -143,11 +170,38 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "ImageData";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(ImageData.init, .{});
+    /// This has many constructors:
+    ///
+    /// ```js
+    /// new ImageData(width, height)
+    /// new ImageData(width, height, settings)
+    ///
+    /// new ImageData(dataArray, width)
+    /// new ImageData(dataArray, width, height)
+    /// new ImageData(dataArray, width, height, settings)
+    /// ```
+    pub const constructor = bridge.constructor(struct {
+        fn wrap(first: js.Value, second: u32, third: ?js.Value, fourth: ?ConstructorSettings, exec: *Execution) !*ImageData {
+            if (first.isUint8ClampedArray()) {
+                return initWithData(first, second, third, fourth, exec);
+            }
+            if (first.isFloat16Array()) {
+                // Float16Array data needs the "rgba-float16" pixel format, which
+                // we don't support. Other typed arrays aren't ImageDataArrays, so
+                // they take the (sw, sh) overload.
+                return error.TypeError;
+            }
+
+            const settings: ?ConstructorSettings = if (third) |v| blk: {
+                if (v.isNullOrUndefined()) break :blk null;
+                break :blk try v.toZig(ConstructorSettings);
+            } else null;
+            return init(try first.toU32(), second, settings, exec);
+        }
+    }.wrap, .{});
 
     pub const colorSpace = bridge.property("srgb", .{ .template = false, .readonly = true });
     pub const pixelFormat = bridge.property("rgba-unorm8", .{ .template = false, .readonly = true });

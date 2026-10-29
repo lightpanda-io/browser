@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../testing.js"></script>
+
+<output id="out1" name="result">42</output>
+
+<script id="type">
+  testing.expectEqual('output', $('#out1').type);
+  testing.expectEqual('output', document.createElement('output').type);
+</script>
+
+<script id="value">
+{
+  const out = document.createElement('output');
+  out.innerHTML = '<b>a</b>b';
+  testing.expectEqual('ab', out.value);
+  testing.expectEqual('ab', out.defaultValue);
+
+  // no override yet: defaultValue writes the content
+  out.defaultValue = 'c';
+  testing.expectEqual('c', out.textContent);
+  testing.expectEqual('c', out.defaultValue);
+
+  // value keeps the current content as the default value override
+  out.value = 'd';
+  testing.expectEqual('d', out.textContent);
+  testing.expectEqual('c', out.defaultValue);
+
+  // with an override, defaultValue only updates the override
+  out.defaultValue = 'e';
+  testing.expectEqual('d', out.value);
+  testing.expectEqual('e', out.defaultValue);
+}
+</script>

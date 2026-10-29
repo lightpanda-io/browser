@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <body>
@@ -71,6 +72,44 @@
   // Test points outside all elements
   const element = document.elementFromPoint(-1000, -1000);
   testing.expectEqual(null, element);
+}
+</script>
+
+<script id="viewport_bound">
+{
+  // Content extends past the viewport, but points outside it hit nothing.
+  const tall = document.createElement('div');
+  tall.style.height = (innerHeight * 3) + 'px';
+  tall.style.width = (innerWidth * 3) + 'px';
+  document.body.appendChild(tall);
+  // Chrome's viewport excludes its scrollbars; Lightpanda draws none.
+  document.documentElement.style.scrollbarWidth = 'none';
+
+  const W = innerWidth;
+  const H = innerHeight;
+  testing.expectTrue(document.elementFromPoint(10, 10) !== null);
+  testing.expectTrue(document.elementFromPoint(W - 1, 10) !== null);
+  testing.expectTrue(document.elementFromPoint(10, H - 1) !== null);
+
+  testing.expectEqual(null, document.elementFromPoint(10, H + 10));
+  testing.expectEqual(null, document.elementFromPoint(W + 10, 10));
+  testing.expectEqual(null, document.elementFromPoint(W, 10));
+  testing.expectEqual(null, document.elementFromPoint(10, H));
+  testing.expectEqual(0, document.elementsFromPoint(10, H + 10).length);
+
+  // Chrome rounds to the nearest pixel before the bound check.
+  testing.expectTrue(document.elementFromPoint(-0.4, 10) !== null);
+  testing.expectEqual(null, document.elementFromPoint(-0.6, 10));
+  testing.expectEqual(null, document.elementFromPoint(W - 0.4, 10));
+
+  // Scrolling moves content into view, not the bound.
+  scrollTo(0, H);
+  testing.expectTrue(document.elementFromPoint(10, 10) !== null);
+  testing.expectEqual(null, document.elementFromPoint(10, H + 10));
+  scrollTo(0, 0);
+
+  document.documentElement.style.scrollbarWidth = '';
+  tall.remove();
 }
 </script>
 

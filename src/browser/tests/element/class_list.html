@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id=test1></div>
@@ -645,5 +646,20 @@
 
   result = iter.next();
   testing.expectEqual(true, result.done);
+}
+</script>
+
+<script id=rest_params>
+{
+  // add/remove take `...tokens`: an array is one argument, stringified
+  const div = document.createElement('div');
+  div.classList.add(['a', 'b']);
+  testing.expectEqual('a,b', div.className);
+  div.classList.add('c', 'd');
+  testing.expectEqual('a,b c d', div.className);
+  div.classList.remove(['a', 'b'], 'c');
+  testing.expectEqual('d', div.className);
+  testing.expectEqual(0, div.classList.add.length);
+  testing.expectEqual(0, div.classList.remove.length);
 }
 </script>

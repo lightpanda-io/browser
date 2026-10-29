@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<body>
+  <div id="host" style="width:200px;height:200px"></div>
+  <div id="slot_host"><span id="slotted">Slotted</span><span id="unslotted" slot="nowhere">Unslotted</span></div>
+  <div id="after">After</div>
+</body>
+
+<script id="shadow_content_laid_out_in_host">
+{
+  const host = document.getElementById('host');
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<button id="shadowButton" style="width:100px;height:100px">Shadow</button>';
+  const button = root.getElementById('shadowButton');
+
+  const h = host.getBoundingClientRect();
+  const b = button.getBoundingClientRect();
+  // shadow content is laid out inside its host
+  testing.expectEqual(true, b.x >= h.x && b.x + b.width <= h.x + h.width);
+  testing.expectEqual(true, b.y >= h.y && b.y + b.height <= h.y + h.height);
+
+  // The document-level API sees only its own tree: a hit on shadow content
+  // retargets to the host, as in Chrome.
+  const x = b.x + 1;
+  const y = b.y + 1;
+  testing.expectEqual(host, document.elementFromPoint(x, y));
+  testing.expectEqual(host, document.elementsFromPoint(x, y)[0]);
+}
+</script>
+
+<script id="shadow_root_element_from_point">
+{
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<button id="sb" style="width:100px;height:40px">In shadow</button><div id="inner"></div>';
+  const button = root.getElementById('sb');
+  const inner = root.getElementById('inner');
+  const nested = inner.attachShadow({mode: 'open'});
+  nested.innerHTML = '<i id="deep" style="display:block;width:100px;height:40px">deep</i>';
+  const deep = nested.getElementById('deep');
+  const status = document.getElementById('after');
+
+  const center = (el) => {
+    const r = el.getBoundingClientRect();
+    return [r.x + 1, r.y + 1];
+  };
+
+  const [bx, by] = center(button);
+  testing.expectEqual(host, document.elementFromPoint(bx, by));
+  testing.expectEqual(button, root.elementFromPoint(bx, by));
+  testing.expectEqual(button, nested.elementFromPoint(bx, by));
+  const all = root.elementsFromPoint(bx, by);
+  testing.expectEqual(button, all[0]);
+  testing.expectEqual(host, all[1]);
+  testing.expectEqual(document.documentElement, all[all.length - 1]);
+
+  // a hit in a nested shadow tree reports its host in this tree
+  const [dx, dy] = center(deep);
+  testing.expectEqual(inner, root.elementFromPoint(dx, dy));
+  testing.expectEqual(deep, nested.elementFromPoint(dx, dy));
+  testing.expectEqual([deep, inner, host], nested.elementsFromPoint(dx, dy).slice(0, 3));
+
+  // a hit outside the shadow tree is returned as is
+  const [sx, sy] = center(status);
+  testing.expectEqual(status, root.elementFromPoint(sx, sy));
+  testing.expectEqual(null, root.elementFromPoint(-5, -5));
+  testing.expectEqual(0, root.elementsFromPoint(-5, -5).length);
+  host.remove();
+}
+</script>
+
+<script id="shadow_root_elements_from_point_slotted">
+{
+  const host = document.createElement('div');
+  host.innerHTML = '<span style="display:block;width:100px;height:40px">light</span>';
+  document.body.appendChild(host);
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<div id="wrap"><slot></slot></div>';
+  const light = host.firstChild;
+  const wrap = root.getElementById('wrap');
+  const r = light.getBoundingClientRect();
+  const html = document.documentElement;
+
+  // slotted content's ancestors in the shadow tree count, the <slot> doesn't:
+  // it's display:contents
+  testing.expectEqual(light, root.elementFromPoint(r.x + 1, r.y + 1));
+  testing.expectEqual([light, wrap, host, document.body, html], root.elementsFromPoint(r.x + 1, r.y + 1));
+  testing.expectEqual([light, host, document.body, html], document.elementsFromPoint(r.x + 1, r.y + 1));
+  host.remove();
+}
+</script>
+
+<script id="slotted_content_laid_out_in_slot">
+{
+  const host = document.getElementById('slot_host');
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<p id="before">Before</p><slot></slot>';
+  const before = root.getElementById('before');
+  const slotted = document.getElementById('slotted');
+
+  const hy = host.getBoundingClientRect().y;
+  const by = before.getBoundingClientRect().y;
+  const ly = slotted.getBoundingClientRect().y;
+  // the slotted span comes after the shadow <p> that precedes its slot
+  testing.expectEqual(true, by >= hy);
+  testing.expectEqual(true, ly > by);
+
+  const r = slotted.getBoundingClientRect();
+  testing.expectEqual(slotted, document.elementFromPoint(r.x + 1, r.y + 1));
+
+  // positions after the host follow the flat tree too
+  const after = document.getElementById('after');
+  testing.expectEqual(true, after.getBoundingClientRect().y > ly);
+}
+</script>
+
+<script id="shadow_content_extends_document">
+{
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<div></div>'.repeat(400) + '<button id="last">Last</button>';
+  const last = root.getElementById('last');
+
+  const bottom = last.getBoundingClientRect().bottom + window.scrollY;
+  testing.expectEqual(true, document.scrollingElement.scrollHeight >= bottom);
+}
+</script>

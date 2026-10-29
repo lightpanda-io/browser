@@ -33,6 +33,12 @@ const Message = zenai.provider.Message;
 // system prompt plus the most recent `prune_keep`.
 const prune_high = 30;
 const prune_keep = 20;
+// Stale results are stubbed in batches, past `elide_trigger`: each rewrite of
+// history invalidates the provider's prompt cache.
+const image_keep = 2;
+const elide_keep = 3;
+const elide_min_bytes = 2048;
+const elide_trigger = 60 * 1024;
 
 allocator: std.mem.Allocator,
 /// Seeded as `messages[0]` on the first turn. Lives outside `arena` (static or
@@ -68,10 +74,86 @@ pub fn ensureSystemPrompt(self: *Conversation) !void {
     }
 }
 
-/// Cap history growth: once it exceeds `prune_high`, keep the system prompt plus
-/// the most recent `prune_keep` messages, snapped to a safe boundary so a
-/// tool_call isn't split from its result.
+const ToolResult = zenai.provider.ToolResult;
+
+/// `prune` only runs between turns; a run re-sends its whole history on every
+/// request.
+pub fn compactForRequest(self: *Conversation) void {
+    self.expireImages();
+    if (self.forStale(elide_keep, isElidable, null) >= elide_trigger) {
+        _ = self.forStale(elide_keep, isElidable, stubResult);
+    }
+}
+
+fn expireImages(self: *Conversation) void {
+    _ = self.forStale(image_keep, hasImage, dropImage);
+}
+
+/// Total size of the candidate results older than the newest `keep`; with
+/// `rewrite`, also replaces them, in a copy since tool results are immutable.
+fn forStale(
+    self: *Conversation,
+    keep: usize,
+    comptime isCandidate: fn (ToolResult) bool,
+    comptime rewrite: ?fn (std.mem.Allocator, ToolResult) ToolResult,
+) usize {
+    const arena = self.arena.allocator();
+    var budget = keep;
+    var stale_bytes: usize = 0;
+    var i = self.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const msg = &self.messages.items[i];
+        const results = msg.tool_results orelse continue;
+        var copy: ?[]ToolResult = null;
+        var n = results.len;
+        while (n > 0) {
+            n -= 1;
+            if (!isCandidate(results[n])) continue;
+            if (budget > 0) {
+                budget -= 1;
+                continue;
+            }
+            stale_bytes += results[n].content.len;
+            const rewriteFn = rewrite orelse continue;
+            const rewritten = copy orelse arena.dupe(ToolResult, results) catch return stale_bytes;
+            copy = rewritten;
+            rewritten[n] = rewriteFn(arena, results[n]);
+        }
+        if (copy) |c| msg.tool_results = c;
+    }
+    return stale_bytes;
+}
+
+fn hasImage(res: ToolResult) bool {
+    return zenai.provider.hasImage(res.parts orelse return false);
+}
+
+fn dropImage(arena: std.mem.Allocator, res: ToolResult) ToolResult {
+    var dropped = res;
+    dropped.parts = null;
+    dropped.content = std.mem.concat(arena, u8, &.{ res.content, " (image dropped from context; call the tool again to look)" }) catch res.content;
+    return dropped;
+}
+
+/// `extract` output is usually the answer, and small.
+fn isElidable(res: ToolResult) bool {
+    return res.content.len >= elide_min_bytes and !std.mem.eql(u8, res.name, "extract");
+}
+
+fn stubResult(arena: std.mem.Allocator, res: ToolResult) ToolResult {
+    var stub = res;
+    stub.parts = null;
+    stub.content = arena.print("[{s} result ({d} bytes) dropped from context; call the tool again to look]", .{ res.name, res.content.len }) catch return res;
+    return stub;
+}
+
+/// Cap history growth: expire stale images, then once history exceeds
+/// `prune_high`, keep the system prompt plus the most recent `prune_keep`
+/// messages, snapped to a safe boundary so a tool_call isn't split from its
+/// result.
 pub fn prune(self: *Conversation) void {
+    self.expireImages();
     const msgs = self.messages.items;
     if (msgs.len <= prune_high) return;
     const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
@@ -108,4 +190,69 @@ fn repackTail(self: *Conversation, tail: []const Message) void {
     self.messages.shrinkRetainingCapacity(1 + duped.len);
     self.arena.deinit();
     self.arena = new_arena;
+}
+
+fn appendResult(conv: *Conversation, name: []const u8, len: usize) !void {
+    const a = conv.arena.allocator();
+    const results = try a.alloc(ToolResult, 1);
+    const content = try a.alloc(u8, len);
+    @memset(content, 'x');
+    results[0] = .{ .id = "c", .name = name, .content = content };
+    try conv.messages.append(std.testing.allocator, .{ .role = .tool, .tool_results = results });
+}
+
+fn contentOf(conv: *const Conversation, i: usize) []const u8 {
+    return conv.messages.items[i].tool_results.?[0].content;
+}
+
+test "compactForRequest waits for the trigger, then stubs all stale results at once" {
+    var conv: Conversation = .init(std.testing.allocator, "sys");
+    defer conv.deinit();
+
+    for (0..6) |_| try appendResult(&conv, "markdown", 18 * 1024);
+    conv.compactForRequest();
+    try std.testing.expectEqual(18 * 1024, contentOf(&conv, 0).len);
+
+    try appendResult(&conv, "markdown", 18 * 1024);
+    conv.compactForRequest();
+    const stub = "[markdown result (18432 bytes) dropped from context; call the tool again to look]";
+    for (0..4) |i| try std.testing.expectEqualStrings(stub, contentOf(&conv, i));
+    for (4..7) |i| try std.testing.expectEqual(18 * 1024, contentOf(&conv, i).len);
+}
+
+test "compactForRequest keeps small and extract results, and doesn't count them as recent" {
+    var conv: Conversation = .init(std.testing.allocator, "sys");
+    defer conv.deinit();
+
+    try appendResult(&conv, "extract", 32 * 1024);
+    for (0..6) |_| try appendResult(&conv, "html", 20 * 1024);
+    for (0..3) |_| try appendResult(&conv, "click", 100);
+    conv.compactForRequest();
+
+    try std.testing.expectEqual(32 * 1024, contentOf(&conv, 0).len);
+    for (1..4) |i| try std.testing.expect(std.mem.startsWith(u8, contentOf(&conv, i), "[html result"));
+    for (4..7) |i| try std.testing.expectEqual(20 * 1024, contentOf(&conv, i).len);
+    for (7..10) |i| try std.testing.expectEqual(100, contentOf(&conv, i).len);
+}
+
+test "expireImages keeps the newest images and annotates the rest" {
+    var conv: Conversation = .init(std.testing.allocator, "sys");
+    defer conv.deinit();
+    const a = conv.arena.allocator();
+
+    const image = [_]zenai.provider.ContentPart{.{ .image = .{ .data = "AAAA", .mime_type = "image/png" } }};
+    for (0..4) |n| {
+        const results = try a.alloc(ToolResult, 1);
+        results[0] = .{ .id = "c", .name = "screenshot", .content = try a.print("shot {d}", .{n}), .parts = &image };
+        try conv.messages.append(std.testing.allocator, .{ .role = .tool, .tool_results = results });
+    }
+
+    conv.expireImages();
+
+    try std.testing.expect(conv.messages.items[0].tool_results.?[0].parts == null);
+    try std.testing.expectEqualStrings("shot 0 (image dropped from context; call the tool again to look)", conv.messages.items[0].tool_results.?[0].content);
+    try std.testing.expect(conv.messages.items[1].tool_results.?[0].parts == null);
+    try std.testing.expect(conv.messages.items[2].tool_results.?[0].parts != null);
+    try std.testing.expect(conv.messages.items[3].tool_results.?[0].parts != null);
+    try std.testing.expectEqualStrings("shot 3", conv.messages.items[3].tool_results.?[0].content);
 }

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div class="test-class">div1</div>
@@ -427,6 +428,41 @@
   testing.expectEqual(false, input.matches(':invalid'));
   testing.expectEqual(true, input.matches(':valid'));
   input.value = '';
+}
+</script>
+
+<form id="form-constraints">
+  <input id="vc-email" type="email" value="bad">
+  <input id="vc-pattern" pattern="[0-9]+" value="12a">
+  <input id="vc-min" type="number" min="1" value="0">
+  <input id="vc-custom" value="x">
+  <textarea id="vc-textarea" required></textarea>
+  <input id="vc-ok" value="fine">
+  <input id="vc-disabled" required disabled>
+</form>
+<form id="form-disabled-only">
+  <input id="vc-disabled-only" required disabled>
+</form>
+
+<script id=validityConstraints>
+{
+  const ids = (sel) => Array.from(document.querySelectorAll(sel)).map((e) => e.id).join(' ');
+  document.getElementById('vc-custom').setCustomValidity('nope');
+
+  // every constraint the validity API reports, not just a missing value
+  testing.expectEqual('form-constraints vc-email vc-pattern vc-min vc-custom vc-textarea', ids('#form-constraints:invalid, #form-constraints :invalid'));
+  testing.expectEqual('vc-ok', ids('#form-constraints :valid'));
+
+  // disabled controls are barred from constraint validation
+  testing.expectEqual('form-disabled-only', ids('#form-disabled-only:valid, #form-disabled-only :valid, #form-disabled-only :invalid'));
+
+  document.getElementById('vc-email').value = 'a@b.c';
+  document.getElementById('vc-pattern').value = '12';
+  document.getElementById('vc-min').value = '3';
+  document.getElementById('vc-custom').setCustomValidity('');
+  document.getElementById('vc-textarea').value = 't';
+  testing.expectEqual(true, document.getElementById('form-constraints').matches(':valid'));
+  testing.expectEqual('', ids('#form-constraints :invalid'));
 }
 </script>
 

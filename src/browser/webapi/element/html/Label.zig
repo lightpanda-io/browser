@@ -1,12 +1,32 @@
-const lp = @import("lightpanda");
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const HtmlElement = @import("../Html.zig");
 const TreeWalker = @import("../../TreeWalker.zig");
+
+const HtmlElement = @import("../Html.zig");
 
 const Label = @This();
 
@@ -22,9 +42,15 @@ pub fn asNode(self: *Label) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getControl(self: *Label, frame: *Frame) ?*Element {
-    if (self.asElement().getAttributeSafe(comptime .wrap("for"))) |id| {
-        const el = frame.getElementByIdFromNode(self.asElement().asNode(), id) orelse return null;
+pub fn getControl(self: *Label) ?*Element {
+    if (self.asElement().getAttributeInterned("for")) |id| {
+        // Like Chrome: `for` only resolves in a document or shadow tree, so a
+        // detached label has no control by id.
+        const node = self.asNode();
+        if (!node.isConnected() and !node.isInShadowTree()) {
+            return null;
+        }
+        const el = Frame.getElementByIdFromNode(node, id) orelse return null;
         if (!isLabelable(el)) {
             return null;
         }
@@ -45,6 +71,7 @@ fn isLabelable(el: *Element) bool {
     return switch (html._type) {
         .button, .meter, .output, .progress, .select, .textarea => true,
         .input => html.subtype(HtmlElement.Input)._input_type != .hidden,
+        .custom => html.subtype(HtmlElement.Custom).isFormAssociated(),
         else => false,
     };
 }
@@ -55,17 +82,6 @@ pub fn findWrappingLabel(control: *Element) ?*Element {
     while (current) |n| : (current = n._parent) {
         const el = n.is(Element) orelse continue;
         if (el.getTag() == .label) return el;
-    }
-    return null;
-}
-
-/// First `<label for="id">` descendant of `root`, if any.
-pub fn findLabelByFor(root: *Node, id: []const u8) ?*Element {
-    var it = TreeWalker.Full.Elements.init(root, .{});
-    while (it.next()) |el| {
-        if (el.getTag() != .label) continue;
-        const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
-        if (std.mem.eql(u8, for_attr, id)) return el;
     }
     return null;
 }
@@ -83,7 +99,7 @@ pub const LabelByForIndex = struct {
             var it = TreeWalker.Full.Elements.init(root, .{});
             while (it.next()) |el| {
                 if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
+                const for_attr = el.getAttributeInterned("for") orelse continue;
                 if (for_attr.len == 0) continue;
                 const gop = try self.map.getOrPut(allocator, for_attr);
                 if (!gop.found_existing) gop.value_ptr.* = el;
@@ -94,33 +110,60 @@ pub const LabelByForIndex = struct {
     }
 };
 
-/// Collects the `<label>` elements associated with a labellable form control.
-/// Matches HTMLInputElement.labels (and the equivalent on button/select/etc).
-/// Includes every `<label for="id">` reference plus the nearest ancestor
-/// `<label>` wrapping the control.
+/// The `<label>` elements whose labeled control is `control`, in tree order.
 pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     const local = frame.js.local orelse return error.NotHandled;
     var arr = local.newArray(0);
     var idx: u32 = 0;
 
-    if (control.getAttributeSafe(comptime .wrap("id"))) |id_value| {
-        if (id_value.len > 0) {
-            const doc = control.asNode().ownerDocument(frame);
-            const search_root: *Node = if (doc) |d| d.asNode() else control.asNode();
-            var it = TreeWalker.Full.Elements.init(search_root, .{});
-            while (it.next()) |el| {
-                if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
-                if (!std.mem.eql(u8, for_attr, id_value)) continue;
-                _ = try arr.set(idx, el, .{});
-                idx += 1;
+    // Like Chrome: a control outside a document or shadow tree has no labels,
+    // not even a wrapping one.
+    const node = control.asNode();
+    if (!node.isConnected() and !node.isInShadowTree()) {
+        return arr;
+    }
+
+    const root = node.getRootNode(.{});
+
+    // Only an id can pull in a `for` label from elsewhere in the tree, and only
+    // if this control is the first element with it. Then walk the whole tree.
+    const by_id = if (control.getId()) |id|
+        id.len > 0 and Frame.getElementByIdFromNode(root, id) == control
+    else
+        false;
+
+    if (by_id) {
+        var it = TreeWalker.Full.ElementsOf(Label).init(root, .{});
+        while (it.next()) |label| {
+            if (label.getControl() != control) {
+                continue;
             }
+            _ = try arr.set(idx, label.asElement(), .{});
+            idx += 1;
+        }
+        return arr;
+    }
+
+    // Otherwise only ancestor labels can apply. Count first so nested labels
+    // land outermost-first, i.e. in tree order.
+    var count: u32 = 0;
+    var current: ?*Node = node._parent;
+    while (current) |n| : (current = n._parent) {
+        const label = n.is(Label) orelse continue;
+        if (label.getControl() == control) {
+            count += 1;
         }
     }
 
-    if (findWrappingLabel(control)) |wrap_label| {
-        _ = try arr.set(idx, wrap_label, .{});
-        idx += 1;
+    idx = count;
+    current = node._parent;
+    while (current) |n| : (current = n._parent) {
+        const label = n.is(Label) orelse continue;
+        if (label.getControl() != control) {
+            continue;
+        }
+        idx -= 1;
+        _ = try arr.set(idx, label.asElement(), .{});
     }
 
     return arr;
@@ -131,7 +174,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLLabelElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

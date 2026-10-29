@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div class="song" rick="roll">
@@ -36,5 +37,29 @@
     const e2 = document.createElement("div");
     e2.innerHTML = "<h1>from the midnight sun where the hot springs flow</h1>";
     testing.expectEqual(false, e1.isEqualNode(e2));
+  }
+
+  {
+    const e1 = document.createElementNS("urn:first", "item");
+    const e2 = document.createElementNS("urn:second", "item");
+    testing.expectEqual(false, e1.isEqualNode(e2));
+  }
+
+  {
+    const e1 = document.createElement("div");
+    const e2 = document.createElement("div");
+    e1.appendChild(document.createElementNS("urn:first", "item"));
+    e2.appendChild(document.createElementNS("urn:second", "item"));
+    testing.expectEqual(false, e1.isEqualNode(e2));
+  }
+</script>
+
+<script id=isEqualNode_null>
+  {
+    const div = document.createElement("div");
+    testing.expectEqual(false, div.isEqualNode(null));
+    testing.expectEqual(false, div.isEqualNode(undefined));
+    testing.expectError('TypeError', () => div.isEqualNode());
+    testing.expectError('TypeError', () => div.isEqualNode({}));
   }
 </script>

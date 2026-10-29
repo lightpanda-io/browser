@@ -244,7 +244,7 @@ pub fn getData(self: *const CData) String {
     return self._data;
 }
 
-pub const RenderOpts = struct {
+const RenderOpts = struct {
     trim_left: bool = true,
     trim_right: bool = true,
 };
@@ -310,14 +310,14 @@ pub fn setData(self: *CData, value: ?[]const u8, frame: *Frame) !void {
         self._data = .empty;
     }
 
-    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_value);
+    self.dataChanged(old_value, frame);
 }
 
 /// JS bridge wrapper for `data` setter.
 /// Per spec, setting .data runs replaceData(0, this.length, value),
 /// which includes live range updates.
 /// Handles [LegacyNullToEmptyString]: null → "" per spec.
-pub fn _setData(self: *CData, value: js.Value, frame: *Frame) !void {
+fn _setData(self: *CData, value: js.Value, frame: *Frame) !void {
     const new_value: []const u8 = if (value.isNull()) "" else try value.toZig([]const u8);
     const length = self.getLength();
     try self.replaceData(0, length, new_value, frame);
@@ -354,13 +354,20 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
     return self._data.eql(other._data);
 }
 
-pub fn appendData(self: *CData, data: []const u8, frame: *Frame) !void {
+/// Text data can flip `:empty` but never a live collection, so only the style
+/// stamp moves.
+fn dataChanged(self: *CData, old: String, frame: *Frame) void {
+    frame.styleChanged();
+    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old);
+}
+
+fn appendData(self: *CData, data: []const u8, frame: *Frame) !void {
     // Per DOM spec, appendData(data) is replaceData(length, 0, data).
     const length = self.getLength();
     try self.replaceData(length, 0, data, frame);
 }
 
-pub fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !void {
+fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
     const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
 
@@ -377,12 +384,12 @@ pub fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !voi
         self._data = try frame.dupeSSO(old_value[0..range.start]);
     } else {
         // Deleting from middle - concat prefix and suffix
-        self._data = try String.concat(frame.arena, &.{
+        self._data = try String.concat(frame.page_arena, &.{
             old_value[0..range.start],
             old_value[range.end..],
         });
     }
-    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_data);
+    self.dataChanged(old_data, frame);
 }
 
 pub fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) !void {
@@ -393,12 +400,12 @@ pub fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) 
 
     const old_value = self._data;
     const existing = old_value.str();
-    self._data = try String.concat(frame.arena, &.{
+    self._data = try String.concat(frame.page_arena, &.{
         existing[0..byte_offset],
         data,
         existing[byte_offset..],
     });
-    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_value);
+    self.dataChanged(old_value, frame);
 }
 
 pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, frame: *Frame) !void {
@@ -412,15 +419,15 @@ pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, 
 
     const old_value = self._data;
     const existing = old_value.str();
-    self._data = try String.concat(frame.arena, &.{
+    self._data = try String.concat(frame.page_arena, &.{
         existing[0..range.start],
         data,
         existing[range.end..],
     });
-    Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old_value);
+    self.dataChanged(old_value, frame);
 }
 
-pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
+fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
     const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
     return self._data.str()[range.start..range.end];
@@ -432,44 +439,29 @@ pub fn remove(self: *CData, frame: *Frame) !void {
     _ = try parent.removeChild(node, frame);
 }
 
-pub fn before(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+pub fn before(self: *CData, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
 
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+    for (nodes.values) |node_or_text| {
+        const child = try node_or_text.toNode(node.getDocument(frame));
         _ = try parent.insertBefore(child, node, frame);
     }
 }
 
-pub fn after(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
+pub fn after(self: *CData, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
-    const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
+    const viable_next = Node.NodeOrText.viableNextSibling(node, nodes.values);
 
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+    for (nodes.values) |node_or_text| {
+        const child = try node_or_text.toNode(node.getDocument(frame));
         _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
 
-pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void {
-    const ref_node = self.asNode();
-    const parent = ref_node.parentNode() orelse return;
-
-    var rm_ref_node = true;
-    for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
-        if (child == ref_node) {
-            rm_ref_node = false;
-            continue;
-        }
-        _ = try parent.insertBefore(child, ref_node, frame);
-    }
-
-    if (rm_ref_node) {
-        _ = try parent.removeChild(ref_node, frame);
-    }
+pub fn replaceWith(self: *CData, nodes: js.Variadic(Node.NodeOrText), frame: *Frame) !void {
+    return self.asNode().replaceWithNodes(nodes.values, frame);
 }
 
 pub fn nextElementSibling(self: *CData) ?*Node.Element {
@@ -495,7 +487,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CharacterData";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

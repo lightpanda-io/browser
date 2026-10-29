@@ -458,6 +458,40 @@
 }
 </script>
 
+<script id=emptyNameSkipped>
+{
+  // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-the-form-data-set
+  // A control whose name attribute is the empty string is skipped, the same
+  // as one without a name attribute.
+  const form = document.createElement('form');
+
+  const named = document.createElement('input');
+  named.name = 'q';
+  named.value = 'lightpanda';
+  form.appendChild(named);
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('name', '');
+  hidden.value = 'nope-hidden';
+  form.appendChild(hidden);
+
+  const text = document.createElement('input');
+  text.setAttribute('name', '');
+  text.value = 'nope-text';
+  form.appendChild(text);
+
+  const ta = document.createElement('textarea');
+  ta.setAttribute('name', '');
+  ta.value = 'nope-textarea';
+  form.appendChild(ta);
+
+  const fd = new FormData(form);
+  testing.expectEqual([['q', 'lightpanda']], Array.from(fd.entries()));
+  testing.expectEqual(false, fd.has(''));
+}
+</script>
+
 <script id=multipleImagesWithSameName>
 {
   // Test that when multiple images share a name, only submitter's coordinates are included
@@ -914,17 +948,62 @@
 
   testing.expectEqual('still-a-string', fd.get('plain'));
 
-  // A file entry read through get() collapses to its name, per WHATWG.
-  testing.expectEqual('blob', fd.get('fromBlob'));
-  testing.expectEqual('notes.txt', fd.get('fromFile'));
-  testing.expectEqual('given.txt', fd.get('renamed'));
+  // A file entry reads back as a File (FormDataEntryValue); it only collapses
+  // to its name when serialized as urlencoded or text/plain.
+  const fromBlob = fd.get('fromBlob');
+  testing.expectEqual(true, fromBlob instanceof File);
+  testing.expectEqual('blob', fromBlob.name);
+  testing.expectEqual(10, fromBlob.size);
+  testing.expectEqual('text/plain', fromBlob.type);
+
+  const fromFile = fd.get('fromFile');
+  testing.expectEqual(true, fromFile instanceof File);
+  testing.expectEqual('notes.txt', fromFile.name);
+  testing.expectEqual(10, fromFile.size);
+  testing.expectEqual(fromFile, fd.get('fromFile'));
+
+  testing.expectEqual('given.txt', fd.get('renamed').name);
+  testing.expectEqual(13, fd.get('renamed').size);
+
+  testing.expectEqual(['plain', 'fromBlob', 'fromFile', 'renamed'], Array.from(fd.keys()));
+  testing.expectEqual(['string', 'object', 'object', 'object'], Array.from(fd.values()).map((v) => typeof v));
+  testing.expectEqual(fromFile, fd.getAll('fromFile')[0]);
+  testing.expectEqual(fromFile, Array.from(fd.entries())[2][1]);
+  const seen = [];
+  fd.forEach((v, k) => seen.push(v instanceof File ? 'file:' + v.name : v));
+  testing.expectEqual(['still-a-string', 'file:blob', 'file:notes.txt', 'file:given.txt'], seen);
+
+  // Copying entries into a new FormData keeps the files.
+  const copy = new FormData();
+  for (const [k, v] of fd) copy.append(k, v);
+  testing.expectEqual(fromFile, copy.get('fromFile'));
 
   // set() goes through the same path.
   fd.set('fromFile', new File(['replaced'], 'replaced.txt', { type: 'text/plain' }));
-  testing.expectEqual('replaced.txt', fd.get('fromFile'));
+  testing.expectEqual('replaced.txt', fd.get('fromFile').name);
 
   // Overwriting a file entry with a string still yields a string.
   fd.set('fromBlob', 'back-to-string');
   testing.expectEqual('back-to-string', fd.get('fromBlob'));
+}
+</script>
+
+<script id=unselectedFileInput>
+{
+  // An unselected file input contributes an empty File named "" of type
+  // application/octet-stream.
+  const form = document.createElement('form');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.name = 'avatar';
+  form.appendChild(input);
+
+  const fd = new FormData(form);
+  const v = fd.get('avatar');
+  testing.expectEqual(true, v instanceof File);
+  testing.expectEqual('', v.name);
+  testing.expectEqual(0, v.size);
+  testing.expectEqual('application/octet-stream', v.type);
+  testing.expectEqual(v, fd.get('avatar'));
 }
 </script>

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 <body>
 <div id="test-content">
@@ -1042,12 +1043,147 @@
   range.selectNodeContents(p);
   const rect = range.getBoundingClientRect();
   testing.expectTrue(rect instanceof DOMRect);
-  // Non-collapsed range delegates to the container element
+  // The text starts where its paragraph does, and has its own size
   const elemRect = p.getBoundingClientRect();
   testing.expectEqual(elemRect.x, rect.x);
   testing.expectEqual(elemRect.y, rect.y);
-  testing.expectEqual(elemRect.width, rect.width);
-  testing.expectEqual(elemRect.height, rect.height);
+  testing.expectTrue(rect.width > 0);
+  testing.expectTrue(rect.height > 0);
+}
+</script>
+
+<script id=getBoundingClientRect_text>
+{
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+
+  // How Playwright decides a display: contents element's text is visible
+  function textRect(html) {
+    host.innerHTML = html;
+    const range = new Range();
+    range.selectNode(host.firstChild.firstChild);
+    return range.getBoundingClientRect();
+  }
+
+  // Text inside a display: contents element still has a box
+  for (const html of [
+    '<div style="display:contents">Role</div>',
+    '<div style="display:contents;visibility:hidden">Role</div>',
+    '<div style="display:contents">&nbsp;</div>',
+    '<div style="display:contents;white-space:pre">   </div>',
+    '<pre style="display:contents">   </pre>',
+    '<div style="display:contents;white-space:preserve nowrap">   </div>',
+    '<div style="display:contents;white-space-collapse:preserve">   </div>',
+    '<div style="display:contents;white-space:break-spaces">   </div>',
+  ]) {
+    const rect = textRect(html);
+    testing.expectTrue(rect.width > 0);
+    testing.expectTrue(rect.height > 0);
+  }
+
+  // Collapsed spaces and a zero font have no size
+  for (const html of [
+    '<div style="display:contents">   </div>',
+    '<div style="display:contents;white-space:nowrap">   </div>',
+    '<div style="display:contents;font-size:0">Role</div>',
+    '<div style="display:none">Role</div>',
+  ]) {
+    const rect = textRect(html);
+    testing.expectEqual(0, rect.width);
+    testing.expectEqual(0, rect.height);
+  }
+
+  // A word wider than its block overflows it
+  {
+    const rect = textRect('<div style="width:2px">abc</div>');
+    testing.expectTrue(rect.width > 2);
+  }
+
+  // Words wrap: two lines, as wide as the longer word
+  {
+    const one = textRect('<div style="width:2px">abc</div>');
+    const two = textRect('<div style="width:2px">abc ab</div>');
+    testing.expectEqual(one.width, two.width);
+    testing.expectTrue(two.height > one.height);
+    const nowrap = textRect('<div style="width:2px;white-space:nowrap">abc ab</div>');
+    testing.expectTrue(nowrap.width > one.width);
+    testing.expectEqual(one.height, nowrap.height);
+  }
+
+  // Text wraps in the nearest block container: inline-blocks, floats,
+  // out-of-flow boxes and flex items are ones, a plain inline isn't
+  {
+    function spanTextRect(html) {
+      host.innerHTML = html;
+      const range = new Range();
+      range.selectNode(host.querySelector('span').firstChild);
+      return range.getBoundingClientRect();
+    }
+
+    const block = textRect('<div style="width:2px">abc ab</div>');
+    for (const html of [
+      '<span style="display:inline-block;width:2px">abc ab</span>',
+      '<span style="float:left;width:2px">abc ab</span>',
+      '<span style="position:absolute;width:2px">abc ab</span>',
+      '<div style="display:flex"><span style="width:2px">abc ab</span></div>',
+      '<div style="width:2px"><span>abc ab</span></div>',
+    ]) {
+      const rect = spanTextRect(html);
+      testing.expectEqual(block.width, rect.width);
+      testing.expectEqual(block.height, rect.height);
+    }
+  }
+
+  // A range that only covers part of the text measures that part
+  {
+    host.innerHTML = '<div>abcdef</div>';
+    const text = host.firstChild.firstChild;
+    const range = new Range();
+    range.setStart(text, 0);
+    range.setEnd(text, 3);
+    const part = range.getBoundingClientRect().width;
+    range.setEnd(text, 6);
+    testing.expectTrue(range.getBoundingClientRect().width > part);
+  }
+
+  // Text directly in a shadow root lays out in its host
+  {
+    host.innerHTML = '<div></div>';
+    const shadow = host.firstChild.attachShadow({ mode: 'open' });
+    shadow.innerHTML = 'Shadow text';
+    const range = new Range();
+    range.selectNode(shadow.firstChild);
+    const rect = range.getBoundingClientRect();
+    testing.expectTrue(rect.width > 0);
+    testing.expectTrue(rect.height > 0);
+  }
+
+  // Collapsed spaces have no client rects
+  host.innerHTML = '<div>   </div>';
+  const range = new Range();
+  range.selectNodeContents(host.firstChild);
+  testing.expectEqual(0, range.getClientRects().length);
+
+  host.remove();
+}
+</script>
+
+<script id=getBoundingClientRect_display_contents_root>
+{
+  // display: contents on the root element computes to block
+  const html = document.documentElement;
+  html.style.display = 'contents';
+  const wrapper = document.createElement('div');
+  wrapper.style.display = 'contents';
+  wrapper.textContent = 'Role';
+  html.appendChild(wrapper);
+  const range = new Range();
+  range.selectNodeContents(wrapper.firstChild);
+  const rect = range.getBoundingClientRect();
+  testing.expectTrue(rect.width > 0);
+  testing.expectTrue(rect.height > 0);
+  wrapper.remove();
+  html.style.display = '';
 }
 </script>
 
@@ -1061,11 +1197,53 @@
 
 <script id=getClientRects_element>
 {
+  // One rect per selected element whose parent isn't selected, plus one per
+  // selected piece of text, in tree order
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  host.innerHTML = '<p><span>a</span>b</p>';
+  const p = host.firstChild;
+  const span = p.firstChild;
   const range = new Range();
-  const p = document.getElementById('p1');
+
+  // span, its text, b
   range.selectNodeContents(p);
-  const rects = range.getClientRects();
-  const elemRects = p.getClientRects();
-  testing.expectEqual(elemRects.length, rects.length);
+  let rects = range.getClientRects();
+  testing.expectEqual(3, rects.length);
+  testing.expectEqual(span.getBoundingClientRect().width, rects[0].width);
+
+  // p covers span, so: p, a, b
+  range.selectNode(p);
+  rects = range.getClientRects();
+  testing.expectEqual(3, rects.length);
+  testing.expectEqual(p.getBoundingClientRect().width, rects[0].width);
+
+  // From inside span: only text, span is partly selected
+  range.setStart(span.firstChild, 0);
+  range.setEnd(p.lastChild, 1);
+  testing.expectEqual(2, range.getClientRects().length);
+
+  // An ancestor of the end is partly selected too: span, ab, c
+  host.innerHTML = '<div><span>ab</span><i>cd</i></div>';
+  const div = host.firstChild;
+  range.setStart(div, 0);
+  range.setEnd(div.lastChild.firstChild, 1);
+  testing.expectEqual(3, range.getClientRects().length);
+
+  // A partial text rect measures only its part
+  const text = div.lastChild.firstChild;
+  range.setStart(text, 0);
+  range.setEnd(text, 1);
+  const part = range.getClientRects();
+  testing.expectEqual(1, part.length);
+  range.setEnd(text, 2);
+  testing.expectTrue(range.getClientRects()[0].width > part[0].width);
+
+  // Comments and boxless elements add nothing
+  host.innerHTML = '<p>a<!--x--><span style="display:none">x</span>b</p>';
+  range.selectNodeContents(host.firstChild);
+  testing.expectEqual(2, range.getClientRects().length);
+
+  host.remove();
 }
 </script>

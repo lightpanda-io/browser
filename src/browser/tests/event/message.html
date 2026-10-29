@@ -1,5 +1,20 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
+<script>
+  // Every window.postMessage below goes to the same window. Posting one
+  // message at a time, each with its own `once` listener, keeps the tests from
+  // receiving each other's messages.
+  let postChain = Promise.resolve();
+  function postAndReceive(data, transfer) {
+    const received = postChain.then(() => new Promise((resolve) => {
+      window.addEventListener('message', resolve, { once: true });
+      window.postMessage(data, '*', transfer);
+    }));
+    postChain = received;
+    return received;
+  }
+</script>
 
 <script id=messageEventConstructor>
 {
@@ -59,39 +74,25 @@
 }
 </script>
 
-<script id=postMessageBasic>
+<script id=postMessageBasic type=module>
 {
-  let receivedEvent = null;
-
-  const handler = (e) => {
-    receivedEvent = e;
-  };
-  window.addEventListener('message', handler, { once: true });
-
-  window.postMessage('test data', '*');
-
-  testing.onload(() => {
-    testing.expectEqual('test data', receivedEvent.data);
-    testing.expectEqual(window, receivedEvent.source);
-    testing.expectEqual('message', receivedEvent.type);
+  const state = await testing.async();
+  state.resolve(await postAndReceive('test data'));
+  await state.done((e) => {
+    testing.expectEqual('test data', e.data);
+    testing.expectEqual(window, e.source);
+    testing.expectEqual('message', e.type);
   });
 }
 </script>
 
-<script id=postMessageWithObject>
+<script id=postMessageWithObject type=module>
 {
-  let receivedData = null;
-
-  const handler = (e) => {
-    receivedData = e.data;
-  };
-  window.addEventListener('message', handler, { once: true });
-
+  const state = await testing.async();
   const testObj = { type: 'test', value: 123, nested: { key: 'value' } };
-  window.postMessage(testObj, '*');
-
-  testing.onload(() => {
-    testing.expectEqual(testObj, receivedData);
+  state.resolve(await postAndReceive(testObj));
+  await state.done((e) => {
+    testing.expectEqual(testObj, e.data);
   });
 }
 </script>
@@ -109,97 +110,65 @@
 }
 </script>
 
-<script id=postMessageWithNumber>
+<script id=postMessageWithNumber type=module>
 {
-  let received = null;
-
-  const handler = (e) => {
-    received = e.data;
-  };
-  window.addEventListener('message', handler, { once: true });
-
-  window.postMessage(42, '*');
-
-  testing.onload(() => {
-    testing.expectEqual(42, received);
+  const state = await testing.async();
+  state.resolve(await postAndReceive(42));
+  await state.done((e) => {
+    testing.expectEqual(42, e.data);
   });
 }
 </script>
 
-<script id=postMessageWithArray>
+<script id=postMessageWithArray type=module>
 {
-  let received = null;
-
-  const handler = (e) => {
-    received = e.data;
-  };
-  window.addEventListener('message', handler, { once: true });
-
+  const state = await testing.async();
   const arr = [1, 2, 3, 'test'];
-  window.postMessage(arr, '*');
-
-  testing.onload(() => {
-    testing.expectEqual(arr, received);
+  state.resolve(await postAndReceive(arr));
+  await state.done((e) => {
+    testing.expectEqual(arr, e.data);
   });
 }
 </script>
 
-<script id=postMessageWithNull>
+<script id=postMessageWithNull type=module>
 {
-  let received = undefined;
-
-  const handler = (e) => {
-    received = e.data;
-  };
-  window.addEventListener('message', handler, { once: true });
-
-  window.postMessage(null, '*');
-
-  testing.onload(() => {
-    testing.expectEqual(null, received);
+  const state = await testing.async();
+  state.resolve(await postAndReceive(null));
+  await state.done((e) => {
+    testing.expectEqual(null, e.data);
   });
 }
 </script>
 
-<script id=postMessageTransfersPorts>
+<script id=postMessageTransfersPorts type=module>
 {
   // window.postMessage(data, targetOrigin, [port]) must deliver the transferred
   // MessagePort as event.ports[0] (regression: ports used to always be empty,
   // so receivers doing `e.ports[0].onmessage = ...` threw on undefined).
+  const state = await testing.async();
   const channel = new MessageChannel();
-  let received = null;
-  let echoed = null;
+  const echoed = new Promise((resolve) => {
+    channel.port1.onmessage = (e) => resolve(e.data);
+  });
 
-  channel.port1.onmessage = (e) => { echoed = e.data; };
-
-  const handler = (e) => {
-    received = e.ports[0];
-    received.postMessage('pong');
-  };
-  window.addEventListener('message', handler, { once: true });
-
-  window.postMessage('ping', '*', [channel.port2]);
-
-  testing.onload(() => {
+  const e = await postAndReceive('ping', [channel.port2]);
+  const received = e.ports[0];
+  received.postMessage('pong');
+  state.resolve({ received, echo: await echoed });
+  await state.done(({ received, echo }) => {
     testing.expectEqual(true, received instanceof MessagePort);
-    testing.expectEqual('pong', echoed);
+    testing.expectEqual('pong', echo);
   });
 }
 </script>
 
-<script id=messageEventOriginFromLocation>
+<script id=messageEventOriginFromLocation type=module>
 {
-  let receivedOrigin = null;
-
-  const handler = (e) => {
-    receivedOrigin = e.origin;
-  };
-  window.addEventListener('message', handler, { once: true });
-
-  window.postMessage('test', '*');
-
-  testing.onload(() => {
-    testing.expectEqual('http://127.0.0.1:9582', receivedOrigin);
+  const state = await testing.async();
+  state.resolve(await postAndReceive('test'));
+  await state.done((e) => {
+    testing.expectEqual('http://127.0.0.1:9582', e.origin);
   });
 }
 </script>

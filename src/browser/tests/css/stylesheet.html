@@ -242,6 +242,56 @@
 }
 </script>
 
+<script id="CSSStyleDeclaration_setCssText_nested_rule_is_invalid">
+{
+    // cssText takes no nested rules (Chrome, Firefox): `&.x { … }` is an
+    // invalid declaration, skipped through the next top-level `;` with the
+    // `display: none` after it.
+    const text = 'color: red; &.x { color: blue; } display: none; opacity: 0';
+
+    const div = document.createElement('div');
+    div.style.cssText = text;
+    testing.expectEqual('color: red; opacity: 0;', div.style.cssText);
+
+    div.setAttribute('style', text);
+    testing.expectEqual('color: red; opacity: 0;', div.style.cssText);
+
+    // Not even on a style rule's own declarations.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('.t {}');
+    const rule = sheet.cssRules[0];
+    rule.style.cssText = text;
+    testing.expectEqual('color: red; opacity: 0;', rule.style.cssText);
+}
+</script>
+
+<script id="CSSStyleSheet_nested_rule_ends_at_its_block">
+{
+    // In a stylesheet, a nested rule (CSS Nesting) ends at its own `}`: the
+    // declarations after it still apply.
+    const style = document.createElement('style');
+    style.textContent = '.nested-after { color: red; &.x { color: blue; } display: none; div:hover { color: green } opacity: 0 }';
+    document.head.append(style);
+
+    const declarations = style.sheet.cssRules[0].style;
+    testing.expectEqual('red', declarations.color);
+    testing.expectEqual('none', declarations.display);
+    testing.expectEqual('0', declarations.opacity);
+
+    const div = document.createElement('div');
+    div.className = 'nested-after';
+    document.documentElement.append(div);
+    testing.expectEqual('none', getComputedStyle(div).display);
+
+    const sheet = new CSSStyleSheet();
+    sheet.insertRule('.t { &.x { color: blue; } display: none; }');
+    testing.expectEqual('none', sheet.cssRules[0].style.display);
+
+    div.remove();
+    style.remove();
+}
+</script>
+
 <script id="CSSStyleDeclaration_style_syncs_to_attribute">
 {
     // JS style modifications must be reflected in getAttribute.
@@ -718,5 +768,27 @@
   testing.expectEqual(1, sheet.cssRules.length);
   testing.expectEqual(0, sheet.cssRules[0].type);
   testing.expectTrue(sheet.cssRules[0].cssText.includes('@layer'));
+}
+</script>
+
+<script id="computed_display_contents_from_stylesheet">
+{
+  const style = document.createElement('style');
+  style.textContent = '.contents-rule { display: contents; }';
+  document.head.appendChild(style);
+
+  const div = document.createElement('div');
+  div.className = 'contents-rule';
+  div.textContent = 'Role';
+  document.documentElement.appendChild(div);
+  testing.expectEqual('contents', getComputedStyle(div).display);
+
+  // On the root element it computes to block
+  document.documentElement.classList.add('contents-rule');
+  testing.expectEqual('block', getComputedStyle(document.documentElement).display);
+  document.documentElement.classList.remove('contents-rule');
+
+  div.remove();
+  style.remove();
 }
 </script>

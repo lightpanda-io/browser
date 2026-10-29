@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+A codec is created in one realm and flush() is invoked on it from another
+(iframe.contentWindow.AudioDecoder.prototype.flush.call(codec)). The promise
+must be made in the caller's realm, which is the only one with an active
+local scope at that point.
+-->
+
+<iframe id=if_codec src="support/cross_realm_collection.html"></iframe>
+
+<script id=cross_realm_codec_flush type=module>
+{
+  const state = await testing.async();
+  const iframe = document.getElementById('if_codec');
+  await new Promise((resolve) => {
+    if (iframe.contentDocument.readyState === 'complete') return resolve();
+    iframe.addEventListener('load', resolve);
+  });
+
+  const decoder = new AudioDecoder({output: () => {}, error: () => {}});
+  decoder.configure({codec: 'opus', sampleRate: 48000, numberOfChannels: 2});
+  const flush = iframe.contentWindow.AudioDecoder.prototype.flush.call(decoder);
+  const unconfigured = iframe.contentWindow.VideoEncoder.prototype.flush.call(new VideoEncoder({output: () => {}, error: () => {}}));
+  // Both handled now: awaiting one leaves the other unhandled meanwhile.
+  state.resolve(await Promise.all([
+    flush.then(() => 'resolved', (e) => e.name),
+    unconfigured.then(() => 'resolved', (e) => e.name),
+  ]));
+
+  await state.done((names) => {
+    // the codec is unsupported, so the pending configure closes it
+    testing.expectEqual(['NotSupportedError', 'InvalidStateError'], names);
+  });
+}
+</script>

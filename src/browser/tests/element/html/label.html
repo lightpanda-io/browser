@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <label id="l1" for="input1">Name</label>
@@ -70,5 +71,84 @@
     // label with no for and not in document -> null
     const lDetached = document.createElement('label');
     testing.expectEqual(null, lDetached.control);
+  }
+</script>
+
+<div id="labels-fixture">
+  <label id="lb-before" for="lb-both-input">Before</label>
+  <label id="lb-both" for="lb-both-input">Both <input id="lb-both-input"></label>
+  <label id="lb-other" for="lb-outside">Other <input id="lb-wrapped-elsewhere"></label>
+  <input id="lb-outside">
+  <label id="lb-two">Two <input id="lb-first"><input id="lb-second"></label>
+  <label id="lb-after" for="lb-both-input">After</label>
+</div>
+
+<script id="labels">
+  {
+    function ids(el) {
+      return Array.from(el.labels, (l) => l.id);
+    }
+
+    // #4030: wrapping + matching for = one entry, all in tree order
+    testing.expectEqual(['lb-before', 'lb-both', 'lb-after'], ids(document.getElementById('lb-both-input')));
+
+    // a wrapping label whose for points elsewhere doesn't label the wrapped input
+    testing.expectEqual([], ids(document.getElementById('lb-wrapped-elsewhere')));
+    testing.expectEqual(['lb-other'], ids(document.getElementById('lb-outside')));
+
+    // a label without for labels only its first labelable descendant
+    testing.expectEqual(['lb-two'], ids(document.getElementById('lb-first')));
+    testing.expectEqual([], ids(document.getElementById('lb-second')));
+
+    // detached tree (as Chrome): no labels at all; control resolves only
+    // through wrapping, not for
+    const div = document.createElement('div');
+    div.innerHTML = '<label id="d-for" for="d-input">A</label><input id="d-input"><label id="d-wrap"><input id="d-wrapped"></label><label id="d-both" for="d-inner"><input id="d-inner"></label>';
+    testing.expectEqual([], ids(div.querySelector('#d-input')));
+    testing.expectEqual([], ids(div.querySelector('#d-wrapped')));
+    testing.expectEqual([], ids(div.querySelector('#d-inner')));
+    testing.expectEqual(null, div.querySelector('#d-for').control);
+    testing.expectEqual('d-wrapped', div.querySelector('#d-wrap').control.id);
+    testing.expectEqual(null, div.querySelector('#d-both').control);
+
+    // once attached, all resolve
+    document.body.appendChild(div);
+    testing.expectEqual(['d-for'], ids(div.querySelector('#d-input')));
+    testing.expectEqual(['d-wrap'], ids(div.querySelector('#d-wrapped')));
+    testing.expectEqual(['d-both'], ids(div.querySelector('#d-inner')));
+    div.remove();
+
+    // shadow trees count as attached, even under a detached host
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const sr = host.attachShadow({ mode: 'open' });
+    sr.innerHTML = '<label id="s-for" for="s-in">A</label><input id="s-in"><label id="s-wrap"><input id="s-w"></label>';
+    testing.expectEqual(['s-for'], ids(sr.querySelector('#s-in')));
+    testing.expectEqual(['s-wrap'], ids(sr.querySelector('#s-w')));
+    host.remove();
+    testing.expectEqual(['s-for'], ids(sr.querySelector('#s-in')));
+    testing.expectEqual('s-in', sr.querySelector('#s-for').control.id);
+    testing.expectEqual(['s-wrap'], ids(sr.querySelector('#s-w')));
+
+    // nested labels without for: both label the input, outermost first
+    const nested = document.createElement('div');
+    nested.innerHTML = '<label id="n-outer">A <label id="n-inner">B <input></label></label>';
+    document.body.appendChild(nested);
+    testing.expectEqual(['n-outer', 'n-inner'], ids(nested.querySelector('input')));
+    nested.remove();
+
+    // a duplicate id that isn't first in the tree gets no for labels, only its wrapper
+    const dup = document.createElement('div');
+    dup.innerHTML = '<input id="dup"><label id="dup-for" for="dup">A</label><label id="dup-wrap"><input id="dup"></label>';
+    document.body.appendChild(dup);
+    const dupInputs = dup.querySelectorAll('input');
+    testing.expectEqual(['dup-for'], ids(dupInputs[0]));
+    testing.expectEqual(['dup-wrap'], ids(dupInputs[1]));
+    dup.remove();
+
+    // a document label with a matching for doesn't label a detached control
+    const detached = document.createElement('input');
+    detached.id = 'lb-both-input';
+    testing.expectEqual([], ids(detached));
   }
 </script>

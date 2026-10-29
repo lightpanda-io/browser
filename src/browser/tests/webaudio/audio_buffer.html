@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=buffer>
+{
+  const buffer = new AudioBuffer({length: 4, numberOfChannels: 2, sampleRate: 8000});
+  testing.expectEqual(4, buffer.length);
+  testing.expectEqual(2, buffer.numberOfChannels);
+  testing.expectEqual(8000, buffer.sampleRate);
+  testing.expectEqual(0.0005, buffer.duration);
+
+  const data = buffer.getChannelData(1);
+  testing.expectEqual(true, data instanceof Float32Array);
+  testing.expectEqual(data, buffer.getChannelData(1));
+  testing.expectEqual([0, 0, 0, 0], Array.from(data));
+  testing.expectError('IndexSizeError', () => buffer.getChannelData(2));
+
+  buffer.copyToChannel(new Float32Array([1, 2, 3]), 1, 1);
+  testing.expectEqual([0, 1, 2, 3], Array.from(data));
+  const into = new Float32Array(3);
+  buffer.copyFromChannel(into, 1, 2);
+  testing.expectEqual([2, 3, 0], Array.from(into));
+  testing.expectError('TypeError', () => buffer.copyFromChannel([], 0));
+  testing.expectError('IndexSizeError', () => buffer.copyToChannel(into, 2));
+
+  testing.expectError('NotSupportedError', () => new AudioBuffer({length: 0, sampleRate: 8000}));
+  testing.expectError('NotSupportedError', () => new AudioBuffer({length: 1, numberOfChannels: 33, sampleRate: 8000}));
+  testing.expectError('NotSupportedError', () => new AudioBuffer({length: 1, sampleRate: 100}));
+  testing.expectError('TypeError', () => new AudioBuffer({sampleRate: 8000}));
+
+  const ctx = new OfflineAudioContext(1, 128, 8000);
+  const created = ctx.createBuffer(3, 10, 22050);
+  testing.expectEqual(3, created.numberOfChannels);
+  testing.expectEqual(22050, created.sampleRate);
+  testing.expectError('NotSupportedError', () => ctx.createBuffer(1, 0, 8000));
+}
+</script>
+
+<script id=buffer_source type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(2, 256, 8000);
+  const buffer = ctx.createBuffer(2, 100, 8000);
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+  for (let i = 0; i < 100; i++) {
+    left[i] = i;
+    right[i] = -i;
+  }
+
+  const src = ctx.createBufferSource();
+  testing.expectEqual(null, src.buffer);
+  src.buffer = buffer;
+  testing.expectEqual(buffer, src.buffer);
+  testing.expectError('InvalidStateError', () => src.buffer = buffer);
+  src.connect(ctx.destination);
+  src.start(10 / 8000, 50 / 8000);
+
+  const ended = new Promise(resolve => src.onended = resolve);
+  const out = await ctx.startRendering();
+  await ended;
+
+  state.resolve();
+  await state.done(() => {
+    const l = out.getChannelData(0);
+    const r = out.getChannelData(1);
+    testing.expectEqual(0, l[9]);
+    testing.expectEqual(50, l[10]);
+    testing.expectEqual(-99, r[59]);
+    testing.expectEqual(0, l[60]);
+  });
+</script>
+
+<script id=buffer_source_loop type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(1, 32, 8000);
+  const buffer = ctx.createBuffer(1, 8, 8000);
+  buffer.copyToChannel(new Float32Array([0, 1, 2, 3, 4, 5, 6, 7]), 0);
+  const src = new AudioBufferSourceNode(ctx, {buffer, loop: true, loopStart: 2 / 8000, loopEnd: 6 / 8000, playbackRate: 2});
+  src.connect(ctx.destination);
+  src.start(0, 0, 10 / 8000);
+  const data = Array.from((await ctx.startRendering()).getChannelData(0).slice(0, 8));
+
+  state.resolve();
+  await state.done(() => {
+    // every other frame, wrapping within [2, 6), for 10 frames of buffer time
+    testing.expectEqual([0, 2, 4, 2, 4, 0, 0, 0], data);
+  });
+</script>

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>bidi input</title>
+<button id=btn>go</button>
+<input id=inp>
+<script>
+window.events = [];
+window.codes = [];
+for (const t of ['mousemove', 'mousedown', 'mouseup', 'click', 'dblclick', 'keydown', 'keyup', 'wheel']) {
+  document.addEventListener(t, (e) => {
+    let s = t;
+    if (e.key !== undefined) s += ':' + e.key + (e.shiftKey ? '+shift' : '') + (e.ctrlKey ? '+ctrl' : '');
+    if (e.button) s += ':b' + e.button;
+    if (e.target && e.target.id) s += '@' + e.target.id;
+    window.events.push(s);
+    if (e.code !== undefined) window.codes.push(e.code);
+  });
+}
+</script>

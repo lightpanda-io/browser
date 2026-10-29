@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../testing.js"></script>
+
+<progress id="indeterminate"></progress>
+<progress id="quarter" value="1" max="4"></progress>
+<progress id="over" value="2"></progress>
+<progress id="bad_max" value="1" max="-1"></progress>
+<progress id="bad_value" value="a"></progress>
+<progress id="negative" value="-1"></progress>
+
+<script id="indeterminate">
+  {
+    const p = document.getElementById('indeterminate');
+    testing.expectEqual(0, p.value);
+    testing.expectEqual(1, p.max);
+    testing.expectEqual(-1, p.position);
+  }
+</script>
+
+<script id="determinate">
+  {
+    testing.expectEqual(0.25, document.getElementById('quarter').position);
+
+    const over = document.getElementById('over');
+    testing.expectEqual(1, over.value);
+    testing.expectEqual(1, over.position);
+
+    testing.expectEqual(1, document.getElementById('bad_max').max);
+
+    // an unparseable value is still determinate
+    const bad = document.getElementById('bad_value');
+    testing.expectEqual(0, bad.value);
+    testing.expectEqual(0, bad.position);
+
+    testing.expectEqual(0, document.getElementById('negative').value);
+  }
+</script>
+
+<script id="setters">
+  {
+    const p = document.createElement('progress');
+    p.value = 2;
+    testing.expectEqual('2', p.getAttribute('value'));
+    testing.expectEqual(1, p.value);
+    testing.expectEqual(1, p.position);
+
+    p.max = 4;
+    testing.expectEqual(2, p.value);
+    testing.expectEqual(0.5, p.position);
+
+    // non-positive max is ignored
+    p.max = 0;
+    p.max = -3;
+    testing.expectEqual('4', p.getAttribute('max'));
+
+    p.removeAttribute('value');
+    testing.expectEqual(-1, p.position);
+
+    testing.expectError('TypeError', () => { p.value = NaN; });
+  }
+</script>

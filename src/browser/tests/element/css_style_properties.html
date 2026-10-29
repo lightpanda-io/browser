@@ -60,6 +60,16 @@
 
   div.style.setProperty('float', 'right');
   testing.expectEqual('right', div.style.cssFloat);
+
+  // undefined stringifies to "undefined", it doesn't clear the declaration
+  // (Chrome rejects the invalid value and keeps 'right'; we don't validate yet)
+  div.style.cssFloat = undefined;
+  testing.expectEqual(false, div.style.cssFloat === '');
+
+  // [LegacyNullToEmptyString]: null removes it
+  div.style.cssFloat = null;
+  testing.expectEqual('', div.style.cssFloat);
+  testing.expectEqual('', div.style.cssText);
 }
 </script>
 
@@ -79,7 +89,14 @@
   testing.expectEqual(undefined, div.style.oTransition);
 
   testing.expectEqual('rotate(45deg)', div.style['-webkit-transform']);
-  testing.expectEqual('none', div.style['-moz-user-select']);
+  // unknown properties are dropped, not stored
+  testing.expectEqual(undefined, div.style['-moz-user-select']);
+
+  div.style.cssText = 'not-a-property: 1; color: red; --custom: x';
+  testing.expectEqual('color: red; --custom: x;', div.style.cssText);
+  div.setAttribute('style', 'bogus: 1; margin-top: 2px');
+  testing.expectEqual('margin-top: 2px;', div.style.cssText);
+  div.removeAttribute('style');
 }
 </script>
 
@@ -118,6 +135,29 @@
 
   testing.expectEqual(undefined, div.style.webkitNotSet);
   testing.expectEqual(undefined, div.style.mozNotSet);
+}
+</script>
+
+<script id="knownPropertyPresence">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  // Known properties are present while unset, whichever spelling is used.
+  testing.expectEqual('', div.style.webkitTransform);
+  testing.expectEqual('', div.style.WebkitTransform);
+  testing.expectEqual('', div.style['-webkit-transform']);
+  testing.expectEqual(true, 'webkitTransform' in div.style);
+  testing.expectEqual(true, 'WebkitTransform' in div.style);
+  testing.expectEqual(true, 'isolation' in div.style);
+  testing.expectEqual(true, 'positionArea' in div.style);
+  testing.expectEqual(false, 'mozUserSelect' in div.style);
+  testing.expectEqual(false, '-moz-user-select' in div.style);
+
+  const computed = getComputedStyle(div);
+  testing.expectEqual(true, 'isolation' in computed);
+  testing.expectEqual(true, 'background-blend-mode' in computed);
+  testing.expectEqual(false, 'notARealProperty' in computed);
 }
 </script>
 
@@ -189,5 +229,61 @@
   // multiple numbers in one value
   div.style.margin = '.5em .25em';
   testing.expectEqual('0.5em 0.25em', div.style.margin);
+}
+</script>
+
+<script id="styleAttributeResync">
+{
+  const div = document.createElement('div');
+  div.setAttribute('style', 'color: red');
+  testing.expectEqual('color: red;', div.style.cssText);
+
+  // attribute writes after .style is materialized must be reflected
+  div.setAttribute('style', 'color: green');
+  testing.expectEqual('color: green;', div.style.cssText);
+  testing.expectEqual('green', div.style.color);
+
+  div.style.backgroundColor = 'blue';
+  testing.expectEqual('color: green; background-color: blue;', div.style.cssText);
+  testing.expectEqual('color: green; background-color: blue;', div.getAttribute('style'));
+
+  div.setAttribute('style', 'margin: 1px');
+  div.removeAttribute('style');
+  testing.expectEqual('', div.style.cssText);
+  testing.expectEqual(0, div.style.length);
+
+  // connected element, same rules
+  const c = $('#test-div');
+  c.setAttribute('style', 'color: red');
+  testing.expectEqual('red', c.style.color);
+  c.setAttribute('style', 'color: teal');
+  testing.expectEqual('teal', c.style.color);
+}
+</script>
+
+<script id="longPropertyName">
+{
+  // longer than the 1024-byte buffer names used to be lowercased into
+  const div = $('#test-div');
+  const name = 'a'.repeat(2000);
+  testing.expectEqual(undefined, div.style[name]);
+  testing.expectEqual(undefined, div.style[name.toUpperCase()]);
+  testing.expectEqual('', div.style.getPropertyValue(name.toUpperCase()));
+}
+</script>
+
+<script id="nullRemovesDeclaration">
+{
+  // [LegacyNullToEmptyString]: null clears the declaration instead of setting "null"
+  const div = $('#test-div');
+  div.style.cssText = 'display: none; color: red';
+
+  div.style.display = null;
+  testing.expectEqual('', div.style.display);
+  testing.expectEqual('color: red;', div.style.cssText);
+
+  div.style.setProperty('color', null);
+  testing.expectEqual('', div.style.color);
+  testing.expectEqual('', div.style.cssText);
 }
 </script>

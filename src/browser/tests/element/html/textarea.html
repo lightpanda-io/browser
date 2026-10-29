@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<meta charset="utf-8">
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- TextArea elements -->
@@ -20,6 +22,11 @@
   <textarea id="textarea_invalid_form_attr" form="nonexistent">invalid form</textarea>
 </form>
 
+<script id="type">
+  testing.expectEqual('textarea', $('#textarea1').type)
+  testing.expectEqual('textarea', document.createElement('textarea').type)
+</script>
+
 <script id="value_initial">
   testing.expectEqual('initial text', $('#textarea1').value)
   testing.expectEqual('', $('#textarea2').value)
@@ -31,6 +38,36 @@
 
   $('#textarea2').value = 'new value'
   testing.expectEqual('new value', $('#textarea2').value)
+</script>
+
+<script id="value_newlines">
+  {
+    const ta = document.createElement('textarea')
+    ta.value = 'a\rb\r\nc\n'
+    testing.expectEqual('a\nb\nc\n', ta.value)
+    testing.expectEqual(6, ta.selectionStart)
+    ta.select()
+    testing.expectEqual(6, ta.selectionEnd)
+  }
+  {
+    const ta = document.createElement('textarea')
+    ta.defaultValue = 'a\r\nb\rc'
+    testing.expectEqual('a\r\nb\rc', ta.defaultValue)
+    testing.expectEqual('a\nb\nc', ta.value)
+    testing.expectEqual(5, ta.textLength)
+  }
+</script>
+
+<script id="textLength">
+  {
+    const ta = document.createElement('textarea')
+    testing.expectEqual(0, ta.textLength)
+    ta.value = 'é😀x'
+    testing.expectEqual(4, ta.textLength)
+    ta.value = 'a\r\nb'
+    testing.expectEqual(3, ta.textLength)
+    testing.expectEqual(13, $('#textarea3').textLength)
+  }
 </script>
 
 <script id="defaultValue">
@@ -230,8 +267,46 @@
   }
 </script>
 
-<script id="select_event">
+<script id="selection_uses_current_value">
   {
+    // A <textarea>'s API value is its raw value, which comes from its child
+    // text node until something assigns to `value`. The selection APIs clamp
+    // against that value, not against an assigned one.
+    // https://html.spec.whatwg.org/#dom-textarea-value
+    // https://html.spec.whatwg.org/#dom-textarea/input-setselectionrange
+    const host = document.createElement('div');
+    host.innerHTML = '<textarea>abcdef</textarea>';
+    document.body.appendChild(host);
+    const parsed = host.firstChild;
+
+    parsed.select();
+    testing.expectEqual(0, parsed.selectionStart);
+    testing.expectEqual(6, parsed.selectionEnd);
+
+    parsed.setSelectionRange(2, 4, 'backward');
+    testing.expectEqual(2, parsed.selectionStart);
+    testing.expectEqual(4, parsed.selectionEnd);
+    testing.expectEqual('backward', parsed.selectionDirection);
+
+    // Offsets past the end clamp to the length of the value.
+    parsed.setSelectionRange(99, 99);
+    testing.expectEqual(6, parsed.selectionStart);
+    testing.expectEqual(6, parsed.selectionEnd);
+
+    // Same when the default value came from the defaultValue setter.
+    const seeded = document.createElement('textarea');
+    document.body.appendChild(seeded);
+    seeded.defaultValue = 'hello';
+    seeded.select();
+    testing.expectEqual(0, seeded.selectionStart);
+    testing.expectEqual(5, seeded.selectionEnd);
+  }
+</script>
+
+<script id="select_event" type=module>
+  {
+    // select is queued: it isn't ordered against the load event, so wait for it.
+    const state = await testing.async();
     const textarea = document.createElement('textarea');
     textarea.value = 'Hello World';
     document.body.appendChild(textarea);
@@ -248,15 +323,18 @@
     textarea.onselect = () => { onselectFired = true; };
 
     let bubbledToBody = false;
-    document.body.addEventListener('select', () => {
-      bubbledToBody = true;
+    document.body.addEventListener('select', (e) => {
+      if (e.target === textarea) {
+        bubbledToBody = true;
+        state.resolve();
+      }
     });
 
     testing.expectEqual(0, eventCount);
 
     textarea.select();
 
-    testing.onload(() => {
+    await state.done(() => {
       testing.expectEqual(1, eventCount);
       testing.expectEqual('select', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
@@ -268,40 +346,157 @@
   }
 </script>
 
-<script id="selectionchange_event">
+<script id="selectionchange_event" type=module>
   {
+    // Fires asynchronously, not ordered against the load event, and changes
+    // before it fires fold into one event.
+    const state = await testing.async();
     const textarea = document.createElement('textarea');
     textarea.value = 'Hello World';
     document.body.appendChild(textarea);
-    
+
     let eventCount = 0;
     let lastEvent = null;
-    
+
     textarea.addEventListener('selectionchange', (e) => {
       eventCount++;
       lastEvent = e;
     });
-    
+
     testing.expectEqual(0, eventCount);
-    
+
     textarea.setSelectionRange(0, 5);
     textarea.select();
     textarea.selectionStart = 3;
     textarea.selectionEnd = 8;
-    
+
     let bubbledToBody = false;
-    document.body.addEventListener('selectionchange', () => {
-      bubbledToBody = true;
+    document.body.addEventListener('selectionchange', (e) => {
+      if (e.target === textarea) {
+        bubbledToBody = true;
+        state.resolve();
+      }
     });
     textarea.setSelectionRange(1, 4);
-    
-    testing.onload(() => {
-      testing.expectEqual(5, eventCount);
+
+    testing.expectEqual(0, eventCount);
+
+    await state.done(() => {
+      testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
       testing.expectEqual(true, lastEvent.bubbles);
       testing.expectEqual(false, lastEvent.cancelable);
       testing.expectEqual(true, bubbledToBody);
     });
+  }
+</script>
+
+<script id="value_setter_moves_caret">
+  {
+    // Setting `value` moves the text entry cursor to the end of the new value,
+    // unselects any selected text and resets the selection direction.
+    // https://html.spec.whatwg.org/#dom-textarea-value
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+
+    textarea.value = 'abc';
+    testing.expectEqual(3, textarea.selectionStart);
+    testing.expectEqual(3, textarea.selectionEnd);
+
+    textarea.setSelectionRange(1, 2, 'backward');
+    textarea.value = 'hello';
+    testing.expectEqual(5, textarea.selectionStart);
+    testing.expectEqual(5, textarea.selectionEnd);
+    // Platforms without a "none" direction report "forward" (Chrome on Linux).
+    const probe = document.createElement('textarea');
+    probe.setSelectionRange(0, 0, 'none');
+    testing.expectEqual(probe.selectionDirection, textarea.selectionDirection);
+
+    // Re-assigning the same value leaves the selection alone
+    // (WPT textfieldselection/selection-after-content-change.html).
+    textarea.setSelectionRange(1, 3, 'backward');
+    textarea.value = 'hello';
+    testing.expectEqual(1, textarea.selectionStart);
+    testing.expectEqual(3, textarea.selectionEnd);
+    testing.expectEqual('backward', textarea.selectionDirection);
+
+    // Assigning a value equal to the default is not a change for the caret,
+    // but it still sets the dirty flag: later default edits stay hidden.
+    const dflt = document.createElement('textarea');
+    dflt.defaultValue = 'foo';
+    dflt.value = 'foo';
+    testing.expectEqual(0, dflt.selectionStart);
+    testing.expectEqual(0, dflt.selectionEnd);
+    dflt.defaultValue = 'bar';
+    testing.expectEqual('foo', dflt.value);
+  }
+</script>
+
+<script id="selection_utf16_offsets">
+  {
+    // Offsets count UTF-16 code units, like value.length.
+    const el = document.createElement('textarea');
+    el.value = 'h\u00e9llo';
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+    el.setSelectionRange(1, 3);
+    testing.expectEqual('\u00e9l', el.value.substring(el.selectionStart, el.selectionEnd));
+
+    el.value = 'a\u{1F600}b';
+    testing.expectEqual(4, el.selectionEnd);
+    el.selectionStart = 3;
+    testing.expectEqual(3, el.selectionStart);
+    el.setSelectionRange(10, 20);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+  }
+</script>
+
+<script id="setRangeText">
+  {
+    const el = document.createElement('textarea');
+    el.value = 'line1\nline2';
+    el.setSelectionRange(0, 0);
+    el.setRangeText('X\r\nY', 0, 0, 'end');
+    testing.expectEqual('X\nYline1\nline2', el.value);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+
+    el.setSelectionRange(2, 7);
+    el.setRangeText('');
+    testing.expectEqual('X\n1\nline2', el.value);
+    testing.expectEqual(2, el.selectionStart);
+    testing.expectEqual(2, el.selectionEnd);
+
+    // CRLF → LF shortens the value; the caret stays on a character boundary
+    el.value = 'éa';
+    el.setRangeText('\r\n', 0, 0, 'end');
+    testing.expectEqual(2, el.selectionStart);
+    el.setRangeText('X');
+    testing.expectEqual('\néXa', el.value);
+    testing.expectEqual(2, el.selectionStart);
+  }
+</script>
+
+<script id="selection_setters_keep_order">
+  {
+    // Setting one end past the other drags the other along (start <= end).
+    const el = document.createElement('textarea');
+    el.value = 'hello';
+    el.setSelectionRange(1, 2, 'backward');
+    el.selectionStart = 4;
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+    testing.expectEqual('backward', el.selectionDirection);
+
+    el.setSelectionRange(3, 4);
+    el.selectionEnd = 1;
+    testing.expectEqual(1, el.selectionStart);
+    testing.expectEqual(1, el.selectionEnd);
+
+    el.selectionStart = 10;
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
   }
 </script>

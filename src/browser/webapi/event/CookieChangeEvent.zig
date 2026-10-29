@@ -136,11 +136,11 @@ pub fn asEvent(self: *CookieChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getChanged(self: *const CookieChangeEvent) []CookieStore.CookieListItem {
+fn getChanged(self: *const CookieChangeEvent) []CookieStore.CookieListItem {
     return self._changed;
 }
 
-pub fn getDeleted(self: *const CookieChangeEvent) []CookieStore.CookieListItem {
+fn getDeleted(self: *const CookieChangeEvent) []CookieStore.CookieListItem {
     return self._deleted;
 }
 
@@ -149,7 +149,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CookieChangeEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -1,14 +1,30 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
-const Frame = @import("../../../Frame.zig");
-const Node = @import("../../Node.zig");
-const Element = @import("../../Element.zig");
-const Window = @import("../../Window.zig");
-const HtmlElement = @import("../Html.zig");
 
-const String = lp.String;
+const Node = @import("../../Node.zig");
+const Window = @import("../../Window.zig");
+const Element = @import("../../Element.zig");
+
+const HtmlElement = @import("../Html.zig");
 
 const FrameSet = @This();
 
@@ -24,65 +40,11 @@ pub fn asNode(self: *FrameSet) *Node {
     return self.asElement().asNode();
 }
 
-// Special-case: the "window-reflecting body element event handler set"
-// (blur, error, focus, load, resize, scroll) are aliases for the Window's
-// event handlers, on frameset elements just like on body elements.
-
-// The aliased Window is the one of the element's node document's frame — not
-// the caller's frame, which differs when a same-origin script reaches into
-// another frame (e.g. the parent setting a handler on a child frameset).
-fn reflectedWindow(self: *FrameSet, frame: *Frame) *Window {
-    return self.asElement().ownerFrame(frame).window;
-}
-
-pub fn getOnBlur(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_blur;
-}
-pub fn setOnBlur(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_blur = Window.getFunctionFromSetter(setter);
-}
-
-pub fn getOnError(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_error;
-}
-pub fn setOnError(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_error = Window.getFunctionFromSetter(setter);
-}
-
-pub fn getOnFocus(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_focus;
-}
-pub fn setOnFocus(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_focus = Window.getFunctionFromSetter(setter);
-}
-
-pub fn getOnLoad(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_load;
-}
-pub fn setOnLoad(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_load = Window.getFunctionFromSetter(setter);
-}
-
-pub fn getOnResize(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_resize;
-}
-pub fn setOnResize(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_resize = Window.getFunctionFromSetter(setter);
-}
-
-pub fn getOnScroll(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_scroll;
-}
-pub fn setOnScroll(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_scroll = Window.getFunctionFromSetter(setter);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(FrameSet);
 
     pub const Meta = struct {
         pub const name = "HTMLFrameSetElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -91,38 +53,29 @@ pub const JsApi = struct {
     pub const cols = reflect.string("cols");
     pub const rows = reflect.string("rows");
 
-    pub const onblur = bridge.accessor(getOnBlur, setOnBlur, .{ .null_as_undefined = false });
-    pub const onerror = bridge.accessor(getOnError, setOnError, .{ .null_as_undefined = false });
-    pub const onfocus = bridge.accessor(getOnFocus, setOnFocus, .{ .null_as_undefined = false });
-    pub const onload = bridge.accessor(getOnLoad, setOnLoad, .{ .null_as_undefined = false });
-    pub const onresize = bridge.accessor(getOnResize, setOnResize, .{ .null_as_undefined = false });
-    pub const onscroll = bridge.accessor(getOnScroll, setOnScroll, .{ .null_as_undefined = false });
-};
-
-pub const Build = struct {
-    const window_reflecting_attributes = [_][]const u8{
-        "onblur", "onerror", "onfocus", "onload", "onresize", "onscroll",
-    };
-
-    pub fn complete(node: *Node, frame: *Frame) !void {
-        const el = node.as(Element);
-        const owner = node.ownerFrame(frame);
-        inline for (window_reflecting_attributes) |attr| {
-            if (el.getAttributeSafe(comptime .wrap(attr))) |value| {
-                owner.window.setWindowReflectingHandlerFromAttribute(comptime .wrap(attr), value, owner);
-            }
-        }
-    }
-
-    pub fn attributeChange(el: *Element, name: String, value: String, frame: *Frame) !void {
-        const owner = el.ownerFrame(frame);
-        owner.window.setWindowReflectingHandlerFromAttribute(name, value.str(), owner);
-    }
-
-    pub fn attributeRemove(el: *Element, name: String, frame: *Frame) !void {
-        const owner = el.ownerFrame(frame);
-        owner.window.setWindowReflectingHandlerFromAttribute(name, null, owner);
-    }
+    pub const onblur = Window.reflectingHandlerAccessor(FrameSet, "blur");
+    pub const onerror = Window.reflectingHandlerAccessor(FrameSet, "error");
+    pub const onfocus = Window.reflectingHandlerAccessor(FrameSet, "focus");
+    pub const onload = Window.reflectingHandlerAccessor(FrameSet, "load");
+    pub const onresize = Window.reflectingHandlerAccessor(FrameSet, "resize");
+    pub const onscroll = Window.reflectingHandlerAccessor(FrameSet, "scroll");
+    // WindowEventHandlers
+    pub const onafterprint = Window.reflectingHandlerAccessor(FrameSet, "afterprint");
+    pub const onbeforeprint = Window.reflectingHandlerAccessor(FrameSet, "beforeprint");
+    pub const onbeforeunload = Window.reflectingHandlerAccessor(FrameSet, "beforeunload");
+    pub const onhashchange = Window.reflectingHandlerAccessor(FrameSet, "hashchange");
+    pub const onlanguagechange = Window.reflectingHandlerAccessor(FrameSet, "languagechange");
+    pub const onmessage = Window.reflectingHandlerAccessor(FrameSet, "message");
+    pub const onmessageerror = Window.reflectingHandlerAccessor(FrameSet, "messageerror");
+    pub const onoffline = Window.reflectingHandlerAccessor(FrameSet, "offline");
+    pub const ononline = Window.reflectingHandlerAccessor(FrameSet, "online");
+    pub const onpagehide = Window.reflectingHandlerAccessor(FrameSet, "pagehide");
+    pub const onpageshow = Window.reflectingHandlerAccessor(FrameSet, "pageshow");
+    pub const onpopstate = Window.reflectingHandlerAccessor(FrameSet, "popstate");
+    pub const onrejectionhandled = Window.reflectingHandlerAccessor(FrameSet, "rejectionhandled");
+    pub const onstorage = Window.reflectingHandlerAccessor(FrameSet, "storage");
+    pub const onunhandledrejection = Window.reflectingHandlerAccessor(FrameSet, "unhandledrejection");
+    pub const onunload = Window.reflectingHandlerAccessor(FrameSet, "unload");
 };
 
 const testing = @import("../../../../testing.zig");

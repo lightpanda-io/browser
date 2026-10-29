@@ -89,11 +89,11 @@ pub fn asEvent(self: *NavigationCurrentEntryChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getFrom(self: *NavigationCurrentEntryChangeEvent) *NavigationHistoryEntry {
+fn getFrom(self: *NavigationCurrentEntryChangeEvent) *NavigationHistoryEntry {
     return self._from;
 }
 
-pub fn getNavigationType(self: *const NavigationCurrentEntryChangeEvent) ?[]const u8 {
+fn getNavigationType(self: *const NavigationCurrentEntryChangeEvent) ?[]const u8 {
     return if (self._navigation_type) |nav_type| @tagName(nav_type) else null;
 }
 
@@ -102,7 +102,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "NavigationCurrentEntryChangeEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

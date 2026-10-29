@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <fieldset id="fs1" disabled name="group1">
@@ -31,5 +32,41 @@
 
     const fs2 = document.getElementById('fs2');
     testing.expectEqual('', fs2.name);
+  }
+</script>
+
+<script id="type">
+  testing.expectEqual('fieldset', $('#fs1').type);
+  testing.expectEqual('fieldset', document.createElement('fieldset').type);
+</script>
+
+<fieldset id="fs-off" disabled>
+  <legend><input id="in-legend" type="text"></legend>
+  <input id="in-body" type="text">
+  <div><button id="btn-body" type="submit">go</button></div>
+</fieldset>
+
+<script id="disabled-state">
+  {
+    // The IDL attribute reflects only the element's own attribute; the
+    // disabled state (activation, constraint validation) also comes from a
+    // disabled fieldset ancestor, except through its first <legend>.
+    const body = document.getElementById('in-body');
+    testing.expectEqual(false, body.disabled);
+    testing.expectEqual(false, body.willValidate);
+    testing.expectEqual(false, document.getElementById('btn-body').willValidate);
+    let clicked = false;
+    body.addEventListener('click', () => { clicked = true; });
+    body.click();
+    testing.expectEqual(false, clicked);
+
+    const legend = document.getElementById('in-legend');
+    testing.expectEqual(true, legend.willValidate);
+    legend.addEventListener('click', () => { clicked = true; });
+    legend.click();
+    testing.expectEqual(true, clicked);
+
+    document.getElementById('fs-off').disabled = false;
+    testing.expectEqual(true, body.willValidate);
   }
 </script>

@@ -37,10 +37,10 @@ _gamma: ?f64 = null,
 _absolute: bool = false,
 
 const DeviceOrientationEventOptions = struct {
+    absolute: bool = false,
     alpha: ?f64 = null,
     beta: ?f64 = null,
     gamma: ?f64 = null,
-    absolute: bool = false,
 };
 
 const Options = Event.inheritOptions(DeviceOrientationEvent, DeviceOrientationEventOptions);
@@ -71,19 +71,19 @@ pub fn asEvent(self: *DeviceOrientationEvent) *Event {
     return self._proto;
 }
 
-pub fn getAlpha(self: *const DeviceOrientationEvent) ?f64 {
+fn getAlpha(self: *const DeviceOrientationEvent) ?f64 {
     return self._alpha;
 }
 
-pub fn getBeta(self: *const DeviceOrientationEvent) ?f64 {
+fn getBeta(self: *const DeviceOrientationEvent) ?f64 {
     return self._beta;
 }
 
-pub fn getGamma(self: *const DeviceOrientationEvent) ?f64 {
+fn getGamma(self: *const DeviceOrientationEvent) ?f64 {
     return self._gamma;
 }
 
-pub fn getAbsolute(self: *const DeviceOrientationEvent) bool {
+fn getAbsolute(self: *const DeviceOrientationEvent) bool {
     return self._absolute;
 }
 
@@ -92,7 +92,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "DeviceOrientationEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -51,7 +51,7 @@ const Cache = struct {
 };
 
 fn cachePath(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8) ![]const u8 {
-    const name = try std.fmt.allocPrint(arena, "models-dev-{s}.json", .{provider_id});
+    const name = try arena.print("models-dev-{s}.json", .{provider_id});
     return std.fs.path.join(arena, &.{ app_dir, name });
 }
 

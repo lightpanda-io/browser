@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <head>
@@ -135,5 +136,89 @@
     div2.replaceChildren(child);
     testing.expectEqual(div2, child.parentNode);
     testing.expectEqual(0, div1.childNodes.length);
+  }
+</script>
+
+<script id=replace_children_adopts>
+  {
+    // Nodes from another document are adopted, as appendChild does.
+    const other = document.implementation.createHTMLDocument("other");
+    const node = other.createElement('div');
+    const frag = other.createDocumentFragment();
+    const fragChild = other.createElement('span');
+    frag.appendChild(fragChild);
+    const host = document.getElementById('test');
+
+    host.replaceChildren(node, frag);
+
+    testing.expectEqual(document, node.ownerDocument);
+    testing.expectEqual(document, fragChild.ownerDocument);
+    testing.expectEqual(true, document.documentElement.scrollWidth > 0);
+  }
+</script>
+
+<script id=error_document_child>
+  {
+    const doc = document.implementation.createHTMLDocument("title");
+    testing.expectError('HierarchyRequest', () => {
+      document.getElementById('test').replaceChildren(doc);
+    });
+    testing.expectError('HierarchyRequest', () => {
+      document.getElementById('test').replaceChildren(doc, 'text');
+    });
+  }
+</script>
+
+<script id=document_replace_children>
+  {
+    const doc = document.implementation.createHTMLDocument("title");
+    doc.replaceChildren();
+    testing.expectEqual(0, doc.childNodes.length);
+
+    const el = doc.createElement('html');
+    doc.replaceChildren(el);
+    testing.expectEqual(el, doc.documentElement);
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren('text');
+    });
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren(doc.createElement('a'), doc.createElement('b'));
+    });
+    testing.expectEqual(el, doc.documentElement);
+  }
+</script>
+
+<script id=replace_children_mutation_records>
+  {
+    const parent = document.createElement('div');
+    const a = document.createElement('a');
+    const mo = new MutationObserver(() => {});
+    mo.observe(parent, {childList: true});
+
+    // A node passed twice is inserted once, in one record.
+    parent.replaceChildren(a, a);
+    let records = mo.takeRecords();
+    testing.expectEqual(1, records.length);
+    testing.expectEqual(1, records[0].addedNodes.length);
+    testing.expectEqual(a, records[0].addedNodes[0]);
+    testing.expectEqual(1, parent.childNodes.length);
+
+    // Nodes taken from this parent are removed one by one into the
+    // intermediate fragment, then the rest is replaced in one record.
+    const b = document.createElement('b');
+    const c = document.createElement('c');
+    parent.append(b, c);
+    mo.takeRecords();
+    parent.replaceChildren(c, a);
+    records = mo.takeRecords();
+    testing.expectEqual(3, records.length);
+    testing.expectEqual(c, records[0].removedNodes[0]);
+    testing.expectEqual(a, records[1].removedNodes[0]);
+    testing.expectEqual(1, records[2].removedNodes.length);
+    testing.expectEqual(b, records[2].removedNodes[0]);
+    testing.expectEqual(2, records[2].addedNodes.length);
+    testing.expectEqual(c, records[2].addedNodes[0]);
+    testing.expectEqual(a, records[2].addedNodes[1]);
   }
 </script>

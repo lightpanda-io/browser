@@ -50,8 +50,7 @@ fn promptNumberedChoiceLine(header: []const u8, items: []const [:0]const u8, def
     var stdin_buf: [128]u8 = undefined;
     var stdin = std.Io.File.stdin().readerStreaming(lp.io, &stdin_buf);
 
-    var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
+    for (0..3) |_| {
         std.debug.print("{s}\n", .{header});
         for (items, 0..) |item, idx| {
             const marker: []const u8 = if (default) |d| (if (d == idx) " (default)" else "") else "";
@@ -118,8 +117,8 @@ const RawTerminal = struct {
         raw.lflag.ICANON = false;
         raw.lflag.IEXTEN = false;
         raw.lflag.ISIG = false;
-        raw.cc[@intFromEnum(std.c.V.MIN)] = 0;
-        raw.cc[@intFromEnum(std.c.V.TIME)] = 1;
+        raw.cc[@backingInt(std.c.V.MIN)] = 0;
+        raw.cc[@backingInt(std.c.V.TIME)] = 1;
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw) catch return error.NotInteractive;
         // Under `ansi.kitty_disambiguate` (pushed by `Terminal.readLine`),
         // cursor keys arrive as CSI-u the byte reader can't parse; push the

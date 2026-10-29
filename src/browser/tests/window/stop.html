@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- Started while parsing; the inline script below stops it before it lands.
+     Its error must still fire so the script manager doesn't wedge the load. -->
+<script defer src="support/stop_defer.js?delay_ms=300" onerror="window.deferErrored = true"></script>
+<script id=stop_during_parse>
+  window.stop();
+  // Not a teardown: the document keeps parsing after the call.
+  testing.expectEqual('loading', document.readyState);
+</script>
+
+<script id=stop_rejects_pending_fetch type=module>
+  {
+    const state = await testing.async();
+    const pending = fetch('http://127.0.0.1:9582/xhr/slow');
+    window.stop();
+    let err = null;
+    try {
+      await pending;
+    } catch (e) {
+      err = e;
+    }
+    state.resolve(err);
+    await state.done((err) => {
+      testing.expectTrue(err instanceof TypeError);
+    });
+  }
+</script>
+
+<script id=stop_aborts_xhr>
+  {
+    const events = [];
+    const xhr = new XMLHttpRequest();
+    xhr.onabort = () => events.push('abort');
+    xhr.onloadend = () => events.push('loadend');
+    xhr.open('GET', 'http://127.0.0.1:9582/xhr/slow');
+    xhr.send();
+    window.stop();
+    testing.expectEqual(0, xhr.readyState);
+    testing.expectEqual(['abort', 'loadend'], events);
+  }
+</script>
+
+<script id=stop_spares_requests_started_by_a_cancel_handler type=module>
+  {
+    // A cancelled request's handler may stop() again and start new loads;
+    // only loads that existed when stop() was called are cancelled.
+    const state = await testing.async();
+    let started = null;
+    const xhr = new XMLHttpRequest();
+    xhr.onabort = () => {
+      window.stop();
+      started = fetch('http://127.0.0.1:9582/xhr');
+    };
+    xhr.open('GET', 'http://127.0.0.1:9582/xhr/slow');
+    xhr.send();
+    window.stop();
+    const response = await started;
+    state.resolve(response.status);
+    await state.done((status) => {
+      testing.expectEqual(200, status);
+    });
+  }
+</script>
+
+<script id=stop_keeps_page_alive>
+  {
+    // stop() is not a teardown: timers keep firing and the load event
+    // still arrives (deferred script errored rather than hanging).
+    window.timerFired = false;
+    setTimeout(() => { window.timerFired = true; }, 0);
+    window.stop();
+    testing.onload(() => {
+      testing.expectTrue(window.timerFired);
+      testing.expectTrue(window.deferErrored);
+      testing.expectEqual(undefined, window.deferRan);
+      testing.expectEqual('complete', document.readyState);
+    });
+  }
+</script>

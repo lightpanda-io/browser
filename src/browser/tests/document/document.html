@@ -2,6 +2,7 @@
 <head id="the_head">
   <meta charset="UTF-8">
   <title>Test Document Title</title>
+  <meta name=lp-mode content=test>
   <script src="../testing.js"></script>
 </head>
 
@@ -307,10 +308,13 @@
       testing.expectEqual("InvalidCharacterError", err.name);
     }, () => document.createAttribute(''));
 
+    // a leading '.' is fine: browsers don't apply the XML Name production here
+    testing.expectEqual('.over', document.createAttribute('.over').name);
+
     testing.withError((err) => {
       testing.expectEqual(5, err.code);
       testing.expectEqual("InvalidCharacterError", err.name);
-    }, () => document.createAttribute('.over'));
+    }, () => document.createAttribute('over there'));
   }
 </script>
 

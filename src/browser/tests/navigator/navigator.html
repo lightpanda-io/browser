@@ -7,7 +7,7 @@
   testing.expectEqual(true, navigator.userAgent.length > 0);
   testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
   testing.expectEqual('Netscape', navigator.appName);
-  testing.expectEqual('1.0', navigator.appVersion);
+  testing.expectEqual(true, navigator.appVersion.startsWith('5.0 ('));
   testing.expectEqual(true, navigator.platform.length > 0);
 
   // Platform should be one of the known values
@@ -51,6 +51,16 @@
   }
 </script>
 
+<script id=navigator_plugins_named_presence>
+  // No plugin is exposed, so PluginArray has no named properties at all.
+  testing.expectEqual(false, 'anything' in navigator.plugins);
+  testing.expectEqual(false, Object.hasOwn(navigator.plugins, 'anything'));
+  testing.expectEqual(null, navigator.plugins.namedItem('anything'));
+
+  // inherited members are still found by `in`
+  testing.expectEqual(true, 'refresh' in navigator.plugins);
+</script>
+
 <script id=navigator_plugins_iterable>
   // WebIDL: indexed getter => @@iterator (Chrome: [...navigator.plugins] works)
   testing.expectEqual('function', typeof navigator.plugins[Symbol.iterator]);
@@ -82,6 +92,14 @@
     await state.done(() => {
       testing.expectEqual('prompt', status.state);
       testing.expectEqual('notifications', status.name);
+      testing.expectTrue(status instanceof PermissionStatus);
+      testing.expectTrue(status instanceof EventTarget);
+      testing.expectEqual(null, status.onchange);
+      let fired = 0;
+      status.onchange = () => fired += 1;
+      status.addEventListener('change', () => fired += 1);
+      status.dispatchEvent(new Event('change'));
+      testing.expectEqual(2, fired);
     });
   }
 </script>
@@ -116,7 +134,8 @@
   testing.expectEqual(true, validUAPlatforms.includes(navigator.userAgentData.platform));
 
   testing.expectEqual(1, navigator.userAgentData.brands.length);
-  testing.expectEqual({brand: 'Lightpanda', version: "1"}, navigator.userAgentData.brands[0]);
+  testing.expectEqual('Lightpanda', navigator.userAgentData.brands[0].brand);
+  testing.expectEqual("1.1.0-", navigator.userAgentData.brands[0].version.substring(0,6));
 
   // Same instance returned on repeated access
   testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
@@ -142,7 +161,7 @@
       testing.expectEqual(true, Array.isArray(v.brands));
       testing.expectEqual(true, Array.isArray(v.fullVersionList));
       testing.expectEqual('Lightpanda', v.fullVersionList[0].brand);
-      testing.expectEqual('1.0.0.0', v.uaFullVersion);
+      testing.expectEqual('1.1.0-', v.uaFullVersion.substring(0,6));
       testing.expectEqual(false, v.wow64);
       testing.expectEqual(true, Array.isArray(v.formFactor));
       testing.expectEqual('Desktop', v.formFactor[0]);
@@ -155,5 +174,33 @@
   // have to handle it being undefined, so this is a real-browser shape
   // rather than a stub that always rejects.
   testing.expectEqual('undefined', typeof navigator.getBattery);
+</script>
+
+
+<script id=sendBeacon>
+  // Nothing is sent, but "queued" keeps callers off their sync-XHR fallback.
+  testing.expectEqual(true, navigator.sendBeacon('/analytics'));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', 'payload'));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', new Blob(['x'])));
+  // The URL and data are checked even when beacons aren't sent.
+  testing.expectError('TypeError', () => navigator.sendBeacon('ftp://example.com/'));
+  testing.expectError('TypeError', () => navigator.sendBeacon('data:text/plain,hi'));
+  testing.expectError('TypeError', () => navigator.sendBeacon('http://['));
+  testing.expectError('TypeError', () => navigator.sendBeacon('/analytics', new ReadableStream()));
+  testing.expectEqual(false, navigator.sendBeacon('/analytics', 'x'.repeat(65537)));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', 'x'.repeat(65536)));
+</script>
+
+<script id=sendBeacon-not-sent type=module>
+  // Without --load-resources beacon, nothing is sent.
+  const state = await testing.async();
+  const sent = navigator.sendBeacon('/beacon/store/disabled', 'payload');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const record = await (await fetch('/beacon/read/disabled')).text();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, sent);
+    testing.expectEqual('(missing)', record);
+  });
 </script>
 

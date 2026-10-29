@@ -69,6 +69,25 @@
   }
 </script>
 
+<script id=fractionalCoordinatesFloored>
+  {
+    // Chrome floors MouseEvent coordinate getters to integers — fractional
+    // precision is exposed on PointerEvent only, even though CSSOM-View types
+    // these as double.
+    let evt = new MouseEvent('click', {clientX: 47.5, clientY: 312.5, screenX: -47.5, screenY: 47.6});
+    testing.expectEqual(47, evt.clientX);
+    testing.expectEqual(312, evt.clientY);
+    testing.expectEqual(-48, evt.screenX);
+    testing.expectEqual(47, evt.screenY);
+    testing.expectEqual(47, evt.pageX);
+    testing.expectEqual(312, evt.pageY);
+    testing.expectEqual(47, evt.x);
+    testing.expectEqual(312, evt.y);
+    testing.expectEqual(47, evt.layerX);
+    testing.expectEqual(312, evt.layerY);
+  }
+</script>
+
 <script id=getModifierState>
   {
     let evt = new MouseEvent('click', {altKey: true, ctrlKey: true, shiftKey: true, metaKey: true});

@@ -39,7 +39,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    var platform = try lp.js.Platform.init(v8_flags);
+    var platform = try lp.js.Platform.init(.{ .v8_flags = v8_flags });
     defer platform.deinit();
 
     const snapshot = try lp.js.Snapshot.create();

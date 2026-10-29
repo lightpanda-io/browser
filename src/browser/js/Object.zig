@@ -28,7 +28,8 @@ handle: *const v8.Object,
 
 pub fn has(self: Object, key: anytype) bool {
     const ctx = self.local.ctx;
-    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
+    // No property has a key longer than V8 accepts.
+    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key) catch return false;
 
     var out: v8.MaybeBool = undefined;
     v8.v8__Object__Has(self.handle, self.local.handle, key_handle, &out);
@@ -41,7 +42,7 @@ pub fn has(self: Object, key: anytype) bool {
 pub fn get(self: Object, key: anytype) !js.Value {
     const ctx = self.local.ctx;
 
-    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
+    const key_handle = if (@TypeOf(key) == *const v8.String) key else try ctx.isolate.initStringHandle(key);
     const js_val_handle = v8.v8__Object__Get(self.handle, self.local.handle, key_handle) orelse return error.JsException;
 
     return .{
@@ -50,11 +51,19 @@ pub fn get(self: Object, key: anytype) !js.Value {
     };
 }
 
+pub fn getSymbol(self: Object, symbol: *const v8.Symbol) !js.Value {
+    const handle = v8.v8__Object__Get(self.handle, self.local.handle, @ptrCast(symbol)) orelse return error.JsException;
+    return .{
+        .handle = handle,
+        .local = self.local,
+    };
+}
+
 pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.Caller.CallOpts) !bool {
     const ctx = self.local.ctx;
 
     const js_value = try self.local.zigValueToJs(value, opts);
-    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
+    const key_handle = if (@TypeOf(key) == *const v8.String) key else try ctx.isolate.initStringHandle(key);
 
     var out: v8.MaybeBool = undefined;
     v8.v8__Object__Set(self.handle, self.local.handle, key_handle, js_value.handle, &out);
@@ -63,7 +72,7 @@ pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.Caller.
 
 pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: v8.PropertyAttribute) ?bool {
     const ctx = self.local.ctx;
-    const name_handle = ctx.isolate.initStringHandle(name);
+    const name_handle = ctx.isolate.initStringHandle(name) catch return null;
 
     var out: v8.MaybeBool = undefined;
     v8.v8__Object__DefineOwnProperty(self.handle, self.local.handle, @ptrCast(name_handle), value.handle, attr, &out);
@@ -83,11 +92,7 @@ pub fn toValue(self: Object) js.Value {
 }
 
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
-    if (comptime lp.IS_DEBUG) {
-        return self.local.ctx.debugValue(self.toValue(), writer);
-    }
-    const str = self.toString() catch return error.WriteFailed;
-    return writer.writeAll(str);
+    return self.toValue().format(writer);
 }
 
 pub fn persist(self: Object) !Global {
@@ -100,7 +105,7 @@ pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     }
     const local = self.local;
 
-    const js_name = local.isolate.initStringHandle(name);
+    const js_name = try local.isolate.initStringHandle(name);
     const js_val_handle = v8.v8__Object__Get(self.handle, local.handle, js_name) orelse return error.JsException;
 
     if (v8.v8__Value__IsFunction(js_val_handle) == false) {
@@ -143,17 +148,16 @@ pub fn getPropertyNames(self: Object) js.Array {
     };
 }
 
-pub fn nameIterator(self: Object) !NameIterator {
-    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle) orelse {
+pub fn iterator(self: Object) !Iterator {
+    const names = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle) orelse {
         // see getOwnPropertyNames above
         return error.TypeError;
     };
-    const count = v8.v8__Array__Length(handle);
 
     return .{
-        .local = self.local,
-        .handle = handle,
-        .count = count,
+        .object = self,
+        .names = names,
+        .count = v8.v8__Array__Length(names),
     };
 }
 
@@ -184,21 +188,35 @@ pub const Global = struct {
     }
 };
 
-pub const NameIterator = struct {
+pub const Iterator = struct {
     count: u32,
     idx: u32 = 0,
-    local: *const js.Local,
-    handle: *const v8.Array,
+    object: Object,
+    names: *const v8.Array,
 
-    pub fn next(self: *NameIterator) !?[]const u8 {
+    pub const Entry = struct {
+        name: []const u8,
+        value: js.Value,
+    };
+
+    pub fn next(self: *Iterator) !?Entry {
         const idx = self.idx;
         if (idx == self.count) {
             return null;
         }
-        self.idx += 1;
+        self.idx = idx + 1;
 
-        const local = self.local;
-        const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), local.handle, idx) orelse return error.JsException;
-        return try js.Value.toStringSlice(.{ .local = local, .handle = js_val_handle });
+        const object = self.object;
+        const local = object.local;
+        const name_handle = v8.v8__Object__GetIndex(@ptrCast(self.names), local.handle, idx) orelse return error.JsException;
+        const js_name = try js.Value.toString(.{ .local = local, .handle = name_handle });
+
+        // look this up by the js_name, not the js_name.toSlice() which can do
+        // a lossy UTF-8 conversion.
+        const value = try object.get(js_name.handle);
+        return .{
+            .value = value,
+            .name = try js_name.toSlice(),
+        };
     }
 };

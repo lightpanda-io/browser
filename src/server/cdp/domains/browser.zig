@@ -1,0 +1,780 @@
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+const lp = @import("lightpanda");
+const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
+
+const Session = @import("../../../browser/Session.zig");
+const Notification = @import("../../../Notification.zig");
+const PermissionState = @import("../../../browser/webapi/Permissions.zig").State;
+
+const log = lp.log;
+
+// TODO: hard coded data
+const PROTOCOL_VERSION = "1.3";
+const REVISION = "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4";
+
+// CDP_USER_AGENT const is used by the CDP server only to identify itself to
+// the CDP clients.
+// Many clients check the CDP server is a Chrome browser.
+//
+// CDP_USER_AGENT const is not used by the browser for the HTTP client (see
+// src/http/client.zig) nor exposed to the JS (see
+// src/browser/html/navigator.zig).
+const CDP_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const PRODUCT = "Chrome/124.0.6367.29";
+
+const JS_VERSION = "12.4.254.8";
+const DEV_TOOLS_WINDOW_ID = 1923710101;
+
+pub fn processMessage(cmd: *CDP.Command) !void {
+    const action = std.meta.stringToEnum(enum {
+        getVersion,
+        setPermission,
+        setWindowBounds,
+        resetPermissions,
+        grantPermissions,
+        getWindowForTarget,
+        setDownloadBehavior,
+    }, cmd.input.action) orelse return error.UnknownMethod;
+
+    switch (action) {
+        .getVersion => return getVersion(cmd),
+        .setPermission => return setPermission(cmd),
+        .setWindowBounds => return setWindowBounds(cmd),
+        .resetPermissions => return resetPermissions(cmd),
+        .grantPermissions => return grantPermissions(cmd),
+        .getWindowForTarget => return getWindowForTarget(cmd),
+        .setDownloadBehavior => return setDownloadBehavior(cmd),
+    }
+}
+
+fn getVersion(cmd: *CDP.Command) !void {
+    // TODO: pre-serialize?
+    return cmd.sendResult(.{
+        .protocolVersion = PROTOCOL_VERSION,
+        .product = PRODUCT,
+        .revision = REVISION,
+        .userAgent = CDP_USER_AGENT,
+        .jsVersion = JS_VERSION,
+    }, .{});
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-setDownloadBehavior
+fn setDownloadBehavior(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        behavior: []const u8,
+        browserContextId: ?[]const u8 = null,
+        downloadPath: ?[]const u8 = null,
+        eventsEnabled: ?bool = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.browserContextId) |browser_context_id| {
+        const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+        if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
+            return error.UnknownBrowserContextId;
+        }
+    }
+
+    const events_enabled = params.eventsEnabled orelse false;
+
+    // `default` defers the choice to the browser; we map it to `deny` (no
+    // download is written unless a driver explicitly opts in).
+    const behavior: Session.DownloadBehavior = if (std.mem.eql(u8, params.behavior, "allow"))
+        .allow
+    else if (std.mem.eql(u8, params.behavior, "allowAndName"))
+        .allow_and_name
+    else if (std.mem.eql(u8, params.behavior, "deny") or std.mem.eql(u8, params.behavior, "default"))
+        .deny
+    else if (std.mem.eql(u8, params.behavior, "stream") and events_enabled == true)
+        // Our extension to download behavior.
+        .stream
+    else
+        return error.InvalidParams;
+
+    // These write to disk, so they need to know where.
+    if ((behavior == .allow or behavior == .allow_and_name) and params.downloadPath == null) {
+        return error.InvalidParams;
+    }
+
+    // Drivers (notably Playwright) send Browser.setDownloadBehavior at the
+    // browser level during connection setup, before any target/context has
+    // been created. Chromium accepts this; we have nowhere to store the config
+    // yet (it lives on the Session), so treat it as a success no-op rather than
+    // erroring, which would abort the driver's whole connection. The config is
+    // applied once a context exists (drivers re-send it per context).
+    const bc = cmd.browser_context orelse {
+        return cmd.sendResult(null, .{});
+    };
+    const session = bc.session;
+
+    session.download_behavior = behavior;
+    // downloadPath comes from the (transient) command arena; persist it on the
+    // session arena since Frame reads it on later navigations.
+    session.download_path = if (params.downloadPath) |p| try session.arena.dupe(u8, p) else null;
+    session.download_events_enabled = events_enabled;
+    // Like Chrome, download events go to the session that asked for them, and
+    // stay sessionless when asked at the browser level (as Playwright does).
+    bc.download_session_id = blk: {
+        const sid = cmd.input.session_id orelse break :blk null;
+        break :blk cmd.cdp.resolveSessionId(sid);
+    };
+
+    if (session.download_events_enabled) {
+        try bc.downloadEventsEnable();
+    } else {
+        bc.downloadEventsDisable();
+    }
+
+    return cmd.sendResult(null, .{});
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadWillBegin
+// Dispatched by Frame when a navigation response is treated as a file download.
+// The opt-in is Browser.setDownloadBehavior, so we emit Browser.* events only
+// (not the deprecated Page.downloadWillBegin / Page.downloadProgress). See #2701.
+pub fn downloadWillBegin(bc: *CDP.BrowserContext, event: *const Notification.DownloadWillBegin) !void {
+    return bc.cdp.sendEvent("Browser.downloadWillBegin", .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .guid = event.guid,
+        .url = event.url,
+        .suggestedFilename = event.suggested_filename,
+        // Not in Chrome's event; clients can't otherwise get the type of a
+        // download, e.g. one streamed as LP.downloadData (issue #3861).
+        .contentType = event.content_type,
+    }, .{ .session_id = bc.download_session_id });
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Browser/#event-downloadProgress
+// Dispatched by Frame as a download is written to disk (see issue #2701).
+pub fn downloadProgress(bc: *CDP.BrowserContext, msg: *const Notification.DownloadProgress) !void {
+    return bc.cdp.sendEvent("Browser.downloadProgress", .{
+        .guid = msg.guid,
+        .totalBytes = msg.total_bytes,
+        .receivedBytes = msg.received_bytes,
+        .state = switch (msg.state) {
+            .in_progress => "inProgress",
+            .completed => "completed",
+            .canceled => "canceled",
+        },
+    }, .{ .session_id = bc.download_session_id });
+}
+
+fn getWindowForTarget(cmd: *CDP.Command) !void {
+    // const params = (try cmd.params(struct {
+    //     targetId: ?[]const u8 = null,
+    // })) orelse return error.InvalidParams;
+
+    return cmd.sendResult(.{ .windowId = DEV_TOOLS_WINDOW_ID, .bounds = .{
+        .windowState = "normal",
+    } }, .{});
+}
+
+// TODO: noop method
+fn setWindowBounds(cmd: *CDP.Command) !void {
+    return cmd.sendResult(null, .{});
+}
+
+// Grant the listed permissions so navigator.permissions.query() reports them
+// as "granted". State is stored on the Browser, so it persists across page
+// navigations.
+fn grantPermissions(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        permissions: []const []const u8,
+        origin: ?[]const u8 = null,
+        browserContextId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.origin) |v| {
+        log.debug(.not_implemented, "Browser.grantPermissions", .{ .param = "origin", .value = v });
+    }
+    if (params.browserContextId) |v| {
+        log.debug(.not_implemented, "Browser.grantPermissions", .{ .param = "browserContextId", .value = v });
+    }
+
+    const browser = &cmd.cdp.browser;
+    for (params.permissions) |name| {
+        try browser.setPermission(name, .granted);
+    }
+
+    return cmd.sendResult(null, .{});
+}
+
+// Set a single permission to an explicit state ("granted", "denied" or
+// "prompt"), reflected by navigator.permissions.query().
+fn setPermission(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        permission: struct { name: []const u8 },
+        setting: []const u8,
+        origin: ?[]const u8 = null,
+        browserContextId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    if (params.origin) |v| {
+        log.debug(.not_implemented, "Browser.setPermission", .{ .param = "origin", .value = v });
+    }
+    if (params.browserContextId) |v| {
+        log.debug(.not_implemented, "Browser.setPermission", .{ .param = "browserContextId", .value = v });
+    }
+
+    const state = std.meta.stringToEnum(PermissionState, params.setting) orelse {
+        return error.InvalidPermissionSetting;
+    };
+    try cmd.cdp.browser.setPermission(params.permission.name, state);
+    return cmd.sendResult(null, .{});
+}
+
+// Clear all granted permissions; navigator.permissions.query() falls back to
+// the default "prompt".
+fn resetPermissions(cmd: *CDP.Command) !void {
+    cmd.cdp.browser.clearPermissions();
+    return cmd.sendResult(null, .{});
+}
+
+const testing = @import("../testing.zig");
+test "cdp.browser: getVersion" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 32,
+        .method = "Browser.getVersion",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .protocolVersion = PROTOCOL_VERSION,
+        .product = PRODUCT,
+        .revision = REVISION,
+        .userAgent = CDP_USER_AGENT,
+        .jsVersion = JS_VERSION,
+    }, .{ .id = 32, .index = 0, .session_id = null });
+}
+
+// Clients route replies by (sessionId, id): a reply must echo the sessionId of its command.
+test "cdp.browser: replies echo the sessionId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .session_id = "SID-X" });
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.getVersion", .sessionId = "SID-X" });
+    try ctx.expectSentResult(.{ .product = PRODUCT }, .{ .id = 1, .session_id = "SID-X" });
+}
+
+test "cdp.browser: getWindowForTarget" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 33,
+        .method = "Browser.getWindowForTarget",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .windowId = DEV_TOOLS_WINDOW_ID,
+        .bounds = .{ .windowState = "normal" },
+    }, .{ .id = 33, .index = 0, .session_id = null });
+}
+
+test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-PERM", .url = "cdp/dom1.html" });
+    const browser = bc.session.browser;
+
+    // grantPermissions: each listed permission becomes "granted". State lives
+    // on the Browser, not the Page.
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{ "geolocation", "notifications" } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
+    // State lives on the Browser, not the Page, so it persists for the whole
+    // CDP connection (across page navigations) rather than being lost when the
+    // page is replaced.
+    try testing.expectEqual(.granted, browser.permissions.get("geolocation").?);
+    try testing.expectEqual(.granted, browser.permissions.get("notifications").?);
+
+    // setPermission: override a single permission to an explicit state.
+    try ctx.processMessage(.{
+        .id = 41,
+        .method = "Browser.setPermission",
+        .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 41, .session_id = null });
+    try testing.expectEqual(.denied, browser.permissions.get("geolocation").?);
+
+    // resetPermissions: clears everything; query falls back to "prompt".
+    try ctx.processMessage(.{
+        .id = 42,
+        .method = "Browser.resetPermissions",
+    });
+    try ctx.expectSentResult(null, .{ .id = 42, .session_id = null });
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+}
+
+test "cdp.browser: disposing a context clears its permission overrides" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-PERM-OLD" });
+    const browser = &ctx.cdp().browser;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"}, .browserContextId = "BID-PERM-OLD" },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Browser.setPermission",
+        .params = .{ .permission = .{ .name = "notifications" }, .setting = "denied", .browserContextId = "BID-PERM-OLD" },
+    });
+    try testing.expectEqual(@as(usize, 2), browser.permissions.count());
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
+    try ctx.expectSentError(-32000, "Failed to find context with id BID-UNKNOWN", .{ .id = 3 });
+    try testing.expectEqual(@as(usize, 2), browser.permissions.count());
+
+    try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-PERM-OLD" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-PERM-NEW" });
+    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+}
+
+test "cdp.browser: setDownloadBehavior stores config on the session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-CFG" });
+
+    try ctx.processMessage(.{
+        .id = 34,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allowAndName",
+            .downloadPath = "/tmp/lp-downloads",
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 34, .session_id = null });
+
+    try testing.expectEqual(.allow_and_name, bc.session.download_behavior);
+    try testing.expectEqualSlices(u8, "/tmp/lp-downloads", bc.session.download_path.?);
+    try testing.expect(bc.session.download_events_enabled);
+
+    // `default` maps to `deny` and tears the registration down again.
+    try ctx.processMessage(.{
+        .id = 35,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "default" },
+    });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+    try testing.expect(bc.session.download_path == null);
+    try testing.expect(bc.session.download_events_enabled == false);
+}
+
+test "cdp.browser: setDownloadBehavior checks browserContextId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-DL", .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allow", .downloadPath = "/tmp/lp-downloads", .browserContextId = "BID-DL" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
+    try testing.expectEqual(.allow, bc.session.download_behavior);
+
+    try ctx.processMessage(.{
+        .id = 41,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "deny", .browserContextId = "BID-OTHER" },
+    });
+    try ctx.expectSentError(-31998, "UnknownBrowserContextId", .{ .id = 41 });
+    try testing.expectEqual(.allow, bc.session.download_behavior);
+}
+
+test "cdp.browser: setDownloadBehavior is a no-op when no context is loaded" {
+    // Drivers (e.g. Playwright) send this at the browser level during
+    // connection setup, before any target/context exists. It must succeed
+    // rather than error, otherwise the driver aborts the whole connection.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 33,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "deny", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 33, .session_id = null });
+}
+
+test "cdp.browser: setDownloadBehavior rejects an unknown behavior" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .session_id = "SID-BAD" });
+
+    try ctx.processMessage(.{
+        .id = 36,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "sometimes" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 36 });
+}
+
+test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{
+        .session_id = "SID-DL",
+        .target_id = "TID-00000000DL".*,
+    });
+
+    try ctx.processMessage(.{
+        .id = 37,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 37, .session_id = null });
+
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/report.csv", .{});
+    try testing.waitForPage(bc);
+
+    // The guid is random, so it's omitted from these subset matches.
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "inProgress",
+        .totalBytes = 30,
+        .receivedBytes = 0,
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{});
+
+    const written = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
+    defer testing.allocator.free(written);
+    try testing.expectEqualSlices(u8, "col1,col2\nhello,world\n42,1337\n", written);
+}
+
+test "cdp.browser: stream behavior streams an attachment navigation as LP.downloadData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 38,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 38 });
+
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/report.csv", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{});
+    try ctx.expectSentEvent("LP.downloadData", .{
+        // "col1,col2\nhello,world\n42,1337\n"
+        .data = "Y29sMSxjb2wyCmhlbGxvLHdvcmxkCjQyLDEzMzcK",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{});
+
+    // The body went over CDP, so it isn't rendered as a page.
+    try ctx.processMessage(.{ .id = 39, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.textContent",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "" } }, .{ .id = 39 });
+}
+
+test "cdp.browser: a failed attachment navigation renders instead of downloading" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40 });
+
+    // Like Chrome, which shows an error page rather than downloading a 404.
+    const frame = (try bc.session.createPage()).frame().?;
+    try frame.navigate("http://127.0.0.1:9582/download/missing.csv", .{});
+    try testing.waitForPage(bc);
+
+    try ctx.processMessage(.{ .id = 41, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.body.textContent",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "not found" } }, .{ .id = 41 });
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing.csv", .{}));
+}
+
+// Clicks a link of cdp/download_link.html, then waits for the network to go
+// idle, which includes the download.
+fn clickDownloadLink(ctx: *testing.TestContext, bc: *CDP.BrowserContext, message_id: usize, comptime link: []const u8) !void {
+    try ctx.processMessage(.{ .id = message_id, .method = "Runtime.evaluate", .params = .{
+        .expression = "document.getElementById('" ++ link ++ "').click()",
+    } });
+    try testing.waitForPage(bc);
+}
+
+test "cdp.browser: setDownloadBehavior stream requires eventsEnabled" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-LPS" });
+
+    // Events are the only way the bytes reach the client.
+    try ctx.processMessage(.{
+        .id = 42,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 42 });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+
+    try ctx.processMessage(.{
+        .id = 43,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 43 });
+    try testing.expectEqual(.stream, bc.session.download_behavior);
+    try testing.expect(bc.session.download_path == null);
+}
+
+test "cdp.browser: setDownloadBehavior allow requires downloadPath" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DLP" });
+
+    // With nowhere to write, every download would fail unannounced.
+    try ctx.processMessage(.{
+        .id = 54,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allow", .eventsEnabled = true },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 54 });
+
+    try ctx.processMessage(.{
+        .id = 55,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allowAndName" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 55 });
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+}
+
+test "cdp.browser: setDownloadBehavior writes an <a download> to disk and emits events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    // Sent on the page session, like lightpanda-io/demo puppeteer/download.js,
+    // so the events must come back on it, as in Chrome.
+    try ctx.processMessage(.{
+        .id = 44,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 44 });
+    try testing.expectEqualSlices(u8, "SID-DL", bc.download_session_id.?);
+
+    try clickDownloadLink(&ctx, bc, 45, "csv");
+    // The guid is random, so it's omitted from these subset matches.
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "data:text/csv,name%2Cvalue%0Aexample%2C42",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 21,
+        .receivedBytes = 21,
+    }, .{ .session_id = "SID-DL" });
+
+    // download="../../evil.txt" is reduced to its basename, so the file
+    // still lands in downloadPath.
+    try clickDownloadLink(&ctx, bc, 46, "traversal");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{ .suggestedFilename = "evil.txt" }, .{ .session_id = "SID-DL" });
+
+    const csv = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
+    defer testing.allocator.free(csv);
+    try testing.expectEqualSlices(u8, "name,value\nexample,42", csv);
+
+    const evil = try tmp.dir.readFileAlloc(testing.io, "evil.txt", testing.allocator, .limited(1024));
+    defer testing.allocator.free(evil);
+    try testing.expectEqualSlices(u8, "x", evil);
+}
+
+test "cdp.browser: a failed <a download> is canceled and nothing is written" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const download_path = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(download_path);
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    try ctx.processMessage(.{
+        .id = 49,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{
+            .behavior = "allow",
+            .downloadPath = download_path,
+            .eventsEnabled = true,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 49 });
+
+    // Like Chrome: the 404 is announced, then canceled with 0/0 bytes, even
+    // though its body advertised a Content-Length.
+    try clickDownloadLink(&ctx, bc, 50, "missing");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/missing.csv",
+        .suggestedFilename = "missing.csv",
+    }, .{});
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "canceled",
+        .totalBytes = 0,
+        .receivedBytes = 0,
+    }, .{});
+
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing.csv", .{}));
+}
+
+test "cdp.browser: stream behavior streams an <a download> as LP.downloadData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL", .url = "cdp/download_link.html" });
+
+    // Sent on SID-DL, so every download event must come back on it.
+    try ctx.processMessage(.{
+        .id = 47,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 47 });
+
+    // Over HTTP, so the body takes the streaming transfer path.
+    try clickDownloadLink(&ctx, bc, 48, "attachment");
+    try ctx.expectSentEvent("Browser.downloadWillBegin", .{
+        .url = "http://127.0.0.1:9582/download/report.csv",
+        .suggestedFilename = "report.csv",
+        .contentType = "text/csv",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("LP.downloadData", .{
+        // "col1,col2\nhello,world\n42,1337\n"
+        .data = "Y29sMSxjb2wyCmhlbGxvLHdvcmxkCjQyLDEzMzcK",
+    }, .{ .session_id = "SID-DL" });
+    try ctx.expectSentEvent("Browser.downloadProgress", .{
+        .state = "completed",
+        .totalBytes = 30,
+        .receivedBytes = 30,
+    }, .{ .session_id = "SID-DL" });
+}
+
+test "cdp.browser: detaching the download session resets the download behavior" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 51,
+        .method = "Browser.setDownloadBehavior",
+        .sessionId = "SID-DL",
+        .params = .{ .behavior = "stream", .eventsEnabled = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 51 });
+    try testing.expectEqualSlices(u8, "SID-DL", bc.download_session_id.?);
+
+    // Like Chrome, which drops the behavior along with the session that set
+    // it, so events never go to a sessionId the client dropped.
+    try ctx.processMessage(.{
+        .id = 52,
+        .method = "Target.detachFromTarget",
+        .params = .{ .sessionId = "SID-DL" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 52 });
+    try testing.expect(bc.download_session_id == null);
+    try testing.expectEqual(.deny, bc.session.download_behavior);
+    try testing.expectEqual(false, bc.session.download_events_enabled);
+}

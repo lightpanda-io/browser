@@ -1,10 +1,14 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
 <script id="exists">
   testing.expectEqual('object', typeof CSS);
   testing.expectEqual('function', typeof CSS.escape);
   testing.expectEqual('function', typeof CSS.supports);
+  // a namespace has no interface object
+  testing.expectEqual('undefined', typeof Css);
+  testing.expectEqual(false, 'Css' in window);
 </script>
 
 <script id="entries">
@@ -60,6 +64,35 @@
     testing.expectEqual(true, CSS.supports('position', 'relative'));
     testing.expectEqual(true, CSS.supports('width', '100px'));
     testing.expectEqual(true, CSS.supports('color', 'red'));
+  }
+</script>
+
+<script id="supports_unknown_properties">
+  {
+    testing.expectEqual(false, CSS.supports('not-a-property', 'red'));
+    testing.expectEqual(false, CSS.supports('-moz-user-select', 'none'));
+    testing.expectEqual(false, CSS.supports(' color', 'red'));
+    // @font-face descriptors aren't properties
+    testing.expectEqual(false, CSS.supports('src', 'inherit'));
+    testing.expectEqual(true, CSS.supports('COLOR', 'red'));
+    testing.expectEqual(true, CSS.supports('-webkit-transform', 'none'));
+    testing.expectEqual(true, CSS.supports('word-wrap', 'normal'));
+    testing.expectEqual(true, CSS.supports('--anything', 'x'));
+  }
+</script>
+
+<script id="supports_condition">
+  {
+    testing.expectEqual(true, CSS.supports('display: block'));
+    testing.expectEqual(true, CSS.supports('(display: grid) and (gap: 1px)'));
+    testing.expectEqual(true, CSS.supports('not (not-a-property: 1)'));
+    testing.expectEqual(false, CSS.supports('not-a-property: 1'));
+    testing.expectEqual(false, CSS.supports('(display: grid) and (color: red) or (gap: 1px)'));
+    testing.expectEqual(true, CSS.supports('selector(:has(a))'));
+    testing.expectEqual(true, CSS.supports('selector(div > p)'));
+    testing.expectEqual(false, CSS.supports('selector(a, b)'));
+    testing.expectEqual(false, CSS.supports('unknown-function(x)'));
+    testing.expectEqual(false, CSS.supports('color', ''));
   }
 </script>
 

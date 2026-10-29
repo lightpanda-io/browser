@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
+const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
 
 const Execution = js.Execution;
@@ -31,6 +32,7 @@ pub const _prototype_root = true;
 
 _width: u32,
 _height: u32,
+_cached: ?DrawingContext = null,
 
 /// Since there's no base class rendering contexts inherit from,
 /// we're using tagged union.
@@ -49,7 +51,7 @@ pub fn getWidth(self: *const OffscreenCanvas) u32 {
     return self._width;
 }
 
-pub fn setWidth(self: *OffscreenCanvas, value: u32) void {
+fn setWidth(self: *OffscreenCanvas, value: u32) void {
     self._width = value;
 }
 
@@ -57,38 +59,78 @@ pub fn getHeight(self: *const OffscreenCanvas) u32 {
     return self._height;
 }
 
-pub fn setHeight(self: *OffscreenCanvas, value: u32) void {
+fn setHeight(self: *OffscreenCanvas, value: u32) void {
     self._height = value;
 }
 
-pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
-    if (std.mem.eql(u8, context_type, "2d")) {
-        const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{});
-        return .{ .@"2d" = ctx };
+fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+    if (self._cached) |cached| {
+        return switch (cached) {
+            .@"2d" => if (std.mem.eql(u8, context_type, "2d")) cached else null,
+        };
     }
 
+    if (std.mem.eql(u8, context_type, "2d")) {
+        const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{ ._canvas = self });
+        self._cached = .{ .@"2d" = ctx };
+        return self._cached;
+    }
+
+    if (Canvas.isWebGL(context_type)) {
+        exec.page.status.noteUnsupported(.webgl);
+    }
     return null;
 }
 
-/// Returns a Promise that resolves to a Blob containing the image.
-/// Since we have no actual rendering, this returns an empty blob.
-pub fn convertToBlob(_: *OffscreenCanvas, exec: *Execution) !js.Promise {
-    const blob = try Blob.init(null, null, exec);
+/// Resolves to the same blank PNG as `HTMLCanvasElement.toBlob`. A canvas
+/// with no pixels rejects with IndexSizeError, per spec.
+fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise {
+    if (!BlankPNG.hasBitmap(self._width, self._height)) {
+        return error.IndexSizeError;
+    }
+    const blob = try BlankPNG.blob(exec);
     return exec.js.local.?.resolvePromise(blob);
 }
 
 /// Returns an ImageBitmap with the rendered content (stub).
-pub fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
+fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
     // ImageBitmap not implemented yet, return null
     return null;
 }
+
+pub const BlankPNG = struct {
+    const mime = "image/png";
+
+    const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+
+    pub const data_url = "data:" ++ mime ++ ";base64," ++ base64;
+
+    pub const bytes = blk: {
+        const decoder = std.base64.standard.Decoder;
+        var buf: [decoder.calcSizeForSlice(base64) catch unreachable]u8 = undefined;
+        decoder.decode(&buf, base64) catch unreachable;
+        break :blk buf;
+    };
+
+    /// Largest canvas Chrome backs with a bitmap (16384 x 16384). Past that, and
+    /// at zero size, there are no pixels to serialize and the serializers answer
+    /// with the spec's "no data" values.
+    const max_area = 16384 * 16384;
+
+    pub fn hasBitmap(width: u32, height: u32) bool {
+        return width > 0 and height > 0 and @as(u64, width) * height <= max_area;
+    }
+
+    pub fn blob(exec: *js.Execution) !*Blob {
+        return Blob.initFromBytes(&BlankPNG.bytes, BlankPNG.mime, exec);
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OffscreenCanvas);
 
     pub const Meta = struct {
         pub const name = "OffscreenCanvas";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

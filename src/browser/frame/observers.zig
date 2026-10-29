@@ -44,6 +44,11 @@ pub const Mutation = struct {
     observers: std.DoublyLinkedList = .{},
     delivery_scheduled: bool = false,
     delivery_depth: u32 = 0,
+
+    // Consecutive delivery sessions that hit delivery_depth's cap instead of
+    // draining. delivery_depth only bounds one session's recursion; a
+    // callback that reschedules itself can restart a fresh session forever.
+    consecutive_full_depth: u32 = 0,
 };
 
 // IntersectionObserver bookkeeping for a frame.
@@ -52,6 +57,13 @@ pub const Intersection = struct {
     observers: std.ArrayList(*IntersectionObserver) = .empty,
     check_scheduled: bool = false,
     delivery_scheduled: bool = false,
+
+    // Deliveries closer together than INTERSECTION_QUIET_MS form one burst.
+    // Frame.init re-initializes the whole struct, so a navigation starts fresh.
+    burst_start_ms: u64 = 0,
+    last_delivery_ms: u64 = 0,
+    burst_deliveries: u32 = 0,
+    runaway: bool = false,
 };
 
 // ResizeObserver bookkeeping for a frame.
@@ -88,20 +100,20 @@ pub fn registerMutationObserver(frame: *Frame, observer: *MutationObserver) !voi
 }
 
 pub fn unregisterMutationObserver(frame: *Frame, observer: *MutationObserver) void {
-    observer.releaseRef(frame._page);
+    observer.releaseRef(frame.page);
     frame._mutation.observers.remove(&observer.node);
 }
 
 pub fn registerIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) !void {
     observer.acquireRef();
-    try frame._intersection.observers.append(frame.arena, observer);
+    try frame._intersection.observers.append(frame.page_arena, observer);
 }
 
 pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) void {
     for (frame._intersection.observers.items, 0..) |obs, i| {
         if (obs == observer) {
-            observer.releaseRef(frame._page);
-            _ = frame._intersection.observers.swapRemove(i);
+            observer.releaseRef(frame.page);
+            _ = frame._intersection.observers.orderedRemove(i);
             return;
         }
     }
@@ -109,14 +121,14 @@ pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObse
 
 pub fn registerResizeObserver(frame: *Frame, observer: *ResizeObserver) !void {
     observer.acquireRef();
-    try frame._resize.observers.append(frame.arena, observer);
+    try frame._resize.observers.append(frame.page_arena, observer);
 }
 
 pub fn unregisterResizeObserver(frame: *Frame, observer: *ResizeObserver) void {
     for (frame._resize.observers.items, 0..) |obs, i| {
         if (obs == observer) {
-            observer.releaseRef(frame._page);
-            _ = frame._resize.observers.swapRemove(i);
+            observer.releaseRef(frame.page);
+            _ = frame._resize.observers.orderedRemove(i);
             return;
         }
     }
@@ -126,7 +138,11 @@ pub fn hasMutationObservers(frame: *const Frame) bool {
     return frame._mutation.observers.first != null;
 }
 
-pub fn checkIntersections(frame: *Frame) !void {
+pub fn hasIntersectionObservers(frame: *const Frame) bool {
+    return frame._intersection.observers.items.len > 0;
+}
+
+fn checkIntersections(frame: *Frame) !void {
     for (frame._intersection.observers.items) |observer| {
         try observer.checkIntersections(frame);
     }
@@ -155,7 +171,7 @@ pub fn scheduleIntersectionChecks(frame: *Frame) void {
     frame._intersection.check_scheduled = true;
     frame.js.queueIntersectionChecks() catch |err| {
         frame._intersection.check_scheduled = false;
-        log.err(.frame, "frame.scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
+        log.err(.frame, "scheduleIntersectionChecks", .{ .err = err, .type = frame._type, .url = frame.url });
     };
 }
 
@@ -212,7 +228,7 @@ pub fn performScheduledResizeChecks(frame: *Frame) void {
 }
 
 // Only these attributes can change an element's size or visibility in our
-// styling model (StyleManager.isHidden + Element.getElementDimensions), and
+// styling model (StyleManager.isHidden + Element.getElementAxis), and
 // only for the element itself and its descendants — so a delivery is only
 // scheduled when an observed element is in the changed element's subtree.
 fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
@@ -241,7 +257,7 @@ fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
     }
 
     for (frame._resize.observers.items) |observer| {
-        if (observer.observesWithin(element)) {
+        if (observer.observesWithin(element, frame)) {
             scheduleResizeDelivery(frame);
             return;
         }
@@ -261,21 +277,28 @@ pub fn deliverResizes(frame: *Frame) void {
         frame._resize.delivery_depth = 0;
     };
     if (frame._resize.delivery_depth > 16) {
-        log.warn(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
+        log.debug(.frame, "frame.ResizeLimit", .{ .type = frame._type, .url = frame.url });
         frame._resize.delivery_depth = 0;
         return;
     }
 
-    // Iterate backwards so an observer disconnecting during its callback is safe.
-    var i = frame._resize.observers.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (i >= frame._resize.observers.items.len) {
-            continue;
-        }
-        const observer = frame._resize.observers.items[i];
+    // snapshot and acquireRef because a the callback for observer A could
+    // disconnect, which would then wipe our reference from under us.
+    const observers = frame.call_arena.dupe(*ResizeObserver, frame._resize.observers.items) catch |err| {
+        log.err(.frame, "deliverResizes.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
+        return;
+    };
+
+    for (observers) |observer| {
+        observer.acquireRef();
+    }
+    defer for (observers) |observer| {
+        observer.releaseRef(frame.page);
+    };
+
+    for (observers) |observer| {
         observer.deliverEntries(frame) catch |err| {
-            log.err(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }
@@ -293,25 +316,104 @@ pub fn performScheduledIntersectionChecks(frame: *Frame) void {
     };
 }
 
+// We report every attached element as fully visible, so a page that observes a
+// fresh sentinel from inside its own callback never settles: the replacement
+// intersects the moment it is attached. Observed on a storefront paginating
+// itself past page 18 at ~30 deliveries/s until the watchdog killed the page.
+//
+// A delivery count cannot separate this from a busy but healthy page: airbnb
+// legitimately needs up to ~50 deliveries per load, and the runaway had already
+// exhausted the timer table by ~70. Duration does separate them. Healthy pages
+// go quiet within 5s of their first delivery; the runaway never does. Bursts
+// are measured from their own start rather than from page load so that lazy
+// loading triggered minutes later, by a scroll or a click, is not penalized.
+// Gaps inside a healthy burst stayed under 800ms; the runaway paused once for
+// 1.1s on a network stall.
+//
+// A chain that re-observes synchronously never leaves the microtask checkpoint,
+// so the clock alone would let it spin for the full limit. The per-burst count
+// exists for that case only; at 20x the busiest healthy page it is not a tuning
+// knob.
+pub const INTERSECTION_RUNAWAY_MS = 10_000;
+pub const INTERSECTION_QUIET_MS = 2_000;
+pub const INTERSECTION_BURST_LIMIT = 1024;
+
+// No observer on the frame can make progress once this path is reached.
+fn disconnectRunawayIntersectionObservers(frame: *Frame) void {
+    // The page can keep creating observers after the disconnect (a framework
+    // re-mounting its lazy loader will), and each one trips this path again, so
+    // only the crossing itself is logged.
+    if (!frame._intersection.runaway) {
+        frame._intersection.runaway = true;
+        log.debug(.frame, "frame.IntersectionRunaway", .{ .type = frame._type, .url = frame.url });
+    }
+
+    for (frame._intersection.observers.items) |observer| {
+        observer.reset(frame.page);
+        observer.releaseRef(frame.page);
+    }
+    frame._intersection.observers.clearRetainingCapacity();
+}
+
 pub fn deliverIntersections(frame: *Frame) void {
     if (!frame._intersection.delivery_scheduled) {
         return;
     }
     frame._intersection.delivery_scheduled = false;
 
-    // Iterate backwards to handle observers that disconnect during their callback
-    var i = frame._intersection.observers.items.len;
-    while (i > 0) {
-        i -= 1;
-        const observer = frame._intersection.observers.items[i];
+    const now = lp.datetime.milliTimestamp(.boot);
+    if (now - frame._intersection.last_delivery_ms > INTERSECTION_QUIET_MS) {
+        frame._intersection.burst_start_ms = now;
+        frame._intersection.burst_deliveries = 0;
+        frame._intersection.runaway = false;
+    }
+    frame._intersection.last_delivery_ms = now;
+    frame._intersection.burst_deliveries += 1;
+
+    const too_long = now - frame._intersection.burst_start_ms > INTERSECTION_RUNAWAY_MS;
+    if (too_long or frame._intersection.burst_deliveries > INTERSECTION_BURST_LIMIT) {
+        disconnectRunawayIntersectionObservers(frame);
+        return;
+    }
+
+    // snapshot and acquireRef because a the callback for observer A could
+    // disconnect, which would then wipe our reference from under us.
+    const observers = frame.call_arena.dupe(*IntersectionObserver, frame._intersection.observers.items) catch |err| {
+        log.err(.frame, "deliverIntersections.snapshot", .{ .err = err, .type = frame._type, .url = frame.url });
+        return;
+    };
+    for (observers) |observer| {
+        observer.acquireRef();
+    }
+    defer for (observers) |observer| {
+        observer.releaseRef(frame.page);
+    };
+
+    for (observers) |observer| {
         observer.deliverEntries(frame) catch |err| {
-            log.err(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }
         };
     }
 }
+
+// No observer on the frame can make progress once this path is reached.
+fn disconnectRunawayMutationObservers(frame: *Frame) void {
+    log.debug(.frame, "frame.MutationRunaway", .{ .type = frame._type, .url = frame.url });
+
+    var node: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
+    while (node) |n| {
+        node = n.next;
+        const observer: *MutationObserver = @fieldParentPtr("node", n);
+        observer.disconnect(frame);
+    }
+}
+
+// ~1600 observer callbacks (100 cascades x 16 depth) with zero progress is
+// well past any legitimate coalescing burst.
+const MUTATION_RUNAWAY_LIMIT = 100;
 
 pub fn deliverMutations(frame: *Frame) void {
     if (!frame._mutation.delivery_scheduled) {
@@ -320,14 +422,23 @@ pub fn deliverMutations(frame: *Frame) void {
     frame._mutation.delivery_scheduled = false;
 
     frame._mutation.delivery_depth += 1;
+    var capped = false;
     defer if (!frame._mutation.delivery_scheduled) {
-        // reset the depth once nothing is left to be scheduled
         frame._mutation.delivery_depth = 0;
+        if (capped) {
+            frame._mutation.consecutive_full_depth += 1;
+            if (frame._mutation.consecutive_full_depth >= MUTATION_RUNAWAY_LIMIT) {
+                disconnectRunawayMutationObservers(frame);
+            }
+        } else {
+            frame._mutation.consecutive_full_depth = 0;
+        }
     };
 
     if (frame._mutation.delivery_depth > 16) {
-        log.err(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
+        log.debug(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
         frame._mutation.delivery_depth = 0;
+        capped = true;
         return;
     }
 
@@ -344,6 +455,9 @@ pub fn deliverMutations(frame: *Frame) void {
     // we started the delivery. So we need to snapshot this. Any observers which
     // get records during this phase will only be processed on the next microtask tick.
     var notify: std.ArrayList(*MutationObserver) = .empty;
+    defer for (notify.items) |observer| {
+        observer.releaseRef(frame.page);
+    };
     var it: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
@@ -354,11 +468,12 @@ pub fn deliverMutations(frame: *Frame) void {
             log.err(.frame, "deliverMutations.notify", .{ .err = err, .type = frame._type, .url = frame.url });
             break;
         };
+        observer.acquireRef();
     }
 
     for (notify.items) |observer| {
         observer.deliverRecords(frame) catch |err| {
-            log.err(.frame, "frame.deliverMutations", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "frame.deliverMutations", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }
@@ -367,13 +482,13 @@ pub fn deliverMutations(frame: *Frame) void {
 
     // slotchange events fire after the observer callbacks (spec step order)
     for (slots) |slot| {
-        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, frame._page) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, frame.page) catch |err| {
             log.err(.frame, "deliverSlotchange.init", .{ .err = err, .type = frame._type, .url = frame.url });
             continue;
         };
         const target = slot.asNode().asEventTarget();
         frame._event_manager.dispatch(target, event) catch |err| {
-            log.err(.frame, "deliverSlotchange.dispatch", .{ .err = err, .type = frame._type, .url = frame.url });
+            log.debug(.frame, "deliverSlotchange.dispatch", .{ .err = err, .type = frame._type, .url = frame.url });
             if (err == error.ExecutionTerminated) {
                 return;
             }

@@ -29,15 +29,20 @@ pub const init: Crypto = .{};
 
 // We take a js.Value, because we want to return the same instance, not a new
 // TypedArray
-pub fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Execution) !js.Object {
+fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Execution) !js.Object {
     const value = js_obj.toValue();
-    if (value.isFloat16Array() or value.isFloat32Array() or value.isFloat64Array() or (value.isArrayBufferView() and !value.isTypedArray())) {
+    // An ArrayBufferView, not [AllowShared]: a view onto a SharedArrayBuffer
+    // is a TypeError too. (AllowSharedBufferSource below would also take an
+    // ArrayBuffer, or a shared buffer.)
+    if (value.isArrayBufferView() == false or value.isBufferSource() == false) {
+        return error.InvalidArgument;
+    }
+    if (value.isFloat16Array() or value.isFloat32Array() or value.isFloat64Array() or value.isTypedArray() == false) {
         // only integer TypedArrays are supported
         return error.TypeMismatch;
     }
 
-    var into = try js_obj.toZig(RandomValues);
-    const buf = into.asBuffer();
+    const buf = (try js_obj.toZig(js.AllowSharedBufferSource)).bytes;
     if (buf.len > 65_536) {
         return QuotaExceededError.throw(js_obj.local, exec);
     }
@@ -45,46 +50,21 @@ pub fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Exec
     return js_obj;
 }
 
-pub fn randomUUID(_: *const Crypto) ![36]u8 {
+fn randomUUID(_: *const Crypto) ![36]u8 {
     var hex: [36]u8 = undefined;
     @import("../../id.zig").uuidv4(&hex);
     return hex;
 }
 
-pub fn getSubtle(self: *Crypto) *SubtleCrypto {
+fn getSubtle(self: *Crypto) *SubtleCrypto {
     return &self._subtle;
 }
-
-const RandomValues = union(enum) {
-    int8: []i8,
-    uint8: []u8,
-    int16: []i16,
-    uint16: []u16,
-    int32: []i32,
-    uint32: []u32,
-    int64: []i64,
-    uint64: []u64,
-
-    fn asBuffer(self: RandomValues) []u8 {
-        return switch (self) {
-            .int8 => |b| (@as([]u8, @ptrCast(b)))[0..b.len],
-            .uint8 => |b| (@as([]u8, @ptrCast(b)))[0..b.len],
-            .int16 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 2],
-            .uint16 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 2],
-            .int32 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 4],
-            .uint32 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 4],
-            .int64 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 8],
-            .uint64 => |b| (@as([]u8, @ptrCast(b)))[0 .. b.len * 8],
-        };
-    }
-};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Crypto);
 
     pub const Meta = struct {
         pub const name = "Crypto";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };
@@ -96,5 +76,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Crypto" {
+    // pbkdf2 limit tests
+    testing.expectLog(&.{ .js, .js });
     try testing.htmlRunner("crypto.html", .{});
 }

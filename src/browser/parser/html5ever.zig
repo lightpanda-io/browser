@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const ParsedNode = @import("Parser.zig").ParsedNode;
 
 pub extern "c" fn html5ever_parse_document(
@@ -24,7 +25,6 @@ pub extern "c" fn html5ever_parse_document(
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
-    elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
     appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
     popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
@@ -50,7 +50,6 @@ pub extern "c" fn html5ever_parse_document_with_encoding(
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
-    elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
     appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
     popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
@@ -67,16 +66,24 @@ pub extern "c" fn html5ever_parse_document_with_encoding(
     allow_declarative_shadow: bool,
 ) void;
 
+// Namespace of the fragment parse context element, matched by
+// html5ever_parse_fragment.
+pub const ContextNamespace = enum(u8) {
+    html = 0,
+    svg = 1,
+    mathml = 2,
+};
+
 pub extern "c" fn html5ever_parse_fragment(
     html: [*c]const u8,
     len: usize,
     context_name: [*c]const u8,
     context_name_len: usize,
+    context_ns: ContextNamespace,
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
     createContextElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
-    elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
     appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
     popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
@@ -96,19 +103,11 @@ pub extern "c" fn html5ever_parse_fragment(
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
 pub extern "c" fn html5ever_attribute_iterator_count(ctx: *anyopaque) usize;
 
-pub extern "c" fn html5ever_get_memory_usage() MemoryUsage;
-
-pub const MemoryUsage = extern struct {
-    resident: usize,
-    allocated: usize,
-};
-
 // Streaming parser API
 pub extern "c" fn html5ever_streaming_parser_create(
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
-    elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
     appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
     popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
@@ -139,7 +138,7 @@ pub extern "c" fn html5ever_streaming_parser_destroy(
     parser: *anyopaque,
 ) void;
 
-pub fn Nullable(comptime T: type) type {
+fn Nullable(comptime T: type) type {
     return extern struct {
         tag: u8,
         value: T,
@@ -155,7 +154,7 @@ pub fn Nullable(comptime T: type) type {
 }
 
 pub const StringSlice = Slice(u8);
-pub fn Slice(comptime T: type) type {
+fn Slice(comptime T: type) type {
     return extern struct {
         ptr: [*]const T,
         len: usize,
@@ -191,12 +190,15 @@ pub const AttributeIterator = extern struct {
 
 pub const NodeOrText = extern struct {
     tag: u8,
-    node: *anyopaque,
+    // Null for text. Also null for a node when its create callback failed:
+    // html5ever still appends the null ref it got back.
+    node: ?*anyopaque,
     text: StringSlice,
 
     pub fn toUnion(self: NodeOrText) Union {
         if (self.tag == 0) {
-            return .{ .node = @ptrCast(@alignCast(self.node)) };
+            const node = self.node orelse return .failed;
+            return .{ .node = @ptrCast(@alignCast(node)) };
         }
         return .{ .text = self.text.slice() };
     }
@@ -204,6 +206,8 @@ pub const NodeOrText = extern struct {
     const Union = union(enum) {
         node: *ParsedNode,
         text: []const u8,
+        // The create callback failed and already set Parser.err.
+        failed,
     };
 };
 
@@ -213,7 +217,6 @@ pub extern "c" fn xml5ever_parse_document(
     doc: *anyopaque,
     ctx: *anyopaque,
     createElementCallback: *const fn (ctx: *anyopaque, data: *anyopaque, QualName, AttributeIterator) callconv(.c) ?*anyopaque,
-    elemNameCallback: *const fn (node_ref: *anyopaque) callconv(.c) *anyopaque,
     appendCallback: *const fn (ctx: *anyopaque, parent_ref: *anyopaque, NodeOrText) callconv(.c) void,
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
     popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
@@ -229,6 +232,17 @@ pub extern "c" fn xml5ever_parse_document(
     attachDeclarativeShadowCallback: *const fn (ctx: *anyopaque, host_ref: *anyopaque, template_ref: *anyopaque, mode_is_open: u8) callconv(.c) u8,
     allow_declarative_shadow: bool,
 ) void;
+
+pub extern "c" fn xml5ever_validate_document(
+    xml: [*c]const u8,
+    len: usize,
+    ctx: *anyopaque,
+    parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
+) void;
+
+// 0: no reference starts with `name`, 1: `name` is a prefix of one,
+// 2: `name` is one, its codepoints are in `out` (out[1] == 0 for a single one).
+pub extern "c" fn html5ever_named_character_reference(name: [*]const u8, len: usize, out: *[2]u32) u8;
 
 // General encoding api
 pub const EncodingInfo = extern struct {
@@ -247,9 +261,53 @@ pub const EncodingInfo = extern struct {
         }
         return self.name_ptr[0..self.name_len];
     }
+
+    /// The encoding `label` names, if it names one.
+    pub fn forLabel(label: ?[]const u8) ?EncodingInfo {
+        const l = label orelse return null;
+        const info = encoding_for_label(l.ptr, l.len);
+        return if (info.isValid()) info else null;
+    }
+
+    pub fn utf8() EncodingInfo {
+        return forLabel("utf-8").?;
+    }
+
+    pub fn isUtf8(self: *const EncodingInfo) bool {
+        return std.mem.eql(u8, self.name(), "UTF-8");
+    }
+
+    pub fn isUtf16(self: *const EncodingInfo) bool {
+        const n = self.name();
+        return std.mem.eql(u8, n, "UTF-16LE") or std.mem.eql(u8, n, "UTF-16BE");
+    }
 };
 
-pub const DecodeResult = extern struct {
+/// `input` as valid UTF-8 without a BOM: `input` itself when it already is
+/// and `encoding` is UTF-8, else decoded with `decodeToUtf8`.
+pub fn validUtf8(allocator: std.mem.Allocator, encoding: EncodingInfo, input: []const u8) ![]const u8 {
+    // A UTF-16 BOM is never valid UTF-8, so only the UTF-8 one needs a check.
+    if (encoding.isUtf8() and
+        !std.mem.startsWith(u8, input, "\xEF\xBB\xBF") and
+        std.unicode.utf8ValidateSlice(input))
+    {
+        return input;
+    }
+    return decodeToUtf8(allocator, encoding.handle.?, input);
+}
+
+/// Decodes `input` from the encoding `handle` names into UTF-8. A BOM
+/// switches to the encoding it marks and is dropped.
+pub fn decodeToUtf8(allocator: std.mem.Allocator, handle: *anyopaque, input: []const u8) ![]const u8 {
+    if (input.len == 0) {
+        return "";
+    }
+    const out = try allocator.alloc(u8, encoding_max_utf8_buffer_length(handle, input.len));
+    const result = encoding_decode(handle, input.ptr, input.len, out.ptr, out.len, 1);
+    return out[0..result.bytes_written];
+}
+
+const DecodeResult = extern struct {
     had_errors: u8,
     bytes_read: usize,
     bytes_written: usize,
@@ -292,8 +350,15 @@ pub extern "c" fn encoding_decoder_decode(
 
 pub extern "c" fn encoding_decoder_free(decoder: *anyopaque) void;
 
+pub extern "c" fn encoding_decoder_max_utf8_buffer_length(decoder: *anyopaque, input_len: usize) usize;
+
+// A decoder in caller-owned memory, never freed (see lib.rs).
+pub extern "c" fn encoding_decoder_size() usize;
+pub extern "c" fn encoding_decoder_align() usize;
+pub extern "c" fn encoding_decoder_init(handle: *anyopaque, out: *anyopaque) u8;
+
 // Encoding API (UTF-8 to legacy encoding with NCR fallback)
-pub const EncodeResult = extern struct {
+const EncodeResult = extern struct {
     status: u8,
     bytes_read: usize,
     bytes_written: usize,

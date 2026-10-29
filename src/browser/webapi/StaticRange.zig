@@ -34,11 +34,11 @@ _proto: *AbstractRange,
 // https://dom.spec.whatwg.org/#dictdef-staticrangeinit
 // All members are required. The fields are non-optional with no default, so the
 // argument decoder rejects a missing or null member with a TypeError.
-pub const StaticRangeInit = struct {
-    startContainer: *Node,
-    startOffset: u32,
+const StaticRangeInit = struct {
     endContainer: *Node,
     endOffset: u32,
+    startContainer: *Node,
+    startOffset: u32,
 };
 
 pub fn init(opts: StaticRangeInit, frame: *Frame) !*StaticRange {
@@ -74,7 +74,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "StaticRange";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

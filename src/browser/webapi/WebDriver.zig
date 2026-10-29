@@ -22,17 +22,14 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const keyboard = @import("../frame/keyboard.zig");
+
+const Event = @import("Event.zig");
+const Element = @import("Element.zig");
+const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
-const Element = @import("Element.zig");
-const Event = @import("Event.zig");
-const EventTarget = @import("EventTarget.zig");
-const MouseEvent = @import("event/MouseEvent.zig");
-const PointerEvent = @import("event/PointerEvent.zig");
-const KeyboardEvent = @import("event/KeyboardEvent.zig");
-const WheelEvent = @import("event/WheelEvent.zig");
-const TouchEvent = @import("event/TouchEvent.zig");
-const EventManagerBase = @import("../EventManagerBase.zig");
+const Label = @import("element/html/Label.zig");
 
 const log = lp.log;
 
@@ -41,14 +38,15 @@ const WebDriver = @This();
 
 _pad: bool = false,
 
-pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
+fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
     page.session.cookie_jar.clearRetainingCapacity();
 }
 
-pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
-    const AXNode = @import("../../cdp/AXNode.zig");
+fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
+    const AXNode = @import("../../server/cdp/AXNode.zig");
     const axnode = AXNode.fromNode(element.asNode());
-    return (try axnode.getName(frame, frame.call_arena)) orelse "";
+    var labels: Label.LabelByForIndex = .{};
+    return (try axnode.getName(frame, frame.call_arena, &labels)) orelse "";
 }
 
 // Implements testdriver's `click`: a full trusted primary-button click
@@ -58,22 +56,10 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 // synchronously so the events are observable when the testdriver promise
 // resolves.
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
-    if (element.is(Element.Html)) |html| {
-        switch (html._type) {
-            inline .button, .input, .textarea, .select => |tag| {
-                if (html.subtype(Element.Html.Subtype(tag)).getDisabled()) {
-                    return;
-                }
-            },
-            else => {},
-        }
-    }
-
-    dispatchPointer(element, "pointerdown", 0, 1, frame);
-    dispatchMouse(element, "mousedown", 0, 1, frame);
-    dispatchPointer(element, "pointerup", 0, 0, frame);
-    dispatchMouse(element, "mouseup", 0, 0, frame);
-    dispatchMouse(element, "click", 0, 0, frame);
+    // A dispatch error must never reject the testdriver command.
+    Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
+        log.debug(.app, "webdriver click", .{ .err = err });
+    };
 }
 
 const WebDriverCookie = struct {
@@ -88,7 +74,7 @@ const WebDriverCookie = struct {
 };
 
 // Unlike the script-facing CookieStore, WebDriver can see HttpOnly cookies.
-pub fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
+fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
     const jar = &frame._session.cookie_jar;
     const target = Cookie.PreparedUri.init(frame.url);
     if (target.host.len == 0) {
@@ -96,8 +82,8 @@ pub fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?Web
     }
 
     jar.removeExpired(null);
-    for (jar.cookies.items) |*cookie| {
-        if (cookie.appliesTo(&target, true, true, true) == false) {
+    for (jar.siteCookies(target.host)) |*cookie| {
+        if (cookie.appliesTo(&target, .{ .same_site = true, .is_http = true, .kind = .navigation }) == false) {
             continue;
         }
         if (std.mem.eql(u8, cookie.name, name) == false) {
@@ -176,10 +162,17 @@ const ActionSequence = struct {
         frame.js.localScope(&ls);
         defer ls.deinit();
 
-        errdefer |err| {
-            ls.toLocal(self.resolver).reject("WebDriver.actionSequence", ls.local.newString(@errorName(err)));
-        }
+        performSources(self, &ls) catch |err| {
+            ls.toLocal(self.resolver).reject("WebDriver.actionSequence", @errorName(err));
+            return err;
+        };
 
+        ls.toLocal(self.resolver).resolve("WebDriver.actionSequence", {});
+        return null;
+    }
+
+    fn performSources(self: *ActionSequence, ls: *js.Local.Scope) !void {
+        const frame = self.frame;
         const sources = self.sources.local(&ls.local).toArray();
         for (0..sources.len()) |i| {
             const source_val = try sources.get(@intCast(i));
@@ -197,9 +190,6 @@ const ActionSequence = struct {
             }
             // "none" sources only carry pauses, which have no observable effect here.
         }
-
-        ls.toLocal(self.resolver).resolve("WebDriver.actionSequence", {});
-        return null;
     }
 
     fn finalize(ptr: *anyopaque) void {
@@ -221,7 +211,8 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     }
     const actions = actions_val.toArray();
 
-    // A touch pointer dispatches touch events instead of mouse events.
+    // Touch actions carry no viewport point, so the element comes from the
+    // action origin.
     var is_touch = false;
     const params = try source.get("parameters");
     if (params.isObject()) {
@@ -233,7 +224,10 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // The element the pointer is currently over, set by the last pointerMove
     // whose origin resolved to an element.
     var target: ?*Element = null;
-    var pressed = false;
+    var pointer: Frame.user_input.PointerButtons = .{};
+    var click_count: u32 = 0;
+    var last_click_button: i32 = 0;
+    var last_click_target: ?*Element = null;
 
     for (0..actions.len()) |i| {
         const action_val = try actions.get(@intCast(i));
@@ -247,40 +241,63 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const origin = try action.get("origin");
             if (origin.isObject()) {
                 target = origin.local.jsValueToZig(*Element, origin) catch null;
+            } else {
+                const y = readI32(action, "y", 0);
+                if (frame.document.hitTestVertical(@floatFromInt(y), frame) catch null) |el| {
+                    target = el;
+                } else if (frame.document.getDocumentElement()) |root| {
+                    target = root;
+                }
             }
             const el = target orelse continue;
-            dispatchPointer(el, "pointermove", 0, 0, frame);
             if (is_touch) {
-                if (pressed) {
-                    dispatchTouch(el, "touchmove", frame);
-                }
-            } else {
-                dispatchMouse(el, "mousemove", 0, 0, frame);
+                const moved = if (frame.page.input_touch.contact != null)
+                    Frame.user_input.touchMove(frame, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers)
+                else
+                    Frame.user_input.touchHover(frame, el, frame.page.input_modifiers);
+                moved catch |err| log.debug(.app, "webdriver touch", .{ .err = err });
+                continue;
             }
+            Frame.user_input.moveSequence(frame, el, .{
+                .buttons_down = pointer.held,
+                .modifiers = frame.page.input_modifiers,
+            }) catch {};
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
-            const button = readI32(action, "button", 0);
-            pressed = true;
-            dispatchPointer(el, "pointerdown", button, 1, frame);
             if (is_touch) {
-                dispatchTouch(el, "touchstart", frame);
-            } else {
-                dispatchMouse(el, "mousedown", button, 1, frame);
-                Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
-                    log.warn(.app, "webdriver editable focus", .{ .err = err });
+                Frame.user_input.touchStart(frame, el, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
+                    log.debug(.app, "webdriver touch", .{ .err = err });
                 };
+                continue;
             }
-        } else if (action_type.eql(comptime .wrap("pointerUp"))) {
-            const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            pressed = false;
-            dispatchPointer(el, "pointerup", button, 0, frame);
-            if (is_touch) {
-                dispatchTouch(el, "touchend", frame);
+            if (last_click_target == el and last_click_button == button) {
+                click_count += 1;
             } else {
-                dispatchMouse(el, "mouseup", button, 0, frame);
-                dispatchMouse(el, "click", button, 0, frame);
+                click_count = 1;
             }
+            pointer.press(frame, el, .{
+                .button = button,
+                .click_count = click_count,
+                .modifiers = frame.page.input_modifiers,
+            }) catch {};
+        } else if (action_type.eql(comptime .wrap("pointerUp"))) {
+            if (is_touch) {
+                Frame.user_input.touchEnd(frame, null, frame.page.input_modifiers) catch |err| {
+                    log.debug(.app, "webdriver touch", .{ .err = err });
+                };
+                continue;
+            }
+            const el = target orelse continue;
+            // WebDriver: releasing a button that isn't pressed is a no-op.
+            if (pointer.held == 0) continue;
+            const button = readI32(action, "button", 0);
+            last_click_button = button;
+            last_click_target = pointer.release(frame, el, .{
+                .button = button,
+                .click_count = click_count,
+                .modifiers = frame.page.input_modifiers,
+            }) catch null;
         }
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)
@@ -306,6 +323,9 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
             continue;
         }
 
+        const x = readI32(action, "x", 0);
+        const y = readI32(action, "y", 0);
+
         const origin = try action.get("origin");
         var el: ?*Element = null;
         if (origin.isObject()) {
@@ -313,8 +333,7 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
         } else {
             // "viewport"/"pointer" origins: approximate hit-testing with
             // the faux layout's vertical axis, falling back to the root.
-            const y = readI32(action, "y", 0);
-            el = frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null;
+            el = frame.document.hitTestVertical(@floatFromInt(y), frame) catch null;
             if (el == null) {
                 el = frame.document.getDocumentElement();
             }
@@ -323,7 +342,7 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
 
         const delta_x = readI32(action, "deltaX", 0);
         const delta_y = readI32(action, "deltaY", 0);
-        dispatchWheel(target, delta_x, delta_y, frame);
+        dispatchWheel(target, x, y, delta_x, delta_y, frame);
     }
 }
 
@@ -332,39 +351,29 @@ fn performKeySource(source: js.Object, frame: *Frame) !void {
     if (!actions_val.isArray()) return;
     const actions = actions_val.toArray();
 
-    // Key actions have no explicit target; they go to the focused element, or
-    // the document if nothing is focused.
-    const target = if (frame.document._active_element) |el|
-        el.asEventTarget()
-    else
-        frame.document.asNode().asEventTarget();
-
     for (0..actions.len()) |i| {
         const action_val = try actions.get(@intCast(i));
         if (!action_val.isObject()) continue;
         const action = action_val.toObject();
         const action_type = (try action.get("type")).toSSO(false) catch continue;
 
-        const key = (try action.get("value")).toStringSlice() catch "";
-        if (action_type.eql(comptime .wrap("keyDown"))) {
-            dispatchKey(target, comptime .wrap("keydown"), key, frame);
-        } else if (action_type.eql(comptime .wrap("keyUp"))) {
-            dispatchKey(target, comptime .wrap("keyup"), key, frame);
+        const is_down = action_type.eql(comptime .wrap("keyDown"));
+        if (!is_down and action_type.eql(comptime .wrap("keyUp")) == false) {
+            continue;
         }
-    }
-}
 
-fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Frame) void {
-    const event = KeyboardEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .key = key,
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver key event", .{ .err = err });
-        return;
-    };
-    dispatch(target, event.asEvent(), frame, typ.str());
+        const value = (try action.get("value")).toStringSlice() catch "";
+        const direction: keyboard.Direction = if (is_down) .down else .up;
+        const modifiers = &frame.page.input_modifiers;
+        // A grapheme cluster of several code points is its own key name.
+        const dispatched = if (keyboard.singleCodepoint(value)) |cp|
+            keyboard.keyAction(frame, cp, direction, modifiers)
+        else
+            keyboard.dispatch(frame, null, direction, &.{ .key = .{ .name = value }, .code = "" }, modifiers);
+        dispatched catch |err| {
+            log.debug(.app, "webdriver key", .{ .err = err });
+        };
+    }
 }
 
 fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
@@ -375,132 +384,19 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
     return val.toI32() catch default;
 }
 
-fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
-    const event = PointerEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .button = button,
-        .buttons = buttons,
-        .pointerId = 1,
-        .pointerType = "mouse",
-        .isPrimary = true,
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver pointer event", .{ .err = err, .type = typ });
-        return;
+// The action's x/y, which the caller already resolved the target from. An
+// element origin makes them offsets from its center, but the faux layout has
+// no center worth computing.
+fn dispatchWheel(el: *Element, x: i32, y: i32, delta_x: i32, delta_y: i32, frame: *Frame) void {
+    Frame.user_input.wheel(frame, el, @floatFromInt(x), @floatFromInt(y), @floatFromInt(delta_x), @floatFromInt(delta_y)) catch |err| {
+        log.debug(.app, "webdriver wheel", .{ .err = err });
     };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
-}
-
-fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
-    const event = MouseEvent.initTrusted(comptime .wrap(typ), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .button = button,
-        .buttons = buttons,
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver mouse event", .{ .err = err, .type = typ });
-        return;
-    };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
-}
-
-fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {
-    // The UA dispatches scroll-blocking events as non-cancelable when every
-    // listener on the propagation path is passive: it already knows
-    // preventDefault can't be called.
-    const event = WheelEvent.initTrusted("wheel", .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, "wheel", frame),
-        .composed = true,
-        .deltaX = @floatFromInt(delta_x),
-        .deltaY = @floatFromInt(delta_y),
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver wheel event", .{ .err = err });
-        return;
-    };
-
-    // Keep the event alive past dispatch so we can read _prevent_default.
-    event.asEvent().acquireRef();
-    defer _ = event.asEvent().releaseRef(frame._page);
-    dispatch(el.asEventTarget(), event.asEvent(), frame, "wheel");
-
-    // Blink also fires the legacy mousewheel event.
-    const legacy = WheelEvent.initTrusted("mousewheel", .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, "mousewheel", frame),
-        .composed = true,
-        .deltaX = @floatFromInt(delta_x),
-        .deltaY = @floatFromInt(delta_y),
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver mousewheel event", .{ .err = err });
-        return;
-    };
-    legacy.asEvent().acquireRef();
-    defer _ = legacy.asEvent().releaseRef(frame._page);
-    dispatch(el.asEventTarget(), legacy.asEvent(), frame, "mousewheel");
-
-    if (event.asEvent()._prevent_default or legacy.asEvent()._prevent_default) {
-        return;
-    }
-
-    // Apply the scroll and fire a trusted scroll event, mirroring actions.scroll.
-    const new_left: i32 = @as(i32, @intCast(el.getScrollLeft(frame))) + delta_x;
-    const new_top: i32 = @as(i32, @intCast(el.getScrollTop(frame))) + delta_y;
-    el.setScrollLeft(new_left, frame) catch {};
-    el.setScrollTop(new_top, frame) catch {};
-
-    const scroll_evt = Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page) catch |err| {
-        log.warn(.app, "webdriver scroll event", .{ .err = err });
-        return;
-    };
-    dispatch(el.asEventTarget(), scroll_evt, frame, "scroll");
 }
 
 fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8) void {
     frame._event_manager.dispatch(target, event) catch |err| {
-        log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ });
+        log.debug(.app, "webdriver dispatch", .{ .err = err, .type = typ });
     };
-}
-
-fn hasNonPassiveListener(el: *Element, typ: []const u8, frame: *Frame) bool {
-    // Listeners live in the event manager of the element's own frame (and the
-    // propagation path ends at that frame's window), which is not the caller's
-    // frame when the element belongs to e.g. an iframe's document.
-    const owner = el.ownerFrame(frame);
-    const base = &owner._event_manager.base;
-    var current: ?*@import("Node.zig") = el.asNode();
-    while (current) |node| : (current = node.parentNode()) {
-        if (anyNonPassive(base.getListeners(node.asEventTarget(), .wrap(typ)))) {
-            return true;
-        }
-    }
-    return anyNonPassive(base.getListeners(owner.window.asEventTarget(), .wrap(typ)));
-}
-
-fn anyNonPassive(list_: ?*std.DoublyLinkedList) bool {
-    const list = list_ orelse return false;
-    var link = list.first;
-    while (link) |l| : (link = l.next) {
-        const listener: *align(8) EventManagerBase.Listener = @fieldParentPtr("node", l);
-        if (!listener.passive) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
-    const event = TouchEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, typ, frame),
-        .composed = true,
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver touch event", .{ .err = err });
-        return;
-    };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
 }
 
 pub const JsApi = struct {
@@ -508,7 +404,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "WebDriver";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };
@@ -518,3 +413,329 @@ pub const JsApi = struct {
     pub const actionSequence = bridge.function(WebDriver.actionSequence, .{});
     pub const click = bridge.function(WebDriver.click, .{});
 };
+
+const testing = @import("../../testing.zig");
+
+test "WebApi: WebDriver touch actionSequence populates touches" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    frame.page.input_modifiers = .{ .alt = true, .ctrl = true, .meta = true, .shift = true };
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\window.pointerTypes = [];
+        \\for (const type of ['pointermove', 'pointerdown', 'pointerup']) {
+        \\  t.addEventListener(type, e => { pointerTypes.push(e.pointerType); });
+        \\}
+        \\t.addEventListener('touchstart', (e) => {
+        \\  window.start = e.touches.length === 1 &&
+        \\    e.targetTouches.length === 1 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.touches[0].target === t && e.altKey && e.ctrlKey && e.metaKey && e.shiftKey;
+        \\});
+        \\t.addEventListener('touchend', (e) => {
+        \\  window.end = e.touches.length === 0 &&
+        \\    e.targetTouches.length === 0 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.changedTouches[0].target === t && e.altKey && e.ctrlKey && e.metaKey && e.shiftKey;
+        \\});
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.start === true && window.end === true && JSON.stringify(pointerTypes) === '[\"touch\",\"touch\",\"touch\"]'",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const a = document.getElementById('hoverTarget');
+        \\const b = document.getElementById('btn');
+        \\// Without it the drag scrolls and cancels the pointer before the pointerup.
+        \\a.style.touchAction = 'none';
+        \\window.moveOnA = false;
+        \\window.moveOnB = false;
+        \\window.endOnA = false;
+        \\window.endOnB = false;
+        \\window.pointerMoveOnACount = 0;
+        \\window.pointerMoveOnBCount = 0;
+        \\window.pointerUpOnA = false;
+        \\window.pointerUpOnB = false;
+        \\a.addEventListener('touchmove', (e) => {
+        \\  window.moveOnA = e.touches.length === 1 && e.touches[0].target === a;
+        \\});
+        \\b.addEventListener('touchmove', () => { window.moveOnB = true; });
+        \\a.addEventListener('touchend', (e) => {
+        \\  window.endOnA = e.changedTouches.length === 1 && e.changedTouches[0].target === a;
+        \\});
+        \\b.addEventListener('touchend', () => { window.endOnB = true; });
+        \\// `a` also gets the initial unpressed move, hence the count.
+        \\a.addEventListener('pointermove', e => { if (e.pointerType === 'touch') window.pointerMoveOnACount++; });
+        \\b.addEventListener('pointermove', () => { window.pointerMoveOnBCount++; });
+        \\a.addEventListener('pointerup', e => { window.pointerUpOnA = e.pointerType === 'touch'; });
+        \\b.addEventListener('pointerup', () => { window.pointerUpOnB = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: a },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerMove', origin: b },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true" ++
+            " && window.pointerMoveOnACount === 2 && window.pointerMoveOnBCount === 0" ++
+            " && window.pointerUpOnA === true && window.pointerUpOnB !== true",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver a touch pointerUp with no preceding pointerDown dispatches no touchend" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawTouchend = false;
+        \\document.getElementById('hoverTarget').addEventListener('touchend', () => { window.sawTouchend = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: document.getElementById('hoverTarget') },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.sawTouchend === false", null);
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.touchendCount = 0;
+        \\document.getElementById('hoverTarget').addEventListener('touchend', () => { window.touchendCount++; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: document.getElementById('hoverTarget') },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.touchendCount === 1", null);
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver a touch tap activates and a drag does not" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const box = document.getElementById('chk');
+        \\const other = document.getElementById('btn');
+        \\window.clicked = false;
+        \\window.tapIds = [];
+        \\box.addEventListener('pointerdown', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
+        \\box.addEventListener('pointerup', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
+        \\box.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') window.tapIds.push(e.pointerId); });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: box },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerMove', origin: box },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerMove', origin: other },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        \\box.checked === true && document.activeElement === box && window.clicked !== true &&
+        \\window.tapIds.length === 4 && window.tapIds[0] === window.tapIds[1] && window.tapIds[0] !== 1 &&
+        \\window.tapIds[2] === window.tapIds[3] && window.tapIds[2] !== window.tapIds[0]
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver a mouse pointerUp with no preceding pointerDown dispatches no click" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawPointerup = false;
+        \\window.sawMouseup = false;
+        \\window.sawClick = false;
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('pointerup', () => { window.sawPointerup = true; });
+        \\t.addEventListener('mouseup', () => { window.sawMouseup = true; });
+        \\t.addEventListener('click', () => { window.sawClick = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'mouse' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.sawPointerup === false && window.sawMouseup === false && window.sawClick === false",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver a second mouse pointerUp dispatches no second click" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.clickCount = 0;
+        \\window.dblclickCount = 0;
+        \\window.mousePointerTypes = [];
+        \\const t = document.getElementById('hoverTarget');
+        \\for (const type of ['pointermove', 'pointerdown', 'pointerup']) {
+        \\  t.addEventListener(type, e => { mousePointerTypes.push(e.pointerType); });
+        \\}
+        \\t.addEventListener('click', () => { window.clickCount++; });
+        \\t.addEventListener('dblclick', () => { window.dblclickCount++; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'mouse' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.clickCount === 1 && window.dblclickCount === 0 && JSON.stringify(mousePointerTypes) === '[\"mouse\",\"mouse\",\"mouse\"]'",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="test">first</div>
@@ -13,9 +14,9 @@
   const second = document.getElementById('test');
   testing.expectEqual('second', second.textContent);
 
-  // second.remove();
-
-  // testing.expectEqual(null, document.getElementById('test'));
+  second.remove();
+  testing.expectEqual(null, document.getElementById('test'));
+  testing.expectEqual(null, document.querySelector('#test'));
 </script>
 
 <div id="qs-test">first</div>
@@ -23,10 +24,8 @@
 
 <script id=duplicateIdsQuerySelector>
 {
-  // Regression test: querySelector('#id') must agree with getElementById('id')
-  // when the first duplicate is removed. Selector engine fast path goes through
-  // Frame.getElementByIdFromNode, which previously only checked the lookup map
-  // and missed the _removed_ids recovery, so it returned null.
+  // querySelector('#id') must agree with getElementById('id') when the
+  // first duplicate is removed.
   const first = document.querySelector('#qs-test');
   testing.expectEqual('first', first.textContent);
 
@@ -36,5 +35,137 @@
   testing.expectEqual('second', document.body.querySelector('#qs-test').textContent);
   testing.expectEqual(1, document.querySelectorAll('#qs-test').length);
   testing.expectEqual('second', document.getElementById('qs-test').textContent);
+}
+</script>
+
+<!-- adds an id to the existing body -->
+<body id="late-body">
+
+<script>
+  function texts(list) {
+    return Array.from(list).map((e) => e.textContent).join(',');
+  }
+</script>
+
+<script id=parserBodyId>
+{
+  testing.expectEqual(document.body, document.getElementById('late-body'));
+  testing.expectEqual(document.body, document.querySelector('#late-body'));
+  document.body.removeAttribute('id');
+  testing.expectEqual(null, document.getElementById('late-body'));
+}
+</script>
+
+<div id="flow-one"><div id="dup">one</div></div>
+<div id="flow-two"><div id="dup">two</div></div>
+
+<script id=duplicateIdsScoped>
+{
+  const one = document.getElementById('flow-one');
+  const two = document.getElementById('flow-two');
+  testing.expectEqual('one', one.querySelector('#dup').textContent);
+  testing.expectEqual('two', two.querySelector('#dup').textContent);
+  testing.expectEqual('one,two', texts(document.querySelectorAll('#dup')));
+  testing.expectEqual('two', texts(two.querySelectorAll('#dup')));
+  testing.expectEqual('two', texts(two.querySelectorAll('div#dup')));
+  testing.expectEqual(2, document.evaluate('//*[@id="dup"]', document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE).snapshotLength);
+
+  // the root never matches itself
+  const first = one.firstChild;
+  testing.expectEqual(null, first.querySelector('#dup'));
+
+  // id-anchored descendant selectors under a later duplicate
+  const p = document.createElement('p');
+  p.textContent = 'p-two';
+  two.firstChild.appendChild(p);
+  testing.expectEqual('p-two', texts(document.querySelectorAll('#dup p')));
+  testing.expectEqual('p-two', document.querySelector('#dup p').textContent);
+  p.remove();
+
+  // a duplicate goes away: back to unique
+  first.id = 'not-dup';
+  testing.expectEqual('two', document.querySelector('#dup').textContent);
+  testing.expectEqual('two', texts(document.querySelectorAll('#dup')));
+  testing.expectEqual(null, one.querySelector('#dup'));
+  first.id = 'dup';
+  testing.expectEqual('one', document.getElementById('dup').textContent);
+}
+</script>
+
+<div id="move-root"><div id="move-a"><span id="mv">A</span></div><div id="move-b"><span id="mv">B</span></div></div>
+
+<script id=duplicateIdsMoved>
+{
+  // moving the first duplicate after the second, inside the document
+  const root = document.getElementById('move-root');
+  testing.expectEqual('A', document.getElementById('mv').textContent);
+  root.appendChild(document.getElementById('move-a'));
+  testing.expectEqual('B', document.getElementById('mv').textContent);
+  testing.expectEqual('B', document.querySelector('#mv').textContent);
+  testing.expectEqual('B', root.querySelector('#mv').textContent);
+  testing.expectEqual('B,A', texts(document.querySelectorAll('#mv')));
+
+  // and back, through moveBefore
+  root.moveBefore(document.getElementById('move-a'), document.getElementById('move-b'));
+  testing.expectEqual('A', document.getElementById('mv').textContent);
+  testing.expectEqual('A', document.querySelector('#mv').textContent);
+}
+</script>
+
+<div id="outer"><section id="inner"><p>p1</p></section></div>
+
+<script id=idAnchorAboveRoot>
+{
+  // the anchor is an ancestor of the queried root
+  const inner = document.getElementById('inner');
+  testing.expectEqual('p1', inner.querySelector('#outer p').textContent);
+  testing.expectEqual('p1', texts(inner.querySelectorAll('#outer p')));
+  testing.expectEqual('p1', texts(inner.querySelectorAll('#inner p')));
+  testing.expectEqual(null, inner.querySelector('#inner'));
+
+  // the id is the subject, but its element isn't below the root
+  testing.expectEqual(0, inner.querySelectorAll('#inner').length);
+  testing.expectEqual(0, inner.querySelectorAll('#outer').length);
+  testing.expectEqual(0, inner.querySelectorAll('div > #outer').length);
+  testing.expectEqual(0, document.getElementById('flow-two').querySelectorAll('#outer').length);
+  testing.expectEqual(null, inner.querySelector('body #outer'));
+}
+</script>
+
+<div id="shadow-host"></div>
+
+<script id=duplicateIdsShadow>
+{
+  const shadow = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<div id="s1"><b id="sd">x</b></div><div id="s2"><b id="sd">y</b></div>';
+  testing.expectEqual('x', shadow.getElementById('sd').textContent);
+  testing.expectEqual('y', shadow.getElementById('s2').querySelector('#sd').textContent);
+  testing.expectEqual('x,y', texts(shadow.querySelectorAll('#sd')));
+  shadow.getElementById('s1').remove();
+  testing.expectEqual('y', shadow.getElementById('sd').textContent);
+  testing.expectEqual('y', texts(shadow.querySelectorAll('#sd')));
+
+  // moving out of the shadow root and into the document
+  const b = shadow.getElementById('sd');
+  document.body.appendChild(b);
+  testing.expectEqual(null, shadow.getElementById('sd'));
+  testing.expectEqual(b, document.getElementById('sd'));
+  b.remove();
+  testing.expectEqual(null, document.getElementById('sd'));
+}
+</script>
+
+<!-- misnested: the adoption agency moves #aaa under a fresh <b> -->
+<div id="aaa-root"><b><p><i id="aaa">aaa</i></b></p></div>
+
+<script id=adoptionAgencyIds>
+{
+  const i = document.getElementById('aaa');
+  testing.expectEqual('aaa', i.textContent);
+  testing.expectEqual(i, document.querySelector('#aaa'));
+  testing.expectEqual(i, document.getElementById('aaa-root').querySelector('#aaa'));
+  i.remove();
+  testing.expectEqual(null, document.getElementById('aaa'));
+  testing.expectEqual(null, document.querySelector('#aaa'));
 }
 </script>

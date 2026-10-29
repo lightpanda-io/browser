@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <head>
+  <meta name=lp-mode content=test>
   <title>DOMException Test</title>
   <script src="testing.js"></script>
 </head>
@@ -32,6 +33,30 @@
     testing.expectEqual('NotFoundError', ex.name);
     testing.expectEqual('Custom error message', ex.message);
     testing.expectEqual(8, ex.code);
+  }
+</script>
+
+<script id=domstring_argument_coercion>
+  {
+    // message/name are WebIDL DOMStrings: a non-string argument is stringified
+    // (ToString), never adopted as raw bytes. A TypedArray stringifies via its
+    // Array-inherited toString, so its contents are joined.
+    const ex = new DOMException(new Uint8Array([65, 66, 67]), 'NotFoundError');
+    testing.expectEqual('65,66,67', ex.message);
+    testing.expectEqual('NotFoundError', ex.name);
+
+    const ex2 = new DOMException('msg', new Uint8Array([0x7f, 0x45, 0x4c, 0x46]));
+    testing.expectEqual('127,69,76,70', ex2.name);
+    testing.expectEqual(0, ex2.code);
+
+    const ex3 = new DOMException({});
+    testing.expectEqual('[object Object]', ex3.message);
+
+    // null stringifies to "null"; a missing/undefined argument uses the default.
+    testing.expectEqual('null', new DOMException(null).message);
+    testing.expectEqual('null', new DOMException('m', null).name);
+    testing.expectEqual('', new DOMException(undefined).message);
+    testing.expectEqual('Error', new DOMException(undefined, undefined).name);
   }
 </script>
 
@@ -121,6 +146,20 @@
   <a id="link" href="foo" class="ok">OK</a>
 </div>
 
+<script id=custom_name_outlives_call>
+  // The constructor's strings come from the call arena: they must be copied.
+  window.__custom_exception = new DOMException('took too ' + 'long', 'Timeout' + 'Error');
+  testing.expectEqual('TimeoutError', window.__custom_exception.name);
+</script>
+
+<script id=custom_name_outlives_call_2>
+  const e = window.__custom_exception;
+  testing.expectEqual('TimeoutError', e.name);
+  testing.expectEqual('took too long', e.message);
+  testing.expectEqual(23, e.code);
+  testing.expectEqual('TimeoutError: took too long', e.toString());
+</script>
+
 <script id=hierarchy_error>
   let link = $('#link');
   let content = $('#content');
@@ -131,4 +170,39 @@
     testing.expectEqual(true, err instanceof DOMException);
     testing.expectEqual(true, err instanceof Error);
   }, () => link.appendChild(content));
+</script>
+
+<script id=structured_clone>
+  {
+    const named = structuredClone(new DOMException('boom', 'NotFoundError'));
+    testing.expectEqual(true, named instanceof DOMException);
+    testing.expectEqual('NotFoundError', named.name);
+    testing.expectEqual('boom', named.message);
+    testing.expectEqual(8, named.code);
+
+    const plain = structuredClone(new DOMException());
+    testing.expectEqual('Error', plain.name);
+    testing.expectEqual('', plain.message);
+    testing.expectEqual(0, plain.code);
+
+    // An exception raised from Zig carries only a code; name and message
+    // still survive the round trip.
+    testing.withError((err) => {
+      const c = structuredClone({a: err, b: err});
+      testing.expectEqual(true, c.a === c.b);
+      testing.expectEqual(false, c.a === err);
+      testing.expectEqual('HierarchyRequestError', c.a.name);
+      testing.expectEqual(err.message, c.a.message);
+      testing.expectEqual(3, c.a.code);
+    }, () => link.appendChild(content));
+  }
+</script>
+
+<script id=long_message>
+{
+  // longer than the 1024-byte buffer toString used to format into
+  const msg = 'x'.repeat(2000);
+  const e = new DOMException(msg, 'SyntaxError');
+  testing.expectEqual('SyntaxError: ' + msg, e.toString());
+}
 </script>

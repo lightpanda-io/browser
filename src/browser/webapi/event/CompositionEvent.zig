@@ -66,7 +66,7 @@ pub fn getData(self: *const CompositionEvent) []const u8 {
     return self._data;
 }
 
-pub fn initCompositionEvent(
+fn initCompositionEvent(
     self: *CompositionEvent,
     typ: []const u8,
     bubbles: ?bool,
@@ -94,7 +94,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CompositionEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -27,12 +27,13 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Output = @This();
 
 pub const Proto = HtmlElement;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
+_default_value_override: ?[]const u8 = null,
 
 pub fn asElement(self: *Output) *Element {
     return Factory.protoOf(self).asElement();
@@ -41,11 +42,40 @@ pub fn asNode(self: *Output) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getLabels(self: *Output, frame: *Frame) !js.Array {
+fn getValue(self: *Output, frame: *Frame) ![]const u8 {
+    return self.asNode().getTextContentAlloc(frame.local_arena);
+}
+
+fn setValue(self: *Output, value: []const u8, frame: *Frame) !void {
+    if (self._default_value_override == null) {
+        const text = try self.asNode().getTextContentAlloc(frame.local_arena);
+        self._default_value_override = try frame.dupeString(text);
+    }
+    try self.asNode().setTextContent(value, frame);
+}
+
+fn getDefaultValue(self: *Output, frame: *Frame) ![]const u8 {
+    return self._default_value_override orelse self.getValue(frame);
+}
+
+fn setDefaultValue(self: *Output, value: []const u8, frame: *Frame) !void {
+    if (self._default_value_override == null) {
+        return self.asNode().setTextContent(value, frame);
+    }
+    self._default_value_override = try frame.dupeString(value);
+}
+
+pub fn reset(self: *Output, frame: *Frame) !void {
+    const default_value = try self.getDefaultValue(frame);
+    try self.asNode().setTextContent(default_value, frame);
+    self._default_value_override = null;
+}
+
+fn getLabels(self: *Output, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
+fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
         return null;
@@ -53,18 +83,30 @@ pub fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
     return element.getTokenList(.@"for", frame);
 }
 
+fn setHtmlFor(self: *Output, value: String, frame: *Frame) !void {
+    const list = try self.getHtmlFor(frame) orelse return;
+    try list.setValue(value, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Output);
 
     pub const Meta = struct {
         pub const name = "HTMLOutputElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     const reflect = Element.Reflect(Output);
     pub const name = reflect.string("name");
+    pub const @"type" = bridge.property("output", .{ .template = false, .readonly = true });
 
+    pub const value = bridge.accessor(Output.getValue, Output.setValue, .{ .ce_reactions = true });
+    pub const defaultValue = bridge.accessor(Output.getDefaultValue, Output.setDefaultValue, .{ .ce_reactions = true });
     pub const labels = bridge.accessor(Output.getLabels, null, .{});
-    pub const htmlFor = bridge.accessor(Output.getHtmlFor, null, .{ .null_as_undefined = true });
+    pub const htmlFor = bridge.accessor(Output.getHtmlFor, Output.setHtmlFor, .{ .null_as_undefined = true, .ce_reactions = true });
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Output" {
+    try testing.htmlRunner("element/html/output.html", .{});
+}

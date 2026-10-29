@@ -74,7 +74,7 @@ pub fn asEvent(self: *TaskPriorityChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getPreviousPriority(self: *const TaskPriorityChangeEvent) Scheduler.Priority {
+fn getPreviousPriority(self: *const TaskPriorityChangeEvent) Scheduler.Priority {
     return self._previous_priority;
 }
 
@@ -83,7 +83,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "TaskPriorityChangeEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

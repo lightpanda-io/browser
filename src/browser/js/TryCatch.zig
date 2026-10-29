@@ -34,7 +34,7 @@ pub fn init(self: *TryCatch, l: *const js.Local) void {
     v8.v8__TryCatch__CONSTRUCT(&self.handle, l.isolate.handle);
 }
 
-pub fn hasCaught(self: TryCatch) bool {
+pub fn hasCaught(self: *const TryCatch) bool {
     return v8.v8__TryCatch__HasCaught(&self.handle);
 }
 
@@ -46,12 +46,12 @@ pub fn rethrow(self: *TryCatch) void {
 }
 
 // The raw caught exception value, e.g. to report it to a global's onerror.
-pub fn exceptionValue(self: TryCatch) ?js.Value {
+pub fn exceptionValue(self: *const TryCatch) ?js.Value {
     const handle = v8.v8__TryCatch__Exception(&self.handle) orelse return null;
     return .{ .local = self.local, .handle = handle };
 }
 
-pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
+pub fn caught(self: *const TryCatch, allocator: Allocator) ?Caught {
     if (self.hasCaught() == false) {
         return null;
     }
@@ -107,7 +107,7 @@ pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
     };
 }
 
-pub fn caughtOrError(self: TryCatch, allocator: Allocator, err: anyerror) Caught {
+pub fn caughtOrError(self: *const TryCatch, allocator: Allocator, err: anyerror) Caught {
     return self.caught(allocator) orelse .{
         .caught = false,
         .line = null,
@@ -136,10 +136,10 @@ pub const Caught = struct {
 
     pub fn logFmt(self: Caught, prefix: []const u8, writer: anytype) !void {
         var buf: [64]u8 = undefined;
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.exception", .{prefix}), self.exception orelse "???");
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.stack", .{prefix}), self.stack orelse "na");
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.line", .{prefix}), self.line);
-        try writer.write(try std.fmt.bufPrint(&buf, "{s}.caught", .{prefix}), self.caught);
+        try writer.write(try std.mem.print(&buf, "{s}.exception", .{prefix}), self.exception orelse "???");
+        try writer.write(try std.mem.print(&buf, "{s}.stack", .{prefix}), self.stack orelse "na");
+        try writer.write(try std.mem.print(&buf, "{s}.line", .{prefix}), self.line);
+        try writer.write(try std.mem.print(&buf, "{s}.caught", .{prefix}), self.caught);
     }
 
     pub fn jsonStringify(self: Caught, jw: anytype) !void {

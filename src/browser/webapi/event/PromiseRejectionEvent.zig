@@ -33,8 +33,8 @@ _reason: ?js.Value.Global = null,
 _promise: ?js.Promise.Global = null,
 
 const PromiseRejectionEventOptions = struct {
-    reason: ?js.Value.Global = null,
     promise: ?js.Promise.Global = null,
+    reason: ?js.Value.Global = null,
 };
 
 const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);
@@ -59,33 +59,24 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEve
     return event;
 }
 
-pub fn deinit(self: *PromiseRejectionEvent, page: *Page) void {
+pub fn deinit(self: *PromiseRejectionEvent, _: *Page) void {
     if (self._reason) |r| {
         r.release();
     }
     if (self._promise) |p| {
         p.release();
     }
-    self._proto.deinit(page);
-}
-
-pub fn releaseRef(self: *PromiseRejectionEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
-}
-
-pub fn acquireRef(self: *PromiseRejectionEvent) void {
-    self._proto.acquireRef();
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {
     return self._proto;
 }
 
-pub fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Global {
+fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Global {
     return self._reason;
 }
 
-pub fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Global {
+fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Global {
     return self._promise;
 }
 
@@ -94,7 +85,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "PromiseRejectionEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

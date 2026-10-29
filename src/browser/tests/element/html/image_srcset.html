@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+<body>
+
+<picture id="parsed-picture">
+  <source media="(max-width: 1px)" srcset="/never.png">
+  <source type="image/x-unknown" srcset="/unsupported.png">
+  <source srcset="/from-source.png 1x, /from-source-2x.png 2x">
+  <img id="parsed-img" src="/from-src.png">
+</picture>
+
+<img id="parsed-srcset" srcset="/one.png 1x, /two.png 2x">
+
+<script>
+  // load doesn't bubble, but it can be captured before the elements exist
+  const fostered_loads = {};
+  document.addEventListener("load", (e) => {
+    fostered_loads[e.target.id] = (fostered_loads[e.target.id] ?? 0) + 1;
+  }, true);
+</script>
+
+<!-- foster parented: inserted before the table, not through the parser's append -->
+<table><img id="fostered" src="/fostered.png"></table>
+<picture>
+  <source srcset="/fostered-source.png">
+  <table><img id="fostered-picture" src="/fostered-src.png"></table>
+</picture>
+
+<script id="parsed">
+{
+  testing.expectEqual(testing.ORIGIN + "/from-source.png", document.getElementById("parsed-img").currentSrc);
+  testing.expectEqual(testing.ORIGIN + "/from-src.png", document.getElementById("parsed-img").src);
+  testing.expectEqual(testing.ORIGIN + "/one.png", document.getElementById("parsed-srcset").currentSrc);
+}
+</script>
+
+<script id="fostered" type=module>
+  const state = await testing.async();
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("TABLE", document.getElementById("fostered").nextElementSibling.tagName);
+    testing.expectEqual(1, fostered_loads["fostered"]);
+    testing.expectEqual(1, fostered_loads["fostered-picture"]);
+    testing.expectEqual(testing.ORIGIN + "/fostered-source.png", document.getElementById("fostered-picture").currentSrc);
+  });
+</script>
+
+<script id="img_srcset" type=module>
+  // Browsers run the source selection, which updates currentSrc, after the
+  // current script. Lightpanda does it synchronously.
+  const state = await testing.async();
+  const checks = [];
+  const img = document.createElement("img");
+  // resolves once the mutation's selection has run and its fetch settled
+  async function check(expected) {
+    await new Promise(resolve => {
+      img.onload = resolve;
+      img.onerror = resolve;
+    });
+    checks.push([expected, img.currentSrc]);
+  }
+
+  checks.push(["", img.currentSrc]);
+
+  img.srcset = "/a.png";
+  await check(testing.ORIGIN + "/a.png");
+
+  // a 2x-only srcset leaves src as the 1x candidate
+  img.src = "/src.png";
+  img.srcset = "/a.png 2x";
+  await check(testing.ORIGIN + "/src.png");
+
+  // smallest density >= 1
+  img.removeAttribute("src");
+  img.srcset = "/half.png 0.5x, /three.png 3x, /one-five.png 1.5x";
+  await check(testing.ORIGIN + "/one-five.png");
+
+  img.srcset = "/half.png 0.5x, /quarter.png 0.25x";
+  await check(testing.ORIGIN + "/half.png");
+
+  // URLs may contain commas; a trailing comma ends the candidate
+  img.srcset = "/a,b.png, /c.png 2x";
+  await check(testing.ORIGIN + "/a,b.png");
+
+  // invalid descriptors drop the candidate
+  img.srcset = "/bad.png 1q, /bad2.png 1x 2x, /bad3.png 1_0w, /bad4.png +10w, /good.png";
+  await check(testing.ORIGIN + "/good.png");
+
+  // width descriptors are measured against the viewport width
+  img.srcset = "/small.png 10w, /huge.png 100000w";
+  await check(testing.ORIGIN + "/huge.png");
+  img.srcset = "/small.png 10w, /big.png " + (window.innerWidth * 2) + "w, /bigger.png " + (window.innerWidth * 3) + "w";
+  await check(testing.ORIGIN + "/big.png");
+
+  state.resolve();
+  await state.done(() => {
+    for (const [expected, actual] of checks) {
+      testing.expectEqual(expected, actual);
+    }
+  });
+</script>
+
+<script id="picture_mutations" type=module>
+  const state = await testing.async();
+  const checks = [];
+  const picture = document.createElement("picture");
+  const source = document.createElement("source");
+  const img = document.createElement("img");
+  // resolves once the mutation's selection has run and its fetch settled
+  async function check(expected) {
+    await new Promise(resolve => {
+      img.onload = resolve;
+      img.onerror = resolve;
+    });
+    checks.push([expected, img.currentSrc]);
+  }
+
+  img.src = "/img.png";
+  picture.append(source, img);
+  await check(testing.ORIGIN + "/img.png");
+
+  source.srcset = "/source.png";
+  await check(testing.ORIGIN + "/source.png");
+
+  source.media = "(max-width: 1px)";
+  await check(testing.ORIGIN + "/img.png");
+  source.removeAttribute("media");
+  await check(testing.ORIGIN + "/source.png");
+
+  // a source after the img doesn't apply
+  const late = document.createElement("source");
+  late.srcset = "/late.png";
+  picture.append(late);
+  source.remove();
+  await check(testing.ORIGIN + "/img.png");
+
+  picture.prepend(source);
+  await check(testing.ORIGIN + "/source.png");
+
+  // outside a picture, sources are ignored
+  document.body.append(img);
+  await check(testing.ORIGIN + "/img.png");
+
+  state.resolve();
+  await state.done(() => {
+    for (const [expected, actual] of checks) {
+      testing.expectEqual(expected, actual);
+    }
+  });
+</script>
+
+<script id="picture_load_events" type=module>
+  const state = await testing.async();
+  const picture = document.createElement("picture");
+  const source = document.createElement("source");
+  const img = document.createElement("img");
+  picture.append(source, img);
+  document.body.append(picture);
+
+  let loads = 0;
+  img.addEventListener("load", () => loads += 1);
+  await new Promise(resolve => {
+    img.addEventListener("load", resolve, { once: true });
+    source.srcset = "/source.png";
+  });
+
+  // a mutation that keeps the selection doesn't restart the load
+  source.sizes = "50vw";
+  picture.append(document.createElement("source"));
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, loads);
+  });
+</script>
+
+<script id="picture_fragment_parse" type=module>
+  // A fragment parse links its children onto the target in one go, without
+  // going through the insertion path, so the selection has to be redone
+  // afterwards; otherwise the img keeps the src it picked while it was still
+  // under the parser's wrapper, and later mutations compare against that.
+  const state = await testing.async();
+  const picture = document.createElement("picture");
+  document.body.append(picture);
+  picture.innerHTML = '<source srcset="/inner-source.png"><img src="/inner-img.png">';
+  const img = picture.querySelector("img");
+  const parsed = img.currentSrc;
+
+  // insertAdjacentHTML parses into a fragment and moves the children in one
+  // at a time, so it goes through the insertion path
+  const adjacent_picture = document.createElement("picture");
+  document.body.append(adjacent_picture);
+  adjacent_picture.insertAdjacentHTML("beforeend", '<source srcset="/adjacent-source.png"><img src="/adjacent-img.png">');
+  const adjacent = adjacent_picture.querySelector("img").currentSrc;
+
+  // let the parses' load events flush before counting
+  await new Promise(resolve => setTimeout(resolve, 10));
+  let loads = 0;
+  img.addEventListener("load", () => loads += 1);
+
+  // the source is gone, so the selection falls back to the img's own src
+  picture.querySelector("source").remove();
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(testing.ORIGIN + "/inner-source.png", parsed);
+    testing.expectEqual(testing.ORIGIN + "/adjacent-source.png", adjacent);
+    testing.expectEqual(testing.ORIGIN + "/inner-img.png", img.currentSrc);
+    testing.expectEqual(1, loads);
+  });
+</script>

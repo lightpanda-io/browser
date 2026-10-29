@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <input id="i1" placeholder="Enter name" min="0" max="100" step="5" autocomplete="email">
@@ -362,5 +363,75 @@
     i.formNoValidate = false
     testing.expectEqual(false, i.formNoValidate)
     testing.expectEqual(null, i.getAttribute('formnovalidate'))
+  }
+</script>
+
+<form id="range_color_form">
+  <input type="range" name="r1">
+  <input type="range" name="r2" min="0" max="11">
+  <input type="color" name="c1">
+</form>
+
+<script id="range_color_default_value">
+  {
+    // A range or color input without a value attribute sanitizes the empty
+    // string to its default: the range midpoint, or #000000.
+    const form = $('#range_color_form');
+    testing.expectEqual('r1=50&r2=6&c1=%23000000', new URLSearchParams(new FormData(form)).toString());
+
+    const r = document.createElement('input');
+    r.type = 'range';
+    testing.expectEqual('50', r.value);
+    r.setAttribute('value', '30');
+    testing.expectEqual('30', r.value);
+    r.removeAttribute('value');
+    testing.expectEqual('50', r.value);
+
+    const c = document.createElement('input');
+    c.type = 'color';
+    testing.expectEqual('#000000', c.value);
+    c.setAttribute('value', '#ABCDEF');
+    testing.expectEqual('#abcdef', c.value);
+    c.removeAttribute('value');
+    testing.expectEqual('#000000', c.value);
+
+    const f = document.createElement('form');
+    f.innerHTML = '<input type=range>';
+    f.firstChild.value = '10';
+    f.reset();
+    testing.expectEqual('50', f.firstChild.value);
+
+    // The value carries over a type change and is sanitized for the new type
+    const t = document.createElement('input');
+    t.type = 'color';
+    t.type = 'range';
+    testing.expectEqual('50', t.value);
+    t.type = 'text';
+    testing.expectEqual('50', t.value);
+  }
+</script>
+
+<script id="range_min_max_change">
+  {
+    // Changing min, max or step sanitizes the current value again.
+    const r = document.createElement('input');
+    r.type = 'range';
+    r.max = '20';
+    testing.expectEqual('20', r.value);
+
+    const r2 = document.createElement('input');
+    r2.type = 'range';
+    r2.value = '80';
+    r2.max = '50';
+    testing.expectEqual('50', r2.value);
+    r2.step = '20';
+    testing.expectEqual('40', r2.value);
+
+    const r3 = document.createElement('input');
+    r3.setAttribute('value', '80');
+    r3.type = 'range';
+    r3.max = '50';
+    testing.expectEqual('50', r3.value);
+    testing.expectEqual('80', r3.getAttribute('value'));
   }
 </script>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<head>
+  <style>
+    .hidden { color: red; }
+  </style>
+</head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+A stylesheet feeds the cascade of the document that owns it, not of whichever
+realm happens to mutate it. The parent reaches into an iframe's sheet here, and
+the iframe helpers read the result back through the iframe's own StyleManager.
+
+The parent's own `.hidden` rule sets color, not display: an edit that landed in
+the parent's cascade instead would leave the iframe reporting the old display.
+
+`sheet` is the iframe that gets its stylesheet mutated; `text` is left alone by
+those blocks so the innerText and removal cases see the document as parsed.
+-->
+<iframe id="sheet" src="support/cross_realm_style.html"></iframe>
+<iframe id="text" src="support/cross_realm_style.html"></iframe>
+
+<script id="insert_rule_from_parent">
+  testing.onload(() => {
+    const idf = document.getElementById('sheet');
+    const iwin = idf.contentWindow;
+
+    testing.expectEqual('block', iwin.displayOf('probe'));
+
+    idf.contentDocument.styleSheets[0].insertRule('#probe { display: none; }', 0);
+    testing.expectEqual('none', iwin.displayOf('probe'));
+  });
+</script>
+
+<script id="delete_rule_from_parent">
+  testing.onload(() => {
+    const idf = document.getElementById('sheet');
+    const iwin = idf.contentWindow;
+
+    // The rule the previous block inserted at index 0.
+    testing.expectEqual('none', iwin.displayOf('probe'));
+    idf.contentDocument.styleSheets[0].deleteRule(0);
+    testing.expectEqual('block', iwin.displayOf('probe'));
+  });
+</script>
+
+<script id="replace_sync_from_parent">
+  testing.onload(() => {
+    const idf = document.getElementById('sheet');
+    const iwin = idf.contentWindow;
+
+    idf.contentDocument.styleSheets[0].replaceSync('#probe { display: none; }');
+    testing.expectEqual('none', iwin.displayOf('probe'));
+  });
+</script>
+
+<script id="inner_text_reads_owner_cascade">
+  testing.onload(() => {
+    // `.hidden` is display:none in the iframe's sheet only. Read from the
+    // parent realm, the hidden span must still be dropped.
+    const idoc = document.getElementById('text').contentDocument;
+    testing.expectEqual('keep', idoc.getElementById('host').innerText);
+  });
+</script>
+
+<script id="remove_style_element_from_parent">
+  testing.onload(() => {
+    const idf = document.getElementById('text');
+    const iwin = idf.contentWindow;
+    const idoc = idf.contentDocument;
+
+    testing.expectEqual('none', iwin.displayOf('gone'));
+
+    // Removing it through the parent has to drop it from the iframe's list and
+    // rebuild the iframe's cascade.
+    idoc.getElementById('sheet').remove();
+    testing.expectEqual(0, idoc.styleSheets.length);
+    testing.expectEqual('inline', iwin.displayOf('gone'));
+  });
+</script>
+</body>

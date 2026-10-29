@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body>
+<div id="host" contenteditable>abc</div>
+<div id="plain">plain</div>
+<input id="text" value="hello">
+<input id="ro" readonly value="ro">
+<textarea id="area">abc</textarea>
+</body>
+
+<script>
+  // Events from the last edit, as "type:target:inputType:data".
+  let events = [];
+  for (const type of ['beforeinput', 'textInput', 'input']) {
+    document.addEventListener(type, e => {
+      events.push(`${type}:${e.target.id}:${e.inputType ?? ''}:${e.data}`);
+    }, true);
+  }
+  function exec(value) {
+    events = [];
+    return document.execCommand('insertText', false, value);
+  }
+</script>
+
+<script id="unsupported">
+{
+  // Chrome doesn't support these either. Slack calls the first two (#4216).
+  for (const cmd of ['enableObjectResizing', 'autoUrlDetect', 'nope']) {
+    testing.expectEqual(false, document.execCommand(cmd, false, false));
+    testing.expectEqual(false, document.queryCommandSupported(cmd));
+    testing.expectEqual(false, document.queryCommandEnabled(cmd));
+    testing.expectEqual(false, document.queryCommandState(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+    testing.expectEqual('', document.queryCommandValue(cmd));
+  }
+}
+</script>
+
+<script id="not_yet_supported">
+{
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  getSelection().selectAllChildren(host);
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  testing.expectEqual(false, document.queryCommandIndeterm('bold'));
+  testing.diverges('no formatting commands', () => {
+    testing.expectEqual(false, document.queryCommandSupported('bold'));
+    testing.expectEqual(false, document.execCommand('bold'));
+    testing.expectEqual('abc', host.innerHTML);
+  });
+  // supported in Chrome whether or not there's a user click; exec isn't
+  testing.diverges('no clipboard', () => {
+    testing.expectEqual(false, document.queryCommandSupported('copy'));
+  });
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().selectAllChildren($('#plain'));
+  testing.expectEqual(true, document.queryCommandSupported('insertText'));
+  testing.expectEqual(false, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, exec('X'));
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  testing.expectEqual([], events);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_input">
+{
+  const input = $('#text');
+  input.focus();
+  input.setSelectionRange(1, 3);
+  testing.expectEqual(true, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, document.queryCommandState('insertText'));
+  testing.expectEqual('', document.queryCommandValue('insertText'));
+
+  // no beforeinput or textInput, unlike typing
+  testing.expectEqual(true, exec('XY'));
+  testing.expectEqual('hXYlo', input.value);
+  testing.expectEqual(3, input.selectionStart);
+  testing.expectEqual(3, input.selectionEnd);
+  testing.expectEqual(['input:text:insertText:XY'], events);
+
+  // case-insensitive
+  events = [];
+  testing.expectEqual(true, document.execCommand('INSERTtext', false, 'Z'));
+  testing.expectEqual('hXYZlo', input.value);
+
+  // nothing to insert at a caret: nothing happens, but it succeeds
+  testing.expectEqual(true, exec(undefined));
+  testing.expectEqual('hXYZlo', input.value);
+  testing.expectEqual([], events);
+
+  // empty text over a selection deletes it
+  input.setSelectionRange(0, 2);
+  testing.expectEqual(true, exec(''));
+  testing.expectEqual('YZlo', input.value);
+  testing.expectEqual(['input:text:insertText:'], events);
+
+  input.setSelectionRange(0, 0);
+  testing.expectEqual(true, exec('a\nb'));
+  testing.expectEqual('a bYZlo', input.value);
+}
+</script>
+
+<script id="insert_text_not_cancelable">
+{
+  const input = $('#text');
+  input.value = '';
+  input.focus();
+  let cancelable = null;
+  input.addEventListener('input', e => {
+    cancelable = e.cancelable;
+    e.preventDefault();
+  }, {once: true});
+  testing.expectEqual(true, exec('P'));
+  testing.expectEqual('P', input.value);
+  testing.expectEqual(false, cancelable);
+}
+</script>
+
+<script id="insert_text_nested">
+{
+  const input = $('#text');
+  input.value = '';
+  input.focus();
+  let nested = null;
+  input.addEventListener('input', () => {
+    nested = document.execCommand('insertText', false, 'N');
+  }, {once: true});
+  testing.expectEqual(true, exec('Q'));
+  testing.expectEqual(false, nested);
+  testing.expectEqual('Q', input.value);
+}
+</script>
+
+<script id="insert_text_change_on_blur">
+{
+  const input = $('#text');
+  input.value = '';
+  input.focus();
+  let changes = 0;
+  input.addEventListener('change', () => changes += 1);
+  exec('C');
+  testing.expectEqual(0, changes);
+  input.blur();
+  testing.expectEqual(1, changes);
+}
+</script>
+
+<script id="insert_text_readonly">
+{
+  const ro = $('#ro');
+  ro.focus();
+  testing.expectEqual(false, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, exec('X'));
+  testing.expectEqual('ro', ro.value);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="insert_text_textarea">
+{
+  const area = $('#area');
+  area.focus();
+  area.setSelectionRange(3, 3);
+  // one input event per line and per line break
+  testing.expectEqual(true, exec('\nline'));
+  testing.expectEqual('abc\nline', area.value);
+  testing.expectEqual(['input:area:insertText:null', 'input:area:insertText:line'], events);
+}
+</script>
+
+<script id="insert_text_contenteditable">
+{
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  host.focus();
+  getSelection().setBaseAndExtent(host.firstChild, 1, host.firstChild, 2);
+  testing.expectEqual(true, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(true, exec('XY'));
+  testing.expectEqual('aXYc', host.innerHTML);
+  testing.expectEqual(3, getSelection().anchorOffset);
+  testing.expectEqual(['input:host:insertText:XY'], events);
+
+  // text, not markup
+  testing.expectEqual(true, exec('<b>'));
+  testing.expectEqual('aXY&lt;b&gt;c', host.innerHTML);
+
+  // Chrome splits the block: aXY&lt;b&gt;a<div>bc</div>
+  testing.diverges('no block splitting', () => {
+    testing.expectEqual(false, exec('a\nb'));
+    testing.expectEqual('aXY&lt;b&gt;c', host.innerHTML);
+  });
+}
+</script>
+
+<script id="insert_text_not_in_select">
+{
+  // the Selection API can reach into a <select>; editing there is refused
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p><select><option>def</option></select>';
+  host.focus();
+  getSelection().selectAllChildren(host.querySelector('option'));
+  exec('X');
+  testing.expectEqual('<p>abc</p><select><option>def</option></select>', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_follows_selection">
+{
+  // Chrome focuses the host when the selection moves into it; the command
+  // follows the selection either way.
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  document.activeElement.blur();
+  getSelection().setBaseAndExtent(host.firstChild, 0, host.firstChild, 0);
+  testing.expectEqual(true, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(true, exec('S'));
+  testing.expectEqual('Sabc', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_other_document">
+{
+  const doc = document.implementation.createHTMLDocument();
+  doc.body.innerHTML = '<div contenteditable>x</div>';
+  doc.getSelection?.()?.selectAllChildren(doc.body.firstChild);
+  testing.expectEqual(false, doc.queryCommandSupported('insertText'));
+  testing.expectEqual(false, doc.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, doc.execCommand('insertText', false, 'y'));
+  testing.expectEqual('x', doc.body.firstChild.innerHTML);
+}
+</script>
+
+<script id="command_required">
+{
+  testing.expectError('TypeError', () => document.execCommand());
+  testing.expectError('TypeError', () => document.queryCommandSupported());
+}
+</script>

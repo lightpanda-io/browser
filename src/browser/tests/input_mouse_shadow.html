@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><title>Native shadow mouse input</title></head><body>
+<div id="host" style="transform:translateX(80px);width:200px;height:200px"></div>
+<script>
+const host = document.getElementById('host');
+const root = host.attachShadow({mode:'open'});
+root.innerHTML = '<button id="inner" style="transform:translateX(20px);width:80px;height:60px">Shadow</button>';
+const inner = root.getElementById('inner');
+window.events = [];
+inner.addEventListener('click', e => events.push({listener:'inner', target:e.target.id, trusted:e.isTrusted}));
+host.addEventListener('click', e => events.push({listener:'host', target:e.target.id, trusted:e.isTrusted, inner:e.composedPath().includes(inner)}));
+</script>
+</body></html>

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="./testing.js"></script>
+
+<script>
+  const METHODS = [{ supportedMethods: 'https://example.com/pay' }];
+  const DETAILS = { total: { label: 'Total', amount: { currency: 'USD', value: '10.00' } } };
+  // a URL method makes Chrome download its manifest before settling a promise
+  const OFFLINE = [{ supportedMethods: 'basic-card' }];
+</script>
+
+<script id=shape>
+  testing.expectEqual('function', typeof PaymentRequest);
+  testing.expectEqual('function', typeof PaymentResponse);
+  testing.expectEqual('function', typeof PaymentRequestUpdateEvent);
+  testing.expectEqual('function', typeof PaymentMethodChangeEvent);
+  testing.expectTrue(PaymentRequest.prototype instanceof EventTarget);
+  testing.expectTrue(PaymentResponse.prototype instanceof EventTarget);
+  testing.expectTrue(PaymentMethodChangeEvent.prototype instanceof PaymentRequestUpdateEvent);
+  testing.expectError('TypeError', () => new PaymentResponse());
+</script>
+
+<script id=hidden_outside_secure_context type=module>
+  // data: has an opaque origin, so it isn't a secure context
+  {
+    const state = await testing.async();
+    window.addEventListener('message', (e) => state.resolve(e.data));
+
+    const f = document.createElement('iframe');
+    f.src = "data:text/html,<script>parent.postMessage({secure: isSecureContext, exposed: ['PaymentRequest', 'PaymentResponse', 'PaymentRequestUpdateEvent', 'PaymentMethodChangeEvent'].filter((n) => n in window)}, '*')<\/script>";
+    document.body.appendChild(f);
+
+    await state.done((data) => {
+      testing.expectEqual(false, data.secure);
+      testing.expectEqual([], data.exposed);
+    });
+  }
+</script>
+
+<script id=constructor>
+  {
+    const req = new PaymentRequest(METHODS, DETAILS);
+    testing.expectTrue(req instanceof PaymentRequest);
+    testing.expectTrue(req instanceof EventTarget);
+    testing.expectEqual('[object PaymentRequest]', Object.prototype.toString.call(req));
+    testing.expectTrue(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(req.id));
+    testing.expectEqual(null, req.shippingAddress);
+    testing.expectEqual(null, req.shippingOption);
+    testing.expectEqual(null, req.shippingType);
+    testing.expectEqual(null, req.onpaymentmethodchange);
+  }
+  {
+    const req = new PaymentRequest(
+      [{ supportedMethods: 'basic-card' }, { supportedMethods: 'pay2-go' }, { supportedMethods: 'https://example.com/pay' }],
+      { id: 'order-1', ...DETAILS, displayItems: [{ label: 'Discount', amount: { currency: 'usd', value: '-1' } }] },
+    );
+    testing.expectEqual('order-1', req.id);
+  }
+  new PaymentRequest([{ supportedMethods: 'http://localhost/pay' }, { supportedMethods: 'http://127.0.0.1:9/pay' }], DETAILS);
+</script>
+
+<script id=shipping>
+  {
+    const shippingOptions = [
+      { id: 'a', label: 'A', amount: { currency: 'USD', value: '0' } },
+      { id: 'b', label: 'B', amount: { currency: 'USD', value: '5' }, selected: true },
+    ];
+    const req = new PaymentRequest(METHODS, { ...DETAILS, shippingOptions }, { requestShipping: true, shippingType: 'delivery' });
+    testing.expectEqual('b', req.shippingOption);
+    testing.expectEqual('delivery', req.shippingType);
+  }
+  {
+    // without requestShipping, shipping options are ignored, duplicates included
+    const dup = [
+      { id: 'a', label: 'A', amount: { currency: 'USD', value: '0' }, selected: true },
+      { id: 'a', label: 'A', amount: { currency: 'USD', value: '0' } },
+    ];
+    const req = new PaymentRequest(METHODS, { ...DETAILS, shippingOptions: dup });
+    testing.expectEqual(null, req.shippingOption);
+    testing.expectEqual(null, req.shippingType);
+    testing.expectError('TypeError', () => new PaymentRequest(METHODS, { ...DETAILS, shippingOptions: dup }, { requestShipping: true }));
+  }
+</script>
+
+<script id=validation>
+  const amount = (value, currency = 'USD') => ({ total: { label: 'Total', amount: { currency, value } } });
+
+  testing.expectError('TypeError', () => new PaymentRequest([], DETAILS));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, {}));
+
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: 'Basic-Card' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: '1pay' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: 'pay-2go' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: 'pay--go' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: 'ftp://example.com/pay' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: 'http://example.com/pay' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([{ supportedMethods: 'https://user:pass@example.com/pay' }], DETAILS));
+  testing.expectError('RangeError', () => new PaymentRequest([...METHODS, ...METHODS], DETAILS));
+
+  testing.expectError('RangeError', () => new PaymentRequest(METHODS, amount('1', 'US')));
+  testing.expectError('RangeError', () => new PaymentRequest(METHODS, amount('1', 'U$D')));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('-1')));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('1.')));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('.5')));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('1e3')));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('')));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, {
+    ...DETAILS,
+    displayItems: [{ label: 'x', amount: { currency: 'USD', value: 'abc' } }],
+  }));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, {
+    ...DETAILS,
+    modifiers: [{ supportedMethods: 'https://example.com/pay', total: { label: 'x', amount: { currency: 'USD', value: '-2' } } }],
+  }));
+  testing.expectError('RangeError', () => new PaymentRequest(METHODS, {
+    ...DETAILS,
+    modifiers: [{ supportedMethods: 'not a pmi' }],
+  }));
+  // a modifier's total is checked before its method identifier
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, {
+    ...DETAILS,
+    modifiers: [{ supportedMethods: 'not a pmi', total: { label: 'x', amount: { currency: 'USD', value: '-2' } } }],
+  }));
+
+  const long = 'x'.repeat(1025);
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, { ...DETAILS, id: long }));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, { total: { label: long, amount: { currency: 'USD', value: '1' } } }));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('1'.repeat(1025))));
+  // the length check comes before the currency format
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, amount('1', long)));
+  testing.expectError('TypeError', () => new PaymentRequest(METHODS, {
+    ...DETAILS,
+    displayItems: Array.from({ length: 1025 }, () => DETAILS.total),
+  }));
+  // an id that's too long fails before the empty method list
+  testing.expectError('cannot be longer than 1024', () => new PaymentRequest([], { ...DETAILS, id: long }));
+</script>
+
+<script id=can_make_payment type=module>
+  {
+    const state = await testing.async();
+    const result = await new PaymentRequest(OFFLINE, DETAILS).canMakePayment();
+    const enrolled = await new PaymentRequest(OFFLINE, DETAILS).hasEnrolledInstrument();
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(false, result);
+      testing.expectEqual(false, enrolled);
+    });
+  }
+</script>
+
+<script id=show type=module>
+  {
+    const state = await testing.async();
+    const req = new PaymentRequest(OFFLINE, DETAILS);
+    const errors = [];
+    await req.show().catch((e) => errors.push(e.name));
+    await req.show().catch((e) => errors.push(e.name));
+    await req.canMakePayment().catch((e) => errors.push(e.name));
+    await req.abort().catch((e) => errors.push(e.name));
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(['NotSupportedError', 'InvalidStateError', 'InvalidStateError', 'InvalidStateError'], errors);
+    });
+  }
+</script>
+
+<script id=events>
+  {
+    const e = new PaymentRequestUpdateEvent('shippingaddresschange', { bubbles: true });
+    testing.expectTrue(e instanceof Event);
+    testing.expectEqual('shippingaddresschange', e.type);
+    testing.expectEqual(true, e.bubbles);
+    testing.expectError('InvalidStateError', () => e.updateWith(Promise.resolve({})));
+  }
+  {
+    const details = { foo: 1 };
+    const e = new PaymentMethodChangeEvent('paymentmethodchange', { methodName: 'https://example.com/pay', methodDetails: details });
+    testing.expectTrue(e instanceof PaymentRequestUpdateEvent);
+    testing.expectEqual('https://example.com/pay', e.methodName);
+    testing.expectEqual(details, e.methodDetails);
+
+    const empty = new PaymentMethodChangeEvent('paymentmethodchange');
+    testing.expectEqual('', empty.methodName);
+    testing.expectEqual(null, empty.methodDetails);
+  }
+</script>

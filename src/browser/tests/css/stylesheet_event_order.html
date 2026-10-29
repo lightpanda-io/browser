@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<head></head>
+<body></body>
+
+<script id="stylesheet_load_after_append">
+(async () => {
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/visibility.css';
+  const events = [];
+  link.addEventListener('load', () => events.push('load'));
+
+  const completion = new Promise(resolve => {
+    document.head.appendChild(link);
+    events.push('appended');
+    queueMicrotask(() => events.push('microtask'));
+    link.addEventListener('load', () => resolve('load'));
+    link.addEventListener('error', () => resolve('error'));
+  });
+  const outcome = await Promise.race([
+    completion,
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 500)),
+  ]);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('load', outcome);
+    testing.expectEqual(['appended', 'microtask', 'load'], events);
+    testing.expectEqual('.ext-hide', document.styleSheets[0].cssRules[0].selectorText);
+  });
+})();
+</script>
+
+<script id="reflected_and_generic_attribute_updates_keep_completion">
+(async () => {
+  const state = await testing.async();
+  const observed = [];
+  for (const update of [
+    link => { link.rel = 'stylesheet'; },
+    link => { link.setAttribute('href', '/styles/visibility.css'); },
+    link => { link.setAttribute('href', '/styles/404.css'); },
+  ]) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/visibility.css';
+    document.head.appendChild(link);
+    update(link);
+    const events = [];
+    link.addEventListener('load', () => events.push('load'));
+    link.addEventListener('error', () => events.push('error'));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    observed.push(events);
+    link.remove();
+  }
+  state.resolve();
+  await state.done(() => testing.expectEqual([['load'], ['load'], ['error']], observed));
+})();
+</script>
+
+<script id="stylesheet_error_after_append">
+(async () => {
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/404.css';
+  const events = [];
+  link.addEventListener('error', () => events.push('error'));
+
+  const completion = new Promise(resolve => {
+    document.head.appendChild(link);
+    events.push('appended');
+    queueMicrotask(() => events.push('microtask'));
+    link.addEventListener('load', () => resolve('load'));
+    link.addEventListener('error', () => resolve('error'));
+  });
+  const outcome = await Promise.race([
+    completion,
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 500)),
+  ]);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('error', outcome);
+    testing.expectEqual(['appended', 'microtask', 'error'], events);
+  });
+})();
+</script>
+
+<script id="superseded_stylesheet_completion_is_not_delivered">
+(async () => {
+  const state = await testing.async();
+  const observed = [];
+  for (const [first, second] of [
+    ['/styles/404.css', '/styles/visibility.css'],
+    ['/styles/visibility.css', '/styles/visibility2.css'],
+    ['/styles/visibility.css', '/styles/404.css'],
+  ]) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = first;
+    document.head.appendChild(link);
+    link.href = second;
+    const events = [];
+    link.addEventListener('load', () => events.push('load'));
+    link.addEventListener('error', () => events.push('error'));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    observed.push(events);
+    link.remove();
+  }
+  state.resolve();
+  await state.done(() => testing.expectEqual([['load'], ['load'], ['error']], observed));
+})();
+</script>
+
+<script id="disconnected_stylesheet_does_not_deliver_completion">
+(async () => {
+  const state = await testing.async();
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/styles/visibility.css';
+  const events = [];
+  link.addEventListener('load', () => events.push('load'));
+  link.addEventListener('error', () => events.push('error'));
+  document.head.appendChild(link);
+  link.remove();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  state.resolve();
+  await state.done(() => testing.expectEqual([], events));
+})();
+</script>

@@ -19,7 +19,6 @@
 const js = @import("../../js/js.zig");
 
 const ReadableStream = @import("ReadableStream.zig");
-const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 
 const Execution = js.Execution;
 
@@ -42,17 +41,7 @@ pub const ReadResult = struct {
     // Done like this so that we can properly return undefined in some cases
     const Chunk = union(enum) {
         empty,
-        string: []const u8,
-        uint8array: js.TypedArray(u8),
-        js_value: js.Value.Global,
-
-        pub fn fromChunk(chunk: ReadableStreamDefaultController.Chunk) Chunk {
-            return switch (chunk) {
-                .string => |s| .{ .string = s },
-                .uint8array => |arr| .{ .uint8array = arr },
-                .js_value => |val| .{ .js_value = val },
-            };
-        }
+        value: js.Value,
     };
 };
 
@@ -61,16 +50,19 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
     const stream = self._stream orelse {
         return local.rejectPromise(.{ .type_error = "Reader has been released" });
     };
+    stream._disturbed = true;
 
     if (stream._state == .errored) {
-        //const err = stream._stored_error orelse "Stream errored";
-        return local.rejectPromise(.{ .type_error = "Stream errored" });
+        const resolver = local.createPromiseResolver();
+        resolver.reject("ReadableStreamDefaultReader.read", stream._stored_error.?);
+        return resolver.promise();
     }
 
     if (stream._controller.dequeue()) |chunk| {
+        defer chunk.release();
         const result = ReadResult{
             .done = false,
-            .value = .fromChunk(chunk),
+            .value = .{ .value = local.toLocal(chunk) },
         };
         return local.resolvePromise(result);
     }
@@ -84,7 +76,7 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
     }
 
     // No data, but not closed. We need to queue the read for any future data
-    return stream._controller.addPendingRead();
+    return stream._controller.addPendingRead(local);
 }
 
 pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
@@ -94,9 +86,9 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
     }
 }
 
-pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, exec: *const Execution) !js.Promise {
+pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?js.Value, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
-        return exec.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return exec.js.typeError("Reader has been released");
     };
 
     self.releaseLock();
@@ -109,7 +101,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "ReadableStreamDefaultReader";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

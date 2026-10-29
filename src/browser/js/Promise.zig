@@ -55,7 +55,7 @@ pub const State = enum(u32) {
 };
 
 pub fn state(self: Promise) State {
-    return @enumFromInt(v8.v8__Promise__State(self.handle));
+    return @fromBackingInt(@intCast(v8.v8__Promise__State(self.handle)));
 }
 
 /// Settled value (fulfillment or rejection). Caller must check `state` first.
@@ -89,5 +89,9 @@ pub const Global = struct {
             .local = l,
             .handle = @ptrCast(v8.v8__Global__Get(&self.slot.handle, l.isolate.handle)),
         };
+    }
+
+    pub fn isEqual(self: Global, other: Promise) bool {
+        return v8.v8__Global__IsEqual(&self.slot.handle, @ptrCast(other.handle));
     }
 };

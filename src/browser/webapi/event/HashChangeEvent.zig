@@ -35,8 +35,8 @@ _old_url: []const u8,
 _new_url: []const u8,
 
 const HashChangeEventOptions = struct {
-    oldURL: []const u8 = "",
     newURL: []const u8 = "",
+    oldURL: []const u8 = "",
 };
 
 const Options = Event.inheritOptions(HashChangeEvent, HashChangeEventOptions);
@@ -75,11 +75,11 @@ pub fn asEvent(self: *HashChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getOldURL(self: *const HashChangeEvent) []const u8 {
+fn getOldURL(self: *const HashChangeEvent) []const u8 {
     return self._old_url;
 }
 
-pub fn getNewURL(self: *const HashChangeEvent) []const u8 {
+fn getNewURL(self: *const HashChangeEvent) []const u8 {
     return self._new_url;
 }
 
@@ -88,7 +88,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HashChangeEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

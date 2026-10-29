@@ -17,21 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
-const Frame = @import("../../Frame.zig");
 
 const MediaError = @This();
 
 _code: u16,
 _message: []const u8 = "",
 
-pub fn init(code: u16, message: []const u8, frame: *Frame) !*MediaError {
-    return frame.arena.create(MediaError{
-        ._code = code,
-        ._message = try frame.dupeString(message),
-    });
-}
-
-pub fn getCode(self: *const MediaError) u16 {
+fn getCode(self: *const MediaError) u16 {
     return self._code;
 }
 
@@ -44,7 +36,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "MediaError";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

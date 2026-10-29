@@ -36,8 +36,6 @@ _exec: *Execution,
 _name: lp.String,
 _sequence: u64,
 _closed: bool = false,
-_on_message: ?js.Function.Global = null,
-_on_message_error: ?js.Function.Global = null,
 
 // Intrusive node, registered in `frame._broadcast_channels` (or WGS)
 // for the lifetime of the channel (until close()). The registry is how a
@@ -113,22 +111,6 @@ pub fn close(self: *BroadcastChannel) void {
     }
     self._closed = true;
     self._exec.getBroadcastChannels().remove(&self._node);
-}
-
-pub fn getOnMessage(self: *const BroadcastChannel) ?js.Function.Global {
-    return self._on_message;
-}
-
-pub fn setOnMessage(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
-    self._on_message = cb;
-}
-
-pub fn getOnMessageError(self: *const BroadcastChannel) ?js.Function.Global {
-    return self._on_message_error;
-}
-
-pub fn setOnMessageError(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
-    self._on_message_error = cb;
 }
 
 const PostMessageCallback = struct {
@@ -208,7 +190,7 @@ const PostMessageCallback = struct {
                 }
 
                 const target = channel.asEventTarget();
-                if (!exec.hasDirectListeners(target, "message", channel._on_message)) {
+                if (!exec.hasDirectListeners(target, "message")) {
                     continue;
                 }
 
@@ -218,12 +200,12 @@ const PostMessageCallback = struct {
                 // MessageEvent, which releases it on teardown — so each receiver
                 // frees only its own handle.
                 const cloned = snapshot.structuredCloneTo(&ls.local) catch |err| {
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 };
 
                 const cloned_temp = cloned.persist() catch |err| {
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 };
 
@@ -233,12 +215,12 @@ const PostMessageCallback = struct {
                     .source = null,
                 }, exec.page) catch |err| {
                     cloned_temp.release();
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                     continue;
                 }).asEvent();
 
-                exec.dispatch(target, event, channel._on_message, .{ .context = "BroadcastChannel message" }) catch |err| {
-                    log.err(.dom, "BroadcastChannel.postMessage", .{ .err = err });
+                exec.dispatch(target, event, .{ .context = "BroadcastChannel message" }) catch |err| {
+                    log.debug(.dom, "BroadcastChannel.postMessage", .{ .err = err });
                 };
             }
         }
@@ -253,7 +235,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "BroadcastChannel";
         pub var class_id: bridge.ClassId = undefined;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const constructor = bridge.constructor(BroadcastChannel.init, .{});
@@ -262,8 +243,8 @@ pub const JsApi = struct {
     pub const postMessage = bridge.function(BroadcastChannel.postMessage, .{});
     pub const close = bridge.function(BroadcastChannel.close, .{});
 
-    pub const onmessage = bridge.accessor(BroadcastChannel.getOnMessage, BroadcastChannel.setOnMessage, .{});
-    pub const onmessageerror = bridge.accessor(BroadcastChannel.getOnMessageError, BroadcastChannel.setOnMessageError, .{});
+    pub const onmessage = EventTarget.handlerAccessor(BroadcastChannel, "message");
+    pub const onmessageerror = EventTarget.handlerAccessor(BroadcastChannel, "messageerror");
 };
 
 const testing = @import("../../testing.zig");

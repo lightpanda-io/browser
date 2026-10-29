@@ -34,8 +34,8 @@ _old_version: u64,
 _new_version: ?u64,
 
 const IDBVersionChangeEventOptions = struct {
-    oldVersion: u64 = 0,
     newVersion: ?u64 = null,
+    oldVersion: u64 = 0,
 };
 
 const Options = Event.inheritOptions(IDBVersionChangeEvent, IDBVersionChangeEventOptions);
@@ -70,11 +70,11 @@ pub fn asEvent(self: *IDBVersionChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getOldVersion(self: *const IDBVersionChangeEvent) u64 {
+fn getOldVersion(self: *const IDBVersionChangeEvent) u64 {
     return self._old_version;
 }
 
-pub fn getNewVersion(self: *const IDBVersionChangeEvent) ?u64 {
+fn getNewVersion(self: *const IDBVersionChangeEvent) ?u64 {
     return self._new_version;
 }
 
@@ -83,7 +83,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "IDBVersionChangeEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

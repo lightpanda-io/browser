@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <!-- Test 1: Basic single element replacement -->
@@ -424,4 +425,86 @@
   // not a DocumentFragment (regression: reddit suspense-replace crash).
   testing.expectEqual(1, seenParentNodeType16); // ELEMENT_NODE
   testing.expectEqual(parent16, seenParentElement16);
+</script>
+
+<!-- Test 17: Nodes from another document are adopted, as insertBefore does -->
+<script id=test17-adopts>
+  const other17 = document.implementation.createHTMLDocument('other');
+  const node17 = other17.createElement('div');
+  const nested17 = other17.createElement('span');
+  node17.appendChild(nested17);
+  const moved17 = other17.createElement('div');
+  other17.body.appendChild(moved17);
+
+  const parent17 = document.createElement('div');
+  const old17 = document.createElement('div');
+  parent17.appendChild(old17);
+  document.body.appendChild(parent17);
+
+  old17.replaceWith(node17, moved17);
+
+  testing.expectEqual(parent17, node17.parentNode);
+  testing.expectEqual(document, node17.ownerDocument);
+  testing.expectEqual(document, nested17.ownerDocument);
+  testing.expectEqual(document, moved17.ownerDocument);
+  testing.expectEqual(0, other17.body.childNodes.length);
+  // Layout walks the document's elements, asserting each is its own.
+  testing.expectEqual(true, document.documentElement.scrollWidth > 0);
+</script>
+
+<!-- Test 18: Replacing with an ancestor throws instead of creating a cycle -->
+<script id=test18-ancestor>
+  const outer18 = document.createElement('div');
+  const inner18 = document.createElement('div');
+  const leaf18 = document.createElement('span');
+  outer18.appendChild(inner18);
+  inner18.appendChild(leaf18);
+
+  testing.expectError('HierarchyRequestError', () => leaf18.replaceWith(outer18));
+  testing.expectError('HierarchyRequestError', () => leaf18.replaceWith(inner18));
+  testing.expectEqual(inner18, leaf18.parentNode);
+  testing.expectEqual(outer18, inner18.parentNode);
+  testing.expectEqual(null, outer18.parentNode);
+</script>
+
+<!-- Test 19: A Document or DocumentType can't replace an element -->
+<script id=test19-invalid-node-types>
+  const parent19 = document.createElement('div');
+  const old19 = document.createElement('div');
+  parent19.appendChild(old19);
+
+  const other19 = document.implementation.createHTMLDocument('other');
+  testing.expectError('HierarchyRequestError', () => old19.replaceWith(other19));
+  testing.expectError('HierarchyRequestError', () => old19.replaceWith(other19.doctype));
+  testing.expectEqual(parent19, old19.parentNode);
+  testing.expectEqual(1, parent19.childNodes.length);
+</script>
+
+<!-- Test 20: Several nodes are one insertion: a single childList record -->
+<script id=test20-single-record>
+  const parent20 = document.createElement('div');
+  const old20 = document.createElement('div');
+  const a20 = document.createElement('b');
+  const b20 = document.createElement('i');
+  parent20.appendChild(old20);
+
+  const observer20 = new MutationObserver(() => {});
+  observer20.observe(parent20, { childList: true });
+  old20.replaceWith(a20, 'text', b20);
+  const records20 = observer20.takeRecords();
+
+  testing.expectEqual(1, records20.length);
+  testing.expectEqual(3, records20[0].addedNodes.length);
+  testing.expectEqual(old20, records20[0].removedNodes[0]);
+  testing.expectEqual('B,#text,I', [...parent20.childNodes].map(n => n.nodeName).join(','));
+</script>
+
+<!-- Test 21: No arguments removes the element -->
+<script id=test21-empty>
+  const parent21 = document.createElement('div');
+  const old21 = document.createElement('div');
+  parent21.appendChild(old21);
+  old21.replaceWith();
+  testing.expectEqual(null, old21.parentNode);
+  testing.expectEqual(0, parent21.childNodes.length);
 </script>

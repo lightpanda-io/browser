@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <head id="the_head">
   <title>Test Document Title</title>
+  <meta name=lp-mode content=test>
   <script src="../testing.js"></script>
 </head>
 
@@ -90,4 +91,74 @@
 
   // Clean up
   document.body.removeChild(fuzzWrapper);
+</script>
+
+<table id=iah-table><tbody><tr id=iah-tr><td>a</td></tr></tbody></table>
+<div id=iah-host></div>
+<script id=insertAdjacentHTML_context>
+  // beforeend/afterbegin parse with the element as context, beforebegin/
+  // afterend with its parent, so table bits are kept where a body context
+  // would drop them.
+  const tbody = $('#iah-table tbody');
+  tbody.insertAdjacentHTML('beforeend', '<tr id=iah-tr3><td>c</td></tr>');
+  tbody.insertAdjacentHTML('afterbegin', '<tr id=iah-tr0><td>0</td></tr>');
+  $('#iah-tr').insertAdjacentHTML('beforebegin', '<tr id=iah-tr1><td>1</td></tr>');
+  $('#iah-tr').insertAdjacentHTML('afterend', '<tr id=iah-tr2><td>b</td></tr>');
+  testing.expectEqual(
+    '<tbody><tr id="iah-tr0"><td>0</td></tr><tr id="iah-tr1"><td>1</td></tr><tr id="iah-tr"><td>a</td></tr><tr id="iah-tr2"><td>b</td></tr><tr id="iah-tr3"><td>c</td></tr></tbody>',
+    $('#iah-table').innerHTML);
+
+  // A raw text element as context switches the tokenizer state.
+  const script = document.createElement('script');
+  script.type = 'text/plain';
+  document.body.appendChild(script);
+  script.insertAdjacentHTML('beforeend', '<b>x</b>');
+  testing.expectEqual(0, script.children.length);
+  testing.expectEqual('<b>x</b>', script.textContent);
+  script.remove();
+
+  // A shadow root parent is allowed, and is a body context.
+  const shadow = $('#iah-host').attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<span id=iah-in></span>';
+  shadow.firstChild.insertAdjacentHTML('beforebegin', '<i>i</i><tr><td>t</td></tr>');
+  testing.expectEqual('<i>i</i>t<span id="iah-in"></span>', shadow.innerHTML);
+
+  // An <html> context parses as body; a document parent is rejected.
+  document.body.insertAdjacentHTML('beforebegin', '<p id=iah-p>p</p>');
+  testing.expectEqual('HTML', $('#iah-p').parentNode.tagName);
+  $('#iah-p').remove();
+  testing.expectError('NoModificationAllowedError', () => {
+    document.documentElement.insertAdjacentHTML('beforebegin', '<p>p</p>');
+  });
+</script>
+
+<script id=insertAdjacentHTML_svg>
+  // Non-HTML elements accept it too and parse with themselves as context,
+  // so the fragment lands in the SVG namespace.
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  document.body.appendChild(svg);
+  svg.insertAdjacentHTML('beforeend', '<symbol id="iah-sym"><path d="M0 0h1"/></symbol>');
+  testing.expectEqual('symbol', svg.lastChild.nodeName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.lastChild.namespaceURI);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.lastChild.firstChild.namespaceURI);
+  svg.firstChild.insertAdjacentHTML('beforebegin', '<g id="iah-g"></g>');
+  testing.expectEqual('g', svg.firstChild.nodeName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg.firstChild.namespaceURI);
+
+  // innerHTML takes the same fragment parsing path.
+  svg.innerHTML = '<foreignObject><div></div></foreignObject>';
+  const fo = svg.firstChild;
+  testing.expectEqual('foreignObject', fo.nodeName);
+  testing.expectEqual('http://www.w3.org/2000/svg', fo.namespaceURI);
+  // foreignObject is an HTML integration point: its content is HTML again.
+  testing.expectEqual('http://www.w3.org/1999/xhtml', fo.firstChild.namespaceURI);
+  fo.insertAdjacentHTML('beforeend', '<p>p</p>');
+  testing.expectEqual('P', fo.lastChild.nodeName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', fo.lastChild.namespaceURI);
+
+  // innerText belongs to HTMLElement, not Element.
+  testing.expectEqual('undefined', typeof svg.innerText);
+  testing.expectEqual(false, 'innerText' in Element.prototype);
+  testing.expectEqual(true, 'innerText' in HTMLElement.prototype);
+  svg.remove();
 </script>

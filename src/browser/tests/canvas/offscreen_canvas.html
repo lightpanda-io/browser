@@ -35,6 +35,11 @@
   testing.expectEqual(true, ctx instanceof OffscreenCanvasRenderingContext2D);
   // We can't really test rendering but let's try to call it at least.
   ctx.fillRect(0, 0, 10, 10);
+
+  testing.expectEqual(canvas, ctx.canvas);
+  testing.expectEqual(64, ctx.canvas.width);
+  testing.expectEqual(ctx, canvas.getContext("2d"));
+  testing.expectEqual(null, canvas.getContext("webgl"));
 }
 </script>
 
@@ -43,11 +48,22 @@
   const canvas = new OffscreenCanvas(64, 64);
   const promise = canvas.convertToBlob();
   testing.expectEqual(true, promise instanceof Promise);
-  // The promise should resolve to a Blob (even if empty)
+  // The same blank PNG as HTMLCanvasElement.toBlob.
   promise.then(blob => {
     testing.expectEqual(true, blob instanceof Blob);
-    testing.expectEqual(blob.size, 0); // Empty since no rendering
+    testing.expectEqual('image/png', blob.type);
+    testing.expectEqual(67, blob.size);
   });
+}
+</script>
+
+<script id=OffscreenCanvas#convertToBlob_zero_size_rejects>
+{
+  const canvas = new OffscreenCanvas(0, 64);
+  canvas.convertToBlob().then(
+    () => testing.expectEqual('rejected', 'resolved'),
+    (err) => testing.expectEqual('IndexSizeError', err.name),
+  );
 }
 </script>
 
@@ -83,5 +99,16 @@
   // Zero or negative dimensions should throw.
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));
+}
+</script>
+
+<script id=OffscreenCanvasRenderingContext2D#measureText>
+{
+  const ctx = new OffscreenCanvas(10, 10).getContext("2d");
+  ctx.font = "16px sans-serif";
+  testing.expectEqual(48, ctx.measureText("hello").width);
+  ctx.setLineDash([1, 2]);
+  testing.expectEqual("1,2", ctx.getLineDash().join());
+  testing.expectEqual(true, ctx.createLinearGradient(0, 0, 1, 1) instanceof CanvasGradient);
 }
 </script>

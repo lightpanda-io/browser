@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <script id="deleteRow">
@@ -77,5 +78,299 @@
     table.removeChild(document.getElementById('b1'));
     testing.expectEqual(1, bodies.length);
     testing.expectEqual('b2', bodies[0].id);
+  }
+</script>
+
+<script id="rows">
+  {
+    // Built by hand, like the deleteRow test, so the tree order differs from
+    // the spec's row order.
+    const table = document.createElement('table');
+    const add = (parent, tag, id) => {
+      const el = document.createElement(tag);
+      if (id) el.id = id;
+      parent.appendChild(el);
+      return el;
+    };
+    add(add(table, 'tfoot'), 'tr', 'foot1');
+    add(table, 'tr', 'top1');
+    add(add(table, 'thead'), 'tr', 'head1');
+    const tbody = add(table, 'tbody');
+    add(tbody, 'tr', 'body1');
+    add(tbody, 'td');
+    // Not rows of this table: a tr inside a caption, a nested table's row.
+    add(add(table, 'caption'), 'tr', 'nested1');
+    add(add(add(tbody.firstChild, 'td'), 'table'), 'tr', 'nested2');
+
+    const ids = () => Array.from(table.rows, (row) => row.id).join(',');
+
+    // thead rows first, then table-level and tbody rows, then tfoot rows.
+    testing.expectEqual('head1,top1,body1,foot1', ids());
+    testing.expectEqual('HTMLCollection', table.rows.constructor.name);
+    testing.expectEqual(4, table.rows.length);
+    testing.expectEqual('body1', table.rows[2].id);
+    testing.expectEqual('foot1', table.rows.namedItem('foot1').id);
+    testing.expectEqual(null, table.rows.namedItem('nested1'));
+
+    // The collection is live.
+    const rows = table.rows;
+    add(tbody, 'tr', 'body2');
+    testing.expectEqual(5, rows.length);
+    testing.expectEqual('head1,top1,body1,body2,foot1', ids());
+
+    testing.expectEqual(0, document.createElement('table').rows.length);
+  }
+</script>
+
+<script id="svg_rows">
+  {
+    // Only HTML tr/tbody count: an SVG element named "tr" or "tbody" isn't one.
+    const svg = 'http://www.w3.org/2000/svg';
+    const table = document.createElement('table');
+    const tbody = table.appendChild(document.createElement('tbody'));
+    tbody.appendChild(document.createElement('tr')).id = 'real';
+    tbody.appendChild(document.createElementNS(svg, 'tr')).id = 'svg1';
+    table.appendChild(document.createElementNS(svg, 'tr')).id = 'svg2';
+    const svgBody = table.appendChild(document.createElementNS(svg, 'tbody'));
+    svgBody.appendChild(document.createElement('tr')).id = 'inSvg';
+
+    testing.expectEqual(1, table.rows.length);
+    testing.expectEqual('real', table.rows[0].id);
+    testing.expectEqual(null, table.rows.namedItem('svg1'));
+    testing.expectEqual(null, table.rows.namedItem('inSvg'));
+    testing.expectEqual(1, table.tBodies.length);
+    testing.expectEqual(1, tbody.rows.length);
+    testing.expectEqual('real', tbody.rows[0].id);
+  }
+</script>
+
+<script id="caption">
+  {
+    const table = document.createElement('table');
+    testing.expectEqual(null, table.caption);
+    table.appendChild(document.createElement('tbody'));
+
+    // createCaption inserts a caption as the first child, then reuses it.
+    const caption = table.createCaption();
+    testing.expectEqual(caption, table.firstChild);
+    testing.expectEqual(caption, table.caption);
+    testing.expectEqual(caption, table.createCaption());
+
+    // The setter replaces the first caption and inserts the new one first.
+    const other = document.createElement('caption');
+    table.appendChild(other);
+    const replacement = document.createElement('caption');
+    table.caption = replacement;
+    testing.expectEqual(null, caption.parentNode);
+    testing.expectEqual(replacement, table.firstChild);
+    testing.expectEqual(table, other.parentNode);
+
+    // Only an HTML caption counts.
+    table.caption = null;
+    testing.expectEqual(other, table.caption);
+    table.deleteCaption();
+    testing.expectEqual(null, other.parentNode);
+    const foreign = table.appendChild(document.createElementNS('foo', 'caption'));
+    testing.expectEqual(null, table.caption);
+    table.deleteCaption();
+    testing.expectEqual(table, foreign.parentNode);
+
+    testing.expectError('TypeError', () => { table.caption = document.createElement('div'); });
+  }
+</script>
+
+<script id="tHead_tFoot">
+  {
+    const table = document.createElement('table');
+    const caption = table.appendChild(document.createElement('caption'));
+    const colgroup = table.appendChild(document.createElement('colgroup'));
+    const tbody = table.appendChild(document.createElement('tbody'));
+    const tfoot = table.appendChild(document.createElement('tfoot'));
+    testing.expectEqual(null, table.tHead);
+    testing.expectEqual(tfoot, table.tFoot);
+
+    // A thead goes after any caption and colgroup.
+    const thead = table.createTHead();
+    testing.expectEqual(thead, colgroup.nextSibling);
+    testing.expectEqual(thead, table.tHead);
+    testing.expectEqual(thead, table.createTHead());
+
+    // A tfoot is appended at the end.
+    table.deleteTFoot();
+    testing.expectEqual(null, tfoot.parentNode);
+    const newFoot = table.createTFoot();
+    testing.expectEqual(newFoot, table.lastChild);
+    table.appendChild(document.createElement('tbody'));
+    table.tFoot = tfoot;
+    testing.expectEqual(null, newFoot.parentNode);
+    testing.expectEqual(tfoot, table.lastChild);
+
+    // Assigning the wrong section throws.
+    testing.expectError('HierarchyRequestError', () => { table.tHead = document.createElement('tbody'); });
+    testing.expectError('HierarchyRequestError', () => { table.tFoot = document.createElement('thead'); });
+    testing.expectEqual(thead, table.tHead);
+
+    table.tHead = null;
+    testing.expectEqual(null, thead.parentNode);
+    testing.expectEqual(null, table.tHead);
+    table.deleteTHead();
+    testing.expectEqual(caption, table.firstChild);
+  }
+</script>
+
+<script id="createTBody">
+  {
+    const table = document.createElement('table');
+    const first = table.createTBody();
+    testing.expectEqual(first, table.firstChild);
+    testing.expectEqual('TBODY', first.tagName);
+
+    // The new tbody goes right after the last tbody, not at the end.
+    const tfoot = table.appendChild(document.createElement('tfoot'));
+    const second = table.createTBody();
+    testing.expectEqual(second, first.nextSibling);
+    testing.expectEqual(tfoot, second.nextSibling);
+    testing.expectEqual(2, table.tBodies.length);
+  }
+</script>
+
+<script id="insertRow">
+  {
+    // An empty table gets a tbody, even with an empty thead.
+    let table = document.createElement('table');
+    const thead = table.appendChild(document.createElement('thead'));
+    let row = table.insertRow();
+    testing.expectEqual('TR', row.tagName);
+    testing.expectEqual('TBODY', row.parentNode.tagName);
+    testing.expectEqual(table, row.parentNode.parentNode);
+    testing.expectEqual(0, thead.childNodes.length);
+
+    // A rowless table with a tbody uses its last tbody.
+    table = document.createElement('table');
+    table.appendChild(document.createElement('tbody'));
+    const lastBody = table.appendChild(document.createElement('tbody'));
+    row = table.insertRow(0);
+    testing.expectEqual(lastBody, row.parentNode);
+
+    // -1 and rows.length append to the last row's parent: the tfoot here.
+    table = document.createElement('table');
+    const tbody = table.appendChild(document.createElement('tbody'));
+    tbody.appendChild(document.createElement('tr'));
+    const tfoot = table.appendChild(document.createElement('tfoot'));
+    tfoot.appendChild(document.createElement('tr'));
+    row = table.insertRow(-1);
+    testing.expectEqual(tfoot, row.parentNode);
+    row = table.insertRow(table.rows.length);
+    testing.expectEqual(tfoot, row.parentNode);
+    testing.expectEqual(row, tfoot.lastChild);
+
+    // Otherwise the row goes before the index-th row.
+    row = table.insertRow(1);
+    testing.expectEqual(tfoot, row.parentNode);
+    testing.expectEqual(row, tfoot.firstChild);
+    testing.expectEqual(1, row.rowIndex);
+
+    testing.expectError('IndexSizeError', () => table.insertRow(-2));
+    testing.expectError('IndexSizeError', () => table.insertRow(table.rows.length + 1));
+  }
+</script>
+
+<script id="section_rows">
+  {
+    const tbody = document.createElement('tbody');
+    tbody.appendChild(document.createElement('div'));
+    const a = tbody.insertRow();
+    const b = tbody.insertRow(0);
+    const c = tbody.insertRow(2);
+    testing.expectEqual([b, a, c], Array.from(tbody.rows));
+
+    testing.expectError('IndexSizeError', () => tbody.insertRow(-2));
+    testing.expectError('IndexSizeError', () => tbody.insertRow(4));
+    testing.expectError('IndexSizeError', () => tbody.deleteRow(3));
+    testing.expectError('IndexSizeError', () => tbody.deleteRow(-2));
+
+    tbody.deleteRow(-1);
+    testing.expectEqual(null, c.parentNode);
+    tbody.deleteRow(0);
+    testing.expectEqual(null, b.parentNode);
+    tbody.deleteRow(0);
+    testing.expectEqual(0, tbody.rows.length);
+
+    // -1 with no rows is a no-op, 0 throws.
+    tbody.deleteRow(-1);
+    testing.expectError('IndexSizeError', () => tbody.deleteRow(0));
+    testing.expectEqual(1, tbody.childNodes.length);
+  }
+</script>
+
+<script id="row_cells">
+  {
+    const tr = document.createElement('tr');
+    const th = tr.appendChild(document.createElement('th'));
+    tr.appendChild(document.createTextNode('x'));
+    const a = tr.insertCell();
+    const b = tr.insertCell(1);
+    testing.expectEqual('TD', a.tagName);
+    testing.expectEqual([th, b, a], Array.from(tr.cells));
+    testing.expectEqual(0, th.cellIndex);
+    testing.expectEqual(1, b.cellIndex);
+    testing.expectEqual(2, a.cellIndex);
+
+    testing.expectError('IndexSizeError', () => tr.insertCell(-2));
+    testing.expectError('IndexSizeError', () => tr.insertCell(4));
+    testing.expectError('IndexSizeError', () => tr.deleteCell(3));
+
+    tr.deleteCell(-1);
+    testing.expectEqual(null, a.parentNode);
+    testing.expectEqual(-1, a.cellIndex);
+    tr.deleteCell(0);
+    testing.expectEqual(0, b.cellIndex);
+
+    // A cell outside an HTML tr has no index.
+    const div = document.createElement('div');
+    div.appendChild(b);
+    testing.expectEqual(-1, b.cellIndex);
+  }
+</script>
+
+<script id="rowIndex">
+  {
+    const table = document.createElement('table');
+    const tfoot = table.appendChild(document.createElement('tfoot'));
+    const foot = tfoot.appendChild(document.createElement('tr'));
+    const top = table.appendChild(document.createElement('tr'));
+    const thead = table.appendChild(document.createElement('thead'));
+    const head1 = thead.appendChild(document.createElement('tr'));
+    const head2 = thead.appendChild(document.createElement('tr'));
+    const tbody = table.appendChild(document.createElement('tbody'));
+    const body = tbody.appendChild(document.createElement('tr'));
+
+    // Rows in spec order: head1, head2, top, body, foot.
+    testing.expectEqual(0, head1.rowIndex);
+    testing.expectEqual(1, head2.rowIndex);
+    testing.expectEqual(2, top.rowIndex);
+    testing.expectEqual(3, body.rowIndex);
+    testing.expectEqual(4, foot.rowIndex);
+
+    // sectionRowIndex is the index in the parent's rows: the table's for a
+    // table-level row.
+    testing.expectEqual(1, head2.sectionRowIndex);
+    testing.expectEqual(2, top.sectionRowIndex);
+    testing.expectEqual(0, body.sectionRowIndex);
+    testing.expectEqual(0, foot.sectionRowIndex);
+
+    // A section outside a table still has a sectionRowIndex, but no rowIndex.
+    const loose = document.createElement('tbody');
+    loose.appendChild(document.createElement('tr'));
+    const row = loose.appendChild(document.createElement('tr'));
+    testing.expectEqual(-1, row.rowIndex);
+    testing.expectEqual(1, row.sectionRowIndex);
+
+    const orphan = document.createElement('tr');
+    testing.expectEqual(-1, orphan.rowIndex);
+    testing.expectEqual(-1, orphan.sectionRowIndex);
+    document.createElement('div').appendChild(orphan);
+    testing.expectEqual(-1, orphan.rowIndex);
+    testing.expectEqual(-1, orphan.sectionRowIndex);
   }
 </script>

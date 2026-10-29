@@ -21,3 +21,63 @@
   // above shouldn't crash (it used to)
   testing.expectEqual(true, true);
 </script>
+
+<script id=orientation_accessors>
+  testing.expectEqual('function', typeof screen.orientation.lock);
+  testing.expectEqual('function', typeof screen.orientation.unlock);
+  testing.expectError('TypeError', () => ScreenOrientation.prototype.type);
+  testing.expectError('TypeError', () => ScreenOrientation.prototype.angle);
+
+  testing.expectEqual(null, screen.orientation.onchange);
+  let changed = 0;
+  screen.orientation.onchange = () => changed += 1;
+  screen.orientation.dispatchEvent(new Event('change'));
+  testing.expectEqual(1, changed);
+  screen.orientation.onchange = null;
+
+  testing.expectEqual(undefined, screen.orientation.unlock());
+</script>
+
+<script id=orientation_lock type=module>
+  const state = await testing.async();
+  const errorName = (p) => p.then(() => 'resolved', (e) => e.name);
+
+  const unsupported = await errorName(screen.orientation.lock('portrait'));
+  const invalid = await Promise.all([
+    screen.orientation.lock('nope'),
+    screen.orientation.lock(null),
+    screen.orientation.lock(),
+  ].map(errorName));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('NotSupportedError', unsupported);
+    testing.expectEqual(['TypeError', 'TypeError', 'TypeError'], invalid);
+  });
+</script>
+
+<script id=fullscreen type=module>
+  const state = await testing.async();
+
+  let requestError = null;
+  try {
+    await document.documentElement.requestFullscreen();
+  } catch (e) {
+    requestError = e;
+  }
+  let exitError = null;
+  try {
+    await document.exitFullscreen();
+  } catch (e) {
+    exitError = e;
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, document.fullscreenEnabled);
+    testing.expectEqual(false, document.fullscreen);
+    testing.expectEqual(null, document.fullscreenElement);
+    testing.expectEqual(true, requestError instanceof TypeError);
+    testing.expectEqual(true, exitError instanceof TypeError);
+  });
+</script>

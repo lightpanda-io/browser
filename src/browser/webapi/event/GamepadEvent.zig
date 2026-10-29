@@ -59,7 +59,7 @@ pub fn asEvent(self: *GamepadEvent) *Event {
 }
 
 // There are no gamepads in a headless browser.
-pub fn getGamepad(_: *const GamepadEvent) ?bool {
+fn getGamepad(_: *const GamepadEvent) ?bool {
     return null;
 }
 
@@ -68,7 +68,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "GamepadEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

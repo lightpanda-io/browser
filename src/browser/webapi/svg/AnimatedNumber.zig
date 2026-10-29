@@ -57,9 +57,10 @@ pub const Lookup = std.AutoHashMapUnmanaged(Key, *AnimatedNumber);
 
 pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedNumber {
     const key: Key = .{ .element = element, .kind = kind };
-    const gop = try frame._svg_animated_numbers.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page.svg_animated_numbers.getOrPut(page.arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_numbers.remove(key);
+        errdefer _ = page.svg_animated_numbers.remove(key);
         gop.value_ptr.* = try frame._factory.create(AnimatedNumber{
             ._element = element,
             ._attr_name = kind.attributeName(),
@@ -73,15 +74,15 @@ pub fn getBaseVal(self: *const AnimatedNumber) f32 {
     return self.currentValue();
 }
 
-pub fn setBaseVal(self: *AnimatedNumber, value: f32, frame: *Frame) !void {
+fn setBaseVal(self: *AnimatedNumber, value: f32, frame: *Frame) !void {
     if (!std.math.isFinite(value)) {
         return error.TypeError;
     }
-    const serialized = try std.fmt.allocPrint(frame.local_arena, "{d}", .{value});
+    const serialized = try frame.local_arena.print("{d}", .{value});
     try self._element.setAttributeSafe(self._attr_name, .wrap(serialized), frame);
 }
 
-pub fn getAnimVal(self: *const AnimatedNumber) f32 {
+fn getAnimVal(self: *const AnimatedNumber) f32 {
     return self.currentValue();
 }
 
@@ -100,7 +101,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "SVGAnimatedNumber";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

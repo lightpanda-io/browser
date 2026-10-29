@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <meta charset="UTF-8">
 
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=decoder>
   let d1 = new TextDecoder();
@@ -61,6 +62,23 @@
   testing.expectEqual(1000, out.length);
   testing.expectEqual('hihi', out.slice(0, 4));
   testing.expectEqual('', d5.decode());
+</script>
+
+<script id=bom>
+  // Only a BOM of the decoder's own encoding is stripped; nothing is sniffed.
+  testing.expectEqual('\ufffd\ufffdA\u0000', new TextDecoder().decode(new Uint8Array([0xFF, 0xFE, 0x41, 0x00])));
+  testing.expectEqual('\u00ef\u00bb\u00bf\u00e9', new TextDecoder('windows-1252').decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0xE9])));
+  testing.expectEqual('A', new TextDecoder('utf-16le').decode(new Uint8Array([0xFF, 0xFE, 0x41, 0x00])));
+  testing.expectEqual('\ufeffA', new TextDecoder('utf-8', {ignoreBOM: true}).decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x41])));
+  testing.expectEqual('A', new TextDecoder('utf-16be').decode(new Uint8Array([0xFE, 0xFF, 0x00, 0x41])));
+  // gb18030 has no BOM: a leading U+FEFF is kept.
+  testing.expectEqual('\ufeffA', new TextDecoder('gb18030').decode(new Uint8Array([0x84, 0x31, 0x95, 0x33, 0x41])));
+
+  // A BOM split across chunks is still stripped, and again after a flush.
+  let d6 = new TextDecoder();
+  testing.expectEqual('', d6.decode(new Uint8Array([0xEF, 0xBB]), { stream: true }));
+  testing.expectEqual('A', d6.decode(new Uint8Array([0xBF, 0x41])));
+  testing.expectEqual('B', d6.decode(new Uint8Array([0xEF, 0xBB, 0xBF, 0x42])));
 </script>
 
 <script id=slice>
@@ -151,5 +169,21 @@
 
     // Verify decoder still works after error recovery
     testing.expectEqual('B', d.decode(new Uint8Array([66])));
+  }
+</script>
+
+<script id=stream_pending_bytes>
+  {
+    // Bytes held from the last call can decode to more than the new input
+    // alone would: here one byte gives two U+FFFD.
+    let d = new TextDecoder();
+    testing.expectEqual('', d.decode(new Uint8Array([0xF0]), { stream: true }));
+    testing.expectEqual('\uFFFD\uFFFD', d.decode(new Uint8Array([0x8F]), { stream: true }));
+    testing.expectEqual('\uFFFD', d.decode(new Uint8Array([0x92]), { stream: true }));
+    testing.expectEqual('', d.decode());
+
+    testing.expectEqual('', d.decode(new Uint8Array([0xF0, 0x9F]), { stream: true }));
+    testing.expectEqual('\uFFFDA', d.decode(new Uint8Array([0x41]), { stream: true }));
+    testing.expectEqual('', d.decode());
   }
 </script>

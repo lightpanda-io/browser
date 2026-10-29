@@ -28,7 +28,7 @@ func main() {
 
 	lookup :=
 		"const std = @import(\"std\");\n" +
-			"const builtin = @import(\"builtin\");\n\n" +
+			"const lp = @import(\"lightpanda\");\n\n" +
 			"pub fn lookup(value: []const u8) bool {\n" +
 			"    return public_suffix_list.has(value);\n" +
 			"}\n"
@@ -36,7 +36,7 @@ func main() {
 
 	fmt.Println("const public_suffix_list = std.StaticStringMap(void).initComptime(entries);\n")
 	fmt.Println("const entries: []const struct { []const u8, void } =")
-	fmt.Println("    if (builtin.is_test) &.{")
+	fmt.Println("    if (lp.IS_TEST) &.{")
 	fmt.Println("        .{ \"api.gov.uk\", {} },")
 	fmt.Println("        .{ \"gov.uk\", {} },")
 	fmt.Println("    } else &.{")

@@ -58,23 +58,23 @@ pub fn acquireRef(self: *DOMTreeWalker) void {
     self._rc.acquire();
 }
 
-pub fn getRoot(self: *const DOMTreeWalker) *Node {
+fn getRoot(self: *const DOMTreeWalker) *Node {
     return self._root;
 }
 
-pub fn getWhatToShow(self: *const DOMTreeWalker) u32 {
+fn getWhatToShow(self: *const DOMTreeWalker) u32 {
     return self._what_to_show;
 }
 
-pub fn getFilter(self: *const DOMTreeWalker) ?FilterOpts {
+fn getFilter(self: *const DOMTreeWalker) ?FilterOpts {
     return self._filter._opts;
 }
 
-pub fn getCurrentNode(self: *const DOMTreeWalker) *Node {
+fn getCurrentNode(self: *const DOMTreeWalker) *Node {
     return self._current;
 }
 
-pub fn setCurrentNode(self: *DOMTreeWalker, node: *Node) void {
+fn setCurrentNode(self: *DOMTreeWalker, node: *Node) void {
     self._current = node;
 }
 
@@ -223,7 +223,7 @@ fn traverseSiblings(self: *DOMTreeWalker, comptime direction: enum { next, previ
     }
 }
 
-pub fn previousNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
+fn previousNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current;
     while (node != self._root) {
         var sibling = self.previousSiblingOrNull(node);
@@ -283,7 +283,7 @@ pub fn previousNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     return null;
 }
 
-pub fn nextNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
+fn nextNode(self: *DOMTreeWalker, frame: *Frame) !?*Node {
     var node = self._current;
 
     while (true) {
@@ -390,7 +390,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "TreeWalker";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -1,0 +1,8 @@
+<!doctype html>
+<input id=text>
+<input id=upload type=file>
+<script>
+  window.__evts = [];
+  const rec = (e) => window.__evts.push(e.type + ':' + e.target.id);
+  for (const t of ['focus', 'focusin', 'input', 'change']) document.addEventListener(t, rec, true);
+</script>

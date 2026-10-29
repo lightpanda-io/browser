@@ -1,5 +1,18 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
+<script>
+  // The module scripts below interleave at each await, but they all change the
+  // one document URL and share window.onhashchange. Each takes a turn, and the
+  // next one starts after the previous one releases it.
+  let turn = Promise.resolve();
+  function takeTurn() {
+    let release;
+    const mine = new Promise((resolve) => { release = resolve; });
+    const ready = turn.then(() => release);
+    turn = mine;
+    return ready;
+  }
+</script>
 
 <script id=hashChangeConstructor>
 {
@@ -50,7 +63,9 @@
   // hashchange is fired by queuing a task (not synchronously): the handler
   // below is registered AFTER the first `location.hash` change yet still
   // observes it, and each fragment change fires its own event.
+  const my_turn = takeTurn();
   const state = await testing.async();
+  const release = await my_turn;
   const root = location.href.split('#')[0];
 
   const oldURLs = [];
@@ -79,6 +94,7 @@
     testing.expectEqual([root + '#foo', root + '#bar'], newURLs);
     window.onhashchange = null;
   });
+  release();
 }
 </script>
 
@@ -88,7 +104,9 @@
   // but differ only by fragment must also fire hashchange. The decision is
   // owned by Navigation.navigateInner (single resolved-URL source of truth),
   // not re-derived in History.goInner.
+  const my_turn = takeTurn();
   const state = await testing.async();
+  const release = await my_turn;
 
   const events = [];
   window.onhashchange = (e) => {
@@ -112,5 +130,40 @@
     ], events);
     window.onhashchange = null;
   });
+  release();
+}
+</script>
+
+<script id=popStateFiresOnFragmentNavigation type=module>
+{
+  // A fragment navigation fires popstate synchronously, with the new entry's
+  // (null) state, before the assignment returns; hashchange follows in a
+  // queued task.
+  const my_turn = takeTurn();
+  const state = await testing.async();
+  const release = await my_turn;
+  const log = [];
+  const onpop = (e) => log.push(['popstate', e.state, location.hash]);
+  const onhash = (e) => {
+    if (!e.newURL.endsWith('#popstate-check')) return;
+    log.push(['hashchange']);
+    state.resolve();
+  };
+  window.addEventListener('hashchange', onhash);
+
+  window.addEventListener('popstate', onpop);
+  location.hash = '#popstate-check';
+  log.push(['after assignment']);
+  window.removeEventListener('popstate', onpop);
+
+  await state.done(() => {
+    testing.expectEqual([
+      ['popstate', null, '#popstate-check'],
+      ['after assignment'],
+      ['hashchange'],
+    ], log);
+    window.removeEventListener('hashchange', onhash);
+  });
+  release();
 }
 </script>

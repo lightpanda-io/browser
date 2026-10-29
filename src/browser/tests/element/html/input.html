@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<meta charset="utf-8">
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <input id="text1" type="text" value="initial">
@@ -46,7 +48,7 @@
     testing.expectEqual(5, input.maxLength);
     input.maxLength = 'banana';
     testing.expectEqual(0, input.maxLength);
-    testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => { input.maxLength = -45;});
+    testing.expectError('IndexSizeError', () => { input.maxLength = -45;});
 
     testing.expectEqual(20, input.size);
     input.size = 5;
@@ -210,8 +212,11 @@
     });
     input.setSelectionRange(1, 4);
 
+    // Fires asynchronously, and changes before it fires fold into one event.
+    testing.expectEqual(0, eventCount);
+
     testing.onload(() => {
-      testing.expectEqual(5, eventCount);
+      testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(input, lastEvent.target);
       testing.expectEqual(true, lastEvent.bubbles);
@@ -530,5 +535,216 @@
 
     input_checked.defaultChecked = true;
     testing.expectEqual(false, input_checked.checked);
+  }
+</script>
+
+<script id="value_setter_moves_caret">
+  {
+    // Setting `value` moves the text entry cursor to the end of the new value,
+    // unselects any selected text and resets the selection direction.
+    // https://html.spec.whatwg.org/#dom-input-value
+    const input = document.createElement('input');
+    input.type = 'text';
+    document.body.appendChild(input);
+
+    input.value = 'abc';
+    testing.expectEqual(3, input.selectionStart);
+    testing.expectEqual(3, input.selectionEnd);
+
+    input.setSelectionRange(1, 2, 'backward');
+    input.value = 'hello';
+    testing.expectEqual(5, input.selectionStart);
+    testing.expectEqual(5, input.selectionEnd);
+    // Platforms without a "none" direction report "forward" (Chrome on Linux).
+    const probe = document.createElement('input');
+    probe.setSelectionRange(0, 0, 'none');
+    testing.expectEqual(probe.selectionDirection, input.selectionDirection);
+
+    // The caret follows the _sanitized_ value: a text input strips CR/LF.
+    input.value = 'a\nb';
+    testing.expectEqual(2, input.selectionStart);
+    testing.expectEqual(2, input.selectionEnd);
+
+    // Re-assigning the same value leaves the selection alone
+    // (WPT textfieldselection/selection-after-content-change.html).
+    input.value = 'hello';
+    input.setSelectionRange(1, 3, 'backward');
+    input.value = 'hello';
+    testing.expectEqual(1, input.selectionStart);
+    testing.expectEqual(3, input.selectionEnd);
+    testing.expectEqual('backward', input.selectionDirection);
+
+    // ...including when the new value only differs before sanitization.
+    input.value = 'hel\nlo';
+    testing.expectEqual(1, input.selectionStart);
+    testing.expectEqual(3, input.selectionEnd);
+
+    // Assigning a value equal to the default is not a change for the caret,
+    // but it still sets the dirty flag: later attribute edits stay hidden.
+    const dflt = document.createElement('input');
+    dflt.type = 'text';
+    dflt.defaultValue = 'foo';
+    dflt.value = 'foo';
+    testing.expectEqual(0, dflt.selectionStart);
+    testing.expectEqual(0, dflt.selectionEnd);
+    dflt.defaultValue = 'bar';
+    testing.expectEqual('foo', dflt.value);
+
+    // Types with no text entry cursor keep reporting null rather than a number.
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.value = 'on';
+    testing.expectEqual(null, check.selectionStart);
+    testing.expectEqual(null, check.selectionEnd);
+  }
+</script>
+
+<script id="selection_utf16_offsets">
+  {
+    // Offsets count UTF-16 code units, like value.length.
+    const el = document.createElement('input');
+    el.value = 'h\u00e9llo';
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+    el.setSelectionRange(1, 3);
+    testing.expectEqual('\u00e9l', el.value.substring(el.selectionStart, el.selectionEnd));
+
+    el.value = 'a\u{1F600}b';
+    testing.expectEqual(4, el.selectionEnd);
+    el.selectionStart = 3;
+    testing.expectEqual(3, el.selectionStart);
+    el.setSelectionRange(10, 20);
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+  }
+</script>
+
+<script id="selection_setters_keep_order">
+  {
+    // Setting one end past the other drags the other along (start <= end).
+    const el = document.createElement('input');
+    el.value = 'hello';
+    el.setSelectionRange(1, 2, 'backward');
+    el.selectionStart = 4;
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+    testing.expectEqual('backward', el.selectionDirection);
+
+    el.setSelectionRange(3, 4);
+    el.selectionEnd = 1;
+    testing.expectEqual(1, el.selectionStart);
+    testing.expectEqual(1, el.selectionEnd);
+
+    el.selectionStart = 10;
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+  }
+</script>
+
+<script id="select_without_selection_api">
+  {
+    // select() never throws, even where the selection APIs don't apply.
+    for (const type of ['email', 'number', 'date', 'color', 'checkbox', 'radio', 'file', 'hidden']) {
+      const input = document.createElement('input');
+      input.type = type;
+      input.select();
+      testing.expectEqual(null, input.selectionStart);
+    }
+
+    const email = document.createElement('input');
+    email.type = 'email';
+    email.value = 'old@example.com';
+    let selects = 0;
+    email.addEventListener('select', () => selects++);
+    email.select();
+    // select is queued, not fired synchronously
+    testing.expectEqual(0, selects);
+    testing.expectError('InvalidStateError', () => email.setSelectionRange(0, 1));
+
+    const date = document.createElement('input');
+    date.type = 'date';
+    date.value = '2026-09-28';
+    let date_selects = 0;
+    date.addEventListener('select', () => date_selects++);
+    date.select();
+
+    testing.onload(() => {
+      testing.expectEqual(1, selects);
+      testing.expectEqual(0, date_selects);
+    });
+  }
+</script>
+
+<script id="pattern_catastrophic_backtracking">
+  {
+    // A nested quantifier backtracks exponentially on a value that almost
+    // matches. Chrome bounds the match and returns at once, treating a
+    // pattern that gives up as not matching.
+    const input = document.createElement('input');
+    input.pattern = '(a+)+';
+    input.value = 'a'.repeat(40) + 'b';
+    testing.expectEqual(true, input.validity.patternMismatch);
+    testing.expectEqual(false, input.checkValidity());
+  }
+</script>
+
+<script id="setRangeText">
+  {
+    const input = document.createElement('input');
+    const state = () => [input.value, input.selectionStart, input.selectionEnd].join('|');
+    const reset = () => { input.value = 'hello world'; input.setSelectionRange(2, 7); };
+
+    reset();
+    input.setRangeText('XY');
+    testing.expectEqual('heXYorld|2|4', state());
+
+    reset();
+    input.setRangeText('ABC', 0, 5, 'select');
+    testing.expectEqual('ABC world|0|3', state());
+
+    reset();
+    input.setRangeText('ABC', 0, 5, 'start');
+    testing.expectEqual('ABC world|0|0', state());
+
+    reset();
+    input.setRangeText('ABC', 0, 5, 'end');
+    testing.expectEqual('ABC world|3|3', state());
+
+    // 'preserve' keeps the selection on the same text
+    reset();
+    input.setRangeText('ZZZZ', 8, 9);
+    testing.expectEqual('hello woZZZZld|2|7', state());
+
+    reset();
+    input.setRangeText('Q', 4, 9, 'preserve');
+    testing.expectEqual('hellQld|2|5', state());
+
+    reset();
+    input.setRangeText('!', 50, 60);
+    testing.expectEqual('hello world!|2|7', state());
+
+    reset();
+    testing.expectError('IndexSizeError', () => input.setRangeText('!', 5, 2));
+    testing.expectError('TypeError', () => input.setRangeText('!', 1, 2, 'bogus'));
+    testing.expectError('TypeError', () => input.setRangeText('!', 1));
+    // argument errors win over the range and type checks
+    testing.expectError('TypeError', () => input.setRangeText('!', 5, 2, 'bogus'));
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    testing.expectError('InvalidStateError', () => checkbox.setRangeText('x'));
+    testing.expectError('TypeError', () => checkbox.setRangeText('x', 1));
+
+    // offsets count UTF-16 code units
+    input.value = '😀a';
+    input.setRangeText('b', 2, 3, 'select');
+    testing.expectEqual('😀b|2|3', state());
+
+    // the stripped newline doesn't push the caret into the 'é'
+    input.value = 'é';
+    input.setRangeText('\n', 0, 0, 'end');
+    testing.expectEqual('é|1|1', state());
+    input.setRangeText('X');
+    testing.expectEqual('éX|1|1', state());
   }
 </script>

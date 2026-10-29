@@ -24,19 +24,22 @@ const Page = @import("../Page.zig");
 const URL = @import("URL.zig");
 const U = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
+const NavigationKind = @import("navigation/root.zig").NavigationKind;
 
 const Location = @This();
 
 _url: *URL,
+_frame: *Frame,
 _rc: lp.RC = .{},
 
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
     const url = try URL.init(raw_url, null, &frame.js.execution);
     url.acquireRef();
-    errdefer url.releaseRef(frame._page);
+    errdefer url.releaseRef(frame.page);
 
     return frame._factory.create(Location{
         ._url = url,
+        ._frame = frame,
     });
 }
 
@@ -52,11 +55,11 @@ pub fn releaseRef(self: *Location, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getPathname(self: *const Location) []const u8 {
+fn getPathname(self: *const Location) []const u8 {
     return self._url.getPathname();
 }
 
-pub fn getProtocol(self: *const Location) []const u8 {
+fn getProtocol(self: *const Location) []const u8 {
     return self._url.getProtocol();
 }
 
@@ -76,7 +79,7 @@ pub fn getOrigin(self: *const Location, exec: *const js.Execution) ![]const u8 {
     return self._url.getOrigin(exec);
 }
 
-pub fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
+fn getSearch(self: *const Location, exec: *const js.Execution) ![]const u8 {
     return self._url.getSearch(exec);
 }
 
@@ -84,64 +87,94 @@ pub fn getHash(self: *const Location) []const u8 {
     return self._url.getHash();
 }
 
-pub fn setPathname(_: *const Location, pathname: []const u8, frame: *Frame) !void {
-    const new_url = try U.setPathname(frame.url, pathname, frame.call_arena);
-    return frame.scheduleNavigation(new_url, .{
-        .reason = .script,
-        .kind = .{ .push = null },
-    }, .{ .script = frame });
+pub fn historyHandling(target: *const Frame) NavigationKind {
+    if (target.isCompletelyLoaded()) {
+        return .{ .push = null };
+    }
+    // if the document isn't completely loaded, a navigation replaces its entry.
+    return .{ .replace = null };
 }
 
-pub fn setSearch(_: *const Location, search: []const u8, frame: *Frame) !void {
-    const new_url = try U.setSearch(frame.url, search, frame.call_arena);
-    return frame.scheduleNavigation(new_url, .{
+pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !void {
+    const target = self._frame;
+    const new_url = try U.setPathname(target.url, pathname, frame.call_arena);
+    return target.scheduleNavigation(new_url, .{
         .reason = .script,
-        .kind = .{ .push = null },
-    }, .{ .script = frame });
+        .kind = historyHandling(target),
+    }, .{ .script = target });
 }
 
-pub fn setHash(_: *const Location, hash: []const u8, frame: *Frame) !void {
-    const old_url = frame.url;
-    const base_end = std.mem.indexOfScalar(u8, old_url, '#') orelse old_url.len;
+fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
+    const target = self._frame;
+    const new_url = try U.setSearch(target.url, search, frame.call_arena);
+    return target.scheduleNavigation(new_url, .{
+        .reason = .script,
+        .kind = historyHandling(target),
+    }, .{ .script = target });
+}
+
+fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
+    const target = self._frame;
+    const old_url = target.url;
+    const base_end = std.mem.findScalar(u8, old_url, '#') orelse old_url.len;
     // Includes the leading '#'; empty when the URL has no fragment.
     const old_fragment = old_url[base_end..];
 
+    // Clearing the hash on an URL w/ no fragment does nothing.
+    if (old_fragment.len == 0 and (hash.len == 0 or std.mem.eql(u8, hash, "#"))) {
+        return;
+    }
+
     const normalized_hash: []const u8 = blk: {
         if (hash.len == 0) {
-            break :blk "";
+            break :blk "#";
         } else if (hash[0] == '#') {
             break :blk hash;
         }
         // Scratch only: scheduleNavigation dupes the URL into its own arena
         // synchronously, so the local arena suffices.
-        break :blk try std.fmt.allocPrint(frame.local_arena, "#{s}", .{hash});
+        break :blk try frame.local_arena.print("#{s}", .{hash});
     };
 
-    // Per the Location hash setter, when the fragment doesn't change no
-    // navigation happens at all — in particular `location.hash = ""` on a
-    // fragment-less URL must not turn into a same-URL reload.
+    // No navigation when the fragment doesn't change.
     if (std.mem.eql(u8, old_fragment, normalized_hash)) {
         return;
     }
 
-    const target_url = if (normalized_hash.len == 0) old_url[0..base_end] else normalized_hash;
+    const target_url = try frame.local_arena.print("{s}{s}", .{ old_url[0..base_end], normalized_hash });
 
-    return frame.scheduleNavigation(target_url, .{
+    return target.scheduleNavigation(target_url, .{
         .reason = .script,
-        .kind = .{ .replace = null },
-    }, .{ .script = frame });
+        .kind = historyHandling(target),
+    }, .{ .script = target });
 }
 
-pub fn assign(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+// The href setter, assign() and replace() parse the URL relative to the entry
+// settings object: the calling script's document. It isn't this location's
+// document when a script navigates another same-origin window, as in
+// iframe.contentWindow.location.href = "page.html". V8 only exposes the
+// incumbent context, which is the entry one for a call made by a script.
+fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) ![]const u8 {
+    const caller = frame.js.getIncumbent();
+    if (caller == self._frame) {
+        return url;
+    }
+    return U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
 }
 
-pub fn replace(_: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = frame });
+pub fn assign(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target_url = try self.parseFromCaller(url, frame);
+    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(self._frame) }, .{ .script = self._frame });
 }
 
-pub fn reload(_: *const Location, frame: *Frame) !void {
-    return frame.scheduleNavigation(frame.url, .{ .reason = .script, .kind = .reload }, .{ .script = frame });
+pub fn replace(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target_url = try self.parseFromCaller(url, frame);
+    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = self._frame });
+}
+
+pub fn reload(self: *const Location) !void {
+    const target = self._frame;
+    return target.scheduleNavigation(target.url, .{ .reason = .script, .kind = .reload }, .{ .script = target });
 }
 
 pub fn toString(self: *const Location, exec: *const js.Execution) ![]const u8 {
@@ -153,7 +186,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Location";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

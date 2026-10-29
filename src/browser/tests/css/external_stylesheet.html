@@ -68,6 +68,31 @@
     });
   </script>
 
+  <script id="ext_stylesheet_large_applies" type=module>
+    const state = await testing.async();
+    const el = document.createElement('div');
+    el.className = 'large-hide';
+    el.textContent = 'hidden by large sheet';
+    document.body.appendChild(el);
+
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/styles/large.css';
+
+    const evt = await new Promise(resolve => {
+      link.addEventListener('load', () => resolve('load'));
+      link.addEventListener('error', () => resolve('error'));
+      document.head.appendChild(link);
+    });
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('load', evt);
+      testing.expectEqual('none', getComputedStyle(el).display);
+      testing.expectFalse(document.body.innerText.includes('hidden by large sheet'));
+    });
+  </script>
+
   <script id="ext_stylesheet_oversize_fires_error" type=module>
     const state = await testing.async();
     const link = document.createElement('link');
@@ -96,24 +121,27 @@
     link.rel = 'stylesheet';
     link.href = '/styles/visibility.css';
 
-    const baseline = document.styleSheets.length;
+    const ownedSheets = () => Array.from(document.styleSheets).filter(sheet => sheet.ownerNode === link);
+    const baseline = ownedSheets().length;
 
     await new Promise(resolve => {
       link.addEventListener('load', () => resolve(), { once: true });
       document.head.appendChild(link);
     });
-    const afterFirst = document.styleSheets.length;
+    const firstSheets = ownedSheets();
+    const afterFirst = firstSheets.length;
+    const firstSheet = firstSheets[0];
 
     const second = await new Promise(resolve => {
       link.addEventListener('load', () => resolve('load'), { once: true });
       link.addEventListener('error', () => resolve('error'), { once: true });
       link.href = '/styles/visibility2.css';
     });
-    const afterSecond = document.styleSheets.length;
+    const secondSheets = ownedSheets();
+    const afterSecond = secondSheets.length;
 
-    // New rules must be in effect after the swap. The reused sheet is
-    // the last registered one (the static head link registered first).
-    const sheet = document.styleSheets[afterFirst - 1];
+    // Other module scripts may add unrelated sheets while the load is pending.
+    const sheet = secondSheets[0];
     const sheetHref = sheet.href;
     const sheetRulesLen = sheet.cssRules.length;
     const sheetSelector = sheet.cssRules[0].selectorText;
@@ -123,6 +151,7 @@
       testing.expectEqual(baseline + 1, afterFirst);
       testing.expectEqual('load', second);
       testing.expectEqual(afterFirst, afterSecond);
+      testing.expectTrue(firstSheet === sheet);
       testing.expectEqual(testing.ORIGIN + '/styles/visibility2.css', sheetHref);
       testing.expectEqual(1, sheetRulesLen);
       testing.expectEqual('.ext-hide-2', sheetSelector);

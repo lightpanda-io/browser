@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="iframes_in_connected_shadow_subtrees">
+(async () => {
+  const state = await testing.async();
+  const pending = [];
+
+  function addFrame(parent, label) {
+    const iframe = document.createElement('iframe');
+    iframe.srcdoc = '<p id="marker">Loaded</p>';
+    const loaded = new Promise(resolve => {
+      iframe.addEventListener('load', () => resolve(label));
+    });
+    parent.appendChild(iframe);
+    pending.push({ iframe, label, loaded });
+  }
+
+  for (const mode of ['open', 'closed']) {
+    const host = document.createElement('section');
+    const shadow = host.attachShadow({ mode });
+    addFrame(shadow, mode);
+    // Unslotted light children still get browsing contexts.
+    addFrame(host, mode + '-light');
+    document.body.appendChild(host);
+  }
+
+  const outer = document.createElement('section');
+  const outerShadow = outer.attachShadow({ mode: 'open' });
+  document.body.appendChild(outer);
+  const inner = document.createElement('article');
+  const innerShadow = inner.attachShadow({ mode: 'closed' });
+  addFrame(innerShadow, 'nested');
+  outerShadow.appendChild(inner);
+
+  const result = await Promise.race([
+    Promise.all(pending.map(item => item.loaded)),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 500)),
+  ]);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['open', 'open-light', 'closed', 'closed-light', 'nested'], result);
+    for (const { iframe } of pending) {
+      testing.expectTrue(iframe.contentWindow !== null);
+      testing.expectEqual('Loaded', iframe.contentDocument.getElementById('marker').textContent);
+    }
+  });
+})();
+</script>
+
+<script id="shadow_iframes_disconnect_and_reconnect">
+(async () => {
+  const state = await testing.async();
+  const checks = [];
+  const check = (expected, actual) => checks.push([expected, actual]);
+  for (const mode of ['open', 'closed']) {
+    const host = document.createElement('section');
+    const shadow = host.attachShadow({ mode });
+    const nested = document.createElement('article');
+    const nestedShadow = nested.attachShadow({ mode: 'closed' });
+    const iframe = document.createElement('iframe');
+    iframe.srcdoc = '<p id="marker">Reconnected</p>';
+    nestedShadow.appendChild(iframe);
+    shadow.appendChild(nested);
+    const load = () => new Promise(resolve => iframe.addEventListener('load', () => resolve('load'), { once: true }));
+    const firstLoad = load();
+    document.body.appendChild(host);
+    check('load', await Promise.race([firstLoad, new Promise(resolve => setTimeout(() => resolve('timeout'), 500))]));
+    const original = iframe.contentWindow;
+    host.remove();
+    check(null, iframe.contentWindow);
+    check(null, iframe.contentDocument);
+    const reloaded = load();
+    document.body.appendChild(host);
+    check('load', await Promise.race([reloaded, new Promise(resolve => setTimeout(() => resolve('timeout'), 500))]));
+    check(true, iframe.contentWindow !== original);
+    check('Reconnected', iframe.contentDocument.getElementById('marker').textContent);
+    host.remove();
+  }
+  state.resolve();
+  await state.done(() => { for (const [expected, actual] of checks) testing.expectEqual(expected, actual); });
+})();
+</script>
+
+<script id="connecting_host_does_not_promote_shadow_styles">
+const outside = document.createElement('button');
+outside.textContent = 'Outside';
+document.body.appendChild(outside);
+const styledHost = document.createElement('section');
+const styledShadow = styledHost.attachShadow({ mode: 'closed' });
+const scopedStyle = document.createElement('style');
+scopedStyle.textContent = 'button { display: none; }';
+styledShadow.appendChild(scopedStyle);
+document.body.appendChild(styledHost);
+testing.expectTrue(getComputedStyle(outside).display !== 'none');
+styledHost.remove();
+outside.remove();
+</script>

@@ -37,10 +37,6 @@ pub const Proto = XMLHttpRequestEventTarget;
 _proto: *XMLHttpRequestEventTarget,
 _xhr: *XMLHttpRequest,
 
-// pub fn deinit(self: *XMLHttpRequestUpload, _: *Page) void {
-//     self._proto.releaseListeners();
-// }
-
 pub fn releaseRef(self: *XMLHttpRequestUpload, page: *Page) void {
     self._xhr.releaseRef(page);
 }
@@ -58,7 +54,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "XMLHttpRequestUpload";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 };

@@ -61,7 +61,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     return event;
 }
 
-pub fn initCustomEvent(
+fn initCustomEvent(
     self: *CustomEvent,
     event_string: []const u8,
     bubbles: ?bool,
@@ -83,19 +83,10 @@ pub fn initCustomEvent(
     self._detail = detail_;
 }
 
-pub fn deinit(self: *CustomEvent, page: *Page) void {
+pub fn deinit(self: *CustomEvent, _: *Page) void {
     if (self._detail) |d| {
         d.release();
     }
-    self._proto.deinit(page);
-}
-
-pub fn releaseRef(self: *CustomEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
-}
-
-pub fn acquireRef(self: *CustomEvent) void {
-    self._proto.acquireRef();
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {
@@ -111,7 +102,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CustomEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -77,7 +77,7 @@ const tracked_event_types = [_][]const u8{
 };
 
 // Counts stored in a fixed array
-_counts: [tracked_event_types.len]u32 = [_]u32{0} ** tracked_event_types.len,
+_counts: [tracked_event_types.len]u32 = @splat(0),
 
 pub fn increment(self: *EventCounts, event_type: []const u8) void {
     if (getIndex(event_type)) |idx| {
@@ -137,7 +137,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "EventCounts";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

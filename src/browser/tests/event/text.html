@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=createEvent>
   {
@@ -25,7 +26,8 @@
     let evt = document.createEvent('TextEvent');
     evt.initTextEvent('foo');
     testing.expectEqual('foo', evt.type);
-    testing.expectEqual('', evt.data);
+    // legacy IDL default: optional DOMString dataArg = "undefined"
+    testing.expectEqual('undefined', evt.data);
     testing.expectEqual(false, evt.bubbles);
     testing.expectEqual(false, evt.cancelable);
   }

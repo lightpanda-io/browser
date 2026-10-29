@@ -2,7 +2,8 @@
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 100px;">Target Element</div>
 
-<script id="basic">
+<script id="basic" type=module>
+    const state = await testing.async();
     const target = document.getElementById('target');
     let callbackCalled = false;
     let entries = null;
@@ -13,8 +14,11 @@
     });
 
     observer.observe(target);
+    await testing.nextFrame();
+    observer.disconnect();
 
-    testing.onload(() => {
+    state.resolve();
+    await state.done(() => {
         testing.expectEqual(true, callbackCalled);
         testing.expectEqual(1, entries.length);
 
@@ -27,37 +31,88 @@
         testing.expectEqual('object', typeof entry.intersectionRect);
         testing.expectEqual('number', typeof entry.time);
         testing.expectEqual(true, entry.time > 0);
-
-        observer.disconnect();
     });
 </script>
 
-<script id=detached>
-  {
-    // never attached
-    let count = 0;
-    const div = document.createElement('div');
-    new IntersectionObserver((entries) => {
-      count += 1;
-    }).observe(div);
+<script id=detached type=module>
+  const state = await testing.async();
 
-    testing.onload(() => {
-      testing.expectEqual(0, count);
-    });
-  }
+  // never attached
+  let neverAttached = 0;
+  const div = document.createElement('div');
+  new IntersectionObserver((entries) => {
+    neverAttached += 1;
+  }).observe(div);
 
-  {
-    // not connected, but has parent
-    let count = 0;
-    const div1 = document.createElement('div');
-    const div2 = document.createElement('div');
-    new IntersectionObserver((entries) => {
-      count += 1;
-    }).observe(div1);
+  // has a parent, but never connected
+  let neverConnected = 0;
+  const div1 = document.createElement('div');
+  const div2 = document.createElement('div');
+  new IntersectionObserver((entries) => {
+    neverConnected += 1;
+  }).observe(div1);
+  div2.appendChild(div1);
 
-    div2.appendChild(div1);
-    testing.onload(() => {
-      testing.expectEqual(1, count);
-    });
-  }
+  // observed inside a detached subtree, reported once the subtree is connected
+  const seen = [];
+  const div3 = document.createElement('div');
+  const div4 = document.createElement('div');
+  div4.appendChild(div3);
+  new IntersectionObserver((entries) => {
+    for (const entry of entries) seen.push(entry.isIntersecting);
+  }).observe(div3);
+  document.body.appendChild(div4);
+
+  await testing.nextFrame();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, neverAttached);
+    testing.expectEqual(0, neverConnected);
+    testing.expectEqual([true], seen);
+  });
+</script>
+
+<script id=detached_document type=module>
+  // connected to a document that never renders, reported once adopted into
+  // this one (WPT intersection-observer/target-in-detached-document.html)
+  const state = await testing.async();
+
+  const seen = [];
+  const doc = document.implementation.createHTMLDocument('');
+  const div = doc.body.appendChild(doc.createElement('div'));
+  new IntersectionObserver((entries) => {
+    for (const entry of entries) seen.push(entry.isIntersecting);
+  }).observe(div);
+
+  await testing.nextFrame();
+  const before = seen.slice();
+  document.body.appendChild(div);
+  await testing.nextFrame();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([], before);
+    testing.expectEqual([true], seen);
+  });
+</script>
+
+<script id=delivered_in_microtask type=module>
+  // The spec delivers from the next rendering update, in a task.
+  const state = await testing.async();
+  const target = document.getElementById('target');
+  let count = 0;
+  const observer = new IntersectionObserver(() => { count += 1; });
+  observer.observe(target);
+  await Promise.resolve();
+  testing.diverges('Lightpanda delivers in a microtask, not at the next rendering update', () => {
+    testing.expectEqual(1, count);
+  });
+  await testing.nextFrame();
+  observer.disconnect();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, count);
+  });
 </script>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body><div id=host></div></body>
+
+<script id=touch-constructor>
+{
+  const body = document.body;
+  const t = new Touch({ identifier: 7, target: body, clientX: 5, clientY: 6, pageX: 15, screenX: 25, radiusX: 2, force: 0.5, rotationAngle: 30 });
+  testing.expectEqual(7, t.identifier);
+  testing.expectEqual(body, t.target);
+  testing.expectEqual([5, 6, 15, 0, 25, 0], [t.clientX, t.clientY, t.pageX, t.pageY, t.screenX, t.screenY]);
+  testing.expectEqual([2, 0, 0.5, 30], [t.radiusX, t.radiusY, t.force, t.rotationAngle]);
+
+  // Every member but identifier and target defaults to 0.
+  const bare = new Touch({ identifier: 8, target: body });
+  testing.expectEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [bare.clientX, bare.clientY, bare.pageX, bare.pageY,
+    bare.screenX, bare.screenY, bare.radiusX, bare.radiusY, bare.force, bare.rotationAngle]);
+
+  // A window is an EventTarget too.
+  testing.expectEqual(window, new Touch({ identifier: 1, target: window }).target);
+
+  // identifier and target are required, and target must be an EventTarget.
+  testing.expectError('TypeError', () => new Touch({ identifier: 1 }));
+  testing.expectError('TypeError', () => new Touch({ target: body }));
+  testing.expectError('TypeError', () => new Touch({ identifier: 1, target: {} }));
+  testing.expectError('TypeError', () => new Touch());
+
+  // The numbers are restricted: NaN and the infinities are TypeErrors.
+  testing.expectError('TypeError', () => new Touch({ identifier: 1, target: body, clientX: NaN }));
+  testing.expectError('TypeError', () => new Touch({ identifier: 1, target: body, force: Infinity }));
+  testing.expectError('TypeError', () => new Touch({ identifier: 1, target: body, pageY: -Infinity }));
+  // identifier is a long: it wraps.
+  testing.expectEqual(5, new Touch({ identifier: 2 ** 32 + 5, target: body }).identifier);
+  // The float members are single precision.
+  testing.expectEqual(0.30000001192092896, new Touch({ identifier: 1, target: body, force: 0.3 }).force);
+}
+</script>
+
+<script id=touch-event-init-lists>
+{
+  const body = document.body;
+  const a = new Touch({ identifier: 1, target: body });
+  const b = new Touch({ identifier: 2, target: body });
+  const ev = new TouchEvent('touchstart', { touches: [a, b], targetTouches: [a], changedTouches: [b], bubbles: true });
+  testing.expectEqual([2, 1, 1], [ev.touches.length, ev.targetTouches.length, ev.changedTouches.length]);
+  // The lists hold the touches given, and are the same list on every read.
+  testing.expectEqual(true, ev.touches[0] === a && ev.touches.item(1) === b);
+  testing.expectEqual(true, ev.targetTouches[0] === a && ev.changedTouches[0] === b);
+  testing.expectEqual(true, ev.touches === ev.touches);
+  testing.expectEqual(undefined, ev.touches[2]);
+  testing.expectEqual(null, ev.touches.item(2));
+
+  // Any iterable of Touch; anything else in it is a TypeError.
+  testing.expectEqual(1, new TouchEvent('x', { touches: new Set([a]) }).touches.length);
+  testing.expectError('TypeError', () => new TouchEvent('x', { touches: [{}] }));
+
+  // Without them, the lists are empty.
+  testing.expectEqual([0, 0, 0], ((e) => [e.touches.length, e.targetTouches.length, e.changedTouches.length])(new TouchEvent('x')));
+
+  // A dispatched event carries them to its listeners.
+  let seen;
+  body.addEventListener('touchstart', (e) => { seen = e.touches.length; }, { once: true });
+  body.dispatchEvent(ev);
+  testing.expectEqual(2, seen);
+}
+</script>

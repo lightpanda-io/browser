@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- removed while its src is still loading: the parent's load event must not
+     keep waiting on it -->
+<iframe id=hanging src="/xhr/hang"></iframe>
+<script id=removed_while_loading>
+  const hanging = document.getElementById('hanging');
+  hanging.remove();
+  testing.expectEqual(null, hanging.contentWindow);
+  testing.expectEqual(0, window.length);
+
+  // only complete once nothing delays the load event anymore
+  testing.onload(() => testing.expectEqual('complete', document.readyState));
+</script>
+
+<script id=discards_context type=module>
+  {
+    // other tests' iframes come and go concurrently, so look for ours
+    const frames = () => Array.from({ length: window.length }, (_, i) => window[i]);
+
+    const state = await testing.async();
+
+    window.ticks = 0;
+    const f = document.createElement('iframe');
+    f.srcdoc = '<script>setInterval(() => parent.ticks += 1, 5)<\/script>';
+    f.onload = () => {
+      const win = f.contentWindow;
+      const doc = f.contentDocument;
+      const listed = frames().includes(win);
+      f.remove();
+      const ticks = window.ticks;
+      setTimeout(() => state.resolve({ win, doc, listed, ticks }), 50);
+    };
+    document.body.appendChild(f);
+
+    await state.done(({ win, doc, listed, ticks }) => {
+      testing.expectEqual(true, listed);
+      testing.expectEqual(null, f.contentWindow);
+      testing.expectEqual(null, f.contentDocument);
+      testing.expectEqual(null, doc.defaultView);
+      testing.expectEqual(true, win.closed);
+      testing.expectEqual(false, frames().includes(win));
+      testing.expectEqual(ticks, window.ticks);
+      // the document itself is still usable
+      testing.expectEqual('BODY', doc.body.tagName);
+    });
+  }
+</script>
+
+<script id=reinsert_loads_new_document type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.srcdoc = '<p>doc</p>';
+    const docs = [];
+    f.onload = () => {
+      docs.push(f.contentDocument);
+      if (docs.length === 1) {
+        f.remove();
+        document.body.appendChild(f);
+      } else {
+        state.resolve();
+      }
+    };
+    document.body.appendChild(f);
+
+    await state.done(() => {
+      testing.expectEqual(2, docs.length);
+      testing.expectEqual(false, docs[0] === docs[1]);
+      testing.expectEqual(null, docs[0].defaultView);
+      testing.expectEqual(f.contentWindow, docs[1].defaultView);
+      testing.expectEqual('doc', docs[1].querySelector('p').textContent);
+    });
+  }
+</script>
+
+<script id=removing_ancestor_discards_descendants type=module>
+  {
+    const state = await testing.async();
+
+    const wrapper = document.createElement('div');
+    const f = document.createElement('iframe');
+    f.srcdoc = '<iframe srcdoc="<p>inner</p>"></iframe>';
+    f.onload = () => {
+      const outer = f.contentWindow;
+      const inner = outer[0];
+      const inner_doc = inner.document;
+      wrapper.remove();
+      state.resolve({ outer, inner, inner_doc });
+    };
+    wrapper.appendChild(f);
+    document.body.appendChild(wrapper);
+
+    await state.done(({ outer, inner, inner_doc }) => {
+      testing.expectEqual(null, f.contentWindow);
+      testing.expectEqual(true, outer.closed);
+      testing.expectEqual(true, inner.closed);
+      testing.expectEqual(null, inner_doc.defaultView);
+    });
+  }
+</script>
+
+<script id=interval_removes_own_iframe type=module>
+  {
+    const state = await testing.async();
+
+    window.self_removals = 0;
+    const f = document.createElement('iframe');
+    f.srcdoc = '<script>setInterval(() => { parent.self_removals += 1; frameElement.remove(); }, 5)<\/script>';
+    document.body.appendChild(f);
+
+    // wait for the first tick however long the load takes, then leave room
+    // for a second one that must not come
+    const poll = () => window.self_removals > 0 ? setTimeout(() => state.resolve(), 50) : setTimeout(poll, 5);
+    poll();
+
+    await state.done(() => {
+      testing.expectEqual(1, window.self_removals);
+      testing.expectEqual(null, f.contentWindow);
+    });
+  }
+</script>
+
+<script id=clear_timer_on_discarded_window type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.srcdoc = '<script>window.timer_id = setInterval(() => {}, 5)<\/script>';
+    f.onload = () => {
+      const win = f.contentWindow;
+      f.remove();
+      // the timer was dropped with the scheduler, clearing it must be a no-op
+      win.clearInterval(win.timer_id);
+      win.clearTimeout(win.timer_id);
+      state.resolve(win);
+    };
+    document.body.appendChild(f);
+
+    await state.done((win) => {
+      testing.expectEqual(true, win.closed);
+    });
+  }
+</script>
+
+<!-- removed by its own window load handler: discard already released the
+     parent, the rest of the load steps must not notify it again -->
+<script id=removed_by_own_load_handler type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    window.removeLoadingFrame = () => {
+      f.remove();
+      setTimeout(() => state.resolve(), 10);
+    };
+    f.srcdoc = '<script>onload = () => parent.removeLoadingFrame();<\/script>';
+    document.body.appendChild(f);
+
+    await state.done(() => {
+      delete window.removeLoadingFrame;
+      testing.expectEqual(null, f.contentWindow);
+    });
+  }
+</script>

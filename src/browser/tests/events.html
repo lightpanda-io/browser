@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
 <div id=parent><p id=child></p></div>
@@ -832,7 +833,11 @@
 
     // dispatchEvent must NOT throw to the caller — if it did, this assignment
     // would be skipped and the next testing.expectEqual would never run.
-    const result = leaf.dispatchEvent(new Event('throw_test', {bubbles: true}));
+    let result;
+    const errors = testing.withReportedErrors(() => {
+      result = leaf.dispatchEvent(new Event('throw_test', {bubbles: true}));
+    });
+    testing.expectEqual(['listener-throw probe'], errors.map((e) => e.message));
 
     testing.expectEqual('leaf-throwing', hits[0]);
     testing.expectEqual('leaf-sibling',  hits[1]);
@@ -864,7 +869,8 @@
     mid.addEventListener('cap_test', () => order.push('mid-bubble'));
     host.addEventListener('cap_test', () => order.push('host-bubble'));
 
-    leaf.dispatchEvent(new Event('cap_test', {bubbles: true}));
+    const errors = testing.withReportedErrors(() => leaf.dispatchEvent(new Event('cap_test', {bubbles: true})));
+    testing.expectEqual(['capture-throw probe'], errors.map((e) => e.message));
 
     testing.expectEqual('host-capture-throwing', order[0]);
     testing.expectEqual('mid-capture',           order[1]);
@@ -888,7 +894,8 @@
     window.addEventListener('win_throw', b);
     window.addEventListener('win_throw', c);
 
-    window.dispatchEvent(new Event('win_throw'));
+    const errors = testing.withReportedErrors(() => window.dispatchEvent(new Event('win_throw')));
+    testing.expectEqual(['window-throw probe'], errors.map((e) => e.message));
 
     testing.expectEqual('a-throwing', calls[0]);
     testing.expectEqual('b',          calls[1]);
@@ -899,6 +906,79 @@
     window.removeEventListener('win_throw', b);
     window.removeEventListener('win_throw', c);
   }
+</script>
+
+<script id=directDispatchEventPhase>
+  // Non-DOM targets have no path: listeners run at the target.
+  for (const target of [new EventTarget(), window]) {
+    const ev = new Event('direct_phase');
+    let phase = null;
+    const listener = (e) => phase = e.eventPhase;
+    target.addEventListener('direct_phase', listener);
+    target.dispatchEvent(ev);
+    target.removeEventListener('direct_phase', listener);
+
+    testing.expectEqual(Event.AT_TARGET, phase);
+    testing.expectEqual(Event.NONE, ev.eventPhase);
+  }
+</script>
+
+<script id=directDispatchIsDispatching>
+  {
+    const target = new EventTarget();
+    const ev = new Event('direct_busy');
+    let redispatch = null;
+    target.addEventListener('direct_busy', (e) => {
+      try {
+        target.dispatchEvent(e);
+      } catch (err) {
+        redispatch = err.name;
+      }
+      // Ignored while the event is being dispatched.
+      e.initEvent('renamed', true, true);
+    });
+    target.dispatchEvent(ev);
+
+    testing.expectEqual('InvalidStateError', redispatch);
+    testing.expectEqual('direct_busy', ev.type);
+    testing.expectEqual(false, ev.bubbles);
+  }
+</script>
+
+<script id=directDispatchClearsStopPropagation>
+  // Fails in Chrome, which doesn't clear the stop flags after dispatching to a
+  // non-Node target (it does for Nodes). The spec and Firefox clear them for
+  // every target.
+  {
+    const target = new EventTarget();
+    const ev = new Event('direct_stop');
+    let calls = 0;
+    target.addEventListener('direct_stop', (e) => {
+      calls += 1;
+      e.stopImmediatePropagation();
+    });
+    target.addEventListener('direct_stop', () => calls += 100);
+
+    target.dispatchEvent(ev);
+    testing.expectEqual(1, calls);
+
+    // The flags are cleared once dispatch ends.
+    target.dispatchEvent(ev);
+    testing.diverges("Chrome doesn't clear the stop flags after dispatching", () => {
+      testing.expectEqual(2, calls);
+    });
+  }
+</script>
+
+<script id=directDispatchEventPhaseNative type=module>
+{
+  const state = await testing.async();
+  window.addEventListener('message', (e) => state.resolve(e.eventPhase), { once: true });
+  window.postMessage('phase', '*');
+  await state.done((phase) => {
+    testing.expectEqual(Event.AT_TARGET, phase);
+  });
+}
 </script>
 
 <div id=return_false_parent><span id=return_false_child></span></div>

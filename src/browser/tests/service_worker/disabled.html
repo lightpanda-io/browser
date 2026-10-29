@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="service_worker_absent_without_the_flag">
+  // Without --experimental-features serviceworker the accessor is deleted from
+  // this context's Navigator.prototype. It has to be absent rather than null:
+  // `'serviceWorker' in navigator` is the standard feature check, and Firefox
+  // with dom.serviceWorkers.enabled=false makes it undefined for the same reason.
+  {
+    testing.expectFalse('serviceWorker' in navigator);
+    testing.expectEqual(undefined, navigator.serviceWorker);
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(Navigator.prototype, 'serviceWorker'));
+    // Only the way in is removed. The interfaces are in the snapshot and stay on
+    // the global, which is what keeps this a one-property delete.
+    testing.expectTrue(typeof ServiceWorkerContainer === 'function');
+    testing.expectTrue(typeof ServiceWorkerRegistration === 'function');
+  }
+</script>

@@ -26,7 +26,7 @@ pub fn item(self: *const StyleSheetList, index: usize) ?*CSSStyleSheet {
 }
 
 pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, frame: *Frame) !void {
-    try self._sheets.append(frame.arena, sheet);
+    try self._sheets.append(frame.page_arena, sheet);
 }
 
 pub fn remove(self: *StyleSheetList, sheet: *CSSStyleSheet) void {
@@ -60,7 +60,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "StyleSheetList";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

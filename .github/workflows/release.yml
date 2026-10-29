@@ -45,7 +45,7 @@ jobs:
       OS: linux
 
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -58,28 +58,50 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
 
       - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dorderfile=orderfile/lightpanda.ld ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
+
+      # Reference partials for the docs site, pulled daily by its
+      # browser-reference workflow. A debug build: the output doesn't depend
+      # on the optimize mode, it compiles far faster than ReleaseFast, and its
+      # flags match the snapshot step's so the C deps come from the cache.
+      - name: docs reference
+        if: matrix.arch == 'x86_64'
+        run: |
+          zig build -Dprebuilt_v8_path=v8/libc_v8.a docs
+          tar -czf lightpanda-docs.tar.gz -C zig-out/docs .
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
+
+      # Debug info is over half the binary. Ship it stripped, with the debug
+      # info as a separate release asset (and on s3) to symbolize crash reports
+      # (addr2line -e lightpanda-ARCH-linux.debug ADDR...).
+      - name: Split debug info
+        run: |
+          BIN=lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          objcopy --only-keep-debug --compress-debug-sections=zlib $BIN $BIN.debug
+          objcopy --strip-all --add-gnu-debuglink=$BIN.debug $BIN
+          ls -l $BIN $BIN.debug
 
       - name: upload on s3
         run: |
           export DIR=`git show --no-patch --no-notes --pretty='%cs_%h'`
           aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp --storage-class=GLACIER_IR lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug s3://lpd-nightly-build/${DIR}/lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/${RELEASE}/lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug s3://lpd-nightly-build/${RELEASE}/lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug
           aws s3 cp lightpanda-${{ env.ARCH }}-${{ env.OS }} s3://lpd-nightly-build/agent-${RELEASE}/lightpanda-agent-${{ env.ARCH }}-${{ env.OS }}
 
       - name: Upload the build
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: true
-          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
+          artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug${{ matrix.arch == 'x86_64' && ',lightpanda-docs.tar.gz' || '' }}
           tag: ${{ env.RELEASE }}
-          makeLatest: true
+          makeLatest: ${{ github.ref_type == 'tag' }}
 
       - name: Share binary with packaging jobs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -105,7 +127,7 @@ jobs:
       OS: macos
 
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -118,10 +140,10 @@ jobs:
           arch: ${{env.ARCH}}
 
       - name: v8 snapshot
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
 
       - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast ${{ env.VERSION_FLAG }}
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast ${{ env.VERSION_FLAG }}
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -139,7 +161,7 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
-          makeLatest: true
+          makeLatest: ${{ github.ref_type == 'tag' }}
 
   package-debian:
     if: github.ref_type == 'tag'
@@ -231,3 +253,41 @@ jobs:
             gh workflow run "Update Formula" \
               --repo lightpanda-io/homebrew-browser \
               --field tag="${{ env.RELEASE }}"
+
+  update-python-package:
+    # Version tags only (never nightly): start the wheels build on
+    # lightpanda-python. It bundles this release's binaries, publishes to PyPI
+    # once a maintainer approves the `pypi` environment deployment there, and
+    # then records the matching release on that repo itself — the app token
+    # below can start workflows there but cannot write repository contents.
+    if: github.ref_type == 'tag'
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate token for lightpanda-python
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: lightpanda-python
+
+      - name: Start the lightpanda-python wheels build
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHON_REPO: lightpanda-io/lightpanda-python
+        run: |
+          if ! echo "$RELEASE" | grep -qE '^v?[0-9]+(\.[0-9]+)+$'; then
+            echo "tag $RELEASE is not version-shaped; not releasing to PyPI"
+            exit 0
+          fi
+          if gh release view "$RELEASE" --repo "$PYTHON_REPO" >/dev/null 2>&1; then
+            echo "release $RELEASE already exists on $PYTHON_REPO; nothing to do"
+            exit 0
+          fi
+          gh workflow run wheels.yml --repo "$PYTHON_REPO" \
+            --field release="$RELEASE" \
+            --field publish=pypi
+          echo "dispatched; the publish waits for pypi environment approval on $PYTHON_REPO"

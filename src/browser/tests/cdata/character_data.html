@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="container"></div>
@@ -92,7 +93,7 @@
 {
   // deleteData with invalid offset
   const text = document.createTextNode('Hello');
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => text.deleteData(10, 5));
+  testing.expectError('IndexSizeError', () => text.deleteData(10, 5));
   testing.expectEqual('Hello', text.data); // unchanged
 }
 </script>
@@ -137,7 +138,7 @@
 {
   // insertData with invalid offset
   const text = document.createTextNode('Hello');
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => text.insertData(10, 'X'));
+  testing.expectError('IndexSizeError', () => text.insertData(10, 'X'));
   testing.expectEqual('Hello', text.data);
 }
 </script>
@@ -228,7 +229,7 @@
 {
   // substringData with invalid offset
   const text = document.createTextNode('Hello');
-  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => text.substringData(10, 5));
+  testing.expectError('IndexSizeError', () => text.substringData(10, 5));
 }
 </script>
 
@@ -727,4 +728,14 @@
   testing.expectEqual(null, text.previousElementSibling);
   testing.expectEqual(null, comment.previousElementSibling);
 }
+</script>
+
+<script id="replaceWithAncestor">
+  {
+    const outer = document.createElement('div');
+    const text = document.createTextNode('t');
+    outer.appendChild(text);
+    testing.expectError('HierarchyRequestError', () => text.replaceWith(outer));
+    testing.expectEqual(outer, text.parentNode);
+  }
 </script>

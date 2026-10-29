@@ -193,9 +193,10 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedLengt
         .element = element,
         .kind = kind,
     };
-    const gop = try frame._svg_animated_lengths.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page.svg_animated_lengths.getOrPut(page.arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_lengths.remove(key);
+        errdefer _ = page.svg_animated_lengths.remove(key);
         gop.value_ptr.* = try createConfigured(
             element,
             kind.attributeName(),
@@ -244,7 +245,7 @@ pub fn getBaseVal(self: *AnimatedLength) *Length {
     return self._base_val;
 }
 
-pub fn getAnimVal(self: *AnimatedLength) *Length {
+fn getAnimVal(self: *AnimatedLength) *Length {
     return self._anim_val;
 }
 
@@ -253,7 +254,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "SVGAnimatedLength";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

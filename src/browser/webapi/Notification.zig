@@ -45,16 +45,16 @@ _require_interaction: bool = false,
 _renotify: bool = false,
 
 const Options = struct {
+    badge: ?[]const u8 = null,
     body: ?[]const u8 = null,
+    dir: ?[]const u8 = null,
     icon: ?[]const u8 = null,
     image: ?[]const u8 = null,
-    badge: ?[]const u8 = null,
-    tag: ?[]const u8 = null,
     lang: ?[]const u8 = null,
-    dir: ?[]const u8 = null,
-    silent: ?bool = null,
-    requireInteraction: ?bool = null,
     renotify: ?bool = null,
+    requireInteraction: ?bool = null,
+    silent: ?bool = null,
+    tag: ?[]const u8 = null,
 };
 
 pub fn init(title: []const u8, options_: ?Options, exec: *const Execution) !*Notification {
@@ -79,7 +79,8 @@ pub fn init(title: []const u8, options_: ?Options, exec: *const Execution) !*Not
     });
 }
 
-pub fn deinit(self: *Notification, _: *Page) void {
+pub fn deinit(self: *Notification, page: *Page) void {
+    page.removeTarget(self._proto);
     self._arena.release();
 }
 
@@ -144,7 +145,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Notification";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

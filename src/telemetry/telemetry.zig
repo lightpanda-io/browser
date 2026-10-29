@@ -2,7 +2,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
-const Config = @import("../Config.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
 
 const log = lp.log;
@@ -27,7 +26,7 @@ fn TelemetryT(comptime P: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, run_mode: Config.RunMode, interactive: bool) !Self {
+        pub fn init(app: *App) !Self {
             const disabled = isDisabled();
             if (lp.IS_DEBUG == false and lp.IS_TEST == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
@@ -38,7 +37,7 @@ fn TelemetryT(comptime P: type) type {
             const provider = try app.allocator.create(P);
             errdefer app.allocator.destroy(provider);
 
-            try P.init(provider, app, iid, run_mode, interactive);
+            try P.init(provider, app, iid);
 
             return .{
                 .disabled = disabled,
@@ -56,8 +55,19 @@ fn TelemetryT(comptime P: type) type {
                 return;
             }
             self.provider.send(event) catch |err| {
-                log.warn(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
+                log.debug(.telemetry, "record error", .{ .err = err, .type = @tagName(std.meta.activeTag(event)) });
             };
+        }
+
+        /// `start_ms` is a `datetime.milliTimestamp(.awake)` taken before the call.
+        pub fn recordTool(self: *Self, id: u8, source: Event.Tool.Source, outcome: Event.Tool.Outcome, start_ms: u64) void {
+            const elapsed = lp.datetime.milliTimestamp(.awake) -| start_ms;
+            self.record(.{ .tool = .{
+                .id = id,
+                .source = source,
+                .outcome = outcome,
+                .duration_ms = std.math.lossyCast(u32, elapsed),
+            } });
         }
 
         pub fn llm_init(_: *Self, provider: [:0]const u8, model: ?[]const u8) Event.LLM {
@@ -107,12 +117,81 @@ pub const Event = union(enum) {
     navigate: Navigate,
     buffer_overflow: BufferOverflow,
     llm: LLM,
+    tool: Tool,
+    mcp_client: McpClient,
 
     pub const Navigate = struct {
         tls: bool,
         context: Context,
 
         pub const Context = enum { page, iframe, popup };
+    };
+
+    /// The provider merges calls with the same id, source and outcome within
+    /// one batch, so a sent row carries a count and a total duration.
+    pub const Tool = struct {
+        /// `browser.tools.Tool.telemetryId()`, or an MCP-only tool's pinned value
+        /// (200+). 0 is a name that matched no tool.
+        id: u8,
+        source: Source,
+        outcome: Outcome,
+        count: u32 = 1,
+        duration_ms: u32,
+
+        pub const Source = enum { llm, user, script, mcp };
+
+        pub const Outcome = enum {
+            ok,
+            is_error,
+            frame_not_loaded,
+            invalid_params,
+            node_not_found,
+            navigation_failed,
+            navigation_timeout,
+            cancelled,
+            timeout,
+            internal,
+        };
+    };
+
+    /// The MCP client, from `clientInfo.name`. Values are wire ids: append,
+    /// never renumber.
+    pub const McpClient = enum(u8) {
+        other = 0,
+        claude_code = 1,
+        claude = 2,
+        cursor = 3,
+        vscode = 4,
+        codex = 5,
+        gemini = 6,
+        windsurf = 7,
+        cline = 8,
+        zed = 9,
+        goose = 10,
+
+        // Ordered: "claude-code" before "claude", "cursor" before the
+        // "vscode" in Cursor's "cursor-vscode".
+        const patterns = [_]struct { []const u8, McpClient }{
+            .{ "claude-code", .claude_code },
+            .{ "claude", .claude },
+            .{ "cursor", .cursor },
+            .{ "windsurf", .windsurf },
+            .{ "visual studio code", .vscode },
+            .{ "vscode", .vscode },
+            .{ "codex", .codex },
+            .{ "gemini", .gemini },
+            .{ "cline", .cline },
+            .{ "goose", .goose },
+        };
+
+        pub fn fromName(name: []const u8) McpClient {
+            // Exact: "zed" is a common substring.
+            if (std.ascii.eqlIgnoreCase(name, "zed")) return .zed;
+            for (patterns) |p| {
+                if (std.ascii.findIgnoreCase(name, p[0]) != null) return p[1];
+            }
+            return .other;
+        }
     };
 
     const BufferOverflow = struct {
@@ -158,6 +237,16 @@ extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
 extern fn unsetenv(name: [*:0]u8) c_int;
 
 const testing = @import("../testing.zig");
+test "telemetry: McpClient.fromName" {
+    try testing.expectEqual(.claude_code, Event.McpClient.fromName("claude-code"));
+    try testing.expectEqual(.claude, Event.McpClient.fromName("claude-ai"));
+    try testing.expectEqual(.cursor, Event.McpClient.fromName("cursor-vscode"));
+    try testing.expectEqual(.vscode, Event.McpClient.fromName("Visual Studio Code - Insiders"));
+    try testing.expectEqual(.zed, Event.McpClient.fromName("Zed"));
+    try testing.expectEqual(.other, Event.McpClient.fromName("customized-client"));
+    try testing.expectEqual(.other, Event.McpClient.fromName(""));
+}
+
 test "telemetry: always disabled in debug builds" {
     // Must be disabled regardless of environment variable.
     _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
@@ -168,29 +257,29 @@ test "telemetry: always disabled in debug builds" {
     try testing.expectEqual(true, isDisabled());
 
     const FailingProvider = struct {
-        fn init(_: *@This(), _: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {}
+        fn init(_: *@This(), _: *App, _: ?[36]u8) !void {}
         fn deinit(_: *@This()) void {}
         pub fn send(_: *@This(), _: Event) !void {
             unreachable;
         }
     };
 
-    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app, .serve, false);
+    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app);
     defer telemetry.deinit(testing.test_app.allocator);
     telemetry.record(.{ .run = {} });
 }
 
 test "telemetry: getOrCreateId" {
-    defer std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.arena_allocator);
 
-    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
-
-    const id1 = getOrCreateId("/tmp/").?;
-    const id2 = getOrCreateId("/tmp/").?;
+    const id1 = getOrCreateId(dir).?;
+    const id2 = getOrCreateId(dir).?;
     try testing.expectEqual(&id1, &id2);
 
-    std.Io.Dir.cwd().deleteFile(testing.io, "/tmp/" ++ IID_FILE) catch {};
-    const id3 = getOrCreateId("/tmp/").?;
+    try tmp.dir.deleteFile(testing.io, IID_FILE);
+    const id3 = getOrCreateId(dir).?;
     try testing.expectEqual(false, std.mem.eql(u8, &id1, &id3));
 
     const id4 = getOrCreateId(null).?;
@@ -199,7 +288,7 @@ test "telemetry: getOrCreateId" {
 }
 
 test "telemetry: sends event to provider" {
-    var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve, false);
+    var telemetry = try TelemetryT(MockProvider).init(testing.test_app);
     defer telemetry.deinit(testing.test_app.allocator);
     telemetry.disabled = false;
     const mock = telemetry.provider;
@@ -218,7 +307,7 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayList(Event),
 
-    fn init(self: *MockProvider, app: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {
+    fn init(self: *MockProvider, app: *App, _: ?[36]u8) !void {
         self.* = .{
             .events = .empty,
             .allocator = app.allocator,

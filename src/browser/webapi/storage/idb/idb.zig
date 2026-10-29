@@ -26,6 +26,7 @@ pub const Manager = @import("Manager.zig");
 pub const IDBFactory = @import("IDBFactory.zig");
 pub const IDBRecord = @import("IDBRecord.zig");
 pub const IDBRequest = @import("IDBRequest.zig");
+pub const IDBOpenDBRequest = @import("IDBOpenDBRequest.zig");
 pub const IDBCursor = @import("IDBCursor.zig");
 pub const IDBIndex = @import("IDBIndex.zig");
 pub const IDBDatabase = @import("IDBDatabase.zig");
@@ -40,6 +41,7 @@ pub fn registerTypes() []const type {
         IDBFactory,
         IDBRecord,
         IDBRequest,
+        IDBOpenDBRequest,
         IDBCursor,
         IDBIndex,
         IDBDatabase,
@@ -68,13 +70,6 @@ pub fn cachedKeyPathJs(cache: *?*js.GlobalSlot, txn: *IDBTransaction, kp: ?Key.K
     }
     return Key.keyPathToJs(local, kp);
 }
-
-// An on* event-handler attribute setter. The bridge can hand the setter either
-// a function (store it) or any other value (clears it).
-pub const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
-};
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: IndexedDB" {

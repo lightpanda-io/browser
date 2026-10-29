@@ -29,13 +29,13 @@ const TextEncoderStream = @This();
 _transform: *TransformStream,
 
 pub fn init(exec: *const Execution) !TextEncoderStream {
-    const transform = try TransformStream.initWithZigTransform(&encodeTransform, exec);
+    const transform = try TransformStream.initWithZigTransformer(.text_encoder, exec);
     return .{
         ._transform = transform,
     };
 }
 
-fn encodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+pub fn encodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
     // chunk should be a JS string; encode it as UTF-8 bytes (Uint8Array)
     const str = chunk.isString() orelse return error.InvalidChunk;
     const slice = try str.toSlice();
@@ -55,7 +55,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "TextEncoderStream";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -38,11 +38,11 @@ pub fn init(exec: *Execution) !*MessageChannel {
     });
 }
 
-pub fn getPort1(self: *const MessageChannel) *MessagePort {
+fn getPort1(self: *const MessageChannel) *MessagePort {
     return self._port1;
 }
 
-pub fn getPort2(self: *const MessageChannel) *MessagePort {
+fn getPort2(self: *const MessageChannel) *MessagePort {
     return self._port2;
 }
 
@@ -52,7 +52,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "MessageChannel";
         pub var class_id: bridge.ClassId = undefined;
-        pub const prototype_chain = bridge.prototypeChain();
     };
 
     pub const constructor = bridge.constructor(MessageChannel.init, .{});

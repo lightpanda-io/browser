@@ -20,21 +20,41 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
+const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
-const Execution = js.Execution;
+const BodyInit = @import("net/body_init.zig").BodyInit;
 
 const PluginArray = @import("PluginArray.zig");
 const Permissions = @import("Permissions.zig");
+const ModelContext = @import("ModelContext.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
-const ModelContext = @import("ModelContext.zig");
+const Geolocation = @import("geolocation/Geolocation.zig");
+const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
+const LockManager = @import("LockManager.zig");
+
+const Execution = js.Execution;
+const resource_load = Frame.resource_load;
 
 const Navigator = @This();
-_pad: bool = false,
+
+comptime {
+    // Ensure we don't cause an identity map conflict. Because _geolocation is
+    // lazy and, for now, Zig orders the highest-aligned field first, none of
+    // the other fields land at offset 0.
+    for ([_][]const u8{ "_plugins", "_permissions", "_storage", "_ua_data" }) |name| {
+        if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
+    }
+}
+
 _plugins: PluginArray = .{},
 _permissions: Permissions = .{},
+_geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
+_service_worker: ?*ServiceWorkerContainer = null,
+_locks: ?*LockManager = null,
+_beacon_bytes: ?*usize = null,
 
 pub const init: Navigator = .{};
 
@@ -42,11 +62,11 @@ pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
     return exec.session.browser.http_client.getUserAgent();
 }
 
-pub fn getLanguages(_: *const Navigator) [2][]const u8 {
-    return .{ "en-US", "en" };
+pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const u8 {
+    return exec.session.browser.http_client.getLanguages();
 }
 
-pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
+fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
     return null;
 }
 
@@ -59,18 +79,23 @@ pub fn getAppCodeName(_: *const Navigator) []const u8 {
 }
 
 pub fn getAppVersion(_: *const Navigator) []const u8 {
-    return "1.0";
+    return switch (builtin.target.os.tag) {
+        .macos => "5.0 (Macintosh)",
+        .windows => "5.0 (Windows)",
+        else => "5.0 (X11)",
+    };
 }
 
-pub fn getLanguage(_: *const Navigator) []const u8 {
-    return "en-US";
+pub fn getLanguage(self: *const Navigator, exec: *const Execution) []const u8 {
+    const languages = self.getLanguages(exec);
+    return if (languages.len == 0) "" else languages[0];
 }
 
 pub fn getOnLine(_: *const Navigator) bool {
     return true;
 }
 
-pub fn getCookieEnabled(_: *const Navigator) bool {
+fn getCookieEnabled(_: *const Navigator) bool {
     return true;
 }
 
@@ -82,7 +107,7 @@ pub fn getDeviceMemory(_: *const Navigator) f64 {
     return 8.0;
 }
 
-pub fn getMaxTouchPoints(_: *const Navigator) u32 {
+fn getMaxTouchPoints(_: *const Navigator) u32 {
     return 0;
 }
 
@@ -94,7 +119,7 @@ pub fn getProduct(_: *const Navigator) []const u8 {
     return "Gecko";
 }
 
-pub fn getWebdriver(_: *const Navigator) bool {
+fn getWebdriver(_: *const Navigator) bool {
     return false;
 }
 
@@ -108,7 +133,7 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
         .linux => "Linux x86_64",
@@ -118,42 +143,118 @@ pub fn getPlatform(_: *const Navigator) []const u8 {
 }
 
 /// Returns whether Java is enabled (always false)
-pub fn javaEnabled(_: *const Navigator) bool {
+fn javaEnabled(_: *const Navigator) bool {
     return false;
 }
 
-/// Noop, signal that the data was successfully queued
-pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
-    _ = url;
-    _ = data;
+/// The keepalive quota: a document's in-flight keepalive request bodies,
+/// beacons here, can't add up to more than 64 KiB (Fetch, "HTTP-network-or-cache
+/// fetch").
+const keepalive_quota = 64 * 1024;
+
+/// https://w3c.github.io/beacon/#sec-processing-model
+/// Only sent if --load-resources beacon is set.
+fn sendBeacon(self: *Navigator, url: []const u8, data: ?BodyInit, frame: *Frame) !bool {
+    const resolved = URL.resolve(frame.local_arena, frame.base(), url, .{}) catch {
+        return frame.js.typeError("sendBeacon: invalid URL");
+    };
+    if (URL.isRemoteScheme(resolved) == false) {
+        return frame.js.typeError("sendBeacon: the URL's scheme must be http or https");
+    }
+
+    var body: []const u8 = "";
+    var content_type: ?[]const u8 = null;
+    if (data) |d| {
+        if (d == .stream) {
+            // A keepalive request can't have a ReadableStream body.
+            return frame.js.typeError("sendBeacon: a ReadableStream body is not supported");
+        }
+        const extracted = try d.extract(frame.local_arena);
+        body = extracted.bytes;
+        content_type = extracted.content_type;
+    }
+
+    if (frame._session.load_resources.beacon == false) {
+        // Nothing is ever in flight, so only this body counts against the quota.
+        if (body.len > keepalive_quota) {
+            return false;
+        }
+        frame.page.status.noteSkipped(.beacon);
+        return true;
+    }
+
+    // keep the # of bytes in-flight for the keepalive quota
+    const in_flight = self._beacon_bytes orelse blk: {
+        // windows can be re-used, heap allocate this so that each document
+        // gets its own counter, and old beacons decrement what they counted
+        // against.
+        const counter = try frame.page_arena.create(usize);
+        counter.* = 0;
+        self._beacon_bytes = counter;
+        break :blk counter;
+    };
+    if (in_flight.* + body.len > keepalive_quota) {
+        return false;
+    }
+    try resource_load.beacon(frame, in_flight, resolved, body, content_type);
     return true;
 }
 
-pub fn getPlugins(self: *Navigator) *PluginArray {
+fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
 
-pub fn getPermissions(self: *Navigator) *Permissions {
+fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
 
-pub fn getStorage(self: *Navigator) *StorageManager {
+fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
+    if (self._geolocation) |g| {
+        return g;
+    }
+    const g = try exec._factory.create(Geolocation{});
+    self._geolocation = g;
+    return g;
+}
+
+fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
-pub fn getUserAgentData(self: *Navigator) *NavigatorUAData {
+// NOTE, the binding for this API is removed at runtime if ServiceWorkers are
+// not enabled (Env.createContext; by default, they are not) or if the frame
+// isn't a secure context (Context.setOrigin).
+fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
+    if (self._service_worker) |sw| {
+        return sw;
+    }
+    const sw = try ServiceWorkerContainer.init(frame);
+    self._service_worker = sw;
+    return sw;
+}
+
+fn getLocks(self: *Navigator, exec: *Execution) !*LockManager {
+    if (self._locks) |l| {
+        return l;
+    }
+    const l = try exec._factory.create(LockManager{});
+    self._locks = l;
+    return l;
+}
+
+fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
-pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
+fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
 
-pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
+fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
 }
-pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
+fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
 }
@@ -209,7 +310,7 @@ fn validateProtocolHandlerScheme(scheme: []const u8) !void {
 }
 
 fn validateProtocolHandlerURL(url: [:0]const u8, frame: *const Frame) !void {
-    if (std.mem.indexOf(u8, url, "%s") == null) {
+    if (std.mem.find(u8, url, "%s") == null) {
         return error.SyntaxError;
     }
     if (frame.isSameOrigin(url) == false) {
@@ -222,9 +323,7 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Navigator";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
@@ -246,19 +345,21 @@ pub const JsApi = struct {
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
 
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
-    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window, .noop = true });
+    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
+    pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{});
+    pub const locks = bridge.accessor(Navigator.getLocks, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
-
-    // window only
-    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
-    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
-    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
-    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .exposed = .window });
+    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
+    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});
+    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
+    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{});
+    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{});
 };
 
 const testing = @import("../../testing.zig");
 test "WebApi: Navigator" {
     try testing.htmlRunner("navigator", .{});
+    try testing.htmlRunner("beacon.html", .{ .load_resources = .{ .beacon = true, .iframe = true } });
 }

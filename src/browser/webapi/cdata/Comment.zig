@@ -31,7 +31,7 @@ _pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {
-    const node = try Frame.node_factory.createComment(frame, if (str) |s| s.value else "");
+    const node = try Frame.node_factory.createComment(frame.document, if (str) |s| s.value else "");
     return node.as(Comment);
 }
 
@@ -40,14 +40,8 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Comment";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const constructor = bridge.constructor(Comment.init, .{});
 };
-
-const testing = @import("../../../testing.zig");
-test "WebApi: CData.Text" {
-    try testing.htmlRunner("cdata/comment.html", .{});
-}

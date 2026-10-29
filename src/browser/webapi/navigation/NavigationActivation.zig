@@ -32,11 +32,11 @@ pub fn getEntry(self: *const NavigationActivation) *NavigationHistoryEntry {
     return self._entry;
 }
 
-pub fn getFrom(self: *const NavigationActivation) ?*NavigationHistoryEntry {
+fn getFrom(self: *const NavigationActivation) ?*NavigationHistoryEntry {
     return self._from;
 }
 
-pub fn getNavigationType(self: *const NavigationActivation) []const u8 {
+fn getNavigationType(self: *const NavigationActivation) []const u8 {
     return @tagName(self._type);
 }
 
@@ -45,7 +45,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "NavigationActivation";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

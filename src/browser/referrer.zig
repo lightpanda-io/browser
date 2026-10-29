@@ -19,6 +19,7 @@
 // Referrer Policy: https://www.w3.org/TR/referrer-policy/
 const std = @import("std");
 const URL = @import("URL.zig");
+const repeat = @import("../string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
@@ -106,7 +107,7 @@ pub fn compute(arena: Allocator, policy: Policy, referrer_url: [:0]const u8, tar
     if (full) {
         // Serializing through origin + path + query strips credentials and
         // the fragment, and normalizes away default ports.
-        const value = try std.fmt.allocPrint(arena, "{s}{s}{s}", .{
+        const value = try arena.print("{s}{s}{s}", .{
             referrer_origin,
             URL.getPathname(referrer_url),
             URL.getSearch(referrer_url),
@@ -117,7 +118,7 @@ pub fn compute(arena: Allocator, policy: Policy, referrer_url: [:0]const u8, tar
             return value;
         }
     }
-    return try std.fmt.allocPrint(arena, "{s}/", .{referrer_origin});
+    return try arena.print("{s}/", .{referrer_origin});
 }
 
 fn staticStringMapEqlAsciiIgnoreCase(a: []const u8, b: []const u8) bool {
@@ -207,14 +208,14 @@ test "referrer: compute" {
 }
 
 test "referrer: compute caps at 4096 bytes" {
-    const path = "/" ++ ("a" ** 4096);
+    const path = "/" ++ (repeat("a", 4096));
     const url = "http://a.com" ++ path;
     // over the cap: falls back to the origin form
     try testing.expectEqual("http://a.com/", (try compute(testing.arena_allocator, .unsafe_url, url, "http://b.com/x")).?);
     try testing.expectEqual("http://a.com/", (try compute(testing.arena_allocator, .no_referrer_when_downgrade, url, "http://a.com/x")).?);
 
     // exactly at the cap: sent in full
-    const at_cap = "http://a.com/" ++ ("a" ** (4096 - "http://a.com/".len));
+    const at_cap = "http://a.com/" ++ (repeat("a", 4096 - "http://a.com/".len));
     try testing.expectEqual(at_cap, (try compute(testing.arena_allocator, .unsafe_url, at_cap, "http://b.com/x")).?);
 
     // origin-only policies are unaffected by the referrer's length

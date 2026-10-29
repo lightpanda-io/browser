@@ -28,6 +28,8 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const EventTarget = @import("EventTarget.zig");
+const MessagePort = @import("MessagePort.zig");
 const Worker = @import("Worker.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 
@@ -40,15 +42,13 @@ pub const Proto = WorkerGlobalScope;
 _proto: *WorkerGlobalScope,
 _worker: *Worker,
 _closed: bool = false,
-_on_message: ?js.Function.Global = null,
-_on_messageerror: ?js.Function.Global = null,
 
 // Messages received before the worker script finished evaluating. Per the
 // HTML spec, postMessage'd data is buffered while the worker is loading
 // and delivered once the worker is ready (i.e. once onmessage can be set).
 // Drained by drainPendingMessages, called from Worker.loadInitialScript
 // after the initial script has been evaluated.
-_pending_messages: std.ArrayList(?js.Value.Global) = .empty,
+_pending_messages: std.ArrayList(MessagePort.Message) = .empty,
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*DedicatedWorkerGlobalScope {
     return WorkerGlobalScope.init(
@@ -67,16 +67,14 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*DedicatedWorkerGlobalScope {
 }
 
 pub fn deinit(self: *DedicatedWorkerGlobalScope) void {
-    for (self._pending_messages.items) |maybe_data| {
-        if (maybe_data) |d| {
-            d.release();
-        }
+    for (self._pending_messages.items) |message| {
+        message.release();
     }
     self._proto.deinit();
 }
 
-pub fn postMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
-    try self._worker.receiveMessage(data);
+pub fn postMessage(self: *DedicatedWorkerGlobalScope, data: js.Value, transfer: ?js.Value) !void {
+    try self._worker.receiveMessage(data, try MessagePort.transferList(transfer));
 }
 
 pub fn close(self: *DedicatedWorkerGlobalScope) void {
@@ -84,22 +82,6 @@ pub fn close(self: *DedicatedWorkerGlobalScope) void {
     self._proto._session.idb.detachContext(self._proto.js);
     self._proto.js.scheduler.reset();
     self._closed = true;
-}
-
-pub fn getOnMessage(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
-    return self._on_message;
-}
-
-pub fn setOnMessage(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_message = WorkerGlobalScope.getFunctionFromSetter(setter);
-}
-
-pub fn getOnMessageError(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
-    return self._on_messageerror;
-}
-
-pub fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
-    self._on_messageerror = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
 pub fn requestAnimationFrame(self: *DedicatedWorkerGlobalScope, cb: js.Function.Global, exec: *js.Execution) !u32 {
@@ -116,21 +98,16 @@ pub fn cancelAnimationFrame(self: *DedicatedWorkerGlobalScope, id: u32) void {
 }
 
 // Called internally by Worker when it wants to post a message to us
-pub fn receiveMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
+pub fn receiveMessage(self: *DedicatedWorkerGlobalScope, data: js.Value, transfer: []const *MessagePort) !void {
+    // clones from where it currently is (the Worker's Page context) to our Context.
+    // Done even when closed (per spec), so transferred ports still detach and
+    // bad data still throws.
+    const cloned_data = try MessagePort.cloneMessage(data, transfer, &self._proto.js.execution);
     if (self._closed) {
+        cloned_data.release();
         return;
     }
-
-    const cloned_data: ?js.Value.Global = blk: {
-        // Enter our context to clone the message
-        var ls: js.Local.Scope = undefined;
-        self._proto.js.localScope(&ls);
-        defer ls.deinit();
-
-        // clones from where it currently is (the Worker's Page context) to our Context
-        const cloned = data.structuredCloneTo(&ls.local) catch break :blk null;
-        break :blk cloned.persist() catch break :blk null;
-    };
+    errdefer cloned_data.release();
 
     if (!self._worker._script_loaded) {
         // Buffer until Worker.loadInitialScript calls drainPendingMessages.
@@ -145,7 +122,7 @@ pub fn receiveMessage(self: *DedicatedWorkerGlobalScope, data: js.Value) !void {
     try self.scheduleMessage(cloned_data);
 }
 
-fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Global) !void {
+fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: MessagePort.Message) !void {
     const wgs = self._proto;
     const session = wgs._session;
 
@@ -172,23 +149,21 @@ fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Glo
 pub fn drainPendingMessages(self: *DedicatedWorkerGlobalScope) void {
     for (self._pending_messages.items) |cloned_data| {
         self.scheduleMessage(cloned_data) catch |err| {
-            lp.log.warn(.browser, "worker drain msg failed", .{ .err = err });
-            if (cloned_data) |d| d.release();
+            lp.log.debug(.browser, "worker drain msg failed", .{ .err = err });
+            cloned_data.release();
         };
     }
     self._pending_messages.clearRetainingCapacity();
 }
 
 const ReceiveMessageCallback = struct {
-    data: ?js.Value.Global,
+    data: MessagePort.Message,
     arena: *lp.Arena,
     worker_scope: *DedicatedWorkerGlobalScope,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
-        if (self.data) |d| {
-            d.release();
-        }
+        self.data.release();
         self.deinit();
     }
 
@@ -199,56 +174,59 @@ const ReceiveMessageCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+        defer self.data.releasePorts();
 
         const worker_scope = self.worker_scope;
         const wsg = worker_scope._proto;
         const target = wsg.asEventTarget();
 
-        // If data is null, structured clone failed - fire messageerror
-        if (self.data == null) {
-            const on_messageerror = worker_scope._on_messageerror;
-            if (!wsg._event_manager.hasDirectListeners(target, "messageerror", on_messageerror)) {
+        // If data is null, deserialization failed - fire messageerror
+        const data = self.data.data orelse {
+            if (!wsg._event_manager.hasDirectListeners(target, "messageerror")) {
                 return null;
             }
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
+                .ports = self.data.ports,
                 .bubbles = false,
                 .cancelable = false,
-            }, wsg._page)).asEvent();
-            try wsg.dispatch(target, event, on_messageerror, .{});
+            }, wsg.page)).asEvent();
+            try wsg.dispatch(target, event, .{});
             return null;
-        }
-
-        const on_message = worker_scope._on_message;
+        };
 
         // Check if there are any listeners before creating the event
-        if (!wsg._event_manager.hasDirectListeners(target, "message", on_message)) {
-            self.data.?.release();
+        if (!wsg._event_manager.hasDirectListeners(target, "message")) {
+            data.release();
             return null;
         }
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = .{ .value = self.data.? },
+            .data = .{ .value = data },
+            .ports = self.data.ports,
             .bubbles = false,
             .cancelable = false,
-        }, wsg._page)).asEvent();
-        try wsg.dispatch(target, event, on_message, .{});
+        }, wsg.page)).asEvent();
+        try wsg.dispatch(target, event, .{});
         return null;
     }
 };
+
+pub fn asEventTarget(self: *DedicatedWorkerGlobalScope) *EventTarget {
+    return self._proto.asEventTarget();
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DedicatedWorkerGlobalScope);
 
     pub const Meta = struct {
         pub const name = "DedicatedWorkerGlobalScope";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const postMessage = bridge.function(DedicatedWorkerGlobalScope.postMessage, .{});
     pub const close = bridge.function(DedicatedWorkerGlobalScope.close, .{});
-    pub const onmessage = bridge.accessor(DedicatedWorkerGlobalScope.getOnMessage, DedicatedWorkerGlobalScope.setOnMessage, .{});
-    pub const onmessageerror = bridge.accessor(DedicatedWorkerGlobalScope.getOnMessageError, DedicatedWorkerGlobalScope.setOnMessageError, .{});
+    pub const onmessage = EventTarget.handlerAccessor(DedicatedWorkerGlobalScope, "message");
+    pub const onmessageerror = EventTarget.handlerAccessor(DedicatedWorkerGlobalScope, "messageerror");
     pub const requestAnimationFrame = bridge.function(DedicatedWorkerGlobalScope.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(DedicatedWorkerGlobalScope.cancelAnimationFrame, .{});
 };

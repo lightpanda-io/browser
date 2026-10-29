@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<!--
+  Driven by the "a failed preload is consumed, not refetched" test in
+  ScriptManager.zig, which blocks these URLs while the hints fetch, then
+  unblocks them and inserts the matching <script> elements.
+-->
+<link rel="preload" as="script" href="preload_failed.js" onerror="window.classic_hint_error = true">
+<link rel="modulepreload" href="preload_failed_module.js" onerror="window.module_hint_error = true">

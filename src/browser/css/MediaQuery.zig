@@ -25,6 +25,8 @@
 //!   - Media types: `all`, `screen`, `print`, `speech`, `tv`
 //!   - Features: `width` / `min-width` / `max-width`,
 //!               `height` / `min-height` / `max-height`,
+//!               `device-width` / `min-device-width` / `max-device-width`,
+//!               `device-height` / `min-device-height` / `max-device-height`,
 //!               `orientation` (portrait | landscape).
 //!   - Length values: `<int>px`, `<int>em` (1em = 16px), `<int>rem`,
 //!     and bare `0`.
@@ -71,7 +73,7 @@ fn hasUnterminatedComment(s: []const u8) bool {
     var i: usize = 0;
     while (i + 1 < s.len) {
         if (s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return true;
+            const close = std.mem.findPos(u8, s, i + 2, "*/") orelse return true;
             i = close + 2;
             continue;
         }
@@ -89,7 +91,7 @@ fn skipWsAndComments(s: []const u8, start: usize) usize {
         if (std.ascii.isWhitespace(s[i])) {
             i += 1;
         } else if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return s.len;
+            const close = std.mem.findPos(u8, s, i + 2, "*/") orelse return s.len;
             i = close + 2;
         } else break;
     }
@@ -105,7 +107,7 @@ fn trimWsAndComments(s: []const u8) []const u8 {
         if (std.ascii.isWhitespace(s[start])) {
             start += 1;
         } else if (start + 1 < end and s[start] == '/' and s[start + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, s, start + 2, "*/") orelse return s[start..end];
+            const close = std.mem.findPos(u8, s, start + 2, "*/") orelse return s[start..end];
             start = close + 2;
         } else break;
     }
@@ -113,7 +115,7 @@ fn trimWsAndComments(s: []const u8) []const u8 {
         if (std.ascii.isWhitespace(s[end - 1])) {
             end -= 1;
         } else if (end >= start + 2 and s[end - 1] == '/' and s[end - 2] == '*') {
-            const open_rel = std.mem.lastIndexOf(u8, s[start .. end - 2], "/*") orelse return s[start..end];
+            const open_rel = std.mem.findLast(u8, s[start .. end - 2], "/*") orelse return s[start..end];
             end = start + open_rel;
         } else break;
     }
@@ -126,7 +128,7 @@ fn indexOfScalarSkippingComments(s: []const u8, needle: u8) ?usize {
     var i: usize = 0;
     while (i < s.len) {
         if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return null;
+            const close = std.mem.findPos(u8, s, i + 2, "*/") orelse return null;
             i = close + 2;
             continue;
         }
@@ -141,7 +143,7 @@ fn nextTopLevelComma(s: []const u8) usize {
     var i: usize = 0;
     while (i < s.len) {
         if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return s.len;
+            const close = std.mem.findPos(u8, s, i + 2, "*/") orelse return s.len;
             i = close + 2;
             continue;
         }
@@ -240,7 +242,7 @@ fn findClosingParen(s: []const u8, open: usize) ?usize {
     var i = open + 1;
     while (i < s.len) {
         if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, s, i + 2, "*/") orelse return null;
+            const close = std.mem.findPos(u8, s, i + 2, "*/") orelse return null;
             i = close + 2;
             continue;
         }
@@ -272,13 +274,29 @@ fn evalFeature(text: []const u8, viewport: Viewport) bool {
     return evalBoolean(trimmed, viewport);
 }
 
+const max_feature_name_len = 17;
+
+/// Map the deprecated `device-*` features onto their viewport counterparts.
+/// `device-width` is the width of the output device; we have no separate
+/// screen geometry, and `window.screen.width` already reports the viewport
+/// (see webapi/Screen.zig), so both stay consistent.
+fn stripDevice(lname: []const u8) []const u8 {
+    if (std.mem.eql(u8, lname, "device-width")) return "width";
+    if (std.mem.eql(u8, lname, "min-device-width")) return "min-width";
+    if (std.mem.eql(u8, lname, "max-device-width")) return "max-width";
+    if (std.mem.eql(u8, lname, "device-height")) return "height";
+    if (std.mem.eql(u8, lname, "min-device-height")) return "min-height";
+    if (std.mem.eql(u8, lname, "max-device-height")) return "max-height";
+    return lname;
+}
+
 fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > max_feature_name_len) {
         return false;
     }
 
-    var buf: [16]u8 = undefined;
-    const lname = std.ascii.lowerString(&buf, name);
+    var buf: [max_feature_name_len]u8 = undefined;
+    const lname = stripDevice(std.ascii.lowerString(&buf, name));
     if (std.mem.eql(u8, lname, "min-width")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.width >= px;
@@ -312,11 +330,11 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
 }
 
 fn evalBoolean(name: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > max_feature_name_len) {
         return false;
     }
-    var buf: [16]u8 = undefined;
-    const lname = std.ascii.lowerString(&buf, name);
+    var buf: [max_feature_name_len]u8 = undefined;
+    const lname = stripDevice(std.ascii.lowerString(&buf, name));
 
     if (std.mem.eql(u8, lname, "width")) return viewport.width > 0;
     if (std.mem.eql(u8, lname, "height")) return viewport.height > 0;
@@ -408,6 +426,41 @@ test "MediaQuery: min-height / max-height / height" {
     try testing.expect(!matches("(max-height: 1079px)", v));
     try testing.expect(matches("(height: 1080px)", v));
     try testing.expect(!matches("(height: 1081px)", v));
+}
+
+test "MediaQuery: device-width / device-height" {
+    const v = Viewport.default;
+    try testing.expect(matches("(min-device-width: 1px)", v));
+    try testing.expect(matches("(min-device-width: 1920px)", v));
+    try testing.expect(!matches("(min-device-width: 1921px)", v));
+    try testing.expect(matches("(max-device-width: 1920px)", v));
+    try testing.expect(!matches("(max-device-width: 1919px)", v));
+    try testing.expect(matches("(device-width: 1920px)", v));
+    try testing.expect(!matches("(device-width: 1919px)", v));
+
+    try testing.expect(matches("(min-device-height: 1080px)", v));
+    try testing.expect(!matches("(min-device-height: 1081px)", v));
+    try testing.expect(matches("(max-device-height: 1080px)", v));
+    try testing.expect(!matches("(max-device-height: 1079px)", v));
+    try testing.expect(matches("(device-height: 1080px)", v));
+    try testing.expect(!matches("(device-height: 1081px)", v));
+
+    // boolean form and case-insensitivity
+    try testing.expect(matches("(device-width)", v));
+    try testing.expect(matches("(device-height)", v));
+    try testing.expect(matches("(MIN-DEVICE-WIDTH: 1px)", v));
+
+    // same unit and malformed-value handling as the non-device features
+    try testing.expect(matches("(min-device-width: 120em)", v)); // 1920px
+    try testing.expect(!matches("(min-device-width: 121em)", v));
+    try testing.expect(!matches("(min-device-width: -1999px)", v));
+    try testing.expect(!matches("(min-device-width: foo)", v));
+    try testing.expect(matches("(min-device-width: 0)", v));
+
+    // `device-*` on a viewport smaller than the query, and combined queries
+    const small = Viewport{ .width = 375, .height = 667 };
+    try testing.expect(!matches("(min-device-width: 1024px)", small));
+    try testing.expect(matches("(max-device-width: 480px) and (orientation: portrait)", small));
 }
 
 test "MediaQuery: orientation" {

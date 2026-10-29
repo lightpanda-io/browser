@@ -41,19 +41,19 @@ const InitOpts = struct {
     ignoreBOM: bool = false,
 };
 
+/// The encoding a TextDecoder or TextDecoderStream label names: a RangeError
+/// for an unknown label, and for "replacement", which can't decode.
+pub fn encodingForLabel(label_: ?[]const u8) !html5ever.EncodingInfo {
+    const info = html5ever.EncodingInfo.forLabel(label_ orelse "utf-8") orelse return error.RangeError;
+    if (std.mem.eql(u8, info.name(), "replacement")) {
+        return error.RangeError;
+    }
+    return info;
+}
+
 pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
-    const label = label_ orelse "utf-8";
-
-    const info = html5ever.encoding_for_label(label.ptr, label.len);
-    if (!info.isValid()) {
-        return error.RangeError;
-    }
-
-    // Check for "replacement" encoding - it's not usable for decoding per spec
+    const info = try encodingForLabel(label_);
     const enc_name = info.name();
-    if (std.mem.eql(u8, enc_name, "replacement")) {
-        return error.RangeError;
-    }
 
     // Only ever holds the decoder itself and the lazily-lowercased encoding
     // name; decode output comes from the caller's call_arena.
@@ -90,15 +90,15 @@ pub fn acquireRef(self: *TextDecoder) void {
     self._rc.acquire();
 }
 
-pub fn getIgnoreBOM(self: *const TextDecoder) bool {
+fn getIgnoreBOM(self: *const TextDecoder) bool {
     return self._ignore_bom;
 }
 
-pub fn getFatal(self: *const TextDecoder) bool {
+fn getFatal(self: *const TextDecoder) bool {
     return self._fatal;
 }
 
-pub fn getEncoding(self: *TextDecoder) ![]const u8 {
+fn getEncoding(self: *TextDecoder) ![]const u8 {
     // Spec requires lowercase encoding name
     // Allocate buffer for lowercase name on first access
     if (self._lowercase_name.len > 0) {
@@ -112,9 +112,9 @@ const DecodeOpts = struct {
     stream: bool = false,
 };
 
-pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts, exec: *const js.Execution) ![]const u8 {
+pub fn decode(self: *TextDecoder, input_: ?js.AllowSharedBufferSource, opts_: ?DecodeOpts, exec: *const js.Execution) ![]const u8 {
     const opts: DecodeOpts = opts_ orelse .{};
-    const input = input_ orelse "";
+    const input: []const u8 = if (input_) |i| i.bytes else "";
 
     if (opts.stream) {
         // Streaming mode: create decoder if needed, keep it alive
@@ -124,33 +124,54 @@ pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts, exec:
                 return error.OutOfMemory;
             }
         }
-        return self._decode(exec.call_arena, input, self._decoder, false);
+        return self._decode(exec.call_arena, input, self._decoder.?, false);
     }
 
-    if (self._decoder) |decoder| {
-        // Non-streaming with existing decoder: flush with is_last=true, then free
-        const result = try self._decode(exec.call_arena, input, decoder, true);
-
-        // on error, _decode will free the decoder. So we only free it on non-error
-        html5ever.encoding_decoder_free(decoder);
-        self._decoder = null;
-        return result;
-    }
-
-    // non-streaming, no existing decoder
-    return self._decode(exec.call_arena, input, null, true);
+    // Non-streaming: flush the decoder from earlier streaming calls (or a new
+    // one) with is_last=true, then free it. On error, _decode frees it.
+    const decoder = self._decoder orelse html5ever.encoding_decoder_new(self._encoding_handle) orelse return error.OutOfMemory;
+    self._decoder = decoder;
+    const result = try self._decode(exec.call_arena, input, decoder, true);
+    html5ever.encoding_decoder_free(decoder);
+    self._decoder = null;
+    self._bom_seen = false;
+    return result;
 }
 
-fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, streaming_decoder: ?*anyopaque, is_last: bool) ![]const u8 {
+fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, decoder: *anyopaque, is_last: bool) ![]const u8 {
+    return decodeChunk(arena, .{
+        .encoding_name = self._encoding_name,
+        .fatal = self._fatal,
+        .ignore_bom = self._ignore_bom,
+        .bom_seen = &self._bom_seen,
+    }, decoder, input, is_last) catch |err| {
+        if (err == error.TypeError) {
+            // Reset decoder on error
+            html5ever.encoding_decoder_free(decoder);
+            self._decoder = null;
+            self._bom_seen = false;
+        }
+        return err;
+    };
+}
+
+pub const ChunkOpts = struct {
+    encoding_name: []const u8,
+    fatal: bool,
+    ignore_bom: bool,
+    // Whether output has come out yet, for the BOM.
+    bom_seen: *bool,
+};
+
+/// Decodes `input` with the streaming `decoder` into `arena`, as TextDecoder
+/// and TextDecoderStream do. A decoding error in fatal mode is a TypeError.
+pub fn decodeChunk(arena: std.mem.Allocator, opts: ChunkOpts, decoder: *anyopaque, input: []const u8, is_last: bool) ![]const u8 {
     if (input.len == 0 and !is_last) {
         return "";
     }
 
-    // Calculate max output size (add extra for potential buffered bytes when finishing)
-    const max_out = html5ever.encoding_max_utf8_buffer_length(
-        self._encoding_handle,
-        if (input.len == 0) 4 else input.len,
-    );
+    // Counts the bytes the decoder holds from earlier input too.
+    const max_out = html5ever.encoding_decoder_max_utf8_buffer_length(decoder, input.len);
 
     if (max_out == 0) {
         return "";
@@ -159,48 +180,38 @@ fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, stre
     // Allocate output buffer
     const output = try arena.alloc(u8, max_out);
 
-    // Decode using either streaming or one-shot decoder
-    const result = if (streaming_decoder) |decoder|
-        html5ever.encoding_decoder_decode(
-            decoder,
-            input.ptr,
-            input.len,
-            output.ptr,
-            output.len,
-            @intFromBool(is_last),
-        )
-    else
-        html5ever.encoding_decode(
-            self._encoding_handle,
-            input.ptr,
-            input.len,
-            output.ptr,
-            output.len,
-            1, // is_last = true for one-shot
-        );
+    const result = html5ever.encoding_decoder_decode(
+        decoder,
+        input.ptr,
+        input.len,
+        output.ptr,
+        output.len,
+        @intFromBool(is_last),
+    );
 
-    // Handle errors in fatal mode
-    if (self._fatal and result.hadErrors()) {
-        if (streaming_decoder != null) {
-            // Reset decoder on error
-            if (self._decoder) |decoder| {
-                html5ever.encoding_decoder_free(decoder);
-                self._decoder = null;
-            }
-        }
-        self._bom_seen = false;
+    if (opts.fatal and result.hadErrors()) {
         return error.TypeError;
     }
 
     var decoded: []const u8 = output[0..result.bytes_written];
 
-    // Handle BOM stripping
-    if (!self._bom_seen and !self._ignore_bom) {
-        decoded = stripBom(decoded);
-        self._bom_seen = true;
+    // The decoder does no BOM sniffing, so a BOM of this encoding is a
+    // leading U+FEFF in the first output; other bytes stay as decoded.
+    // Only UTF-8 and UTF-16 have a BOM: in gb18030, U+FEFF is a character.
+    if (!opts.bom_seen.* and decoded.len > 0) {
+        if (opts.ignore_bom == false and hasBom(opts.encoding_name)) {
+            decoded = stripBom(decoded);
+        }
+        opts.bom_seen.* = true;
     }
 
     return decoded;
+}
+
+fn hasBom(encoding_name: []const u8) bool {
+    return std.mem.eql(u8, encoding_name, "UTF-8") or
+        std.mem.eql(u8, encoding_name, "UTF-16LE") or
+        std.mem.eql(u8, encoding_name, "UTF-16BE");
 }
 
 fn stripBom(data: []const u8) []const u8 {
@@ -217,7 +228,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "TextDecoder";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

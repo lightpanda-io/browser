@@ -25,14 +25,16 @@ const URL = @import("browser/URL.zig");
 
 const TestHTTPServer = @This();
 
+port: u16,
 shutdown: std.atomic.Value(bool),
 listener: ?std.Io.net.Server,
 handler: Handler,
 
 const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
-pub fn init(handler: Handler) TestHTTPServer {
+pub fn init(handler: Handler, port: u16) TestHTTPServer {
     return .{
+        .port = port,
         .shutdown = .init(true),
         .listener = null,
         .handler = handler,
@@ -54,7 +56,7 @@ pub fn stop(self: *TestHTTPServer) void {
 }
 
 pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 9582);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", self.port);
 
     self.listener = try address.listen(lp.io, .{ .reuse_address = true });
     var listener = &self.listener.?;
@@ -98,7 +100,7 @@ fn handleConnection(self: *TestHTTPServer, conn: std.Io.net.Stream) !void {
 
         self.handler(&req) catch |err| {
             switch (err) {
-                error.BrokenPipe => {},
+                error.BrokenPipe, error.WriteFailed => {},
                 else => {
                     std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
                     req.respond("server error", .{ .status = .internal_server_error }) catch {};
@@ -113,7 +115,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     var url_buf: [1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&url_buf);
     var unescaped_file_path = try URL.unescape(fba.allocator(), file_path);
-    if (std.mem.indexOfScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
+    if (std.mem.findScalarPos(u8, unescaped_file_path, 0, '?')) |pos| {
         unescaped_file_path = unescaped_file_path[0..pos];
     }
     const file = std.Io.Dir.cwd().openFile(lp.io, unescaped_file_path, .{}) catch |err| switch (err) {
@@ -122,15 +124,40 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
     };
     defer file.close(lp.io);
 
+    var headers: [8]std.http.Header = undefined;
+    headers[0] = .{ .name = "content-type", .value = getContentType(unescaped_file_path) };
+    var header_count: usize = 1;
+
+    // Like WPT, a `<file>.headers` next to the file adds its "Name: value"
+    // lines to the response.
+    var headers_buf: [1024]u8 = undefined;
+    var headers_fba = std.heap.FixedBufferAllocator.init(&headers_buf);
+    const headers_path = try std.fmt.allocPrint(fba.allocator(), "{s}.headers", .{unescaped_file_path});
+    if (std.Io.Dir.cwd().readFileAlloc(lp.io, headers_path, headers_fba.allocator(), .limited(headers_buf.len))) |content| {
+        var lines = std.mem.tokenizeAny(u8, content, "\r\n");
+        while (lines.next()) |line| {
+            const colon = std.mem.findScalar(u8, line, ':') orelse return error.InvalidHeadersFile;
+            if (header_count == headers.len) {
+                return error.TooManyHeaders;
+            }
+            headers[header_count] = .{
+                .name = std.mem.trim(u8, line[0..colon], " "),
+                .value = std.mem.trim(u8, line[colon + 1 ..], " "),
+            };
+            header_count += 1;
+        }
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
     const stat = try file.stat(lp.io);
     var send_buffer: [4096]u8 = undefined;
 
     var res = try req.respondStreaming(&send_buffer, .{
         .content_length = stat.size,
         .respond_options = .{
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = getContentType(unescaped_file_path) },
-            },
+            .extra_headers = headers[0..header_count],
         },
     });
 
@@ -143,7 +170,7 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
 
 fn getContentType(file_path: []const u8) []const u8 {
     if (std.mem.endsWith(u8, file_path, ".js")) {
-        return "application/json";
+        return "text/javascript";
     }
 
     if (std.mem.endsWith(u8, file_path, ".GB2312.html")) {
@@ -158,14 +185,30 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "text/html";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".txt")) {
+        return "text/plain";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".xhtml")) {
+        return "application/xhtml+xml";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".md")) {
+        return "text/markdown";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".xml")) {
         // some wpt tests do this
         return "text/xml";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".wasm")) {
+        return "application/wasm";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".mjs")) {
         // mjs are ECMAScript modules
-        return "application/json";
+        return "text/javascript";
     }
 
     std.debug.print("TestHTTPServer asked to serve an unknown file type: {s}\n", .{file_path});

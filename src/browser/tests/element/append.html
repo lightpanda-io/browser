@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="test-container"></div>
 <script id="append-prepend-tests">
@@ -26,4 +27,20 @@
     p4.textContent = 'p4';
     container.prepend(p4, 'some text ');
     testing.expectEqual('<p>p4</p>some text <p>p3</p>', container.innerHTML, "prepend multiple nodes");
+</script>
+
+<script id=rest_params>
+{
+  // `...nodes`: an array isn't spread, it's converted to a string
+  const container = document.createElement('div');
+  const p = document.createElement('p');
+  container.append([p, 'x']);
+  testing.expectEqual('[object HTMLParagraphElement],x', container.innerHTML);
+  testing.expectEqual(null, p.parentNode);
+  testing.expectEqual(0, container.append.length);
+  testing.expectEqual(0, container.prepend.length);
+  testing.expectEqual(0, container.before.length);
+  testing.expectEqual(0, container.replaceWith.length);
+  testing.expectEqual(0, container.replaceChildren.length);
+}
 </script>

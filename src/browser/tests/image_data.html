@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
 <script id=constructor-basic>
@@ -85,4 +86,43 @@
 
 <script id=too-large>
   testing.expectError("IndexSizeError", () => new ImageData(2_147_483_648, 2_147_483_648));
+</script>
+
+<script id=constructor-with-data>
+  {
+    const arr = new Uint8ClampedArray(3 * 2 * 4);
+    const img = new ImageData(arr, 3, 2);
+    testing.expectEqual(3, img.width);
+    testing.expectEqual(2, img.height);
+    // wraps the caller's array, not a copy
+    testing.expectEqual(true, img.data === arr);
+    img.data[0] = 7;
+    testing.expectEqual(7, arr[0]);
+
+    // height is derived when omitted
+    const derived = new ImageData(arr, 3);
+    testing.expectEqual(2, derived.height);
+    testing.diverges("Chrome converts an explicit undefined height to 0 when settings follow", () => {
+      testing.expectEqual(2, new ImageData(arr, 3, undefined, { colorSpace: "srgb" }).height);
+    });
+
+    testing.expectEqual(2, ImageData.length);
+  }
+</script>
+
+<script id=constructor-with-data-errors>
+  {
+    const arr = new Uint8ClampedArray(3 * 2 * 4);
+    const expectError = (name, fn) => testing.withError((err) => testing.expectEqual(name, err.name), fn);
+
+    expectError('IndexSizeError', () => new ImageData(arr, 3, 3));
+    expectError('IndexSizeError', () => new ImageData(arr, 4));
+    expectError('IndexSizeError', () => new ImageData(arr, 0));
+    expectError('InvalidStateError', () => new ImageData(new Uint8ClampedArray(0), 1));
+    expectError('InvalidStateError', () => new ImageData(new Uint8ClampedArray(5), 1));
+    // not an ImageDataArray: the (sw, sh) overload, with sw = 0
+    expectError('IndexSizeError', () => new ImageData(new Uint8Array(4), 1));
+    expectError('TypeError', () => new ImageData(arr, 3, 2, { colorSpace: "nope" }));
+    expectError('TypeError', () => new ImageData(10));
+  }
 </script>

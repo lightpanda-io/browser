@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <p data-random="abc\def" id="backslash-target">backslash</p>
@@ -27,5 +28,57 @@
   // A bare newline inside a string token is a parse error.
   testing.expectError("SyntaxError",
     () => document.querySelector('p[data-random="line one\nline two"]'));
+}
+</script>
+
+<div id="unquoted">
+  <a id="tel" href="tel:1" data-v="a:b">tel</a>
+  <a id="mail" href="mailto:x@example.com">mail</a>
+  <a id="plain" x="abc">plain</a>
+  <a id="digit" x="1">digit</a>
+  <a id="nul" x="a&#xFFFD;b">nul</a>
+</div>
+
+<script id=unquotedAttributeValueEscapes>
+{
+  // An unquoted attribute value is an <ident-token>, which may hold escapes.
+  // https://drafts.csswg.org/css-syntax/#consume-name
+  const root = document.getElementById('unquoted');
+  const ids = (sel) => Array.from(root.querySelectorAll(sel), (e) => e.id).join(',');
+
+  testing.expectEqual('tel', ids('a[href^=tel\\:]'));
+
+  // Each operator.
+  testing.expectEqual('tel', ids('[data-v=a\\:b]'));
+  testing.expectEqual('tel', ids('[data-v~=a\\:b]'));
+  testing.expectEqual('tel', ids('[data-v|=a\\:b]'));
+  testing.expectEqual('tel', ids('[href^=tel\\:]'));
+  testing.expectEqual('tel', ids('[data-v$=\\:b]'));
+  testing.expectEqual('tel', ids('[href*=l\\:1]'));
+
+  // Hex escape with its terminating space.
+  testing.expectEqual('tel', ids('[href=tel\\3a 1]'));
+  // Escaped ordinary letter.
+  testing.expectEqual('tel', ids('[href^=te\\l]'));
+  // Selector list.
+  testing.expectEqual('tel,mail', ids('a[href^=tel\\:], a[href^=mailto\\:]'));
+
+  testing.expectEqual(true, root.querySelector('a[href^=tel\\:]').matches('[href^=tel\\:]'));
+  testing.expectEqual('tel', root.querySelector('a').closest('[href^=tel\\:]').id);
+
+  // A null in an unquoted value is U+FFFD.
+  testing.expectEqual('nul', ids('[x=a\0b]'));
+
+  // Unchanged forms.
+  testing.expectEqual('plain', ids('[x=abc]'));
+  testing.expectEqual('tel', ids('[data-v="a:b"]'));
+  // In a quoted value, a backslash and a newline are a line continuation.
+  testing.expectEqual('tel', ids('[data-v="a\\\n:b"]'));
+  testing.expectError("SyntaxError", () => root.querySelectorAll('[x=a:b]'));
+
+  // An unquoted value must start like an ident.
+  testing.expectError("SyntaxError", () => root.querySelectorAll('[x=1]'));
+  testing.expectError("SyntaxError", () => root.querySelectorAll('[x=-1]'));
+  testing.expectEqual('digit', ids('[x=\\31]'));
 }
 </script>

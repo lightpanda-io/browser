@@ -25,6 +25,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Factory = @import("../../../Factory.zig");
 const DOMRect = @import("../../DOMRect.zig");
+const DOMMatrix = @import("../../DOMMatrix.zig");
 const DOMMatrixReadOnly = @import("../../DOMMatrixReadOnly.zig");
 const SvgElement = @import("../Svg.zig");
 const AnimatedTransformList = @import("../../svg/AnimatedTransformList.zig");
@@ -120,7 +121,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "SVGGraphicsElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -128,12 +128,14 @@ pub const JsApi = struct {
     pub const requiredExtensions = bridge.accessor(Graphics.getRequiredExtensions, null, .{});
     pub const systemLanguage = bridge.accessor(Graphics.getSystemLanguage, null, .{});
     pub const getBBox = bridge.function(Graphics.getBBox, .{});
+    pub const getCTM = bridge.function(Graphics.getCTM, .{});
+    pub const getScreenCTM = bridge.function(Graphics.getScreenCTM, .{});
 };
 
 // SVGBoundingBoxOptions is not modelled: Chrome declares no parameter at all
 // and Firefox's flags degenerate to the fill geometry, so both engines answer
 // every call with the fill box.
-pub fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
+fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
     var bounds: PathData.Bounds = .{};
     switch (self._type) {
         .geometry => {
@@ -142,8 +144,9 @@ pub fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
             bounds = path.bounds(.{});
         },
         .foreign_object => bounds = try self.subtype(ForeignObject).getBounds(frame),
+        .text_content => bounds = self.subtype(TextContent).getBounds(frame),
         .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
-        .defs, .symbol, .switch_element, .use, .image, .text_content => {},
+        .defs, .symbol, .switch_element, .use, .image => {},
     }
     if (bounds.isEmpty()) {
         return DOMRect.create(.{}, frame._factory);
@@ -189,33 +192,75 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
                 defer path.deinit(frame.local_arena);
                 bounds.merge(path.bounds(child_matrix));
             },
-            .foreign_object => {
-                const child_bounds = try graphics.subtype(ForeignObject).getBounds(frame);
-                if (!child_bounds.isEmpty()) {
-                    var foreign_path: PathData.Path = .{};
-                    defer foreign_path.deinit(frame.local_arena);
-                    const top_left = PathData.Point{ .x = child_bounds.min_x, .y = child_bounds.min_y };
-                    const top_right = PathData.Point{ .x = child_bounds.max_x, .y = child_bounds.min_y };
-                    const bottom_right = PathData.Point{ .x = child_bounds.max_x, .y = child_bounds.max_y };
-                    const bottom_left = PathData.Point{ .x = child_bounds.min_x, .y = child_bounds.max_y };
-                    try foreign_path.appendLine(top_left, top_right, frame.local_arena);
-                    try foreign_path.appendLine(top_right, bottom_right, frame.local_arena);
-                    try foreign_path.appendLine(bottom_right, bottom_left, frame.local_arena);
-                    try foreign_path.appendLine(bottom_left, top_left, frame.local_arena);
-                    bounds.merge(foreign_path.bounds(child_matrix));
-                }
-            },
+            .foreign_object => mergeTransformed(bounds, try graphics.subtype(ForeignObject).getBounds(frame), child_matrix),
+            // The text box covers its <tspan>s, so they aren't visited.
+            .text_content => mergeTransformed(bounds, graphics.subtype(TextContent).getBounds(frame), child_matrix),
             .g, .a => try cursors.append(frame.local_arena, .{
                 .next = graphics.asNode().firstChild(),
                 .matrix = child_matrix,
             }),
             // <defs> and <symbol> never render. Nested viewports, <switch>,
-            // <use>, <image> and text have geometry we cannot resolve yet, so
-            // they contribute nothing rather than making the whole box
-            // unavailable.
-            .defs, .symbol, .svg, .switch_element, .use, .image, .text_content => {},
+            // <use> and <image> have geometry we cannot resolve yet, so they
+            // contribute nothing rather than making the whole box unavailable.
+            .defs, .symbol, .svg, .switch_element, .use, .image => {},
         }
     }
+}
+
+fn mergeTransformed(bounds: *PathData.Bounds, rect: PathData.Bounds, matrix: PathData.Matrix) void {
+    if (rect.isEmpty()) {
+        return;
+    }
+    bounds.include(matrix.apply(.{ .x = rect.min_x, .y = rect.min_y }));
+    bounds.include(matrix.apply(.{ .x = rect.max_x, .y = rect.min_y }));
+    bounds.include(matrix.apply(.{ .x = rect.max_x, .y = rect.max_y }));
+    bounds.include(matrix.apply(.{ .x = rect.min_x, .y = rect.max_y }));
+}
+
+/// Composes `transform` attributes from the element up to, excluding, its
+/// nearest <svg>. Null when the element isn't in a document.
+fn getCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+    return currentTransformMatrix(self, .viewport, frame);
+}
+
+/// Like getCTM through every enclosing <svg>, offset by where the outermost
+/// one sits on the page. Nested viewport x/y are not applied.
+fn getScreenCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+    return currentTransformMatrix(self, .screen, frame);
+}
+
+fn currentTransformMatrix(self: *Graphics, space: enum { viewport, screen }, frame: *Frame) !?*DOMMatrix {
+    if (!self.asNode().isConnected()) {
+        return null;
+    }
+
+    var matrix = transformMatrix(self.asElement());
+    var outermost: ?*Element = if (self._type == .svg) self.asElement() else null;
+    var node = self.asNode().parentNode();
+    while (node) |n| : (node = n.parentNode()) {
+        const element = n.is(Element) orelse break;
+        if (element._namespace != .svg) break;
+        const graphics = element.as(SvgElement).is(Graphics) orelse continue;
+        if (graphics._type == .svg) {
+            if (space == .viewport) break;
+            outermost = element;
+        }
+        matrix = transformMatrix(element).multiply(matrix);
+    }
+
+    if (space == .screen) {
+        if (outermost) |svg| {
+            const rect = svg.boundingClientRectValues(frame);
+            matrix = (PathData.Matrix{ .e = rect.x, .f = rect.y }).multiply(matrix);
+        }
+    }
+
+    return try DOMMatrix.create(.{
+        matrix.a, matrix.b, 0, 0,
+        matrix.c, matrix.d, 0, 0,
+        0,        0,        1, 0,
+        matrix.e, matrix.f, 0, 1,
+    }, true, frame.page);
 }
 
 fn transformMatrix(element: *Element) PathData.Matrix {
@@ -241,14 +286,14 @@ fn transformMatrix(element: *Element) PathData.Matrix {
     };
 }
 
-pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
+fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
     return AnimatedTransformList.getOrCreate(self.asElement(), .transform, frame);
 }
 
-pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
+fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
     return StringList.getOrCreate(self.asElement(), .required_extensions, frame);
 }
 
-pub fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
+fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
     return StringList.getOrCreate(self.asElement(), .system_language, frame);
 }

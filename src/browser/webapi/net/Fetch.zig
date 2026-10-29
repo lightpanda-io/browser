@@ -24,7 +24,6 @@ const URL = @import("../../URL.zig");
 const HttpClient = @import("../../../network/HttpClient.zig");
 
 const AbortSignal = @import("../AbortSignal.zig");
-const DOMException = @import("../DOMException.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
@@ -33,41 +32,82 @@ const log = lp.log;
 const Execution = js.Execution;
 const Transfer = HttpClient.Transfer;
 
+const referrer = @import("../../referrer.zig");
+
 const Fetch = @This();
 
 _exec: *const Execution,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
-_resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
+_abort_reason: ?AbortSignal.Reason = null,
 _manual_redirect: bool,
+_no_cors: bool,
+_null_body: bool,
+_headers_done: bool = false,
+_sink: Sink,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
-pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
-    const resolver = exec.js.local.?.createPromiseResolver();
+const Sink = union(enum) {
+    promise: js.PromiseResolver.Global,
+    completion: Completion,
+};
 
-    // A bad RequestInit (e.g. an invalid priority) must reject the promise,
-    // not throw synchronously.
-    const request = Request.init(input, options, exec) catch {
-        resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
-        return resolver.promise();
+// For a fetch made by Zig code (Cache.add), in place of fetch()'s promise.
+// Once `start` has returned without an error, `callback` fires exactly once.
+pub const Completion = struct {
+    ctx: *anyopaque,
+    callback: *const fn (ctx: *anyopaque, result: Result) void,
+
+    pub const Result = union(enum) {
+        // Only valid for the duration of the callback.
+        done: *Response,
+        err,
+        // The owner is being torn down: no JS.
+        shutdown,
     };
+};
+
+pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promise {
+    // Errors returned from here reject the promise (see Caller.handleError).
+    const request = try Request.init(input, options, exec);
+
     // This Request is never exposed to JS. makeRequest dupes the url/body
     // into the transfer, so nothing references it once we return.
     request.acquireRef();
     defer request.releaseRef(exec.page);
 
+    if (request._mode == .navigate) {
+        return exec.js.typeError("Fetch can't be navigate");
+    }
+
+    const resolver = exec.js.local.?.createPromiseResolver();
     if (request._signal) |signal| {
         if (signal._aborted) {
-            resolver.reject("fetch aborted", DOMException.init("The operation was aborted.", "AbortError"));
+            resolver.reject("fetch aborted", try AbortSignal.reasonJsValue(signal._reason, exec.js.local.?));
             return resolver.promise();
         }
     }
 
+    const body = request.bodyBytes() catch |err| switch (err) {
+        error.TypeError => return exec.js.typeError("Failed to read ReadableStream body"),
+        else => return err,
+    };
+
+    try submit(request, body, .{ .promise = try resolver.persist() }, exec);
+    return resolver.promise();
+}
+
+pub fn start(request: *Request, completion: Completion, exec: *const Execution) !void {
+    const body = try request.bodyBytes();
+    return submit(request, body, .{ .completion = completion }, exec);
+}
+
+fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Execution) !void {
     const response = try Response.initPending(exec);
     errdefer response.deinit(exec.page);
 
@@ -76,57 +116,77 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._exec = exec,
         ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
-        ._resolver = try resolver.persist(),
+        ._sink = sink,
         ._response = response,
         ._owns_response = true,
         ._signal = request._signal,
         ._manual_redirect = request._redirect == .manual,
+        ._no_cors = request._mode == .@"no-cors",
+        ._null_body = request._method == .HEAD,
     };
-
-    const session = exec.session;
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
 
-    const cookie_jar = switch (request._credentials) {
-        .omit => null,
-        .include => &session.cookie_jar,
-        .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
-    };
-
-    const transfer = exec.newRequest(.{
+    const transfer = try exec.newRequest(.{
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
-        .body = request._body,
+        .body = body,
         .resource_type = .fetch,
-        .cookie_jar = cookie_jar,
-        .cookie_origin = exec.url.*,
+        .credentials_mode = switch (request._credentials) {
+            .omit => .omit,
+            .@"same-origin" => .same_origin,
+            .include => .include,
+        },
+        .request_mode = switch (request._mode) {
+            .cors => .cors,
+            .@"no-cors" => .no_cors,
+            .@"same-origin" => .same_origin,
+            .navigate => @panic("fetch can't be navigate mode"),
+        },
+        .origin = exec.origin(),
         .redirect = switch (request._redirect) {
             .follow => .follow,
             .manual => .manual,
             .@"error" => .@"error",
         },
-        .notification = session.notification,
+        .header_before_body_error = true,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
-    }) catch {
-        // OOM-class; nothing was committed and no callback fired.
-        return resolver.promise();
-    };
+    });
 
     {
         errdefer transfer.deinit();
         if (request._headers) |h| {
             try h.populateRequestHeaders(transfer);
         }
-        try exec.headersForRequest(transfer);
+
+        // fetch() computes its own Referer below, from request._referrer /
+        // request._referrer_policy, so skip the default one here.
+        try exec.headersForRequest(transfer, .{ .referer = false });
+
+        const source: ?[:0]const u8 = switch (request._referrer) {
+            .none => null,
+            .client => exec.referrerSource(),
+            .url => |u| u,
+        };
+
+        if (source) |s| {
+            const policy = request._referrer_policy orelse exec.referrerPolicy();
+            if (try referrer.compute(transfer.arena.allocator(), policy, s, transfer.req.url)) |ref| {
+                try transfer.setHeader("Referer", ref, .{});
+                transfer.req.referrer_policy = policy;
+            }
+        }
+
+        if (fetch._signal) |signal| {
+            try signal._dependents.append(exec.page_arena, .{ .fetch = fetch });
+        }
     }
 
     // Held for Response.deinit's abort; the error, shutdown and done
@@ -138,21 +198,21 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     // error from here would also fire the `errdefer response.deinit` above
     // and double-free the arena.
     transfer.submit() catch {};
-    return resolver.promise();
 }
 
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
+    const is_opaque = self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin;
 
-    if (self._signal) |signal| {
-        if (signal._aborted) {
-            return .abort;
-        }
+    const status = transfer.responseStatus().?;
+    self._exec.page.status.noteResponse(.fetch, transfer);
+    if (is_opaque or Response.isNullBodyStatus(status) or (self._manual_redirect and HttpClient.isRedirectStatus(status))) {
+        self._null_body = true;
     }
 
     const arena = self._response._arena;
-    if (transfer.getContentLength()) |cl| {
-        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
+    if (self._null_body == false) {
+        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
     }
 
     const res = self._response;
@@ -165,10 +225,25 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         });
     }
 
-    res._status = transfer.responseStatus().?;
-    res._status_text = std.http.Status.phrase(@enumFromInt(transfer.responseStatus().?)) orelse "";
-    res._url = try arena.dupeZ(u8, transfer.req.url);
+    res._status = status;
+    res._status_text = if (transfer.statusText()) |st|
+        try arena.allocator().dupe(u8, st)
+    else
+        std.http.Status.phrase(@fromBackingInt(@intCast(status))) orelse "";
+    res._url = try arena.dupeSentinel(u8, transfer.req.url, 0);
     res._is_redirected = transfer.redirectCount().? > 0;
+
+    // no-cors mode: regardless of what the server returned, JS only ever sees
+    // an opaque response — status 0, no headers, no body, url "".
+    if (is_opaque) {
+        res._status = 0;
+        res._status_text = "";
+        res._url = "";
+        res._type = .@"opaque";
+        res._is_redirected = false;
+        self._headers_done = true;
+        return .proceed;
+    }
 
     // redirect: "manual" surfaces the unfollowed 3xx as an opaque-redirect
     // filtered response: status 0, no headers, no body.
@@ -178,6 +253,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._url = "";
         res._type = .opaqueredirect;
         res._is_redirected = false;
+        self._headers_done = true;
         return .proceed;
     }
 
@@ -200,22 +276,19 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         res._type = .basic;
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
+    for (transfer.responseHeaders()) |hdr| {
         try res._headers.append(hdr.name, hdr.value, exec);
     }
 
+    self._headers_done = true;
     return .proceed;
 }
 
 fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
 
-    // Check if aborted
-    if (self._signal) |signal| {
-        if (signal._aborted) {
-            return error.Abort;
-        }
+    if (self._null_body) {
+        return;
     }
 
     try self._buf.appendSlice(self._response._arena.allocator(), data);
@@ -223,9 +296,12 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+    const signal = self._signal;
+    self.detachSignal();
+
     var response = self._response;
     response._http_transfer = null;
-    response._body = .{ .bytes = self._buf.items };
+    response._body = if (self._null_body) .empty else .{ .bytes = self._buf.items };
 
     log.info(.http, "request complete", .{
         .source = "fetch",
@@ -234,18 +310,29 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .len = self._buf.items.len,
     });
 
+    const resolver = switch (self._sink) {
+        .promise => |resolver| resolver,
+        .completion => |completion| {
+            self._owns_response = false;
+            defer response.deinit(self._exec.page);
+            return completion.callback(completion.ctx, .{ .done = response });
+        },
+    };
+
     var ls: js.Local.Scope = undefined;
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
+    response._signal = signal;
     const js_val = try ls.local.zigValueToJs(self._response, .{});
     self._owns_response = false;
     response._arena.report();
-    return ls.toLocal(self._resolver).resolve("fetch done", js_val);
+    return ls.toLocal(resolver).resolve("fetch done", js_val);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+    self.detachSignal();
 
     log.info(.http, "request error", .{
         .source = "fetch",
@@ -254,13 +341,17 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         .err = err,
     });
 
+    if (self._headers_done == false) {
+        self._exec.page.status.noteError(.fetch, err);
+    }
+
     var response = self._response;
     response._http_transfer = null;
 
     // Capture this before we reject. Rejection could trigger httpShutdownCallback
     // (via a microtask callback). But if we're here, then we'll take care of
     // cleaning up when we're done.
-    const owns_response = self._owns_response;
+    var owns_response = self._owns_response;
     self._owns_response = false;
 
     // the response is only passed on v8 on success, if we're here, it's safe to
@@ -270,29 +361,76 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         response.deinit(self._exec.page);
     };
 
+    const resolver = switch (self._sink) {
+        .promise => |resolver| resolver,
+        .completion => |completion| return completion.callback(completion.ctx, .err),
+    };
+
     var ls: js.Local.Scope = undefined;
     self._exec.js.localScope(&ls);
     defer ls.deinit();
 
+    if (self._abort_reason) |reason| {
+        if (AbortSignal.reasonJsValue(reason, &ls.local)) |js_val| {
+            return ls.toLocal(resolver).reject("fetch aborted", js_val);
+        } else |_| {}
+    }
+
+    if (owns_response and self._headers_done) {
+        // Once we have the headers, the promise should resolve. A later error,
+        // like libcurl returning a BadContentEncoding errors at the body, not
+        // the fetch.
+        if (self._null_body == false) {
+            response._body = .errored;
+        }
+        if (ls.local.zigValueToJs(response, .{})) |js_val| {
+            owns_response = false;
+            response._arena.report();
+            return ls.toLocal(resolver).resolve("fetch done", js_val);
+        } else |_| {}
+    }
+
     // fetch() must reject with a TypeError on network errors per spec
-    ls.toLocal(self._resolver).rejectError("fetch error", .{ .type_error = "fetch error" });
+    ls.toLocal(resolver).rejectError("fetch error", .{ .type_error = "fetch error" });
+}
+
+// Called by _signal when it aborts. Synchronously fires httpErrorCallback
+// which frees self.
+pub fn abort(self: *Fetch, reason: AbortSignal.Reason) void {
+    // detach first so we don't try to remove ourselves from the signal, the
+    // signal will take care of that.
+    self._signal = null;
+    self._abort_reason = reason;
+    const transfer = self._response._http_transfer orelse return;
+    transfer.cancel();
+}
+
+fn detachSignal(self: *Fetch) void {
+    const signal = self._signal orelse return;
+    self._signal = null;
+    signal.removeDependent(.{ .fetch = self });
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+    self.detachSignal();
 
     if (self._owns_response) {
+        const sink = self._sink;
         var response = self._response;
         response._http_transfer = null;
         response.deinit(self._exec.page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
+        switch (sink) {
+            .promise => {},
+            .completion => |completion| completion.callback(completion.ctx, .shutdown),
+        }
     }
 }
 
 const testing = @import("../../../testing.zig");
 test "WebApi: fetch" {
-    testing.expectLog(&.{ .http, .http });
     try testing.htmlRunner("net/fetch.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
 }

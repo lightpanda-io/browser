@@ -51,12 +51,15 @@ generation: u64,
 // considered done.
 blocking: u32,
 
+resets: u32,
+
 pub fn init(allocator: Allocator) Scheduler {
     return .{
         ._sequence = 0,
         .allocator = allocator,
         .generation = 0,
         .blocking = 0,
+        .resets = 0,
         .timed = Queue.initContext({}),
         .immediate = .{},
         .front = .{},
@@ -68,6 +71,7 @@ pub fn deinit(self: *Scheduler) void {
 }
 
 pub fn reset(self: *Scheduler) void {
+    self.resets +%= 1;
     self.finalizeTasks();
     self.blocking = 0;
     self.front.clear();
@@ -118,7 +122,10 @@ pub fn run(self: *Scheduler) !void {
     const start = lp.datetime.milliTimestamp(.boot);
     var now = start;
 
-    while (self.popReady(now)) |task_| {
+    // Only run what was queued before this run started.
+    self.immediate.pseudoSnapshot();
+
+    while (self.popReady(start)) |task_| {
         var task = task_;
         if (comptime lp.IS_DEBUG) {
             log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
@@ -126,21 +133,32 @@ pub fn run(self: *Scheduler) !void {
 
         self.generation +%= 1;
 
+        const resets = self.resets;
         const repeat_in_ms = task.callback(task.ctx) catch |err| {
-            log.warn(.scheduler, "task.callback", .{ .name = task.name, .err = err });
+            log.debug(.scheduler, "task.callback", .{ .name = task.name, .err = err });
             continue;
         };
 
         if (repeat_in_ms) |ms| {
-            // Task cannot be repeated immediately, and they should know that
-            if (comptime lp.IS_DEBUG) {
-                std.debug.assert(ms != 0);
+            if (resets != self.resets) {
+                // The task reset its own scheduler. Since it was running,
+                // finalizeTasks skipped over it. (would also be true for a non-
+                // repeating task, but in that case we aren't responsible
+                // for finalizing it.)
+                if (task.finalizer) |func| {
+                    func(task.ctx);
+                }
+            } else {
+                // Task cannot be repeated immediately, and they should know that
+                if (comptime lp.IS_DEBUG) {
+                    std.debug.assert(ms != 0);
+                }
+                // A task that endlessly reschedules itself would keep the page
+                // alive forever, so repeats never block completion.
+                task.blocks_done = false;
+                task.key = self.nextKey(now + ms);
+                try self.timed.push(self.allocator, task);
             }
-            // A task that endlessly reschedules itself would keep the page
-            // alive forever, so repeats never block completion.
-            task.blocks_done = false;
-            task.key = self.nextKey(now + ms);
-            try self.timed.push(self.allocator, task);
         }
 
         now = lp.datetime.milliTimestamp(.boot);
@@ -160,7 +178,7 @@ pub fn blocksCompletion(self: *const Scheduler) bool {
 }
 
 pub fn msToNext(self: *Scheduler) ?u64 {
-    if (self.immediate.peek() != null or self.front.peek() != null) {
+    if (self.immediate.isEmpty() == false or self.front.isEmpty() == false) {
         return 0;
     }
     const task = self.timed.peek() orelse return null;
@@ -177,8 +195,11 @@ fn nextKey(self: *Scheduler, run_at: u64) u64 {
     return (run_at << SEQ_BITS) | (self._sequence & SEQ_MASK);
 }
 
-fn popReady(self: *Scheduler, now: u64) ?Task {
+fn popReady(self: *Scheduler, cutoff: u64) ?Task {
     const task = task: {
+        // front isn't snapshotted: a scheduler.yield() continuation queued
+        // during this run still jumps ahead of the already-queued tasks.
+        self.front.pseudoSnapshot();
         if (self.front.peek() != null) {
             break :task self.front.pop();
         }
@@ -198,7 +219,7 @@ fn popReady(self: *Scheduler, now: u64) ?Task {
         }
 
         const candidate = timed orelse return null;
-        if (candidate.runAt() > now) {
+        if (candidate.runAt() > cutoff) {
             return null;
         }
 
@@ -254,6 +275,11 @@ const Queue = std.PriorityQueue(Task, void, struct {
 const Immediate = struct {
     head: usize = 0,
     tasks: std.ArrayList(Task) = .empty,
+    snapshot_index: usize = 0, // the queue wait until the next run
+
+    fn pseudoSnapshot(self: *Immediate) void {
+        self.snapshot_index = self.tasks.items.len;
+    }
 
     fn push(self: *Immediate, allocator: Allocator, task: Task) !void {
         // pop can only reset tasks when its fully drained (which might not
@@ -265,16 +291,21 @@ const Immediate = struct {
         if (head > 16 and head >= live) {
             std.mem.copyForwards(Task, self.tasks.items[0..live], self.tasks.items[head..]);
             self.tasks.shrinkRetainingCapacity(live);
+            self.snapshot_index -= head;
             self.head = 0;
         }
         return self.tasks.append(allocator, task);
     }
 
     fn peek(self: *const Immediate) ?Task {
-        if (self.head == self.tasks.items.len) {
+        if (self.head == self.snapshot_index) {
             return null;
         }
         return self.tasks.items[self.head];
+    }
+
+    fn isEmpty(self: *const Immediate) bool {
+        return self.head == self.tasks.items.len;
     }
 
     fn pop(self: *Immediate) Task {
@@ -292,6 +323,7 @@ const Immediate = struct {
 
     fn clear(self: *Immediate) void {
         self.head = 0;
+        self.snapshot_index = 0;
         self.tasks.clearRetainingCapacity();
     }
 };
@@ -362,20 +394,49 @@ test "Scheduler: immediate queue reclaims consumed prefix" {
     try im.push(testing.arena_allocator, dummy);
     try im.push(testing.arena_allocator, dummy);
     for (0..10_000) |_| {
+        im.pseudoSnapshot();
         _ = im.pop();
         try im.push(testing.arena_allocator, dummy);
     }
     try testing.expect(im.tasks.items.len <= 64);
 }
 
+test "Scheduler: tasks added during a run wait for the next run" {
+    var s = Scheduler.init(testing.arena_allocator);
+    var ran: std.ArrayList(u8) = .empty;
+    var t2: TestTask = .{ .id = 2, .ran = &ran };
+    var t3: TestTask = .{ .id = 3, .ran = &ran };
+    var t1: TestTask = .{ .id = 1, .ran = &ran, .spawn = .{ .scheduler = &s, .immediate = &t2, .front = &t3 } };
+
+    // the front task still runs in the same run, the immediate one doesn't
+    try s.add(&t1, TestTask.run, 0, .{});
+    try s.run();
+    try testing.expectEqualSlices(u8, &.{ 1, 3 }, ran.items);
+    try testing.expectEqual(true, s.hasReadyTasks());
+
+    try s.run();
+    try testing.expectEqualSlices(u8, &.{ 1, 3, 2 }, ran.items);
+}
+
 const TestTask = struct {
     id: u8,
     ran: *std.ArrayList(u8),
     repeat: ?u32 = null,
+    spawn: ?Spawn = null,
+
+    const Spawn = struct {
+        scheduler: *Scheduler,
+        immediate: *TestTask,
+        front: *TestTask,
+    };
 
     fn run(ptr: *anyopaque) anyerror!?u32 {
         const self: *TestTask = @ptrCast(@alignCast(ptr));
         try self.ran.append(testing.arena_allocator, self.id);
+        if (self.spawn) |spawn| {
+            try spawn.scheduler.add(spawn.immediate, TestTask.run, 0, .{});
+            try spawn.scheduler.add(spawn.front, TestTask.run, 0, .{ .front = true });
+        }
         defer self.repeat = null;
         return self.repeat;
     }

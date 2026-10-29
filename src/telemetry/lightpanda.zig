@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const build_config = @import("build_config");
 
 const App = @import("../App.zig");
-const Config = @import("../Config.zig");
 
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
@@ -24,13 +23,13 @@ const LINGER_MS = 5000;
 const LINGER_BATCH = 16;
 const URL = "https://telemetry.lightpanda.io/v2";
 
-const OS_CODE = switch (builtin.os.tag) {
+const OS_CODE = switch (builtin.target.os.tag) {
     .linux => "L",
     .macos => "M",
     .ios => "I",
     else => "O",
 };
-const ARCH_CODE = switch (builtin.cpu.arch) {
+const ARCH_CODE = switch (builtin.target.cpu.arch) {
     .x86_64 => "X",
     .aarch64 => "A",
     else => "O",
@@ -46,7 +45,7 @@ writer: std.Io.Writer.Allocating,
 
 iid: ?[36]u8 = null,
 mode: []const u8,
-proxy: u8,
+cli: Header.CLI,
 
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
@@ -70,21 +69,27 @@ running: bool = true,
 pending: std.ArrayList(telemetry.Event) = .empty,
 dropped: u32 = 0,
 
-pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
+pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8) !void {
+    const config = app.config;
+    const allocator = app.allocator;
     self.* = .{
         .iid = iid,
-        .allocator = app.allocator,
+        .allocator = allocator,
         .network = &app.network,
-        .proxy = if (app.config.httpProxy() != null) 1 else 0,
-        .writer = std.Io.Writer.Allocating.init(app.allocator),
-        .mode = switch (run_mode) {
+        .cli = .{
+            .proxy = config.httpProxy() != null,
+            .robots = config.obeyRobots(),
+        },
+        .writer = std.Io.Writer.Allocating.init(allocator),
+        .mode = switch (config.command) {
             .fetch => "F",
             .serve => "S",
-            .agent => if (interactive == false) "AR" else "A",
+            .agent => if (config.interactive()) "A" else "AR",
             .run => "R",
             .mcp => "M",
             .version => "V",
             .help => "H",
+            .completion => "C",
         },
     };
 }
@@ -116,6 +121,10 @@ pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
         };
     }
 
+    if (raw_event == .tool and mergeTool(self.pending.items, raw_event.tool)) {
+        return;
+    }
+
     if (self.pending.items.len >= MAX_PENDING) {
         self.dropped +|= 1;
         return;
@@ -129,10 +138,23 @@ pub fn send(self: *LightPanda, raw_event: telemetry.Event) !void {
     self.cond.signal(lp.io);
 }
 
+/// Folds `tool` into a queued row with the same id, source and outcome.
+fn mergeTool(pending: []telemetry.Event, tool: telemetry.Event.Tool) bool {
+    for (pending) |*event| switch (event.*) {
+        .tool => |*t| if (t.id == tool.id and t.source == tool.source and t.outcome == tool.outcome) {
+            t.count +|= tool.count;
+            t.duration_ms +|= tool.duration_ms;
+            return true;
+        },
+        else => {},
+    };
+    return false;
+}
+
 fn run(self: *LightPanda) void {
     // The connection is created, owned, and torn down entirely on this thread;
     // the network thread never sees it (Transport == .none).
-    var conn = http.Connection.init(self.network.x509_store, self.network.config, self.network.ip_filter) catch |err| {
+    var conn = http.Connection.init(self.network.certificates, self.network.config, self.network.ip_filter) catch |err| {
         // Essentially OOM — the process is already in trouble. The thread
         // handle stays set so send() won't respawn; events drop at the cap.
         log.warn(.telemetry, "connection init", .{ .err = err });
@@ -180,7 +202,7 @@ fn run(self: *LightPanda) void {
 
         var sent: usize = 0;
         self.postEvents(&conn, batch.items, dropped, &sent) catch |err| {
-            log.warn(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
+            log.debug(.telemetry, "postEvents", .{ .err = err, .events = batch.items.len, .dropped = dropped });
         };
         const lost: u32 = @intCast(batch.items.len - sent);
 
@@ -243,7 +265,7 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
 
 fn flush(self: *LightPanda, conn: *http.Connection) !void {
     self._flush(conn) catch |err| {
-        log.warn(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
+        log.debug(.telemetry, "flush", .{ .err = err, .size = self.writer.written().len });
         return err;
     };
 }
@@ -266,7 +288,7 @@ fn writeHeader(self: *LightPanda) !bool {
     return self.writeLine(&Header{
         .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
         .mode = self.mode,
-        .proxy = self.proxy,
+        .cli = self.cli,
     });
 }
 
@@ -308,6 +330,34 @@ const EventRow = struct {
                 try writer.write(l.provider);
                 try writer.write(l.model);
             },
+            .tool => |t| {
+                try writer.write("T");
+                try writer.write(t.id);
+                try writer.write(switch (t.source) {
+                    .llm => "L",
+                    .user => "U",
+                    .script => "S",
+                    .mcp => "M",
+                });
+                try writer.write(switch (t.outcome) {
+                    .ok => "O",
+                    .is_error => "E",
+                    .frame_not_loaded => "F",
+                    .invalid_params => "P",
+                    .node_not_found => "N",
+                    .navigation_failed => "V",
+                    .navigation_timeout => "T",
+                    .cancelled => "C",
+                    .timeout => "W",
+                    .internal => "I",
+                });
+                try writer.write(t.count);
+                try writer.write(t.duration_ms);
+            },
+            .mcp_client => |c| {
+                try writer.write("C");
+                try writer.write(@backingInt(c));
+            },
         }
         try writer.endArray();
     }
@@ -316,14 +366,20 @@ const EventRow = struct {
 const Header = struct {
     iid: []const u8,
     mode: []const u8,
-    proxy: u8,
+    cli: CLI,
+
+    const CLI = packed struct(u32) {
+        proxy: bool,
+        robots: bool,
+        _reserved: u30 = 0,
+    };
 
     pub fn jsonStringify(self: *const Header, writer: anytype) !void {
         try writer.beginArray();
         try writer.write(self.iid);
         try writer.write("H");
         try writer.write(self.mode);
-        try writer.write(self.proxy);
+        try writer.write(@as(u32, @bitCast(self.cli)));
         try writer.write(OS_CODE);
         try writer.write(ARCH_CODE);
         try writer.write(build_config.version);
@@ -360,6 +416,18 @@ test "Telemetry: event row wire format" {
             .event = .{ .llm = .{ .provider = "nollm", .model = null } },
             .expected = "[\"L\",\"nollm\",null]",
         },
+        .{
+            .event = .{ .tool = .{ .id = 14, .source = .llm, .outcome = .ok, .count = 3, .duration_ms = 12 } },
+            .expected = "[\"T\",14,\"L\",\"O\",3,12]",
+        },
+        .{
+            .event = .{ .tool = .{ .id = 1, .source = .script, .outcome = .navigation_timeout, .duration_ms = 0 } },
+            .expected = "[\"T\",1,\"S\",\"T\",1,0]",
+        },
+        .{
+            .event = .{ .mcp_client = .cursor },
+            .expected = "[\"C\",3]",
+        },
     };
 
     for (cases) |case| {
@@ -370,6 +438,20 @@ test "Telemetry: event row wire format" {
     }
 }
 
+test "Telemetry: tool calls merge by id, source and outcome" {
+    var pending = [_]telemetry.Event{
+        .{ .run = {} },
+        .{ .tool = .{ .id = 14, .source = .llm, .outcome = .ok, .duration_ms = 10 } },
+    };
+    try testing.expect(mergeTool(&pending, .{ .id = 14, .source = .llm, .outcome = .ok, .duration_ms = 5 }));
+    try testing.expectEqual(2, pending[1].tool.count);
+    try testing.expectEqual(15, pending[1].tool.duration_ms);
+
+    try testing.expect(!mergeTool(&pending, .{ .id = 14, .source = .mcp, .outcome = .ok, .duration_ms = 5 }));
+    try testing.expect(!mergeTool(&pending, .{ .id = 14, .source = .llm, .outcome = .is_error, .duration_ms = 5 }));
+    try testing.expect(!mergeTool(&pending, .{ .id = 15, .source = .llm, .outcome = .ok, .duration_ms = 5 }));
+}
+
 test "Telemetry: header wire format" {
     var w = std.Io.Writer.Allocating.init(testing.allocator);
     defer w.deinit();
@@ -377,11 +459,11 @@ test "Telemetry: header wire format" {
     const header = Header{
         .iid = "the-iid",
         .mode = "S",
-        .proxy = 1,
+        .cli = .{ .proxy = true, .robots = false },
     };
     try std.json.Stringify.value(&header, .{}, &w.writer);
 
-    const expected = try std.fmt.allocPrint(testing.allocator, "[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
+    const expected = try testing.allocator.print("[\"the-iid\",\"H\",\"S\",1,\"{s}\",\"{s}\",\"{s}\"]", .{ OS_CODE, ARCH_CODE, build_config.version });
     defer testing.allocator.free(expected);
 
     try testing.expectEqual(expected, w.written());

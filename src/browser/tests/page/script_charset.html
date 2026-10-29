@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+  <link rel="preload" as="script" href="/scripts/latin1-header/byPreload.js">
+</head>
+<body>
+<script src="/scripts/latin1-header/byHeader.js"></script>
+<script src="/scripts/latin1-header/byPreload.js"></script>
+<script src="/scripts/bom-over-header.js"></script>
+<script src="/scripts/latin1/byAttribute.js" charset="windows-1252"></script>
+<script defer src="/scripts/latin1/byAttributeDefer.js" charset="windows-1252"></script>
+<script src="/scripts/latin1/byDocumentUtf8.js"></script>
+<script type="module" src="/scripts/latin1/byModule.js" charset="windows-1252"></script>
+
+<script id="content_type_charset">
+  testing.expectEqual('café', window.byHeader);
+  testing.expectEqual('café', window.byPreload);
+</script>
+
+<script id="bom_wins">
+  testing.expectEqual('café', window.byBom);
+</script>
+
+<script id="charset_attribute">
+  testing.expectEqual('café', window.byAttribute);
+</script>
+
+<script id="document_encoding_utf8">
+  testing.expectEqual('caf�', window.byDocumentUtf8);
+</script>
+
+<script id="defer_module_and_document_encoding" type="module">
+  {
+    const state = await testing.async();
+    const iframe = document.createElement('iframe');
+    iframe.src = 'encoding/script_document.html';
+    iframe.onload = () => state.resolve();
+    document.body.appendChild(iframe);
+
+    await state.done(() => {
+      testing.expectEqual('café', window.byAttributeDefer);
+      // Module scripts are always UTF-8, whatever the charset attribute says.
+      testing.expectEqual('caf�', window.byModule);
+      testing.expectEqual('café', iframe.contentWindow.byDocument);
+    });
+  }
+</script>
+</body>

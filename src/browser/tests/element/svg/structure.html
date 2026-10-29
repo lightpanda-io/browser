@@ -106,3 +106,11 @@
   testing.expectEqual(6, box.height);
 }
 </script>
+
+<script id=typeSelectors>
+{
+  testing.expectEqual($('#foreign'), document.querySelector('foreignObject'));
+  testing.expectEqual($('#foreign'), document.querySelector('foreignobject'));
+  testing.expectEqual('HTML content', document.querySelector('#root foreignObject div')?.textContent);
+}
+</script>

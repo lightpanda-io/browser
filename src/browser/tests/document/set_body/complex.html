@@ -1,5 +1,7 @@
 <html>
 <body><div>original</div></body>
 <script>
-  document.body = '<h1>title</h1>text node<div id="d" class="x"><span>nested</span></div>';
+  const body = document.createElement('body');
+  body.innerHTML = '<h1>title</h1>text node<div id="d" class="x"><span>nested</span></div>';
+  document.body = body;
 </script>

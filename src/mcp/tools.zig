@@ -12,18 +12,55 @@ const McpTool = protocol.Tool;
 /// Convert browser tool_defs to MCP wire-protocol tools (comptime).
 /// Tool identity comes from the `BrowserTool` tag — `tool_defs` only
 /// carries the LLM-facing description and JSON schema.
-const browser_tool_list = blk: {
-    const fields = @typeInfo(BrowserTool).@"enum".fields;
-    var tools: [fields.len]McpTool = undefined;
-    for (browser_tools.tool_defs, fields, 0..) |td, f, i| {
+pub const browser_tool_list = blk: {
+    const field_names = @typeInfo(BrowserTool).@"enum".field_names;
+    var tools: [field_names.len]McpTool = undefined;
+    for (browser_tools.tool_defs, field_names, 0..) |td, field_name, i| {
         tools[i] = .{
-            .name = f.name,
+            .name = field_name,
+            .title = td.summary,
             .description = td.description,
             .inputSchema = td.input_schema,
+            .outputSchema = if (@field(BrowserTool, field_name).reportsPageState()) page_state_schema else null,
+            .annotations = annotations(@field(BrowserTool, field_name)),
         };
     }
     break :blk tools;
 };
+
+const read_only: protocol.ToolAnnotations = .{ .readOnlyHint = true, .destructiveHint = false, .idempotentHint = true, .openWorldHint = false };
+
+/// Exhaustive so a new tool must classify itself. Read-only means the call
+/// cannot change page or session state: navigation writes cookies and
+/// storage, and waiting lets page scripts run, so neither qualifies.
+fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
+    return switch (tool) {
+        .nodeDetails, .findElement, .getUrl, .getCookies, .getEnv, .extract => read_only,
+        // Drains the buffer: a second call returns something else.
+        .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
+        .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
+        // Overwrite `path`.
+        .screenshot, .download => .{ .idempotentHint = true },
+        .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
+        .evaluate, .click, .press => .{},
+        .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
+        .scroll => .{ .destructiveHint = false, .openWorldHint = false },
+    };
+}
+
+/// Mirrors `browser_tools.PageState`. Inlined once per declaring tool, so it
+/// stays terse: every client pays for it on `tools/list`.
+const page_state_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "url": { "type": "string", "description": "URL of the page the call left loaded." },
+    \\    "httpStatus": { "type": "integer", "description": "Response status of that page's own document. Absent when no response has arrived. 4xx/5xx means an error page, not the content." },
+    \\    "title": { "type": "string", "description": "Document title. Empty or absent when the page has none." }
+    \\  },
+    \\  "required": ["url"]
+    \\}
+);
 
 const save_schema = browser_tools.minify(
     \\{
@@ -55,25 +92,34 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
-const extra_tools = [_]McpTool{
+/// MCP-only tools, absent from the agent and scripts.
+pub const extra_tools = [_]McpTool{
     .{
         .name = "save",
+        .title = "Save the session as an agent script",
+        .annotations = .{ .idempotentHint = true, .openWorldHint = false },
         .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — `const page = new Page(); await page.goto(url);` then call the builtins you used as tools (extract, click, fill, …) as methods on `page` with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = save_schema,
     },
     .{
         .name = "session_new",
-        .description = "Create a new isolated browser session (its own page, cookies and memory) and return its id. Use it to give a separate agent its own browsing context, or to obtain an id to share. Pass that id back as the `Mcp-Session-Id` header to route calls to it.",
+        .title = "Create an isolated browser session",
+        .annotations = .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
+        .description = "Create a new isolated browser session (its own page, cookies and memory) and return its id. Use it to give a separate agent its own browsing context, or to obtain an id to share. Pass that id back as the `Mcp-Session-Id` header to route calls to it. Needs the HTTP transport (`lightpanda mcp --port <PORT>`); over stdio only the `default` session exists and this call returns an error.",
         .inputSchema = session_new_schema,
     },
     .{
         .name = "session_list",
-        .description = "List the active browser sessions with their id and current URL. The `default` session always exists.",
+        .title = "List browser sessions",
+        .annotations = read_only,
+        .description = "List the active browser sessions with their id and current URL. The `default` session always exists. Needs the HTTP transport (`lightpanda mcp --port <PORT>`); over stdio only the `default` session exists and this call returns an error.",
         .inputSchema = browser_tools.minify("{ \"type\": \"object\", \"properties\": {} }"),
     },
     .{
         .name = "session_close",
-        .description = "Close a browser session, freeing its page and memory. The `default` session cannot be closed.",
+        .title = "Close a browser session",
+        .annotations = .{ .openWorldHint = false },
+        .description = "Close a browser session, freeing its page and memory. The `default` session cannot be closed. Needs the HTTP transport (`lightpanda mcp --port <PORT>`); over stdio only the `default` session exists and this call returns an error.",
         .inputSchema = session_id_schema,
     },
 };
@@ -81,11 +127,12 @@ const extra_tools = [_]McpTool{
 const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
-const ExtraTool = enum {
-    save,
-    session_new,
-    session_list,
-    session_close,
+/// Values are telemetry wire ids, kept clear of `browser_tools.Tool`'s.
+const ExtraTool = enum(u8) {
+    save = 200,
+    session_new = 201,
+    session_list = 202,
+    session_close = 203,
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -103,11 +150,22 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     };
 
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
-        return switch (tool) {
-            .save => handleSave(server, arena, id, call_params.arguments),
-            .session_new => handleSessionNew(server, arena, id, call_params.arguments),
-            .session_list => handleSessionList(server, arena, id),
-            .session_close => handleSessionClose(server, arena, id, call_params.arguments),
+        const start = lp.datetime.milliTimestamp(.awake);
+        const result: ExtraResult = switch (tool) {
+            .save => handleSave(arena, call_params.arguments),
+            .session_new => handleSessionNew(server, arena, call_params.arguments),
+            .session_list => handleSessionList(server, arena),
+            .session_close => handleSessionClose(server, arena, call_params.arguments),
+        };
+        server.app.telemetry.recordTool(@backingInt(tool), .mcp, switch (result) {
+            .ok => .ok,
+            .fail => .is_error,
+            .invalid_params => .invalid_params,
+        }, start);
+        return switch (result) {
+            .ok => |text| sendToolResultText(server, id, text, false),
+            .fail => |text| sendToolResultText(server, id, text, true),
+            .invalid_params => |msg| server.sendError(id, .InvalidParams, msg),
         };
     }
 
@@ -126,7 +184,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -136,12 +194,28 @@ fn dispatchBrowserTool(
             error.FrameNotLoaded => .FrameNotLoaded,
             error.NodeNotFound, error.InvalidParams => .InvalidParams,
             error.Cancelled => .Cancelled,
-            error.Timeout => .Timeout,
+            error.Timeout, error.NavigationTimeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
         return server.sendError(id, code, browser_tools.errorMessage(err));
     };
 
+    if (result.image) |image| {
+        const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };
+        return server.sendResult(id, protocol.CallToolResult(Content){
+            .content = .{ .{ .data = image, .mimeType = "image/png" }, .{ .text = result.text } },
+            .isError = result.is_error,
+        });
+    }
+    if (result.page_state) |page_state| {
+        const Content = []const protocol.TextContent([]const u8);
+        const content = [_]protocol.TextContent([]const u8){.{ .text = result.text }};
+        return server.sendResult(id, protocol.StructuredCallToolResult(Content, browser_tools.PageState){
+            .content = &content,
+            .structuredContent = page_state,
+            .isError = result.is_error,
+        });
+    }
     try sendToolResultText(server, id, result.text, result.is_error);
 }
 
@@ -149,100 +223,95 @@ fn surfacesErrorInBand(tool: BrowserTool) bool {
     return tool == .evaluate or tool == .extract;
 }
 
-fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+/// An MCP-only tool's reply: a tool result, or a protocol-level InvalidParams.
+const ExtraResult = union(enum) {
+    ok: []const u8,
+    fail: []const u8,
+    invalid_params: []const u8,
+};
+
+fn handleSave(arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
     const Args = struct { path: []const u8, script: []const u8 };
-    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { path: string, script: string }");
-    };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch
+        return .{ .invalid_params = "expected { path: string, script: string }" };
 
     if (!browser_tools.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+        return .{ .fail = browser_tools.unsafe_path_message };
     }
 
     // The client never sees resolved secrets, but scrub any literal LP_* value
     // back to its `$LP_*` placeholder as a safety net before persisting.
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
-        return sendErrorContent(server, id, "out of memory");
+        return .{ .fail = "out of memory" };
 
     writeScript(args.path, script) catch |err| {
-        const msg = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
-            return sendErrorContent(server, id, "could not write script file");
-        return sendErrorContent(server, id, msg);
+        const msg = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
+            return .{ .fail = "could not write script file" };
+        return .{ .fail = msg };
     };
 
-    // Absolute path: the cwd is the client-launched server's, not one the user picked.
-    const where = std.Io.Dir.cwd().realPathFileAlloc(lp.io, args.path, arena) catch args.path;
+    const where = browser_tools.absolutePath(arena, args.path);
     const lines = std.mem.count(u8, script, "\n") + 1;
-    const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
-        return sendErrorContent(server, id, "out of memory");
-
-    try sendToolResultText(server, id, msg, false);
+    return okFmt(arena, "saved {d} line(s) to {s}", .{ lines, where });
 }
 
-/// The session tools require the HTTP transport's parked-isolate discipline:
-/// a second session means a second V8 isolate, only safe when isolates are
-/// entered around use. Over stdio (one permanently-entered isolate) they are
-/// all unsupported, kept uniform so clients see one consistent rule.
-fn requireMultiSession(server: *Server, id: std.json.Value) !bool {
-    if (server.park_isolates) return true;
-    try sendToolResultText(server, id, "multiple sessions require the HTTP transport (start with --port)", true);
-    return false;
-}
+/// The session tools need a transport that routes by session id (HTTP's
+/// `Mcp-Session-Id`). Over stdio they are all unsupported, kept uniform so
+/// clients see one consistent rule.
+const multi_session_required: ExtraResult = .{ .fail = "multiple sessions require the HTTP transport (start with --port)" };
 
-fn handleSessionNew(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    if (!try requireMultiSession(server, id)) return;
+fn handleSessionNew(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
+    const directory = server.directory orelse return multi_session_required;
     const Args = struct { name: ?[]const u8 = null };
-    const args = browser_tools.parseArgsOrDefault(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { name?: string }");
-    };
+    const args = browser_tools.parseArgsOrDefault(Args, arena, arguments) catch
+        return .{ .invalid_params = "expected { name?: string }" };
 
     const requested: ?[]const u8 = if (args.name) |n| (if (n.len > 0) n else null) else null;
-    const sid = requested orelse (server.nextSessionId(arena) catch
-        return sendErrorContent(server, id, "out of memory"));
+    const sid = directory.createSession(arena, requested) catch |err|
+        return .{ .fail = @errorName(err) };
 
-    _ = server.createSession(sid) catch |err|
-        return sendErrorContent(server, id, @errorName(err));
-
-    return sendToolResultFmt(server, arena, id, "session {s}", .{sid});
+    return okFmt(arena, "session {s}", .{sid});
 }
 
-fn handleSessionList(server: *Server, arena: std.mem.Allocator, id: std.json.Value) !void {
-    if (!try requireMultiSession(server, id)) return;
-    const Entry = struct { id: []const u8, url: ?[]const u8 };
-    var list: std.ArrayList(Entry) = .empty;
+fn handleSessionList(server: *Server, arena: std.mem.Allocator) ExtraResult {
+    const directory = server.directory orelse return multi_session_required;
+    const list = directory.listSessions(arena) catch return .{ .fail = "out of memory" };
 
-    var it = server.sessions.valueIterator();
-    while (it.next()) |entry| {
-        const url: ?[]const u8 = if (entry.*.session.currentFrame()) |frame| frame.url else null;
-        list.append(arena, .{ .id = entry.*.id, .url = url }) catch
-            return sendErrorContent(server, id, "out of memory");
+    // The others are as of their last call; this one is live.
+    for (list) |*entry| {
+        if (std.mem.eql(u8, entry.id, server.session_id)) {
+            entry.url = if (server.active_session.session.currentFrame()) |frame| frame.url else null;
+        }
     }
 
-    const json = std.json.Stringify.valueAlloc(arena, list.items, .{ .emit_null_optional_fields = false }) catch
-        return sendErrorContent(server, id, "out of memory");
-    try sendToolResultText(server, id, json, false);
+    const json = std.json.Stringify.valueAlloc(arena, list, .{ .emit_null_optional_fields = false }) catch
+        return .{ .fail = "out of memory" };
+    return .{ .ok = json };
 }
 
-fn handleSessionClose(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    if (!try requireMultiSession(server, id)) return;
+fn handleSessionClose(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
+    const directory = server.directory orelse return multi_session_required;
     const Args = struct { id: []const u8 };
-    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { id: string }");
-    };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch
+        return .{ .invalid_params = "expected { id: string }" };
 
-    if (std.mem.eql(u8, args.id, Server.default_session_id)) {
-        return sendErrorContent(server, id, "the default session cannot be closed");
+    if (Server.isDefault(args.id)) {
+        return .{ .fail = "the default session cannot be closed" };
     }
-    // Closing the session serving this very call would tear down the isolate
-    // mid-dispatch; require the client to be elsewhere first.
-    if (std.mem.eql(u8, args.id, server.active_session.id)) {
-        return sendErrorContent(server, id, "cannot close the session you are attached to");
+    // A client closes its own session with DELETE.
+    if (std.mem.eql(u8, args.id, server.session_id)) {
+        return .{ .fail = "cannot close the session you are attached to" };
     }
-    if (!server.closeSession(args.id)) {
-        return sendErrorContent(server, id, "no such session");
+    if (!directory.closeSession(args.id)) {
+        return .{ .fail = "no such session" };
     }
 
-    return sendToolResultFmt(server, arena, id, "closed session {s}", .{args.id});
+    return okFmt(arena, "closed session {s}", .{args.id});
+}
+
+fn okFmt(arena: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ExtraResult {
+    const msg = arena.print(fmt, args) catch return .{ .fail = "out of memory" };
+    return .{ .ok = msg };
 }
 
 fn writeScript(path: []const u8, content: []const u8) !void {
@@ -254,21 +323,139 @@ fn writeScript(path: []const u8, content: []const u8) !void {
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
-}
-
-fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
-    return sendToolResultText(server, id, msg, true);
-}
-
-fn sendToolResultFmt(server: *Server, arena: std.mem.Allocator, id: std.json.Value, comptime fmt: []const u8, args: anytype) !void {
-    const msg = std.fmt.allocPrint(arena, fmt, args) catch
-        return sendErrorContent(server, id, "out of memory");
-    return sendToolResultText(server, id, msg, false);
+    try server.sendResult(id, protocol.CallToolResult([]const protocol.TextContent([]const u8)){ .content = &content, .isError = is_error });
 }
 
 const router = @import("router.zig");
 const testing = @import("../testing.zig");
+
+test "MCP - tool telemetry ids are distinct" {
+    var seen: std.StaticBitSet(256) = .empty;
+    for (std.enums.values(BrowserTool)) |t| {
+        const id = t.telemetryId();
+        try testing.expect(id != 0 and id < @backingInt(ExtraTool.save));
+        try testing.expect(!seen.isSet(id));
+        seen.set(id);
+    }
+    for (std.enums.values(ExtraTool)) |t| {
+        try testing.expect(!seen.isSet(@backingInt(t)));
+        seen.set(@backingInt(t));
+    }
+}
+
+test "MCP - tools/list carries titles and annotations" {
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, all_tools, .{});
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const Expect = struct { name: []const u8, title: []const u8, read_only: bool, destructive: bool };
+    const expected = [_]Expect{
+        .{ .name = "getUrl", .title = "Show the current page URL", .read_only = true, .destructive = false },
+        .{ .name = "markdown", .title = "Render the page or a subtree as markdown", .read_only = false, .destructive = false },
+        .{ .name = "click", .title = "Click an element", .read_only = false, .destructive = true },
+        .{ .name = "save", .title = "Save the session as an agent script", .read_only = false, .destructive = true },
+        .{ .name = "session_list", .title = "List browser sessions", .read_only = true, .destructive = false },
+    };
+
+    var found: usize = 0;
+    for (parsed.value.array.items) |tool| {
+        const name = tool.object.get("name").?.string;
+        for (expected) |e| {
+            if (!std.mem.eql(u8, name, e.name)) continue;
+            found += 1;
+            try testing.expectEqual(e.title, tool.object.get("title").?.string);
+            const a = tool.object.get("annotations").?.object;
+            try testing.expectEqual(e.read_only, a.get("readOnlyHint").?.bool);
+            try testing.expectEqual(e.destructive, a.get("destructiveHint").?.bool);
+        }
+    }
+    try testing.expectEqual(expected.len, found);
+}
+
+test "MCP - outputSchema is declared exactly where structuredContent follows" {
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, all_tools, .{});
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    for (parsed.value.array.items) |tool| {
+        const name = tool.object.get("name").?.string;
+        const declares = tool.object.get("outputSchema") != null;
+        // `save`/`session_*` are MCP-only and have no `BrowserTool` tag.
+        const expected = if (std.meta.stringToEnum(BrowserTool, name)) |t| t.reportsPageState() else false;
+        try testing.expectEqual(expected, declares);
+        if (!declares) continue;
+        const schema = tool.object.get("outputSchema").?.object;
+        try testing.expectEqual("object", schema.get("type").?.string);
+        try testing.expectEqual(@as(usize, 1), schema.get("required").?.array.items.len);
+        try testing.expectEqual("url", schema.get("required").?.array.items[0].string);
+    }
+}
+
+test "MCP - structuredContent on a navigation" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const goto =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "goto",
+        \\    "arguments": { "url": "http://localhost:9582/src/browser/tests/mcp_actions.html" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, goto);
+    // The fixture has no <title>, so `title` is empty rather than absent.
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .content = &.{.{ .type = "text", .text = "Navigated. HTTP 200 OK." }},
+        .structuredContent = .{
+            .url = "http://localhost:9582/src/browser/tests/mcp_actions.html",
+            .httpStatus = 200,
+            .title = "",
+        },
+    } }, out.written());
+
+    // A read tool reports no page state, so no `structuredContent` to mistake
+    // for its payload.
+    out.clearRetainingCapacity();
+    const get_url =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "getUrl", "arguments": {} }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expect(std.mem.find(u8, out.written(), "structuredContent") == null);
+
+    // An action reports where it left the page, navigation or not.
+    out.clearRetainingCapacity();
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#btn" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .structuredContent = .{
+            .url = "http://localhost:9582/src/browser/tests/mcp_actions.html",
+            .httpStatus = 200,
+            .title = "",
+        },
+    } }, out.written());
+}
 
 test "MCP - evaluate error reporting" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
@@ -295,6 +482,65 @@ test "MCP - evaluate error reporting" {
     try testing.expectJson(.{ .id = 1, .result = .{
         .isError = true,
         .content = &.{.{ .type = "text" }},
+    } }, out.written());
+}
+
+test "MCP - missing required argument is named in the error" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // A caller guessing the wrong argument name used to get a bare
+    // InvalidParams; the diagnosis names the field to add.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"evaluate","arguments":{"expression":"1+1"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'script'" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    // No arguments at all: same diagnosis.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"evaluate"}}
+    );
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'script'" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"press","arguments":{"selector":"#chk"}}}
+    );
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'key'" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    // setChecked.checked is default-true: omitted is not "missing" — the call
+    // runs and checks the box.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk"}}}
+    );
+    try testing.expectJson(.{ .id = 4, .result = .{ .isError = false } }, out.written());
+    out.clearRetainingCapacity();
+
+    // PascalCase keys normalize before the check, so `Url` is not "missing".
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"goto","arguments":{"Url":"about:blank"}}}
+    );
+    try testing.expectJson(.{ .id = 5, .result = .{ .isError = false } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":null}}}
+    );
+    try testing.expectJson(.{ .id = 6, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "missing required argument 'script'" }},
     } }, out.written());
 }
 
@@ -425,6 +671,82 @@ test "MCP - evaluate: object return serializes as JSON" {
     try testing.expectJson(.{ .id = 1, .result = .{
         .content = &.{.{ .type = "text", .text = "{\"n\":42,\"items\":[1,2]}" }},
     } }, out.written());
+}
+
+test "MCP - click on a target=_blank link follows the new window" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_target_blank.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#nt" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+
+    out.clearRetainingCapacity();
+    const get_url =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "getUrl", "arguments": {} }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "http://localhost:9582/src/browser/tests/mcp_actions.html" }},
+    } }, out.written());
+
+    // navigation from inside the followed popup
+    out.clearRetainingCapacity();
+    const navigate =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "evaluate",
+        \\    "arguments": { "script": "location.href = 'mcp_target_blank.html'" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, navigate);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "http://localhost:9582/src/browser/tests/mcp_target_blank.html" }},
+    } }, out.written());
+}
+
+test "MCP - submitting a target=_blank form follows the new window" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_target_blank.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#fs" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?q=1") != null);
 }
 
 test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
@@ -824,8 +1146,8 @@ test "MCP - evaluate: rejected Promise surfaces as is_error" {
         \\}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "nope") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "nope") != null);
 }
 
 test "MCP - evaluate: async IIFE without explicit return resolves to empty text" {
@@ -895,7 +1217,7 @@ test "MCP - save rejects unsafe path" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"../escape.js","script":"goto(\"x\");"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "must be relative") != null);
 }
 
 test "MCP - save writes the script to disk" {
@@ -903,15 +1225,15 @@ test "MCP - save writes the script to disk" {
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    const path = "mcp-save-test-script.js";
-    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "script.js");
 
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"save","arguments":{"path":"mcp-save-test-script.js","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}
-    ;
+    const msg = try testing.arena_allocator.print(
+        \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"save","arguments":{{"path":"{s}","script":"const page = new Page();\nawait page.goto(\"https://example.com\");"}}}}}}
+    , .{path});
     try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "saved 2 line") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "saved 2 line") != null);
 
     const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
@@ -927,7 +1249,7 @@ test "MCP - tree rejects stale backendNodeId instead of dumping whole document" 
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
+    try testing.expect(std.mem.find(u8, written, "NodeNotFound") != null);
 }
 
 test "MCP - tree treats zero-filled backendNodeId as omitted" {
@@ -940,8 +1262,8 @@ test "MCP - tree treats zero-filled backendNodeId as omitted" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") == null);
-    try testing.expect(std.mem.indexOf(u8, written, "\"isError\":true") == null);
+    try testing.expect(std.mem.find(u8, written, "NodeNotFound") == null);
+    try testing.expect(std.mem.find(u8, written, "\"isError\":true") == null);
 }
 
 test "MCP - stale backendNodeId surfaces recovery guidance" {
@@ -954,8 +1276,8 @@ test "MCP - stale backendNodeId surfaces recovery guidance" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
-    try testing.expect(std.mem.indexOf(u8, written, "omit backendNodeId") != null);
+    try testing.expect(std.mem.find(u8, written, "NodeNotFound") != null);
+    try testing.expect(std.mem.find(u8, written, "omit backendNodeId") != null);
 }
 
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
@@ -968,8 +1290,8 @@ test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "\"isError\":true") == null);
-    try testing.expect(std.mem.indexOf(u8, written, "InvalidParams") == null);
+    try testing.expect(std.mem.find(u8, written, "\"isError\":true") == null);
+    try testing.expect(std.mem.find(u8, written, "InvalidParams") == null);
 }
 
 test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked" {
@@ -978,108 +1300,174 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
+    // Poking the page directly (node registration, JS) needs its isolate
+    // entered, as a tool dispatch would.
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
 
     const frame = server.active_session.session.currentFrame().?;
 
     {
-        const btn = frame.document.getElementById("btn", frame).?.asNode();
-        const btn_id = (try server.active_session.node_registry.register(btn)).id;
+        const btn = frame.document.getElementById("btn").?.asNode();
+        const btn_id = (try server.active_session.registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
-        const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
+        const btn_id_str = std.mem.print(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
         const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
         try router.handleMessage(server, aa, click_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Clicked element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+        out.clearRetainingCapacity();
+    }
+
+    for ([_][]const u8{ "#btnPreventDefault", "#btnDisabled", "#focusTarget", "#plain" }) |selector| {
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.find(u8, out.written(), "Clicked element") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const inp = frame.document.getElementById("inp", frame).?.asNode();
-        const inp_id = (try server.active_session.node_registry.register(inp)).id;
+        const inp = frame.document.getElementById("inp").?.asNode();
+        const inp_id = (try server.active_session.registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
-        const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
+        const inp_id_str = std.mem.print(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
         const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
         try router.handleMessage(server, aa, fill_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"hello\\\"") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "with \\\"hello\\\"") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const sel = frame.document.getElementById("sel", frame).?.asNode();
-        const sel_id = (try server.active_session.node_registry.register(sel)).id;
+        const sel = frame.document.getElementById("sel").?.asNode();
+        const sel_id = (try server.active_session.registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
-        const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
+        const sel_id_str = std.mem.print(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
         const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
         try router.handleMessage(server, aa, fill_sel_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Filled element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "with \\\"opt2\\\"") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "with \\\"opt2\\\"") != null);
+        out.clearRetainingCapacity();
+    }
+
+    // A scroll container, and a node with no scroll-container ancestor, are
+    // scrolled themselves.
+    const scrollbox = frame.document.getElementById("scrollbox").?.asNode();
+    const scrollbox_id = (try server.active_session.registry.register(scrollbox)).id;
+    const plain = frame.document.getElementById("plain").?.asNode();
+    const plain_id = (try server.active_session.registry.register(plain)).id;
+    for ([_]struct { id: lp.NodeRegistry.Id, y: i32 }{ .{ .id = scrollbox_id, .y = 50 }, .{ .id = plain_id, .y = 7 } }) |c| {
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
+        try router.handleMessage(server, aa, msg);
+        const expected = try aa.print("Scrolled element (backendNodeId: {d}) to x: 0, y: {d}", .{ c.id, c.y });
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
+    // A leaf inside a scroll container scrolls the container, not the leaf.
+    {
+        const leaf = frame.document.getElementById("innerleaf").?.asNode();
+        const leaf_id = (try server.active_session.registry.register(leaf)).id;
+        const outer = frame.document.getElementById("outerscroll").?.asNode();
+        const outer_id = (try server.active_session.registry.register(outer)).id;
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        try router.handleMessage(server, aa, msg);
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
+    // A selector targets the element as a backendNodeId does.
+    {
+        const outer = frame.document.getElementById("outerscroll").?.asNode();
+        const outer_id = (try server.active_session.registry.register(outer)).id;
+        try router.handleMessage(server, aa,
+            \\{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"scroll","arguments":{"selector":"#innerleaf","y":30}}}
+        );
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (selector: #innerleaf) to x: 0, y: 30", .{outer_id});
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
+    // The container may be declared in a stylesheet rather than inline.
+    {
+        const leaf = frame.document.getElementById("sheetleaf").?.asNode();
+        const leaf_id = (try server.active_session.registry.register(leaf)).id;
+        const outer = frame.document.getElementById("sheetscroll").?.asNode();
+        const outer_id = (try server.active_session.registry.register(outer)).id;
+        const msg = try aa.print("{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        try router.handleMessage(server, aa, msg);
+        const expected = try aa.print("Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        try testing.expect(std.mem.find(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
+    // Without a node the window scrolls; an omitted axis keeps its offset.
+    {
+        try router.handleMessage(server, aa,
+            \\{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"scroll","arguments":{"y":20}}}
+        );
+        try testing.expect(std.mem.find(u8, out.written(), "Scrolled window to x: 0, y: 20") != null);
+        out.clearRetainingCapacity();
+        try router.handleMessage(server, aa,
+            \\{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"scroll","arguments":{"x":5}}}
+        );
+        try testing.expect(std.mem.find(u8, out.written(), "Scrolled window to x: 5, y: 20") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
-        const scrollbox_id = (try server.active_session.node_registry.register(scrollbox)).id;
-        var scroll_id_buf: [12]u8 = undefined;
-        const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
-        const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
-        try router.handleMessage(server, aa, scroll_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled to x: 0, y: 50") != null);
-        out.clearRetainingCapacity();
-    }
-
-    {
-        const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el = frame.document.getElementById("hoverTarget").?.asNode();
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Hovered element") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const el = frame.document.getElementById("keyTarget", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el = frame.document.getElementById("keyTarget").?.asNode();
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Pressed key") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Pressed key") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const el = frame.document.getElementById("sel2", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el = frame.document.getElementById("sel2").?.asNode();
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Selected option") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const el = frame.document.getElementById("chk", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el = frame.document.getElementById("chk").?.asNode();
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
         out.clearRetainingCapacity();
     }
 
     {
-        const el = frame.document.getElementById("rad", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el = frame.document.getElementById("rad").?.asNode();
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
+        const id_str = std.mem.print(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1091,12 +1479,27 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    // Scroll events are scheduled, not fired inline with the tool.
+    var runner = server.active_session.session.runner(.{});
+    try runner.waitForScript(frame._frame_id, "window.scrolled === true && window.outerScrolled === true", 1000);
+
     const result = try ls.local.exec(
+        \\ JSON.stringify(window.seq) === JSON.stringify([
+        \\   'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:1::true',
+        \\   'pointerup:0:0:0:mouse:true', 'mouseup:0:0:1::true', 'click:0:0:1:mouse:true'
+        \\ ]) &&
+        \\ JSON.stringify(window.seqPrevented) === JSON.stringify(['pointerdown', 'pointerup', 'click']) &&
+        \\ JSON.stringify(window.disabledEvents) === JSON.stringify(['pointerdown', 'pointerup']) &&
+        \\ window.focusTargetFocused === true && window.plainBlurred === true &&
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
-        \\ window.scrolled === true &&
+        \\ document.getElementById('outerscroll').scrollTop === 30 &&
+        \\ document.getElementById('innerleaf').scrollTop === 0 &&
+        \\ document.getElementById('sheetscroll').scrollTop === 30 &&
+        \\ document.getElementById('plain').scrollTop === 7 &&
+        \\ window.scrollX === 5 && window.scrollY === 20 &&
         \\ window.hovered === true &&
-        \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
+        \\ window.keyPressed === 'Enter' && window.keyCode === 'Enter' && window.keyReleased === 'Enter' &&
         \\ window.sel2Changed === 'b' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true
@@ -1115,14 +1518,18 @@ test "MCP - click that navigates clears node registry" {
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_nav.html", &out.writer);
     defer server.deinit();
+    // Poking the page directly (node registration, JS) needs its isolate
+    // entered, as a tool dispatch would.
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
 
     const before_frame = server.active_session.session.currentFrame().?;
-    const link = before_frame.document.getElementById("navlink", before_frame).?.asNode();
-    const link_id = (try server.active_session.node_registry.register(link)).id;
-    try testing.expect(server.active_session.node_registry.lookup_by_id.contains(link_id));
+    const link = before_frame.document.getElementById("navlink").?.asNode();
+    const link_id = (try server.active_session.registry.register(link)).id;
+    try testing.expect(server.active_session.registry.lookup_by_id.contains(link_id));
 
     var id_buf: [12]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{link_id}) catch unreachable;
+    const id_str = std.mem.print(&id_buf, "{d}", .{link_id}) catch unreachable;
     const click_msg = try std.mem.concat(aa, u8, &.{
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":",
         id_str,
@@ -1131,7 +1538,7 @@ test "MCP - click that navigates clears node registry" {
     try router.handleMessage(server, aa, click_msg);
 
     try testing.expect(server.active_session.session.currentFrame().? != before_frame);
-    try testing.expect(!server.active_session.node_registry.lookup_by_id.contains(link_id));
+    try testing.expect(!server.active_session.registry.lookup_by_id.contains(link_id));
 }
 
 test "MCP - Actions by selector: hover, selectOption, setChecked" {
@@ -1140,6 +1547,10 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
+    // Poking the page directly (node registration, JS) needs its isolate
+    // entered, as a tool dispatch would.
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
 
     // Single-page test: reach straight into the live page.
     const page = server.active_session.session.pages.items[0];
@@ -1149,8 +1560,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Hovered element") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #hoverTarget") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Hovered element") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #hoverTarget") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1159,8 +1570,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"selectOption","arguments":{"selector":"#sel2","value":"c"}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Selected option") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #sel2") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "Selected option") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #sel2") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1169,8 +1580,8 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#chk","checked":true}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #chk") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #chk") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1179,8 +1590,23 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
             \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setChecked","arguments":{"selector":"#rad","checked":true}}}
         ;
         try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "checked") != null);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "selector: #rad") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "checked") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "selector: #rad") != null);
+        out.clearRetainingCapacity();
+    }
+
+    const fills = [_]struct { []const u8, []const u8, bool }{
+        .{ "#fillPre", "new", true },
+        .{ "#fillCancel", "new", false },
+        .{ "#fillRo", "new", false },
+        .{ "#fillDate", "2024-05-06", true },
+    };
+    for (fills) |f| {
+        const selector, const value, const ok = f;
+        try router.handleMessage(server, aa, try aa.print(
+            \\{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"fill","arguments":{{"selector":"{s}","value":"{s}"}}}}}}
+        , .{ selector, value }));
+        try testing.expectEqual(ok, std.mem.find(u8, out.written(), "Filled element") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1195,10 +1621,60 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     const result = try ls.local.exec(
         \\ window.hovered === true &&
         \\ window.sel2Changed === 'c' &&
+        \\ document.getElementById('fillPre').value === 'new' &&
+        \\ fillLog.join(' ') === 'beforeinput:insertText input:insertText change' &&
+        \\ document.getElementById('fillCancel').value === '' &&
+        \\ document.getElementById('fillRo').value === 'ro' &&
+        \\ document.getElementById('fillDate').value === '2024-05-06' &&
         \\ window.chkClicked === true && window.chkChanged === true &&
         \\ window.radClicked === true && window.radChanged === true
     , null);
 
+    try testing.expect(result.isTrue());
+}
+
+test "MCP - hover moves the pointer between elements" {
+    const aa = testing.arena_allocator;
+
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
+
+    const page = server.active_session.session.pages.items[0];
+
+    var ls: js.Local.Scope = undefined;
+    page.frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.exec(
+        \\ window.hoverLog = [];
+        \\ for (const t of ['mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'mousemove']) {
+        \\   document.addEventListener(t, (e) => window.hoverLog.push(t + ':' + (e.target.id || e.target.localName)), true);
+        \\ }
+    , null);
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#hoverTarget"}}}
+    );
+    _ = try ls.local.exec("window.hoverLog.push('|')", null);
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hover","arguments":{"selector":"#keyTarget"}}}
+    );
+
+    // The second hover leaves the first target, and <body>, their common
+    // ancestor, is neither left nor re-entered.
+    const result = try ls.local.exec(
+        \\ window.hoverLog.join(' ') === [
+        \\   'mouseover:hoverTarget', 'mouseenter:html', 'mouseenter:body', 'mouseenter:hoverTarget', 'mousemove:hoverTarget', '|',
+        \\   'mouseout:hoverTarget', 'mouseleave:hoverTarget', 'mouseover:keyTarget', 'mouseenter:keyTarget', 'mousemove:keyTarget',
+        \\ ].join(' ')
+    , null);
     try testing.expect(result.isTrue());
 }
 
@@ -1209,41 +1685,57 @@ test "MCP - findElement" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"button"}}}
+    );
+    try testing.expectJson(.{
+        .{ .name = "Click Me", .listeners = &.{ "click", "pointerdown", "mousedown", "pointerup", "mouseup" } },
+        .{ .name = "Prevent Default" },
+        .{ .name = "Chord" },
+        .{ .name = "Disabled", .disabled = true },
+    }, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"click"}}}
+    );
+    try testing.expectJson(.{.{ .name = "Click Me", .id = "btn" }}, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "[]") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"findElement","arguments":{"role":"slider"}}}
+    );
+    try testing.expectEqual("[]", try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
 
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "error") != null);
-        out.clearRetainingCapacity();
-    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32602, .message = "InvalidParams" } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/^PREVENT.*default$/i"}}}
+    );
+    try testing.expectJson(.{.{ .name = "Prevent Default", .id = "btnPreventDefault" }}, try testToolText(aa, out.written()));
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/(/"}}}
+    );
+    try testing.expectJson(.{ .id = 6, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "findElement: invalid name regex '(': missing closing parenthesis at offset 1" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
+    );
+    try testing.expectJson(.{ .id = 7, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "findElement: unsupported regex flag 'g' in '/prevent/g'" }},
+    } }, out.written());
 }
 
 test "MCP - waitForSelector: existing element" {
@@ -1291,7 +1783,7 @@ test "MCP - waitForSelector: timeout" {
     // Missing element after the timeout surfaces as NodeNotFound, matching
     // the error /hover, /click, etc. produce when their selector misses.
     const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":100}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#nonexistent","timeout":20}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expectJson(.{
@@ -1309,23 +1801,23 @@ test "MCP - markdown: full page, selector scope, maxBytes truncation" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"markdown"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, full);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Hover Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Hover Me") != null);
 
     out.clearRetainingCapacity();
     const scoped =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"markdown","arguments":{"selector":"#hoverTarget"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, scoped);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Hover Me") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Click Me") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Hover Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Click Me") == null);
 
     out.clearRetainingCapacity();
     const capped =
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"markdown","arguments":{"maxBytes":4}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, capped);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "[truncated]") != null);
 }
 
 test "MCP - html: full document, selector subtree, backendNodeId subtree" {
@@ -1338,9 +1830,9 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, full);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<form id=\\\"f\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<form id=\\\"f\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<input id=\\\"q\\\"") != null);
 
     // selector → just that element's outerHTML, no doctype.
     out.clearRetainingCapacity();
@@ -1348,9 +1840,100 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"selector":"#q"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, sel);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") == null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "<form") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<!DOCTYPE html>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<input id=\\\"q\\\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<form") == null);
+}
+
+test "MCP - html: maxBytes truncation and strip" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/dump.html", &out.writer);
+    defer server.deinit();
+
+    const full =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, full);
+    try testing.expect(std.mem.find(u8, out.written(), "<script>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<style>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "[truncated]") == null);
+
+    out.clearRetainingCapacity();
+    const stripped =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"strip":{"js":true,"css":true}}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, stripped);
+    try testing.expect(std.mem.find(u8, out.written(), "<script>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<style>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "<h1>Title</h1>") != null);
+
+    out.clearRetainingCapacity();
+    const capped =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"html","arguments":{"maxBytes":20}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, capped);
+    try testing.expect(std.mem.find(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "<h1>") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "[truncated]") != null);
+}
+
+test "MCP - screenshot: inline image, file, unsafe path" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const inline_call =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, inline_call);
+    try testing.expect(std.mem.find(u8, out.written(), "\"type\":\"image\"") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"mimeType\":\"image/png\"") != null);
+    // base64 of the PNG signature
+    try testing.expect(std.mem.find(u8, out.written(), "\"data\":\"iVBORw0KGgo") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+    // Inline images are narrowed to the model-facing limit.
+    try testing.expect(std.mem.find(u8, out.written(), "PNG, 1280x") != null);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "screenshot.png");
+
+    out.clearRetainingCapacity();
+    const to_file = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"screenshot\",\"arguments\":{{\"path\":\"{s}\",\"selector\":\"#hoverTarget\"}}}}}}", .{path});
+    try router.handleMessage(server, testing.arena_allocator, to_file);
+    try testing.expect(std.mem.find(u8, out.written(), "Saved 1920x") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"type\":\"image\"") == null);
+    const png = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024 * 1024));
+    try testing.expect(std.mem.startsWith(u8, png, "\x89PNG\r\n\x1a\n"));
+
+    out.clearRetainingCapacity();
+    const unsafe =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"screenshot","arguments":{"path":"../escape.png"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, unsafe);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
+}
+
+test "MCP - links: dedup, hidden, text fallback, limit" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_links.html", &out.writer);
+    defer server.deinit();
+
+    const all =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"links"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, all);
+    try testing.expectEqual(2, std.mem.count(u8, out.written(), "href"));
+    try testing.expect(std.mem.find(u8, out.written(), "/second") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Third") != null);
+
+    out.clearRetainingCapacity();
+    const limited =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"links","arguments":{"limit":1}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, limited);
+    try testing.expectEqual(1, std.mem.count(u8, out.written(), "href"));
+    try testing.expect(std.mem.find(u8, out.written(), "/first") != null);
 }
 
 test "MCP - waitForScript: truthy returns, falsy times out" {
@@ -1362,14 +1945,14 @@ test "MCP - waitForScript: truthy returns, falsy times out" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"document.readyState === 'complete'","timeout":2000}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, ok);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Script returned truthy") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Script returned truthy") != null);
 
     out.clearRetainingCapacity();
     const timeout =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"false","timeout":50}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, timeout);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "Timeout") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Timeout") != null);
 }
 
 test "MCP - press Enter on form input triggers submit (lowercase alias)" {
@@ -1390,7 +1973,7 @@ test "MCP - press Enter on form input triggers submit (lowercase alias)" {
 
     const evaluate_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"evaluate\",\"arguments\":{\"script\":\"window.submitted === true && window.submittedValue === 'hello'\"}}}");
     try router.handleMessage(server, aa, evaluate_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "true") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "true") != null);
 }
 
 test "MCP - getCookies: defaults to current page, url filter, all flag" {
@@ -1405,31 +1988,31 @@ test "MCP - getCookies: defaults to current page, url filter, all flag" {
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getCookies"}}
     ;
     try router.handleMessage(server, testing.arena_allocator, default_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "session=abc") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "tracking=xyz") == null);
 
     out.clearRetainingCapacity();
     const url_msg =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getCookies","arguments":{"url":"http://other.test/"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, url_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "tracking=xyz") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "session=abc") == null);
 
     out.clearRetainingCapacity();
     const all_msg =
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getCookies","arguments":{"all":true}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, all_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session=abc") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "tracking=xyz") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "session=abc") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "tracking=xyz") != null);
 
     out.clearRetainingCapacity();
     const empty_msg =
         \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"getCookies","arguments":{"url":"http://nope.test/"}}}
     ;
     try router.handleMessage(server, testing.arena_allocator, empty_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "No cookies for http://nope.test/") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "No cookies for http://nope.test/") != null);
 }
 
 test "MCP - getCookies without a loaded page refuses instead of dumping the jar" {
@@ -1444,8 +2027,8 @@ test "MCP - getCookies without a loaded page refuses instead of dumping the jar"
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "session=abc") == null);
-    try testing.expect(std.mem.indexOf(u8, written, "No current page") != null);
+    try testing.expect(std.mem.find(u8, written, "session=abc") == null);
+    try testing.expect(std.mem.find(u8, written, "No current page") != null);
 }
 
 test "MCP - waitForState with bad state surfaces rich error" {
@@ -1458,68 +2041,43 @@ test "MCP - waitForState with bad state surfaces rich error" {
     ;
     try router.handleMessage(server, testing.arena_allocator, msg);
     const written = out.written();
-    try testing.expect(std.mem.indexOf(u8, written, "invalid state 'x'") != null);
-    try testing.expect(std.mem.indexOf(u8, written, "load") != null);
-    try testing.expect(std.mem.indexOf(u8, written, "isError\":true") != null);
+    try testing.expect(std.mem.find(u8, written, "invalid state 'x'") != null);
+    try testing.expect(std.mem.find(u8, written, "load") != null);
+    try testing.expect(std.mem.find(u8, written, "isError\":true") != null);
 }
 
-test "MCP - sessions: new, list, attach isolation, close" {
+test "MCP - sessions: refused without a directory (stdio)" {
     const aa = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(aa);
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
-    // Session tools require the HTTP transport's parked-isolate discipline.
-    server.enableIsolateParking();
 
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"a"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "session a") != null);
-    try testing.expect(server.sessions.contains("a"));
+    try testing.expect(std.mem.find(u8, out.written(), "require the HTTP transport") != null);
+}
 
-    out.clearRetainingCapacity();
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
-    );
-    // The listing is JSON nested in the tool-result text, so its quotes are
-    // escaped (\"default\").
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\\\"default\\\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "\\\"a\\\"") != null);
-
-    // Routing a request to "a" (as the Mcp-Session-Id header does) and loading
-    // a page there leaves the default untouched, proving the two are isolated.
-    _ = try server.useSession("a");
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank"}}}
-    );
-    try testing.expect(server.sessions.get("a").?.session.currentFrame() != null);
-    try testing.expect(server.defaultSession().session.currentFrame() == null);
-
-    // Route back to the default before closing "a" (the active session can't be closed).
-    _ = try server.useSession(null);
-
-    out.clearRetainingCapacity();
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"default"}}}
-    );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "cannot be closed") != null);
-
-    out.clearRetainingCapacity();
-    try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"a"}}}
-    );
-    try testing.expect(std.mem.indexOf(u8, out.written(), "closed session a") != null);
-    try testing.expect(!server.sessions.contains("a"));
+/// The text of a tools/call result, which tools like findElement fill with JSON.
+fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
+    const Response = struct { result: struct { content: []const struct { text: []const u8 } } };
+    const parsed = try std.json.parseFromSliceLeaky(Response, arena, response, .{ .ignore_unknown_fields = true });
+    try testing.expectEqual(1, parsed.result.content.len);
+    return parsed.result.content[0].text;
 }
 
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const page = try server.active_session.session.createPage();
+    const session = server.active_session;
+    session.enterIsolate();
+    defer session.exitIsolate();
+
+    const page = try session.session.createPage();
     try page.navigate(url, .{});
 
-    var runner = server.active_session.session.runner(.{});
+    var runner = session.session.runner(.{});
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     return server;
 }

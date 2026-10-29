@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <p id="p1" class=cl>9000!!</p>
 
@@ -165,7 +166,9 @@
   testing.expectEqual(false, p1.isSameNode(text));
   testing.expectEqual(true, p1.isSameNode($('#p1')));
   testing.expectEqual(false, p1.isSameNode(document.createElement('p')));
-  testing.expectEqual(false, p1.isSameNode());
+  // `Node?` is nullable but still required: an explicit null is fine, omitting
+  // the argument entirely is a TypeError.
+  testing.expectError('TypeError', () => p1.isSameNode());
   testing.expectEqual(false, p1.isSameNode(null));
 </script>
 

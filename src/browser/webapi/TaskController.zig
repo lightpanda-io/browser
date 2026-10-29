@@ -44,7 +44,7 @@ pub fn init(options_: ?Options, exec: *const Execution) !*TaskController {
     });
 }
 
-pub fn setPriority(self: *TaskController, priority: Scheduler.Priority, exec: *const Execution) !void {
+fn setPriority(self: *TaskController, priority: Scheduler.Priority, exec: *const Execution) !void {
     return self._proto._signal._type.task_signal.setPriority(priority, exec);
 }
 
@@ -54,7 +54,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "TaskController";
 
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

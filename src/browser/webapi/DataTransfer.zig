@@ -53,11 +53,21 @@ _arena: *lp.Arena,
 _rc: lp.RC = .{},
 _items: std.ArrayList(*DataTransferItem) = .empty,
 _item_list: *DataTransferItemList,
-// FileList lives on the factory slab and is frame-tracked, so each File ref it
+// FileList lives on the factory allocator and is frame-tracked, so each File ref it
 // holds is released at frame teardown (same path as `<input type=file>`).
 _files: *FileList,
 _drop_effect: []const u8 = "none",
-_effect_allowed: []const u8 = "uninitialized",
+_effect_allowed: []const u8 = "none",
+_mode: Mode = .read_write,
+
+// https://html.spec.whatwg.org/multipage/dnd.html#drag-data-store-mode
+// A drag's dragenter/dragover/dragleave see the item types but not their data,
+// and only a dragstart may change the items.
+pub const Mode = enum {
+    read_write,
+    read_only,
+    protected,
+};
 
 pub fn init(frame: *Frame) !*DataTransfer {
     const arena = try frame.getArena(.medium, "DataTransfer");
@@ -102,6 +112,9 @@ fn normalizeFormat(arena: Allocator, format: []const u8) ![]const u8 {
 }
 
 pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]const u8 {
+    if (self._mode == .protected) {
+        return "";
+    }
     const norm = try normalizeFormat(frame.local_arena, format);
     for (self._items.items) |it| {
         if (it._kind == .string and std.mem.eql(u8, it._type, norm)) {
@@ -112,6 +125,9 @@ pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]
 }
 
 pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void {
+    if (self._mode != .read_write) {
+        return;
+    }
     const norm = try normalizeFormat(self._arena.allocator(), format);
     const owned_data = try self._arena.dupe(u8, data);
     for (self._items.items) |it| {
@@ -125,7 +141,10 @@ pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void 
     try self._items.append(self._arena.allocator(), it);
 }
 
-pub fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
+fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
+    if (self._mode != .read_write) {
+        return;
+    }
     if (format_) |format| {
         const norm = try normalizeFormat(frame.local_arena, format);
         var i: usize = 0;
@@ -154,6 +173,9 @@ pub fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void
 
 // add(File) -> file item ; add(DOMString, DOMString) -> string item.
 pub fn addItem(self: *DataTransfer, data: js.Value, type_: ?[]const u8, frame: *Frame) !?*DataTransferItem {
+    if (self._mode != .read_write) {
+        return null;
+    }
     if (data.toZig(*File)) |file| {
         return try self.addFileItem(file, frame);
     } else |_| {}
@@ -176,20 +198,23 @@ fn addFileItem(self: *DataTransfer, file: *File, frame: *Frame) !*DataTransferIt
 }
 
 pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
-    if (index >= self._items.items.len) {
+    if (self._mode != .read_write or index >= self._items.items.len) {
         return;
     }
     const it = self._items.orderedRemove(index);
     if (it._kind == .file) {
-        it._payload.file._proto.releaseRef(frame._page);
+        it._payload.file._proto.releaseRef(frame.page);
         try self.rebuildFiles(frame);
     }
 }
 
 pub fn clearItems(self: *DataTransfer, frame: *Frame) !void {
+    if (self._mode != .read_write) {
+        return;
+    }
     for (self._items.items) |it| {
         if (it._kind == .file) {
-            it._payload.file._proto.releaseRef(frame._page);
+            it._payload.file._proto.releaseRef(frame.page);
         }
     }
     self._items.clearRetainingCapacity();
@@ -201,23 +226,23 @@ fn rebuildFiles(self: *DataTransfer, frame: *Frame) !void {
     var files: std.ArrayList(*File) = .empty;
     for (self._items.items) |it| {
         if (it._kind == .file) {
-            try files.append(frame.arena, it._payload.file);
+            try files.append(frame.page_arena, it._payload.file);
         }
     }
-    self._files._files = try files.toOwnedSlice(frame.arena);
+    self._files._files = try files.toOwnedSlice(frame.page_arena);
 }
 
 // --- accessors ---
 
-pub fn getFiles(self: *DataTransfer) *FileList {
+fn getFiles(self: *DataTransfer) *FileList {
     return self._files;
 }
 
-pub fn getItems(self: *DataTransfer) *DataTransferItemList {
+fn getItems(self: *DataTransfer) *DataTransferItemList {
     return self._item_list;
 }
 
-pub fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
+fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     var has_files = false;
     for (self._items.items) |it| {
@@ -232,11 +257,11 @@ pub fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
     return out.toOwnedSlice(frame.local_arena);
 }
 
-pub fn getDropEffect(self: *const DataTransfer) []const u8 {
+fn getDropEffect(self: *const DataTransfer) []const u8 {
     return self._drop_effect;
 }
 
-pub fn setDropEffect(self: *DataTransfer, value: []const u8) !void {
+fn setDropEffect(self: *DataTransfer, value: []const u8) !void {
     inline for (.{ "none", "copy", "link", "move" }) |valid| {
         if (std.mem.eql(u8, value, valid)) {
             self._drop_effect = valid;
@@ -245,11 +270,11 @@ pub fn setDropEffect(self: *DataTransfer, value: []const u8) !void {
     }
 }
 
-pub fn getEffectAllowed(self: *const DataTransfer) []const u8 {
+fn getEffectAllowed(self: *const DataTransfer) []const u8 {
     return self._effect_allowed;
 }
 
-pub fn setEffectAllowed(self: *DataTransfer, value: []const u8) !void {
+fn setEffectAllowed(self: *DataTransfer, value: []const u8) !void {
     inline for (.{ "none", "copy", "copyLink", "copyMove", "link", "linkMove", "move", "all", "uninitialized" }) |valid| {
         if (std.mem.eql(u8, value, valid)) {
             self._effect_allowed = valid;
@@ -260,14 +285,13 @@ pub fn setEffectAllowed(self: *DataTransfer, value: []const u8) !void {
 
 // https://html.spec.whatwg.org/multipage/dnd.html#dom-datatransfer-setdragimage
 // No-op: Lightpanda has no rendered drag feedback.
-pub fn setDragImage(_: *DataTransfer, _: js.Value, _: i32, _: i32) void {}
+fn setDragImage(_: *DataTransfer, _: js.Value, _: i32, _: i32) void {}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DataTransfer);
 
     pub const Meta = struct {
         pub const name = "DataTransfer";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

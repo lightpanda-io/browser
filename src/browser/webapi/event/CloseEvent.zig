@@ -74,15 +74,15 @@ pub fn asEvent(self: *CloseEvent) *Event {
     return self._proto;
 }
 
-pub fn getCode(self: *const CloseEvent) u16 {
+fn getCode(self: *const CloseEvent) u16 {
     return self._code;
 }
 
-pub fn getReason(self: *const CloseEvent) []const u8 {
+fn getReason(self: *const CloseEvent) []const u8 {
     return self._reason;
 }
 
-pub fn getWasClean(self: *const CloseEvent) bool {
+fn getWasClean(self: *const CloseEvent) bool {
     return self._was_clean;
 }
 
@@ -92,7 +92,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CloseEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

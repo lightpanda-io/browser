@@ -43,11 +43,11 @@ pub fn parseCommand(arena: std.mem.Allocator, rest: []const u8) !Command {
     var after: []const u8 = undefined;
     if (trimmed[0] == '\'' or trimmed[0] == '"') {
         const quote = trimmed[0];
-        const end = std.mem.indexOfScalarPos(u8, trimmed, 1, quote) orelse return error.UnterminatedQuote;
+        const end = std.mem.findScalarPos(u8, trimmed, 1, quote) orelse return error.UnterminatedQuote;
         name = trimmed[1..end];
         after = trimmed[end + 1 ..];
     } else {
-        const tok_end = std.mem.indexOfAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
+        const tok_end = std.mem.findAny(u8, trimmed, &std.ascii.whitespace) orelse trimmed.len;
         name = trimmed[0..tok_end];
         after = trimmed[tok_end..];
     }
@@ -72,7 +72,7 @@ pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
         var n_bytes: [8]u8 = undefined;
         lp.io.random(&n_bytes);
         const n = std.mem.readInt(u64, &n_bytes, .little);
-        const path = try std.fmt.allocPrint(arena, "session-{x}.js", .{n});
+        const path = try arena.print("session-{x}.js", .{n});
         if (!(try fileExists(path))) return path;
     }
     return error.NameCollision;
@@ -118,9 +118,9 @@ pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void
 pub fn stripCodeFence(text: []const u8) []const u8 {
     const t = std.mem.trim(u8, text, &std.ascii.whitespace);
     if (!std.mem.startsWith(u8, t, "```")) return t;
-    const first_nl = std.mem.indexOfScalar(u8, t, '\n') orelse return t;
+    const first_nl = std.mem.findScalar(u8, t, '\n') orelse return t;
     const body = t[first_nl + 1 ..];
-    const close = std.mem.lastIndexOf(u8, body, "```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
+    const close = std.mem.findLast(u8, body, "```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
     return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
 }
 

@@ -21,9 +21,12 @@ const zenai = @import("zenai");
 const lp = @import("lightpanda");
 
 const cli = @import("cli.zig");
+const string = @import("string.zig");
 const dump = @import("browser/dump.zig");
+const Mime = @import("browser/Mime.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+const HttpHeader = @import("network/http.zig").Header;
 
 const log = lp.log;
 const crypto = @import("sys/libcrypto.zig");
@@ -38,8 +41,10 @@ pub const CDP_TCP_USER_TIMEOUT_MS: c_int = 10_000;
 
 const Config = @This();
 
-fn logFilterScopesValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(log.FilterRule)) !void {
-    const str = args.next() orelse return error.InvalidOption;
+fn logFilterValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(log.FilterRule)) !void {
+    const str = args.next() orelse return error.MissingArgument;
+
+    defer log.opts.scope_enabled = log.resolveFilters(list.items);
 
     var it = std.mem.splitScalar(u8, str, ',');
     while (it.next()) |part| {
@@ -64,8 +69,7 @@ fn logFilterScopesValidator(allocator: Allocator, args: *std.process.Args.Iterat
         }
 
         const v = std.meta.stringToEnum(log.Scope, name) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "--log-filter-scopes", .value = part });
-            return error.InvalidOption;
+            return cli.invalidChoice("--log-filter", part[0 .. part.len - name.len], name, comptime tagNames(log.Scope) ++ &[_][]const u8{"all"});
         };
 
         try list.append(allocator, .{ .scope = v, .enable = enable });
@@ -76,13 +80,61 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?l
     const str = args.next() orelse return error.MissingArgument;
     if (std.mem.eql(u8, str, "error")) {
         target.* = .err;
+        log.opts.level = .err;
         return;
     }
 
-    target.* = std.meta.stringToEnum(log.Level, str) orelse {
-        log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
+    target.* = std.meta.stringToEnum(log.Level, str) orelse return cli.invalidChoice("--log-level", "", str, tagNames(log.Level));
+    log.opts.level = target.*.?;
+}
+
+// The MCP host captures stderr into a log file, where pretty's ANSI
+// escapes and multi-line entries are noise. Runs before any option is
+// read so parse-time lines match; --log-format still overrides.
+fn mcpLogDefaults() void {
+    log.opts.format = .logfmt;
+}
+
+fn logFormatValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?log.Format) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const format = std.meta.stringToEnum(log.Format, str) orelse return cli.invalidChoice("--log-format", "", str, tagNames(log.Format));
+    target.* = format;
+    log.opts.format = format;
+}
+
+fn httpHeaderValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(HttpHeader)) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const header = HttpHeader.parse(str) orelse {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "expected \"Name: Value\"" });
         return error.InvalidArgument;
     };
+
+    // The same shape script-set headers go through in `Headers`: a name that
+    // is an HTTP token, a value that is a CR/LF-free byte string.
+    if (Mime.isHttpToken(header.name) == false) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "name must be a non-empty HTTP token" });
+        return error.InvalidArgument;
+    }
+
+    if (Mime.isHttpHeaderValue(header.value) == false) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "value must be Latin-1 text without CR, LF or NUL" });
+        return error.InvalidArgument;
+    }
+
+    if (std.ascii.eqlIgnoreCase(header.name, "User-Agent")) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Use --user-agent instead" });
+        return error.InvalidArgument;
+    }
+
+    if (std.ascii.eqlIgnoreCase(header.name, "Sec-Ch-Ua")) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Sec-Ch-Ua is not overridable" });
+        return error.InvalidArgument;
+    }
+
+    try list.append(allocator, .{
+        .name = try allocator.dupe(u8, header.name),
+        .value = try allocator.dupe(u8, header.value),
+    });
 }
 
 const Cert = struct {
@@ -174,6 +226,32 @@ fn caPathValidator(
     }
 }
 
+pub const HttpVersion = enum {
+    auto,
+    @"1.1",
+};
+
+pub const LoadResources = packed struct(u6) {
+    image: bool = false,
+    iframe: bool = false,
+    worker: bool = false,
+    stylesheet: bool = false,
+    // navigator.sendBeacon sends its request (otherwise it only validates).
+    beacon: bool = false,
+    // Only marks the option as given, so `--load-resources none` turns off a
+    // mode's default.
+    none: bool = false,
+};
+
+pub const ExperimentalFeatures = packed struct(u2) {
+    cors: bool = false, // ignored, kept only for backward compatibility.
+    serviceworker: bool = false,
+};
+
+pub const DisabledFeatures = packed struct(u1) {
+    cors: bool = false,
+};
+
 /// Common CLI args.
 const CommonOptions = .{
     .{
@@ -183,33 +261,49 @@ const CommonOptions = .{
         .default = true,
         .variants = .{.{ .name = "obey_robots" }},
     },
+    .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "cors_store_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
-    .{ .name = "http_max_concurrent", .type = ?u8 },
+    .{ .name = "http_max_concurrent", .type = ?u16 },
     .{ .name = "http_max_host_open", .type = ?u8 },
+    .{ .name = "http_nav_delay", .type = ?u32 },
+    .{ .name = "http_nav_burst", .type = ?u32 },
     .{ .name = "http_timeout", .type = ?u31 },
+    .{ .name = "http_version", .type = HttpVersion, .default = .auto },
     .{ .name = "http_connect_timeout", .type = ?u31 },
+    .{ .name = "http_header", .type = HttpHeader, .multiple = true, .validator = httpHeaderValidator },
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
     .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
-    .{ .name = "log_format", .type = ?log.Format },
-    .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
+    .{ .name = "log_format", .type = ?log.Format, .validator = logFormatValidator },
+    .{ .name = "log_filter", .type = log.FilterRule, .multiple = true, .validator = logFilterValidator },
+    .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterValidator, .deprecated = "use --log-filter" },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
-    .{ .name = "http_cache_dir", .type = ?[]const u8 },
+    .{ .name = "http_cache_dir", .type = ?[]const u8, .path = true },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
-    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
+    .{ .name = "http_debug", .type = bool },
+    .{ .name = "http_curves", .type = ?[:0]const u8, .validator = httpCurvesValidator },
+    .{ .name = "render_font", .type = []const u8, .multiple = true, .path = true },
+    .{ .name = "web_bot_auth_key_file", .type = ?[]const u8, .path = true },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
     .{ .name = "user_agent", .type = ?[]const u8, .validator = userAgentValidator },
+    .{ .name = "locale", .type = [:0]const u8, .default = HttpHeaders.default_locale, .validator = localeValidator },
+    .{ .name = "timezone", .type = ?[:0]const u8, .validator = timezoneValidator },
     .{ .name = "block_private_networks", .type = bool },
-    .{ .name = "block_cidrs", .type = ?[]const u8 },
-    .{ .name = "block_urls", .type = ?[]const u8 },
-    .{ .name = "cookie", .type = ?[]const u8 },
-    .{ .name = "cookie_jar", .type = ?[]const u8 },
-    .{ .name = "disable_subframes", .type = bool },
-    .{ .name = "disable_workers", .type = bool },
-    .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "block_cidrs", .type = ?[]const u8, .validator = accumulateValidator },
+    .{ .name = "block_urls", .type = ?[]const u8, .validator = accumulateValidator },
+    .{ .name = "adblock_lists", .type = ?[]const u8, .validator = accumulateValidator, .path = true },
+    .{ .name = "cookie", .type = ?[]const u8, .path = true },
+    .{ .name = "cookie_jar", .type = ?[]const u8, .path = true },
+    .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
+    .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
+    .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
+    .{ .name = "disable_features", .type = DisabledFeatures, .default = DisabledFeatures{} },
+    .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
+    .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
@@ -222,6 +316,7 @@ const CommonOptions = .{
         },
         .default = Cert{},
         .validator = caCertValidator,
+        .path = true,
     },
     .{
         .name = "ca_path",
@@ -232,6 +327,7 @@ const CommonOptions = .{
         },
         .default = Cert{},
         .validator = caPathValidator,
+        .path = true,
     },
 };
 
@@ -240,6 +336,10 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     var peek_args = args.*;
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
+            // Anything else is the positional url, unless it is a misspelt format.
+            if (!cli.isUrlLike(next_arg) and string.closest(next_arg, tagNames(DumpFormat)) != null) {
+                return cli.invalidChoice("--dump", "", next_arg, tagNames(DumpFormat));
+            }
             target.* = .html;
             return;
         };
@@ -262,6 +362,7 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// in `Agent.init` (explicit flag > remembered > mode default), so there is
 /// no Config-level accessor like `agentVerbosity`.
 pub const Effort = zenai.provider.Effort;
+pub const SearchEngine = @import("browser/tools.zig").SearchEngine;
 
 /// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {
@@ -273,7 +374,7 @@ pub const AgentVerbosity = enum {
     high,
 
     pub fn atLeast(self: AgentVerbosity, min: AgentVerbosity) bool {
-        return @intFromEnum(self) >= @intFromEnum(min);
+        return @backingInt(self) >= @backingInt(min);
     }
 };
 
@@ -308,19 +409,22 @@ fn injectScriptFileValidator(
 }
 
 /// Definition for all the commands and its arguments. See @cli.zig for further.
-const Commands = cli.Builder(.{
+pub const Commands = cli.Builder(.{
     .{
         .name = "serve",
         .options = .{
-            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
-            .{ .name = "port", .type = u16, .default = 9222 },
+            .{ .name = "host", .type = ?[]const u8 },
+            .{ .name = "port", .type = ?u16 },
+            .{ .name = "unix_socket", .type = ?[:0]const u8, .path = true },
             .{ .name = "advertise_host", .type = ?[]const u8 },
-            .{ .name = "timeout", .type = ?u31 },
+            // Repeatable; one server can speak several on the same port.
+            .{ .name = "protocol", .type = Protocol, .multiple = true },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
-            // Don't widen this without growing the reader buffer in the HTTP path.
-            .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "cdp_max_http_message_size", .type = u32, .default = 1024 * 1024 },
+            .{ .name = "http_session_timeout", .type = u32, .default = 60 },
+            .{ .name = "remote_allow_origins", .type = []const u8, .multiple = true },
             .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
@@ -334,13 +438,17 @@ const Commands = cli.Builder(.{
             .{ .name = "with_base", .type = bool },
             .{ .name = "with_frames", .type = bool },
             .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
+            .{ .name = "dump_selector", .type = ?[:0]const u8 },
+            .{ .name = "dump_max_bytes", .type = ?u32 },
+            .{ .name = "fail_on_http_error", .type = bool },
+            .{ .name = "markdown_alternate", .type = bool },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
             .{
                 .name = "wait_script",
                 .type = ?[:0]const u8,
                 .variants = .{
-                    .{ .name = "wait_script_file", .validator = waitScriptFileValidator },
+                    .{ .name = "wait_script_file", .validator = waitScriptFileValidator, .path = true },
                 },
             },
             .{ .name = "wait_selector", .type = ?[:0]const u8 },
@@ -349,7 +457,7 @@ const Commands = cli.Builder(.{
                 .type = []const u8,
                 .multiple = true,
                 .variants = .{
-                    .{ .name = "inject_script_file", .validator = injectScriptFileValidator },
+                    .{ .name = "inject_script_file", .validator = injectScriptFileValidator, .path = true },
                 },
             },
             .{ .name = "terminate_ms", .type = ?u32 },
@@ -360,26 +468,32 @@ const Commands = cli.Builder(.{
     },
     .{
         .name = "mcp",
+        .before_parse = mcpLogDefaults,
         .options = .{
             .{ .name = "port", .type = ?u16 },
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
+            .{ .name = "http_session_timeout", .type = u32, .default = 0 },
         },
         .shared_options = CommonOptions,
     },
     .{
         .name = "agent",
-        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8, .path = true },
         .options = .{
             .{ .name = "provider", .type = ?AiProvider },
             .{ .name = "model", .type = ?[:0]const u8 },
             .{ .name = "base_url", .type = ?[:0]const u8 },
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
             .{ .name = "task", .type = ?[]const u8 },
-            .{ .name = "save", .type = ?[]const u8 },
-            .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
+            .{ .name = "trace", .type = ?[]const u8, .path = true },
+            .{ .name = "trace_results", .type = bool },
+            .{ .name = "save", .type = ?[]const u8, .path = true },
+            .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true, .path = true },
             .{ .name = "verbosity", .type = ?AgentVerbosity },
             .{ .name = "effort", .type = ?Effort },
+            .{ .name = "search_engine", .type = ?SearchEngine },
+            .{ .name = "url", .type = ?[:0]const u8 },
             .{ .name = "list_models", .type = bool },
             .{ .name = "no_llm", .type = bool },
         },
@@ -388,18 +502,24 @@ const Commands = cli.Builder(.{
     .{
         // Normalized to `.agent` in `parseArgs`; intentionally no LLM options.
         .name = "run",
-        .positional = .{ .name = "script_file", .type = ?[:0]const u8 },
+        .positional = .{ .name = "script_file", .type = ?[:0]const u8, .path = true },
         .options = .{},
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{
         .{ .name = "check", .type = bool },
     } },
+    .{
+        .name = "completion",
+        .positional = .{ .name = "shell", .type = ?Shell },
+        .options = .{},
+    },
 });
 
-pub const RunMode = Commands.Enum;
+const RunMode = Commands.Enum;
 pub const Mode = Commands.Union;
 pub const Agent = @FieldType(Mode, "agent");
+const Serve = @FieldType(Mode, "serve");
 
 mode: Mode,
 // The command as typed. Mirrors `mode`, except `run` normalizes to `.agent`
@@ -426,6 +546,27 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     if (modeNeedsHttp(mode)) {
         config.http_headers = try HttpHeaders.init(allocator, &config);
     }
+
+    switch (config.mode) {
+        inline else => |*m| {
+            if (@hasField(@TypeOf(m.*), "enable_external_stylesheets")) {
+                if (m.enable_external_stylesheets) {
+                    // map deprecated property onto updated one
+                    m.load_resources.stylesheet = true;
+                }
+            }
+            // The agent-facing modes read visibility, which is wrong without
+            // external stylesheets: a menu hidden by an author class looks
+            // open. An explicit --load-resources replaces this default.
+            if (@hasField(@TypeOf(m.*), "load_resources")) {
+                const given = m.load_resources != LoadResources{};
+                if (!given and (config.command == .mcp or config.command == .agent)) {
+                    m.load_resources.stylesheet = true;
+                }
+            }
+        },
+    }
+
     return config;
 }
 
@@ -453,6 +594,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
     };
 }
 
+pub fn obeyCors(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_features.cors == false,
+        else => unreachable,
+    };
+}
+
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
@@ -460,16 +608,30 @@ pub fn obeyRobots(self: *const Config) bool {
     };
 }
 
-pub fn disableSubframes(self: *const Config) bool {
+pub fn robotStoreEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_subframes,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.robot_store_entry_limit.?,
+        else => 1000,
+    };
+}
+
+pub fn corsStoreEntryLimit(self: *const Config) u32 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cors_store_entry_limit.?,
+        else => 1000,
+    };
+}
+
+pub fn httpVersion(self: *const Config) HttpVersion {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_version,
         else => unreachable,
     };
 }
 
-pub fn disableWorkers(self: *const Config) bool {
+pub fn experimentalFeatures(self: *const Config) ExperimentalFeatures {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.experimental_features,
         else => unreachable,
     };
 }
@@ -484,9 +646,9 @@ pub fn watchdogMs(self: *const Config) ?u32 {
     };
 }
 
-pub fn enableExternalStylesheets(self: *const Config) bool {
+pub fn loadResources(self: *const Config) LoadResources {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.load_resources,
         else => unreachable,
     };
 }
@@ -513,16 +675,24 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     };
 }
 
-pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
+pub fn httpHeaders(self: *const Config) []const HttpHeader {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_header.items,
+        else => &.{},
+    };
+}
+
+fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
         else => null,
     };
 }
 
-pub fn httpMaxConcurrent(self: *const Config) u8 {
+pub fn httpMaxConcurrent(self: *const Config) u16 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
+        .serve => |opts| opts.http_max_concurrent orelse std.math.clamp(opts.cdp_max_connections *| 8, 40, 256),
+        inline .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
         else => unreachable,
     };
 }
@@ -534,9 +704,25 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
     };
 }
 
+pub fn httpNavDelay(self: *const Config) ?u32 {
+    const ms = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_delay,
+        else => unreachable,
+    } orelse return null;
+    return if (ms == 0) null else ms;
+}
+
+pub fn httpNavBurst(self: *const Config) u32 {
+    const burst = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_burst,
+        else => unreachable,
+    } orelse 1;
+    return @max(burst, 1);
+}
+
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 8000,
         .version => 0,
         else => unreachable,
     };
@@ -544,14 +730,16 @@ pub fn httpConnectTimeout(self: *const Config) u31 {
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 15000,
         .version => 5000,
         else => unreachable,
     };
 }
 
+// https://fetch.spec.whatwg.org/#http-redirect-fetch
+// "If request’s redirect count is 20, then return a network error."
 pub fn httpMaxRedirects(_: *const Config) u8 {
-    return 10;
+    return 20;
 }
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
@@ -564,18 +752,6 @@ pub fn httpMaxResponseSize(self: *const Config) ?usize {
 pub fn wsMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.ws_max_concurrent orelse 8,
-        else => unreachable,
-    };
-}
-
-pub fn logLevel(self: *const Config) ?log.Level {
-    return switch (self.mode) {
-        // Agent mode quiets page-driven `console.error` noise unless verbosity=high.
-        .agent => |opts| opts.log_level orelse switch (agentVerbosity(opts)) {
-            .low, .medium => .err,
-            .high => null,
-        },
-        inline .serve, .fetch, .mcp => |opts| opts.log_level,
         else => unreachable,
     };
 }
@@ -598,26 +774,12 @@ var stderr_tty_once = lp.once(initStderrTty);
 fn initStderrTty() void {
     stderr_tty_cached = std.Io.File.stderr().isTty(lp.io) catch false;
 }
-fn stderrIsTty() bool {
+pub fn stderrIsTty() bool {
     stderr_tty_once.call();
     return stderr_tty_cached;
 }
 
-pub fn logFormat(self: *const Config) ?log.Format {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_format,
-        else => unreachable,
-    };
-}
-
-pub fn logFilterScopes(self: *const Config) std.ArrayList(log.FilterRule) {
-    return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_filter_scopes,
-        else => unreachable,
-    };
-}
-
-pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
+fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
         else => null,
@@ -631,10 +793,45 @@ pub fn userAgent(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn locale(self: *const Config) [:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.locale,
+        else => HttpHeaders.default_locale,
+    };
+}
+
+pub fn timezone(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.timezone,
+        else => null,
+    };
+}
+
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
         else => null,
+    };
+}
+
+pub fn httpDebug(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_debug,
+        else => false,
+    };
+}
+
+pub fn httpCurves(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_curves,
+        else => null,
+    };
+}
+
+pub fn renderFonts(self: *const Config) []const []const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.render_font.items,
+        else => &.{},
     };
 }
 
@@ -654,34 +851,51 @@ pub fn cookieFile(self: *const Config) ?[]const u8 {
 
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .fetch, .mcp, .agent => |opts| opts.cookie_jar,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie_jar,
         else => null,
     };
 }
 
 pub fn port(self: *const Config) u16 {
     return switch (self.mode) {
-        .serve => |opts| opts.port,
+        .serve => |opts| opts.port orelse 9222,
         .mcp => |opts| opts.cdp_port orelse 0,
         else => unreachable,
     };
 }
 
+// Optional in the option table so --unix-socket can reject an explicit one.
+pub fn serveHost(self: *const Config) []const u8 {
+    return self.mode.serve.host orelse "127.0.0.1";
+}
+
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(opts.host),
+        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(self.serveHost()),
         .mcp => "127.0.0.1",
         else => unreachable,
     };
 }
 
-// Wildcard bind addresses (0.0.0.0, ::) are not routable for clients
-// resolving /json/version. Fall back to a loopback address so the
-// advertised webSocketDebuggerUrl is at least connectable from the same
-// host (covers the official Docker image, which exposes 9222 via the
-// container's published port, and the WSL localhost bridge).
-// For remote hosts, users can still pin the URL with --advertise-host.
-// See issue #1922.
+// The --advertise-host value when the operator set one. Unlike
+// advertiseHost() there is no fallback: only an explicit choice may widen the
+// WebSocket Host check (see isAllowedHost in server/http.zig).
+pub fn explicitAdvertiseHost(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        .serve => |opts| opts.advertise_host,
+        else => null,
+    };
+}
+
+// The origins (or `*`) a WebSocket upgrade may carry, as Chrome's flag of
+// the same name. Empty, any Origin is rejected.
+pub fn remoteAllowOrigins(self: *const Config) []const []const u8 {
+    return switch (self.mode) {
+        .serve => |opts| opts.remote_allow_origins.items,
+        else => &.{},
+    };
+}
+
 fn advertiseHostFallback(host: []const u8) []const u8 {
     if (isHostWildcard(host)) {
         return "127.0.0.1";
@@ -695,7 +909,7 @@ fn advertiseHostFallback(host: []const u8) []const u8 {
 // resolvable, but the caller still benefits from emitting a guidance log.
 pub fn bindIsWildcard(self: *const Config) bool {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host == null and isHostWildcard(opts.host),
+        .serve => |opts| opts.advertise_host == null and isHostWildcard(self.serveHost()),
         else => false,
     };
 }
@@ -737,11 +951,40 @@ pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scala
     return std.mem.splitScalar(u8, patterns, ',');
 }
 
+pub fn adblockLists(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
+    const paths = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.adblock_lists,
+        else => unreachable,
+    } orelse return null;
+    return std.mem.splitScalar(u8, paths, ',');
+}
+
+pub const Protocol = enum {
+    cdp,
+    webdriver,
+};
+
+pub fn protocols(self: *const Config) []const Protocol {
+    return switch (self.mode) {
+        .serve => |opts| if (opts.protocol.items.len == 0) &.{.cdp} else opts.protocol.items,
+        .mcp => &.{.cdp},
+        else => unreachable,
+    };
+}
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
         .mcp => 16,
         .fetch, .agent => 0,
+        else => unreachable,
+    };
+}
+
+// Null disables the reaper: sessions then only end on DELETE.
+pub fn httpSessionTimeout(self: *const Config) ?u64 {
+    return switch (self.mode) {
+        inline .serve, .mcp => |opts| if (opts.http_session_timeout == 0) null else @as(u64, opts.http_session_timeout) * 1000,
         else => unreachable,
     };
 }
@@ -775,7 +1018,7 @@ pub fn dumpMetricsOnExit(self: *const Config) bool {
     };
 }
 
-pub fn cdpMaxHTTPMessageSize(self: *const Config) u14 {
+pub fn cdpMaxHTTPMessageSize(self: *const Config) u32 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_http_message_size,
         else => unreachable,
@@ -799,10 +1042,15 @@ pub fn customCertStore(self: *const Config) ?*crypto.X509_STORE {
 pub const DumpFormat = enum {
     html,
     markdown,
+    png,
+    pdf,
     wpt,
     semantic_tree,
     semantic_tree_text,
+    structured_data,
 };
+
+pub const Shell = enum { bash, fish, zsh };
 
 pub const WaitUntil = enum {
     load,
@@ -820,13 +1068,14 @@ pub const HttpHeaders = struct {
     const Brand = struct {
         brand: [:0]const u8,
         version: [:0]const u8,
+        full_version: []const u8,
     };
 
     /// Source of truth for client-hints brand data. Both the Sec-Ch-Ua
     /// HTTP header and navigator.userAgentData.brands derive from this
     /// list, so the two sides cannot drift.
     pub const brands = [_]Brand{
-        .{ .brand = "Lightpanda", .version = "1" },
+        .{ .brand = "Lightpanda", .version = "1", .full_version = lp.build_config.version },
     };
 
     pub const sec_ch_ua: [:0]const u8 = blk: {
@@ -838,11 +1087,19 @@ pub const HttpHeaders = struct {
         break :blk out;
     };
 
-    // Some bot-protection frontends (e.g. Akamai on canada.ca) RST the HTTP/2
-    // stream when a client sends Accept-Encoding without Accept-Language,
-    // treating it as a bot signal. Ship a neutral default so we look like a
-    // normal client.
-    pub const accept_language: [:0]const u8 = "en-US,en;q=0.9";
+    pub const sec_ch_ua_full_version_list: [:0]const u8 = blk: {
+        var out: [:0]const u8 = "";
+        for (brands, 0..) |b, i| {
+            const sep = if (i == 0) "" else ", ";
+            out = out ++ sep ++ "\"" ++ b.brand ++ "\";v=\"" ++ b.full_version ++ "\"";
+        }
+        break :blk out;
+    };
+
+    // The neutral default: some bot-protection frontends (e.g. Akamai on
+    // canada.ca) RST the HTTP/2 stream when a client sends Accept-Encoding
+    // without Accept-Language.
+    const default_locale: [:0]const u8 = "en-US";
 
     // Document-navigation Accept value Chrome sends.
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -851,23 +1108,65 @@ pub const HttpHeaders = struct {
 
     proxy_bearer_header: ?[:0]const u8,
 
+    accept_language: AcceptLanguage,
+
+    /// An Accept-Language header and the tags it lists, which is what
+    /// navigator.languages reports (Chrome keeps the two in step).
+    pub const AcceptLanguage = struct {
+        header: [:0]const u8,
+        // Sub-slices of `header`.
+        languages: []const []const u8,
+
+        pub fn init(allocator: Allocator, value: []const u8) !AcceptLanguage {
+            const header = try allocator.dupeSentinel(u8, value, 0);
+            errdefer allocator.free(header);
+
+            var languages: std.ArrayList([]const u8) = .empty;
+            errdefer languages.deinit(allocator);
+
+            var it = std.mem.splitScalar(u8, header, ',');
+            while (it.next()) |item| {
+                const end = std.mem.findScalar(u8, item, ';') orelse item.len;
+                const tag = std.mem.trim(u8, item[0..end], " \t");
+                if (tag.len > 0) {
+                    try languages.append(allocator, tag);
+                }
+            }
+
+            return .{
+                .header = header,
+                .languages = try languages.toOwnedSlice(allocator),
+            };
+        }
+
+        pub fn deinit(self: *const AcceptLanguage, allocator: Allocator) void {
+            allocator.free(self.languages);
+            allocator.free(self.header);
+        }
+    };
+
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
         const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
-            try allocator.dupeZ(u8, ua)
+            try allocator.dupeSentinel(u8, ua, 0)
         else if (config.userAgentSuffix()) |suffix|
-            try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
+            try allocator.printSentinel("{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
         errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
-            try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
+            try allocator.printSentinel("Proxy-Authorization: Bearer {s}", .{token}, 0)
         else
             null;
+        errdefer if (proxy_bearer_header) |hdr| allocator.free(hdr);
+
+        var buf: [64]u8 = undefined;
+        const accept_language: AcceptLanguage = try .init(allocator, acceptLanguageFor(&buf, config.locale()));
 
         return .{
             .user_agent = user_agent,
             .proxy_bearer_header = proxy_bearer_header,
+            .accept_language = accept_language,
         };
     }
 
@@ -878,6 +1177,25 @@ pub const HttpHeaders = struct {
         if (self.user_agent.ptr != user_agent_base.ptr) {
             allocator.free(self.user_agent);
         }
+        self.accept_language.deinit(allocator);
+    }
+
+    /// Chrome's shape: the tag, then its language alone, then English as a
+    /// last resort, with descending q values. `buf` must hold the longest
+    /// output for a tag that passed validateLocale (35 + 24 bytes).
+    fn acceptLanguageFor(buf: *[64]u8, tag: []const u8) []const u8 {
+        const primary = tag[0 .. std.mem.findScalar(u8, tag, '-') orelse tag.len];
+        var w: std.Io.Writer = .fixed(buf);
+        w.writeAll(tag) catch unreachable;
+        var q: u8 = 9;
+        if (primary.len != tag.len) {
+            w.print(",{s};q=0.{d}", .{ primary, q }) catch unreachable;
+            q -= 1;
+        }
+        if (!std.ascii.eqlIgnoreCase(primary, "en")) {
+            w.print(",en;q=0.{d}", .{q}) catch unreachable;
+        }
+        return w.buffered();
     }
 };
 
@@ -895,7 +1213,7 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
                 \\{s}
                 \\
             , .{Help.general});
-            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
+            break :text try allocator.print(template, .{exec_name});
         },
         inline .fetch, .serve, .mcp, .agent, .run => |tag| text: {
             const template = comptimePrint(
@@ -904,11 +1222,11 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
                 \\{s}
                 \\
             , .{ @field(Help, @tagName(tag)), Help.common_options });
-            break :text try std.fmt.allocPrint(allocator, template, .{ exec_name, info_or_warn, pretty_or_logfmt });
+            break :text try allocator.print(template, .{ exec_name, info_or_warn, pretty_or_logfmt });
         },
-        .version => text: {
-            const template = Help.version ++ "\n";
-            break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
+        inline .version, .completion => |tag| text: {
+            const template = @field(Help, @tagName(tag)) ++ "\n";
+            break :text try allocator.print(template, .{exec_name});
         },
     };
     defer allocator.free(text);
@@ -980,27 +1298,108 @@ fn printPaged(allocator: Allocator, text: []const u8) void {
 
 pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
     const exec_name, var command = try Commands.parse(allocator, proc_args);
-    if (command == .serve and command.serve.timeout != null) {
-        log.warn(.app, "--timeout is deprecated", .{});
-    }
     const invoked = std.meta.activeTag(command);
     // Rewrite `run` to `.agent` so nothing downstream needs a `.run` case.
     if (command == .run) {
         const run = command.run;
         if (run.script_file == null) {
-            log.fatal(.app, "missing script file", .{ .hint = "usage: lightpanda run <script.js>" });
+            log.fatal(.app, "missing script file", .{ .hint = "usage: lightpanda run <script.js | ->" });
             return error.MissingArgument;
         }
         // run's fields are a strict subset of Agent's (compile error otherwise).
         var agent_opts: Agent = .{};
-        inline for (@typeInfo(@TypeOf(run)).@"struct".fields) |f| {
-            @field(agent_opts, f.name) = @field(run, f.name);
+        inline for (@typeInfo(@TypeOf(run)).@"struct".field_names) |field_name| {
+            @field(agent_opts, field_name) = @field(run, field_name);
         }
         command = .{ .agent = agent_opts };
     }
+
+    if (command == .serve) {
+        if (command.serve.unix_socket) |path| {
+            const opts = command.serve;
+            if (opts.host != null or opts.port != null or opts.advertise_host != null) {
+                log.fatal(.app, "invalid argument", .{ .arg = "--unix-socket", .hint = "cannot be combined with --host, --port or --advertise-host" });
+                return error.InvalidArgument;
+            }
+            // `:` would end the path in the advertised ws+unix:// URL.
+            if (std.fs.path.isAbsolute(path) == false or std.mem.findScalar(u8, path, ':') != null) {
+                log.fatal(.app, "invalid argument", .{ .arg = "--unix-socket", .value = path, .hint = "must be an absolute path without ':'" });
+                return error.InvalidArgument;
+            }
+            if (path.len >= @sizeOf(@FieldType(std.posix.sockaddr.un, "path"))) {
+                log.fatal(.app, "invalid argument", .{ .arg = "--unix-socket", .value = path, .hint = "path is too long" });
+                return error.InvalidArgument;
+            }
+        }
+    }
+
+    if (command == .fetch and command.fetch.url.items.len == 0) {
+        log.fatal(.app, "missing URL", .{ .hint = "usage: lightpanda fetch <url>... [OPTIONS]" });
+        return error.MissingArgument;
+    }
+
+    // Agent mode quiets page-driven `console.error` noise unless
+    // verbosity=high. Depends on --verbosity/--task, so it can only be
+    // resolved after the options are parsed; an explicit --log-level wins.
+    if (command == .agent) {
+        const opts = command.agent;
+        if (opts.log_level == null and agentVerbosity(opts) != .high) {
+            log.opts.level = .err;
+        }
+    }
+
     var config = try Config.init(allocator, exec_name, command);
     config.command = invoked;
     return config;
+}
+
+test "Config: parseArgs obeys robots by default and supports explicit flags" {
+    const saved_log_opts = log.opts;
+    defer log.opts = saved_log_opts;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const default_config = try parseArgs(allocator, .{ .vector = &.{"lightpanda"} });
+    try std.testing.expect(default_config.obeyRobots());
+
+    const commands = [_][]const [*:0]const u8{
+        &.{ "lightpanda", "serve" },
+        &.{ "lightpanda", "fetch", "https://example.com" },
+        &.{ "lightpanda", "mcp" },
+        &.{ "lightpanda", "agent", "--no-llm" },
+        &.{ "lightpanda", "run", "session.js" },
+    };
+    const cases = [_]struct { flags: []const [*:0]const u8, obey: bool }{
+        .{ .flags = &.{}, .obey = true },
+        .{ .flags = &.{"--obey-robots"}, .obey = true },
+        .{ .flags = &.{"--no-obey-robots"}, .obey = false },
+        .{ .flags = &.{ "--no-obey-robots", "--obey-robots" }, .obey = true },
+        .{ .flags = &.{ "--obey-robots", "--no-obey-robots" }, .obey = false },
+        .{ .flags = &.{ "--no-obey-robots", "--no-obey-robots" }, .obey = false },
+    };
+    for (commands) |command| {
+        for (cases) |case| {
+            var argv: std.ArrayList([*:0]const u8) = .empty;
+            try argv.appendSlice(allocator, command);
+            try argv.appendSlice(allocator, case.flags);
+            const config = try parseArgs(allocator, .{ .vector = argv.items });
+            try std.testing.expectEqual(case.obey, config.obeyRobots());
+        }
+    }
+}
+
+test "Config: adblockLists splits comma-separated paths" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .adblock_lists = "easylist.txt,easyprivacy.txt",
+    } });
+    defer config.deinit(std.testing.allocator);
+
+    var paths = config.adblockLists().?;
+    try std.testing.expectEqualStrings("easylist.txt", paths.next().?);
+    try std.testing.expectEqualStrings("easyprivacy.txt", paths.next().?);
+    try std.testing.expectEqual(null, paths.next());
 }
 
 test "Config: blockedUrlPatterns splits comma-separated patterns" {
@@ -1064,11 +1463,333 @@ test "Config: parseArgs refuses a mozilla user-agent" {
     try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
 }
 
+test "Config: parseArgs --http-version" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.auto, config.httpVersion());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--http-version", "1.1" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.@"1.1", config.httpVersion());
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--http-version", "3" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
+test "Config: parseArgs --http-session-timeout" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(60_000, config.httpSessionTimeout());
+    }
+    {
+        // 0 disables the reaper
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--http-session-timeout", "0" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--http-session-timeout", "600" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(600_000, config.httpSessionTimeout());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--http-session-timeout", "0" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+}
+
+test "Config: httpMaxConcurrent default scales with --cdp-max-connections on serve" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cases = [_]struct { argv: []const [*:0]const u8, expected: u16 }{
+        .{ .argv = &.{ "lightpanda", "serve" }, .expected = 128 },
+        .{ .argv = &.{ "lightpanda", "serve", "--cdp-max-connections", "2" }, .expected = 40 },
+        .{ .argv = &.{ "lightpanda", "serve", "--cdp-max-connections", "100" }, .expected = 256 },
+        .{ .argv = &.{ "lightpanda", "serve", "--cdp-max-connections", "65535" }, .expected = 256 },
+        .{ .argv = &.{ "lightpanda", "serve", "--cdp-max-connections", "100", "--http-max-concurrent", "1000" }, .expected = 1000 },
+        .{ .argv = &.{ "lightpanda", "serve", "--http-max-concurrent", "10" }, .expected = 10 },
+        .{ .argv = &.{ "lightpanda", "fetch", "https://example.com" }, .expected = 40 },
+        .{ .argv = &.{ "lightpanda", "mcp" }, .expected = 40 },
+    };
+    for (cases) |case| {
+        const proc_args: std.process.Args = .{ .vector = case.argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(case.expected, config.httpMaxConcurrent());
+    }
+}
+
+test "Config: parseArgs --dump tells a url from a misspelt format" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdown.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.html, config.mode.fetch.dump);
+        try std.testing.expectEqualStrings("markdown.com", config.mode.fetch.url.items[0]);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--dump", "markdwon", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), proc_args));
+    }
+}
+
+test "Config: parseArgs tells a url from a misspelt command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "version.io" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqualStrings("version.io", config.mode.fetch.url.items[0]);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "versoin" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.UnknownCommand, parseArgs(arena.allocator(), proc_args));
+    }
+}
+
 test "Config: validateUserAgent" {
     try validateUserAgent("Lightpanda/1.0");
     try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
     try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
+}
+
+test "Config: validateLocale" {
+    try validateLocale("en");
+    try validateLocale("en-US");
+    try validateLocale("zh-Hant-TW");
+    try validateLocale("es-419");
+    try std.testing.expectError(error.InvalidLanguage, validateLocale(""));
+    try std.testing.expectError(error.InvalidLanguage, validateLocale("e"));
+    try std.testing.expectError(error.InvalidLanguage, validateLocale("en_US"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-U"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-US-x-toolongsub"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-U$"));
+    try std.testing.expectError(error.TooLong, validateLocale("en-" ++ string.repeat("a", 40)));
+}
+
+test "Config: validateTimezone" {
+    try validateTimezone("UTC");
+    try validateTimezone("Europe/Paris");
+    try validateTimezone("America/Argentina/Buenos_Aires");
+    try std.testing.expectError(error.Empty, validateTimezone(""));
+    try std.testing.expectError(error.InvalidCharacter, validateTimezone("Europe/ Paris"));
+    try std.testing.expectError(error.InvalidCharacter, validateTimezone("UTC\n"));
+    try std.testing.expectError(error.TooLong, validateTimezone(string.repeat("a", 65)));
+}
+
+test "Config: HttpHeaders.acceptLanguageFor" {
+    const cases = [_]struct { tag: []const u8, expected: []const u8 }{
+        .{ .tag = "en-US", .expected = "en-US,en;q=0.9" },
+        .{ .tag = "en-GB", .expected = "en-GB,en;q=0.9" },
+        .{ .tag = "de-DE", .expected = "de-DE,de;q=0.9,en;q=0.8" },
+        .{ .tag = "de", .expected = "de,en;q=0.9" },
+        .{ .tag = "en", .expected = "en" },
+        .{ .tag = "zh-Hant-TW", .expected = "zh-Hant-TW,zh;q=0.9,en;q=0.8" },
+    };
+    for (cases) |case| {
+        var buf: [64]u8 = undefined;
+        try std.testing.expectEqualStrings(case.expected, HttpHeaders.acceptLanguageFor(&buf, case.tag));
+    }
+}
+
+test "Config: HttpHeaders.AcceptLanguage lists the header's tags" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { header: []const u8, tags: []const []const u8 }{
+        .{ .header = "en-US,en;q=0.9", .tags = &.{ "en-US", "en" } },
+        .{ .header = "de-DE,de;q=0.9, en;q=0.8", .tags = &.{ "de-DE", "de", "en" } },
+        .{ .header = "fr-FR", .tags = &.{"fr-FR"} },
+        .{ .header = " , ;q=0.5,", .tags = &.{} },
+        .{ .header = "", .tags = &.{} },
+    };
+    for (cases) |case| {
+        const al: HttpHeaders.AcceptLanguage = try .init(allocator, case.header);
+        defer al.deinit(allocator);
+        try std.testing.expectEqualStrings(case.header, al.header);
+        try std.testing.expectEqual(case.tags.len, al.languages.len);
+        for (case.tags, al.languages) |expected, actual| {
+            try std.testing.expectEqualStrings(expected, actual);
+        }
+    }
+}
+
+test "Config: locale drives http_headers" {
+    const allocator = std.testing.allocator;
+    {
+        var config = try Config.init(allocator, "test", .{ .serve = .{ .host = "127.0.0.1" } });
+        defer config.deinit(allocator);
+        try std.testing.expectEqualStrings("en-US,en;q=0.9", config.http_headers.accept_language.header);
+        try std.testing.expectEqual(2, config.http_headers.accept_language.languages.len);
+        try std.testing.expectEqualStrings("en", config.http_headers.accept_language.languages[1]);
+    }
+    {
+        var config = try Config.init(allocator, "test", .{ .serve = .{ .host = "127.0.0.1", .locale = "fr" } });
+        defer config.deinit(allocator);
+        try std.testing.expectEqualStrings("fr,en;q=0.9", config.http_headers.accept_language.header);
+        try std.testing.expectEqual(2, config.http_headers.accept_language.languages.len);
+        try std.testing.expectEqualStrings("fr", config.http_headers.accept_language.languages[0]);
+    }
+}
+
+test "Config: parseArgs refuses an invalid --locale and --timezone" {
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--locale", "en_US" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--timezone", "Europe/ Paris" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
+test "Config: parseArgs refuses an invalid --http-header" {
+    const invalid = [_][*:0]const u8{
+        // no colon to split on
+        "not-a-header",
+        // empty name
+        ": value",
+        // names that aren't HTTP tokens
+        "Foo Bar: value",
+        "X(Foo)=a: value",
+        // CR/LF in the value would smuggle a second header onto the wire
+        "X-A: b\r\nX-B: c",
+        "X-A: b\n",
+        // reserved names have their own flag, or none at all
+        "User-Agent: Custom/1.0",
+        "Sec-Ch-Ua: \"Chromium\";v=\"140\"",
+    };
+
+    for (invalid) |header| {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--http-header", header };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
+test "Config: parseArgs accumulates repeated list flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const argv = [_][*:0]const u8{
+        "lightpanda",         "fetch",
+        "--adblock-lists",    "easylist.txt",
+        "--adblock-lists",    "easyprivacy.txt,annoyances.txt",
+        "--block-cidrs",      "10.0.0.0/8",
+        "--block-cidrs",      "-10.0.0.42/32",
+        "http://example.com",
+    };
+    const proc_args: std.process.Args = .{ .vector = &argv };
+    const config = try parseArgs(arena.allocator(), proc_args);
+
+    var paths = config.adblockLists().?;
+    try std.testing.expectEqualStrings("easylist.txt", paths.next().?);
+    try std.testing.expectEqualStrings("easyprivacy.txt", paths.next().?);
+    try std.testing.expectEqualStrings("annoyances.txt", paths.next().?);
+    try std.testing.expectEqual(null, paths.next());
+
+    try std.testing.expectEqualStrings("10.0.0.0/8,-10.0.0.42/32", config.blockCidrs().?);
+}
+
+test "Config: parseArgs collects --http-header" {
+    // The parsed headers are owned by the allocator for the process lifetime;
+    // an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const argv = [_][*:0]const u8{
+        "lightpanda",         "fetch",
+        "--http-header",      "Accept-Language: fr-FR,fr;q=0.9",
+        "--http-header",      " \tX-Empty \t: \t",
+        "http://example.com",
+    };
+    const proc_args: std.process.Args = .{ .vector = &argv };
+    const config = try parseArgs(arena.allocator(), proc_args);
+
+    const headers = config.httpHeaders();
+    try std.testing.expectEqual(2, headers.len);
+    try std.testing.expectEqualStrings("Accept-Language", headers[0].name);
+    try std.testing.expectEqualStrings("fr-FR,fr;q=0.9", headers[0].value);
+    // Name and value are trimmed; an empty value is legal.
+    try std.testing.expectEqualStrings("X-Empty", headers[1].name);
+    try std.testing.expectEqualStrings("", headers[1].value);
+}
+
+test "Config: httpHeaders accessor" {
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{} });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(0, config.httpHeaders().len);
+    }
+    {
+        var list: std.ArrayList(HttpHeader) = .empty;
+        defer list.deinit(std.testing.allocator);
+        try list.append(std.testing.allocator, .{ .name = "X-Extra", .value = "1" });
+
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .http_header = list,
+        } });
+        defer config.deinit(std.testing.allocator);
+
+        const headers = config.httpHeaders();
+        try std.testing.expectEqual(1, headers.len);
+        try std.testing.expectEqualStrings("X-Extra", headers[0].name);
+        try std.testing.expectEqualStrings("1", headers[0].value);
+    }
+}
+
+/// For comma-separated flags the help documents as repeatable: each
+/// occurrence appends to what earlier ones left, so "--x a --x b" equals
+/// "--x a,b" instead of the last flag silently winning.
+fn accumulateValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const existing = field.* orelse {
+        field.* = try allocator.dupe(u8, str);
+        return;
+    };
+    field.* = try std.mem.join(allocator, ",", &.{ existing, str });
 }
 
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {
@@ -1088,26 +1809,97 @@ pub fn validateUserAgent(ua: []const u8) !void {
         }
     }
 
-    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+    if (std.ascii.findIgnoreCase(ua, "mozilla") != null) {
         return error.Reserved;
+    }
+}
+
+fn localeValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *[:0]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    validateLocale(str) catch |err| {
+        log.fatal(.app, "invalid option value", .{ .arg = "--locale", .value = str, .err = err, .hint = "must be a BCP 47 tag such as en-US, de or zh-Hant-TW" });
+        return error.InvalidArgument;
+    };
+    field.* = try allocator.dupeSentinel(u8, str, 0);
+}
+
+fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[:0]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    validateTimezone(str) catch |err| {
+        log.fatal(.app, "invalid option value", .{ .arg = "--timezone", .value = str, .err = err, .hint = "must be an IANA time zone such as Europe/Paris or UTC" });
+        return error.InvalidArgument;
+    };
+    field.* = try allocator.dupeSentinel(u8, str, 0);
+}
+
+// libcurl only stores the string; BoringSSL parses it at handshake time, so
+// a bad name would fail every request with a misleading SslCipher error.
+fn httpCurvesValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[:0]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+
+    const ctx = crypto.SSL_CTX_new(crypto.TLS_method()) orelse return error.OutOfMemory;
+    defer crypto.SSL_CTX_free(ctx);
+
+    if (crypto.SSL_CTX_set1_curves_list(ctx, str) != 1) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-curves", .value = str, .hint = "must be a colon-separated list such as X25519MLKEM768:X25519:P-256:P-384" });
+        return error.InvalidArgument;
+    }
+    field.* = try allocator.dupeSentinel(u8, str, 0);
+}
+
+/// A BCP 47 tag restricted to what ICU and the Accept-Language derivation
+/// need: a 2-3 letter language followed by 2-8 character alphanumeric subtags.
+pub fn validateLocale(tag: []const u8) !void {
+    if (tag.len > 35) {
+        return error.TooLong;
+    }
+    var it = std.mem.splitScalar(u8, tag, '-');
+    const language = it.next().?;
+    if (language.len < 2 or language.len > 3) {
+        return error.InvalidLanguage;
+    }
+    for (language) |c| {
+        if (!std.ascii.isAlphabetic(c)) {
+            return error.InvalidLanguage;
+        }
+    }
+    while (it.next()) |subtag| {
+        if (subtag.len < 2 or subtag.len > 8) {
+            return error.InvalidSubtag;
+        }
+        for (subtag) |c| {
+            if (!std.ascii.isAlphanumeric(c)) {
+                return error.InvalidSubtag;
+            }
+        }
+    }
+}
+
+/// Only the shape is checked; ICU resolves the id itself and falls back to
+/// GMT for names it does not know.
+pub fn validateTimezone(id: []const u8) !void {
+    if (id.len == 0) {
+        return error.Empty;
+    }
+    if (id.len > 64) {
+        return error.TooLong;
+    }
+    for (id) |c| {
+        if (c <= ' ' or c == 0x7f) {
+            return error.InvalidCharacter;
+        }
     }
 }
 
 /// Tag names of a Zig enum, so a command's allowed values can't drift from the
 /// enum it sets.
-pub fn tagNames(comptime E: type) []const []const u8 {
-    const fields = @typeInfo(E).@"enum".fields;
-    var names: [fields.len][]const u8 = undefined;
-    for (fields, &names) |f, *n| n.* = f.name;
-    const frozen = names;
-    return &frozen;
-}
+pub const tagNames = cli.tagNames;
 
 /// `<a|b|c>` ghost-text hint built from the same enum's tag names.
 pub fn tagHint(comptime E: type) []const u8 {
     var s: []const u8 = "<";
-    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
-        s = s ++ (if (i == 0) f.name else "|" ++ f.name);
+    for (@typeInfo(E).@"enum".field_names, 0..) |field_name, i| {
+        s = s ++ (if (i == 0) field_name else "|" ++ field_name);
     }
     return s ++ ">";
 }
@@ -1115,8 +1907,60 @@ pub fn tagHint(comptime E: type) []const u8 {
 /// JSON array `["a","b","c"]` representation of the enum tag names.
 pub fn tagJsonArray(comptime E: type) []const u8 {
     var s: []const u8 = "[";
-    for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
-        s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
+    for (@typeInfo(E).@"enum".field_names, 0..) |field_name, i| {
+        s = s ++ (if (i == 0) "\"" else ",\"") ++ field_name ++ "\"";
     }
     return s ++ "]";
+}
+
+test "Config: parseArgs --load-resources defaults stylesheets on for mcp and agent" {
+    // Parsing agent mode lowers the global log level, which other tests in
+    // this process expect log lines from.
+    const saved_log_opts = log.opts;
+    defer log.opts = saved_log_opts;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const cases = [_]struct { argv: []const [*:0]const u8, stylesheet: bool, image: bool, beacon: bool = false }{
+        .{ .argv = &.{ "lightpanda", "mcp" }, .stylesheet = true, .image = false },
+        .{ .argv = &.{ "lightpanda", "agent", "--no-llm" }, .stylesheet = true, .image = false },
+        .{ .argv = &.{ "lightpanda", "fetch", "https://example.com" }, .stylesheet = false, .image = false },
+        .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "none" }, .stylesheet = false, .image = false },
+        .{ .argv = &.{ "lightpanda", "mcp", "--load-resources", "image" }, .stylesheet = false, .image = true },
+        .{ .argv = &.{ "lightpanda", "fetch", "--load-resources", "beacon", "https://example.com" }, .stylesheet = false, .image = false, .beacon = true },
+    };
+    for (cases) |case| {
+        const config = try parseArgs(arena.allocator(), .{ .vector = case.argv });
+        const resources = config.loadResources();
+        try std.testing.expectEqual(case.stylesheet, resources.stylesheet);
+        try std.testing.expectEqual(case.image, resources.image);
+        try std.testing.expectEqual(case.beacon, resources.beacon);
+    }
+}
+
+test "Config: --unix-socket rejects TCP flags and bad paths" {
+    log.expectLog(&.{ .app, .app, .app, .app, .app });
+    var long: [120:0]u8 = @splat('a');
+    long[0] = '/';
+    const cases = [_][]const [*:0]const u8{
+        &.{ "lightpanda", "serve", "--unix-socket", "/tmp/lp.sock", "--port", "9322" },
+        &.{ "lightpanda", "serve", "--unix-socket", "/tmp/lp.sock", "--host", "127.0.0.1" },
+        &.{ "lightpanda", "serve", "--unix-socket", "lp.sock" },
+        &.{ "lightpanda", "serve", "--unix-socket", "/tmp/lp:1.sock" },
+        &.{ "lightpanda", "serve", "--unix-socket", &long },
+    };
+    for (cases) |vector| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), .{ .vector = vector }));
+    }
+}
+
+test "Config: --unix-socket" {
+    const vector = [_][*:0]const u8{ "lightpanda", "serve", "--unix-socket", "/tmp/lp.sock", "--protocol", "webdriver" };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const config = try parseArgs(arena.allocator(), .{ .vector = &vector });
+    try std.testing.expectEqualStrings("/tmp/lp.sock", config.mode.serve.unix_socket.?);
 }

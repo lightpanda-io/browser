@@ -27,7 +27,7 @@ const StorageManager = @This();
 
 _pad: bool = false,
 
-pub fn estimate(_: *const StorageManager, exec: *const Execution) !js.Promise {
+fn estimate(_: *const StorageManager, exec: *const Execution) !js.Promise {
     const est = try exec._factory.create(StorageEstimate{
         ._usage = 0,
         ._quota = 1024 * 1024 * 1024, // 1 GiB
@@ -51,7 +51,6 @@ const StorageEstimate = struct {
         pub const bridge = js.Bridge(StorageEstimate);
         pub const Meta = struct {
             pub const name = "StorageEstimate";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const quota = bridge.accessor(getQuota, null, .{});
@@ -63,7 +62,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(StorageManager);
     pub const Meta = struct {
         pub const name = "StorageManager";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };

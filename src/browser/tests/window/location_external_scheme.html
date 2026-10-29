@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+  A URL whose scheme isn't fetchable (mailto:, tel:, ...) is handed off to
+  external software: nothing is fetched and the document stays.
+-->
+
+<a id=mailto href="mailto:someone@example.com">mail</a>
+<a id=tel href="TEL:+15555550100">tel</a>
+<script id=link type=module>
+(async() => {
+  if (testing.IS_TEST_RUNNER === false) {
+    // Even if it's headless, chrome will still try to open these link in
+    // whatever application is registered. Annoying. Easier to just skip.
+    return testing.skipAsync();
+  }
+
+  const state = await testing.async();
+  window.__marker = 'kept';
+  document.getElementById('mailto').click();
+  document.getElementById('tel').click();
+  location.href = 'sms:+15555550100';
+  setTimeout(() => state.resolve(), 50);
+  await state.done(() => {
+    testing.expectEqual('kept', window.__marker);
+    testing.expectEqual(testing.BASE_URL + 'window/location_external_scheme.html', location.href);
+  });
+})();
+</script>

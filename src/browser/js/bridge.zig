@@ -93,28 +93,6 @@ pub fn Builder(comptime T: type) type {
             }
             @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet");
         }
-
-        const PrototypeChainEntry = @import("TaggedOpaque.zig").PrototypeChainEntry;
-        pub fn prototypeChain() [prototypeChainLength(T)]PrototypeChainEntry {
-            var entries: [prototypeChainLength(T)]PrototypeChainEntry = undefined;
-
-            entries[0] = .{ .offset = 0, .index = JsApiLookup.getId(T.JsApi) };
-
-            if (entries.len == 1) {
-                return entries;
-            }
-
-            var Prototype = T;
-            inline for (entries[1..]) |*entry| {
-                const Next = PrototypeType(Prototype).?;
-                entry.* = .{
-                    .index = JsApiLookup.getId(Next.JsApi),
-                    .offset = Factory.protoOffset(Prototype),
-                };
-                Prototype = Next;
-            }
-            return entries;
-        }
     };
 }
 
@@ -170,6 +148,7 @@ pub const Function = struct {
     js_name: ?[:0]const u8 = null,
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
+    rejects_bad_receiver: bool,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
@@ -179,8 +158,7 @@ pub const Function = struct {
             .wpt_only = opts.wpt_only,
             .js_name = opts.js_name,
             .exposed = opts.exposed,
-            // Non-static methods receive `self` as their first param; static
-            // methods don't, so don't skip the first param for them.
+            .rejects_bad_receiver = returnsPromise(@TypeOf(func)),
             .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -192,6 +170,14 @@ pub const Function = struct {
 
     pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
 
+    fn returnsPromise(comptime F: type) bool {
+        const R = @typeInfo(F).@"fn".return_type orelse return false;
+        return switch (@typeInfo(R)) {
+            .error_union => |eu| eu.payload,
+            else => R,
+        } == js.Promise;
+    }
+
     fn getArity(comptime T: type, comptime start: usize) usize {
         const Execution = js.Execution;
 
@@ -199,9 +185,9 @@ pub const Function = struct {
         const Session = @import("../Session.zig");
 
         var count: usize = 0;
-        var params = @typeInfo(T).@"fn".params;
-        for (params[start..]) |p| { // start at 1, skip self
-            const PT = p.type.?;
+        const param_types = @typeInfo(T).@"fn".param_types;
+        for (param_types[start..]) |param_type| { // start at 1, skip self
+            const PT = param_type.?;
             if (PT == *Frame or PT == *const Frame) {
                 break;
             }
@@ -222,9 +208,8 @@ pub const Function = struct {
                 break;
             }
 
-            // A slice of js.Value is always bound as variadic (see
-            // Caller.getArgs) and variadics contribute 0 to length.
-            if (@typeInfo(PT) == .pointer and @typeInfo(PT).pointer.size == .slice and @typeInfo(PT).pointer.child == js.Value) {
+            // a rest parameter contributes 0 to length
+            if (@typeInfo(PT) == .@"struct" and @hasDecl(PT, "js_variadic")) {
                 break;
             }
             count += 1;
@@ -292,6 +277,8 @@ pub const Indexed = struct {
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
+        // Only applies to setter and deleter; getters don't mutate.
+        ce_reactions: bool = false,
     };
 
     fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, query: anytype, definer: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
@@ -338,6 +325,18 @@ pub const Indexed = struct {
                     }
                     defer caller.deinit();
 
+                    const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
+                        .frame => |frame| frame,
+                        .worker => null,
+                    } else null;
+                    var ce_checkpoint: usize = undefined;
+                    if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| ce_checkpoint = frame._ce_reactions.push();
+                    }
+                    defer if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+                    };
+
                     return caller.setIndex(T, setter, idx, c_value.?, handle.?, .{
                         .as_typed_array = opts.as_typed_array,
                         .null_as_undefined = opts.null_as_undefined,
@@ -356,6 +355,18 @@ pub const Indexed = struct {
                     }
                     defer caller.deinit();
 
+                    const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
+                        .frame => |frame| frame,
+                        .worker => null,
+                    } else null;
+                    var ce_checkpoint: usize = undefined;
+                    if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| ce_checkpoint = frame._ce_reactions.push();
+                    }
+                    defer if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+                    };
+
                     return caller.deleteOrDefineIndex(T, deleter, idx, handle.?, .{
                         .as_typed_array = opts.as_typed_array,
                         .null_as_undefined = opts.null_as_undefined,
@@ -364,20 +375,25 @@ pub const Indexed = struct {
             }.wrap;
         }
 
-        if (@typeInfo(@TypeOf(query)) != .null) {
-            indexed.query = struct {
-                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    if (!caller.init(v8_isolate)) {
-                        return js.Intercepted.no;
-                    }
-                    defer caller.deinit();
+        const query_func = if (@typeInfo(@TypeOf(query)) != .null)
+            query
+        else
+            // Generate a Query handler by wrapping getter. With no setter, this
+            // gets the ReadOnly attribute
+            GetterQuery(getter, if (@typeInfo(@TypeOf(setter)) == .null) v8.ReadOnly else v8.None).query;
 
-                    return caller.getIndexQuery(T, query, idx, handle.?);
+        indexed.query = struct {
+            fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                var caller: Caller = undefined;
+                if (!caller.init(v8_isolate)) {
+                    return js.Intercepted.no;
                 }
-            }.wrap;
-        }
+                defer caller.deinit();
+
+                return caller.getIndexQuery(T, query_func, idx, handle.?);
+            }
+        }.wrap;
 
         if (@typeInfo(@TypeOf(definer)) != .null) {
             indexed.definer = struct {
@@ -398,6 +414,56 @@ pub const Indexed = struct {
         return indexed;
     }
 };
+
+fn hasNotHandled(comptime E: type) bool {
+    // anyerror includes it
+    const error_names = @typeInfo(E).error_set.error_names orelse return true;
+    for (error_names) |name| {
+        if (std.mem.eql(u8, name, "NotHandled")) return true;
+    }
+    return false;
+}
+
+// Default index query if one isn't provided. Uses the getter to determine the result
+fn GetterQuery(comptime getter: anytype, comptime attrs: u32) type {
+    const param_types = @typeInfo(@TypeOf(getter)).@"fn".param_types;
+    const Self = param_types[0].?;
+    const Index = param_types[1].?;
+
+    // A getter that can return neither null nor error.NotHandled would report
+    // every index as present.
+    const can_be_absent = switch (@typeInfo(@typeInfo(@TypeOf(getter)).@"fn".return_type.?)) {
+        .optional => true,
+        .error_union => |eu| @typeInfo(eu.payload) == .optional or hasNotHandled(eu.error_set),
+        else => false,
+    };
+    if (can_be_absent == false) {
+        @compileError(@typeName(Self) ++ ": an indexed getter that can't return null or error.NotHandled needs an explicit query");
+    }
+
+    return struct {
+        const query = if (param_types.len == 3) withGlobal else plain;
+
+        fn plain(self: Self, idx: Index) !u32 {
+            return attributes(getter(self, idx));
+        }
+
+        fn withGlobal(self: Self, idx: Index, global: param_types[2].?) !u32 {
+            return attributes(getter(self, idx, global));
+        }
+
+        fn attributes(ret: anytype) !u32 {
+            const value = switch (@typeInfo(@TypeOf(ret))) {
+                .error_union => try ret,
+                else => ret,
+            };
+            if (@typeInfo(@TypeOf(value)) == .optional and value == null) {
+                return error.NotHandled;
+            }
+            return attrs;
+        }
+    };
+}
 
 pub const NamedIndexed = struct {
     getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32,
@@ -594,7 +660,7 @@ pub const Iterator = struct {
     }
 };
 
-pub const Callable = struct {
+const Callable = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
@@ -654,10 +720,6 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 
     const local = &caller.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
         return js.Intercepted.no;
     };
@@ -666,7 +728,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     switch (local.ctx.global) {
         .frame => |frame| {
             const document = frame.document;
-            if (document.getElementById(property, frame)) |el| {
+            if (document.getElementById(property)) |el| {
                 const js_val = local.zigValueToJs(el, .{}) catch return js.Intercepted.no;
                 var pc = Caller.PropertyCallbackInfo{ .handle = handle.? };
                 pc.getReturnValue().set(js_val);
@@ -676,144 +738,132 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         .worker => {}, // no global lookup in a worker
     }
 
-    if (comptime lp.IS_DEBUG) {
-        if (std.mem.startsWith(u8, property, "__")) {
-            // some frameworks will extend built-in types using a __ prefix
-            // these should always be safe to ignore.
-            return js.Intercepted.no;
-        }
+    // @LOG-UNKNOWN-PROPERTY
+    // This was really useful when sites often broke because of an unimplemented
+    // feature. But it hasnt' been useful to me in ~6 months.
+    // if (comptime lp.IS_DEBUG) {
+    //     if (std.mem.startsWith(u8, property, "__")) {
+    //         // some frameworks will extend built-in types using a __ prefix
+    //         // these should always be safe to ignore.
+    //         return js.Intercepted.no;
+    //     }
 
-        const ignored = std.StaticStringMap(void).initComptime(.{
-            .{ "Deno", {} },
-            .{ "process", {} },
-            .{ "ShadyDOM", {} },
-            .{ "ShadyCSS", {} },
+    //     const ignored = std.StaticStringMap(void).initComptime(.{
+    //         .{ "Deno", {} },
+    //         .{ "process", {} },
+    //         .{ "ShadyDOM", {} },
+    //         .{ "ShadyCSS", {} },
 
-            // a lot of sites seem to like having their own window.config.
-            .{ "config", {} },
+    //         // a lot of sites seem to like having their own window.config.
+    //         .{ "config", {} },
 
-            .{ "litNonce", {} },
-            .{ "litHtmlVersions", {} },
-            .{ "litElementVersions", {} },
-            .{ "litHtmlPolyfillSupport", {} },
-            .{ "litElementHydrateSupport", {} },
-            .{ "litElementPolyfillSupport", {} },
-            .{ "reactiveElementVersions", {} },
+    //         .{ "litNonce", {} },
+    //         .{ "litHtmlVersions", {} },
+    //         .{ "litElementVersions", {} },
+    //         .{ "litHtmlPolyfillSupport", {} },
+    //         .{ "litElementHydrateSupport", {} },
+    //         .{ "litElementPolyfillSupport", {} },
+    //         .{ "reactiveElementVersions", {} },
 
-            .{ "recaptcha", {} },
-            .{ "grecaptcha", {} },
-            .{ "___grecaptcha_cfg", {} },
-            .{ "__recaptcha_api", {} },
-            .{ "__google_recaptcha_client", {} },
+    //         .{ "recaptcha", {} },
+    //         .{ "grecaptcha", {} },
+    //         .{ "___grecaptcha_cfg", {} },
+    //         .{ "__recaptcha_api", {} },
+    //         .{ "__google_recaptcha_client", {} },
 
-            .{ "CLOSURE_FLAGS", {} },
-            .{ "__REACT_DEVTOOLS_GLOBAL_HOOK__", {} },
-            .{ "ApplePaySession", {} },
-        });
-        if (!ignored.has(property)) {
-            var buf: [2048]u8 = undefined;
-            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
-            logUnknownProperty(local, key) catch return js.Intercepted.no;
-        }
-    }
+    //         .{ "CLOSURE_FLAGS", {} },
+    //         .{ "__REACT_DEVTOOLS_GLOBAL_HOOK__", {} },
+    //         .{ "ApplePaySession", {} },
+    //     });
+    //     if (!ignored.has(property)) {
+    //         var buf: [2048]u8 = undefined;
+    //         const key = std.mem.print(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
+    //         logUnknownProperty(local, key) catch return js.Intercepted.no;
+    //     }
+    // }
 
     return js.Intercepted.no;
 }
 
+// @LOG-UNKNOWN-PROPERTY
 // Only used for debugging
-pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-    if (comptime !lp.IS_DEBUG) {
-        @compileError("unknownObjectPropertyCallback should only be used in debug builds");
-    }
+// pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+//     if (comptime !lp.IS_DEBUG) {
+//         @compileError("unknownObjectPropertyCallback should only be used in debug builds");
+//     }
 
-    return struct {
-        fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-            const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+//     return struct {
+//         fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+//             const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
 
-            var caller: Caller = undefined;
-            if (!caller.init(v8_isolate)) {
-                return js.Intercepted.no;
-            }
-            defer caller.deinit();
+//             var caller: Caller = undefined;
+//             if (!caller.init(v8_isolate)) {
+//                 return js.Intercepted.no;
+//             }
+//             defer caller.deinit();
 
-            const local = &caller.local;
+//             const local = &caller.local;
 
-            var hs: js.HandleScope = undefined;
-            hs.init(local.isolate);
-            defer hs.deinit();
+//             var hs: js.HandleScope = undefined;
+//             hs.init(local.isolate);
+//             defer hs.deinit();
 
-            const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
-                return js.Intercepted.no;
-            };
+//             const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
+//                 return js.Intercepted.no;
+//             };
 
-            if (std.mem.startsWith(u8, property, "__")) {
-                // some frameworks will extend built-in types using a __ prefix
-                // these should always be safe to ignore.
-                return js.Intercepted.no;
-            }
+//             if (std.mem.startsWith(u8, property, "__")) {
+//                 // some frameworks will extend built-in types using a __ prefix
+//                 // these should always be safe to ignore.
+//                 return js.Intercepted.no;
+//             }
 
-            if (std.mem.startsWith(u8, property, "jQuery")) {
-                return js.Intercepted.no;
-            }
+//             if (std.mem.startsWith(u8, property, "jQuery")) {
+//                 return js.Intercepted.no;
+//             }
 
-            if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
-                if (std.mem.eql(u8, property, "tagName")) {
-                    // knockout does this, a lot.
-                    return js.Intercepted.no;
-                }
-            }
+//             if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
+//                 if (std.mem.eql(u8, property, "tagName")) {
+//                     // knockout does this, a lot.
+//                     return js.Intercepted.no;
+//                 }
+//             }
 
-            if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
-                // react ?
-                if (std.mem.eql(u8, property, "props")) return js.Intercepted.no;
-                if (std.mem.eql(u8, property, "hydrated")) return js.Intercepted.no;
-                if (std.mem.eql(u8, property, "isHydrated")) return js.Intercepted.no;
-            }
+//             if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
+//                 // react ?
+//                 if (std.mem.eql(u8, property, "props")) return js.Intercepted.no;
+//                 if (std.mem.eql(u8, property, "hydrated")) return js.Intercepted.no;
+//                 if (std.mem.eql(u8, property, "isHydrated")) return js.Intercepted.no;
+//             }
 
-            if (JsApi == @import("../webapi/Console.zig").JsApi) {
-                if (std.mem.eql(u8, property, "firebug")) return js.Intercepted.no;
-            }
+//             if (JsApi == @import("../webapi/Console.zig").JsApi) {
+//                 if (std.mem.eql(u8, property, "firebug")) return js.Intercepted.no;
+//             }
 
-            const ignored = std.StaticStringMap(void).initComptime(.{});
-            if (!ignored.has(property)) {
-                var buf: [2048]u8 = undefined;
-                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
-                logUnknownProperty(local, key) catch return js.Intercepted.no;
-            }
-            return js.Intercepted.no;
-        }
-    }.wrap;
-}
+//             const ignored = std.StaticStringMap(void).initComptime(.{});
+//             if (!ignored.has(property)) {
+//                 var buf: [2048]u8 = undefined;
+//                 const key = std.mem.print(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
+//                 logUnknownProperty(local, key) catch return js.Intercepted.no;
+//             }
+//             return js.Intercepted.no;
+//         }
+//     }.wrap;
+// }
 
-fn logUnknownProperty(local: *const js.Local, key: []const u8) !void {
-    const ctx = local.ctx;
-    const gop = try ctx.unknown_properties.getOrPut(ctx.arena.allocator(), key);
-    if (gop.found_existing) {
-        gop.value_ptr.count += 1;
-    } else {
-        gop.key_ptr.* = try ctx.arena.dupe(u8, key);
-        gop.value_ptr.* = .{
-            .count = 1,
-            .first_stack = try ctx.arena.dupe(u8, (try local.stackTrace()) orelse "???"),
-        };
-    }
-}
-
-// Given a Type, returns the length of the prototype chain, including self
-fn prototypeChainLength(comptime T: type) usize {
-    var l: usize = 1;
-    var Next = T;
-    while (PrototypeType(Next)) |N| {
-        Next = N;
-        l += 1;
-    }
-    return l;
-}
-
-// Given a Type, gets its prototype Type (if any)
-fn PrototypeType(comptime T: type) ?type {
-    return reflect.Proto(T);
-}
+// fn logUnknownProperty(local: *const js.Local, key: []const u8) !void {
+//     const ctx = local.ctx;
+//     const gop = try ctx.unknown_properties.getOrPut(ctx.arena.allocator(), key);
+//     if (gop.found_existing) {
+//         gop.value_ptr.count += 1;
+//     } else {
+//         gop.key_ptr.* = try ctx.arena.dupe(u8, key);
+//         gop.value_ptr.* = .{
+//             .count = 1,
+//             .first_stack = try ctx.arena.dupe(u8, (try local.stackTrace()) orelse "???"),
+//         };
+//     }
+// }
 
 fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
     @setEvalBranchQuota(10_000);
@@ -908,7 +958,7 @@ pub const JsApiLookup = struct {
 
     /// Returns the ID for the given type.
     pub inline fn getId(t: type) BackingInt {
-        return @intFromEnum(getIndex(t));
+        return @backingInt(getIndex(t));
     }
 };
 
@@ -1062,6 +1112,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/element/html/UL.zig"),
     @import("../webapi/element/html/Unknown.zig"),
     @import("../webapi/element/html/ValidityState.zig"),
+    @import("../webapi/ElementInternals.zig"),
+    @import("../webapi/CustomStateSet.zig"),
     @import("../webapi/element/Svg.zig"),
     @import("../webapi/element/svg/Generic.zig"),
     @import("../webapi/element/svg/Graphics.zig"),
@@ -1117,6 +1169,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
+    @import("../webapi/compression/CompressionStream.zig"),
+    @import("../webapi/compression/DecompressionStream.zig"),
     @import("../webapi/Event.zig"),
     @import("../webapi/event/CompositionEvent.zig"),
     @import("../webapi/event/CustomEvent.zig"),
@@ -1124,15 +1178,20 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/MessageEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
     @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
+    @import("../webapi/event/NavigateEvent.zig"),
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
     @import("../webapi/event/HashChangeEvent.zig"),
+    @import("../webapi/event/MediaQueryListEvent.zig"),
+    @import("../webapi/event/AnimationPlaybackEvent.zig"),
     @import("../webapi/event/BeforeUnloadEvent.zig"),
     @import("../webapi/event/StorageEvent.zig"),
     @import("../webapi/event/DeviceMotionEvent.zig"),
     @import("../webapi/event/GamepadEvent.zig"),
     @import("../webapi/event/DeviceOrientationEvent.zig"),
     @import("../webapi/event/TouchEvent.zig"),
+    @import("../webapi/event/Touch.zig"),
+    @import("../webapi/event/TouchList.zig"),
     @import("../webapi/event/UIEvent.zig"),
     @import("../webapi/event/MouseEvent.zig"),
     @import("../webapi/event/PointerEvent.zig"),
@@ -1151,9 +1210,16 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/Worker.zig"),
     @import("../webapi/SharedWorker.zig"),
+    @import("../webapi/ServiceWorker.zig"),
+    @import("../webapi/ServiceWorkerContainer.zig"),
+    @import("../webapi/ServiceWorkerRegistration.zig"),
     @import("../webapi/media/MediaError.zig"),
+    @import("../webapi/media/TextTrack.zig"),
     @import("../webapi/media/TextTrackCue.zig"),
+    @import("../webapi/media/TextTrackCueList.zig"),
+    @import("../webapi/media/TextTrackList.zig"),
     @import("../webapi/media/VTTCue.zig"),
+    @import("../webapi/media/VTTRegion.zig"),
     @import("../webapi/animation/Animation.zig"),
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/Location.zig"),
@@ -1177,20 +1243,33 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/streams/ReadableStreamDefaultController.zig"),
     @import("../webapi/streams/WritableStream.zig"),
     @import("../webapi/streams/WritableStreamDefaultWriter.zig"),
+    @import("../webapi/streams/CountQueuingStrategy.zig"),
+    @import("../webapi/streams/ByteLengthQueuingStrategy.zig"),
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/streams/TransformStream.zig"),
     @import("../webapi/Node.zig"),
     @import("../webapi/storage/storage.zig"),
     @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/storage/idb/idb.zig"),
+    @import("../webapi/cache/CacheStorage.zig"),
+    @import("../webapi/cache/Cache.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
+    @import("../webapi/URLPattern.zig"),
     @import("../webapi/Window.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/EventCounts.zig"),
     @import("../webapi/PluginArray.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
+    @import("../webapi/geolocation/Geolocation.zig"),
+    @import("../webapi/geolocation/GeolocationPosition.zig"),
+    @import("../webapi/geolocation/GeolocationCoordinates.zig"),
+    @import("../webapi/geolocation/GeolocationPositionError.zig"),
+    @import("../webapi/payment/PaymentRequest.zig"),
+    @import("../webapi/payment/PaymentResponse.zig"),
+    @import("../webapi/payment/PaymentRequestUpdateEvent.zig"),
+    @import("../webapi/payment/PaymentMethodChangeEvent.zig"),
     @import("../webapi/CustomElementRegistry.zig"),
     @import("../webapi/ResizeObserver.zig"),
     @import("../webapi/IdleDeadline.zig"),
@@ -1205,10 +1284,15 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/navigation/Navigation.zig"),
     @import("../webapi/navigation/NavigationHistoryEntry.zig"),
     @import("../webapi/navigation/NavigationActivation.zig"),
+    @import("../webapi/navigation/NavigationDestination.zig"),
     @import("../webapi/canvas/CanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
+    @import("../webapi/canvas/TextMetrics.zig"),
+    @import("../webapi/canvas/CanvasGradient.zig"),
+    @import("../webapi/canvas/CanvasPattern.zig"),
+    @import("../webapi/canvas/Path2D.zig"),
     @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/CryptoKey.zig"),
     @import("../webapi/Selection.zig"),
@@ -1217,18 +1301,54 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/XPathExpression.zig"),
     @import("../webapi/XPathEvaluator.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
+    @import("../webapi/Sanitizer.zig"),
+    @import("../webapi/Lock.zig"),
+    @import("../webapi/LockManager.zig"),
+    @import("../webapi/webcodecs/encoded_chunk.zig"),
+    @import("../webapi/webcodecs/AudioData.zig"),
+    @import("../webapi/webcodecs/VideoColorSpace.zig"),
+    @import("../webapi/webcodecs/VideoFrame.zig"),
+    @import("../webapi/webcodecs/AudioDecoder.zig"),
+    @import("../webapi/webcodecs/AudioEncoder.zig"),
+    @import("../webapi/webcodecs/VideoDecoder.zig"),
+    @import("../webapi/webcodecs/VideoEncoder.zig"),
+    @import("../webapi/webaudio/AudioBuffer.zig"),
+    @import("../webapi/webaudio/AudioParam.zig"),
+    @import("../webapi/webaudio/PeriodicWave.zig"),
+    @import("../webapi/webaudio/BaseAudioContext.zig"),
+    @import("../webapi/webaudio/OfflineAudioContext.zig"),
+    @import("../webapi/webaudio/OfflineAudioCompletionEvent.zig"),
+    @import("../webapi/webaudio/AudioNode.zig"),
+    @import("../webapi/webaudio/AudioDestinationNode.zig"),
+    @import("../webapi/webaudio/AudioScheduledSourceNode.zig"),
+    @import("../webapi/webaudio/AudioBufferSourceNode.zig"),
+    @import("../webapi/webaudio/ConstantSourceNode.zig"),
+    @import("../webapi/webaudio/OscillatorNode.zig"),
+    @import("../webapi/webaudio/GainNode.zig"),
+    @import("../webapi/webaudio/DynamicsCompressorNode.zig"),
 });
 
-// APIs available on every Worker context global (constructors like URL,
-// Headers, etc.), regardless of worker kind. Each kind's snapshot context
-// adds its own global-scope type on top (DedicatedWorkerJsApis,
-// SharedWorkerJsApis below).
+const webcodecs_apis = [_]type{
+    @import("../webapi/webcodecs/encoded_chunk.zig"),
+    @import("../webapi/webcodecs/AudioData.zig"),
+    @import("../webapi/webcodecs/VideoColorSpace.zig"),
+    @import("../webapi/webcodecs/VideoFrame.zig"),
+    @import("../webapi/webcodecs/AudioDecoder.zig"),
+    @import("../webapi/webcodecs/AudioEncoder.zig"),
+    @import("../webapi/webcodecs/VideoDecoder.zig"),
+    @import("../webapi/webcodecs/VideoEncoder.zig"),
+};
+
+// APIs available on EVERY worker global — dedicated, shared and service. This
+// is the WebIDL `[Exposed=Worker]` set, which covers all three. Each kind's
+// snapshot context adds its own global-scope type on top; dedicated and shared
+// additionally get worker_extended_apis below.
 // This is a subset of PageJsApis plus WorkerGlobalScope.
 // TODO: Expand this list to include all worker-appropriate APIs.
 const worker_common_apis = [_]type{
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
-    @import("../webapi/Navigator.zig"),
+    @import("../webapi/WorkerNavigator.zig"),
     @import("../webapi/NavigatorUAData.zig"),
     @import("../webapi/Permissions.zig"),
     @import("../webapi/StorageManager.zig"),
@@ -1265,9 +1385,13 @@ const worker_common_apis = [_]type{
     @import("../webapi/streams/ReadableStreamDefaultController.zig"),
     @import("../webapi/streams/WritableStream.zig"),
     @import("../webapi/streams/WritableStreamDefaultWriter.zig"),
+    @import("../webapi/streams/CountQueuingStrategy.zig"),
+    @import("../webapi/streams/ByteLengthQueuingStrategy.zig"),
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
+    @import("../webapi/compression/CompressionStream.zig"),
+    @import("../webapi/compression/DecompressionStream.zig"),
     @import("../webapi/AbortSignal.zig"),
     @import("../webapi/AbortController.zig"),
     @import("../webapi/Scheduler.zig"),
@@ -1275,20 +1399,22 @@ const worker_common_apis = [_]type{
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
     @import("../webapi/URL.zig"),
+    @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
-    @import("../webapi/net/XMLHttpRequest.zig"),
-    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
-    @import("../webapi/net/XMLHttpRequestUpload.zig"),
+    @import("../webapi/canvas/TextMetrics.zig"),
+    @import("../webapi/canvas/CanvasGradient.zig"),
+    @import("../webapi/canvas/CanvasPattern.zig"),
+    @import("../webapi/canvas/Path2D.zig"),
     @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
-    @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/storage/idb/idb.zig"),
-    @import("../webapi/event/CookieChangeEvent.zig"),
+    @import("../webapi/cache/CacheStorage.zig"),
+    @import("../webapi/cache/Cache.zig"),
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/event/CustomEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
@@ -1297,10 +1423,32 @@ const worker_common_apis = [_]type{
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/collections/DOMStringList.zig"),
+    @import("../webapi/Lock.zig"),
+    @import("../webapi/LockManager.zig"),
 };
 
-pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_common_apis));
-pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_common_apis));
+// Additionally available on a dedicated or shared worker, but NOT on a service
+// worker. Both are blocking APIs that a service worker — which has to stay
+// responsive to lifecycle and (eventually) fetch events — must not have:
+// XMLHttpRequest is [Exposed=(Window,DedicatedWorker,SharedWorker)] and
+// FileReaderSync is [Exposed=(DedicatedWorker,SharedWorker)].
+const worker_extended_apis = worker_common_apis ++ [_]type{
+    @import("../webapi/net/XMLHttpRequest.zig"),
+    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/net/XMLHttpRequestUpload.zig"),
+    @import("../webapi/FileReaderSync.zig"),
+};
+
+pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_extended_apis ++ webcodecs_apis));
+pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_extended_apis));
+
+pub const ServiceWorkerJsApis = flattenTypes(&([_]type{
+    @import("../webapi/ServiceWorkerGlobalScope.zig"),
+    @import("../webapi/ServiceWorker.zig"),
+    @import("../webapi/ServiceWorkerRegistration.zig"),
+    @import("../webapi/event/ExtendableEvent.zig"),
+    @import("../webapi/storage/CookieStore.zig"),
+} ++ worker_common_apis));
 
 // Master list of ALL JS APIs across all contexts.
 // Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
@@ -1308,10 +1456,16 @@ pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedW
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
 pub const JsApis = blk: {
     const base = PageJsApis ++ [_]type{
+        // Worker-only, so it isn't in PageJsApis.
+        @import("../webapi/FileReaderSync.zig").JsApi,
         @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/SharedWorkerGlobalScope.zig").JsApi,
+        @import("../webapi/ServiceWorkerGlobalScope.zig").JsApi,
+        //ServiceWorker-only, so it isn't in PageJsApis either.
+        @import("../webapi/event/ExtendableEvent.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
+        @import("../webapi/WorkerNavigator.zig").JsApi,
     };
     if (lp.build_config.wpt_extensions == false) {
         break :blk base;

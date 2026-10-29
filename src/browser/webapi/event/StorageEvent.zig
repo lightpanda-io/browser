@@ -38,8 +38,8 @@ _url: []const u8 = "",
 
 const StorageEventOptions = struct {
     key: ?[]const u8 = null,
-    oldValue: ?[]const u8 = null,
     newValue: ?[]const u8 = null,
+    oldValue: ?[]const u8 = null,
     url: []const u8 = "",
 };
 
@@ -89,7 +89,7 @@ pub fn getOldValue(self: *const StorageEvent) ?[]const u8 {
     return self._old_value;
 }
 
-pub fn getNewValue(self: *const StorageEvent) ?[]const u8 {
+fn getNewValue(self: *const StorageEvent) ?[]const u8 {
     return self._new_value;
 }
 
@@ -98,11 +98,11 @@ pub fn getUrl(self: *const StorageEvent) []const u8 {
 }
 
 // The initiating Storage object is not tracked; always null.
-pub fn getStorageArea(_: *const StorageEvent) ?bool {
+fn getStorageArea(_: *const StorageEvent) ?bool {
     return null;
 }
 
-pub fn initStorageEvent(
+fn initStorageEvent(
     self: *StorageEvent,
     typ: []const u8,
     bubbles: ?bool,
@@ -133,7 +133,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "StorageEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

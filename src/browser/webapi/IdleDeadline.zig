@@ -25,7 +25,7 @@ pub fn init() IdleDeadline {
     return .{};
 }
 
-pub fn timeRemaining(_: *const IdleDeadline) f64 {
+fn timeRemaining(_: *const IdleDeadline) f64 {
     // Return a fixed 50ms.
     // This allows idle callbacks to perform work without complex
     // timing infrastructure.
@@ -38,7 +38,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "IdleDeadline";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };

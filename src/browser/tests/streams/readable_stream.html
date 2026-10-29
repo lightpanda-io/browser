@@ -372,3 +372,143 @@
     testing.expectEqual(7, r1.value.num);
   })();
 </script>
+
+<script id=queuing_strategies>
+  {
+    const count = new CountQueuingStrategy({ highWaterMark: 3 });
+    testing.expectEqual(3, count.highWaterMark);
+    testing.expectEqual(1, count.size('anything'));
+
+    const bytes = new ByteLengthQueuingStrategy({ highWaterMark: 1024 });
+    testing.expectEqual(1024, bytes.highWaterMark);
+    testing.expectEqual(4, bytes.size(new Uint8Array(4)));
+    testing.expectEqual(8, bytes.size(new ArrayBuffer(8)));
+    testing.expectEqual(undefined, bytes.size({}));
+    testing.expectEqual(undefined, bytes.size(7));
+    testing.expectError('TypeError', () => bytes.size(null));
+    testing.expectError('TypeError', () => bytes.size());
+
+    testing.expectError('TypeError', () => new CountQueuingStrategy());
+    testing.expectError('TypeError', () => new ByteLengthQueuingStrategy({}));
+
+    let desired;
+    const stream = new ReadableStream({ start(c) { desired = c.desiredSize; } }, count);
+    testing.expectEqual(3, desired);
+    testing.expectEqual('function', typeof stream.getReader);
+  }
+</script>
+
+<script id=promise_rejections type=module>
+  // Each call returns a promise that rejects with a TypeError; none throws.
+  async function rejection(fn) {
+    const promise = fn();
+    if (!(promise instanceof Promise)) {
+      return 'not a promise';
+    }
+    try {
+      await promise;
+      return 'resolved';
+    } catch (e) {
+      return `${e.name}: ${e.message}`;
+    }
+  }
+
+  const state = await testing.async();
+
+  const released = new WritableStream().getWriter();
+  released.releaseLock();
+
+  const closed = new WritableStream().getWriter();
+  await closed.close();
+
+  const reader = new ReadableStream().getReader();
+  reader.releaseLock();
+
+  const locked = new ReadableStream();
+  locked.getReader();
+
+  const results = [
+    await rejection(() => released.write('x')),
+    await rejection(() => released.close()),
+    await rejection(() => released.closed),
+    await rejection(() => closed.write('x')),
+    await rejection(() => closed.close()),
+    await rejection(() => reader.cancel()),
+    await rejection(() => locked.pipeTo(new WritableStream())),
+  ];
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([
+      'TypeError: Writer has been released',
+      'TypeError: Writer has been released',
+      'TypeError: Writer has been released',
+      'TypeError: Stream is not writable',
+      'TypeError: Stream is not writable',
+      'TypeError: Reader has been released',
+      'TypeError: ReadableStream is locked',
+    ], results);
+  });
+</script>
+
+<script id=readable_stream_start_throws>
+  {
+    const e = new Error('boom');
+    let caught;
+    try {
+      new ReadableStream({ start() { throw e; } });
+    } catch (x) {
+      caught = x;
+    }
+    testing.expectEqual(e, caught);
+  }
+</script>
+
+<script id=response_text_rejects_with_stream_error type=module>
+  const state = await testing.async();
+
+  const errored = new Error('errored');
+  const pulled = new Error('pulled');
+  let r1, r2;
+  try {
+    await new Response(new ReadableStream({ start(c) { c.error(errored); } })).text();
+  } catch (x) {
+    r1 = x;
+  }
+  try {
+    await new Response(new ReadableStream({ pull() { throw pulled; } })).text();
+  } catch (x) {
+    r2 = x;
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(errored, r1);
+    testing.expectEqual(pulled, r2);
+  });
+</script>
+
+<script id=stored_error type=module>
+  const state = await testing.async();
+
+  // read(), cancel(), write() and closed reject with whatever
+  // controller.error() was given; close() with a new TypeError.
+  const errored = new ReadableStream({ start(c) { c.error('err!'); } }).getReader();
+  const no_reason = new ReadableStream({ start(c) { c.error(); } }).getReader();
+  const errored_sink = new WritableStream({ start(c) { c.error('err!'); } }).getWriter();
+  const no_reason_sink = new WritableStream({ start(c) { c.error(); } }).getWriter();
+  const results = [
+    await errored.read().catch((e) => e),
+    await errored.cancel().catch((e) => e),
+    await no_reason.read().then(() => 'resolved', (e) => e),
+    await errored_sink.write('a').catch((e) => e),
+    await errored_sink.close().catch((e) => e.name),
+    await no_reason_sink.close().then(() => 'resolved', (e) => e.name),
+    await errored_sink.closed.catch((e) => e),
+  ];
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['err!', 'err!', undefined, 'err!', 'TypeError', 'TypeError', 'err!'], results);
+  });
+</script>

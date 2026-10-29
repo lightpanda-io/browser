@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <body>
 <script src="../testing.js"></script>
 <script id="attribute_changed">
@@ -162,4 +163,112 @@
     testing.expectEqual('initial', callbackCalls[1].oldValue);
     testing.expectEqual('initial', callbackCalls[1].newValue);
 }
+</script>
+
+<script id="style_declaration">
+{
+    let calls = [];
+
+    class StyleObserver extends HTMLElement {
+        static get observedAttributes() {
+            return ['style'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            calls.push(newValue);
+        }
+    }
+
+    customElements.define('style-observer', StyleObserver);
+    const el = document.createElement('style-observer');
+
+    // each write runs the callback before returning
+    el.style.setProperty('color', 'red');
+    testing.expectEqual(['color: red;'], calls);
+
+    el.style.cssText = 'width: 1px;';
+    testing.expectEqual(2, calls.length);
+
+    el.style.borderWidth = '2px';
+    testing.expectEqual(3, calls.length);
+
+    el.style.cssFloat = 'left';
+    testing.expectEqual(4, calls.length);
+
+    el.style.removeProperty('width');
+    testing.expectEqual(5, calls.length);
+    testing.expectEqual(el.getAttribute('style'), calls[4]);
+
+    // Element.style is [PutForwards=cssText]
+    el.style = 'color: green;';
+    testing.expectEqual(6, calls.length);
+    testing.expectEqual('color: green;', calls[5]);
+}
+
+{
+    // Polymer reflects an attribute change back through `this.style = value`.
+    // Delivered late, each callback carried a stale value and the element
+    // ping-ponged between two styles forever.
+    let count = 0;
+
+    class StyleReflector extends HTMLElement {
+        static get observedAttributes() {
+            return ['style'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            if (++count > 50) {
+                return;
+            }
+            if (oldValue !== newValue) {
+                this.style = newValue;
+            }
+        }
+    }
+
+    customElements.define('style-reflector', StyleReflector);
+    const el = document.createElement('style-reflector');
+    el.setAttribute('style', 'transform: rotate(180deg);');
+    el.style.opacity = '0.3';
+
+    testing.expectEqual(4, count);
+    testing.expectEqual('transform: rotate(180deg); opacity: 0.3;', el.getAttribute('style'));
+}
+</script>
+
+<script id="cross_frame_long_name" type=module>
+  // The element's frame has no reaction scope open, so its reactions run
+  // later, after the caller's temporary copies of the name are gone.
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const win = iframe.contentWindow;
+  win.seen = [];
+  win.eval(`
+    class CrossFrame extends HTMLElement {
+      static get observedAttributes() { return ['data-a-long-observed-name']; }
+      attributeChangedCallback(name) { window.seen.push(name); }
+    }
+    customElements.define('cross-frame', CrossFrame);
+  `);
+
+  const el = win.document.createElement('cross-frame');
+  const name = 'data-a-long-observed-name';
+  // this realm's methods, so the scope opened is this frame's, not el's
+  const setAttribute = Element.prototype.setAttribute;
+  const removeAttribute = Element.prototype.removeAttribute;
+  setAttribute.call(el, name.toUpperCase(), '1');
+  // more temporaries, to reuse the memory the name was lowercased into
+  document.createElement('X-' + 'B'.repeat(40));
+  setAttribute.call(el, name, '2');
+  removeAttribute.call(el, name.toUpperCase());
+  document.createElement('X-' + 'C'.repeat(40));
+
+  // the backup queue drains on the iframe's microtask queue
+  await new Promise(resolve => setTimeout(resolve, 0));
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([name, name, name], win.seen);
+  });
 </script>

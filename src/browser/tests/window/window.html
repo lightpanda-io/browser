@@ -12,6 +12,31 @@
   testing.expectEqual(1920, innerWidth);
 </script>
 
+<script id=outer_size_and_screen_position>
+  testing.expectEqual(innerWidth, outerWidth);
+  testing.expectEqual(innerHeight, outerHeight);
+  testing.expectEqual(0, screenX);
+  testing.expectEqual(0, screenY);
+  testing.expectEqual(0, screenLeft);
+  testing.expectEqual(0, screenTop);
+</script>
+
+<script id=is_secure_context>
+  {
+    // The test server is on 127.0.0.1: loopback is potentially trustworthy.
+    testing.expectEqual(true, window.isSecureContext);
+    // Readonly, not [Replaceable].
+    window.isSecureContext = false;
+    testing.expectEqual(true, window.isSecureContext);
+
+    // about:blank inherits its parent's origin.
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    testing.expectEqual(true, iframe.contentWindow.isSecureContext);
+    iframe.remove();
+  }
+</script>
+
 <script id=load>
   let call1 = 0;
   let call2 = 0;
@@ -352,6 +377,12 @@
   }
 </script>
 
+<script id=array_buffer_max_length>
+  // Past the cap; at 32GB+, V8 used to abort the process on a CHECK.
+  testing.expectError('RangeError', () => new ArrayBuffer(4 * 1024 ** 3 + 1));
+  testing.expectError('RangeError', () => new ArrayBuffer(8, { maxByteLength: 4 * 1024 ** 3 + 1 }));
+</script>
+
 <script id=cached_getter_wrong_this>
   // Test that extracting a cached property getter and calling it with wrong `this`
   // doesn't crash (V8 internal field out of bounds). V8's Signature validation
@@ -398,6 +429,8 @@
       testing.expectEqual(window, e.srcElement);
       testing.expectEqual(window, e.currentTarget);
       unhandledCalled += 1;
+      // expected: not reported as uncaught
+      e.preventDefault();
     });
     Promise.reject({x: 'Fail'});
     testing.onload(() => testing.expectEqual(2, unhandledCalled));

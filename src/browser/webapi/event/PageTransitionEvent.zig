@@ -72,7 +72,7 @@ pub fn asEvent(self: *PageTransitionEvent) *Event {
     return self._proto;
 }
 
-pub fn getPersisted(self: *PageTransitionEvent) bool {
+fn getPersisted(self: *PageTransitionEvent) bool {
     return self._persisted;
 }
 
@@ -81,7 +81,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "PageTransitionEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

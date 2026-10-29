@@ -41,7 +41,7 @@ pub fn scriptHint(frame: *Frame, element: ?*Element.Html, href: []const u8) bool
     defer arena.release();
 
     const resolved = URL.resolve(arena.allocator(), frame.base(), href, .{ .encoding = frame.charset }) catch return false;
-    if (!isRemoteScheme(resolved)) {
+    if (!URL.isRemoteScheme(resolved)) {
         return false;
     }
     return frame._script_manager.preloadScript(element, resolved) catch false;
@@ -60,8 +60,8 @@ pub fn moduleHint(frame: *Frame, element: ?*Element.Html, href: []const u8) bool
 
     // The url becomes the imported_modules key, which must outlive the fetch
     // so it lives on the frame arena
-    const resolved = URL.resolve(frame.arena, frame.base(), href, .{ .encoding = frame.charset }) catch return false;
-    if (!isRemoteScheme(resolved)) {
+    const resolved = URL.resolve(frame.page_arena, frame.base(), href, .{ .encoding = frame.charset }) catch return false;
+    if (!URL.isRemoteScheme(resolved)) {
         return false;
     }
 
@@ -106,7 +106,7 @@ const Prescan = struct {
                     return;
                 }
                 const resolved = URL.resolve(self.arena, self.base, href, .{ .encoding = frame.charset }) catch return;
-                if (isRemoteScheme(resolved) == false) {
+                if (URL.isRemoteScheme(resolved) == false) {
                     return;
                 }
                 _ = frame._script_manager.preloadScript(null, resolved) catch {};
@@ -117,8 +117,8 @@ const Prescan = struct {
                 }
                 // The url becomes the imported_modules key, which must
                 // outlive the fetch so it lives on the frame arena.
-                const resolved = URL.resolve(frame.arena, self.base, href, .{ .encoding = frame.charset }) catch return;
-                if (isRemoteScheme(resolved) == false) {
+                const resolved = URL.resolve(frame.page_arena, self.base, href, .{ .encoding = frame.charset }) catch return;
+                if (URL.isRemoteScheme(resolved) == false) {
                     return;
                 }
                 _ = frame._script_manager.base.preloadModuleHint(null, resolved, frame.url) catch {};
@@ -128,15 +128,11 @@ const Prescan = struct {
     }
 };
 
-fn isRemoteScheme(url: []const u8) bool {
-    return std.ascii.startsWithIgnoreCase(url, "http:") or std.ascii.startsWithIgnoreCase(url, "https:");
-}
-
 // Non-http(s) scheme (e.g. data:, blob:) never resolve to a remote URL. We
 // detect this upfront to prevent uncessary URL.resolves that would dupe the
 // (potentially very lage) data.
 fn hasNonRemoteScheme(href: []const u8) bool {
-    if (isRemoteScheme(href)) {
+    if (URL.isRemoteScheme(href)) {
         return false;
     }
     if (href.len == 0 or !std.ascii.isAlphabetic(href[0])) {

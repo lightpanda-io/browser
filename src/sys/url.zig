@@ -14,11 +14,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Bindings for Servo's rust-url (https://github.com/servo/rust-url).
-//! Check @src/html5ever/url.rs for Rust-side of the bindings.
+//! Check @src/rust/html5ever/url.rs for Rust-side of the bindings.
 
 pub const Url = anyopaque;
 
-pub const OwnedString = extern struct {
+const OwnedString = extern struct {
     ptr: [*]const u8,
     len: usize,
 
@@ -63,9 +63,8 @@ pub extern "c" fn url_get_host(url: *const Url, out_ptr: *[*]const u8, out_len: 
 /// This function allocates on Rust-side.
 pub extern "c" fn url_get_origin(url: *const Url) OwnedString;
 pub extern "c" fn free_owned_string(owned: OwnedString) void;
-pub extern "c" fn url_set_port(url: *Url, port: u16) i32;
-/// Sets the port to null.
-pub extern "c" fn url_set_port_to_null(url: *Url) i32;
+/// WHATWG port setter: "" clears the port, otherwise the leading digits.
+pub extern "c" fn url_set_port(url: *Url, ptr: [*]const u8, len: usize) i32;
 pub extern "c" fn url_set_username(url: *Url, ptr: [*]const u8, len: usize) i32;
 pub extern "c" fn url_get_username(url: *const Url, out_ptr: *[*]const u8, out_len: *usize) void;
 pub extern "c" fn url_set_password(url: *Url, ptr: [*]const u8, len: usize) i32;

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+class FcControl extends HTMLElement {
+  static formAssociated = true;
+  constructor() {
+    super();
+    this.forms = [];
+    this.disabled = [];
+    this.resets = 0;
+  }
+  formAssociatedCallback(form) { this.forms.push(form); }
+  formDisabledCallback(disabled) { this.disabled.push(disabled); }
+  formResetCallback() {
+    this.resets += 1;
+    if (this.observe) {
+      this.observed = this.observe.value;
+    }
+  }
+}
+customElements.define('fc-control', FcControl);
+</script>
+
+<form id="parsed_form"><fc-control id="parsed_inside"></fc-control></form>
+<fc-control id="parsed_before" form="parsed_later"></fc-control>
+<form id="parsed_later"></form>
+
+<script id="parser">
+{
+  const inside = document.getElementById('parsed_inside');
+  testing.expectEqual([document.getElementById('parsed_form')], inside.forms);
+
+  // the form attribute names a form the parser hadn't reached yet
+  const before = document.getElementById('parsed_before');
+  testing.expectEqual([document.getElementById('parsed_later')], before.forms);
+}
+</script>
+
+<!-- the misnested </b> makes the parser move the <p>, and what it holds -->
+<form id="adopt_form"><b><p><fc-control id="adopted"></fc-control></b></p></form>
+
+<script id="adoption_agency">
+{
+  const control = document.getElementById('adopted');
+  // form > p > b > fc-control
+  testing.expectEqual('B', control.parentNode.tagName);
+  testing.expectEqual('P', control.parentNode.parentNode.tagName);
+  testing.expectEqual(document.getElementById('adopt_form'), control.forms.at(-1));
+}
+</script>
+
+<div id="container"></div>
+
+<script id="associate">
+{
+  const container = document.getElementById('container');
+  container.innerHTML = '<form id="fc_f1"><fc-control></fc-control></form><form id="fc_f2"></form>';
+  const [f1, f2] = container.querySelectorAll('form');
+  const control = container.querySelector('fc-control');
+  testing.expectEqual([f1], control.forms);
+
+  f2.appendChild(control);
+  testing.expectEqual([f1, null, f2], control.forms);
+
+  control.remove();
+  testing.expectEqual([f1, null, f2, null], control.forms);
+
+  container.appendChild(control);
+  testing.expectEqual([f1, null, f2, null], control.forms);
+
+  control.setAttribute('form', 'fc_f1');
+  testing.expectEqual([f1, null, f2, null, f1], control.forms);
+
+  control.setAttribute('form', 'nope');
+  testing.expectEqual([f1, null, f2, null, f1, null], control.forms);
+
+  f2.id = 'nope';
+  testing.expectEqual([f1, null, f2, null, f1, null, f2], control.forms);
+
+  f2.removeAttribute('id');
+  testing.expectEqual([f1, null, f2, null, f1, null, f2, null], control.forms);
+
+  // a matching form inserted later in a wrapper
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = '<form id="nope"></form>';
+  container.appendChild(wrapper);
+  testing.expectEqual(wrapper.firstChild, control.forms.at(-1));
+
+  wrapper.remove();
+  testing.expectEqual(null, control.forms.at(-1));
+
+  // innerHTML parses straight into a connected element
+  const target = document.createElement('div');
+  container.appendChild(target);
+  target.innerHTML = '<form id="nope"></form>';
+  testing.expectEqual(target.firstChild, control.forms.at(-1));
+  container.innerHTML = '';
+}
+</script>
+
+<script id="move_before">
+{
+  // an atomic move never exposes the detached state
+  const container = document.getElementById('container');
+  container.innerHTML = '<form id="mb_f1"><div></div><div></div><fc-control form="mb_f1"></fc-control></form><form id="mb_f2"><fc-control></fc-control></form>';
+  const [f1, f2] = container.querySelectorAll('form');
+  const [div1, div2] = f1.querySelectorAll('div');
+  const [with_attr, control] = container.querySelectorAll('fc-control');
+  testing.expectEqual([f2], control.forms);
+  testing.expectEqual([f1], with_attr.forms);
+
+  div1.moveBefore(with_attr, null);
+  testing.expectEqual([f1], with_attr.forms);
+
+  f1.moveBefore(control, null);
+  testing.expectEqual([f2, f1], control.forms);
+
+  div2.moveBefore(control, null);
+  testing.expectEqual([f2, f1], control.forms);
+  container.innerHTML = '';
+}
+
+{
+  const container = document.getElementById('container');
+  container.innerHTML = '<fieldset disabled><legend></legend><legend><fc-control></fc-control></legend></fieldset><div></div>';
+  const fieldset = container.querySelector('fieldset');
+  const div = container.querySelector('div');
+  const [first, second] = fieldset.querySelectorAll('legend');
+  const control = container.querySelector('fc-control');
+  testing.expectEqual([true], control.disabled);
+
+  // moved out of the fieldset: the control's legend becomes the first one
+  div.moveBefore(first, null);
+  testing.expectEqual([true, false], control.disabled);
+
+  // moved back in front
+  fieldset.moveBefore(first, second);
+  testing.expectEqual([true, false, true], control.disabled);
+
+  // reordered within the same fieldset
+  fieldset.moveBefore(second, first);
+  testing.expectEqual([true, false, true, false], control.disabled);
+  container.innerHTML = '';
+}
+</script>
+
+<script id="disabled">
+{
+  const control = new FcControl();
+  control.setAttribute('disabled', '');
+  control.removeAttribute('disabled');
+  testing.expectEqual([true, false], control.disabled);
+
+  const outer = document.createElement('fieldset');
+  outer.innerHTML = '<fieldset><fc-control></fc-control></fieldset>';
+  const inner = outer.firstChild;
+  const nested = outer.querySelector('fc-control');
+  inner.disabled = true;
+  outer.disabled = true;
+  inner.disabled = false;
+  testing.expectEqual([true], nested.disabled);
+
+  nested.remove();
+  inner.appendChild(nested);
+  testing.expectEqual([true, false, true], nested.disabled);
+
+  // already disabled by the fieldset: its own attribute changes nothing
+  nested.setAttribute('disabled', '');
+  nested.removeAttribute('disabled');
+  testing.expectEqual([true, false, true], nested.disabled);
+}
+
+{
+  const fieldset = document.createElement('fieldset');
+  fieldset.disabled = true;
+  fieldset.innerHTML = '<legend><fc-control></fc-control></legend>';
+  const control = fieldset.querySelector('fc-control');
+  testing.expectEqual([], control.disabled);
+
+  const legend = document.createElement('legend');
+  fieldset.prepend(legend);
+  testing.expectEqual([true], control.disabled);
+
+  legend.remove();
+  testing.expectEqual([true, false], control.disabled);
+}
+
+{
+  // upgraded with the disabled state already in place
+  const container = document.getElementById('container');
+  container.innerHTML = '<fieldset disabled><form><fc-later></fc-later></form></fieldset>';
+  const el = container.querySelector('fc-later');
+  class FcLater extends FcControl {}
+  customElements.define('fc-later', FcLater);
+  testing.expectEqual([container.querySelector('form')], el.forms);
+  testing.expectEqual([true], el.disabled);
+  container.innerHTML = '';
+}
+</script>
+
+<script id="reset">
+{
+  const container = document.getElementById('container');
+  container.innerHTML = '<form><input value="a"><fc-control></fc-control></form>';
+  const form = container.firstChild;
+  const text = form.querySelector('input');
+  const control = form.querySelector('fc-control');
+  control.observe = text;
+
+  text.value = 'b';
+  form.reset();
+  // synchronous, after the built-in controls were reset
+  testing.expectEqual(1, control.resets);
+  testing.expectEqual('a', control.observed);
+
+  form.addEventListener('reset', (e) => e.preventDefault());
+  form.reset();
+  testing.expectEqual(1, control.resets);
+  container.innerHTML = '';
+}
+</script>
+
+<script id="reset_button">
+{
+  const container = document.getElementById('container');
+  container.innerHTML = '<form><fc-control></fc-control><input type="reset"><button type="reset"></button></form>';
+  const control = container.querySelector('fc-control');
+  container.querySelector('input').click();
+  container.querySelector('button').click();
+  // Chrome fires each one in a microtask; ours wait for the end of the script
+  testing.onload(() => testing.expectEqual(2, control.resets));
+}
+</script>

@@ -33,7 +33,6 @@ pub const Proto = AbortSignal;
 _proto: *AbortSignal,
 _priority: Scheduler.Priority,
 _priority_changing: bool = false,
-_on_prioritychange: ?js.Function.Global = null,
 
 pub fn init(priority: Scheduler.Priority, exec: *const Execution) !*TaskSignal {
     return exec._factory.taskSignal(TaskSignal{
@@ -50,16 +49,8 @@ pub fn asEventTarget(self: *TaskSignal) *EventTarget {
     return self._proto.asEventTarget();
 }
 
-pub fn getPriority(self: *const TaskSignal) Scheduler.Priority {
+fn getPriority(self: *const TaskSignal) Scheduler.Priority {
     return self._priority;
-}
-
-pub fn getOnPriorityChange(self: *const TaskSignal) ?js.Function.Global {
-    return self._on_prioritychange;
-}
-
-pub fn setOnPriorityChange(self: *TaskSignal, cb: ?js.Function.Global) !void {
-    self._on_prioritychange = cb;
 }
 
 pub fn setPriority(self: *TaskSignal, priority: Scheduler.Priority, exec: *const Execution) !void {
@@ -77,10 +68,9 @@ pub fn setPriority(self: *TaskSignal, priority: Scheduler.Priority, exec: *const
     self._priority = priority;
 
     const target = self.asEventTarget();
-    const on_prioritychange = self._on_prioritychange;
-    if (exec.hasDirectListeners(target, "prioritychange", on_prioritychange)) {
+    if (exec.hasDirectListeners(target, "prioritychange")) {
         const event = try TaskPriorityChangeEvent.initTrusted(.{ .previousPriority = previous }, exec.page);
-        try exec.dispatch(target, event.asEvent(), on_prioritychange, .{ .context = "task signal" });
+        try exec.dispatch(target, event.asEvent(), .{ .context = "task signal" });
     }
 }
 
@@ -90,10 +80,9 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "TaskSignal";
 
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const priority = bridge.accessor(TaskSignal.getPriority, null, .{});
-    pub const onprioritychange = bridge.accessor(TaskSignal.getOnPriorityChange, TaskSignal.setOnPriorityChange, .{});
+    pub const onprioritychange = EventTarget.handlerAccessor(TaskSignal, "prioritychange");
 };

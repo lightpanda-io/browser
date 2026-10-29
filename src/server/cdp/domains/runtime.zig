@@ -1,0 +1,703 @@
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+
+const CDP = @import("../CDP.zig");
+const js = @import("../../../browser/js/js.zig");
+const Notification = @import("../../../Notification.zig");
+const repeat = @import("../../../string.zig").repeat;
+
+const Allocator = std.mem.Allocator;
+
+pub fn processMessage(cmd: *CDP.Command) !void {
+    const action = std.meta.stringToEnum(enum {
+        enable,
+        disable,
+        runIfWaitingForDebugger,
+        evaluate,
+        addBinding,
+        callFunctionOn,
+        releaseObject,
+        getProperties,
+        releaseObjectGroup,
+        awaitPromise,
+        compileScript,
+        runScript,
+        queryObjects,
+        globalLexicalScopeNames,
+        removeBinding,
+        terminateExecution,
+        getExceptionDetails,
+        discardConsoleEntries,
+        getHeapUsage,
+        getIsolateId,
+        setCustomObjectFormatterEnabled,
+        setMaxCallStackSizeToCapture,
+    }, cmd.input.action) orelse return error.UnknownMethod;
+
+    switch (action) {
+        .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
+        .enable => return enable(cmd),
+        .disable => return disable(cmd),
+        // Bookkeeping that can neither observe nor change the page's global.
+        .releaseObjectGroup, .discardConsoleEntries, .getHeapUsage, .getIsolateId, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => return sendInspector(cmd),
+        else => {
+            const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+            bc.main_world_touched = true;
+            return sendInspector(cmd);
+        },
+    }
+}
+
+fn enable(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    try bc.runtimeEnable();
+    return sendInspector(cmd);
+}
+
+fn disable(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    bc.runtimeDisable();
+    return sendInspector(cmd);
+}
+
+fn sendInspector(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    // the result to return is handled directly by the inspector.
+    try bc.callInspector(cmd);
+}
+
+// Object arguments stay remote handles; serializing them would execute page JS.
+const RemoteObject = struct {
+    type: []const u8,
+    subtype: ?[]const u8,
+    className: ?[]const u8,
+    description: ?[]const u8,
+    objectId: ?[]const u8,
+    value: ?std.json.Value = null,
+    unserializableValue: ?[]const u8 = null,
+
+    fn setPrimitive(self: *RemoteObject, arena: Allocator, value: js.Value) !void {
+        if (value.isString()) |str| {
+            self.value = .{ .string = try str.toSliceWithAlloc(arena) };
+        } else if (value.isBoolean()) {
+            self.value = .{ .bool = value.isTrue() };
+        } else if (value.isNull()) {
+            self.value = .null;
+        } else if (value.isNumber()) {
+            const n = try value.toF64();
+            if (std.math.isNan(n)) {
+                self.unserializableValue = "NaN";
+            } else if (std.math.isInf(n)) {
+                self.unserializableValue = if (n > 0) "Infinity" else "-Infinity";
+            } else if (n == 0 and std.math.signbit(n)) {
+                self.unserializableValue = "-0";
+            } else if (value.isInt32()) {
+                self.value = .{ .integer = @intFromFloat(n) };
+            } else {
+                self.value = .{ .float = n };
+            }
+        } else if (value.isBigInt()) {
+            self.unserializableValue = try arena.print("{s}n", .{try value.toStringSliceWithAlloc(arena)});
+        }
+    }
+};
+
+const ConsoleMessage = struct {
+    type: []const u8,
+    executionContextId: i32,
+    timestamp: u64,
+    args: []RemoteObject,
+};
+
+pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ConsoleMessage) !void {
+    // The event goes to the primary session, so its argument handles are
+    // minted on the primary's inspector session.
+    const session_id = bc.session_id orelse return;
+    const inspector_session = try bc.inspectorSession(session_id);
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const local = inspectedContext(bc, event.local, &ls.local);
+
+    var args: std.ArrayList(RemoteObject) = .empty;
+    for (event.values) |value| {
+        const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
+        defer remote_object.deinit();
+
+        const arg = try args.addOne(arena);
+        arg.* = .{
+            .type = try remote_object.getType(arena),
+            .subtype = try remote_object.getSubtype(arena),
+            .className = try remote_object.getClassName(arena),
+            .description = try remote_object.getDescription(arena),
+            .objectId = try remote_object.getObjectId(arena),
+        };
+        try arg.setPrimitive(arena, value);
+    }
+
+    return bc.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
+        .type = @tagName(event.type),
+        .timestamp = event.timestamp,
+        .executionContextId = bc.inspector().getContextId(local),
+        .args = args.items,
+    }, .{ .session_id = session_id });
+}
+
+const ExceptionDetails = struct {
+    exceptionId: u32,
+    text: []const u8,
+    lineNumber: u32,
+    columnNumber: u32,
+    url: ?[]const u8,
+    exception: RemoteObject,
+    executionContextId: i32,
+};
+
+// The context `local` belongs to (an iframe's, an isolated world's), or the
+// page's when the inspector doesn't know it (a worker's): an unregistered
+// context has id 0.
+fn inspectedContext(bc: *CDP.BrowserContext, local: *const js.Local, page: *const js.Local) *const js.Local {
+    return if (bc.inspector().getContextId(local) == 0) page else local;
+}
+
+pub fn exceptionThrown(arena: Allocator, bc: *CDP.BrowserContext, event: *const Notification.ExceptionThrown) !void {
+    // Like consoleAPICalled: the primary session's inspector mints the handle.
+    const session_id = bc.session_id orelse return;
+    const inspector_session = try bc.inspectorSession(session_id);
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const value = event.value;
+    const local = inspectedContext(bc, value.local, &ls.local);
+    const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
+    defer remote_object.deinit();
+
+    var exception = RemoteObject{
+        .type = try remote_object.getType(arena),
+        .subtype = try remote_object.getSubtype(arena),
+        .className = try remote_object.getClassName(arena),
+        .description = try remote_object.getDescription(arena),
+        .objectId = try remote_object.getObjectId(arena),
+    };
+    try exception.setPrimitive(arena, value);
+
+    // The location is 1-based, CDP's is 0-based.
+    const location = event.location;
+    const exception_id = bc.next_exception_id;
+    bc.next_exception_id += 1;
+
+    return bc.cdp.sendEvent("Runtime.exceptionThrown", .{
+        .timestamp = event.timestamp,
+        .exceptionDetails = ExceptionDetails{
+            .exceptionId = exception_id,
+            .text = switch (event.kind) {
+                .exception => "Uncaught",
+                .rejection => "Uncaught (in promise)",
+            },
+            .lineNumber = location.line -| 1,
+            .columnNumber = location.column -| 1,
+            .url = if (location.url.len == 0) null else location.url,
+            .exception = exception,
+            .executionContextId = bc.inspector().getContextId(local),
+        },
+    }, .{ .session_id = session_id });
+}
+
+const testing = @import("../testing.zig");
+
+test "cdp.runtime: inspector-handled methods pass through" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-RT", .url = "hi.html", .target_id = "FID-0000000RTP".* });
+    try ctx.processMessage(.{ .id = 50, .method = "Runtime.enable" });
+
+    try ctx.processMessage(.{ .id = 51, .method = "Runtime.releaseObjectGroup", .params = .{ .objectGroup = "handles" } });
+    try ctx.expectSentResult(null, .{ .id = 51 });
+
+    try ctx.processMessage(.{ .id = 52, .method = "Runtime.discardConsoleEntries" });
+    try ctx.expectSentResult(null, .{ .id = 52 });
+}
+
+// Playwright's browserContext.newCDPSession attaches a second session to the
+// page and sends Runtime commands through it. The inspector's answer must
+// carry that session's id: the driver keys its pending callbacks by session
+// and asserts on a response it can't match (lightpanda-io/browser#1838).
+test "cdp.runtime: inspector responses go to the session that sent the command" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT2", .url = "hi.html", .target_id = "FID-0000000RT2".*, .session_id = "SID-PRIMARY" });
+    _ = try bc.attachSession("SID-AUX", null);
+
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 2, .description = "2" } }, .{ .id = 60, .session_id = "SID-AUX" });
+
+    // The primary session keeps working as before.
+    try ctx.processMessage(.{ .id = 61, .method = "Runtime.evaluate", .sessionId = "SID-PRIMARY", .params = .{ .expression = "2 + 2", .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 4, .description = "4" } }, .{ .id = 61, .session_id = "SID-PRIMARY" });
+
+    // A response the inspector produces after the dispatch (awaitPromise
+    // answers from a microtask) still finds its session.
+    try ctx.processMessage(.{ .id = 62, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "Promise.resolve('late')", .awaitPromise = true, .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "late" } }, .{ .id = 62, .session_id = "SID-AUX" });
+
+    // A command with no sessionId is answered on the primary session.
+    try ctx.processMessage(.{ .id = 63, .method = "Runtime.evaluate", .params = .{ .expression = "3 + 3", .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 6, .description = "6" } }, .{ .id = 63, .session_id = "SID-PRIMARY" });
+}
+
+// Number of `method` events the client received on `session_id`.
+fn countSentEvents(ctx: *testing.TestContext, method: []const u8, session_id: []const u8) !usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = switch (msg) {
+            .object => |o| o,
+            else => continue,
+        };
+        const sent_method = obj.get("method") orelse continue;
+        if (sent_method != .string or !std.mem.eql(u8, sent_method.string, method)) {
+            continue;
+        }
+        const sent_session_id = obj.get("sessionId") orelse continue;
+        if (sent_session_id == .string and std.mem.eql(u8, sent_session_id.string, session_id)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+// V8 keeps Runtime.enable per inspector session: a session only gets the
+// executionContextCreated events it asked for, stamped with its own id.
+test "cdp.runtime: inspector events go to the session that enabled them" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT3", .url = "hi.html", .target_id = "FID-0000000RT3".*, .session_id = "SID-PRIMARY" });
+    _ = try bc.attachSession("SID-AUX", null);
+
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-AUX" });
+    try ctx.expectSentResult(null, .{ .id = 70, .session_id = "SID-AUX" });
+    try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{ .auxData = .{ .isDefault = true, .type = "default" } } }, .{ .session_id = "SID-AUX" });
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-AUX"));
+    try testing.expectEqual(0, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-PRIMARY"));
+
+    try ctx.processMessage(.{ .id = 71, .method = "Runtime.enable", .sessionId = "SID-PRIMARY" });
+    try ctx.expectSentResult(null, .{ .id = 71, .session_id = "SID-PRIMARY" });
+    try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{ .auxData = .{ .isDefault = true, .type = "default" } } }, .{ .session_id = "SID-PRIMARY" });
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-AUX"));
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.executionContextCreated", "SID-PRIMARY"));
+}
+
+test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC", .url = "hi.html", .target_id = "FID-0000000EXC".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // An inline handler's exception is reported to the window and nothing
+    // cancels it: uncaught.
+    _ = try ls.local.exec(
+        \\document.body.setAttribute('onclick', "throw new TypeError('boom')");
+        \\document.body.click();
+    , null);
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{
+            .text = "Uncaught",
+            .exception = .{ .type = "object", .subtype = "error", .className = "TypeError" },
+        },
+    }, .{});
+}
+
+test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC3", .url = "hi.html", .target_id = "FID-000000EXC3".* });
+    try ctx.processMessage(.{ .id = 62, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\const unused = 1;
+        \\const err = new Error('here');
+        \\reportError(err);
+    , "exc.js");
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .lineNumber = 1, .columnNumber = 12, .url = "exc.js" },
+    }, .{});
+}
+
+test "cdp.runtime: an exception whose error event is cancelled is not reported" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC2", .url = "hi.html", .target_id = "FID-000000EXC2".* });
+    try ctx.processMessage(.{ .id = 61, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // preventDefault() on the error event marks the exception handled, as
+    // in Chrome; only the second report is uncaught.
+    _ = try ls.local.exec(
+        \\const quiet = (e) => e.preventDefault();
+        \\window.addEventListener('error', quiet);
+        \\reportError('quiet');
+        \\window.removeEventListener('error', quiet);
+        \\reportError('loud');
+    , null);
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .exception = .{ .type = "string", .value = "loud" } },
+    }, .{});
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+}
+
+test "cdp.runtime: an unhandled rejection emits Runtime.exceptionThrown once" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ1", .url = "hi.html", .target_id = "FID-000000REJ1".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\window.unhandled = 0;
+        \\window.addEventListener('unhandledrejection', () => window.unhandled += 1);
+        \\Promise.reject(new TypeError('nope'));
+    , null);
+    // Reported at the end of the microtask checkpoint, not when rejected.
+    try testing.expectEqual(0, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    ls.local.runMicrotasks();
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{
+            .text = "Uncaught (in promise)",
+            .exception = .{ .type = "object", .subtype = "error", .className = "TypeError" },
+            .executionContextId = bc.inspector().getContextId(&ls.local),
+        },
+    }, .{});
+
+    // A later checkpoint doesn't report it again.
+    ls.local.runMicrotasks();
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    try testing.expectEqual(1, try (try ls.local.exec("window.unhandled", null)).toI32());
+}
+
+test "cdp.runtime: a rejection handled before the checkpoint ends is not reported" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ2", .url = "hi.html", .target_id = "FID-000000REJ2".* });
+    try ctx.processMessage(.{ .id = 71, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // V8 sees each promise rejected with no handler, then gets one: in the
+    // same script, from a microtask, and on an async function's promise.
+    _ = try ls.local.exec(
+        \\window.events = [];
+        \\window.addEventListener('unhandledrejection', (e) => window.events.push(e.type));
+        \\window.addEventListener('rejectionhandled', (e) => window.events.push(e.type));
+        \\Promise.reject(new Error('now')).catch(() => {});
+        \\const later = Promise.reject(new Error('later'));
+        \\Promise.resolve().then(() => later.catch(() => {}));
+        \\async function f() { throw new Error('async'); }
+        \\f().catch(() => {});
+    , null);
+    ls.local.runMicrotasks();
+
+    try testing.expectEqual(0, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+    try testing.expectEqual(0, try (try ls.local.exec("window.events.length", null)).toI32());
+}
+
+test "cdp.runtime: a rejection whose unhandledrejection event is cancelled is not reported" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ3", .url = "hi.html", .target_id = "FID-000000REJ3".* });
+    try ctx.processMessage(.{ .id = 72, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // preventDefault() on unhandledrejection marks the rejection handled, as
+    // in Chrome; only the second one is uncaught.
+    _ = try ls.local.exec(
+        \\const quiet = (e) => e.preventDefault();
+        \\window.addEventListener('unhandledrejection', quiet);
+        \\Promise.reject('quiet');
+    , null);
+    ls.local.runMicrotasks();
+    _ = try ls.local.exec(
+        \\window.removeEventListener('unhandledrejection', quiet);
+        \\Promise.reject('loud');
+    , null);
+    ls.local.runMicrotasks();
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .text = "Uncaught (in promise)", .exception = .{ .type = "string", .value = "loud" } },
+    }, .{});
+    try testing.expectEqual(1, try countSentEvents(&ctx, "Runtime.exceptionThrown", "SID-X"));
+}
+
+test "cdp.runtime: an exception carries the id of the context it was thrown in" {
+    testing.expectLog(&.{ .page_error, .page_error });
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC4", .url = "cdp/input_iframe.html", .target_id = "FID-000000EXC4".* });
+    try ctx.processMessage(.{ .id = 63, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    const child = frame.child_frames.items[0];
+
+    var page_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&page_ls);
+    defer page_ls.deinit();
+    const page_context_id = bc.inspector().getContextId(&page_ls.local);
+    _ = try page_ls.local.exec("reportError(new RangeError('page'))", null);
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .executionContextId = page_context_id, .exception = .{ .className = "RangeError" } },
+    }, .{});
+
+    var child_ls: js.Local.Scope = undefined;
+    child.js.localScope(&child_ls);
+    defer child_ls.deinit();
+    const child_context_id = bc.inspector().getContextId(&child_ls.local);
+    try testing.expect(child_context_id != page_context_id);
+    _ = try child_ls.local.exec("reportError(new SyntaxError('child'))", null);
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .executionContextId = child_context_id, .exception = .{ .className = "SyntaxError" } },
+    }, .{});
+}
+
+test "cdp.runtime: consoleAPICalled carries the id of the context it was logged in" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CON2", .url = "cdp/input_iframe.html", .target_id = "FID-0000000CO2".* });
+    try ctx.processMessage(.{ .id = 64, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    const child = frame.child_frames.items[0];
+
+    var page_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&page_ls);
+    defer page_ls.deinit();
+    const page_context_id = bc.inspector().getContextId(&page_ls.local);
+    _ = try page_ls.local.exec("console.log('page')", null);
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = page_context_id }, .{});
+
+    var child_ls: js.Local.Scope = undefined;
+    child.js.localScope(&child_ls);
+    defer child_ls.deinit();
+    const child_context_id = bc.inspector().getContextId(&child_ls.local);
+    try testing.expect(child_context_id != page_context_id);
+    // no arguments: the context comes from the caller, not the values
+    _ = try child_ls.local.exec("console.log('child'); console.log()", null);
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = child_context_id, .args = &.{.{ .value = "child" }} }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .executionContextId = child_context_id, .args = &.{} }, .{});
+}
+
+test "cdp.runtime: consoleAPICalled type matches the console method" {
+    testing.silenceLog(&.{.js});
+
+    // Wire types per the CDP protocol: console.log -> "log",
+    // console.warn -> "warning" (not "warn"), console.info -> "info",
+    // console.error -> "error", console.debug -> "debug".
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec("console.log('l'); console.warn('w'); console.info('i'); console.error('e'); console.debug('d');", null);
+
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "warning" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "info" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "error" }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "debug" }, .{});
+}
+
+test "cdp.runtime: consoleAPICalled only carries values for primitives" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\globalThis.probed = 0;
+        \\const div = document.createElement('div');
+        \\Object.defineProperty(div, 'id', { get() { globalThis.probed++; return 'x'; }, enumerable: true });
+        \\const obj = { toJSON() { globalThis.probed++; return 'x'; } };
+        \\const cycle = {}; cycle.self = cycle;
+        \\console.log(div, obj, 'str', 12, 1.5, true, null, undefined, NaN, -0, 10n,
+        \\    Infinity, -Infinity, false, 0, 2 ** 40, -9007199254740993n, Symbol('test'),
+        \\    function named() {}, cycle, new Number(42));
+    , null);
+
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log", .args = .{
+        .{ .type = "object", .className = "HTMLDivElement" },
+        .{ .type = "object", .className = "Object" },
+        .{ .type = "string", .value = "str" },
+        .{ .type = "number", .value = 12 },
+        .{ .type = "number", .value = 1.5 },
+        .{ .type = "boolean", .value = true },
+        .{ .type = "object", .subtype = "null", .value = null },
+        .{ .type = "undefined" },
+        .{ .type = "number", .unserializableValue = "NaN" },
+        .{ .type = "number", .unserializableValue = "-0" },
+        .{ .type = "bigint", .unserializableValue = "10n" },
+        .{ .type = "number", .unserializableValue = "Infinity" },
+        .{ .type = "number", .unserializableValue = "-Infinity" },
+        .{ .type = "boolean", .value = false },
+        .{ .type = "number", .value = 0 },
+        .{ .type = "number", .value = @as(f64, 1099511627776) },
+        .{ .type = "bigint", .unserializableValue = "-9007199254740993n" },
+        .{ .type = "symbol" },
+        .{ .type = "function" },
+        .{ .type = "object" },
+        .{ .type = "object", .className = "Number" },
+    } }, .{});
+
+    const event = ctx.received.items[ctx.received.items.len - 1];
+    const args = event.object.get("params").?.object.get("args").?.array.items;
+    try testing.expectEqual(21, args.len);
+    try testing.expect(args[6].object.get("value").? == .null);
+    for ([_]usize{ 0, 1, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20 }) |i| {
+        try testing.expectEqual(null, args[i].object.get("value"));
+    }
+    for ([_]usize{ 0, 1, 18, 19, 20 }) |i| {
+        try testing.expect(args[i].object.contains("objectId"));
+    }
+    for ([_]usize{ 0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 17, 18, 19, 20 }) |i| {
+        try testing.expectEqual(null, args[i].object.get("unserializableValue"));
+    }
+
+    const probed = try ls.local.exec("globalThis.probed", null);
+    try testing.expectEqual(0, try probed.toF64());
+}
+
+test "cdp.runtime: console notifications run no page JS" {
+    testing.silenceLog(&.{.js});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
+    try ctx.processMessage(.{ .id = 61, .method = "Console.enable" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\globalThis.probed = 0;
+        \\const probe = { toString() { globalThis.probed++; console.log('inner'); return 'outer'; } };
+        \\console.log('head-marker', probe, 'tail-marker-'.repeat(20));
+    , null);
+
+    const tail = repeat("tail-marker-", 20);
+    try ctx.expectSentEvent("Console.messageAdded", .{ .level = "log", .text = "head-marker [object Object] " ++ tail }, .{});
+    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log", .args = .{ .{ .type = "string", .value = "head-marker" }, .{ .type = "object", .className = "Object" }, .{ .type = "string", .value = tail } } }, .{});
+    const probed = try ls.local.exec("globalThis.probed", null);
+    try testing.expectEqual(0, try probed.toF64());
+    try testing.expectEqual(0, ctx.cdp().notification_depth);
+    try testing.expectEqual(0, ctx.cdp().link.send_depth);
+    try ctx.processMessage(.{ .id = 62, .method = "Runtime.evaluate", .params = .{ .expression = "6 * 7" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 42 } }, .{ .id = 62 });
+}
+
+test "cdp.runtime: only nodes have the node subtype, DOMExceptions are errors" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-SUBT", .url = "hi.html", .target_id = "FID-000000SUBT".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable" });
+
+    try ctx.processMessage(.{ .id = 71, .method = "Runtime.evaluate", .params = .{ .expression = "document.body" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "node", .className = "HTMLBodyElement" } }, .{ .id = 71 });
+
+    try ctx.processMessage(.{ .id = 72, .method = "Runtime.evaluate", .params = .{ .expression = "new DOMException('custom', 'NotFoundError')" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "error", .className = "DOMException", .description = "NotFoundError: custom" } }, .{ .id = 72 });
+
+    try ctx.processMessage(.{ .id = 73, .method = "Runtime.evaluate", .params = .{ .expression = "location" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .className = "Location", .description = "Location" } }, .{ .id = 73 });
+    try ctx.processMessage(.{ .id = 74, .method = "Runtime.evaluate", .params = .{ .expression = "window" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .className = "Window" } }, .{ .id = 74 });
+    for (ctx.received.items) |msg| {
+        const id = msg.object.get("id") orelse continue;
+        if (id.integer != 73 and id.integer != 74) continue;
+        const result = msg.object.get("result").?.object.get("result").?.object;
+        try testing.expectEqual(null, result.get("subtype"));
+    }
+}

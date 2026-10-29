@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="container">
@@ -93,6 +94,14 @@
   testing.expectEqual('Link 1', exampleLink.innerText);
 </script>
 
+<script id="empty_value">
+  // An empty value for ^=, $= and *= matches nothing
+  testing.expectEqual(0, document.querySelectorAll('[href^=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[href$=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[href*=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[href^="" i]').length);
+</script>
+
 <script id="compound">
   testing.expectEqual(1, document.querySelectorAll('input[type="text"]').length);
   testing.expectEqual(1, document.querySelectorAll('input[type="password"]').length);
@@ -122,4 +131,30 @@
   // Also test with single quotes inside selector
   const el2 = document.querySelector("link[imagesrcset='url1.png 1x, url2.png 2x']");
   testing.expectEqual('preload-link', el2.id);
+</script>
+
+<form id="caseForm" method="POST"><input id="caseCheckbox" type="Checkbox"><input name="Q"></form>
+<a id="caseLink" href="/a" target="_Blank" rel="NoFollow" hreflang="EN-us">a</a>
+<svg><g id="caseSvg" type="Matrix"></g></svg>
+
+<script id="valueCase">
+  // Values of some HTML attributes (method, type, ...) match case-insensitively
+  testing.expectEqual('caseForm', document.querySelector('form[method=post]')?.id);
+  testing.expectEqual('caseCheckbox', document.querySelector('#caseForm input[type=checkbox]')?.id);
+  testing.expectEqual(true, document.getElementById('caseForm').matches('[method^=po]'));
+  testing.expectEqual('caseForm', document.getElementById('caseCheckbox').closest('form[method="post"]')?.id);
+  testing.expectEqual('caseLink', document.querySelector('a[target=_blank][rel~=nofollow][hreflang|=en]')?.id);
+
+  // An explicit `s` flag keeps them case-sensitive
+  testing.diverges("Chrome doesn't support the s flag", () => {
+    testing.expectEqual(null, document.querySelector('form[method=post s]'));
+    testing.expectEqual(null, document.querySelector('a[rel~=nofollow s]'));
+  });
+
+  // Other attributes and foreign elements stay case-sensitive
+  testing.expectEqual(null, document.querySelector('[name=q]'));
+  testing.diverges("Chrome doesn't enforce this case sensitivity", () => {
+    testing.expectEqual(null, document.querySelector('#caseSvg[type=matrix]'));
+  });
+  testing.expectEqual('caseSvg', document.querySelector('#caseSvg[type=matrix i]')?.id);
 </script>

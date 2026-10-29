@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="container">
@@ -64,6 +65,14 @@
   const p = document.createElement('p');
   p.textContent = 'XAnge\xa0Privacy';
   testing.expectEqual('<p>XAnge&nbsp;Privacy</p>', p.outerHTML);
+
+  // Attribute values encode it too
+  const a = document.createElement('a');
+  a.setAttribute('title', 'a\xa0b');
+  a.setAttribute('data-x', '\xa0"\xa0');
+  testing.expectEqual('<a title="a&nbsp;b" data-x="&nbsp;&quot;&nbsp;"></a>', a.outerHTML);
+  div.innerHTML = '<span title="x&nbsp;y">z</span>';
+  testing.expectEqual('<span title="x&nbsp;y">z</span>', div.innerHTML);
 </script>
 
 <script id=element>

@@ -19,13 +19,17 @@
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 
+const Event = @import("../../Event.zig");
 const Element = @import("../../Element.zig");
+const ElementInternals = @import("../../ElementInternals.zig");
+
 const Input = @import("Input.zig");
 const Select = @import("Select.zig");
-const TextArea = @import("TextArea.zig");
 const Button = @import("Button.zig");
-const Frame = @import("../../../Frame.zig");
+const Custom = @import("Custom.zig");
+const TextArea = @import("TextArea.zig");
 
 const ValidityState = @This();
 
@@ -34,54 +38,60 @@ const ValidityState = @This();
 // because the flag definitions are per-type in the HTML spec.
 _owner: *Element,
 
-pub fn getValueMissing(self: *const ValidityState, frame: *Frame) bool {
-    if (self._owner.is(Input)) |input| return input.suffersValueMissing(frame);
+fn getValueMissing(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.valueMissing;
+    if (self._owner.is(Input)) |input| return input.suffersValueMissing();
     if (self._owner.is(Select)) |select| return select.suffersValueMissing();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersValueMissing();
     return false;
 }
 
-pub fn getTypeMismatch(self: *const ValidityState) bool {
+fn getTypeMismatch(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.typeMismatch;
     if (self._owner.is(Input)) |input| return input.suffersTypeMismatch();
     return false;
 }
 
-pub fn getPatternMismatch(self: *const ValidityState, frame: *Frame) bool {
+fn getPatternMismatch(self: *const ValidityState, frame: *Frame) bool {
+    if (self.customFlags()) |flags| return flags.patternMismatch;
     if (self._owner.is(Input)) |input| return input.suffersPatternMismatch(frame);
     return false;
 }
 
-pub fn getTooLong(self: *const ValidityState) bool {
+fn getTooLong(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.tooLong;
     if (self._owner.is(Input)) |input| return input.suffersTooLong();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersTooLong();
     return false;
 }
 
-pub fn getTooShort(self: *const ValidityState) bool {
+fn getTooShort(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.tooShort;
     if (self._owner.is(Input)) |input| return input.suffersTooShort();
     if (self._owner.is(TextArea)) |textarea| return textarea.suffersTooShort();
     return false;
 }
 
-pub fn getRangeUnderflow(self: *const ValidityState) bool {
+fn getRangeUnderflow(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.rangeUnderflow;
     if (self._owner.is(Input)) |input| return input.suffersRangeUnderflow();
     return false;
 }
 
-pub fn getRangeOverflow(self: *const ValidityState) bool {
+fn getRangeOverflow(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.rangeOverflow;
     if (self._owner.is(Input)) |input| return input.suffersRangeOverflow();
     return false;
 }
 
-pub fn getStepMismatch(self: *const ValidityState) bool {
-    _ = self;
-    // Step matching is not implemented yet (PR #2280 begins step rounding for
-    // <input type=range>). Returning false keeps well-formed values valid.
+fn getStepMismatch(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.stepMismatch;
+    if (self._owner.is(Input)) |input| return input.suffersStepMismatch();
     return false;
 }
 
-pub fn getBadInput(self: *const ValidityState) bool {
-    _ = self;
+fn getBadInput(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.badInput;
     // badInput flips when the UA cannot convert a user-typed string (e.g. the
     // user typed "abc" into <input type=number>). Headless Lightpanda receives
     // values via attributes or JS assignment, never raw keystrokes — there is
@@ -89,7 +99,8 @@ pub fn getBadInput(self: *const ValidityState) bool {
     return false;
 }
 
-pub fn getCustomError(self: *const ValidityState) bool {
+fn getCustomError(self: *const ValidityState) bool {
+    if (self.customFlags()) |flags| return flags.customError;
     if (self._owner.is(Input)) |input| return input.hasCustomValidity();
     if (self._owner.is(Select)) |select| return select.hasCustomValidity();
     if (self._owner.is(TextArea)) |textarea| return textarea.hasCustomValidity();
@@ -98,7 +109,8 @@ pub fn getCustomError(self: *const ValidityState) bool {
 }
 
 pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
-    return !self.getValueMissing(frame) and
+    if (self.customFlags()) |flags| return !flags.any();
+    return !self.getValueMissing() and
         !self.getTypeMismatch() and
         !self.getPatternMismatch(frame) and
         !self.getTooLong() and
@@ -110,12 +122,52 @@ pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
         !self.getCustomError();
 }
 
+// Whether the element satisfies its constraints, or null when it is not a
+// candidate for constraint validation (it then matches neither :valid nor
+// :invalid).
+pub fn isValid(element: *Element, frame: *Frame) ?bool {
+    const will_validate = if (element.is(Input)) |input|
+        input.getWillValidate()
+    else if (element.is(Select)) |select|
+        select.getWillValidate()
+    else if (element.is(TextArea)) |textarea|
+        textarea.getWillValidate()
+    else if (element.is(Button)) |button|
+        button.getWillValidate()
+    else if (element.is(Custom)) |custom|
+        custom.isFormAssociated() and custom.willValidate()
+    else
+        return null;
+    if (will_validate == false) {
+        return null;
+    }
+    const validity: ValidityState = .{ ._owner = element };
+    return validity.getValid(frame);
+}
+
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#check-validity-steps
+pub fn checkValidity(element: *Element, frame: *Frame) !bool {
+    if (isValid(element, frame) orelse true) {
+        return true;
+    }
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
+    try frame._event_manager.dispatch(element.asEventTarget(), event);
+    return false;
+}
+
+// A form-associated custom element's flags are whatever its ElementInternals
+// last passed to setValidity().
+fn customFlags(self: *const ValidityState) ?ElementInternals.ValidityFlags {
+    const custom = self._owner.is(Custom) orelse return null;
+    const internals = custom._internals orelse return .{};
+    return internals._flags;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ValidityState);
 
     pub const Meta = struct {
         pub const name = "ValidityState";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

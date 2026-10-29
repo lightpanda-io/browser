@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<iframe id=loaded src="about:blank"></iframe>
+
+<script id=open_close_fires_load_events type=module>
+  {
+    const state = await testing.async();
+
+    const cw = $('#loaded').contentWindow;
+    const doc = cw.document;
+    const events = [];
+
+    // registered before open(): erased by it
+    cw.addEventListener('load', () => events.push('old window load'));
+    cw.onload = () => events.push('old window onload');
+    doc.addEventListener('DOMContentLoaded', () => events.push('old dcl'));
+    doc.onreadystatechange = () => events.push('old readystatechange');
+
+    // descendants, shadow trees included, lose theirs; detached nodes don't
+    const child = doc.body.appendChild(doc.createElement('div'));
+    child.addEventListener('ping', () => events.push('old child'));
+    const shadowChild = child.attachShadow({ mode: 'open' }).appendChild(doc.createElement('span'));
+    shadowChild.addEventListener('ping', () => events.push('old shadow child'));
+    const detached = doc.createElement('div');
+    detached.addEventListener('ping', () => events.push('detached'));
+
+    // after parsing, so open() clears the document
+    setTimeout(() => {
+      doc.open();
+      testing.expectEqual('loading', doc.readyState);
+
+      child.dispatchEvent(new cw.Event('ping'));
+      shadowChild.dispatchEvent(new cw.Event('ping'));
+      detached.dispatchEvent(new cw.Event('ping'));
+
+      doc.addEventListener('readystatechange', () => events.push('readystatechange ' + doc.readyState));
+      doc.addEventListener('DOMContentLoaded', () => events.push('dcl'));
+      // the events are queued by close(): wait for the last one
+      cw.addEventListener('load', () => {
+        events.push('window load');
+        state.resolve();
+      });
+
+      doc.write('<p id=written>hello</p>');
+      doc.close();
+    }, 5);
+
+    await state.done(() => {
+      testing.expectEqual('hello', doc.getElementById('written').textContent);
+      testing.expectEqual('complete', doc.readyState);
+      testing.expectEqual([
+        'detached',
+        'readystatechange interactive',
+        'dcl',
+        'readystatechange complete',
+        'window load',
+      ], events);
+    });
+  }
+</script>
+
+<script id=open_close_on_fresh_iframe type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    const doc = cw.document;
+    const events = [];
+
+    doc.open();
+    doc.addEventListener('DOMContentLoaded', () => events.push('dcl'));
+    cw.addEventListener('load', () => {
+      events.push('window load');
+      state.resolve();
+    });
+    doc.write('<p id=written>fresh</p>');
+    doc.close();
+
+    await state.done(() => {
+      testing.expectEqual('fresh', doc.getElementById('written').textContent);
+      testing.expectEqual(['dcl', 'window load'], events);
+    });
+  }
+</script>
+
+<!--
+  close() on a loaded document runs readystatechange, DOMContentLoaded and load
+  synchronously, as in Chrome.
+-->
+<script id=close_after_load_is_sync type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    const events = [];
+
+    setTimeout(() => {
+      const doc = cw.document;
+      doc.open();
+      doc.addEventListener('readystatechange', () => events.push('rsc:' + doc.readyState));
+      doc.addEventListener('DOMContentLoaded', () => events.push('DCL'));
+      cw.addEventListener('load', () => events.push('load'));
+      doc.write('<p>x</p>');
+      events.push('before:' + doc.readyState);
+      doc.close();
+      events.push('after:' + doc.readyState);
+      state.resolve();
+    }, 5);
+
+    await state.done(() => {
+      testing.expectEqual('before:loading,rsc:interactive,DCL,rsc:complete,load,after:complete', events.join(','));
+    });
+  }
+</script>
+
+<script id=close_from_load_handler type=module>
+  {
+    const state = await testing.async();
+
+    // A load handler that opens, writes + closes again gets readystatechange
+    // and DOMContentLoaded, but no nested load, now or later (as in Chrome).
+    // Firing it recursed, and crashed on the write.
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    const events = [];
+    let count = 0;
+
+    const rewrite = () => {
+      const doc = cw.document;
+      doc.open();
+      // open() erased the listeners
+      doc.addEventListener('readystatechange', () => events.push('rsc:' + doc.readyState));
+      doc.addEventListener('DOMContentLoaded', () => events.push('DCL'));
+      cw.addEventListener('load', onload);
+      doc.write('<b id=n>' + count + '</b>');
+      doc.close();
+    };
+    const onload = () => {
+      events.push('load');
+      count += 1;
+      if (count < 3) {
+        rewrite();
+      }
+    };
+    setTimeout(rewrite, 5);
+    setTimeout(() => state.resolve(), 50);
+
+    await state.done(() => {
+      testing.expectEqual(1, count);
+      testing.expectEqual('rsc:interactive,DCL,rsc:complete,load,rsc:interactive,DCL,rsc:complete', events.join(','));
+      testing.expectEqual('1', cw.document.getElementById('n').textContent);
+      testing.expectEqual('complete', cw.document.readyState);
+    });
+  }
+</script>
+
+<!--
+  https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps
+  open() from within the iframe element's load event mutes its later ones. That
+  event is the tail of the iframe document's load, so, as from a window load
+  handler, close() fires DOMContentLoaded but no nested window load (as in Chrome).
+-->
+<script id=open_during_iframe_load_mutes type=module>
+  {
+    const state = await testing.async();
+
+    const iframe = document.createElement('iframe');
+    let loads = 0;
+    let window_loads = 0;
+    let dcls = 0;
+    iframe.addEventListener('load', () => {
+      loads += 1;
+      if (loads > 1) return;
+      const doc = iframe.contentDocument;
+      doc.open();
+      doc.addEventListener('DOMContentLoaded', () => dcls += 1);
+      iframe.contentWindow.addEventListener('load', () => window_loads += 1);
+      doc.write('<p>muted</p>');
+      doc.close();
+      setTimeout(() => state.resolve(), 20);
+    });
+    document.body.appendChild(iframe);
+
+    await state.done(() => {
+      testing.expectEqual(1, loads);
+      testing.expectEqual(1, dcls);
+      testing.expectEqual(0, window_loads);
+      testing.expectEqual('muted', iframe.contentDocument.body.textContent);
+    });
+  }
+</script>

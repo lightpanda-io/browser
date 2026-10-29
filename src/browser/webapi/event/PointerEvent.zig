@@ -67,19 +67,19 @@ _altitude_angle: f64,
 _azimuth_angle: f64,
 _is_primary: bool,
 
-pub const PointerEventOptions = struct {
+const PointerEventOptions = struct {
+    altitudeAngle: f64 = std.math.pi / 2.0,
+    azimuthAngle: f64 = 0.0,
+    height: f64 = 1.0,
+    isPrimary: bool = false,
     pointerId: i32 = 0,
     pointerType: []const u8 = "",
-    width: f64 = 1.0,
-    height: f64 = 1.0,
     pressure: f64 = 0.0,
     tangentialPressure: f64 = 0.0,
     tiltX: i32 = 0,
     tiltY: i32 = 0,
     twist: i32 = 0,
-    altitudeAngle: f64 = std.math.pi / 2.0,
-    azimuthAngle: f64 = 0.0,
-    isPrimary: bool = false,
+    width: f64 = 1.0,
 };
 
 const Options = Event.inheritOptions(
@@ -144,11 +144,11 @@ pub fn asEvent(self: *PointerEvent) *Event {
     return self._proto.asEvent();
 }
 
-pub fn getPointerId(self: *const PointerEvent) i32 {
+fn getPointerId(self: *const PointerEvent) i32 {
     return self._pointer_id;
 }
 
-pub fn getPointerType(self: *const PointerEvent) []const u8 {
+fn getPointerType(self: *const PointerEvent) []const u8 {
     return self._pointer_type.toString();
 }
 
@@ -160,35 +160,35 @@ pub fn getHeight(self: *const PointerEvent) f64 {
     return self._height;
 }
 
-pub fn getPressure(self: *const PointerEvent) f64 {
+fn getPressure(self: *const PointerEvent) f64 {
     return self._pressure;
 }
 
-pub fn getTangentialPressure(self: *const PointerEvent) f64 {
+fn getTangentialPressure(self: *const PointerEvent) f64 {
     return self._tangential_pressure;
 }
 
-pub fn getTiltX(self: *const PointerEvent) i32 {
+fn getTiltX(self: *const PointerEvent) i32 {
     return self._tilt_x;
 }
 
-pub fn getTiltY(self: *const PointerEvent) i32 {
+fn getTiltY(self: *const PointerEvent) i32 {
     return self._tilt_y;
 }
 
-pub fn getTwist(self: *const PointerEvent) i32 {
+fn getTwist(self: *const PointerEvent) i32 {
     return self._twist;
 }
 
-pub fn getAltitudeAngle(self: *const PointerEvent) f64 {
+fn getAltitudeAngle(self: *const PointerEvent) f64 {
     return self._altitude_angle;
 }
 
-pub fn getAzimuthAngle(self: *const PointerEvent) f64 {
+fn getAzimuthAngle(self: *const PointerEvent) f64 {
     return self._azimuth_angle;
 }
 
-pub fn getIsPrimary(self: *const PointerEvent) bool {
+fn getIsPrimary(self: *const PointerEvent) bool {
     return self._is_primary;
 }
 
@@ -197,7 +197,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "PointerEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- Test inline event listeners set via HTML attributes -->
@@ -13,6 +14,7 @@
 <div id="attr-wheel" onwheel="window.x = 1"></div>
 <div id="attr-scroll" onscroll="window.x = 1"></div>
 <div id="attr-contextmenu" oncontextmenu="window.x = 1"></div>
+<div id="attr-mouseenter" onmouseenter="this.dataset.seen = event.type"></div>
 <div id="no-listeners"></div>
 
 <script id="attr_listener_returns_function">
@@ -512,16 +514,265 @@
 }
 </script>
 
-<img src="https://cdn.lightpanda.io/website/assets/images/docs/hn.png" />
+<div id="order-attr" onclick="window.order.push('attr')"><span id="order-attr-child"></span></div>
+<div id="bad-attr" onclick="this is not valid js("></div>
+
+<script id="handler_order_property">
+{
+    const r = [];
+    const a = document.createElement('a');
+    a.addEventListener('click', () => r.push(1));
+    a.onclick = () => r.push(2);
+    a.addEventListener('click', () => r.push(3));
+    a.click();
+    testing.expectEqual('1,2,3', r.join());
+
+    // Replacing a non-null handler keeps its position.
+    r.length = 0;
+    a.onclick = () => r.push('b');
+    a.click();
+    testing.expectEqual('1,b,3', r.join());
+
+    // Setting it to null removes it; setting it again appends it.
+    r.length = 0;
+    a.onclick = null;
+    a.click();
+    testing.expectEqual('1,3', r.join());
+
+    r.length = 0;
+    a.onclick = () => r.push('c');
+    a.click();
+    testing.expectEqual('1,3,c', r.join());
+
+    // At the target, capture listeners run before the handler.
+    r.length = 0;
+    a.addEventListener('click', () => r.push('capture'), true);
+    a.click();
+    testing.expectEqual('capture,1,3,c', r.join());
+
+    // A non-object value clears it.
+    a.onclick = 5;
+    testing.expectEqual(null, a.onclick);
+}
+</script>
+
+<script id="handler_order_bubbling">
+{
+    const r = [];
+    const parent = document.createElement('div');
+    const child = document.createElement('span');
+    parent.appendChild(child);
+    parent.addEventListener('click', () => r.push(1));
+    parent.onclick = () => r.push(2);
+    parent.addEventListener('click', () => r.push(3));
+    child.click();
+    testing.expectEqual('1,2,3', r.join());
+}
+</script>
+
+<script id="handler_stop_immediate_propagation">
+{
+    const r = [];
+    const a = document.createElement('a');
+    a.addEventListener('click', (e) => { r.push(1); e.stopImmediatePropagation(); });
+    a.onclick = () => r.push(2);
+    a.click();
+    testing.expectEqual('1', r.join());
+}
+</script>
+
+<script id="handler_return_value">
+{
+    const a = document.createElement('a');
+    a.onclick = () => false;
+    let e = new MouseEvent('click', { cancelable: true });
+    a.dispatchEvent(e);
+    testing.expectEqual(true, e.defaultPrevented);
+
+    // Only false cancels; and not for a passive-looking undefined.
+    a.onclick = () => undefined;
+    e = new MouseEvent('click', { cancelable: true });
+    a.dispatchEvent(e);
+    testing.expectEqual(false, e.defaultPrevented);
+
+    // An element's onerror isn't special: false cancels it too.
+    const img = document.createElement('img');
+    img.onerror = () => false;
+    e = new Event('error', { cancelable: true });
+    img.dispatchEvent(e);
+    testing.expectEqual(true, e.defaultPrevented);
+}
+</script>
+
+<script id="handler_order_content_attribute">
+{
+    window.order = [];
+    const div = $('#order-attr');
+    div.addEventListener('click', () => window.order.push('listener'));
+    $('#order-attr-child').click();
+    testing.expectEqual('attr,listener', window.order.join());
+
+    // Setting the content attribute replaces the property's value, and
+    // removing it removes the handler.
+    window.order = [];
+    div.onclick = () => window.order.push('property');
+    div.setAttribute('onclick', "window.order.push('attr2')");
+    div.click();
+    testing.expectEqual('attr2,listener', window.order.join());
+
+    window.order = [];
+    div.removeAttribute('onclick');
+    testing.expectEqual(null, div.onclick);
+    div.click();
+    testing.expectEqual('listener', window.order.join());
+
+    window.order = [];
+    div.setAttribute('onclick', "window.order.push('attr3')");
+    div.click();
+    testing.expectEqual('listener,attr3', window.order.join());
+
+    // Cloning keeps the attribute's handler.
+    window.order = [];
+    const clone = div.cloneNode();
+    clone.addEventListener('click', () => window.order.push('clone listener'));
+    clone.click();
+    testing.expectEqual('attr3,clone listener', window.order.join());
+
+    // So does innerHTML.
+    window.order = [];
+    const holder = document.createElement('div');
+    holder.innerHTML = `<span onclick="window.order.push('inner')"></span>`;
+    holder.firstChild.click();
+    testing.expectEqual('inner', window.order.join());
+}
+</script>
+
+<script id="handler_content_attribute_short">
+{
+    // A short value (stored inline in a String) set from script.
+    window.short_hits = 0;
+    window.h = () => window.short_hits++;
+    const div = document.createElement('div');
+    div.setAttribute('onclick', 'h()');
+    for (let i = 0; i < 100; i++) {
+        document.createElement('span').setAttribute('data-x', 'y' + i);
+    }
+    div.click();
+    testing.expectEqual(1, window.short_hits);
+    testing.expectEqual('function', typeof div.onclick);
+}
+</script>
+
+<script id="handler_content_attribute_invalid">
+{
+    // An attribute that doesn't compile reports a SyntaxError and leaves the
+    // handler null.
+    let reported = null;
+    const onError = (e) => { reported = e.error; e.preventDefault(); };
+    window.addEventListener('error', onError);
+    const div = $('#bad-attr');
+    testing.expectEqual(null, div.onclick);
+    window.removeEventListener('error', onError);
+    testing.expectEqual(true, reported instanceof SyntaxError);
+
+    let fired = false;
+    div.addEventListener('click', () => fired = true);
+    div.click();
+    testing.expectEqual(true, fired);
+}
+</script>
+
+<script id="handler_order_document_window">
+{
+    const r = [];
+    document.addEventListener('click', () => r.push(1));
+    document.onclick = () => r.push(2);
+    document.addEventListener('click', () => r.push(3));
+    document.dispatchEvent(new Event('click'));
+    testing.expectEqual('1,2,3', r.join());
+    document.onclick = null;
+
+    r.length = 0;
+    window.addEventListener('resize', () => r.push(1));
+    window.onresize = () => r.push(2);
+    window.addEventListener('resize', () => r.push(3));
+    window.dispatchEvent(new Event('resize'));
+    testing.expectEqual('1,2,3', r.join());
+    window.onresize = null;
+}
+</script>
+
+<script id="handler_body_reflects_window">
+{
+    const r = [];
+    document.body.onresize = () => r.push('body');
+    testing.expectEqual(true, window.onresize === document.body.onresize);
+    window.dispatchEvent(new Event('resize'));
+    testing.expectEqual('body', r.join());
+
+    document.body.setAttribute('onresize', "window.resized_by_attr = true");
+    testing.expectEqual('function', typeof window.onresize);
+    window.dispatchEvent(new Event('resize'));
+    testing.expectEqual(true, window.resized_by_attr);
+    // ...and not as a handler on the body element itself.
+    testing.expectEqual('body', r.join());
+
+    document.body.removeAttribute('onresize');
+    testing.expectEqual(null, window.onresize);
+}
+</script>
+
+<script id="handler_non_node_targets">
+{
+    const r = [];
+    const xhr = new XMLHttpRequest();
+    xhr.addEventListener('load', () => r.push(1));
+    xhr.onload = () => r.push(2);
+    xhr.addEventListener('load', () => r.push(3));
+    xhr.dispatchEvent(new Event('load'));
+    testing.expectEqual('1,2,3', r.join());
+    xhr.onload = null;
+    testing.expectEqual(null, xhr.onload);
+
+    r.length = 0;
+    const ac = new AbortController();
+    ac.signal.addEventListener('abort', () => r.push(1));
+    ac.signal.onabort = () => r.push(2);
+    ac.abort();
+    testing.expectEqual('1,2', r.join());
+}
+</script>
+
+<script id="mouseenter_mouseleave">
+{
+    const div = $('#attr-mouseenter');
+    testing.expectEqual('function', typeof div.onmouseenter);
+    div.dispatchEvent(new MouseEvent('mouseenter'));
+    testing.expectEqual('mouseenter', div.dataset.seen);
+
+    let left = 0;
+    div.onmouseleave = () => left++;
+    div.dispatchEvent(new MouseEvent('mouseleave'));
+    testing.expectEqual(1, left);
+
+    testing.expectEqual(true, 'onmouseenter' in window);
+    testing.expectEqual(true, 'onmouseleave' in document);
+}
+</script>
+
+<script>
+  // Registered before the <img> so a fast local load can't be missed.
+  // We should get this fired at capturing phase when a resource loaded.
+  const documentElementLoad = new Promise((resolve) => {
+    document.documentElement.addEventListener("load", e => resolve(e.eventPhase), { capture: true, once: true });
+  });
+</script>
+
+<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
 
 <script id="document-element-load" type=module>
   const state = await testing.async();
-  const docElement = document.documentElement;
-
-  // We should get this fired at capturing phase when a resource loaded.
-  docElement.addEventListener("load", e => {
-    state.resolve(e.eventPhase);
-  }, true);
+  state.resolve(await documentElementLoad);
 
   await state.done((eventPhase) => {
     testing.expectEqual(Event.CAPTURING_PHASE, eventPhase);

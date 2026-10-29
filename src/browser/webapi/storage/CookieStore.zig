@@ -36,7 +36,6 @@ const CookieStore = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_on_change: ?js.Function.Global = null,
 _exec: ?*Execution = null,
 
 pub fn asEventTarget(self: *CookieStore) *EventTarget {
@@ -66,7 +65,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
 
     // CookieStore exposes only cookies that script would see for the
     // current document — same filter as `match` (HttpOnly hidden,
-    // same-site treated as first-party against the document URL).
+    // SameSite judged against the global's site-for-cookies).
     const doc_url = exec.url.*;
     const target = Cookie.PreparedUri.init(doc_url);
     if (target.host.len == 0) {
@@ -84,14 +83,15 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
         .http_only = data.http_only,
         .same_site = data.same_site,
     };
-    if (!probe.appliesTo(&target, true, true, false)) {
+    const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
+    if (!probe.appliesTo(&target, .{ .same_site = same_site, .is_http = false })) {
         return;
     }
 
     // Rechecked in ChangeCallback.run, but between now and then, a listener
     // could be added which should NOT get this event (because it wasn't addded
     // at this point).
-    if (!exec.hasDirectListeners(self.asEventTarget(), "change", self._on_change)) {
+    if (!exec.hasDirectListeners(self.asEventTarget(), "change")) {
         return;
     }
 
@@ -157,7 +157,7 @@ const ChangeCallback = struct {
         const target = cs.asEventTarget();
 
         // Skip event construction when nobody is listening.
-        if (!exec.hasDirectListeners(target, "change", cs._on_change)) {
+        if (!exec.hasDirectListeners(target, "change")) {
             return null;
         }
 
@@ -172,32 +172,12 @@ const ChangeCallback = struct {
             .same_site = self.same_site,
         }, exec);
 
-        try exec.dispatch(target, event.asEvent(), cs._on_change, .{
+        try exec.dispatch(target, event.asEvent(), .{
             .context = "CookieStore.change",
         });
 
         return null;
     }
-};
-
-pub fn getOnChange(self: *const CookieStore) ?js.Function.Global {
-    return self._on_change;
-}
-
-pub fn setOnChange(self: *CookieStore, setter: ?FunctionSetter) void {
-    const s = setter orelse {
-        self._on_change = null;
-        return;
-    };
-    self._on_change = switch (s) {
-        .func => |f| f,
-        .anything => null,
-    };
-}
-
-const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore/get
@@ -213,14 +193,14 @@ const GetInput = union(enum) {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore/set
 const CookieInit = struct {
-    name: []const u8,
-    value: []const u8,
+    domain: ?[]const u8 = null,
     expires: ?f64 = null,
     maxAge: ?f64 = null,
-    domain: ?[]const u8 = null,
+    name: []const u8,
+    partitioned: bool = false,
     path: []const u8 = "/",
     sameSite: SameSite = .strict,
-    partitioned: bool = false,
+    value: []const u8,
 };
 
 const SetInput = union(enum) {
@@ -230,10 +210,10 @@ const SetInput = union(enum) {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore/delete
 const DeleteOptions = struct {
-    name: []const u8,
     domain: ?[]const u8 = null,
-    path: []const u8 = "/",
+    name: []const u8,
     partitioned: bool = false,
+    path: []const u8 = "/",
 };
 
 const DeleteInput = union(enum) {
@@ -258,11 +238,11 @@ pub fn get(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Promis
 
     if (name == null and url == null) {
         // Unlike getAll(), get() requires a name or url
-        return local.rejectPromise(.{ .type_error = "get requires a name or url" });
+        return local.typeError("get requires a name or url");
     }
 
     const items = matchCookies(exec, name, url, true) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     if (items.len == 0) {
@@ -280,7 +260,7 @@ pub fn getAll(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Pro
     } else .{ null, null };
 
     const items = matchCookies(exec, name, url, false) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
     return local.resolvePromise(items);
 }
@@ -292,12 +272,12 @@ pub fn set(_: *CookieStore, input: SetInput, value: ?[]const u8, exec: *const Ex
         .options => |o| o,
         .name => |n| .{
             .name = n,
-            .value = value orelse return local.rejectPromise(.{ .type_error = "value is required" }),
+            .value = value orelse return local.typeError("value is required"),
         },
     };
 
     storeCookie(exec, init, false) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     return local.resolvePromise({});
@@ -323,7 +303,7 @@ pub fn delete(_: *CookieStore, input: DeleteInput, exec: *const Execution) !js.P
         .sameSite = .strict,
         .partitioned = opts.partitioned,
     }, true) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     return local.resolvePromise({});
@@ -362,11 +342,7 @@ fn matchCookies(
     const session = exec.session;
     const url_resolved = try resolveQueryUrl(exec, url);
 
-    const target = Cookie.PreparedUri{
-        .host = URL.getHostname(url_resolved),
-        .path = URL.getPathname(url_resolved),
-        .secure = URL.isSecure(url_resolved),
-    };
+    const target: Cookie.PreparedUri = .init(url_resolved);
     if (target.host.len == 0) {
         return error.SecurityError;
     }
@@ -377,11 +353,12 @@ fn matchCookies(
     // we're matching
     const normalized_name: ?[]const u8 = if (name) |n| std.mem.trim(u8, n, " \t") else null;
 
+    const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
     var items: std.ArrayList(CookieListItem) = .empty;
-    for (session.cookie_jar.cookies.items) |*cookie| {
+    for (session.cookie_jar.siteCookies(target.host)) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
-        if (cookie.appliesTo(&target, true, true, false) == false) {
+        if (cookie.appliesTo(&target, .{ .same_site = same_site, .is_http = false }) == false) {
             continue;
         }
         if (normalized_name) |n| {
@@ -445,7 +422,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (init.value.len == 0) {
             return error.InvalidCookieName;
         }
-        if (std.mem.indexOfScalar(u8, init.value, '=') != null) {
+        if (std.mem.findScalar(u8, init.value, '=') != null) {
+            return error.InvalidCookieName;
+        }
+        if (Cookie.hasHiddenPrefix(init.value)) {
             return error.InvalidCookieName;
         }
     }
@@ -453,7 +433,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     // Reject inputs the cookie model can't represent. `=` is allowed in
     // values but not in names; `;` and the control characters (U+0000–U+001F,
     // U+007F) break the cookie wire format and so are forbidden in both.
-    if (std.mem.indexOfScalar(u8, init.name, '=') != null) {
+    if (std.mem.findScalar(u8, init.name, '=') != null) {
         return error.InvalidCookieName;
     }
     if (hasForbiddenChar(init.name)) {
@@ -472,7 +452,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     if (init.path.len > 1024) {
         return error.InvalidCookiePath;
     }
-    if (std.mem.indexOfAny(u8, init.path, ";\r\n\x00") != null) {
+    if (std.mem.findAny(u8, init.path, ";\r\n\x00") != null) {
         return error.InvalidCookiePath;
     }
     if (init.domain) |d| {
@@ -483,41 +463,24 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (d.len > 1024) {
             return error.InvalidCookieDomain;
         }
-        if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) {
+        if (std.mem.findAny(u8, d, ";\r\n\x00") != null) {
             return error.InvalidCookieDomain;
         }
     }
 
-    const is_https = URL.isSecure(url);
-    // Per spec, SameSite=None requires Secure. CookieStore additionally
-    // marks any cookie written from an HTTPS document as Secure.
-    const secure = is_https or init.sameSite == .none;
-
-    // The `__Http-` and `__Host-Http-` prefixes are reserved for HTTP-state
-    // cookies; the (script) CookieStore API can never set them, on any origin.
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Http-") or std.ascii.startsWithIgnoreCase(init.name, "__Host-Http-")) {
-        return error.InvalidPrefixedCookie;
+    if (init.sameSite != .none and Cookie.areSameSite(exec.siteForCookies(), URL.getHostname(url)) == false) {
+        return error.SameSiteBlocked;
     }
 
-    // Cookie-name-prefix rules — match Cookie.parse, case-insensitive to
-    // catch impersonation attempts (e.g. "__HoSt-").
-    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes
-    if (std.ascii.startsWithIgnoreCase(init.name, "__Host-")) {
-        if (!is_https) {
-            return error.InvalidPrefixedCookie;
-        }
-        if (init.domain) |d| {
-            if (d.len > 0) {
-                return error.InvalidPrefixedCookie;
-            }
-        }
+    const trustworthy = URL.isPotentiallyTrustworthy(url);
+    // Per spec, SameSite=None requires Secure. CookieStore additionally
+    // marks any cookie written from a trustworthy origin as Secure.
+    const secure = trustworthy or init.sameSite == .none;
 
+    // Script can't set HttpOnly, so __Http- and __Host-Http- never pass.
+    if (Cookie.prefixOf(init.name)) |prefix| {
         const resolved_path = try Cookie.parsePath(exec.local_arena, url, init.path);
-        if (std.mem.eql(u8, resolved_path, "/") == false) {
-            return error.InvalidPrefixedCookie;
-        }
-    } else if (std.ascii.startsWithIgnoreCase(init.name, "__Secure-")) {
-        if (!is_https) {
+        if (!prefix.allows(trustworthy, false, if (init.domain) |d| d.len > 0 else false, resolved_path)) {
             return error.InvalidPrefixedCookie;
         }
     }
@@ -557,7 +520,7 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
     };
 
     // CookieStore is a script API, so is_http = false.
-    try session.cookie_jar.add(cookie, lp.datetime.timestamp(.real), false);
+    try session.cookie_jar.addFromUrl(url, cookie, lp.datetime.timestamp(.real), false);
 }
 
 // Control characters (U+0000–U+001F and U+007F DEL) and `;` cannot appear in
@@ -577,7 +540,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CookieStore";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -585,7 +547,7 @@ pub const JsApi = struct {
     pub const getAll = bridge.function(CookieStore.getAll, .{});
     pub const set = bridge.function(CookieStore.set, .{});
     pub const delete = bridge.function(CookieStore.delete, .{});
-    pub const onchange = bridge.accessor(CookieStore.getOnChange, CookieStore.setOnChange, .{});
+    pub const onchange = EventTarget.handlerAccessor(CookieStore, "change");
 };
 
 // CookieListItem is an plain JavaScript object, not an interface. The bridge
@@ -595,20 +557,98 @@ pub const JsApi = struct {
 // NOTE: Per spec, name and value are the only valid fields. All other fields
 // are experimental. Chrome exposes them all, so we do too.
 pub const CookieListItem = struct {
+    domain: ?String = null,
+    expires: ?f64 = null,
     name: String,
+    partitioned: bool = false,
+    path: String = String.wrap("/"),
+    sameSite: []const u8 = "strict",
+    secure: bool = false,
     // Optional because a deletion change-event reports the removed cookie with
     // `value` omitted (serialized as undefined via the `deleted` accessor's
     // null_as_undefined). For get/getAll and `changed` items it is always set.
     value: ?String = null,
-    domain: ?String = null,
-    path: String = String.wrap("/"),
-    expires: ?f64 = null,
-    secure: bool = false,
-    sameSite: []const u8 = "strict",
-    partitioned: bool = false,
 };
 
 const testing = @import("../../../testing.zig");
+const HttpClient = @import("../../../network/HttpClient.zig");
+
 test "WebApi: CookieStore" {
     try testing.htmlRunner("cookie_store.html", .{});
+}
+
+test "CookieStore: cross-site frame" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const exec = &frame.js.execution;
+    const jar = &frame._session.cookie_jar;
+    defer jar.clearRetainingCapacity();
+
+    // victim.example embedded by attacker.example: the ancestor chain is
+    // cross-site, so the frame has no site for cookies.
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top: HttpClient.Owner = undefined;
+    top.url = &top_url;
+    top.parent = null;
+    frame.url = "https://victim.example/inner";
+    frame._http_owner.parent = &top;
+    defer frame._http_owner.parent = null;
+
+    try jar.populateFromResponse("https://victim.example/", "strict=1; SameSite=Strict");
+    try jar.populateFromResponse("https://victim.example/", "lax=2; SameSite=Lax");
+    try jar.populateFromResponse("https://victim.example/", "none=3; SameSite=None; Secure");
+
+    // getAll(): only SameSite=None is visible from a cross-site context.
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(1, items.len);
+        try testing.expectEqual("none", items[0].name.str());
+    }
+
+    // set(): the default (Strict) and Lax are rejected, None is stored.
+    // delete() is an expiring Strict set, so it is rejected too.
+    try std.testing.expectError(error.SameSiteBlocked, storeCookie(exec, .{ .name = "set_strict", .value = "4" }, false));
+    try std.testing.expectError(error.SameSiteBlocked, storeCookie(exec, .{ .name = "set_lax", .value = "5", .sameSite = .lax }, false));
+    try storeCookie(exec, .{ .name = "set_none", .value = "6", .sameSite = .none }, false);
+    try std.testing.expectError(error.SameSiteBlocked, storeCookie(exec, .{ .name = "none", .value = "", .expires = 0 }, true));
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(2, items.len);
+        try testing.expectEqual("none", items[0].name.str());
+        try testing.expectEqual("set_none", items[1].name.str());
+    }
+
+    // The same jar seen from a same-site chain: everything applies, and the
+    // rejected writes really were rejected rather than hidden.
+    top_url = "https://victim.example/";
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(4, items.len);
+        try testing.expectEqual("strict", items[0].name.str());
+        try testing.expectEqual("lax", items[1].name.str());
+        try testing.expectEqual("none", items[2].name.str());
+        try testing.expectEqual("set_none", items[3].name.str());
+    }
+    try storeCookie(exec, .{ .name = "set_strict", .value = "4" }, false);
+    try storeCookie(exec, .{ .name = "none", .value = "", .expires = 0 }, true);
+    {
+        // The jar swap-removes on delete, so only check membership here.
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(4, items.len);
+        var has_set_strict = false;
+        for (items) |item| {
+            try testing.expectEqual(false, std.mem.eql(u8, "none", item.name.str()));
+            if (std.mem.eql(u8, "set_strict", item.name.str())) has_set_strict = true;
+        }
+        try testing.expectEqual(true, has_set_strict);
+    }
+
+    // Back in the cross-site context, the Strict cookie written same-site is
+    // hidden again.
+    top_url = "https://attacker.example/";
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(1, items.len);
+        try testing.expectEqual("set_none", items[0].name.str());
+    }
 }

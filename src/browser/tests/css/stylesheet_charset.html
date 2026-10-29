@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+  <link rel="stylesheet" href="/styles/latin1-header.css">
+  <link rel="stylesheet" href="/styles/latin1-at-charset.css">
+  <link rel="stylesheet" href="/styles/truncated-utf8.css">
+</head>
+<body>
+  <div id="by-header" class="by-header">hidden</div>
+  <div id="by-at-charset" class="by-at-charset">hidden</div>
+  <div id="before-truncated" class="before-truncated">hidden</div>
+
+  <script id="content_type_charset">
+  {
+    const el = document.getElementById('by-header');
+    testing.expectEqual('none', getComputedStyle(el).display);
+    testing.expectEqual('"café"', document.styleSheets[0].cssRules[0].style.getPropertyValue('--name'));
+  }
+  </script>
+
+  <script id="at_charset">
+    testing.expectEqual('none', getComputedStyle(document.getElementById('by-at-charset')).display);
+  </script>
+
+  <script id="truncated_utf8">
+    testing.expectEqual('none', getComputedStyle(document.getElementById('before-truncated')).display);
+  </script>
+</body>

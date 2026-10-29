@@ -56,7 +56,7 @@ pub fn evaluate(
     return XPathResult.fromExpression(expression, context_node, requested_type orelse XPathResult.ANY_TYPE, frame);
 }
 
-pub fn createExpression(
+fn createExpression(
     _: *const XPathEvaluator,
     expression: []const u8,
     resolver: ?js.Value,
@@ -66,7 +66,7 @@ pub fn createExpression(
     return XPathExpression.init(expression, frame);
 }
 
-pub fn createNSResolver(_: *const XPathEvaluator, node: *Node) ?*Node {
+fn createNSResolver(_: *const XPathEvaluator, node: *Node) ?*Node {
     // HTML-mode passthrough — the WHATWG IDL accepts a Node and returns
     // an `XPathNSResolver`, but in practice the input node is reused.
     return node;
@@ -77,7 +77,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "XPathEvaluator";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };

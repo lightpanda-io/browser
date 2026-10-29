@@ -68,7 +68,7 @@ pub const replaceItem = M.replaceItem;
 pub const removeItem = M.removeItem;
 pub const appendItem = M.appendItem;
 
-pub fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
+fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
     try M.requireMutable(self);
     try M.sync(self, frame);
     if (self._items.items.len == 0) return null;
@@ -91,10 +91,10 @@ pub fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
         .is_2d = true,
     }, frame);
     consolidated.acquireRef();
-    errdefer consolidated.releaseRef(frame._page);
+    errdefer consolidated.releaseRef(frame.page);
 
     try M.retireAll(self, frame);
-    try self._items.ensureTotalCapacity(frame.arena, 1);
+    try self._items.ensureTotalCapacity(frame.page_arena, 1);
     try M.setAttribute(self, &.{consolidated}, frame);
     self._items.appendAssumeCapacity(consolidated);
     attach(self, consolidated);
@@ -143,7 +143,7 @@ fn mutateTransform(context: *anyopaque, transform: *Transform, state: Transform.
 
 fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*Transform) {
     var parsed: std.ArrayList(*Transform) = .empty;
-    errdefer for (parsed.items) |transform| transform.releaseRef(frame._page);
+    errdefer for (parsed.items) |transform| transform.releaseRef(frame.page);
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "none")) return parsed;
 
@@ -153,7 +153,7 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*Transform) {
         const transform = try Transform.fromParsed(value, frame);
         transform.acquireRef();
         parsed.append(frame.local_arena, transform) catch |err| {
-            transform.releaseRef(frame._page);
+            transform.releaseRef(frame.page);
             return err;
         };
     }
@@ -179,7 +179,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "SVGTransformList";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

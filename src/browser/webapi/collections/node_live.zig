@@ -27,6 +27,8 @@ const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const Selector = @import("../selector/Selector.zig");
 const Form = @import("../element/html/Form.zig");
+const Table = @import("../element/html/Table.zig");
+const HTMLDocument = @import("../HTMLDocument.zig");
 
 const String = lp.String;
 
@@ -40,21 +42,23 @@ const Mode = enum {
     child_elements,
     child_tag,
     cells,
+    table_rows,
     select_options,
     selected_options,
     links,
     anchors,
     form,
+    document_named,
 };
 
-pub const ClassNameFilter = struct {
+const ClassNameFilter = struct {
     names: [][]const u8,
     // getElementsByClassName matches class names ASCII case-insensitively
     // when the document is in quirks mode.
     case_insensitive: bool = false,
 };
 
-pub const TagNameNsFilter = struct {
+const TagNameNsFilter = struct {
     namespace: ?Element.Namespace, // null means wildcard "*"
     local_name: String,
 };
@@ -69,15 +73,17 @@ const Filters = union(Mode) {
     child_elements,
     child_tag: Element.Tag,
     cells,
+    table_rows,
     select_options,
     selected_options,
     links,
     anchors,
-    form: struct { form: *Form, form_id: ?[]const u8 },
+    form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool, outputs: bool, listed: bool },
+    document_named: []const u8,
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(10_000);
-        return std.meta.fieldInfo(Filters, mode).type;
+        return @FieldType(Filters, @tagName(mode));
     }
 };
 
@@ -103,8 +109,9 @@ const Filters = union(Mode) {
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
-        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
+        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form, .document_named => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .cells => TreeWalker.Children,
+        .table_rows => Table.RowWalker,
         // A select's options can sit one level down, inside an <optgroup>, so
         // these two walk the subtree and filter on the parent instead.
         .select_options, .selected_options => TreeWalker.FullExcludeSelf,
@@ -133,7 +140,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
-                ._cached_version = frame._page.dom_version,
+                ._cached_version = frame.page.dom_version,
             };
         }
 
@@ -171,19 +178,6 @@ pub fn NodeLive(comptime mode: Mode) type {
             return l;
         }
 
-        // This API supports indexing by both numeric index and id/name
-        // i.e. a combination of getAtIndex and getByName
-        pub fn getIndexed(self: *Self, value: js.Atom, frame: *Frame) !?*Element {
-            if (value.isUint()) |n| {
-                return self.getAtIndex(n, frame);
-            }
-
-            const name = value.toString();
-            defer value.freeString(name);
-
-            return self.getByName(name, frame) orelse return error.NotHandled;
-        }
-
         pub fn getAtIndex(self: *Self, index: usize, frame: *const Frame) ?*Element {
             _ = self.versionCheck(frame);
 
@@ -218,8 +212,8 @@ pub fn NodeLive(comptime mode: Mode) type {
             return null;
         }
 
-        pub fn getByName(self: *Self, name: []const u8, frame: *Frame) ?*Element {
-            if (frame.getElementByIdFromNode(self._tw._root, name)) |element| {
+        pub fn getByName(self: *Self, name: []const u8) ?*Element {
+            if (Frame.getElementByIdFromNode(self._tw._root, name)) |element| {
                 const node = element.asNode();
                 if (self._tw.contains(node) and self.matches(node)) {
                     return element;
@@ -239,7 +233,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 if (element._namespace != .html) {
                     continue;
                 }
-                const element_name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+                const element_name = element.getName() orelse continue;
                 if (std.mem.eql(u8, element_name, name)) {
                     return element;
                 }
@@ -309,7 +303,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                     }
 
                     const el = node.is(Element) orelse return false;
-                    const class_attr = el.getAttributeSafe(comptime .wrap("class")) orelse return false;
+                    const class_attr = el.getAttributeInterned("class") orelse return false;
                     for (self._filter.names) |class_name| {
                         if (!Selector.classAttributeContainsCase(class_attr, class_name, self._filter.case_insensitive)) {
                             return false;
@@ -321,13 +315,15 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     // getElementsByName only considers HTML elements.
                     if (el._namespace != .html) return false;
-                    const name_attr = el.getAttributeSafe(comptime .wrap("name")) orelse return false;
+                    const name_attr = el.getName() orelse return false;
                     return std.mem.eql(u8, name_attr, self._filter);
                 },
                 .all_elements => return node._type == .element,
                 .child_elements => return node._type == .element,
                 .child_tag => {
                     const el = node.is(Element) orelse return false;
+                    // getTag() is namespace-blind: an SVG "tr" reports .tr
+                    if (el._namespace != .html) return false;
                     return el.getTag() == self._filter;
                 },
                 .cells => {
@@ -335,6 +331,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     return el.is(Element.Html.TableCell) != null;
                 },
+                // the RowWalker only yields rows
+                .table_rows => return true,
                 .select_options, .selected_options => {
                     const opt = node.is(Element.Html.Option) orelse return false;
 
@@ -361,19 +359,34 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     const Anchor = Element.Html.Anchor;
                     if (el.is(Anchor) == null) return false;
-                    return el.hasAttributeSafe(comptime .wrap("href"));
+                    return el.hasAttributeInterned("href");
                 },
                 .anchors => {
                     // Anchors are <a> elements with name attribute
                     const el = node.is(Element) orelse return false;
                     const Anchor = Element.Html.Anchor;
                     if (el.is(Anchor) == null) return false;
-                    return el.hasAttributeSafe(comptime .wrap("name"));
+                    return el.hasName();
                 },
                 .form => {
                     const el = node.is(Element) orelse return false;
-                    if (!isFormControl(el)) {
+                    if (el._type != .html) {
                         return false;
+                    }
+                    const is_control = isFormControl(el) or switch (el.getTag()) {
+                        .output => self._filter.outputs or self._filter.listed,
+                        .fieldset, .object => self._filter.listed,
+                        else => false,
+                    };
+                    if (is_control == false) {
+                        return false;
+                    }
+                    if (self._filter.image_buttons == false) {
+                        if (el.is(Element.Html.Input)) |input| {
+                            if (input._input_type == .image) {
+                                return false;
+                            }
+                        }
                     }
 
                     if (self._filter.form_id) |form_id| {
@@ -402,20 +415,24 @@ pub fn NodeLive(comptime mode: Mode) type {
                     // controls, this could be significantly faster.
                     return self._filter.form.asNode().contains(node);
                 },
+                .document_named => {
+                    const el = node.is(Element) orelse return false;
+                    return HTMLDocument.isNamed(el, self._filter);
+                },
             }
         }
 
         fn isFormControl(el: *Element) bool {
-            if (el._type != .html) return false;
             const html = el.subtype(Element.Html);
             return switch (html._type) {
                 .input, .button, .select, .textarea => true,
+                .custom => html.subtype(Element.Html.Custom).isFormAssociated(),
                 else => false,
             };
         }
 
         fn versionCheck(self: *Self, frame: *const Frame) bool {
-            const current = frame._page.dom_version;
+            const current = frame.page.dom_version;
             if (current == self._cached_version) {
                 return true;
             }
@@ -448,11 +465,13 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .child_elements => .{ ._data = .{ .child_elements = self } },
                 .child_tag => .{ ._data = .{ .child_tag = self } },
                 .cells => .{ ._data = .{ .cells = self } },
+                .table_rows => .{ ._data = .{ .table_rows = self } },
                 .select_options => .{ ._data = .{ .select_options = self } },
                 .selected_options => .{ ._data = .{ .selected_options = self } },
                 .links => .{ ._data = .{ .links = self } },
                 .anchors => .{ ._data = .{ .anchors = self } },
                 .form => .{ ._data = .{ .form = self } },
+                .document_named => .{ ._data = .{ .document_named = self } },
             };
         }
     };
@@ -493,7 +512,7 @@ test "NodeLive: indexed reads stay linear" {
 
 fn buildSpans(frame: *Frame, count: usize) !*Node {
     const div = try frame.window._document.createElement("div", null, frame);
-    const html = try frame.arena.alloc(u8, count * "<span></span>".len);
+    const html = try frame.page_arena.alloc(u8, count * "<span></span>".len);
     var i: usize = 0;
     while (i < html.len) : (i += "<span></span>".len) {
         @memcpy(html[i..][0.."<span></span>".len], "<span></span>");

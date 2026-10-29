@@ -72,7 +72,7 @@ pub fn asEvent(self: *FormDataEvent) *Event {
     return self._proto;
 }
 
-pub fn getFormData(self: *const FormDataEvent) ?*FormData {
+fn getFormData(self: *const FormDataEvent) ?*FormData {
     return self._form_data;
 }
 
@@ -81,7 +81,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "FormDataEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

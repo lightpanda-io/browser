@@ -60,7 +60,7 @@ pub fn getKey(self: *const IDBRecord, exec: *Execution) !js.Value {
     return Key.decodeToJs(exec.call_arena, exec.js.local.?, self._key);
 }
 
-pub fn getPrimaryKey(self: *const IDBRecord, exec: *Execution) !js.Value {
+fn getPrimaryKey(self: *const IDBRecord, exec: *Execution) !js.Value {
     return Key.decodeToJs(exec.call_arena, exec.js.local.?, self._primary_key);
 }
 
@@ -73,7 +73,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "IDBRecord";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

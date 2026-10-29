@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id=root>
@@ -186,5 +187,25 @@
   const root = $('#desc-root');
   assertList(['Direct child paragraph', 'Nested paragraph', 'Deeply nested paragraph', 'Article paragraph'], root.querySelectorAll('  div   p  '));
   assertList(['Nested paragraph'], root.querySelectorAll('  div.nested    p.text  '));
+}
+</script>
+
+<div id=grouped-tags>
+  <a href="#">a</a><dir>dir</dir><h1>h1</h1><h2>h2</h2><q>q</q><blockquote>blockquote</blockquote><audio></audio><video></video>
+</div>
+
+<script id=internalTagGroupsAreNotTagNames>
+{
+  const root = $('#grouped-tags');
+  for (const name of ['anchor', 'directory', 'heading', 'quote', 'media']) {
+    testing.expectEqual(0, root.querySelectorAll(name).length);
+    testing.expectEqual(0, root.getElementsByTagName(name).length);
+  }
+  assertList(['a'], root.querySelectorAll('a'));
+  assertList(['dir'], root.querySelectorAll('dir'));
+  assertList(['h1', 'h2'], root.querySelectorAll('h1, h2'));
+  assertList(['q'], root.querySelectorAll('q'));
+  testing.expectEqual(1, root.getElementsByTagName('blockquote').length);
+  testing.expectEqual(2, root.querySelectorAll('audio, video').length);
 }
 </script>

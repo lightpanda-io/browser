@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<head><style>.iframe-hidden { display: none }</style></head>
 <body>
   <span id="s1" data-cp="5F" data-bytes="A1B2" data-cycle="A1B2" nonstandardattr="ns1">x</span>
   <script>
@@ -11,6 +12,9 @@
     }
     function removeAttr(name) {
       document.getElementById('s1').removeAttribute(name);
+    }
+    function checkHidden() {
+      return !document.getElementById('s1').checkVisibility();
     }
 
     window.addEventListener('message', (e) => {

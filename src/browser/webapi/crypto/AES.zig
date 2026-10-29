@@ -16,9 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! AES for AES-CBC/CTR/GCM/KW: key generation, import, and encrypt/decrypt
-//! (CBC/CTR/GCM). Keys are raw byte strings; wrapKey/unwrapKey is not yet
-//! implemented.
+//! AES for AES-CBC/CTR/GCM/KW: key generation, import, encrypt/decrypt
+//! (CBC/CTR/GCM) and AES-KW's key wrap/unwrap. Keys are raw byte strings.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -68,7 +67,8 @@ pub fn validate(params: algorithm.Init.AesKeyGen, key_usages: []const []const u8
         }
     }
 
-    if (params.length != 128 and params.length != 192 and params.length != 256) {
+    const length = params.length.value;
+    if (length != 128 and length != 192 and length != 256) {
         return error.OperationError;
     }
 
@@ -85,15 +85,13 @@ pub fn generate(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    validate(params, key_usages) catch |err| {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
+    try validate(params, key_usages);
 
     // validate() already confirmed the usages and length are well-formed.
     const allowed = allowedUsages(params.name).?;
     const mask = common.usageMask(allowed, key_usages) catch unreachable;
 
-    const key = try exec.local_arena.alloc(u8, params.length / 8);
+    const key = try exec.local_arena.alloc(u8, params.length.value / 8);
 
     const res = crypto.RAND_bytes(key.ptr, key.len);
     lp.assert(res == 1, "AES.generate", .{ .res = res });
@@ -110,8 +108,8 @@ pub fn generate(
     return local.resolvePromise(crypto_key);
 }
 
-/// Imports raw AES key material (from the `raw` or `jwk` formats; the caller has
-/// already turned both into the underlying bytes).
+/// Imports raw AES key material (from the `raw` format, or the `k` of a JWK
+/// that `importJwk` checked).
 pub fn import(
     name: []const u8,
     raw: []const u8,
@@ -122,15 +120,13 @@ pub fn import(
     const local = exec.js.local.?;
 
     const canonical = canonicalName(name) orelse {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     };
 
-    const mask = common.usageMask(allowedUsages(name).?, key_usages) catch |err| {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
+    const mask = try common.usageMask(allowedUsages(name).?, key_usages);
 
     if (raw.len != 16 and raw.len != 24 and raw.len != 32) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+        return error.DataError;
     }
 
     const crypto_key = try CryptoKey.init(exec, .{
@@ -145,7 +141,37 @@ pub fn import(
     return local.resolvePromise(crypto_key);
 }
 
-pub const CipherError = error{ InvalidAccessError, OperationError, NotSupported, OutOfMemory };
+/// Imports an AES key from a JWK, following the "jwk" steps of AES's "import
+/// key": the usages first (SyntaxError), then kty "oct", the key in `k`, an
+/// `alg` that names this algorithm at the key's length, and the common
+/// use/key_ops/ext checks (DataError).
+pub fn importJwk(
+    name: []const u8,
+    jwk: algorithm.KeyData.Jwk,
+    extractable: bool,
+    key_usages: []const []const u8,
+    exec: *const Execution,
+) !js.Promise {
+    const canonical = canonicalName(name) orelse return error.NotSupported;
+    const mask = try common.usageMask(allowedUsages(canonical).?, key_usages);
+
+    const raw = try common.octKey(jwk, exec.local_arena);
+    if (jwk.alg) |alg| {
+        if (!std.mem.eql(u8, alg, try jwkAlg(canonical, raw.len, exec))) return error.DataError;
+    }
+    try common.checkJwk(jwk, "enc", mask, extractable);
+
+    // import() rejects a key that isn't 128, 192 or 256 bits (DataError).
+    return import(canonical, raw, extractable, key_usages, exec);
+}
+
+/// The JWK `alg` of an AES key: "A", its length in bits and the mode
+/// ("A128GCM", "A256KW", ...). `name` is the canonical algorithm name.
+pub fn jwkAlg(name: []const u8, key_len: usize, exec: *const Execution) ![]const u8 {
+    return exec.local_arena.print("A{d}{s}", .{ key_len * 8, name[4..] }); // strip "AES-"
+}
+
+const CipherError = error{ InvalidAccessError, OperationError, NotSupported, OutOfMemory };
 
 const Mode = enum { cbc, ctr, gcm };
 
@@ -180,12 +206,14 @@ fn cipherFor(mode: Mode, key_len: usize) ?*const crypto.EVP_CIPHER {
 }
 
 /// AES encrypt (`encrypting = true`) or decrypt. Returns the resulting bytes
-/// (ciphertext for GCM includes the appended tag).
+/// (ciphertext for GCM includes the appended tag). `usage` is the usage bit
+/// the key needs: encrypt/decrypt, or wrapKey/unwrapKey when wrapping a key.
 pub fn crypt(
     params: anytype, // algorithm.Encrypt.params
     key: *const CryptoKey,
     data: []const u8,
     encrypting: bool,
+    usage: u8,
     exec: *const Execution,
 ) CipherError![]const u8 {
     const mode = modeFor(params.name) orelse return error.NotSupported;
@@ -195,7 +223,7 @@ pub fn crypt(
     if (key._type != .aes or !eqlIgnoreCase(key._algorithm.name, params.name)) {
         return error.InvalidAccessError;
     }
-    if ((encrypting and !key.canEncrypt()) or (!encrypting and !key.canDecrypt())) {
+    if (key._usages & usage == 0) {
         return error.InvalidAccessError;
     }
 
@@ -211,6 +239,43 @@ pub fn crypt(
         },
         .gcm => gcm(cipher, key._key, params, data, encrypting, exec),
     };
+}
+
+/// AES-KW (RFC 3394) key wrap (`wrapping = true`) or unwrap, with the default
+/// IV. `usage` is the wrapKey/unwrapKey bit the key needs. Data that isn't a
+/// multiple of 8 bytes (or too short), and an integrity failure on unwrap, are
+/// OperationError.
+pub fn keyWrap(
+    key: *const CryptoKey,
+    data: []const u8,
+    wrapping: bool,
+    usage: u8,
+    exec: *const Execution,
+) CipherError![]const u8 {
+    if (key._type != .aes or !eqlIgnoreCase(key._algorithm.name, "AES-KW")) {
+        return error.InvalidAccessError;
+    }
+    if (key._usages & usage == 0) {
+        return error.InvalidAccessError;
+    }
+    if (data.len < 8) return error.OperationError;
+
+    // 16-byte aligned like the key schedules BoringSSL allocates itself.
+    var aes_key: crypto.AES_KEY align(16) = undefined;
+    const bits: c_uint = @intCast(key._key.len * 8);
+    const set = if (wrapping)
+        crypto.AES_set_encrypt_key(key._key.ptr, bits, &aes_key)
+    else
+        crypto.AES_set_decrypt_key(key._key.ptr, bits, &aes_key);
+    if (set != 0) return error.OperationError;
+
+    const out = try exec.local_arena.alloc(u8, if (wrapping) data.len + 8 else data.len - 8);
+    const len = if (wrapping)
+        crypto.AES_wrap_key(&aes_key, null, out.ptr, data.ptr, data.len)
+    else
+        crypto.AES_unwrap_key(&aes_key, null, out.ptr, data.ptr, data.len);
+    if (len < 0) return error.OperationError;
+    return out[0..@intCast(len)];
 }
 
 fn ivOf(opt: anytype) ?[]const u8 {

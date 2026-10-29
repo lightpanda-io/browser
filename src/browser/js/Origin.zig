@@ -52,7 +52,7 @@ pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     defer hs.deinit();
 
     const owned_key = try arena.dupe(u8, key);
-    const token_local = isolate.initStringHandle(owned_key);
+    const token_local = try isolate.initStringHandle(owned_key);
     var token_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, token_local, &token_global);
 

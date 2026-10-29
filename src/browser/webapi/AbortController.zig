@@ -33,7 +33,7 @@ pub fn init(exec: *const Execution) !*AbortController {
     });
 }
 
-pub fn getSignal(self: *const AbortController) *AbortSignal {
+fn getSignal(self: *const AbortController) *AbortSignal {
     return self._signal;
 }
 
@@ -47,7 +47,6 @@ pub const JsApi = struct {
     pub const Meta = struct {
         pub const name = "AbortController";
 
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

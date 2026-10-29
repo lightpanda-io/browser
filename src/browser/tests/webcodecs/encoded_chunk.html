@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=construct>
+{
+  for (const Chunk of [EncodedAudioChunk, EncodedVideoChunk]) {
+    const chunk = new Chunk({type: 'key', timestamp: -10, duration: 300, data: new Uint8Array([1, 2, 3])});
+    testing.expectEqual('key', chunk.type);
+    testing.expectEqual(-10, chunk.timestamp);
+    testing.expectEqual(300, chunk.duration);
+    testing.expectEqual(3, chunk.byteLength);
+
+    const dest = new Uint8Array(4);
+    chunk.copyTo(dest);
+    testing.expectEqual([1, 2, 3, 0], Array.from(dest));
+    testing.expectError('TypeError', () => chunk.copyTo(new Uint8Array(2)));
+
+    const delta = new Chunk({type: 'delta', timestamp: 0, data: new ArrayBuffer(0)});
+    testing.expectEqual(null, delta.duration);
+    testing.expectEqual(0, delta.byteLength);
+  }
+}
+</script>
+
+<script id=invalid>
+{
+  const data = new Uint8Array(1);
+  testing.expectError('TypeError', () => new EncodedVideoChunk({type: 'nope', timestamp: 0, data}));
+  testing.expectError('TypeError', () => new EncodedVideoChunk({type: 'key', data}));
+  // [EnforceRange]
+  testing.expectError('TypeError', () => new EncodedVideoChunk({type: 'key', timestamp: Infinity, data}));
+  testing.expectError('TypeError', () => new EncodedVideoChunk({type: 'key', timestamp: 0, duration: -1, data}));
+}
+</script>
+
+<script id=transfer>
+{
+  const buffer = new Uint8Array([7, 8]).buffer;
+  const chunk = new EncodedAudioChunk({type: 'key', timestamp: 0, data: buffer, transfer: [buffer]});
+  testing.expectEqual(true, buffer.detached);
+  testing.expectEqual(2, chunk.byteLength);
+
+  const other = new ArrayBuffer(1);
+  testing.expectError('DataCloneError', () => new EncodedAudioChunk({type: 'key', timestamp: 0, data: other, transfer: [other, other]}));
+  testing.expectEqual(false, other.detached);
+  testing.expectError('DataCloneError', () => new EncodedAudioChunk({type: 'key', timestamp: 0, data: other, transfer: [buffer]}));
+}
+</script>
+
+<script id=clone>
+{
+  const chunk = new EncodedVideoChunk({type: 'delta', timestamp: 5, duration: 6, data: new Uint8Array([9])});
+  const copy = structuredClone(chunk);
+  testing.expectEqual(true, copy instanceof EncodedVideoChunk);
+  testing.expectEqual('delta', copy.type);
+  testing.expectEqual(5, copy.timestamp);
+  testing.expectEqual(6, copy.duration);
+  const dest = new Uint8Array(1);
+  copy.copyTo(dest);
+  testing.expectEqual(9, dest[0]);
+}
+</script>

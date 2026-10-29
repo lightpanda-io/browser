@@ -17,33 +17,55 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
-const units = @import("../css/units.zig");
+const Tokenizer = @import("../css/Tokenizer.zig");
+const css_supports = @import("../css/supports.zig");
 
 const CSS = @This();
 _pad: bool = false,
 
 pub const init: CSS = .{};
 
-pub fn parseDimension(value: []const u8) ?f64 {
-    const parsed = units.parse(value) catch return null;
-    return switch (parsed.unit) {
-        .none, .px => parsed.value,
-        else => null,
-    };
-}
+// Extract the X value from a transfrom. This could come from a translate,
+// translatex, translate3d or matrix function.
+pub fn parseTranslateX(value: []const u8) f64 {
+    var total: f64 = 0.0;
+    var tokenizer: Tokenizer = .{ .input = value };
+    while (tokenizer.next()) |token| {
+        const name = switch (token) {
+            .function => |name| name,
+            else => continue,
+        };
+        const x_arg: usize = blk: {
+            if (std.ascii.eqlIgnoreCase(name, "translatex") or std.ascii.eqlIgnoreCase(name, "translate") or std.ascii.eqlIgnoreCase(name, "translate3d")) {
+                // x is the first arg in all these cases
+                break :blk 0;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "matrix")) {
+                // x is the 4th arg in the matrix
+                break :blk 4;
+            }
+            continue;
+        };
 
-// parseDimension plus viewport-relative units, which the faux layout
-// resolves against the page viewport.
-pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
-    const parsed = units.parse(value) catch return null;
-    return switch (parsed.unit) {
-        .none, .px => parsed.value,
-        .vh => parsed.value * @as(f64, @floatFromInt(frame._page.getViewport().height)) / 100.0,
-        .vw => parsed.value * @as(f64, @floatFromInt(frame._page.getViewport().width)) / 100.0,
-        else => null,
-    };
+        var arg: usize = 0;
+        while (tokenizer.next()) |t| {
+            switch (t) {
+                .close_parenthesis => break,
+                .comma => arg += 1,
+                .number => |n| if (arg == x_arg) {
+                    total += n.value;
+                },
+                .dimension => |d| if (arg == x_arg and std.ascii.eqlIgnoreCase(d.unit, "px")) {
+                    total += d.value;
+                },
+                else => {},
+            }
+        }
+    }
+    return total;
 }
 
 /// Escapes a CSS identifier string
@@ -87,7 +109,7 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
         // Second char (i==0) is a digit and first is '-', needs hex escape
         if (i == 0 and first == '-' and c >= '0' and c <= '9') {
             result[pos] = '\\';
-            const hex_str = std.fmt.bufPrint(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
+            const hex_str = std.mem.print(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
             pos += 1 + hex_str.len;
         } else if (!needsEscape(false, c)) {
             result[pos] = c;
@@ -100,10 +122,14 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
     return result;
 }
 
-pub fn supports(property_or_condition: []const u8, value: ?[]const u8) bool {
-    _ = property_or_condition;
-    _ = value;
-    return true;
+// With two arguments, this is asking: do we recognize the property. We don't
+// currently validate the value, we don't have a grammar for most properties.
+// With one, it's a condition: `(display: grid) and selector(:has(a))`.
+pub fn supports(property_or_condition: []const u8, value: ?[]const u8, frame: *Frame) bool {
+    if (value) |v| {
+        return css_supports.declaration(property_or_condition, v);
+    }
+    return css_supports.condition(frame.local_arena, property_or_condition);
 }
 
 fn escapeLen(comptime is_first: bool, c: u8) usize {
@@ -160,7 +186,7 @@ fn writeEscape(comptime is_first: bool, buf: []u8, c: u8) usize {
     var data = buf[1..];
 
     if (isHexEscape(c) or ((comptime is_first) and c >= '0' and c <= '9')) {
-        const hex_str = std.fmt.bufPrint(data, "{x} ", .{c}) catch unreachable;
+        const hex_str = std.mem.print(data, "{x} ", .{c}) catch unreachable;
         return 1 + hex_str.len;
     }
 
@@ -173,12 +199,12 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Css";
+        pub const class_string = "CSS";
 
         // Per the CSSOM spec, CSS is a namespace object — members are own
         // properties so Object.entries(CSS) returns them.
-        pub const own_properties = true;
+        pub const namespace = true;
 
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const empty_with_no_proto = true;
     };

@@ -48,44 +48,44 @@ fn create(exec: *Execution, lower: ?[]const u8, upper: ?[]const u8, lower_open: 
 }
 
 pub fn only(value: js.Value, exec: *Execution) !*IDBKeyRange {
-    const encoded = try Key.encodeValue(exec.arena, value);
+    const encoded = try Key.encodeValue(exec.page_arena, value);
     return create(exec, encoded, encoded, false, false);
 }
 
-pub fn lowerBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
-    const encoded = try Key.encodeValue(exec.arena, value);
+fn lowerBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
+    const encoded = try Key.encodeValue(exec.page_arena, value);
     return create(exec, encoded, null, open orelse false, false);
 }
 
-pub fn upperBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
-    const encoded = try Key.encodeValue(exec.arena, value);
+fn upperBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
+    const encoded = try Key.encodeValue(exec.page_arena, value);
     return create(exec, null, encoded, false, open orelse false);
 }
 
-pub fn bound(lower: js.Value, upper: js.Value, lower_open: ?bool, upper_open: ?bool, exec: *Execution) !*IDBKeyRange {
-    const lo = try Key.encodeValue(exec.arena, lower);
-    const up = try Key.encodeValue(exec.arena, upper);
+fn bound(lower: js.Value, upper: js.Value, lower_open: ?bool, upper_open: ?bool, exec: *Execution) !*IDBKeyRange {
+    const lo = try Key.encodeValue(exec.page_arena, lower);
+    const up = try Key.encodeValue(exec.page_arena, upper);
     if (std.mem.order(u8, lo, up) == .gt) {
         return error.DataError;
     }
     return create(exec, lo, up, lower_open orelse false, upper_open orelse false);
 }
 
-pub fn getLower(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
+fn getLower(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
     const encoded = self._lower orelse return null;
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-pub fn getUpper(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
+fn getUpper(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
     const encoded = self._upper orelse return null;
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-pub fn getLowerOpen(self: *const IDBKeyRange) bool {
+fn getLowerOpen(self: *const IDBKeyRange) bool {
     return self._lower_open;
 }
 
-pub fn getUpperOpen(self: *const IDBKeyRange) bool {
+fn getUpperOpen(self: *const IDBKeyRange) bool {
     return self._upper_open;
 }
 
@@ -113,7 +113,7 @@ fn containsEncoded(self: *const IDBKeyRange, encoded: []const u8) bool {
 }
 
 // SQL bounds for the engine's ranged queries.
-pub fn toBounds(self: *const IDBKeyRange) Engine.Bounds {
+fn toBounds(self: *const IDBKeyRange) Engine.Bounds {
     return .{
         .is_point = false,
         .lower = self._lower orelse Engine.Bounds.min_sentinel,
@@ -161,13 +161,13 @@ pub const GetAllArgs = struct {
 // IDBGetAllOptions dictionary as the first argument. Per Web IDL, the first
 // argument is the options dictionary when it's an object that is not itself a key
 // or an IDBKeyRange; otherwise it's the query and `count` is the count.
-pub fn resolveGetAll(arena: Allocator, query_or_options: ?js.Value, count: ?u32, exec: *Execution) !GetAllArgs {
+pub fn resolveGetAll(arena: Allocator, query_or_options: ?js.Value, count: ?f64, exec: *Execution) !GetAllArgs {
     if (query_or_options) |v| {
         if (isOptionsDictionary(v, exec)) {
             return resolveOptions(arena, v, exec);
         }
     }
-    return .{ .bounds = try resolveQuery(arena, query_or_options, exec), .count = normalizeCount(count) };
+    return .{ .bounds = try resolveQuery(arena, query_or_options, exec), .count = try normalizeCount(count) };
 }
 
 // getAllRecords always takes an IDBGetAllOptions dictionary (or nothing).
@@ -200,7 +200,7 @@ fn resolveOptions(arena: Allocator, v: js.Value, exec: *Execution) !GetAllArgs {
 
     const count = try obj.get("count");
     if (!count.isNullOrUndefined()) {
-        args.count = normalizeCount(try count.toU32());
+        args.count = try normalizeCount(try count.toF64());
     }
 
     const direction = try obj.get("direction");
@@ -211,9 +211,19 @@ fn resolveOptions(arena: Allocator, v: js.Value, exec: *Execution) !GetAllArgs {
     return args;
 }
 
-fn normalizeCount(count: ?u32) ?u32 {
+// count is [EnforceRange] unsigned long: NaN, the infinities and anything
+// outside [0, 2^32) are a TypeError (fractions truncate). 0 means "no limit".
+fn normalizeCount(count: ?f64) !?u32 {
     const c = count orelse return null;
-    return if (c == 0) null else c;
+    if (!std.math.isFinite(c)) {
+        return error.TypeError;
+    }
+    const truncated = @trunc(c);
+    if (truncated < 0 or truncated > std.math.maxInt(u32)) {
+        return error.TypeError;
+    }
+    const n: u32 = @intFromFloat(truncated);
+    return if (n == 0) null else n;
 }
 
 pub const JsApi = struct {
@@ -221,7 +231,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "IDBKeyRange";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

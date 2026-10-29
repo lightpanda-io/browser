@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<form id=form><select id=select><option>a<option>b</select></form>
+
+<script id=sameSetAsHTMLElement>
+{
+  // Window and Document include GlobalEventHandlers, like HTMLElement.
+  // Window leaves out the DocumentAndElementEventHandlers (copy, cut, paste),
+  // and the fullscreen handlers (Element and Document only).
+  const notOnWindow = [
+    'oncopy', 'oncut', 'onpaste',
+    'onfullscreenchange', 'onfullscreenerror',
+  ];
+  const names = Object.getOwnPropertyNames(HTMLElement.prototype)
+    .filter((n) => n.startsWith('on'));
+
+  testing.expectEqual([], names.filter((n) => !(n in document)));
+  testing.expectEqual([], names.filter((n) => !notOnWindow.includes(n) && !(n in window)));
+  testing.expectEqual([], notOnWindow.filter((n) => n in window));
+}
+</script>
+
+<script id=featureDetection>
+  // What libraries read once at load to decide whether change and submit bubble.
+  testing.expectEqual(true, 'onchange' in window);
+  testing.expectEqual(true, 'onsubmit' in window);
+  testing.expectEqual(true, 'oninput' in window);
+  testing.expectEqual(true, 'onkeydown' in window);
+  testing.expectEqual(true, 'onchange' in document);
+  testing.expectEqual(true, 'onsubmit' in document);
+</script>
+
+<script id=noTouchHandlers>
+{
+  // As desktop Chrome without a touch screen: pages read
+  // 'ontouchstart' in document.documentElement to detect a touch device.
+  const names = ['ontouchcancel', 'ontouchend', 'ontouchmove', 'ontouchstart'];
+  for (const n of names) {
+    testing.expectEqual([false, false, false], [n in window, n in document, n in document.documentElement]);
+  }
+
+  // the content attribute isn't a handler either, but listeners still run
+  window.seenTouch = [];
+  const div = document.createElement('div');
+  div.setAttribute('ontouchstart', 'seenTouch.push("attr")');
+  div.addEventListener('touchstart', () => seenTouch.push('listener'));
+  div.dispatchEvent(new TouchEvent('touchstart'));
+  testing.expectEqual(['listener'], seenTouch);
+}
+</script>
+
+<script id=handlersRunForBubblingEvents>
+{
+  const seen = [];
+  testing.expectEqual(null, window.onchange);
+  testing.expectEqual(null, document.onchange);
+
+  window.onchange = function (e) { seen.push(['window', this === window, e.target.id]); };
+  document.onchange = function (e) { seen.push(['document', this === document, e.target.id]); };
+  testing.expectEqual('function', typeof window.onchange);
+  testing.expectEqual('function', typeof document.onchange);
+
+  $('#select').dispatchEvent(new Event('change', { bubbles: true }));
+  testing.expectEqual([['document', true, 'select'], ['window', true, 'select']], seen);
+
+  window.onchange = null;
+  document.onchange = 'not a function';
+  testing.expectEqual(null, window.onchange);
+  testing.expectEqual(null, document.onchange);
+
+  $('#select').dispatchEvent(new Event('change', { bubbles: true }));
+  testing.expectEqual(2, seen.length);
+}
+</script>
+
+<script id=returnFalseCancels>
+{
+  window.onsubmit = function () { return false; };
+  const e = new Event('submit', { bubbles: true, cancelable: true });
+  $('#form').dispatchEvent(e);
+  testing.expectEqual(true, e.defaultPrevented);
+  window.onsubmit = null;
+}
+</script>
+
+<script id=windowEventHandlers>
+{
+  const names = [
+    'onafterprint', 'onbeforeprint', 'onbeforeunload', 'onhashchange',
+    'onlanguagechange', 'onmessage', 'onmessageerror', 'onoffline', 'ononline',
+    'onpagehide', 'onpageshow', 'onpopstate',
+    'onrejectionhandled', 'onstorage', 'onunhandledrejection', 'onunload',
+  ];
+  testing.expectEqual([], names.filter((n) => !(n in window)));
+  testing.expectEqual([], names.filter((n) => !(n in document.body)));
+  testing.expectEqual([], names.filter((n) => !(n in HTMLFrameSetElement.prototype)));
+  // only Window, body and frameset have them
+  testing.expectEqual([], names.filter((n) => n in document));
+  testing.expectEqual([], names.filter((n) => n in HTMLDivElement.prototype));
+
+  // Window only (as Chrome)
+  for (const n of ['onpagereveal', 'onpageswap']) {
+    testing.expectEqual([true, false, false], [n in window, n in document.body, n in document]);
+  }
+}
+</script>
+
+<script id=bodyReflectsWindowEventHandlers>
+{
+  const seen = [];
+  const fn = (e) => seen.push(e.type);
+  document.body.onpagehide = fn;
+  testing.expectEqual(fn, window.onpagehide);
+  window.dispatchEvent(new Event('pagehide'));
+  testing.expectEqual(['pagehide'], seen);
+
+  window.onpagehide = null;
+  testing.expectEqual(null, document.body.onpagehide);
+
+  const frameset = document.createElement('frameset');
+  frameset.onunload = fn;
+  testing.expectEqual(fn, window.onunload);
+  window.onunload = null;
+}
+</script>
+
+<script id=bodyWindowEventHandlerAttributes>
+{
+  window.seenAttr = [];
+  document.body.setAttribute('onstorage', 'seenAttr.push(event.type)');
+  testing.expectEqual('function', typeof window.onstorage);
+  window.dispatchEvent(new Event('storage'));
+  testing.expectEqual(['storage'], seenAttr);
+
+  document.body.removeAttribute('onstorage');
+  testing.expectEqual(null, window.onstorage);
+  window.dispatchEvent(new Event('storage'));
+  testing.expectEqual(['storage'], seenAttr);
+
+  // not an event handler on other elements
+  const div = document.createElement('div');
+  div.setAttribute('onstorage', 'seenAttr.push("div")');
+  testing.expectEqual(undefined, div.onstorage);
+  testing.expectEqual(null, window.onstorage);
+}
+</script>
+
+<script id=onbeforeunloadReturnValue>
+{
+  function dispatch(ret, returnValue) {
+    window.onbeforeunload = () => ret;
+    const e = document.createEvent('BeforeUnloadEvent');
+    e.initEvent('beforeunload', false, true);
+    if (returnValue !== undefined) e.returnValue = returnValue;
+    window.dispatchEvent(e);
+    return [e.defaultPrevented, e.returnValue];
+  }
+  testing.expectEqual([false, ''], dispatch(null));
+  testing.expectEqual([false, ''], dispatch(undefined));
+  testing.expectEqual([true, 'leave?'], dispatch('leave?'));
+  testing.expectEqual([true, 'false'], dispatch(false));
+  testing.expectEqual([true, 'first'], dispatch('second', 'first'));
+
+  // coerced to a string, so false doesn't cancel a non-BeforeUnloadEvent
+  window.onbeforeunload = () => false;
+  const custom = new CustomEvent('beforeunload', { cancelable: true });
+  window.dispatchEvent(custom);
+  testing.expectEqual(false, custom.defaultPrevented);
+  window.onbeforeunload = null;
+}
+</script>
+
+<script id=documentHandlers>
+{
+  testing.expectEqual(null, document.onvisibilitychange);
+  let seen = 0;
+  document.onvisibilitychange = () => seen++;
+  document.dispatchEvent(new Event('visibilitychange'));
+  testing.expectEqual(1, seen);
+  document.onvisibilitychange = null;
+}
+</script>
+
+<script id=documentOnreadystatechange>
+{
+  const states = [];
+  document.onreadystatechange = function (e) {
+    states.push([this === document, document.readyState]);
+  };
+  testing.onload(() => {
+    testing.expectEqual([[true, 'interactive'], [true, 'complete']], states);
+  });
+}
+</script>

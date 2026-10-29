@@ -125,6 +125,8 @@
   testing.expectEqual(true, signal.aborted);
   testing.expectEqual(true, signal.reason instanceof DOMException);
   testing.expectEqual("AbortError", signal.reason.name);
+  testing.expectEqual("signal is aborted without reason", signal.reason.message);
+  testing.expectEqual(20, signal.reason.code);
 }
 </script>
 
@@ -139,14 +141,9 @@
   controller.abort();
 
   // Should throw after abort
-  let didThrow = false;
-  try {
+  testing.expectError('AbortError: signal is aborted without reason', () => {
     signal.throwIfAborted();
-  } catch (e) {
-    didThrow = true;
-  }
-
-  testing.expectEqual(true, didThrow);
+  });
 }
 </script>
 
@@ -327,9 +324,61 @@
       testing.expectEqual(true, s3.aborted);
       testing.expectEqual(true, s3.reason instanceof DOMException);
       testing.expectEqual('TimeoutError', s3.reason.name);
-      testing.expectError('TimeoutError: The operation timed out', () => {
+      testing.expectEqual('signal timed out', s3.reason.message);
+      testing.expectEqual(23, s3.reason.code);
+      testing.expectError('TimeoutError: signal timed out', () => {
         s3.throwIfAborted()
       });
     });
   }
+</script>
+
+<script id=abortsignal_timeout_enforce_range>
+  // [EnforceRange] unsigned long long: no wrapping, out of range throws.
+  testing.expectError('TypeError', () => AbortSignal.timeout(-1));
+  testing.expectError('TypeError', () => AbortSignal.timeout(NaN));
+  testing.expectError('TypeError', () => AbortSignal.timeout(Infinity));
+  testing.expectError('TypeError', () => AbortSignal.timeout(2 ** 53));
+  testing.expectEqual(false, AbortSignal.timeout(2 ** 53 - 1).aborted);
+  testing.expectEqual(false, AbortSignal.timeout(-0.5).aborted);
+</script>
+
+<script id=abortsignal_timeout_listener_throws type=module>
+  {
+    // Reporting reads the exception's message through a native accessor. The
+    // dependents still waiting for their abort event must survive that call.
+    let reported = 0;
+    const onError = (e) => { reported += 1; e.preventDefault(); };
+    window.addEventListener('error', onError);
+
+    const state = await testing.async();
+    const timeout = AbortSignal.timeout(1);
+    let dependents = 0;
+    for (let i = 0; i < 3; i++) {
+      AbortSignal.any([timeout]).addEventListener('abort', () => { dependents += 1; });
+    }
+    timeout.addEventListener('abort', () => {
+      throw new DOMException('nope', 'SyntaxError');
+    });
+    window.setTimeout(() => state.resolve(), 5);
+
+    await state.done(() => {
+      window.removeEventListener('error', onError);
+      testing.expectEqual(true, timeout.aborted);
+      testing.expectEqual(3, dependents);
+      testing.expectEqual(1, reported);
+    });
+  }
+</script>
+
+<script id=any_sequence>
+{
+  // signals is a required sequence<AbortSignal>
+  testing.expectError('TypeError', () => AbortSignal.any());
+  testing.expectError('TypeError', () => AbortSignal.any(new AbortController().signal));
+  const c = new AbortController();
+  const signal = AbortSignal.any(new Set([c.signal]));
+  c.abort();
+  testing.expectEqual(true, signal.aborted);
+}
 </script>

@@ -46,10 +46,10 @@ pub const Source = union(enum) {
 
 const MessageEventOptions = struct {
     data: ?Data = null,
-    origin: ?[]const u8 = null,
     lastEventId: ?[]const u8 = null,
-    source: ?Source = null,
+    origin: ?[]const u8 = null,
     ports: []const *MessagePort = &.{},
+    source: ?Source = null,
 };
 
 pub const Data = union(enum) {
@@ -102,15 +102,6 @@ pub fn deinit(self: *MessageEvent, page: *Page) void {
             .string, .arraybuffer => {},
         }
     }
-    self._proto.deinit(page);
-}
-
-pub fn acquireRef(self: *MessageEvent) void {
-    self._proto.acquireRef();
-}
-
-pub fn releaseRef(self: *MessageEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
 }
 
 pub fn asEvent(self: *MessageEvent) *Event {
@@ -125,7 +116,7 @@ pub fn getOrigin(self: *const MessageEvent) []const u8 {
     return self._origin;
 }
 
-pub fn getLastEventId(self: *const MessageEvent) []const u8 {
+fn getLastEventId(self: *const MessageEvent) []const u8 {
     return self._last_event_id;
 }
 
@@ -134,7 +125,7 @@ const SourceAccess = union(enum) {
     port: *MessagePort,
 };
 
-pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
+fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
     const source = self._source orelse return null;
     switch (source) {
         .port => |port| return .{ .port = port },
@@ -151,7 +142,7 @@ pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
     }
 }
 
-pub fn getPorts(self: *const MessageEvent) []const *MessagePort {
+fn getPorts(self: *const MessageEvent) []const *MessagePort {
     return self._ports;
 }
 
@@ -160,7 +151,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "MessageEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

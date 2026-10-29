@@ -102,7 +102,7 @@ pub fn observe(self: *ResizeObserver, target: *Element, options_: ?Options, fram
     Frame.observers.scheduleResizeDelivery(frame);
 }
 
-pub fn unobserve(self: *ResizeObserver, target: *Element, frame: *Frame) void {
+fn unobserve(self: *ResizeObserver, target: *Element, frame: *Frame) void {
     for (self._observations.items, 0..) |obs, i| {
         if (obs.target == target) {
             _ = self._observations.swapRemove(i);
@@ -135,13 +135,12 @@ pub fn connectivityChanged(self: *const ResizeObserver) bool {
     return false;
 }
 
-// True if any observed element is `ancestor` or one of its descendants. Walks
-// the same parentElement chain StyleManager.isHidden resolves visibility
-// through.
-pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element) bool {
+/// True if any observed element is `ancestor` or one of its descendants. Walks
+/// the same flat-tree chain StyleManager.isHidden resolves visibility through.
+pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element, frame: *const Frame) bool {
     for (self._observations.items) |obs| {
         var current: ?*Element = obs.target;
-        while (current) |el| : (current = el.parentElement()) {
+        while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
             if (el == ancestor) {
                 return true;
             }
@@ -154,19 +153,19 @@ pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element) bool {
 // any, invoke the callback.
 pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
     var entries: std.ArrayList(*ResizeObserverEntry) = .empty;
-    // Observed elements share ancestors, so one cache serves the whole pass.
-    var visibility_cache: Element.VisibilityCache = .empty;
     for (self._observations.items) |*obs| {
         const target = obs.target;
         const connected = target.asNode().isConnected();
         obs.connected = connected;
 
         const width, const height = blk: {
-            if (!connected or !target.checkVisibilityCached(&visibility_cache, frame)) {
+            if (!connected or !target.isVisible(frame)) {
                 break :blk .{ 0, 0 };
             }
-            const dims = target.getElementDimensions(frame);
-            break :blk .{ dims.width, dims.height };
+            break :blk .{
+                target.getElementAxis(frame, .width).value,
+                target.getElementAxis(frame, .height).value,
+            };
         };
 
         if (width == obs.last_width and height == obs.last_height) {
@@ -183,14 +182,12 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
         return;
     }
 
-    var caught: js.TryCatch.Caught = .{};
-
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    ls.toLocal(self._callback).tryCall(void, .{ entries.items, self }, &caught) catch |err| {
-        log.err(.frame, "ResizeObserver.deliverEntries", .{ .err = err, .caught = caught });
+    ls.toLocal(self._callback).callWithThisReport(self, .{ entries.items, self }) catch |err| {
+        log.debug(.frame, "ResizeObserver.deliverEntries", .{ .err = err });
         return err;
     };
 }
@@ -214,19 +211,19 @@ pub const ResizeObserverEntry = struct {
         return self._target;
     }
 
-    pub fn getContentRect(self: *const ResizeObserverEntry) *DOMRect {
+    fn getContentRect(self: *const ResizeObserverEntry) *DOMRect {
         return self._content_rect;
     }
 
-    pub fn getBorderBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
+    fn getBorderBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
         return &self._box_size;
     }
 
-    pub fn getContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
+    fn getContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
         return &self._box_size;
     }
 
-    pub fn getDevicePixelContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
+    fn getDevicePixelContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
         return &self._box_size;
     }
 
@@ -235,7 +232,6 @@ pub const ResizeObserverEntry = struct {
 
         pub const Meta = struct {
             pub const name = "ResizeObserverEntry";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 
@@ -258,11 +254,11 @@ pub const ResizeObserverSize = struct {
         });
     }
 
-    pub fn getInlineSize(self: *const ResizeObserverSize) f64 {
+    fn getInlineSize(self: *const ResizeObserverSize) f64 {
         return self._inline_size;
     }
 
-    pub fn getBlockSize(self: *const ResizeObserverSize) f64 {
+    fn getBlockSize(self: *const ResizeObserverSize) f64 {
         return self._block_size;
     }
 
@@ -271,7 +267,6 @@ pub const ResizeObserverSize = struct {
 
         pub const Meta = struct {
             pub const name = "ResizeObserverSize";
-            pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
 
@@ -285,7 +280,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "ResizeObserver";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

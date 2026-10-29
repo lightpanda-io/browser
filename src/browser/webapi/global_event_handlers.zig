@@ -17,55 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
-const js = @import("../js/js.zig");
-
-const EventTarget = @import("EventTarget.zig");
-
-const Key = struct {
-    target: *EventTarget,
-    handler: Handler,
-
-    /// Fuses `target` pointer and `handler` enum; used at hashing.
-    /// NEVER use a fusion to retrieve a pointer back. Portability is not guaranteed.
-    /// See `Context.hash`.
-    fn fuse(self: *const Key) u64 {
-        // Check if we have 3 bits available from alignment of 8.
-        if (comptime lp.IS_DEBUG) {
-            lp.assert(@alignOf(EventTarget) == 8, "Key.fuse: incorrect alignment", .{
-                .event_target_alignment = @alignOf(EventTarget),
-            });
-        }
-
-        const ptr = @intFromPtr(self.target) >> 3;
-        if (comptime lp.IS_DEBUG) {
-            lp.assert(ptr < (1 << 57), "Key.fuse: pointer overflow", .{ .ptr = ptr });
-        }
-        return ptr | (@as(u64, @intFromEnum(self.handler)) << 57);
-    }
-};
-
-const Context = struct {
-    pub fn hash(_: @This(), key: Key) u64 {
-        return std.hash.int(key.fuse());
-    }
-
-    pub fn eql(_: @This(), a: Key, b: Key) bool {
-        return a.fuse() == b.fuse();
-    }
-};
-
-pub const Lookup = std.HashMapUnmanaged(
-    Key,
-    js.Function.Global,
-    Context,
-    std.hash_map.default_max_load_percentage,
-);
-
-/// Enum of known event listeners; increasing the size of it (u7)
-/// can cause `Key` to behave incorrectly.
-pub const Handler = enum(u7) {
+/// The event handlers (onclick, ...) of HTML elements.
+pub const Handler = enum {
     onabort,
     onanimationcancel,
     onanimationend,
@@ -119,6 +73,8 @@ pub const Handler = enum(u7) {
     onloadstart,
     onlostpointercapture,
     onmousedown,
+    onmouseenter,
+    onmouseleave,
     onmousemove,
     onmouseout,
     onmouseover,
@@ -154,10 +110,6 @@ pub const Handler = enum(u7) {
     onsuspend,
     ontimeupdate,
     ontoggle,
-    ontouchcancel,
-    ontouchend,
-    ontouchmove,
-    ontouchstart,
     ontransitioncancel,
     ontransitionend,
     ontransitionrun,
@@ -167,23 +119,62 @@ pub const Handler = enum(u7) {
     onwheel,
 };
 
-const typeToHandler = std.StaticStringMap(Handler).initComptime(blk: {
-    const fields = std.meta.fields(Handler);
-    var entries: [fields.len]struct { []const u8, Handler } = undefined;
-    for (fields, 0..) |field, i| {
-        entries[i] = .{ field.name[2..], @enumFromInt(field.value) };
-    }
-    break :blk entries;
-});
+/// The WindowEventHandlers mixin: on Window, and on body/frameset elements.
+pub const WindowHandler = enum {
+    onafterprint,
+    onbeforeprint,
+    onbeforeunload,
+    onhashchange,
+    onlanguagechange,
+    onmessage,
+    onmessageerror,
+    onoffline,
+    ononline,
+    onpagehide,
+    onpageshow,
+    onpopstate,
+    onrejectionhandled,
+    onstorage,
+    onunhandledrejection,
+    onunload,
+};
 
-pub fn fromEventType(typ: []const u8) ?Handler {
-    return typeToHandler.get(typ);
+fn nameMap(comptime E: type) std.StaticStringMap(void) {
+    const names = @typeInfo(E).@"enum".field_names;
+    var entries: [names.len]struct { []const u8 } = undefined;
+    for (names, 0..) |name, i| {
+        entries[i] = .{name};
+    }
+    return .initComptime(entries);
+}
+
+const handlers = nameMap(Handler);
+const window_handlers = nameMap(WindowHandler);
+
+/// Whether `name` (e.g. "onclick") is an event handler content attribute.
+pub fn isEventHandler(name: []const u8) bool {
+    return handlers.has(name);
+}
+
+/// Whether `name` (e.g. "onpagehide") is a WindowEventHandlers attribute.
+pub fn isWindowEventHandler(name: []const u8) bool {
+    return window_handlers.has(name);
 }
 
 const testing = @import("../../testing.zig");
-test "GlobalEventHandlers: fromEventType" {
-    try testing.expectEqual(.onabort, fromEventType("abort"));
-    try testing.expectEqual(.onselect, fromEventType("select"));
-    try testing.expectEqual(null, fromEventType(""));
-    try testing.expectEqual(null, fromEventType("unknown"));
+test "GlobalEventHandlers: isEventHandler" {
+    try testing.expectEqual(true, isEventHandler("onabort"));
+    try testing.expectEqual(true, isEventHandler("onselect"));
+    try testing.expectEqual(false, isEventHandler("abort"));
+    try testing.expectEqual(false, isEventHandler("on"));
+    try testing.expectEqual(false, isEventHandler(""));
+    try testing.expectEqual(false, isEventHandler("onunknown"));
+    try testing.expectEqual(false, isEventHandler("onpagehide"));
+}
+
+test "GlobalEventHandlers: isWindowEventHandler" {
+    try testing.expectEqual(true, isWindowEventHandler("onpagehide"));
+    try testing.expectEqual(true, isWindowEventHandler("onbeforeunload"));
+    try testing.expectEqual(false, isWindowEventHandler("onload"));
+    try testing.expectEqual(false, isWindowEventHandler("pagehide"));
 }

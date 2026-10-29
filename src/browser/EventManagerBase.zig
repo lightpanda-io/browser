@@ -24,28 +24,12 @@ const Page = @import("Page.zig");
 
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
+const ErrorEvent = @import("webapi/event/ErrorEvent.zig");
+const BeforeUnloadEvent = @import("webapi/event/BeforeUnloadEvent.zig");
 
 const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-
-const EventKey = struct {
-    event_target: usize,
-    type_string: String,
-};
-
-const EventKeyContext = struct {
-    pub fn hash(_: @This(), key: EventKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.event_target));
-        hasher.update(key.type_string.str());
-        return hasher.final();
-    }
-
-    pub fn eql(_: @This(), a: EventKey, b: EventKey) bool {
-        return a.event_target == b.event_target and a.type_string.eql(b.type_string);
-    }
-};
 
 // EventManagerBase provides core event listener management without DOM-specific
 // functionality. It handles listener registration, removal, and the basic dispatch
@@ -55,12 +39,8 @@ pub const EventManagerBase = @This();
 arena: Allocator,
 listener_pool: std.heap.MemoryPool(Listener),
 list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
-lookup: std.HashMapUnmanaged(
-    EventKey,
-    *std.DoublyLinkedList,
-    EventKeyContext,
-    std.hash_map.default_max_load_percentage,
-),
+// @intFromPtr(event_target) -> [{type, listener-linked-list}]
+lookup: std.AutoHashMapUnmanaged(usize, std.ArrayList(TypeListeners)),
 dispatch_depth: usize,
 deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
 
@@ -74,6 +54,11 @@ pub fn init(arena: Allocator) EventManagerBase {
         .deferred_removals = .empty,
     };
 }
+
+const TypeListeners = struct {
+    typ: String,
+    list: *std.DoublyLinkedList,
+};
 
 pub const RegisterOptions = struct {
     once: bool = false,
@@ -102,8 +87,6 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
             .target = target.toString(),
         });
     }
-    const arena = self.arena;
-
     // If a signal is provided and already aborted, don't register the listener
     if (opts.signal) |signal| {
         if (signal.getAborted()) {
@@ -111,34 +94,24 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         }
     }
 
-    // Allocate the type string we'll use in both listener and key
-    const type_string = try String.init(arena, typ, .{});
+    const list, const type_string = try self.getOrCreateList(target, typ);
 
-    const gop = try self.lookup.getOrPut(arena, .{
-        .type_string = type_string,
-        .event_target = @intFromPtr(target),
-    });
-    if (gop.found_existing) {
-        // check for duplicate callbacks already registered. Listeners that
-        // have been removed (e.g. a `once` listener that fired mid-dispatch
-        // and is awaiting destruction in deferred_removals) are not "in"
-        // the listener list per spec — skip them.
-        var node = gop.value_ptr.*.first;
-        while (node) |n| {
-            const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-            node = n.next;
-            if (listener.removed) continue;
-            const is_duplicate = switch (callback) {
-                .object => |obj| listener.function.eqlObject(obj),
-                .function => |func| listener.function.eqlFunction(func),
-            };
-            if (is_duplicate and listener.capture == opts.capture) {
-                return null;
-            }
+    // check for duplicate callbacks already registered. Listeners that
+    // have been removed (e.g. a `once` listener that fired mid-dispatch
+    // and is awaiting destruction in deferred_removals) are not "in"
+    // the listener list per spec — skip them.
+    var node = list.first;
+    while (node) |n| {
+        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        node = n.next;
+        if (listener.removed) continue;
+        const is_duplicate = switch (callback) {
+            .object => |obj| listener.function.eqlObject(obj),
+            .function => |func| listener.function.eqlFunction(func),
+        };
+        if (is_duplicate and listener.capture == opts.capture) {
+            return null;
         }
-    } else {
-        gop.value_ptr.* = try self.list_pool.create(arena);
-        gop.value_ptr.*.* = .{};
     }
 
     const func = switch (callback) {
@@ -146,7 +119,7 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         .object => |o| Function{ .object = try o.persist() },
     };
 
-    const listener = try self.listener_pool.create(arena);
+    const listener = try self.listener_pool.create(self.arena);
     listener.* = .{
         .node = .{},
         .once = opts.once,
@@ -157,16 +130,94 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         .typ = type_string,
     };
     // append the listener to the list of listeners for this target
-    gop.value_ptr.*.append(&listener.node);
+    list.append(&listener.node);
 
     return listener;
 }
 
+// re-setting keeps its order in the list
+pub fn setHandler(self: *EventManagerBase, target: *EventTarget, typ: []const u8, handler: ?js.Function.Global) !?*Listener {
+    return self.setHandlerFunction(target, typ, if (handler) |h| .{ .handler = h } else null);
+}
+
+// An event handler content attribute, compiled on first use. The source must
+// live as long as the page. Currently, the source is always from an attribute
+// entry's slice (attribute values are also tied to the page.arena).
+// As always careful not to use String.str() on a stack-allocated String!
+pub fn setHandlerSource(self: *EventManagerBase, target: *EventTarget, typ: []const u8, source: ?[]const u8) !?*Listener {
+    return self.setHandlerFunction(target, typ, if (source) |s| .{ .handler_source = s } else null);
+}
+
+// The handler's function, compiling a content attribute in `ctx`.
+pub fn getHandler(self: *EventManagerBase, ctx: *js.Context, target: *EventTarget, typ: []const u8) ?js.Function.Global {
+    const list = self.getListeners(target, .wrap(typ)) orelse return null;
+    const listener = findHandler(list) orelse return null;
+    return listener.compileHandler(ctx, target);
+}
+
+fn setHandlerFunction(self: *EventManagerBase, target: *EventTarget, typ: []const u8, function: ?Function) !?*Listener {
+    if (self.getListeners(target, .wrap(typ))) |list| {
+        if (findHandler(list)) |listener| {
+            if (function) |f| {
+                listener.function.release();
+                listener.function = f;
+            } else {
+                self.removeListener(list, listener);
+            }
+            return null;
+        }
+    }
+    const f = function orelse return null;
+
+    const list, const type_string = try self.getOrCreateList(target, typ);
+    const listener = try self.listener_pool.create(self.arena);
+    listener.* = .{
+        .node = .{},
+        .once = false,
+        .capture = false,
+        .passive = false,
+        .function = f,
+        .typ = type_string,
+    };
+    list.append(&listener.node);
+    return listener;
+}
+
+fn findHandler(list: *const std.DoublyLinkedList) ?*Listener {
+    var node = list.first;
+    while (node) |n| : (node = n.next) {
+        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        if (listener.removed) {
+            continue;
+        }
+        switch (listener.function) {
+            .handler, .handler_source => return listener,
+            .value, .object => {},
+        }
+    }
+    return null;
+}
+
+fn getOrCreateList(self: *EventManagerBase, target: *EventTarget, typ: []const u8) !struct { *std.DoublyLinkedList, String } {
+    const arena = self.arena;
+    const gop = try self.lookup.getOrPut(arena, @intFromPtr(target));
+    if (gop.found_existing == false) {
+        gop.value_ptr.* = .empty;
+    }
+    const types = gop.value_ptr;
+
+    if (findType(types.items, .wrap(typ))) |existing| {
+        return .{ existing.list, existing.typ };
+    }
+    const type_string = try String.init(arena, typ, .{});
+    const list = try self.list_pool.create(arena);
+    list.* = .{};
+    try types.append(arena, .{ .typ = type_string, .list = list });
+    return .{ list, type_string };
+}
+
 pub fn remove(self: *EventManagerBase, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
-    const list = self.lookup.get(.{
-        .type_string = .wrap(typ),
-        .event_target = @intFromPtr(target),
-    }) orelse return;
+    const list = self.getListeners(target, .wrap(typ)) orelse return;
     if (findListener(list, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
     }
@@ -185,24 +236,72 @@ pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, list
     } else {
         // Outside dispatch, remove immediately
         list.remove(&listener.node);
-        self.listener_pool.destroy(listener);
+        self.destroyListener(listener);
     }
 }
 
+pub fn destroyListener(self: *EventManagerBase, listener: *Listener) void {
+    listener.function.release();
+    self.listener_pool.destroy(listener);
+}
+
+/// Drops every listener on `target`.
+pub fn removeTarget(self: *EventManagerBase, target: *EventTarget) void {
+    var kv = self.lookup.fetchRemove(@intFromPtr(target)) orelse return;
+    for (kv.value.items) |type_listeners| {
+        const list = type_listeners.list;
+        var node = list.first;
+        while (node) |n| {
+            node = n.next;
+            self.removeListener(list, @alignCast(@fieldParentPtr("node", n)));
+        }
+        if (self.dispatch_depth == 0) {
+            self.list_pool.destroy(list);
+        } else {
+            // we leak this until the arena is cleared, no big deal
+        }
+    }
+    kv.value.deinit(self.arena);
+}
+
 /// Check if there are any listeners registered for a target/type combination.
-pub fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
-    return self.lookup.get(.{
-        .event_target = @intFromPtr(target),
-        .type_string = .wrap(typ),
-    }) != null;
+fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
+    const list = self.getListeners(target, .wrap(typ)) orelse return false;
+    return hasListener(list, .any);
 }
 
 /// Get the listener list for a target/type, if any exist.
 pub fn getListeners(self: *EventManagerBase, target: *EventTarget, event_type: String) ?*std.DoublyLinkedList {
-    return self.lookup.get(.{
-        .event_target = @intFromPtr(target),
-        .type_string = event_type,
-    });
+    const types = self.lookup.get(@intFromPtr(target)) orelse return null;
+    const entry = findType(types.items, event_type) orelse return null;
+    return entry.list;
+}
+
+fn findType(types: []const TypeListeners, event_type: String) ?*const TypeListeners {
+    for (types) |*entry| {
+        if (entry.typ.eql(event_type)) {
+            return entry;
+        }
+    }
+    return null;
+}
+
+/// Whether the list still holds a listener, or one that can call
+/// preventDefault. A listener removed during a dispatch stays linked until
+/// the dispatch unwinds, but isn't "in" the list anymore, same as
+/// findListener.
+pub fn hasListener(list: *const std.DoublyLinkedList, comptime which: enum { any, non_passive }) bool {
+    var node = list.first;
+    while (node) |n| : (node = n.next) {
+        const listener: *align(8) Listener = @fieldParentPtr("node", n);
+        if (listener.removed) {
+            continue;
+        }
+        if (which == .any or !listener.passive) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Dispatching can be recursive from the compiler's point of view, so we need to
@@ -222,16 +321,13 @@ pub const DispatchDirectOptions = struct {
     run_microtasks: bool = true,
 };
 
-/// Direct dispatch for non-DOM targets. No propagation - just calls the property
-/// handler and registered listeners. Caller is responsible for event ref counting.
-/// Handler can be: null, ?js.Function.Global or js.Function
+/// Direct dispatch for non-DOM targets. No propagation - just calls the
+/// registered listeners. Caller is responsible for event ref counting.
 pub fn dispatchDirect(
     self: *EventManagerBase,
-    arena: Allocator,
     ctx: *js.Context,
     target: *EventTarget,
     event: *Event,
-    handler: anytype,
     page: *Page,
     comptime opts: DispatchDirectOptions,
 ) DispatchError!void {
@@ -256,16 +352,19 @@ pub fn dispatchDirect(
         ls.deinit();
     }
 
-    // Per spec, currentTarget is only set while listeners are being invoked
-    defer event._current_target = null;
-
     // This is a slightly simplified version of what you'll find in EventManager.
     // dispatchPhase. It is simpler because, for direct dispatching, we know
     // there's no ancestors and only the single target phase.
+    event._event_phase = .at_target;
+    defer {
+        event._event_phase = .none;
+        // Per spec, currentTarget is only set while listeners are being invoked
+        event._current_target = null;
+        event._stop_propagation = false;
+        event._stop_immediate_propagation = false;
+    }
 
-    // Track dispatch depth for deferred removal. Bump it *before* the property
-    // handler runs so any listener it removes is deferred (keeping our sentinel
-    // node alive) rather than freed mid-dispatch.
+    // Track dispatch depth for deferred removal.
     self.dispatch_depth += 1;
     defer {
         self.dispatch_depth -= 1;
@@ -273,40 +372,17 @@ pub fn dispatchDirect(
         if (self.dispatch_depth == 0) {
             for (self.deferred_removals.items) |removal| {
                 removal.list.remove(&removal.listener.node);
-                self.listener_pool.destroy(removal.listener);
+                self.destroyListener(removal.listener);
             }
             self.deferred_removals.clearRetainingCapacity();
         }
     }
 
-    // Snapshot the listener list *before* invoking the property handler. Per
-    // spec the set of listeners is collected at the start of dispatch, so a
-    // listener added while we're dispatching — including one added by the
-    // property handler itself (e.g. onupgradeneeded calling addEventListener) —
-    // must not be invoked for this event.
-    const maybe_list = self.getListeners(target, event._type_string);
-    const sentinel = if (maybe_list) |list| list.last else null;
-
-    // Call the property handler (e.g., onmessage) if present
-    if (getFunction(handler, &ls.local)) |func| {
-        event._current_target = target;
-        var caught: js.TryCatch.Caught = .{};
-        _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
-            if (err == error.ExecutionTerminated) {
-                return error.ExecutionTerminated;
-            }
-            page.recordJsError(err);
-            if (err == error.JsException) {
-                event._listeners_did_throw = true;
-            } else {
-                log.warn(.event, opts.context, .{ .err = err, .caught = caught });
-            }
-        };
-    }
-
-    // No listeners were registered via addEventListener at dispatch start.
-    const last_node = sentinel orelse return;
-    const list = maybe_list.?;
+    // Per spec the set of listeners is collected at the start of dispatch, so
+    // a listener added while we're dispatching must not be invoked for this
+    // event.
+    const list = self.getListeners(target, event._type_string) orelse return;
+    const last_node = list.last orelse return;
 
     // Use the last listener present at dispatch start as sentinel - listeners
     // added during dispatch will be after it
@@ -345,7 +421,7 @@ pub fn dispatchDirect(
         event._current_target = target;
         event._in_passive_listener = listener.passive;
 
-        try listener.run(arena, &ls.local, event, opts.context);
+        try listener.run(&ls.local, event, opts.context);
 
         event._in_passive_listener = false;
 
@@ -355,41 +431,15 @@ pub fn dispatchDirect(
     }
 }
 
-fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
-    const T = @TypeOf(handler);
-    const ti = @typeInfo(T);
-
-    if (ti == .null) {
-        return null;
-    }
-    if (ti == .optional) {
-        return getFunction(handler orelse return null, local);
-    }
-    return switch (T) {
-        js.Function => handler,
-        js.Function.Global => local.toLocal(handler),
-        else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
-    };
-}
-
 /// Check if there are any listeners for a direct dispatch (non-DOM target).
 /// Use this to avoid creating an event when there are no listeners.
-pub fn hasDirectListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8, handler: anytype) bool {
-    if (hasHandler(handler)) {
-        return true;
-    }
+pub fn hasDirectListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
     return self.hasListeners(target, typ);
 }
 
-fn hasHandler(handler: anytype) bool {
-    const ti = @typeInfo(@TypeOf(handler));
-    if (ti == .null) {
-        return false;
-    }
-    if (ti == .optional) {
-        return handler != null;
-    }
-    return true;
+pub fn hasHandler(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
+    const list = self.getListeners(target, .wrap(typ)) orelse return false;
+    return findHandler(list) != null;
 }
 
 fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: bool) ?*Listener {
@@ -435,12 +485,48 @@ pub const Listener = struct {
     // listener variant uses it as `this`, matching the spec contract that a
     // listener sees its current target via both `event.currentTarget` and `this`.
     pub fn run(
-        self: *const Listener,
-        arena: Allocator,
+        self: *Listener,
         local: *const js.Local,
         event: *Event,
         comptime context: []const u8,
-    ) error{ OutOfMemory, ExecutionTerminated }!void {
+    ) error{ExecutionTerminated}!void {
+        // An event caused from an isolated world (e.g. element.focus() called
+        // over CDP) must reach a main-world listener with main-world wrappers.
+        if (self.function == .handler_source) {
+            _ = self.compileHandler(local.ctx, event._current_target.?);
+        }
+        if (self.otherWorldContext(local)) |ctx| {
+            var ls: js.Local.Scope = undefined;
+            ctx.localScope(&ls);
+            defer ls.deinit();
+            return self.invoke(&ls.local, event, context);
+        }
+        return self.invoke(local, event, context);
+    }
+
+    // The context the callback was created in, when it belongs to another
+    // world than `local`.
+    fn otherWorldContext(self: *const Listener, local: *const js.Local) ?*js.Context {
+        const handle: *const js.v8.Object = switch (self.function) {
+            .value => |f| @ptrCast(local.toLocal(f).handle),
+            .object => |o| local.toLocal(o).handle,
+            .handler => |h| @ptrCast(local.toLocal(h orelse return null).handle),
+            // compiled by run() before this is called
+            .handler_source => unreachable,
+        };
+        const ctx = js.Context.fromObject(handle) orelse return null;
+        if (ctx.identity == local.ctx.identity) {
+            return null;
+        }
+        return ctx;
+    }
+
+    fn invoke(
+        self: *Listener,
+        local: *const js.Local,
+        event: *Event,
+        comptime context: []const u8,
+    ) error{ExecutionTerminated}!void {
         switch (self.function) {
             .value => |value| {
                 var try_catch: js.TryCatch = undefined;
@@ -454,23 +540,12 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
-                    else => log.warn(.event, context, .{ .err = err }),
+                    else => log.debug(.event, context, .{ .err = err }),
                 };
             },
-            .string => |string| {
-                const str = try arena.dupeZ(u8, string.str());
-                local.eval(str, null) catch |err| {
-                    if (err == error.ExecutionTerminated) {
-                        return error.ExecutionTerminated;
-                    }
-                    local.ctx.page.recordJsError(err);
-                    if (err == error.JsException) {
-                        event._listeners_did_throw = true;
-                    } else {
-                        log.warn(.event, context, .{ .err = err });
-                    }
-                };
-            },
+            .handler => |h| try runHandler(local.toLocal(h orelse return), local, event, context),
+            // compiled by run() before this is called
+            .handler_source => unreachable,
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
 
@@ -485,7 +560,7 @@ pub const Listener = struct {
                         event._listeners_did_throw = true;
                         reportException(&try_catch, local);
                     } else {
-                        log.warn(.event, context, .{ .err = err });
+                        log.debug(.event, context, .{ .err = err });
                     }
                     return;
                 };
@@ -511,43 +586,159 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
-                    else => log.warn(.event, context, .{ .err = err }),
+                    else => log.debug(.event, context, .{ .err = err }),
                 };
             },
         }
     }
 
+    fn compileHandler(self: *Listener, ctx: *js.Context, target: *EventTarget) ?js.Function.Global {
+        switch (self.function) {
+            .handler => |h| return h,
+            .handler_source => |source| {
+                // compiled on first use (then turned into a handler), in the
+                // main world whichever world asks first.
+                // on error, the handler becomes null.
+                const main_ctx = switch (ctx.global) {
+                    .frame => |frame| frame.main_js,
+                    .worker => ctx,
+                };
+                var ls: js.Local.Scope = undefined;
+                main_ctx.localScope(&ls);
+                defer ls.deinit();
+
+                var try_catch: js.TryCatch = undefined;
+                try_catch.init(&ls.local);
+                defer try_catch.deinit();
+
+                // window.onerror (incl. <body onerror>) gets the decomposed
+                // ErrorEvent: see runHandler.
+                const is_window_error = target._type == .window and self.typ.eql(comptime .wrap("error"));
+                const compiled = if (is_window_error)
+                    ls.local.compileFunction(source, &.{ "event", "source", "lineno", "colno", "error" }, &.{})
+                else
+                    ls.local.compileFunction(source, &.{"event"}, &.{});
+
+                const handler: ?js.Function.Global = blk: {
+                    const func = compiled catch |err| {
+                        log.debug(.js, "event handler source", .{ .source = source, .err = err });
+                        reportException(&try_catch, &ls.local);
+                        break :blk null;
+                    };
+                    break :blk func.persist() catch null;
+                };
+                self.function = .{ .handler = handler };
+                return handler;
+            },
+            .value, .object => unreachable,
+        }
+    }
+
+    // Runs an on* handler. Returning true cancels the event. Special handling
+    // for the window.onerror's ErrorEvent callback which is decomposed into parameters :/
+    fn runHandler(handler: js.Function, local: *const js.Local, event: *Event, comptime context: []const u8) error{ExecutionTerminated}!void {
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const this = event._current_target.?;
+        const error_event: ?*ErrorEvent = blk: {
+            if (this._type != .window and this._type != .worker_global_scope) break :blk null;
+            if (event._type_string.eql(comptime .wrap("error")) == false) break :blk null;
+            break :blk event.is(ErrorEvent);
+        };
+
+        const result = blk: {
+            if (error_event) |e| {
+                break :blk handler.callWithThisRethrow(js.Value, this, .{
+                    e._message,
+                    e._filename,
+                    e._line_number,
+                    e._column_number,
+                    e._error,
+                });
+            }
+            break :blk handler.callWithThisRethrow(js.Value, this, .{event});
+        } catch |err| switch (err) {
+            error.JsException, error.TryCatchRethrow => {
+                event._listeners_did_throw = true;
+                reportException(&try_catch, local);
+                return;
+            },
+            error.ExecutionTerminated => return error.ExecutionTerminated,
+            else => {
+                local.ctx.page.recordJsError(err);
+                log.debug(.event, context, .{ .err = err });
+                return;
+            },
+        };
+
+        if (this._type == .window and event._type_string.eql(comptime .wrap("beforeunload"))) {
+            const before_unload = event.is(BeforeUnloadEvent) orelse return;
+            if (result.isNullOrUndefined()) {
+                return;
+            }
+            event.preventDefault();
+            if (before_unload._return_value.len == 0) {
+                // onbeforeunload is weird, the return value is converting to
+                // a string, so false -> "false" and it doesn't cancel. Only
+                // a null does.
+                const str = result.toStringSlice() catch |err| {
+                    log.debug(.event, context, .{ .err = err });
+                    return;
+                };
+                before_unload.setReturnValue(str) catch |err| {
+                    log.debug(.event, context, .{ .err = err });
+                };
+            }
+            return;
+        }
+
+        const cancel = if (error_event != null) result.isTrue() else result.isFalse();
+        if (cancel) {
+            event.preventDefault();
+        }
+    }
+
     // Reports a listener exception to the relevant global (firing
     // window.onerror / an "error" event) without stopping the dispatch.
-    fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
+    pub fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
         const exc = try_catch.exceptionValue() orelse return;
         reportExceptionValue(local, exc);
     }
 
     fn reportExceptionValue(local: *const js.Local, exc: js.Value) void {
-        switch (local.ctx.global) {
-            .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
-                log.warn(.event, "listener report error", .{ .err = err });
-            },
-            // No worker error-event plumbing here (yet); still count it.
-            .worker => local.ctx.page.recordJsError(error.JsException),
-        }
+        local.ctx.global.reportError(exc) catch |err| {
+            log.debug(.event, "listener report error", .{ .err = err });
+        };
     }
 };
 
 pub const Function = union(enum) {
     value: js.Function.Global,
-    string: String,
     object: js.Object.Global,
+    // An event handler (onclick, ...): see setHandler. Null when its content
+    // attribute didn't compile.
+    handler: ?js.Function.Global,
+    handler_source: []const u8,
 
-    pub fn eqlFunction(self: Function, func: js.Function) bool {
+    fn release(self: Function) void {
+        switch (self) {
+            .value => |f| f.release(),
+            .handler => |h| if (h) |f| f.release(),
+            .object => |o| o.release(),
+            .handler_source => {},
+        }
+    }
+
+    fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
             .value => |v| v.isEqual(func),
             else => false,
         };
     }
 
-    pub fn eqlObject(self: Function, obj: js.Object) bool {
+    fn eqlObject(self: Function, obj: js.Object) bool {
         return switch (self) {
             .object => |o| return o.isEqual(obj),
             else => false,

@@ -31,7 +31,7 @@ pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, frame: *Frame) !vo
     if (index > self._rules.items.len) {
         return error.IndexSizeError;
     }
-    try self._rules.insert(frame.arena, index, rule);
+    try self._rules.insert(frame.page_arena, index, rule);
 }
 
 pub fn remove(self: *CSSRuleList, index: u32) !void {
@@ -67,7 +67,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CSSRuleList";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

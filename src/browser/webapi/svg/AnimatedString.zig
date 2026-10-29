@@ -38,12 +38,13 @@ pub const Key = struct {
     kind: Kind,
 };
 
-// Identity map for AnimatedString, help by the frame
+// Identity map for AnimatedString, held by the page
 pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedString {
     const key: Key = .{ .element = element, .kind = kind };
-    const gop = try frame._svg_animated_strings.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page.svg_animated_strings.getOrPut(page.arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_strings.remove(key);
+        errdefer _ = page.svg_animated_strings.remove(key);
         gop.value_ptr.* = try frame._factory.create(AnimatedString{
             ._element = element,
             ._kind = kind,
@@ -56,12 +57,12 @@ pub fn getBaseVal(self: *const AnimatedString) []const u8 {
     return self._element.getAttributeSafe(self.attributeName()) orelse "";
 }
 
-pub fn setBaseVal(self: *AnimatedString, value: String, frame: *Frame) !void {
+fn setBaseVal(self: *AnimatedString, value: String, frame: *Frame) !void {
     try self._element.setAttribute(self.attributeName(), value, frame);
 }
 
 // No real animation, return the BaseVal
-pub fn getAnimVal(self: *const AnimatedString) []const u8 {
+fn getAnimVal(self: *const AnimatedString) []const u8 {
     return self.getBaseVal();
 }
 
@@ -89,7 +90,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "SVGAnimatedString";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

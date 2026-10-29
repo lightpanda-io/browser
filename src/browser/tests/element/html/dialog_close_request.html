@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<body>
+<dialog id="a">a</dialog>
+<dialog id="b">b</dialog>
+<iframe id="f" srcdoc="<!DOCTYPE html><dialog id=c>c</dialog>"></iframe>
+<script>
+  // Driven by the "HTML.Dialog close request" test in Dialog.zig, which
+  // presses a trusted Escape between steps.
+  window.A = document.getElementById('a');
+  window.B = document.getElementById('b');
+  window.C = () => document.getElementById('f').contentDocument.getElementById('c');
+  window.log = [];
+  window.preventCancel = false;
+  window.preventKeydown = false;
+
+  for (const d of [A, B]) {
+    for (const type of ['cancel', 'close']) {
+      d.addEventListener(type, (e) => {
+        if (type === 'close' && d.resetClose) {
+          d.resetClose = false;
+          return;
+        }
+        // A trailing "!" marks an event that was not cancelable.
+        log.push(`${type}@${d.id}${e.cancelable ? '' : '!'}`);
+        if (type === 'cancel' && preventCancel) e.preventDefault();
+      });
+    }
+  }
+  document.addEventListener('keydown', (e) => {
+    if (preventKeydown) e.preventDefault();
+  });
+
+  window.reset = () => {
+    for (const d of [A, B]) {
+      if (!d.isConnected) document.body.append(d);
+      // close is queued: skip the one this queues, it fires in a later step
+      if (d.open) d.resetClose = true;
+      d.close();
+      d.returnValue = '';
+    }
+    preventCancel = false;
+    preventKeydown = false;
+    log.length = 0;
+  };
+
+  window.state = () =>
+    `a:${A.open} b:${B.open} rv:${A.returnValue}|${B.returnValue} log:${log.join(',')}`;
+</script>
+</body>

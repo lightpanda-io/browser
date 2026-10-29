@@ -11,9 +11,11 @@
   testing.expectEqual("#abcdef", location.hash);
   testing.expectEqual(testing.BASE_URL + 'window/location.html#abcdef', location.href);
 
+  // Clearing the hash leaves an empty fragment, not a null one: the '#'
+  // stays and the document isn't reloaded.
   location.hash = "";
   testing.expectEqual("", location.hash);
-  testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html#', location.href);
 
   location.hash = "xyzxyz";
   testing.expectEqual("#xyzxyz", location.hash);
@@ -21,7 +23,7 @@
 
   location.hash = "";
   testing.expectEqual("", location.hash);
-  testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html#', location.href);
 </script>
 
 <script id=location_pathname_setter>
@@ -74,10 +76,18 @@
   // fragment must not navigate at all: re-assigning "" on a fragment-less URL
   // must not schedule a same-URL reload, and re-assigning the current
   // fragment must be a no-op too.
+  history.replaceState(null, '', location.pathname);
   const stable_href = location.href;
   location.hash = "";
-  location.hash = "";
   testing.expectEqual(stable_href, location.href);
+
+  // Clearing an existing fragment gives an empty one; clearing it again
+  // is a no-op.
+  location.hash = "#gone";
+  location.hash = "";
+  testing.expectEqual(stable_href + '#', location.href);
+  location.hash = "";
+  testing.expectEqual(stable_href + '#', location.href);
 
   location.hash = "#same";
   const with_fragment = location.href;
@@ -87,5 +97,5 @@
   testing.expectEqual("#same", location.hash);
 
   location.hash = "";
-  testing.expectEqual(stable_href, location.href);
+  testing.expectEqual(stable_href + '#', location.href);
 </script>

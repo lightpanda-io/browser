@@ -36,6 +36,7 @@ pub const Identity = @import("Identity.zig");
 pub const Context = @import("Context.zig");
 pub const Execution = @import("Execution.zig");
 pub const Local = @import("Local.zig");
+pub const TaggedOpaque = @import("TaggedOpaque.zig");
 pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
@@ -166,9 +167,25 @@ pub fn TypedArray(comptime T: type) type {
 pub const ArrayBuffer = struct {
     values: []const u8,
 
+    // Larger lengths throw a RangeError. Nothing real needs more, and an
+    // overcommitted buffer that size can take the whole process down.
+    pub const MAX_LENGTH = 4 * 1024 * 1024 * 1024;
+
     pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
         return .{ .values = try allocator.dupe(u8, self.values) };
     }
+};
+
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// But not from an underying SharedBuffer
+pub const BufferSource = struct {
+    bytes: []const u8,
+};
+
+// An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
+// The underlaying value *can* be a SharedBuffer
+pub const AllowSharedBufferSource = struct {
+    bytes: []u8,
 };
 
 pub const ArrayType = enum(u8) {
@@ -233,8 +250,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             } else {
                 const buffer_len = size * bits / 8;
                 const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
-                const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                array_buffer = newArrayBuffer(isolate, backing_store);
             }
 
             const handle: *const v8.Value = switch (comptime kind) {
@@ -266,13 +282,31 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             }
             const byte_offset = v8.v8__ArrayBufferView__ByteOffset(view);
             const array_buffer = v8.v8__ArrayBufferView__Buffer(view).?;
-            const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
-            const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
-            const data = v8.v8__BackingStore__Data(backing_store).?;
+            const data = arrayBufferData(array_buffer).?;
             const base = @as([*]u8, @ptrCast(data)) + byte_offset;
             return @as([*]BackingInt, @ptrCast(@alignCast(base)))[0 .. byte_len / @sizeOf(BackingInt)];
         }
     };
+}
+
+fn newArrayBuffer(isolate: Isolate, backing_store: *v8.BackingStore) *const v8.ArrayBuffer {
+    var backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    return v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+}
+
+pub fn arrayBufferData(array_buffer: *const v8.ArrayBuffer) ?*anyopaque {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return null;
+    return v8.v8__BackingStore__Data(backing_store);
+}
+
+pub fn arrayBufferIsShared(array_buffer: *const v8.ArrayBuffer) bool {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return false;
+    return v8.v8__BackingStore__IsShared(backing_store);
 }
 
 // If a WebAPI takes a []const u8, then we'll coerce any JS value to that string
@@ -297,6 +331,42 @@ pub fn Nullable(comptime T: type) type {
     };
 }
 
+pub fn Variadic(comptime T: type) type {
+    return struct {
+        values: []const T,
+
+        pub const js_variadic = T;
+
+        pub fn init(values: []const T) @This() {
+            return .{ .values = values };
+        }
+    };
+}
+
+// A WebIDL [EnforceRange] integer. NaN, +/i infinity and values outside of T's
+// range are a TypeError.
+pub fn EnforceRange(comptime T: type) type {
+    return struct {
+        value: T = 0,
+
+        pub const js_enforce_range = T;
+    };
+}
+
+pub fn enforceRange(comptime T: type, value: f64) !T {
+    if (std.math.isFinite(value) == false) {
+        return error.TypeError;
+    }
+    // [EnforceRange] long long is limited to the safe integer range.
+    const min: f64 = @floatFromInt(@max(std.math.minInt(T), -9007199254740991));
+    const max: f64 = @floatFromInt(@min(std.math.maxInt(T), 9007199254740991));
+    const truncated = @trunc(value);
+    if (truncated < min or truncated > max) {
+        return error.TypeError;
+    }
+    return @intFromFloat(truncated);
+}
+
 pub const Exception = struct {
     local: *const Local,
     handle: *const v8.Value,
@@ -305,7 +375,8 @@ pub const Exception = struct {
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
-pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.Value else ?*const v8.Value {
+// Fails only for a string longer than V8 accepts (see Isolate.newString).
+pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) error{InvalidStringLength}!(if (fail) *const v8.Value else ?*const v8.Value) {
     switch (@typeInfo(@TypeOf(value))) {
         .void => return isolate.initUndefined(),
         .null => if (comptime null_as_undefined) return isolate.initUndefined() else return isolate.initNull(),
@@ -317,23 +388,27 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
             if (value >= 0 and value <= 4_294_967_295) {
                 return @ptrCast(isolate.initInteger(@as(u32, @intCast(value))).handle);
             }
-            return @ptrCast(isolate.initBigInt(value).handle);
+            if (value >= -2_147_483_648 and value < 0) {
+                return @ptrCast(isolate.initInteger(@as(i32, @intCast(value))).handle);
+            }
+            // 64-bit numbers are represented as floats (that's how it works in JS)
+            return @ptrCast(isolate.initNumber(@as(f64, @floatFromInt(value))).handle);
         },
         .comptime_int => {
-            if (value > -2_147_483_648 and value <= 4_294_967_295) {
+            if (value >= -2_147_483_648 and value <= 4_294_967_295) {
                 return @ptrCast(isolate.initInteger(value).handle);
             }
-            return @ptrCast(isolate.initBigInt(value).handle);
+            return @ptrCast(isolate.initNumber(@as(f64, value)).handle);
         },
         .float, .comptime_float => return @ptrCast(isolate.initNumber(value).handle),
         .pointer => |ptr| {
             if (ptr.size == .slice and ptr.child == u8) {
-                return @ptrCast(isolate.initStringHandle(value));
+                return @ptrCast(try isolate.initStringHandle(value));
             }
             if (ptr.size == .one) {
                 const one_info = @typeInfo(ptr.child);
                 if (one_info == .array and one_info.array.child == u8) {
-                    return @ptrCast(isolate.initStringHandle(value));
+                    return @ptrCast(try isolate.initStringHandle(value));
                 }
             }
         },
@@ -349,18 +424,17 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
         },
         .@"struct" => {
             switch (@TypeOf(value)) {
-                string.String => return isolate.initStringHandle(value.str()),
-                String.OneByte => return @ptrCast(isolate.initOneByteStringHandle(value.bytes)),
+                string.String => return @ptrCast(try isolate.initStringHandle(value.str())),
+                String.OneByte => return @ptrCast(try isolate.initOneByteStringHandle(value.bytes)),
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
-                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len).?;
                     if (len > 0) {
                         const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
                     }
-                    const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                    return @ptrCast(v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
+                    return @ptrCast(newArrayBuffer(isolate, backing_store));
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -385,8 +459,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                         const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
                         const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                        array_buffer = newArrayBuffer(isolate, backing_store);
                     }
 
                     switch (@typeInfo(value_type)) {
@@ -450,8 +523,8 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.InspectorClientImpl,
     c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
-    const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
-    return if (external_entry.subtype) |st| @tagName(st) else null;
+    const tao = Inspector.getTaggedOpaque(c_value) orelse return null;
+    return if (inspectorSubtype(tao)) |st| @tagName(st) else null;
 }
 
 // Same as valueSubType above, but for the optional description field.
@@ -465,16 +538,124 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 ) callconv(.c) [*c]const u8 {
     _ = v8_context;
 
-    // We _must_ include a non-null description in order for the subtype value
-    // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
-    return if (external_entry.subtype == null) null else "";
+    // Without a description, V8 drops the subtype, except for "error": it
+    // then describes the value itself ("name: message", plus the stack).
+    const tao = Inspector.getTaggedOpaque(c_value) orelse return null;
+    const subtype = inspectorSubtype(tao) orelse return null;
+    if (subtype == .@"error") {
+        return null;
+    }
+    return "";
+}
+
+// The subtype the inspector reports for one of our objects, as Chrome does:
+// "node" for Nodes, "error" for DOMExceptions, none for everything else.
+fn inspectorSubtype(tao: TaggedOpaque) ?bridge.SubType {
+    if (tao.is(@import("../webapi/Node.zig"))) {
+        return .node;
+    }
+    if (tao.is(@import("../webapi/DOMException.zig"))) {
+        return .@"error";
+    }
+    return null;
 }
 
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try std.testing.expectEqual(24, @sizeOf(@import("TaggedOpaque.zig")));
+    // It used to be 24, and that worked ok.
+    try testing.expectEqual(16, @sizeOf(TaggedOpaque));
 }
+
+test "js: ArrayBuffers crossing Zig don't keep a reference to their backing store" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    // Every buffer must end up owned by its ArrayBuffer alone, otherwise
+    // it's never freed.
+    const created = ArrayBufferRef(.uint8).init(local, 16);
+    try testing.expectEqual(1, backingStoreRefs(created.handle));
+    _ = created.slice();
+    try testing.expectEqual(1, backingStoreRefs(created.handle));
+
+    const typed = try simpleZigValueToJs(local.isolate, TypedArray(u8){ .values = "abc" }, true, false);
+    try testing.expectEqual(1, backingStoreRefs(typed));
+
+    const buffer = try simpleZigValueToJs(local.isolate, ArrayBuffer{ .values = "abc" }, true, false);
+    try testing.expectEqual(1, backingStoreRefs(buffer));
+
+    const from_js = try local.exec("new Uint8Array(8)", null);
+    _ = try from_js.toStringSmart();
+    _ = try from_js.toZig(TypedArray(u8));
+    try testing.expectEqual(1, backingStoreRefs(from_js.handle));
+}
+
+// A slice claiming `len` bytes over a 1-byte buffer. Only valid for code that
+// rejects it on its length before reading any byte: V8 compares the length
+// against String::kMaxLength before touching the data, and lengths that don't
+// fit a c_int never reach V8.
+fn overlongString(len: usize) []const u8 {
+    const byte: *const [1]u8 = "a";
+    const base: [*]const u8 = byte;
+    return base[0..len];
+}
+
+test "js: a string longer than V8 accepts fails with RangeError instead of crashing" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const State = struct {
+        len: usize,
+
+        fn text(self: *@This()) []const u8 {
+            return overlongString(self.len);
+        }
+    };
+    const driver = try local.exec("(function(text) { try { text(); } catch (e) { return String(e); } })", null);
+    const driver_fn = Function{ .local = local, .handle = @ptrCast(driver.handle) };
+
+    // Just above v8::String::kMaxLength on 64-bit builds, then past c_int.
+    for ([_]usize{ 1 << 29, 1 << 31 }) |len| {
+        const str = overlongString(len);
+        try testing.expectError(error.InvalidStringLength, local.zigValueToJs(str, .{}));
+        try testing.expectError(error.InvalidStringLength, local.zigValueToJs(String.OneByte{ .bytes = str }, .{}));
+        try testing.expectError(error.InvalidStringLength, local.parseJSON(str));
+        try testing.expectError(error.InvalidStringLength, local.compile(str, null));
+
+        var state = State{ .len = len };
+        const res = try driver_fn.call([]const u8, .{local.newCallback(State.text, &state)});
+        try testing.expectEqual("RangeError: Invalid string length", res);
+
+        // Nothing handles the rejection.
+        testing.expectLog(&.{.page_error});
+        const promise = try local.resolvePromise(str);
+        try testing.expectEqual(.rejected, promise.state());
+        try testing.expectEqual("RangeError: Invalid string length", try promise.result().toStringSmart());
+    }
+}
+
+// References held on an ArrayBuffer's (or a view's) backing store, not
+// counting the one taken here to ask.
+fn backingStoreRefs(handle: *const v8.Value) i64 {
+    const array_buffer: *const v8.ArrayBuffer = if (v8.v8__Value__IsArrayBuffer(handle))
+        @ptrCast(handle)
+    else
+        v8.v8__ArrayBufferView__Buffer(@ptrCast(handle)).?;
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    return v8.std__shared_ptr__v8__BackingStore__use_count(&backing_store_ptr) - 1;
+}
+
+const testing = @import("../../testing.zig");
 
 // Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
 // Page. This is to ensure that, if v8 doesn't finalize the value, we can
@@ -536,12 +717,38 @@ pub fn writeStackTrace(isolate: *v8.Isolate, stack_handle: *const v8.StackTrace,
 
     for (0..@intCast(frame_count)) |i| {
         const frame_handle = v8.v8__StackTrace__GetFrame(stack_handle, isolate, @intCast(i)).?;
-        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
-            var buf: [1024]u8 = undefined;
-            const n = v8.v8__String__WriteUtf8(name, isolate, &buf, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-            try writer.print("{s}{s}:{d}", .{ separator, buf[0..n], v8.v8__StackFrame__GetLineNumber(frame_handle) });
-        } else {
-            try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
+
+        var name_buf: [512]u8 = undefined;
+        var name: []const u8 = "";
+        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &name_buf, name_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            name = name_buf[0..n];
         }
+        var script_buf: [512]u8 = undefined;
+        var script: []const u8 = "";
+        if (v8.v8__StackFrame__GetScriptNameOrSourceURL(frame_handle)) |str| {
+            const n = v8.v8__String__WriteUtf8(str, isolate, &script_buf, script_buf.len, v8.WRITE_REPLACE_INVALID_UTF8, null);
+            script = script_buf[0..n];
+        }
+
+        try writer.print("{s}{s} ({s}:{d}:{d})", .{
+            separator,
+            if (name.len == 0) "<anonymous>" else name,
+            if (script.len == 0) "<unknown>" else script,
+            v8.v8__StackFrame__GetLineNumber(frame_handle),
+            v8.v8__StackFrame__GetColumn(frame_handle),
+        });
     }
+}
+
+test "js: enforceRange" {
+    try testing.expectEqual(@as(u32, 5), try enforceRange(u32, 5.9));
+    try testing.expectEqual(@as(i64, -10), try enforceRange(i64, -10));
+    try testing.expectError(error.TypeError, enforceRange(u32, -1));
+    try testing.expectError(error.TypeError, enforceRange(u32, 4294967296));
+    try testing.expectError(error.TypeError, enforceRange(i64, std.math.nan(f64)));
+    try testing.expectError(error.TypeError, enforceRange(u64, std.math.inf(f64)));
+    try testing.expectError(error.TypeError, enforceRange(u64, 9007199254740992));
+    try testing.expectEqual(@as(u16, 65535), try enforceRange(u16, 65535.5));
+    try testing.expectError(error.TypeError, enforceRange(u16, 65536));
 }

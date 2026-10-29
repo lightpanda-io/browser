@@ -45,7 +45,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "SVGPolylineElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
@@ -57,6 +56,6 @@ pub fn getPoints(self: *Polyline, frame: *Frame) !*PointList {
     return PointList.getOrCreate(self.asElement(), .base, frame);
 }
 
-pub fn getAnimatedPoints(self: *Polyline, frame: *Frame) !*PointList {
+fn getAnimatedPoints(self: *Polyline, frame: *Frame) !*PointList {
     return PointList.getOrCreate(self.asElement(), .animated, frame);
 }

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- A GET submission sets the action URL's query to the form data: any query
+     already in the action is replaced, and its fragment is kept after it.
+     https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#submit-mutate-action -->
+
+<script>
+  function loadFrame(name, src) {
+    return new Promise((resolve) => {
+      const frame = document.createElement('iframe');
+      frame.name = name;
+      frame.onload = () => {
+        if (frame.contentWindow.location.pathname.endsWith('/support/page.html') === false) return;
+        frame.onload = null;
+        resolve(frame);
+      };
+      frame.src = src;
+      document.body.appendChild(frame);
+    });
+  }
+</script>
+
+<script id=get_replaces_action_query type=module>
+  {
+    const state = await testing.async();
+    const frame = await loadFrame('get_query_frame', 'support/page.html?sort=name');
+
+    const form = document.createElement('form');
+    form.action = 'support/page.html?sort=name';
+    form.target = 'get_query_frame';
+    form.innerHTML = '<input name=sort value=price>';
+    document.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.submit();
+
+    await state.done(() => {
+      testing.expectEqual('?sort=price', frame.contentWindow.location.search);
+    });
+  }
+</script>
+
+<script id=get_keeps_fragment_after_query type=module>
+  {
+    // Appending the entries after the fragment would turn this into a
+    // fragment navigation that never reaches the server.
+    const state = await testing.async();
+    const frame = await loadFrame('get_fragment_frame', 'support/page.html?sort=name#top');
+    const initial_document = frame.contentDocument;
+
+    const form = document.createElement('form');
+    form.action = 'support/page.html?sort=name#top';
+    form.target = 'get_fragment_frame';
+    form.innerHTML = '<input name=sort value=price>';
+    document.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.submit();
+
+    await state.done(() => {
+      testing.expectEqual(false, frame.contentDocument === initial_document);
+      testing.expectEqual('?sort=price', frame.contentWindow.location.search);
+      testing.expectEqual('#top', frame.contentWindow.location.hash);
+    });
+  }
+</script>
+
+<script id=get_empty_action_is_document_url type=module>
+  {
+    // An empty action is the form document's URL, so its fragment is kept.
+    const state = await testing.async();
+    const frame = await loadFrame('get_empty_action_frame', 'support/page.html?sort=name#top');
+
+    const form = frame.contentDocument.createElement('form');
+    form.setAttribute('action', '');
+    form.target = 'get_empty_action_frame';
+    form.innerHTML = '<input name=sort value=price>';
+    frame.contentDocument.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.submit();
+
+    await state.done(() => {
+      testing.expectEqual('?sort=price', frame.contentWindow.location.search);
+      testing.expectEqual('#top', frame.contentWindow.location.hash);
+    });
+  }
+</script>
+
+<script id=get_empty_formaction_is_document_url type=module>
+  {
+    // An empty formaction doesn't fall back to the form's action.
+    const state = await testing.async();
+    const frame = await loadFrame('get_empty_formaction_frame', 'support/page.html?sort=name#top');
+
+    const form = frame.contentDocument.createElement('form');
+    form.action = 'other.html';
+    form.target = 'get_empty_formaction_frame';
+    form.innerHTML = '<input name=sort value=price><button formaction="">go</button>';
+    frame.contentDocument.body.appendChild(form);
+
+    frame.onload = () => state.resolve();
+    form.requestSubmit(form.querySelector('button'));
+
+    await state.done(() => {
+      testing.expectEqual(true, frame.contentWindow.location.pathname.endsWith('/support/page.html'));
+      testing.expectEqual('?sort=price', frame.contentWindow.location.search);
+      testing.expectEqual('#top', frame.contentWindow.location.hash);
+    });
+  }
+</script>

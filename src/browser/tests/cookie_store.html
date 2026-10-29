@@ -1,5 +1,14 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
+<script>
+  // The module scripts below interleave at each await and share cookieStore,
+  // so a change listener also sees the other scripts' cookies. Each test only
+  // keeps the events about its own.
+  function isAbout(e, prefix) {
+    return [...e.changed, ...e.deleted].some((c) => c.name.startsWith(prefix));
+  }
+</script>
 <script id=interface>
   testing.expectEqual('object', typeof cookieStore);
   testing.expectEqual(cookieStore, window.cookieStore);
@@ -74,6 +83,24 @@
   });
 </script>
 
+<script id=loopback-is-trustworthy type=module>
+  // Served over plain http on 127.0.0.1, which browsers treat as trustworthy.
+  const state = await testing.async();
+  await cookieStore.set({ name: '__Host-lp', value: '1', path: '/' });
+  const item = await cookieStore.get('__Host-lp');
+  await cookieStore.delete('__Host-lp');
+
+  document.cookie = 'lp_secure=1; Secure';
+  const doc = document.cookie;
+  document.cookie = 'lp_secure=; Max-Age=0; Secure';
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('__Host-lp', item.name);
+    testing.expectEqual(true, item.secure);
+    testing.expectEqual(true, doc.includes('lp_secure=1'));
+  });
+</script>
+
 <script id=change-event-binds-listeners-at-mutation type=module>
   const state = await testing.async();
   // A change enqueued while nobody is subscribed must not be delivered to a
@@ -100,7 +127,7 @@
 <script id=set-max-age type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ma-')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   // A positive maxAge stores the cookie.
@@ -180,7 +207,7 @@
 <script id=change-event-from-cookieStore-set type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ev-from-set')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   await cookieStore.set('ev-from-set', 'v1');
@@ -231,6 +258,9 @@
   const rejects = [
     await captureReject('', ''),
     await captureReject('', 'a=b'),
+    // A nameless value that would read as a prefixed name.
+    await captureReject('', '__Host-x'),
+    await captureReject('', ' __http-x'),
     // Forbidden chars in name.
     await captureReject('a=b', 'v'),
     await captureReject('a;b', 'v'),
@@ -269,7 +299,7 @@
 <script id=change-event-delete-omits-value type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  const handler = (e) => { if (isAbout(e, 'ev-delete-val')) events.push(e); };
   cookieStore.addEventListener('change', handler);
 
   await cookieStore.set('ev-delete-val', 'original');
@@ -300,16 +330,27 @@
 <script id=change-event-from-document-cookie type=module>
   const state = await testing.async();
   const events = [];
-  const handler = (e) => events.push(e);
+  let waiter = null;
+  const handler = (e) => {
+    if (isAbout(e, 'ev-from-doc')) {
+      events.push(e);
+      waiter?.();
+    }
+  };
   cookieStore.addEventListener('change', handler);
+  // Chrome delivers document.cookie changes later than a setTimeout(0), so
+  // wait for the event itself.
+  const nextEvent = () => new Promise(r => { waiter = r; });
 
+  let next = nextEvent();
   document.cookie = 'ev-from-doc=v1; path=/';
-  await new Promise(r => setTimeout(r, 0));
+  await next;
 
   const lenAfterSet = events.length;
 
+  next = nextEvent();
   document.cookie = 'ev-from-doc=DELETED; path=/; max-age=0';
-  await new Promise(r => setTimeout(r, 0));
+  await next;
 
   const lenAfterDelete = events.length;
 
@@ -328,7 +369,7 @@
 <script id=change-event-onchange-attribute type=module>
   const state = await testing.async();
   let captured = null;
-  cookieStore.onchange = (e) => { captured = e; };
+  cookieStore.onchange = (e) => { if (isAbout(e, 'ev-onchange')) captured = e; };
 
   await cookieStore.set('ev-onchange', 'v1');
   await new Promise(r => setTimeout(r, 0));
@@ -342,5 +383,31 @@
   await state.done(() => {
     testing.expectEqual(true, wasCaptured);
     testing.expectEqual('ev-onchange', capturedName);
+  });
+</script>
+
+<script id=rejections type=module>
+  // Invalid calls reject with a TypeError rather than throwing. Only the
+  // error type is checked: messages differ between browsers.
+  async function rejection(fn) {
+    const promise = fn();
+    try {
+      await promise;
+      return 'resolved';
+    } catch (e) {
+      return e.name;
+    }
+  }
+
+  const state = await testing.async();
+  const results = [
+    await rejection(() => cookieStore.get()),
+    await rejection(() => cookieStore.set('no-value')),
+  ];
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('TypeError', results[0]);
+    testing.expectEqual('TypeError', results[1]);
   });
 </script>

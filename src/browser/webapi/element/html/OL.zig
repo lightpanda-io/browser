@@ -17,11 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
 
 const OL = @This();
@@ -38,10 +41,10 @@ pub fn asNode(self: *OL) *Node {
 }
 
 pub fn getType(self: *OL) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "1";
+    return self.asElement().getAttributeInterned("type") orelse "1";
 }
 
-pub fn setType(self: *OL, value: []const u8, frame: *Frame) !void {
+fn setType(self: *OL, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
 }
 
@@ -50,7 +53,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLOListElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

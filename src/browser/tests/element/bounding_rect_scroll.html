@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body>
+<div id="top">top</div>
+<div id="filler"></div>
+<button id="far">far</button>
+</body>
+
+<script id="rectIsViewportRelative">
+{
+  const filler = $('#filler');
+  // Empty paragraphs have no height in a real layout, so give them text.
+  for (let i = 0; i < 300; i++) {
+    const p = document.createElement('p');
+    p.textContent = 'x';
+    filler.appendChild(p);
+  }
+  const far = $('#far');
+  const before = far.getBoundingClientRect();
+  testing.expectTrue(before.top > window.innerHeight);
+
+  window.scrollTo(0, 100);
+  const after = far.getBoundingClientRect();
+  testing.expectEqual(before.top - 100, after.top);
+  testing.expectEqual(before.x, after.x);
+  testing.expectEqual(after.top, far.getClientRects()[0].top);
+
+  // scrollIntoView brings it into the viewport
+  far.scrollIntoView();
+  const inView = far.getBoundingClientRect();
+  testing.expectTrue(inView.top >= 0);
+  testing.expectTrue(inView.bottom <= window.innerHeight);
+  testing.expectEqual(far, document.elementFromPoint(inView.x, inView.y));
+
+  window.scrollTo(0, 0);
+  testing.expectEqual(before.top, far.getBoundingClientRect().top);
+}
+</script>

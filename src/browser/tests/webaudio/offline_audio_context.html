@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=interfaces>
+{
+  const ctx = new OfflineAudioContext(1, 5000, 44100);
+  testing.expectEqual(BaseAudioContext.prototype, Object.getPrototypeOf(OfflineAudioContext.prototype));
+  testing.expectEqual(EventTarget.prototype, Object.getPrototypeOf(BaseAudioContext.prototype));
+  testing.expectEqual(AudioScheduledSourceNode.prototype, Object.getPrototypeOf(OscillatorNode.prototype));
+  testing.expectEqual(AudioNode.prototype, Object.getPrototypeOf(AudioScheduledSourceNode.prototype));
+  testing.expectEqual(AudioNode.prototype, Object.getPrototypeOf(DynamicsCompressorNode.prototype));
+  testing.expectError('TypeError', () => new BaseAudioContext());
+  testing.expectError('TypeError', () => new AudioNode());
+
+  testing.expectEqual(5000, ctx.length);
+  testing.expectEqual(44100, ctx.sampleRate);
+  testing.expectEqual(0, ctx.currentTime);
+  testing.expectEqual('suspended', ctx.state);
+  testing.expectEqual(true, ctx.destination instanceof AudioDestinationNode);
+  testing.expectEqual(ctx.destination, ctx.destination);
+  testing.expectEqual(ctx, ctx.destination.context);
+
+  const fromOptions = new OfflineAudioContext({length: 128, sampleRate: 8000});
+  testing.expectEqual(1, fromOptions.destination.channelCount);
+  testing.expectEqual(8000, fromOptions.sampleRate);
+
+  testing.expectError('NotSupportedError', () => new OfflineAudioContext(0, 5000, 44100));
+  testing.expectError('NotSupportedError', () => new OfflineAudioContext(33, 5000, 44100));
+  testing.expectError('NotSupportedError', () => new OfflineAudioContext(1, 0, 44100));
+  testing.expectError('NotSupportedError', () => new OfflineAudioContext(1, 5000, 1000));
+  testing.expectError('TypeError', () => new OfflineAudioContext({sampleRate: 44100}));
+}
+</script>
+
+<script id=defaults>
+{
+  const ctx = new OfflineAudioContext(2, 5000, 44100);
+  const destination = ctx.destination;
+  testing.expectEqual(2, destination.maxChannelCount);
+  testing.expectEqual(2, destination.channelCount);
+  testing.expectEqual('explicit', destination.channelCountMode);
+  testing.expectEqual('speakers', destination.channelInterpretation);
+  testing.expectEqual(1, destination.numberOfInputs);
+  destination.channelCount = 3;
+  testing.expectEqual(3, destination.channelCount);
+
+  const osc = ctx.createOscillator();
+  testing.expectEqual('sine', osc.type);
+  testing.expectEqual(440, osc.frequency.value);
+  testing.expectEqual(-22050, osc.frequency.minValue);
+  testing.expectEqual(22050, osc.frequency.maxValue);
+  testing.expectEqual(0, osc.detune.value);
+  testing.expectEqual(osc.frequency, osc.frequency);
+  testing.expectEqual(0, osc.numberOfInputs);
+  testing.expectEqual(1, osc.numberOfOutputs);
+  testing.expectEqual(2, osc.channelCount);
+  testing.expectEqual('max', osc.channelCountMode);
+
+  const comp = ctx.createDynamicsCompressor();
+  testing.expectEqual(-24, comp.threshold.value);
+  testing.expectEqual(30, comp.knee.value);
+  testing.expectEqual(12, comp.ratio.value);
+  testing.expectEqual(Math.fround(0.003), comp.attack.value);
+  testing.expectEqual(0.25, comp.release.value);
+  testing.expectEqual(0, comp.reduction);
+  testing.expectEqual('k-rate', comp.threshold.automationRate);
+  testing.expectEqual('clamped-max', comp.channelCountMode);
+  testing.expectError('NotSupportedError', () => comp.channelCount = 3);
+  testing.expectError('NotSupportedError', () => comp.channelCountMode = 'max');
+  testing.expectError('InvalidStateError', () => comp.threshold.automationRate = 'a-rate');
+
+  const gain = ctx.createGain();
+  testing.expectEqual(1, gain.gain.value);
+  testing.expectEqual('a-rate', gain.gain.automationRate);
+  gain.channelCountMode = 'bogus';
+  testing.expectEqual('max', gain.channelCountMode);
+
+  testing.expectEqual('max', ctx.createBufferSource().channelCountMode);
+  testing.expectEqual(1, ctx.createConstantSource().offset.value);
+
+  const fromCtor = new OscillatorNode(ctx, {type: 'square', frequency: 1000});
+  testing.expectEqual('square', fromCtor.type);
+  testing.expectEqual(1000, fromCtor.frequency.value);
+  testing.expectEqual(ctx, fromCtor.context);
+  testing.expectError('InvalidStateError', () => new OscillatorNode(ctx, {type: 'custom'}));
+  testing.expectError('TypeError', () => new OscillatorNode(ctx, {type: 'bogus'}));
+  testing.expectEqual(-50, new DynamicsCompressorNode(ctx, {threshold: -50}).threshold.value);
+}
+</script>
+
+<script id=fingerprint type=module>
+  const state = await testing.async();
+
+  // The graph audio fingerprinting scripts render.
+  async function render(type, frequency, release) {
+    const ctx = new OfflineAudioContext(1, 5000, 44100);
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = frequency;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -50;
+    comp.knee.value = 40;
+    comp.ratio.value = 12;
+    comp.attack.value = 0;
+    comp.release.value = release;
+    osc.connect(comp);
+    comp.connect(ctx.destination);
+    osc.start(0);
+    const buffer = await ctx.startRendering();
+    const data = buffer.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += Math.abs(data[i]);
+    return {sum, reduction: comp.reduction, length: data.length, zero: data[263], first: data[265]};
+  }
+  const sine = await render('sine', 1000, 0.2);
+  const triangle = await render('triangle', 10000, 0.25);
+
+  state.resolve();
+  await state.done(() => {
+    // Chrome 151 x86-64: 1168.9068228197468 and 1085.371121346027; the
+    // wavetables differ in the last bit only.
+    testing.expectEqual(true, Math.abs(sine.sum - 1168.90682) < 1e-4);
+    testing.expectEqual(true, Math.abs(triangle.sum - 1085.37112) < 1e-4);
+    testing.expectEqual(Math.fround(-21.242456436157227), sine.reduction);
+    testing.expectEqual(Math.fround(-20.538288116455078), triangle.reduction);
+    testing.expectEqual(5000, sine.length);
+    // the compressor's 6ms look-ahead
+    testing.expectEqual(0, sine.zero);
+    testing.expectEqual(true, Math.abs(sine.first - 0.0511644) < 1e-5);
+  });
+</script>
+
+<script id=raw_oscillator type=module>
+  const state = await testing.async();
+
+  const results = {};
+  for (const type of ['sine', 'square', 'sawtooth', 'triangle']) {
+    const ctx = new OfflineAudioContext(1, 256, 44100);
+    const osc = new OscillatorNode(ctx, {type, frequency: 1000});
+    osc.connect(ctx.destination);
+    osc.start();
+    results[type] = Array.from((await ctx.startRendering()).getChannelData(0).slice(0, 4));
+  }
+
+  state.resolve();
+  await state.done(() => {
+    const expected = {
+      sine: [0, 0.14199429750442505, 0.2811110317707062, 0.41453102231025696],
+      square: [0, 0.952648937702179, 0.8448548316955566, 0.817898154258728],
+      sawtooth: [0, 0.030252715572714806, 0.08926413208246231, 0.10508260130882263],
+      triangle: [0, 0.08988944441080093, 0.18264608085155487, 0.2712443470954895],
+    };
+    for (const type in expected) {
+      for (let i = 0; i < 4; i++) {
+        testing.expectEqual(true, Math.abs(results[type][i] - expected[type][i]) < 1e-6);
+      }
+    }
+  });
+</script>
+
+<script id=lifecycle type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(2, 300, 8000);
+  const events = [];
+  ctx.onstatechange = () => events.push('statechange:' + ctx.state);
+  ctx.oncomplete = (e) => events.push(['complete', e instanceof OfflineAudioCompletionEvent, e.renderedBuffer.length, ctx.state]);
+
+  const source = ctx.createConstantSource();
+  source.connect(ctx.destination);
+  source.start();
+
+  const rendering = ctx.startRendering();
+  events.push('started:' + ctx.state);
+  let again = null;
+  try { await ctx.startRendering(); } catch (e) { again = e.name; }
+
+  const buffer = await rendering;
+  events.push('resolved');
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('InvalidStateError', again);
+    testing.expectEqual(['started:running', 'statechange:running', ['complete', true, 300, 'closed'], 'resolved', 'statechange:closed'], events);
+    testing.expectEqual(2, buffer.numberOfChannels);
+    testing.expectEqual(8000, buffer.sampleRate);
+    // a mono source up-mixes to both channels
+    testing.expectEqual(1, buffer.getChannelData(0)[299]);
+    testing.expectEqual(1, buffer.getChannelData(1)[0]);
+    testing.expectEqual('closed', ctx.state);
+  });
+</script>
+
+<script id=suspend_resume type=module>
+  const state = await testing.async();
+
+  const ctx = new OfflineAudioContext(1, 1024, 8000);
+  const source = ctx.createConstantSource();
+  source.connect(ctx.destination);
+  source.start();
+
+  let times = [];
+  ctx.suspend(200 / 8000).then(() => {
+    times.push([ctx.currentTime * 8000, ctx.state]);
+    source.offset.value = 0.5;
+    ctx.resume();
+  });
+  let errors = [];
+  for (const when of [-1, 2000 / 8000]) {
+    try { await ctx.suspend(when); } catch (e) { errors.push(e.name); }
+  }
+  try { await ctx.suspend(256 / 8000); } catch (e) { errors.push(e.name); }
+
+  let resumeError = null;
+  try { await new OfflineAudioContext(1, 128, 8000).resume(); } catch (e) { resumeError = e.name; }
+
+  const data = (await ctx.startRendering()).getChannelData(0);
+
+  state.resolve();
+  await state.done(() => {
+    // rounded up to a render quantum boundary
+    testing.expectEqual([[256, 'suspended']], times);
+    testing.expectEqual(['InvalidStateError', 'InvalidStateError', 'InvalidStateError'], errors);
+    testing.expectEqual('InvalidStateError', resumeError);
+    testing.expectEqual(1, data[255]);
+    testing.expectEqual(0.5, data[256]);
+  });
+</script>

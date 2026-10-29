@@ -77,7 +77,7 @@ pub fn getState(self: *PopStateEvent, frame: *Frame) !?js.Value {
     return try frame.js.local.?.parseJSON(s);
 }
 
-pub fn hasUAVisualTransition(_: *PopStateEvent) bool {
+fn hasUAVisualTransition(_: *PopStateEvent) bool {
     // Not currently supported  so we always return false;
     return false;
 }
@@ -87,7 +87,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "PopStateEvent";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

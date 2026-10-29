@@ -18,21 +18,27 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const text_measure = @import("../../../text_measure.zig");
+const StyleManager = @import("../../../StyleManager.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Factory = @import("../../../Factory.zig");
+const TreeWalker = @import("../../TreeWalker.zig");
 
-const AnimatedEnumeration = @import("../../svg/AnimatedEnumeration.zig");
+const Length = @import("../../svg/Length.zig");
+const PathData = @import("../../svg/PathData.zig");
 const AnimatedLength = @import("../../svg/AnimatedLength.zig");
+const AnimatedEnumeration = @import("../../svg/AnimatedEnumeration.zig");
+
+const SvgElement = @import("../Svg.zig");
 
 const Graphics = @import("Graphics.zig");
-
-pub const TextPositioning = @import("TextPositioning.zig");
 pub const TextPath = @import("TextPath.zig");
+pub const TextPositioning = @import("TextPositioning.zig");
 
 const TextContent = @This();
 
@@ -84,11 +90,166 @@ pub fn asNode(self: *TextContent) *Node {
 }
 
 fn text(self: *TextContent, frame: *Frame) []const u8 {
-    return self.asNode().getTextContentAlloc(frame.local_arena) catch "";
+    const raw = self.asNode().getTextContentAlloc(frame.local_arena) catch return "";
+    return collapseSpaces(raw, self.preservesSpaces(), .both, frame.local_arena) catch "";
+}
+
+const Trim = enum { both, start };
+
+// By default, newlines and tabs become spaces. Runs collapse to one. Edges
+// are trimmmed. `xml:space="preserve"` only does the first (newlines+tabs => space)
+fn collapseSpaces(raw: []const u8, preserve: bool, trim: Trim, allocator: std.mem.Allocator) ![]const u8 {
+    const out = try allocator.alloc(u8, raw.len);
+    var len: usize = 0;
+    for (raw) |c| {
+        const char: u8 = switch (c) {
+            '\n', '\r', '\t' => ' ',
+            else => c,
+        };
+        if (preserve == false and char == ' ' and (len == 0 or out[len - 1] == ' ')) {
+            continue;
+        }
+        out[len] = char;
+        len += 1;
+    }
+    if (preserve == false and trim == .both and len > 0 and out[len - 1] == ' ') {
+        len -= 1;
+    }
+    return out[0..len];
+}
+
+fn preservesSpaces(self: *TextContent) bool {
+    var current: ?*Element = self.asElement();
+    while (current) |element| : (current = element.parentElement()) {
+        const value = element.getAttributeSafe(comptime .wrap("xml:space")) orelse continue;
+        return std.mem.eql(u8, value, "preserve");
+    }
+    return false;
+}
+
+/// The box the deterministic text model gives this element: glyphs start at
+/// the first x/y, shifted by the first dx/dy and by text-anchor, and advance
+/// along the baseline. Per-glyph positions, textPath geometry and bidi are not
+/// modelled.
+pub fn getBounds(self: *TextContent, frame: *Frame) PathData.Bounds {
+    const element = self.asElement();
+    if (element.asNode().isConnected() == false) {
+        // without a layout box, there is no geometry
+        return .{};
+    }
+    const owner = element.ownerFrame(frame) orelse return .{};
+    if (owner._style_manager.rendering(element) == .none) {
+        return .{};
+    }
+
+    const content = self.text(frame);
+    if (content.len == 0) {
+        return .{};
+    }
+    const font_size = self.fontSize(frame);
+    const width = text_measure.width(content, font_size);
+    const origin = self.baselineOrigin(width, frame);
+    return .{
+        .min_x = origin.x,
+        .min_y = origin.y - font_size * text_measure.ASCENT,
+        .max_x = origin.x + width,
+        .max_y = origin.y + font_size * text_measure.DESCENT,
+    };
+}
+
+/// Where the first glyph sits on the baseline. A <tspan> or <textPath> without
+/// its own x/y continues its <text>, after the text that precedes it.
+fn baselineOrigin(self: *TextContent, width: f64, frame: *Frame) PathData.Point {
+    const element = self.asElement();
+    const own_x = firstLength(element, "x", .horizontal, frame);
+    const own_y = firstLength(element, "y", .vertical, frame);
+    const dx = firstLength(element, "dx", .horizontal, frame) orelse 0;
+    const dy = firstLength(element, "dy", .vertical, frame) orelse 0;
+
+    const root = self.textRoot();
+    if (root == self) {
+        return .{
+            .x = (own_x orelse 0) + dx - anchorShift(element, width, frame),
+            .y = (own_y orelse 0) + dy,
+        };
+    }
+
+    const root_width = text_measure.width(root.text(frame), root.fontSize(frame));
+    const root_origin = root.baselineOrigin(root_width, frame);
+    const x = if (own_x) |value|
+        value - anchorShift(element, width, frame)
+    else
+        root_origin.x + self.precedingWidth(root, frame);
+    return .{ .x = x + dx, .y = (own_y orelse root_origin.y) + dy };
+}
+
+/// The outermost text content element this one is nested in, or itself.
+fn textRoot(self: *TextContent) *TextContent {
+    var root = self;
+    var parent = self.asElement().parentElement();
+    while (parent) |element| : (parent = element.parentElement()) {
+        if (element._namespace != .svg) {
+            break;
+        }
+        const graphics = element.as(SvgElement).is(Graphics) orelse break;
+        root = graphics.is(TextContent) orelse break;
+    }
+    return root;
+}
+
+/// Advance of the text in `root` that comes before this element.
+fn precedingWidth(self: *TextContent, root: *TextContent, frame: *Frame) f64 {
+    var preceding: std.Io.Writer.Allocating = .init(frame.local_arena);
+    const stop = self.asNode();
+    var walker = TreeWalker.FullExcludeSelf.init(root.asNode(), .{});
+    while (walker.next()) |node| {
+        if (node == stop) {
+            break;
+        }
+        const text_node = node.is(Node.CData.Text) orelse continue;
+        preceding.writer.writeAll(text_node.asCData()._data.str()) catch return 0;
+    }
+    const collapsed = collapseSpaces(preceding.written(), root.preservesSpaces(), .start, frame.local_arena) catch return 0;
+    return text_measure.width(collapsed, root.fontSize(frame));
+}
+
+/// The first entry of a length-list attribute such as x="10 20 30".
+fn firstLength(element: *Element, comptime name: []const u8, direction: Length.Direction, frame: *Frame) ?f64 {
+    const raw = element.getAttributeSafe(comptime .wrap(name)) orelse return null;
+    var entries = std.mem.tokenizeAny(u8, raw, " \t\r\n,");
+    const first = entries.next() orelse return null;
+    const value = Length.resolve(first, element, direction, frame) orelse return null;
+    return if (std.math.isFinite(value)) value else null;
+}
+
+/// How far text-anchor moves a run of `width` back from its x. Like
+/// computedFontSize, only inline styles and attributes are consulted.
+fn anchorShift(element: *Element, width: f64, frame: *Frame) f64 {
+    const owner = element.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
+    var current: ?*Element = element;
+    while (current) |el| : (current = el.asNode().flatTreeParentElement(owner)) {
+        const raw = style_manager.inlineStyleValue(el, comptime .wrap("text-anchor")) orelse
+            el.getAttributeSafe(comptime .wrap("text-anchor")) orelse continue;
+        const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
+        if (std.ascii.eqlIgnoreCase(value, "start")) {
+            return 0;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "middle")) {
+            return width / 2;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "end")) {
+            return width;
+        }
+        // inherit, or a value the cascade would drop: keep looking up.
+    }
+    return 0;
 }
 
 fn fontSize(self: *TextContent, frame: *Frame) f64 {
-    return frame._style_manager.computedFontSize(self.asElement());
+    const element = self.asElement();
+    const owner = element.ownerFrame(frame) orelse return StyleManager.DEFAULT_FONT_SIZE;
+    return owner._style_manager.computedFontSize(element);
 }
 
 fn getTextLength(self: *TextContent, frame: *Frame) !*AnimatedLength {
@@ -99,15 +260,15 @@ fn getLengthAdjust(self: *TextContent, frame: *Frame) !*AnimatedEnumeration {
     return AnimatedEnumeration.getOrCreate(self.asElement(), .length_adjust, frame);
 }
 
-pub fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
+fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
     return text_measure.utf16Length(self.text(frame));
 }
 
-pub fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {
+fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {
     return text_measure.width(self.text(frame), self.fontSize(frame));
 }
 
-pub fn getSubStringLength(self: *TextContent, charnum: u32, nchars: u32, frame: *Frame) !f64 {
+fn getSubStringLength(self: *TextContent, charnum: u32, nchars: u32, frame: *Frame) !f64 {
     return text_measure.substringWidth(self.text(frame), charnum, nchars, self.fontSize(frame));
 }
 
@@ -115,7 +276,6 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(TextContent);
     pub const Meta = struct {
         pub const name = "SVGTextContentElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

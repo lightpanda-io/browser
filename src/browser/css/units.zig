@@ -30,6 +30,7 @@ pub const Unit = enum {
     none, // bare number, no suffix
     percentage,
     em,
+    rem,
     ex,
     px,
     cm,
@@ -52,13 +53,15 @@ pub const Parsed = struct {
 
 const WHITESPACE = " \t\r\n\x0c";
 
-// Longer suffixes first: "5grad" must not match the "rad" entry.
+// Longer suffixes first: "5grad" must not match the "rad" entry, nor "2rem"
+// the "em" one.
 const suffixes = [_]struct { []const u8, Unit }{
     .{ "turn", .turn },
     .{ "grad", .grad },
     .{ "deg", .deg },
     .{ "rad", .rad },
     .{ "%", .percentage },
+    .{ "rem", .rem },
     .{ "em", .em },
     .{ "ex", .ex },
     .{ "px", .px },
@@ -129,6 +132,7 @@ test "css units: parse" {
     try testing.expectEqual(Parsed{ .value = 50, .unit = .percentage }, try parse("50%"));
     try testing.expectEqual(Parsed{ .value = 2.54, .unit = .cm }, try parse("2.54cm"));
     try testing.expectEqual(Parsed{ .value = 1.5, .unit = .em }, try parse("1.5EM"));
+    try testing.expectEqual(Parsed{ .value = 2, .unit = .rem }, try parse("2rem"));
     try testing.expectEqual(Parsed{ .value = 90, .unit = .deg }, try parse("90deg"));
     try testing.expectEqual(Parsed{ .value = 100, .unit = .grad }, try parse("100grad"));
     try testing.expectEqual(Parsed{ .value = 0.5, .unit = .turn }, try parse("0.5turn"));

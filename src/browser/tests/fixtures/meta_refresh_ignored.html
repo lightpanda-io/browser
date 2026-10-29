@@ -1,0 +1,7 @@
+<!doctype html>
+<title>ignored</title>
+<template><meta http-equiv="refresh" content="0; meta_refresh_target.html"></template>
+<script>
+  const meta = document.querySelector("template").content.querySelector("meta");
+  document.createElement("div").appendChild(meta.cloneNode());
+</script>

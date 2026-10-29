@@ -26,6 +26,7 @@ const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
+const Table = @import("../element/html/Table.zig");
 const Execution = js.Execution;
 
 const Mode = enum {
@@ -37,11 +38,13 @@ const Mode = enum {
     child_elements,
     child_tag,
     cells,
+    table_rows,
     select_options,
     selected_options,
     links,
     anchors,
     form,
+    document_named,
     empty,
 };
 
@@ -58,11 +61,13 @@ _data: union(Mode) {
     child_elements: NodeLive(.child_elements),
     child_tag: NodeLive(.child_tag),
     cells: NodeLive(.cells),
+    table_rows: NodeLive(.table_rows),
     select_options: NodeLive(.select_options),
     selected_options: NodeLive(.selected_options),
     links: NodeLive(.links),
     anchors: NodeLive(.anchors),
     form: NodeLive(.form),
+    document_named: NodeLive(.document_named),
     empty: void,
 },
 _rc: lp.RC = .{},
@@ -106,14 +111,14 @@ pub fn getAtIndex(self: *HTMLCollection, index: usize, frame: *const Frame) ?*El
     };
 }
 
-pub fn getByName(self: *HTMLCollection, name: []const u8, frame: *Frame) ?*Element {
+pub fn getByName(self: *HTMLCollection, name: []const u8) ?*Element {
     if (name.len == 0) {
         return null;
     }
 
     return switch (self._data) {
         .empty => null,
-        inline else => |*impl| impl.getByName(name, frame),
+        inline else => |*impl| impl.getByName(name),
     };
 }
 
@@ -129,11 +134,13 @@ pub fn iterator(self: *HTMLCollection, exec: *const Execution) !*Iterator {
             .child_elements => |*impl| .{ .child_elements = impl._tw.clone() },
             .child_tag => |*impl| .{ .child_tag = impl._tw.clone() },
             .cells => |*impl| .{ .cells = impl._tw.clone() },
+            .table_rows => |*impl| .{ .table_rows = impl._tw.clone() },
             .select_options => |*impl| .{ .select_options = impl._tw.clone() },
             .selected_options => |*impl| .{ .selected_options = impl._tw.clone() },
             .links => |*impl| .{ .links = impl._tw.clone() },
             .anchors => |*impl| .{ .anchors = impl._tw.clone() },
             .form => |*impl| .{ .form = impl._tw.clone() },
+            .document_named => |*impl| .{ .document_named = impl._tw.clone() },
             .empty => .empty,
         },
     }, exec);
@@ -151,11 +158,13 @@ pub const Iterator = GenericIterator(struct {
         child_elements: TreeWalker.Children,
         child_tag: TreeWalker.Children,
         cells: TreeWalker.Children,
+        table_rows: Table.RowWalker,
         select_options: TreeWalker.FullExcludeSelf,
         selected_options: TreeWalker.FullExcludeSelf,
         links: TreeWalker.FullExcludeSelf,
         anchors: TreeWalker.FullExcludeSelf,
         form: TreeWalker.FullExcludeSelf,
+        document_named: TreeWalker.FullExcludeSelf,
         empty: void,
     },
 
@@ -177,11 +186,13 @@ pub const Iterator = GenericIterator(struct {
             .child_elements => |*impl| impl.nextTw(&self.tw.child_elements),
             .child_tag => |*impl| impl.nextTw(&self.tw.child_tag),
             .cells => |*impl| impl.nextTw(&self.tw.cells),
+            .table_rows => |*impl| impl.nextTw(&self.tw.table_rows),
             .select_options => |*impl| impl.nextTw(&self.tw.select_options),
             .selected_options => |*impl| impl.nextTw(&self.tw.selected_options),
             .links => |*impl| impl.nextTw(&self.tw.links),
             .anchors => |*impl| impl.nextTw(&self.tw.anchors),
             .form => |*impl| impl.nextTw(&self.tw.form),
+            .document_named => |*impl| impl.nextTw(&self.tw.document_named),
             .empty => return null,
         };
     }
@@ -192,27 +203,26 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLCollection";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const length = bridge.accessor(HTMLCollection.length, null, .{});
     pub const @"[int]" = bridge.indexedFull(HTMLCollection.getAtIndex, setAtIndex, deleteAtIndex, queryAtIndex, defineAtIndex, getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexedFull(struct {
-        pub fn wrap(self: *HTMLCollection, name: []const u8, frame: *Frame) !?*Element {
+        pub fn wrap(self: *HTMLCollection, name: []const u8) !?*Element {
             if (name.len == 0) {
                 return error.NotHandled;
             }
 
-            return self.getByName(name, frame) orelse error.NotHandled;
+            return self.getByName(name) orelse error.NotHandled;
         }
     }.wrap, null, deleteByName, getNames, queryByName, defineByName, describeByName, .{ .null_as_undefined = true });
 
     // Named properties are [LegacyUnenumerableNamedProperties]: the query
     // reports them non-enumerable, so for-in skips them while
     // Object.getOwnPropertyNames still lists them via the enumerator.
-    fn queryByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !u32 {
-        if (name.len > 0 and self.getByName(name, frame) != null) {
+    fn queryByName(self: *HTMLCollection, name: []const u8) !u32 {
+        if (name.len > 0 and self.getByName(name) != null) {
             return js.v8.DontEnum;
         }
         return error.NotHandled;
@@ -242,8 +252,8 @@ pub const JsApi = struct {
     // ordinary [[Set]] which ends up in defineByName, while an assignment
     // through a derived object (the collection as prototype) must ignore the
     // named property entirely and create an expando on the receiver.
-    fn defineByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
-        if (name.len > 0 and self.getByName(name, frame) != null) {
+    fn defineByName(self: *HTMLCollection, name: []const u8) !bool {
+        if (name.len > 0 and self.getByName(name) != null) {
             return false;
         }
         return error.NotHandled;
@@ -251,9 +261,9 @@ pub const JsApi = struct {
 
     // Named properties are [LegacyUnenumerableNamedProperties]: not
     // enumerable, configurable, read-only.
-    fn describeByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !Descriptor {
+    fn describeByName(self: *HTMLCollection, name: []const u8) !Descriptor {
         if (name.len > 0) {
-            if (self.getByName(name, frame)) |element| {
+            if (self.getByName(name)) |element| {
                 return .{
                     .value = element,
                     .writable = false,
@@ -291,13 +301,13 @@ pub const JsApi = struct {
         const len = self.length(frame);
         for (0..len) |i| {
             const element = self.getAtIndex(i, frame) orelse break;
-            if (element.getAttributeSafe(comptime .wrap("id"))) |id| {
+            if (element.getId()) |id| {
                 if (id.len > 0 and !contains(names.items, id)) {
                     try names.append(arena, id);
                 }
             }
             if (element._namespace == .html) {
-                if (element.getAttributeSafe(comptime .wrap("name"))) |name| {
+                if (element.getName()) |name| {
                     if (name.len > 0 and !contains(names.items, name)) {
                         try names.append(arena, name);
                     }
@@ -329,8 +339,8 @@ pub const JsApi = struct {
         return error.NotHandled;
     }
 
-    fn deleteByName(self: *HTMLCollection, name: []const u8, frame: *Frame) !bool {
-        if (self.getByName(name, frame) != null) {
+    fn deleteByName(self: *HTMLCollection, name: []const u8) !bool {
+        if (self.getByName(name) != null) {
             return false;
         }
         return error.NotHandled;
@@ -347,3 +357,8 @@ pub const JsApi = struct {
     pub const namedItem = bridge.function(HTMLCollection.getByName, .{});
     pub const symbol_iterator = bridge.iterator(HTMLCollection.iterator, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: indexed properties" {
+    try testing.htmlRunner("collections/indexed_properties.html", .{});
+}

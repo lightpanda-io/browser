@@ -18,14 +18,15 @@
 
 //! Opt-in core-dump suppression.
 //!
-//! Lightpanda has no SIGSEGV handler, so a segfault (or the `abort()` in the
-//! panic path) falls through to the kernel and writes a core dump. When many
+//! On Linux, fatal signals are re-raised after nonblocking diagnostics.
+//! Core limits still apply, but the core captures the re-raise context;
+//! the diagnostic record holds the original fault PC. Other platforms keep
+//! their existing signal handling. Signals and panics can produce cores. When many
 //! instances run under a shared `core_pattern` crash reporter — e.g. a
 //! containerized crawl fleet — those dumps become pure storage and alert
 //! noise, and a browser core can capture the contents of arbitrary pages.
-//! Crashes are already reported via telemetry, so `LIGHTPANDA_DISABLE_CORE_DUMP`
-//! lets an operator drop the cores while leaving the default behavior
-//! (and local debugging) untouched.
+//! `LIGHTPANDA_DISABLE_CORE_DUMP` lets an operator drop the cores while
+//! leaving the default behavior (and local debugging) untouched.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -41,7 +42,7 @@ pub fn disableIfRequested() void {
 }
 
 fn shouldDisable() bool {
-    if (builtin.os.tag == .windows) return false;
+    if (builtin.target.os.tag == .windows) return false;
     return std.c.getenv("LIGHTPANDA_DISABLE_CORE_DUMP") != null;
 }
 
@@ -69,7 +70,7 @@ test "core_dump: disabled only when the env var is set" {
 }
 
 test "core_dump: disable zeroes the soft RLIMIT_CORE" {
-    if (builtin.os.tag == .windows) return;
+    if (builtin.target.os.tag == .windows) return;
 
     const original = try std.posix.getrlimit(.CORE);
     defer std.posix.setrlimit(.CORE, original) catch {};

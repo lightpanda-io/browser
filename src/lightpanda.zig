@@ -18,54 +18,74 @@
 
 const std = @import("std");
 
+comptime {
+    // Strong __clear_cache overriding compiler_rt's broken aarch64 one
+    _ = @import("clear_cache.zig");
+}
+
 pub const log = @import("log.zig");
-pub const datetime = @import("datetime.zig");
+pub const mcp = @import("mcp.zig");
 pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
-pub const ArenaPool = @import("ArenaPool.zig");
-pub const Network = @import("network/Network.zig");
-pub const Server = @import("Server.zig");
+pub const Regex = @import("Regex.zig");
 pub const Config = @import("Config.zig");
+pub const completion = @import("completion.zig");
+pub const cookies = @import("cookies.zig");
+pub const datetime = @import("datetime.zig");
+pub const core_dump = @import("core_dump.zig");
+pub const malloc_tuning = @import("malloc_tuning.zig");
+pub const ArenaPool = @import("ArenaPool.zig");
+pub const build_config = @import("build_config");
 pub const String = @import("string.zig").String;
+pub const ToolSession = @import("ToolSession.zig");
 pub const Notification = @import("Notification.zig");
-
-pub const URL = @import("browser/URL.zig");
-pub const Page = @import("browser/Page.zig");
-pub const Frame = @import("browser/Frame.zig");
-pub const Browser = @import("browser/Browser.zig");
-pub const Session = @import("browser/Session.zig");
-
-pub const js = @import("browser/js/js.zig");
-pub const dump = @import("browser/dump.zig");
-pub const markdown = @import("browser/markdown.zig");
+pub const Server = @import("server/Server.zig");
+pub const Base64Writer = @import("Base64Writer.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
-pub const CDPNode = @import("cdp/Node.zig");
-pub const interactive = @import("browser/interactive.zig");
-pub const links = @import("browser/links.zig");
-pub const forms = @import("browser/forms.zig");
-pub const actions = @import("browser/actions.zig");
-pub const structured_data = @import("browser/structured_data.zig");
-pub const tools = @import("browser/tools.zig");
+pub const NodeRegistry = @import("NodeRegistry.zig");
+pub const crash_handler = @import("crash_handler.zig");
+
+// for `zig build test-server`
+pub const test_routes = @import("test_routes.zig");
+pub const TestWSServer = @import("TestWSServer.zig");
+pub const TestHTTPServer = @import("TestHTTPServer.zig");
+
+pub const Network = @import("network/Network.zig");
 pub const HttpClient = @import("network/HttpClient.zig");
 
-pub const mcp = @import("mcp.zig");
+pub const pdf = @import("browser/pdf.zig");
+pub const URL = @import("browser/URL.zig");
+pub const dump = @import("browser/dump.zig");
+pub const Page = @import("browser/Page.zig");
+pub const Frame = @import("browser/Frame.zig");
+pub const forms = @import("browser/forms.zig");
+pub const links = @import("browser/links.zig");
+pub const tools = @import("browser/tools.zig");
+pub const actions = @import("browser/actions.zig");
+pub const Browser = @import("browser/Browser.zig");
+pub const Session = @import("browser/Session.zig");
+pub const markdown = @import("browser/markdown.zig");
+pub const screenshot = @import("browser/screenshot.zig");
+pub const RenderTree = @import("browser/RenderTree.zig");
+pub const interactive = @import("browser/interactive.zig");
+pub const structured_data = @import("browser/structured_data.zig");
+pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
+
+pub const js = @import("browser/js/js.zig");
+const Node = @import("browser/webapi/Node.zig");
+const Selector = @import("browser/webapi/selector/Selector.zig");
+
 pub const Agent = @import("agent/Agent.zig");
-pub const Command = @import("script/command.zig").Command;
+pub const skill = @import("script/skill.zig");
+pub const docs = @import("docs.zig");
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const Schema = @import("script/Schema.zig");
-pub const skill = @import("script/skill.zig");
-pub const cookies = @import("cookies.zig");
-pub const build_config = @import("build_config");
-pub const crash_handler = @import("crash_handler.zig");
-pub const core_dump = @import("core_dump.zig");
-
-pub const Updater = @import("Updater.zig");
+pub const Command = @import("script/command.zig").Command;
 
 pub var metrics = @import("Metrics.zig"){};
-
 pub const IS_TEST = @import("builtin").is_test;
-pub const IS_DEBUG = @import("builtin").mode == .Debug;
+pub const IS_DEBUG = @import("builtin").mode == .debug;
 
 /// Process-wide Io instance for blocking syscalls (fs, net, time, futex).
 /// Single-threaded-init only disables Io.async/Io.concurrent task spawning;
@@ -159,7 +179,7 @@ pub fn once(comptime f: fn () void) Once(f) {
     return .{};
 }
 
-pub fn Once(comptime f: fn () void) type {
+fn Once(comptime f: fn () void) type {
     return struct {
         done: bool = false,
         mutex: std.Io.Mutex = .init,
@@ -186,6 +206,13 @@ pub const FetchOpts = struct {
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
+    /// Dump only the first match instead of the document.
+    selector: ?[:0]const u8 = null,
+    /// Any page with an HTTP status >= 400 fails the fetch with `error.HttpError`.
+    fail_on_http_error: bool = false,
+    /// Dump a page's `<link rel="alternate" type="text/markdown">` instead of
+    /// converting the page, when that link loads as markdown.
+    markdown_alternate: bool = false,
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
@@ -199,17 +226,20 @@ fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
     if (opts.wait_selector == null and opts.wait_script == null) return .load;
     return null;
 }
+
+fn remainingMs(timer: std.Io.Timestamp, budget_ms: u32) u32 {
+    return budget_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+}
+
 /// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
-/// Errors:
-///   - `error.Timeout` if the deadline expires while a `wait_selector` or
-///     `wait_script` is still unmet. The `wait_until` phase never raises it:
-///     when the budget runs out the page is dumped as-is.
-///   - `error.Cancelled` if the embedder installed a `Session.cancel_hook`
-///     that returned true during the wait. The hook is opt-in via
-///     `session.cancel_hook = .{...}`; without it, this error never fires.
-///   - Other errors from navigation / parsing / I/O surface as their
-///     underlying tag.
+/// A page's navigation, wait or dump failure is recorded for that page and
+/// does not stop the others: every page is still written (JSON carries the
+/// failure under `error`), then the first failure is returned. Wait failures
+/// are `error.Timeout` when the deadline expires while a `wait_selector` or
+/// `wait_script` is still unmet (the `wait_until` phase never raises it: when
+/// the budget runs out the page is dumped as-is), or `error.Cancelled` if the
+/// embedder's opt-in `Session.cancel_hook` returned true.
 pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
@@ -291,38 +321,146 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 
     var runner = session.runner(.{});
 
-    var timer: std.Io.Timestamp = .now(io, .boot);
+    const timer: std.Io.Timestamp = .now(io, .boot);
 
     if (resolveWaitUntil(opts)) |wu| {
         try runner.waitForAll(opts.wait_ms, .{ .until = wu });
     }
 
+    // One slot per page; the first failure sticks.
+    const errors = try session.arena.allocator().alloc(?anyerror, pages.items.len);
+    @memset(errors, null);
+
     if (opts.wait_selector) |selector| {
-        const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
-        const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) {
-            return error.Timeout;
-        }
-        for (session.pages.items) |p| {
-            if (p.replacement == null) {
-                _ = try runner.waitForSelector(p.frame._frame_id, selector, remaining);
-            }
+        for (pages.items, errors) |page, *err| {
+            if (err.* != null) continue;
+            const frame = page.frame() orelse {
+                err.* = error.FrameClosed;
+                continue;
+            };
+            const remaining = remainingMs(timer, opts.wait_ms);
+            _ = runner.waitForSelector(frame._frame_id, selector, remaining) catch |e| {
+                err.* = e;
+            };
         }
     }
 
     if (opts.wait_script) |wait_script| {
-        const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
-        const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) {
-            return error.Timeout;
+        for (pages.items, errors) |page, *err| {
+            if (err.* != null) continue;
+            const frame = page.frame() orelse {
+                err.* = error.FrameClosed;
+                continue;
+            };
+            const remaining = remainingMs(timer, opts.wait_ms);
+            runner.waitForScript(frame._frame_id, wait_script, remaining) catch |e| {
+                err.* = e;
+            };
         }
-        for (session.pages.items) |p| {
-            if (p.replacement == null) {
-                try runner.waitForScript(p.frame._frame_id, wait_script, remaining);
+    }
+
+    var http_error = false;
+    for (pages.items, errors) |page, *err| {
+        const frame = page.frame() orelse {
+            if (err.* == null) {
+                err.* = error.FrameClosed;
+            }
+            continue;
+        };
+        if (err.* == null) {
+            err.* = frame._last_navigate_error;
+        }
+        if (err.* == null) {
+            if (frame._bot_challenge) |challenge| {
+                log.warn(.app, "bot challenge", .{
+                    .url = frame.url,
+                    .status = frame._http_status,
+                    .provider = challenge,
+                });
+                err.* = error.BotChallenge;
+            }
+        }
+        if (frame._http_status) |status| {
+            if (status >= 400) {
+                http_error = true;
             }
         }
     }
 
+    // After the errors above are recorded, so a failed page keeps them.
+    const alternates = try session.arena.allocator().alloc(bool, pages.items.len);
+    @memset(alternates, false);
+    if (opts.markdown_alternate) {
+        const remaining = remainingMs(timer, opts.wait_ms);
+        try followMarkdownAlternates(session, pages.items, errors, remaining, alternates);
+    }
+
+    try writeResults(app, opts, pages.items, errors, alternates);
+
+    var failed = false;
+    for (urls, pages.items, errors) |url, page, err| {
+        if (err) |e| {
+            failed = true;
+            log.err(.app, "page failed", .{ .url = url, .err = e });
+            continue;
+        }
+        if (!opts.fail_on_http_error) {
+            continue;
+        }
+        const frame = page.frame() orelse continue;
+        const status = frame._http_status orelse continue;
+        if (status >= 400) {
+            log.err(.app, "page http error", .{ .url = url, .status = status });
+        }
+    }
+    if (failed) {
+        return error.PageFailed;
+    }
+    if (opts.fail_on_http_error and http_error) {
+        return error.HttpError;
+    }
+}
+
+/// Loads each page's markdown alternate in a page of its own (same session, so
+/// same cookies, robots and proxy) and swaps it in for the page when it loads
+/// as markdown, marking it in `followed`. Otherwise the page is kept and
+/// converted as usual.
+fn followMarkdownAlternates(session: *Session, pages: []Session.PageHandle, errors: []const ?anyerror, timeout_ms: u32, followed: []bool) !void {
+    const arena = session.arena.allocator();
+    const alternates = try arena.alloc(?Session.PageHandle, pages.len);
+    var conditions: std.ArrayList(Session.Runner.WaitCondition) = .empty;
+    for (pages, errors, alternates) |page, err, *alternate| {
+        alternate.* = null;
+        if (err != null) continue;
+        const frame = page.frame() orelse continue;
+        const alt = try markdown.openAlternate(arena, session, frame) orelse continue;
+        alternate.* = alt;
+        try conditions.append(arena, .{ .frame_id = alt.frame_id, .until = .load });
+    }
+    if (conditions.items.len == 0) return;
+
+    var runner = session.runner(.{});
+    const result = try runner.waitResult(timeout_ms, conditions.items);
+
+    for (pages, alternates, followed) |*page, alternate, *was_followed| {
+        const alt = alternate orelse continue;
+        if (alt.frame()) |frame| {
+            if (markdown.isAlternateLoaded(frame)) {
+                log.info(.app, "markdown alternate", .{ .page = page.frame().?.url, .alternate = frame.url });
+                page.close();
+                page.* = alt;
+                was_followed.* = true;
+                continue;
+            }
+            if (result == .timeout) {
+                log.warn(.app, "markdown alternate skipped", .{ .alternate = frame.url, .reason = "wait budget used up" });
+            }
+        }
+        alt.close();
+    }
+}
+
+fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, errors: []?anyerror, alternates: []const bool) !void {
     const writer = opts.writer orelse return;
 
     if (opts.json) {
@@ -331,24 +469,41 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         // top-level array is hard to evolve (consumers index it directly),
         // whereas an object lets us add sibling fields later without breaking
         // anyone reading `results`.
-        const wrap = pages.items.len > 1;
+        const wrap = pages.len > 1;
         if (wrap) {
             try writer.writeAll("{\"results\":[");
         }
-        for (pages.items, 0..) |page, i| {
+        for (pages, errors, alternates, 0..) |page, *err, alternate, i| {
             if (i != 0) {
                 try writer.writeByte(',');
+            }
+
+            const frame = page.frame();
+            if ((opts.dump_mode == .png or opts.dump_mode == .pdf) and frame != null) {
+                // Binary formats stream themselves into the envelope as
+                // base64; nothing is buffered here.
+                const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
+                defer arena.release();
+
+                if (prepareBinary(arena.allocator(), frame.?, opts)) |prepared| {
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, prepared, err.*);
+                } else |e| {
+                    if (err.* == null) err.* = e;
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, "", err.*);
+                }
+                continue;
             }
 
             var aw: std.Io.Writer.Allocating = .init(app.allocator);
             defer aw.deinit();
 
-            if (opts.dump_mode) |mode| blk: {
-                const frame = page.frame() orelse break :blk;
-                try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+            if (opts.dump_mode) |mode| {
+                if (frame) |f| dumpContent(app, mode, opts, f, alternate, &aw.writer) catch |e| {
+                    aw.clearRetainingCapacity();
+                    if (err.* == null) err.* = e;
+                };
             }
-
-            try writeJsonEnvelope(writer, page.frame(), opts.dump_mode, aw.written());
+            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written(), err.*);
         }
         if (wrap) {
             try writer.writeAll("]}");
@@ -356,33 +511,74 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         try writer.writeByte('\n');
     } else {
         // main validates that non-JSON dump is only reached with a single url.
-        const page = pages.items[0];
+        const page = pages[0];
         if (opts.dump_mode) |mode| blk: {
             const frame = page.frame() orelse {
                 try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
                 break :blk;
             };
-            try dumpContent(app, mode, opts.dump, frame, writer);
+            try dumpContent(app, mode, opts, frame, alternates[0], writer);
         }
     }
     try writer.flush();
 }
 
-fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: *Frame, writer: *std.Io.Writer) !void {
+// A dump that can only fail before any output starts; it then streams into
+// the JSON envelope as base64.
+const Binary = union(enum) {
+    png: screenshot.Prepared,
+    pdf: pdf.Prepared,
+
+    pub fn jsonStringify(self: *const Binary, jws: *std.json.Stringify) std.Io.Writer.Error!void {
+        switch (self.*) {
+            inline else => |*prepared| try prepared.jsonStringify(jws),
+        }
+    }
+};
+
+fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Binary {
+    const state = try RenderTree.resolve(arena, try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
+    return switch (opts.dump_mode.?) {
+        .png => .{ .png = try screenshot.preparePng(arena, state, pngOpts(frame), frame) },
+        .pdf => .{ .pdf = try pdf.prepare(arena, state, .{}, frame) },
+        else => unreachable,
+    };
+}
+
+fn pngOpts(frame: *Frame) screenshot.Opts {
+    return .fromViewport(frame.page.getViewport(), true);
+}
+
+fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
+    const document = frame.window._document.asNode();
+    const sel = selector orelse return document;
+    const element = try Selector.querySelector(document, sel, frame);
+    return (element orelse return error.SelectorNotFound).asNode();
+}
+
+fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, alternate: bool, writer: *std.Io.Writer) !void {
+    if (alternate) {
+        return markdown.dumpAlternate(frame, opts.dump.max_bytes, writer);
+    }
+    var arena: std.heap.ArenaAllocator = .init(app.allocator);
+    defer arena.deinit();
+    const state = try RenderTree.resolve(arena.allocator(), try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
     switch (mode) {
-        .html => try dump.root(frame.window._document, dump_opts, writer, frame),
-        .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+        .html => try dump.render(state, opts.dump, writer, frame),
+        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes }, writer, frame),
+        .png => {
+            _ = try screenshot.png(arena.allocator(), state, pngOpts(frame), writer, frame);
+        },
+        .pdf => {
+            try pdf.print(arena.allocator(), state, .{}, writer, frame);
+        },
         .semantic_tree, .semantic_tree_text => {
-            var registry = CDPNode.Registry.init(app.allocator);
+            var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
-            const st: SemanticTree = .{
-                .dom_node = frame.window._document.asNode(),
-                .registry = &registry,
-                .frame = frame,
-                .arena = frame.call_arena,
+            const st: SemanticTree = try .init(frame.call_arena, state.root, &registry, frame, .{
                 .prune = (mode == .semantic_tree_text),
-            };
+            });
 
             if (mode == .semantic_tree) {
                 try std.json.Stringify.value(st, .{}, writer);
@@ -390,24 +586,24 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
                 try st.textStringify(writer);
             }
         },
+        .structured_data => {
+            const data = try structured_data.collectStructuredData(state.root, arena.allocator(), frame);
+            try std.json.Stringify.value(data, .{}, writer);
+        },
         .wpt => try dumpWPT(frame, writer),
     }
 }
 
 pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
-    var client = try Updater.init(allocator, config);
-    defer client.deinit();
-
     const stdout = std.Io.File.stdout();
     var buf: [4096]u8 = undefined;
     var writer = stdout.writer(io, &buf);
-    const w = &writer.interface;
-    try client.inform(w);
+    try @import("Updater.zig").inform(allocator, config, &writer.interface);
 }
 
 // Writes a single page's result object. Framing (the enclosing array and any
 // separators / trailing newline) is the caller's responsibility.
-fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: []const u8) !void {
+fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: anytype, err: ?anyerror) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
     try std.json.Stringify.value(.{
         .url = if (meta) |m| m.url else "",
@@ -415,6 +611,9 @@ fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.
         .headers = if (meta) |m| m.headers else &.{},
         .dump = if (dump_mode) |mode| @tagName(mode) else "",
         .content = content,
+        .@"error" = if (err) |e| @errorName(e) else null,
+        .bot_challenge = if (frame) |f| f._bot_challenge else null,
+        .page_status = if (frame) |f| &f.page.status else null,
     }, .{}, writer);
 }
 
@@ -537,12 +736,47 @@ test "writeJsonEnvelope: null frame" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, null, "");
+    try writeJsonEnvelope(&aw.writer, null, null, "", null);
     try testing.expectJson(.{
         .url = "",
         .http_status = 0,
         .dump = "",
         .content = "",
+    }, aw.written());
+    try testing.expect(std.mem.find(u8, aw.written(), "\"error\":null") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "\"page_status\":null") != null);
+}
+
+test "writeJsonEnvelope: page status" {
+    testing.expectLog(&.{ .page_error, .page_error });
+    var page = try testing.pageTest("page_js_error.html", .{});
+    defer page.close();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try writeJsonEnvelope(&aw.writer, page.frame().?, null, "", null);
+    try testing.expectJson(.{
+        .http_status = 200,
+        .page_status = .{
+            .js_errors = 2,
+            .unsupported = .{ .webgl = 0, .canvas2d = 0 },
+            .skipped = .{ .iframe = 0, .worker = 0, .image = 0, .stylesheet = 0 },
+            .missing_globals = &[_][]const u8{},
+        },
+    }, aw.written());
+    try testing.expect(std.mem.find(u8, aw.written(), "\"bot_challenge\":null") != null);
+}
+
+test "writeJsonEnvelope: page error" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try writeJsonEnvelope(&aw.writer, null, .markdown, "", error.Timeout);
+    try testing.expectJson(.{
+        .dump = "markdown",
+        .content = "",
+        .@"error" = "Timeout",
     }, aw.written());
 }
 
@@ -550,10 +784,24 @@ test "writeJsonEnvelope: null frame with dump mode and content" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>");
+    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>", null);
     try testing.expectJson(.{
         .dump = "html",
         .content = "<html><body>hello</body></html>",
+    }, aw.written());
+}
+
+test "dumpContent: structured_data" {
+    var page = try testing.pageTest("structured_data.html", .{});
+    defer page.close();
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpContent(testing.test_app, .structured_data, .{ .dump = .{} }, page.frame().?, false, &aw.writer);
+    try testing.expectJson(.{
+        .jsonLd = &.{"{\"@type\":\"Product\",\"name\":\"Blue Kettle\"}"},
+        .openGraph = .{ .type = "product" },
+        .meta = .{ .language = "en", .title = "Blue Kettle" },
+        .links = .{ .canonical = "http://127.0.0.1:9582/products/blue-kettle" },
     }, aw.written());
 }
 
@@ -566,6 +814,58 @@ test "fetch: resolveWaitUntil" {
         .networkidle,
         resolveWaitUntil(.{ .dump = .{}, .wait_until = .networkidle, .wait_selector = "#main" }),
     );
+}
+
+test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    var pages = [_]Session.PageHandle{
+        try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_alternate_html.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_flex.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_alternate_plain.html", .{ .wait_until_done = true }),
+    };
+    var errors = [_]?anyerror{ null, null, null, null };
+    var followed = [_]bool{ false, false, false, false };
+    try followMarkdownAlternates(session, &pages, &errors, 2000, &followed);
+
+    const base = "http://127.0.0.1:9582/src/browser/tests/";
+    try testing.expectString(base ++ "markdown_source.md", pages[0].frame().?.url);
+    try testing.expectString(base ++ "markdown_alternate_html.html", pages[1].frame().?.url);
+    try testing.expectString(base ++ "markdown_flex.html", pages[2].frame().?.url);
+    // Many servers send .md files as text/plain; the link already says it's markdown.
+    try testing.expectString(base ++ "markdown_source.txt", pages[3].frame().?.url);
+    try testing.expectEqualSlices(bool, &.{ true, false, false, true }, &followed);
+    try testing.expectEqual(4, session.pages.items.len);
+
+    // A followed text/plain alternate is written as-is, not fenced.
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, pages[3].frame().?, true, &aw.writer);
+    try testing.expectString(@embedFile("browser/tests/markdown_source.txt"), aw.written());
+}
+
+test "fetch: followMarkdownAlternates keeps a page that failed" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    var pages = [_]Session.PageHandle{
+        try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
+        try testing.pageTest("markdown_alternate.html", .{ .wait_until_done = true }),
+    };
+    // A 404 page with a markdown link: its alternate's 200 would hide the 404
+    // from --fail-on-http-error.
+    pages[0].frame().?._http_status = 404;
+    pages[1].frame().?._bot_challenge = .cloudflare;
+    var errors = [_]?anyerror{ null, null };
+    var followed = [_]bool{ false, false };
+    try followMarkdownAlternates(session, &pages, &errors, 2000, &followed);
+
+    const page_url = "http://127.0.0.1:9582/src/browser/tests/markdown_alternate.html";
+    try testing.expectString(page_url, pages[0].frame().?.url);
+    try testing.expectString(page_url, pages[1].frame().?.url);
+    try testing.expectEqualSlices(bool, &.{ false, false }, &followed);
+    try testing.expectEqual(2, session.pages.items.len);
 }
 
 test {

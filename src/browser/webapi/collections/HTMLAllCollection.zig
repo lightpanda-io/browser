@@ -44,8 +44,8 @@ pub fn getAtIndex(self: *HTMLAllCollection, index: usize, frame: *const Frame) ?
     return self._nodes.getAtIndex(index, frame);
 }
 
-pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*Element {
-    if (frame.getElementByIdFromNode(self._nodes._tw._root, name)) |el| {
+pub fn getByName(self: *HTMLAllCollection, name: []const u8) ?*Element {
+    if (Frame.getElementByIdFromNode(self._nodes._tw._root, name)) |el| {
         return el;
     }
 
@@ -57,7 +57,7 @@ pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*El
             if (!isAllNamed(el)) {
                 continue;
             }
-            if (el.getAttributeSafe(comptime .wrap("name"))) |attr_name| {
+            if (el.getName()) |attr_name| {
                 if (std.mem.eql(u8, attr_name, name)) {
                     return el;
                 }
@@ -76,7 +76,7 @@ fn isAllNamed(el: *Element) bool {
         return false;
     }
     return switch (el.getTag()) {
-        .anchor, .button, .embed, .form, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
+        .a, .button, .embed, .form, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
         else => false,
     };
 }
@@ -88,7 +88,7 @@ const CAllAsFunctionArg = union(enum) {
 pub fn callable(self: *HTMLAllCollection, arg: CAllAsFunctionArg, frame: *Frame) ?*Element {
     return switch (arg) {
         .index => |i| self.getAtIndex(i, frame),
-        .id => |id| self.getByName(id, frame),
+        .id => |id| self.getByName(id),
     };
 }
 
@@ -114,7 +114,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLAllCollection";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
 
         // This is a very weird class that requires special JavaScript behavior
@@ -125,20 +124,29 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(HTMLAllCollection.length, null, .{});
     pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, null, .{ .null_as_undefined = true });
-
-    pub const item = bridge.function(_item, .{});
-    fn _item(self: *HTMLAllCollection, index: i32, frame: *Frame) ?*Element {
-        if (index < 0) {
-            return null;
+    pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, struct {
+        fn wrap(self: *HTMLAllCollection, name: []const u8) !u32 {
+            if (self.getByName(name) != null) {
+                // Named properties are [LegacyUnenumerableNamedProperties]
+                return js.v8.DontEnum;
+            }
+            return error.NotHandled;
         }
-        return self.getAtIndex(@intCast(index), frame);
-    }
+    }.wrap, .{ .null_as_undefined = true });
+
+    pub const item = bridge.function(struct {
+        fn wrap(self: *HTMLAllCollection, index: i32, frame: *Frame) ?*Element {
+            if (index < 0) {
+                return null;
+            }
+            return self.getAtIndex(@intCast(index), frame);
+        }
+    }.wrap, .{});
 
     pub const namedItem = bridge.function(HTMLAllCollection.getByName, .{});
     pub const symbol_iterator = bridge.iterator(HTMLAllCollection.iterator, .{});
 
-    pub const callable = bridge.callable(HTMLAllCollection.callable, .{ .null_as_undefined = true });
+    pub const callable = bridge.callable(HTMLAllCollection.callable, .{});
 };
 
 const testing = @import("../../../testing.zig");

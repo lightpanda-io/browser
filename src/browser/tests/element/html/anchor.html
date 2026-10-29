@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- Test anchors with various href values -->
@@ -124,8 +125,11 @@
   testing.expectEqual('foo.bar', link.hostname);
   testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
 
+  // null is stringified to "null", which has no digits and is ignored.
+  link.port = '8080';
   link.port = null;
-  testing.expectEqual('', link.port);
+  testing.expectEqual('8080', link.port);
+  link.port = '';
   testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
 
   link.href = 'foo';
@@ -185,6 +189,24 @@
   a.hash = '';
   testing.expectEqual('', a.hash);
   testing.expectEqual('https://example.com/', a.href);
+}
+</script>
+
+<script id=anchor_question_mark_in_fragment>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com/app#/item?id=5';
+  testing.expectEqual('', a.search);
+  testing.expectEqual('#/item?id=5', a.hash);
+
+  a.pathname = '/other';
+  testing.expectEqual('https://example.com/other#/item?id=5', a.href);
+
+  a.hash = '#top';
+  testing.expectEqual('https://example.com/other#top', a.href);
+
+  a.href = 'https://example.com/app?q=1#/item?id=5';
+  testing.expectEqual('?q=1', a.search);
 }
 </script>
 
@@ -286,4 +308,65 @@
     base.href = '';
     document.head.removeChild(base);
   }
+</script>
+
+<script id=anchor_setters_keep_userinfo>
+{
+  const a = document.createElement('a');
+  const reset = () => a.href = 'https://u:p@h.com:81/p?q#f';
+
+  reset(); a.port = '99';
+  testing.expectEqual('https://u:p@h.com:99/p?q#f', a.href);
+  reset(); a.hostname = 'z.org';
+  testing.expectEqual('https://u:p@z.org:81/p?q#f', a.href);
+  reset(); a.host = 'z.org:5';
+  testing.expectEqual('https://u:p@z.org:5/p?q#f', a.href);
+  reset(); a.protocol = 'http';
+  testing.expectEqual('http://u:p@h.com:81/p?q#f', a.href);
+  reset(); a.pathname = '/z';
+  testing.expectEqual('https://u:p@h.com:81/z?q#f', a.href);
+  reset(); a.search = '?k';
+  testing.expectEqual('https://u:p@h.com:81/p?k#f', a.href);
+  reset(); a.hash = 'g';
+  testing.expectEqual('https://u:p@h.com:81/p?q#g', a.href);
+  reset(); a.username = 'w';
+  testing.expectEqual('https://w:p@h.com:81/p?q#f', a.href);
+}
+</script>
+
+<script id=anchor_setters_invalid_values>
+{
+  const a = document.createElement('a');
+
+  a.href = 'https://h.com/p';
+  a.port = '8080abc';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.port = 'abc';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.port = '99999';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.port = '\t81\n';
+  testing.expectEqual('https://h.com:81/p', a.href);
+  a.port = '000082';
+  testing.expectEqual('https://h.com:82/p', a.href);
+  a.port = '0443';
+  testing.expectEqual('https://h.com/p', a.href);
+
+  a.host = 'h.com:8080abc';
+  testing.expectEqual('https://h.com:8080/p', a.href);
+  a.host = 'g.com:abc';
+  testing.expectEqual('https://g.com:8080/p', a.href);
+
+  a.href = 'https://h.com/p';
+  a.hostname = '';
+  testing.expectEqual('https://h.com/p', a.href);
+
+  // a special scheme can't become a non-special one
+  a.protocol = 'mailto';
+  testing.expectEqual('https://h.com/p', a.href);
+  a.protocol = 'ftp:';
+  testing.expectEqual('ftp://h.com/p', a.href);
+  a.protocol = 'http:x';
+  testing.expectEqual('http://h.com/p', a.href);
+}
 </script>

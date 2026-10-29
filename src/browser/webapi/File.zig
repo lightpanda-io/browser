@@ -33,19 +33,26 @@ _name: []const u8,
 _last_modified: i64,
 
 pub const InitOptions = struct {
-    type: []const u8 = "",
     endings: []const u8 = "transparent",
     lastModified: ?i64 = null,
+    type: []const u8 = "",
 };
 
 pub fn init(
-    parts_: ?[]const js.Value,
-    name: []const u8,
-    opts_: ?InitOptions,
+    parts_: js.Value,
+    name_: js.Value,
+    opts_: ?js.Value,
     exec: *js.Execution,
 ) !*File {
-    const opts = opts_ orelse InitOptions{};
-    const blob = try Blob.buildValue(parts_, .{
+    const parts = try Blob.collectParts(parts_, exec) orelse return error.TypeError;
+    const name = try name_.toStringSlice();
+
+    const opts: InitOptions = blk: {
+        const value = opts_ orelse break :blk .{};
+        break :blk (try value.toZig(?InitOptions)) orelse .{};
+    };
+
+    const blob = try Blob.buildValue(parts, .{
         .type = opts.type,
         .endings = opts.endings,
     }, exec);
@@ -115,7 +122,7 @@ pub fn getName(self: *const File) []const u8 {
     return self._name;
 }
 
-pub fn getLastModified(self: *const File) f64 {
+fn getLastModified(self: *const File) f64 {
     return @floatFromInt(self._last_modified);
 }
 
@@ -124,7 +131,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "File";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 

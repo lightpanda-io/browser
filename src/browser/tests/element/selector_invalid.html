@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="container">
@@ -56,5 +57,22 @@
     testing.expectError("SyntaxError", () => container.querySelector('p >'));
     testing.expectError("SyntaxError", () => container.querySelector('p +'));
     testing.expectError("SyntaxError", () => container.querySelector('p ~'));
+}
+</script>
+
+<script id="escaped_newline">
+{
+    const container = $('#container');
+
+    // A backslash followed by a newline is not a valid escape, so it ends an
+    // identifier and leaves a stray backslash.
+    // https://drafts.csswg.org/css-syntax/#starts-with-a-valid-escape
+    testing.expectError("SyntaxError", () => container.querySelector('.a\\\nb'));
+    testing.expectError("SyntaxError", () => container.querySelector('#a\\\nb'));
+    testing.expectError("SyntaxError", () => container.querySelector('[a\\\nb]'));
+    testing.expectError("SyntaxError", () => container.querySelector('[x=a\\\nb]'));
+    testing.expectError("SyntaxError", () => container.querySelector('[x=a\\\rb]'));
+    testing.expectError("SyntaxError", () => container.querySelector('[x=a\\\fb]'));
+    testing.expectError("SyntaxError", () => container.querySelector('[x=\\\n]'));
 }
 </script>

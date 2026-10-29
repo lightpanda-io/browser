@@ -25,12 +25,12 @@ const c = @import("curl");
 
 pub const Curl = c.CURL;
 pub const CurlM = c.CURLM;
+pub const CurlSH = c.CURLSH;
 pub const CurlCode = c.CURLcode;
-pub const CurlMCode = c.CURLMcode;
 pub const CurlSList = c.curl_slist;
 pub const CurlHeader = c.curl_header;
 pub const CurlSocket = c.curl_socket_t;
-pub const CurlOffT = c.curl_off_t;
+const CurlOffT = c.curl_off_t;
 
 pub const CURLE = struct {
     pub const OK = c.CURLE_OK;
@@ -42,9 +42,9 @@ pub const CurlWriteFunction = *const fn ([*]const u8, usize, usize, *anyopaque) 
 pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 pub const curl_readfunc_pause: usize = c.CURL_READFUNC_PAUSE;
 pub const CurlReadFunction = *const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize;
-pub const CurlOpenSocketFunction = *const fn (?*anyopaque, c_uint, [*c]CurlSockAddr) callconv(.c) CurlSocket;
-pub const CurlSslCtxFunction = *const fn (*Curl, *anyopaque, *anyopaque) callconv(.c) CurlCode;
-pub const CurlDebugFunction = *const fn (*Curl, CurlInfoType, [*c]u8, usize, ?*anyopaque) callconv(.c) c_int;
+const CurlOpenSocketFunction = *const fn (?*anyopaque, c_uint, [*c]CurlSockAddr) callconv(.c) CurlSocket;
+const CurlSslCtxFunction = *const fn (*Curl, *anyopaque, *anyopaque) callconv(.c) CurlCode;
+const CurlDebugFunction = *const fn (*Curl, CurlInfoType, [*c]u8, usize, ?*anyopaque) callconv(.c) c_int;
 
 pub const CurlSockType = enum(c.curlsocktype) {
     ipcxn = c.CURLSOCKTYPE_IPCXN,
@@ -63,13 +63,13 @@ pub const CurlSockAddr = extern struct {
 
 pub const CURL_SOCKET_BAD: c.curl_socket_t = c.CURL_SOCKET_BAD;
 
-pub const FreeCallback = fn (ptr: ?*anyopaque) void;
-pub const StrdupCallback = fn (str: [*:0]const u8) ?[*:0]u8;
-pub const MallocCallback = fn (size: usize) ?*anyopaque;
-pub const CallocCallback = fn (nmemb: usize, size: usize) ?*anyopaque;
-pub const ReallocCallback = fn (ptr: ?*anyopaque, size: usize) ?*anyopaque;
+const FreeCallback = fn (ptr: ?*anyopaque) void;
+const StrdupCallback = fn (str: [*:0]const u8) ?[*:0]u8;
+const MallocCallback = fn (size: usize) ?*anyopaque;
+const CallocCallback = fn (nmemb: usize, size: usize) ?*anyopaque;
+const ReallocCallback = fn (ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
-pub const CurlAllocator = struct {
+const CurlAllocator = struct {
     free: FreeCallback,
     strdup: StrdupCallback,
     malloc: MallocCallback,
@@ -77,18 +77,18 @@ pub const CurlAllocator = struct {
     realloc: ReallocCallback,
 };
 
-pub const CurlGlobalFlags = packed struct(u8) {
+const CurlGlobalFlags = packed struct(u8) {
     ssl: bool = false,
     _reserved: u7 = 0,
 
-    pub fn to_c(self: @This()) c_long {
+    fn to_c(self: @This()) c_long {
         var flags: c_long = 0;
         if (self.ssl) flags |= c.CURL_GLOBAL_SSL;
         return flags;
     }
 };
 
-pub const CurlHeaderOrigin = enum(c_uint) {
+const CurlHeaderOrigin = enum(c_uint) {
     header = c.CURLH_HEADER,
     trailer = c.CURLH_TRAILER,
     connect = c.CURLH_CONNECT,
@@ -127,7 +127,7 @@ pub const CurlPauseFlags = packed struct(c_short) {
     cont: bool = false,
     _reserved: u12 = 0,
 
-    pub fn to_c(self: @This()) c_int {
+    fn to_c(self: @This()) c_int {
         var flags: c_int = 0;
         if (self.recv) flags |= c.CURLPAUSE_RECV;
         if (self.send) flags |= c.CURLPAUSE_SEND;
@@ -194,11 +194,12 @@ comptime {
     }
 }
 
-pub const CurlOption = enum(c.CURLoption) {
+const CurlOption = enum(c.CURLoption) {
     url = c.CURLOPT_URL,
     timeout_ms = c.CURLOPT_TIMEOUT_MS,
     connect_timeout_ms = c.CURLOPT_CONNECTTIMEOUT_MS,
     follow_location = c.CURLOPT_FOLLOWLOCATION,
+    http_version = c.CURLOPT_HTTP_VERSION,
     proxy = c.CURLOPT_PROXY,
     ssl_verify_host = c.CURLOPT_SSL_VERIFYHOST,
     ssl_verify_peer = c.CURLOPT_SSL_VERIFYPEER,
@@ -212,6 +213,7 @@ pub const CurlOption = enum(c.CURLoption) {
     post_field_size = c.CURLOPT_POSTFIELDSIZE,
     copy_post_fields = c.CURLOPT_COPYPOSTFIELDS,
     http_get = c.CURLOPT_HTTPGET,
+    no_body = c.CURLOPT_NOBODY,
     http_header = c.CURLOPT_HTTPHEADER,
     cookie = c.CURLOPT_COOKIE,
     private = c.CURLOPT_PRIVATE,
@@ -224,15 +226,32 @@ pub const CurlOption = enum(c.CURLoption) {
     read_data = c.CURLOPT_READDATA,
     read_function = c.CURLOPT_READFUNCTION,
     connect_only = c.CURLOPT_CONNECT_ONLY,
+    suppress_connect_headers = c.CURLOPT_SUPPRESS_CONNECT_HEADERS,
+    forbid_reuse = c.CURLOPT_FORBID_REUSE,
+    pipewait = c.CURLOPT_PIPEWAIT,
     upload = c.CURLOPT_UPLOAD,
     opensocket_function = c.CURLOPT_OPENSOCKETFUNCTION,
     opensocket_data = c.CURLOPT_OPENSOCKETDATA,
     ssl_ctx_function = c.CURLOPT_SSL_CTX_FUNCTION,
     ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
+    ssl_ec_curves = c.CURLOPT_SSL_EC_CURVES,
+    connect_to = c.CURLOPT_CONNECT_TO,
+    share = c.CURLOPT_SHARE,
+    resolve = c.CURLOPT_RESOLVE,
 };
 
-pub const CurlMOption = enum(c.CURLMoption) {
+pub const CurlHttpVersion = enum(c_long) {
+    none = c.CURL_HTTP_VERSION_NONE, // libcurl's own defaults, picks the best
+    v1_0 = c.CURL_HTTP_VERSION_1_0,
+    v1_1 = c.CURL_HTTP_VERSION_1_1,
+    v2 = c.CURL_HTTP_VERSION_2_0,
+    v3 = c.CURL_HTTP_VERSION_3,
+    _,
+};
+
+const CurlMOption = enum(c.CURLMoption) {
     max_host_connections = c.CURLMOPT_MAX_HOST_CONNECTIONS,
+    max_connects = c.CURLMOPT_MAXCONNECTS,
 };
 
 pub const CurlInfo = enum(c.CURLINFO) {
@@ -242,6 +261,15 @@ pub const CurlInfo = enum(c.CURLINFO) {
     response_code = c.CURLINFO_RESPONSE_CODE,
     connect_code = c.CURLINFO_HTTP_CONNECTCODE,
     total_time_t = c.CURLINFO_TOTAL_TIME_T,
+    queue_time_t = c.CURLINFO_QUEUE_TIME_T,
+    namelookup_time_t = c.CURLINFO_NAMELOOKUP_TIME_T,
+    connect_time_t = c.CURLINFO_CONNECT_TIME_T,
+    appconnect_time_t = c.CURLINFO_APPCONNECT_TIME_T,
+    pretransfer_time_t = c.CURLINFO_PRETRANSFER_TIME_T,
+    starttransfer_time_t = c.CURLINFO_STARTTRANSFER_TIME_T,
+    size_download_t = c.CURLINFO_SIZE_DOWNLOAD_T,
+    header_size = c.CURLINFO_HEADER_SIZE,
+    http_version = c.CURLINFO_HTTP_VERSION,
     num_connects = c.CURLINFO_NUM_CONNECTS,
     conn_id = c.CURLINFO_CONN_ID,
 };
@@ -335,7 +363,7 @@ pub const Error = error{
     Unknown,
 };
 
-pub fn errorFromCode(code: c.CURLcode) Error {
+fn errorFromCode(code: c.CURLcode) Error {
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(code != c.CURLE_OK);
     }
@@ -430,7 +458,7 @@ pub fn errorFromCode(code: c.CURLcode) Error {
     };
 }
 
-pub const ErrorMulti = error{
+const ErrorMulti = error{
     BadHandle,
     BadEasyHandle,
     OutOfMemory,
@@ -446,14 +474,23 @@ pub const ErrorMulti = error{
     Unknown,
 };
 
-pub const ErrorHeader = error{
+const ErrorShare = error{
+    BadOption,
+    InUse,
+    Invalid,
+    OutOfMemory,
+    NotBuiltIn,
+    Unknown,
+};
+
+const ErrorHeader = error{
     OutOfMemory,
     BadArgument,
     NotBuiltIn,
     Unknown,
 };
 
-pub fn errorMFromCode(code: c.CURLMcode) ErrorMulti {
+fn errorMFromCode(code: c.CURLMcode) ErrorMulti {
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(code != c.CURLM_OK);
     }
@@ -475,7 +512,7 @@ pub fn errorMFromCode(code: c.CURLMcode) ErrorMulti {
     };
 }
 
-pub fn errorHFromCode(code: c.CURLHcode) ErrorHeader {
+fn errorHFromCode(code: c.CURLHcode) ErrorHeader {
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(code != c.CURLHE_OK);
     }
@@ -488,14 +525,14 @@ pub fn errorHFromCode(code: c.CURLHcode) ErrorHeader {
     };
 }
 
-pub fn errorCheck(code: c.CURLcode) Error!void {
+fn errorCheck(code: c.CURLcode) Error!void {
     if (code == c.CURLE_OK) {
         return;
     }
     return errorFromCode(code);
 }
 
-pub fn errorMCheck(code: c.CURLMcode) ErrorMulti!void {
+fn errorMCheck(code: c.CURLMcode) ErrorMulti!void {
     if (code == c.CURLM_OK) {
         return;
     }
@@ -505,26 +542,19 @@ pub fn errorMCheck(code: c.CURLMcode) ErrorMulti!void {
     return errorMFromCode(code);
 }
 
-pub fn errorHCheck(code: c.CURLHcode) ErrorHeader!void {
-    if (code == c.CURLHE_OK) {
-        return;
-    }
-    return errorHFromCode(code);
-}
-
-pub const CurlMsgType = enum(c.CURLMSG) {
+const CurlMsgType = enum(c.CURLMSG) {
     none = c.CURLMSG_NONE,
     done = c.CURLMSG_DONE,
     last = c.CURLMSG_LAST,
 };
 
-pub const CurlMsgData = union(CurlMsgType) {
+const CurlMsgData = union(CurlMsgType) {
     none: ?*anyopaque,
     done: ?Error,
     last: ?*anyopaque,
 };
 
-pub const CurlMsg = struct {
+const CurlMsg = struct {
     easy_handle: *Curl,
     data: CurlMsgData,
 };
@@ -596,6 +626,10 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .post,
         .upload,
         .http_get,
+        .pipewait,
+        .no_body,
+        .forbid_reuse,
+        .suppress_connect_headers,
         .ssl_verify_peer,
         .proxy_ssl_verify_peer,
         => @as(c_long, @intFromBool(value)),
@@ -621,9 +655,13 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .user_pwd,
         .proxy_user_pwd,
         .copy_post_fields,
+        .ssl_ec_curves,
         => @as(?[*]const u8, value),
 
-        .http_header => @as(?*CurlSList, value),
+        .http_header,
+        .connect_to,
+        .resolve,
+        => @as(?*CurlSList, value),
 
         .private,
         .header_data,
@@ -633,6 +671,9 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         => @as(?*anyopaque, @ptrCast(value)),
 
         .ssl_ctx_data => @as(*crypto.X509_STORE, value),
+        .share => @as(?*CurlSH, value),
+
+        .http_version => @as(c_long, @backingInt(@as(CurlHttpVersion, value))),
 
         .debug_function => @as(CurlDebugFunction, value),
         .opensocket_function => @as(CurlOpenSocketFunction, value),
@@ -641,7 +682,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .write_function => @as(CurlWriteFunction, value),
         .ssl_ctx_function => @as(CurlSslCtxFunction, value),
     };
-    const code = c.curl_easy_setopt(easy, @intFromEnum(option), v);
+    const code = c.curl_easy_setopt(easy, @backingInt(option), v);
     return errorCheck(code);
 }
 
@@ -650,7 +691,7 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         @compileError("curl_easy_getinfo out must be a pointer, got " ++ @typeName(@TypeOf(out)));
     }
 
-    const inf: c.CURLINFO = @intFromEnum(info);
+    const inf: c.CURLINFO = @backingInt(info);
     const code = switch (info) {
         .effective_url => blk: {
             const p: *[*c]u8 = out;
@@ -660,11 +701,20 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         .connect_code,
         .redirect_count,
         .num_connects,
+        .http_version,
+        .header_size,
         => blk: {
             const p: *c_long = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },
         .total_time_t,
+        .queue_time_t,
+        .namelookup_time_t,
+        .connect_time_t,
+        .appconnect_time_t,
+        .pretransfer_time_t,
+        .starttransfer_time_t,
+        .size_download_t,
         .conn_id,
         => blk: {
             const p: *c.curl_off_t = out;
@@ -691,7 +741,7 @@ pub fn curl_easy_header(
     hout: *?*CurlHeader,
 ) ErrorHeader!void {
     var c_hout: [*c]CurlHeader = null;
-    const code = c.curl_easy_header(easy, name, index, @intFromEnum(origin), request, &c_hout);
+    const code = c.curl_easy_header(easy, name, index, @backingInt(origin), request, &c_hout);
     switch (code) {
         c.CURLHE_OK => {
             hout.* = @ptrCast(c_hout);
@@ -718,9 +768,57 @@ pub fn curl_easy_nextheader(
     request: c_int,
     prev: ?*CurlHeader,
 ) ?*CurlHeader {
-    const ptr = c.curl_easy_nextheader(easy, @intFromEnum(origin), request, prev);
+    const ptr = c.curl_easy_nextheader(easy, @backingInt(origin), request, prev);
     if (ptr == null) return null;
     return @ptrCast(ptr);
+}
+
+pub const CurlLockData = enum(c.curl_lock_data) {
+    share = c.CURL_LOCK_DATA_SHARE,
+    dns = c.CURL_LOCK_DATA_DNS,
+    _,
+};
+
+pub const CurlLockAccess = c.curl_lock_access;
+pub const CurlLockFunction = *const fn (?*Curl, CurlLockData, CurlLockAccess, ?*anyopaque) callconv(.c) void;
+pub const CurlUnlockFunction = *const fn (?*Curl, CurlLockData, ?*anyopaque) callconv(.c) void;
+
+const CurlSHOption = enum(c.CURLSHoption) {
+    share = c.CURLSHOPT_SHARE,
+    lock_function = c.CURLSHOPT_LOCKFUNC,
+    unlock_function = c.CURLSHOPT_UNLOCKFUNC,
+    user_data = c.CURLSHOPT_USERDATA,
+};
+
+pub fn curl_share_init() ?*CurlSH {
+    return c.curl_share_init();
+}
+
+pub fn curl_share_cleanup(share: *CurlSH) ErrorShare!void {
+    try errorSHCheck(c.curl_share_cleanup(share));
+}
+
+pub fn curl_share_setopt(share: *CurlSH, comptime option: CurlSHOption, value: anytype) ErrorShare!void {
+    const opt: c.CURLSHoption = @backingInt(option);
+    const code = switch (option) {
+        .share => c.curl_share_setopt(share, opt, @as(c_int, @intCast(@backingInt(@as(CurlLockData, value))))),
+        .lock_function => c.curl_share_setopt(share, opt, @as(CurlLockFunction, value)),
+        .unlock_function => c.curl_share_setopt(share, opt, @as(CurlUnlockFunction, value)),
+        .user_data => c.curl_share_setopt(share, opt, @as(?*anyopaque, @ptrCast(value))),
+    };
+    try errorSHCheck(code);
+}
+
+fn errorSHCheck(code: c.CURLSHcode) ErrorShare!void {
+    return switch (code) {
+        c.CURLSHE_OK => {},
+        c.CURLSHE_BAD_OPTION => ErrorShare.BadOption,
+        c.CURLSHE_IN_USE => ErrorShare.InUse,
+        c.CURLSHE_INVALID => ErrorShare.Invalid,
+        c.CURLSHE_NOMEM => ErrorShare.OutOfMemory,
+        c.CURLSHE_NOT_BUILT_IN => ErrorShare.NotBuiltIn,
+        else => ErrorShare.Unknown,
+    };
 }
 
 pub fn curl_multi_init() ?*CurlM {
@@ -732,9 +830,9 @@ pub fn curl_multi_cleanup(multi: *CurlM) ErrorMulti!void {
 }
 
 pub fn curl_multi_setopt(multi: *CurlM, comptime option: CurlMOption, value: anytype) ErrorMulti!void {
-    const opt: c.CURLMoption = @intFromEnum(option);
+    const opt: c.CURLMoption = @backingInt(option);
     const code = switch (option) {
-        .max_host_connections => blk: {
+        .max_host_connections, .max_connects => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {
                 .comptime_int, .int => @intCast(value),
                 else => @compileError("expected integer for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
@@ -776,12 +874,12 @@ pub fn curl_multi_wakeup(multi: *CurlM) ErrorMulti!void {
     try errorMCheck(c.curl_multi_wakeup(multi));
 }
 
-pub fn curl_multi_waitfds(multi: *CurlM, ufds: []CurlWaitFd, fd_count: *c_uint) ErrorMulti!void {
+fn curl_multi_waitfds(multi: *CurlM, ufds: []CurlWaitFd, fd_count: *c_uint) ErrorMulti!void {
     const raw_fds: [*c]c.curl_waitfd = if (ufds.len == 0) null else @ptrCast(ufds.ptr);
     try errorMCheck(c.curl_multi_waitfds(multi, raw_fds, @intCast(ufds.len), fd_count));
 }
 
-pub fn curl_multi_timeout(multi: *CurlM, timeout_ms: *c_long) ErrorMulti!void {
+fn curl_multi_timeout(multi: *CurlM, timeout_ms: *c_long) ErrorMulti!void {
     try errorMCheck(c.curl_multi_timeout(multi, timeout_ms));
 }
 
@@ -870,11 +968,11 @@ pub const WsFrameMeta = struct {
     }
 };
 
-pub fn curl_ws_send(easy: *Curl, buffer: []const u8, sent: *usize, fragsize: CurlOffT, frame_type: WsFrameType) Error!void {
+fn curl_ws_send(easy: *Curl, buffer: []const u8, sent: *usize, fragsize: CurlOffT, frame_type: WsFrameType) Error!void {
     try errorCheck(c.curl_ws_send(easy, buffer.ptr, buffer.len, sent, fragsize, frame_type.toInt()));
 }
 
-pub fn curl_ws_recv(easy: *Curl, buffer: []u8, recv: *usize, meta: *?WsFrameMeta) Error!void {
+fn curl_ws_recv(easy: *Curl, buffer: []u8, recv: *usize, meta: *?WsFrameMeta) Error!void {
     var c_meta: [*c]const c.curl_ws_frame = null;
     const code = c.curl_ws_recv(easy, buffer.ptr, buffer.len, recv, &c_meta);
     if (c_meta) |m| {

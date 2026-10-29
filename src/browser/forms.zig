@@ -25,7 +25,7 @@ const Node = @import("webapi/Node.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const SelectOption = struct {
+const SelectOption = struct {
     value: []const u8,
     text: []const u8,
 
@@ -39,7 +39,7 @@ pub const SelectOption = struct {
     }
 };
 
-pub const FormField = struct {
+const FormField = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -101,7 +101,7 @@ pub const FormField = struct {
     }
 };
 
-pub const FormInfo = struct {
+const FormInfo = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     action: ?[]const u8,
@@ -161,19 +161,18 @@ pub fn collectForms(
 ) ![]FormInfo {
     var forms: std.ArrayList(FormInfo) = .empty;
 
-    var tw = TreeWalker.Full.init(root, .{});
-    while (tw.next()) |node| {
-        const form = node.is(Element.Html.Form) orelse continue;
+    var tw = TreeWalker.Full.ElementsOf(Element.Html.Form).init(root, .{});
+    while (tw.next()) |form| {
         const el = form.asElement();
 
         const fields = try collectFormFields(arena, form, frame);
         if (fields.len == 0) continue;
 
-        const action_attr = el.getAttributeSafe(comptime .wrap("action"));
+        const action_attr = el.getAttributeInterned("action");
         const method_str = form.getMethod();
 
         try forms.append(arena, .{
-            .node = node,
+            .node = el.asNode(),
             .action = if (action_attr) |a| if (a.len > 0) a else null else null,
             .method = method_str,
             .fields = fields,
@@ -204,12 +203,12 @@ fn collectFormFields(
             try fields.append(arena, .{
                 .node = node,
                 .tag_name = "input",
-                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .name = el.getName(),
                 .input_type = input._input_type.toString(),
-                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = input.getRedactedValue(),
-                .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+                .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
             continue;
@@ -219,12 +218,12 @@ fn collectFormFields(
             try fields.append(arena, .{
                 .node = node,
                 .tag_name = "textarea",
-                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .name = el.getName(),
                 .input_type = null,
-                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = textarea.getValue(),
-                .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+                .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
             continue;
@@ -236,9 +235,9 @@ fn collectFormFields(
             try fields.append(arena, .{
                 .node = node,
                 .tag_name = "select",
-                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .name = el.getName(),
                 .input_type = null,
-                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = select.getValue(frame),
                 .placeholder = null,
@@ -259,13 +258,8 @@ fn collectSelectOptions(
     frame: *Frame,
 ) ![]SelectOption {
     var options: std.ArrayList(SelectOption) = .empty;
-    const Option = Element.Html.Option;
-
-    var tw = TreeWalker.Full.init(select_node, .{});
-    while (tw.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        const option = el.is(Option) orelse continue;
-
+    var tw = TreeWalker.Full.ElementsOf(Element.Html.Option).init(select_node, .{});
+    while (tw.next()) |option| {
         try options.append(arena, .{
             .value = option.getValue(frame),
             .text = option.getText(frame),
@@ -306,6 +300,20 @@ test "browser.forms: login form" {
     try testing.expect(forms[0].fields[0].required);
     try testing.expect(!forms[0].fields[0].disabled);
     try testing.expectEqual("password", forms[0].fields[1].name.?);
+}
+
+test "browser.forms: password value is redacted only when set" {
+    const forms = try testForms(
+        \\<form>
+        \\  <input type="password" name="empty">
+        \\  <input type="password" name="filled" value="secret">
+        \\</form>
+    );
+    defer testing.test_session.closeAllPages();
+
+    try testing.expectEqual(2, forms[0].fields.len);
+    try testing.expectEqual("", forms[0].fields[0].value.?);
+    try testing.expectEqual("*****", forms[0].fields[1].value.?);
 }
 
 test "browser.forms: form with select" {

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="testing.js"></script>
+<body></body>
+
+<!--
+  These run with load_resources = .{ .beacon = true, .iframe = true } (see Navigator.zig's
+  test decl), so sendBeacon really sends its POST. The test server records
+  each request to /beacon/store/<id>; /beacon/read/<id> reads it back as
+  "METHOD|content-type|body length|start of the body".
+-->
+
+<script id=beacon-sends type=module>
+  const state = await testing.async();
+  const sleep = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const read = async (id) => {
+    for (let i = 0; i < 50; i++) {
+      const record = await (await fetch(`/beacon/read/${id}`)).text();
+      if (record !== "(missing)") return record;
+      await sleep();
+    }
+    return "(missing)";
+  };
+
+  // The bodies of beacons still in flight share a 64 KiB quota: a beacon that
+  // would go over it isn't sent, and sendBeacon returns false. Nothing settles
+  // between these calls, so the first is still in flight.
+  const quota = [
+    navigator.sendBeacon("/beacon/store/max", "x".repeat(65536)),
+    navigator.sendBeacon("/beacon/store/empty", ""),
+    navigator.sendBeacon("/beacon/store/over", "x"),
+  ];
+  // Once it settles, the quota is free again.
+  let freed = false;
+  for (let i = 0; i < 50 && !freed; i++) {
+    await sleep();
+    freed = navigator.sendBeacon("/beacon/store/freed", "x".repeat(65536));
+  }
+  const quotaRecords = [await read("max"), await read("over")];
+
+  // Each kind of body, with the Content-Type the spec gives it.
+  const sent = {
+    none: navigator.sendBeacon("/beacon/store/none"),
+    string: navigator.sendBeacon("/beacon/store/string", "payload"),
+    buffer: navigator.sendBeacon("/beacon/store/buffer", new TextEncoder().encode("bytes").buffer),
+    blob: navigator.sendBeacon("/beacon/store/blob", new Blob(["{}"], { type: "application/json" })),
+    untypedBlob: navigator.sendBeacon("/beacon/store/untyped-blob", new Blob(["raw"])),
+    params: navigator.sendBeacon("/beacon/store/params", new URLSearchParams("a=1&b=2")),
+  };
+  const form = new FormData();
+  form.append("field", "value");
+  sent.form = navigator.sendBeacon("/beacon/store/form", form);
+
+  const records = {};
+  for (const id of ["none", "string", "buffer", "blob", "untyped-blob", "params"]) {
+    records[id] = await read(id);
+  }
+  const formRecord = await read("form");
+
+  // Cross-origin: a CORS-safelisted Content-Type goes out as a no-cors
+  // request; another one makes it a CORS request, so it's preflighted (and
+  // this server doesn't allow it, so the POST itself never comes).
+  const cross = {
+    plain: navigator.sendBeacon("http://localhost:9582/beacon/store/cross-plain", "x"),
+    json: navigator.sendBeacon("http://localhost:9582/beacon/store/cross-json", new Blob(["{}"], { type: "application/json" })),
+  };
+  const crossRecords = { plain: await read("cross-plain"), json: await read("cross-json") };
+
+  // A beacon is a keepalive request: it still goes out when the iframe that
+  // sent it is removed right away.
+  const iframe = document.createElement("iframe");
+  document.body.appendChild(iframe);
+  const fromIframe = iframe.contentWindow.navigator.sendBeacon("/beacon/store/iframe", "bye");
+  // Each document has its own quota: the iframe can fill the rest of its own
+  // 64 KiB while this document has 60,000 bytes in flight.
+  const quotas = [
+    navigator.sendBeacon("/beacon/store/parent-big", "x".repeat(60000)),
+    iframe.contentWindow.navigator.sendBeacon("/beacon/store/iframe-max", "x".repeat(65536 - 3)),
+    iframe.contentWindow.navigator.sendBeacon("/beacon/store/iframe-over", "x"),
+  ];
+  iframe.remove();
+  const iframeRecord = await read("iframe");
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([true, true, false], quota);
+    testing.expectEqual(true, freed);
+    testing.expectEqual("POST|text/plain;charset=UTF-8|65536|", quotaRecords[0].slice(0, 36));
+    testing.expectEqual("(missing)", quotaRecords[1]);
+    testing.expectEqual({ none: true, string: true, buffer: true, blob: true, untypedBlob: true, params: true, form: true }, sent);
+    testing.expectEqual({
+      none: "POST|(missing)|0|",
+      string: "POST|text/plain;charset=UTF-8|7|payload",
+      buffer: "POST|(missing)|5|bytes",
+      blob: "POST|application/json|2|{}",
+      "untyped-blob": "POST|(missing)|3|raw",
+      params: "POST|application/x-www-form-urlencoded;charset=UTF-8|7|a=1&b=2",
+    }, records);
+    testing.expectEqual(true, formRecord.startsWith("POST|multipart/form-data; boundary="));
+    testing.expectEqual({ plain: true, json: true }, cross);
+    testing.expectEqual("POST|text/plain;charset=UTF-8|1|x", crossRecords.plain);
+    testing.expectEqual("OPTIONS|", crossRecords.json.slice(0, 8));
+    testing.expectEqual([true, true, false], quotas);
+    testing.expectEqual(true, fromIframe);
+    testing.expectEqual("POST|text/plain;charset=UTF-8|3|bye", iframeRecord);
+  });
+</script>

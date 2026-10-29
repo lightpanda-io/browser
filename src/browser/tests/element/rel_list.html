@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <link id=l1 rel="stylesheet" href="data:text/css,">
@@ -11,7 +12,9 @@
   testing.expectEqual(true, rl.supports('MODULEPRELOAD'));
   testing.expectEqual(true, rl.supports('preload'));
   testing.expectEqual(true, rl.supports('stylesheet'));
-  testing.expectEqual(false, rl.supports('prefetch'));
+  testing.diverges("Chrome implements <link rel=prefetch>", () => {
+    testing.expectEqual(false, rl.supports('prefetch'));
+  });
 }
 </script>
 
@@ -19,5 +22,74 @@
 {
   // classList's backing attribute defines no supported tokens.
   testing.expectError('TypeError', () => $('#d1').classList.supports('foo'));
+}
+</script>
+
+<script id=sandbox_supports>
+{
+  const sandbox = document.createElement('iframe').sandbox;
+  testing.expectEqual(true, sandbox.supports('allow-modals'));
+  testing.expectEqual(true, sandbox.supports('ALLOW-SCRIPTS'));
+  testing.expectEqual(true, sandbox.supports('allow-popups-to-escape-sandbox'));
+  testing.expectEqual(true, sandbox.supports('allow-storage-access-by-user-activation'));
+  testing.expectEqual(false, sandbox.supports('unknown-token'));
+}
+</script>
+
+<a id=a1 rel="noopener"></a>
+<area id=ar1 rel="noopener">
+<output id=o1 for="x"></output>
+<iframe id=if1></iframe>
+<svg><a id=sa1 rel="noopener"></a></svg>
+<form id=f1 rel="noopener"></form>
+
+<script id=hyperlink_supports>
+{
+  // Everything but <link> supports only the opener-related keywords.
+  for (const el of [$('#a1'), $('#ar1'), $('#sa1'), $('#f1')]) {
+    const rl = el.relList;
+    testing.expectEqual(true, rl.supports('noopener'));
+    testing.expectEqual(true, rl.supports('NOREFERRER'));
+    testing.expectEqual(true, rl.supports('opener'));
+    testing.expectEqual(false, rl.supports('stylesheet'));
+    testing.expectEqual(false, rl.supports('nofollow'));
+  }
+  testing.expectEqual(false, $('#l1').relList.supports('noopener'));
+}
+</script>
+
+<script id=form_rel>
+{
+  const form = $('#f1');
+  testing.expectEqual('noopener', form.rel);
+  testing.expectEqual(1, form.relList.length);
+  form.relList.add('noreferrer');
+  testing.expectEqual('noopener noreferrer', form.getAttribute('rel'));
+  form.rel = 'opener';
+  testing.expectEqual('opener', form.relList.value);
+}
+</script>
+
+<script id=put_forwards_value>
+{
+  // [PutForwards=value]: assigning sets the attribute and keeps the same list.
+  const cases = [
+    [$('#l1'), 'relList', 'rel'],
+    [$('#l1'), 'sizes', 'sizes'],
+    [$('#a1'), 'relList', 'rel'],
+    [$('#ar1'), 'relList', 'rel'],
+    [$('#o1'), 'htmlFor', 'for'],
+    [$('#if1'), 'sandbox', 'sandbox'],
+    [$('#sa1'), 'relList', 'rel'],
+    [$('#f1'), 'relList', 'rel'],
+  ];
+  for (const [el, prop, attr] of cases) {
+    const list = el[prop];
+    el[prop] = 'one two';
+    testing.expectEqual('one two', el.getAttribute(attr));
+    testing.expectEqual(true, list === el[prop]);
+    testing.expectEqual(2, list.length);
+    testing.expectEqual('two', list.item(1));
+  }
 }
 </script>

@@ -25,6 +25,9 @@ const protocol = @import("protocol.zig");
 
 const Self = @This();
 
+/// A screenshot response is hundreds of KB; don't keep that parked.
+pub const large_response = 256 * 1024;
+
 writer: *std.Io.Writer,
 mutex: std.Io.Mutex = .init,
 aw: std.Io.Writer.Allocating,
@@ -44,7 +47,7 @@ pub fn retarget(self: *Self, writer: *std.Io.Writer) void {
     self.writer = writer;
 }
 
-pub fn sendResponse(self: *Self, response: anytype) !void {
+fn sendResponse(self: *Self, response: anytype) !void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
@@ -53,6 +56,12 @@ pub fn sendResponse(self: *Self, response: anytype) !void {
     try self.aw.writer.writeByte('\n');
     try self.writer.writeAll(self.aw.writer.buffered());
     try self.writer.flush();
+
+    if (self.aw.writer.buffer.len > large_response) {
+        const allocator = self.aw.allocator;
+        self.aw.deinit();
+        self.aw = .init(allocator);
+    }
 }
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
@@ -68,7 +77,7 @@ pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, mess
     try self.sendResponse(protocol.Response{
         .id = id,
         .@"error" = protocol.Error{
-            .code = @intFromEnum(code),
+            .code = @backingInt(code),
             .message = message,
         },
     });

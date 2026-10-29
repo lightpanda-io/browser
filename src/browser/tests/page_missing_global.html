@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <!-- Fixture for PageStatus.missing_globals: each script is its own
+         uncaught error. createImageBitmap twice (deduped), a lowercase site-style
+         name, a TypeError (ignored), and a ReferenceError that arrives as
+         an unhandled rejection. -->
+    <script>createImageBitmap();</script>
+    <script>createImageBitmap.length;</script>
+    <script>someUndefinedThing();</script>
+    <script>null.x;</script>
+    <script>(async () => { new WebGL2RenderingContext(); })();</script>
+</body>
+</html>

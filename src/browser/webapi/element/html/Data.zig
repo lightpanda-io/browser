@@ -19,7 +19,6 @@
 const lp = @import("lightpanda");
 const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
-const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -45,7 +44,6 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLDataElement";
-        pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
