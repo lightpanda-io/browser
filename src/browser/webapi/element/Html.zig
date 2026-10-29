@@ -759,6 +759,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     // The text of an invisible element isn't included, but we still walk all
     // its children, since they can make themeselves visible again.
     const text_hidden = state.style_manager.hasVisibilityHiddenInherited(el);
+    // A closed <details> renders only its summary; its other elements are
+    // display:none, and its loose text isn't rendered either.
+    const closed_details = self_tag == .details and !el.hasAttributeSafe(comptime .wrap("open"));
 
     var it = el.asNode().childrenIterator();
     while (it.next()) |child| {
@@ -782,9 +785,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                 const c = child.subtype(Node.CData);
                 switch (c._type) {
                     .text => {
-                        if (child_filter != .none or text_hidden) {
-                            // Text directly inside <select>/<optgroup> is skipped,
-                            // as is visibility:hidden text
+                        if (child_filter != .none or text_hidden or closed_details) {
+                            // Text directly inside <select>/<optgroup> or a closed
+                            // <details> is skipped, as is visibility:hidden text
                             continue;
                         }
                         if (table_ctx and isAllAsciiWhitespace(c.getData().str())) {
