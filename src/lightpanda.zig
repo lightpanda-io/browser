@@ -799,6 +799,14 @@ test "dumpContent: structured_data" {
     try dumpContent(testing.test_app, .structured_data, .{ .dump = .{} }, page.frame().?, false, &aw.writer);
     try testing.expectJson(.{
         .jsonLd = &.{"{\"@type\":\"Product\",\"name\":\"Blue Kettle\"}"},
+        .microdata = &.{.{
+            .type = &.{"https://schema.org/Product"},
+            .properties = .{
+                .name = &.{"Blue Kettle"},
+                .image = &.{"http://127.0.0.1:9582/img/kettle.jpg"},
+                .price = &.{"25"},
+            },
+        }},
         .openGraph = .{ .type = "product" },
         .meta = .{ .language = "en", .title = "Blue Kettle" },
         .links = .{ .canonical = "http://127.0.0.1:9582/products/blue-kettle" },

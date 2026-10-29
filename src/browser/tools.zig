@@ -601,8 +601,8 @@ pub const Tool = enum {
                 .input_schema = url_params_schema,
             },
             .structuredData => .{
-                .description = "Page metadata as JSON: `jsonLd` (each JSON-LD block as a string), `openGraph`, `twitterCard`, `meta` and `links` (key/value lists), plus `alternate` (hreflang variants) and `linkHeaders` (relations from the HTTP Link header) when present. Empty sections come back as empty arrays. Use it for publisher-declared facts such as product price, article author or canonical URL before scraping the visible text for them. If a url is provided, it navigates there first.",
-                .summary = "Extract JSON-LD / OpenGraph data",
+                .description = "Page metadata as JSON: `jsonLd` (each JSON-LD block as a string), `openGraph`, `twitterCard`, `meta` and `links` (key/value lists), plus `microdata` (itemscope items as `{type, id, properties}`, every property value an array), `alternate` (hreflang variants) and `linkHeaders` (relations from the HTTP Link header) when present. Empty sections come back as empty arrays. Use it for publisher-declared facts such as product price, article author or canonical URL before scraping the visible text for them. If a url is provided, it navigates there first.",
+                .summary = "Extract JSON-LD / microdata / OpenGraph data",
                 .input_schema = url_params_schema,
             },
             .detectForms => .{

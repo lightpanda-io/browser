@@ -46,8 +46,70 @@ const LinkRel = struct {
     href: []const u8,
 };
 
+/// A microdata item, shaped like the HTML spec's JSON conversion:
+/// https://html.spec.whatwg.org/multipage/microdata.html#json
+const MicrodataItem = struct {
+    types: []const []const u8,
+    id: ?[]const u8,
+    properties: []const MicrodataProperty,
+
+    pub fn jsonStringify(self: *const MicrodataItem, jw: anytype) !void {
+        try jw.beginObject();
+        if (self.types.len > 0) {
+            try jw.objectField("type");
+            try jw.write(self.types);
+        }
+        if (self.id) |id| {
+            try jw.objectField("id");
+            try jw.write(id);
+        }
+
+        // Values are always arrays, grouped by name in first-seen order.
+        try jw.objectField("properties");
+        try jw.beginObject();
+        for (self.properties, 0..) |prop, i| {
+            for (self.properties[0..i]) |prev| {
+                if (std.mem.eql(u8, prev.name, prop.name)) break;
+            } else {
+                try jw.objectField(prop.name);
+                try jw.beginArray();
+                for (self.properties[i..]) |p| {
+                    if (std.mem.eql(u8, p.name, prop.name)) {
+                        try jw.write(p.value);
+                    }
+                }
+                try jw.endArray();
+            }
+        }
+        try jw.endObject();
+
+        try jw.endObject();
+    }
+};
+
+const MicrodataProperty = struct {
+    name: []const u8,
+    value: MicrodataValue,
+};
+
+const MicrodataValue = union(enum) {
+    text: []const u8,
+    item: *const MicrodataItem,
+    // an item that contains itself, through itemprop or itemref
+    cycle,
+
+    pub fn jsonStringify(self: MicrodataValue, jw: anytype) !void {
+        switch (self) {
+            .text => |t| try jw.write(t),
+            .item => |item| try jw.write(item),
+            .cycle => try jw.write("ERROR"),
+        }
+    }
+};
+
 const StructuredData = struct {
     json_ld: []const []const u8,
+    microdata: []const *const MicrodataItem,
     open_graph: []const Property,
     twitter_card: []const Property,
     meta: []const Property,
@@ -100,6 +162,11 @@ const StructuredData = struct {
         // Emitted only when present so existing consumers of the CDP/MCP
         // structured-data shape see no new key on sites without a `Link:`
         // response header.
+        if (self.microdata.len > 0) {
+            try jw.objectField("microdata");
+            try jw.write(self.microdata);
+        }
+
         if (self.link_headers.len > 0) {
             try jw.objectField("linkHeaders");
             try jw.beginArray();
@@ -164,6 +231,7 @@ pub fn collectStructuredData(
     frame: *Frame,
 ) !StructuredData {
     var json_ld: std.ArrayList([]const u8) = .empty;
+    var microdata: std.ArrayList(*const MicrodataItem) = .empty;
     var open_graph: std.ArrayList(Property) = .empty;
     var twitter_card: std.ArrayList(Property) = .empty;
     var meta: std.ArrayList(Property) = .empty;
@@ -194,6 +262,12 @@ pub fn collectStructuredData(
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
 
+        // Top-level items; the ones with itemprop are values of another item.
+        if (isItem(el) and !el.hasAttributeSafe(comptime .wrap("itemprop"))) {
+            var memory: std.ArrayList(*Element) = .empty;
+            try microdata.append(arena, try collectMicrodataItem(el, root, arena, frame, &memory));
+        }
+
         switch (el.getTag()) {
             .script => {
                 try collectJsonLd(el, arena, &json_ld);
@@ -214,6 +288,7 @@ pub fn collectStructuredData(
 
     return .{
         .json_ld = json_ld.items,
+        .microdata = microdata.items,
         .open_graph = open_graph.items,
         .twitter_card = twitter_card.items,
         .meta = meta.items,
@@ -361,6 +436,150 @@ fn extractRel(params: []const u8) ?[]const u8 {
         return val;
     }
     return null;
+}
+
+fn isItem(el: *Element) bool {
+    return el._namespace == .html and el.hasAttributeSafe(comptime .wrap("itemscope"));
+}
+
+/// `memory` holds the items being collected, outermost first, so an item
+/// reached again through itemprop or itemref becomes a cycle, not a loop.
+fn collectMicrodataItem(
+    el: *Element,
+    root: *Node,
+    arena: Allocator,
+    frame: *Frame,
+    memory: *std.ArrayList(*Element),
+) Allocator.Error!*const MicrodataItem {
+    try memory.append(arena, el);
+    defer _ = memory.pop();
+
+    var types: std.ArrayList([]const u8) = .empty;
+    if (el.getAttributeSafe(comptime .wrap("itemtype"))) |itemtype| {
+        var it = std.mem.tokenizeAny(u8, itemtype, &std.ascii.whitespace);
+        while (it.next()) |t| try types.append(arena, t);
+    }
+
+    // An itemid is only a global identifier on a typed item.
+    var id: ?[]const u8 = null;
+    if (types.items.len > 0) {
+        if (el.getAttributeSafe(comptime .wrap("itemid"))) |itemid| {
+            id = URL.resolve(arena, frame.base(), itemid, .{ .encoding = frame.charset }) catch itemid;
+        }
+    }
+
+    var properties: std.ArrayList(MicrodataProperty) = .empty;
+    for (try crawlMicrodataProperties(el, root, arena)) |prop_el| {
+        const value: MicrodataValue = if (isItem(prop_el)) blk: {
+            for (memory.items) |m| {
+                if (m == prop_el) break :blk .cycle;
+            }
+            break :blk .{ .item = try collectMicrodataItem(prop_el, root, arena, frame, memory) };
+        } else .{ .text = try microdataPropertyValue(prop_el, arena, frame) };
+
+        // a name repeated on the same element counts once
+        const first = properties.items.len;
+        var names = std.mem.tokenizeAny(u8, prop_el.getAttributeSafe(comptime .wrap("itemprop")).?, &std.ascii.whitespace);
+        while (names.next()) |name| {
+            for (properties.items[first..]) |p| {
+                if (std.mem.eql(u8, p.name, name)) break;
+            } else try properties.append(arena, .{ .name = name, .value = value });
+        }
+    }
+
+    const item = try arena.create(MicrodataItem);
+    item.* = .{ .types = types.items, .id = id, .properties = properties.items };
+    return item;
+}
+
+/// The elements carrying the item's properties, in tree order: its
+/// descendants and itemref targets, without descending into nested items.
+/// https://html.spec.whatwg.org/multipage/microdata.html#associating-names-with-items
+fn crawlMicrodataProperties(item: *Element, root: *Node, arena: Allocator) ![]*Element {
+    var results: std.ArrayList(*Element) = .empty;
+    var visited: std.ArrayList(*Element) = .empty;
+    var pending: std.ArrayList(*Element) = .empty;
+    try visited.append(arena, item);
+
+    try appendChildElements(item, arena, &pending);
+    if (item.getAttributeSafe(comptime .wrap("itemref"))) |itemref| {
+        var it = std.mem.tokenizeAny(u8, itemref, &std.ascii.whitespace);
+        while (it.next()) |id| {
+            if (findById(item.asNode().getRootNode(.{}), root, id)) |target| {
+                try pending.append(arena, target);
+            }
+        }
+    }
+
+    while (pending.pop()) |candidate| {
+        const seen = for (visited.items) |v| {
+            if (v == candidate) break true;
+        } else false;
+        if (seen) continue;
+        try visited.append(arena, candidate);
+
+        if (!isItem(candidate)) {
+            try appendChildElements(candidate, arena, &pending);
+        }
+        if (candidate.getAttributeSafe(comptime .wrap("itemprop"))) |itemprop| {
+            var names = std.mem.tokenizeAny(u8, itemprop, &std.ascii.whitespace);
+            if (names.peek() != null) {
+                try results.append(arena, candidate);
+            }
+        }
+    }
+
+    std.mem.sort(*Element, results.items, {}, struct {
+        fn lessThan(_: void, a: *Element, b: *Element) bool {
+            const FOLLOWING: u16 = 0x04;
+            return a.asNode().compareDocumentPosition(b.asNode()) & FOLLOWING != 0;
+        }
+    }.lessThan);
+    return results.items;
+}
+
+fn appendChildElements(el: *Element, arena: Allocator, out: *std.ArrayList(*Element)) !void {
+    var it = el.asNode().childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Element)) |child_el| {
+            try out.append(arena, child_el);
+        }
+    }
+}
+
+/// An itemref target: the first element with this id in the item's tree.
+/// `root` is the collection root, searched when the tree isn't a document.
+fn findById(tree: *Node, root: *Node, id: []const u8) ?*Element {
+    if (tree.is(Node.Document)) |document| {
+        return document.getElementById(id);
+    }
+    var tw = TreeWalker.Full.init(root, .{});
+    while (tw.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (std.mem.eql(u8, el.getId() orelse continue, id)) return el;
+    }
+    return null;
+}
+
+/// https://html.spec.whatwg.org/multipage/microdata.html#values
+fn microdataPropertyValue(el: *Element, arena: Allocator, frame: *Frame) ![]const u8 {
+    const url_attr: ?[]const u8 = switch (el.getTag()) {
+        .meta => return el.getAttributeInterned("content") orelse "",
+        .audio, .embed, .iframe, .img, .source, .track, .video => "src",
+        .a, .area, .link => "href",
+        .object => "data",
+        .data, .meter => return el.getAttributeSafe(comptime .wrap("value")) orelse "",
+        .time => if (el.getAttributeSafe(comptime .wrap("datetime"))) |datetime| return datetime else null,
+        else => null,
+    };
+    if (url_attr) |name| {
+        const raw = el.getAttributeSafe(.wrap(name)) orelse return "";
+        return URL.resolve(arena, frame.base(), raw, .{ .encoding = frame.charset }) catch raw;
+    }
+
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    el.asNode().getTextContent(&buf.writer) catch return error.OutOfMemory;
+    return std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
 }
 
 fn collectJsonLd(
@@ -516,6 +735,74 @@ test "structured_data: json-ld" {
 
     try testing.expectEqual(1, data.json_ld.len);
     try testing.expect(std.mem.find(u8, data.json_ld[0], "Article") != null);
+}
+
+test "structured_data: microdata" {
+    const data = try testStructuredData(
+        \\<div itemscope itemtype="https://schema.org/Product" itemid="https://example.com/p/1">
+        \\  <h1 itemprop="name"> Lamp </h1>
+        \\  <img itemprop="image" src="https://example.com/lamp.jpg">
+        \\  <a itemprop="url" href="https://example.com/p/1">link</a>
+        \\  <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+        \\    <meta itemprop="priceCurrency" content="USD">
+        \\    <data itemprop="price" value="19.99">$19.99</data>
+        \\    <time itemprop="validFrom" datetime="2026-10-01">October</time>
+        \\  </div>
+        \\  <span itemprop="color material color">steel</span>
+        \\</div>
+    );
+    defer testing.test_session.closeAllPages();
+
+    try expectMicrodata(
+        \\[{"type":["https://schema.org/Product"],"id":"https://example.com/p/1","properties":{
+    ++
+        \\"name":["Lamp"],"image":["https://example.com/lamp.jpg"],"url":["https://example.com/p/1"],
+    ++
+        \\"offers":[{"type":["https://schema.org/Offer"],"properties":{"priceCurrency":["USD"],"price":["19.99"],"validFrom":["2026-10-01"]}}],
+    ++
+        \\"color":["steel"],"material":["steel"]}}]
+    , data);
+}
+
+test "structured_data: microdata itemref" {
+    const data = try testStructuredData(
+        \\<p id="early" itemprop="zero">0</p>
+        \\<div itemscope itemid="https://example.com/untyped" itemref="early missing"><span itemprop="one">1</span></div>
+    );
+    defer testing.test_session.closeAllPages();
+
+    // tree order, and no id without a type
+    try expectMicrodata(
+        \\[{"properties":{"zero":["0"],"one":["1"]}}]
+    , data);
+}
+
+test "structured_data: microdata cycle" {
+    const data = try testStructuredData(
+        \\<div itemscope><div id="x" itemprop="a" itemscope><div itemprop="b" itemscope itemref="x"></div></div></div>
+    );
+    defer testing.test_session.closeAllPages();
+
+    try expectMicrodata(
+        \\[{"properties":{"a":[{"properties":{"b":[{"properties":{"a":["ERROR"]}}]}}]}}]
+    , data);
+}
+
+test "structured_data: no microdata key without items" {
+    const data = try testStructuredData(
+        \\<span itemprop="orphan">no item</span>
+    );
+    defer testing.test_session.closeAllPages();
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, data, .{});
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.find(u8, json, "microdata") == null);
+}
+
+fn expectMicrodata(expected: []const u8, data: StructuredData) !void {
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, data.microdata, .{});
+    defer testing.allocator.free(json);
+    try testing.expectEqual(expected, json);
 }
 
 test "structured_data: multiple json-ld" {
