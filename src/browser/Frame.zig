@@ -635,7 +635,7 @@ pub fn siteForCookies(self: *const Frame) Cookie.SiteForCookies {
 
 pub fn getTitle(self: *Frame) !?[]const u8 {
     if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
-        return try html_doc.getTitle(self);
+        return try html_doc.asDocument().getTitle(self);
     }
     return null;
 }
