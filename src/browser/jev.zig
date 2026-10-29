@@ -146,8 +146,10 @@ pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, regist
     tree.textStringify(&aw.writer) catch return error.InternalError;
 
     var state: std.json.ObjectMap = .empty;
-    try state.put(arena, "url", .{ .string = page.url });
-    try state.put(arena, "title", if (page.getTitle() catch null) |title| .{ .string = title } else .null);
+    // Copied: a helper thread serializes these while page JS frees them.
+    try state.put(arena, "url", .{ .string = try arena.dupe(u8, page.url) });
+    const title = page.getTitle() catch null;
+    try state.put(arena, "title", if (title) |t| .{ .string = try arena.dupe(u8, t) } else .null);
     if (page._http_status) |status| {
         try state.put(arena, "status", .{ .integer = status });
     }

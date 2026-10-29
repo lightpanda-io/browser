@@ -858,11 +858,9 @@ fn classifyArgs(
     if (argc < 1 or argc > 2) return error.InvalidArguments;
     var questions = try self.argJson(arena, context, info, 0);
     var options: ?std.json.Value = if (argc == 2) try self.argJson(arena, context, info, 1) else null;
-    if (argc == 1 and questions == .object) {
-        if (questions.object.get("questions")) |inner| {
-            options = questions;
-            questions = inner;
-        }
+    if (argc == 1 and questions == .object and isClassifyWrapper(questions.object)) {
+        options = questions;
+        questions = questions.object.get("questions").?;
     }
 
     var args = try objectWith(arena, "questions", switch (questions) {
@@ -878,6 +876,24 @@ fn classifyArgs(
         else => return error.InvalidArguments,
     }
     return args;
+}
+
+/// `{ questions, selector?, presets? }` rather than a question set that has
+/// a question keyed `questions`: alone, a `questions` key whose value reads
+/// as one question is the question.
+fn isClassifyWrapper(obj: std.json.ObjectMap) bool {
+    const inner = obj.get("questions") orelse return false;
+    var it = obj.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (!std.mem.eql(u8, key, "questions") and !std.mem.eql(u8, key, "selector") and !std.mem.eql(u8, key, "presets")) return false;
+    }
+    if (obj.count() > 1) return true;
+    return switch (inner) {
+        .string => false,
+        .object => |o| o.get("question") == null,
+        else => true,
+    };
 }
 
 fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{OutOfMemory}![]const u8 {
@@ -1136,6 +1152,8 @@ test "agent script runtime: page.classify executes presets, categories and struc
         \\
         \\const checks = await page.classify({ is_blocked: "Is it blocked?" });
         \\if (checks.is_blocked !== 0.95) throw new Error("expected is_blocked === 0.95, got " + checks.is_blocked);
+        \\const named = await page.classify({ questions: "Is it blocked?" });
+        \\if (!("questions" in named)) throw new Error("expected a question keyed questions, got " + JSON.stringify(named));
         \\
         \\const details = await page.classify({ page_type: { question: "What is it?", options: ["product", "catalog"] } });
         \\if (details.page_type.choice !== "product") throw new Error("expected details.page_type.choice === 'product'");

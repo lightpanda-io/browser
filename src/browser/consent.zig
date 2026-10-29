@@ -104,7 +104,6 @@ test "browser.consent: questions asks the banner and the pick in one request" {
     try testing.expect(asked.get(wall_key).? == .noul);
     const pick = asked.get(control_key).?;
     try testing.expect(pick == .choice);
-    // The candidate, plus a way to say the banner has no such control.
     try testing.expectEqual(2, pick.choice.criteria.count());
     try testing.expect(pick.choice.criteria.has(choose.none_key));
 }

@@ -79,7 +79,6 @@ test "browser.classify: the presets are added beside the caller's own wording" {
 
     const with = try prepareQuestions(aa, .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" }, true);
     const presets = std.enums.values(jev.Preset);
-    // isPaywall was already asked, so it is not asked twice.
     try testing.expectEqual(2 + presets.len - 1, with.questions.count());
     try testing.expect(with.questions.has("kind"));
     for (presets) |preset| try testing.expect(with.questions.has(@tagName(preset)));

@@ -247,6 +247,7 @@ pub fn of(tool: Tool) Definition {
                 \\    "usernameSelector": { "type": "string", "description": "Optional CSS selector of the identifier field, from an earlier call's result. Given with passwordSelector, the fields are filled with no model call." },
                 \\    "passwordSelector": { "type": "string", "description": "Optional CSS selector of the password field, from an earlier call's result. Must name an input[type=password]." },
                 \\    "submitSelector": { "type": "string", "description": "Optional CSS selector of the control that submits the form. Without it, Enter is pressed in the filled field." },
+                \\    "nextSelector": { "type": "string", "description": "Optional CSS selector of the control that submits the username on a page that asks for the password on a later step. Without it, Enter is pressed in the username field." },
                 \\    "decideOnly": { "type": "boolean", "description": "Report which fields would be used and type nothing. For checking the picks on a page without sending credentials." }
                 \\  },
                 \\  "required": ["password"]

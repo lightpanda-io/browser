@@ -1223,7 +1223,7 @@ fn askPage(
     // unserviced while curl's own timeout keeps counting against them.
     const options: zenai.typesafe.types.AskOptions = .{};
     const pool = &session.browser.app.typesafe;
-    const response = session.runPumped(zenai.typesafe.Pool.ask, .{ pool, arena, state, ask.questions, options, &detail }) catch |err| switch (err) {
+    var response = session.runPumped(zenai.typesafe.Pool.ask, .{ pool, arena, state, ask.questions, options, &detail }) catch |err| switch (err) {
         error.MissingApiKey => return .{ .failed = .{
             .text = arena.print("{s}: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
             .is_error = true,
@@ -1238,6 +1238,7 @@ fn askPage(
     // `settleAction`). The answer describes a page that is no longer here.
     const now = session.currentFrame();
     if (now == null or now.? != page) {
+        response.deinit();
         registry.reset();
         return .{ .failed = .{
             .text = arena.print("{s}: the page navigated while the model was asked", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
@@ -1323,8 +1324,6 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     const args = try parseArgsOrDefault(Params, arena, arguments);
     var outcome: lp.consent.Outcome = .{};
 
-    // The control a previous run recorded, when it is still there: a replay
-    // clicks it and asks nothing, so a saved script needs no API key.
     if (args.selector) |selector| {
         if (resolveBySelector(session, selector) catch null) |target| {
             try clickAndSettle(session, registry, target.node, target.page);
@@ -1386,7 +1385,6 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         if (outcome.attempts > 0 and !std.mem.eql(u8, url_before, (try requireFrame(session)).url)) {
             return consentVerdict(arena, &outcome, "clicked, and the click moved the page; ask again for the banner this one shows");
         }
-        // Gone already, taken away by the click before this one.
         const target = resolveBySelector(session, selector) catch continue;
 
         outcome.attempts += 1;
@@ -1433,6 +1431,7 @@ const LoginParams = struct {
     usernameSelector: ?[]const u8 = null,
     passwordSelector: ?[]const u8 = null,
     submitSelector: ?[]const u8 = null,
+    nextSelector: ?[]const u8 = null,
     /// Report which fields would be used and type nothing, so the picks can
     /// be scored on a real page without sending credentials.
     decideOnly: bool = false,
@@ -1454,9 +1453,8 @@ const Decided = union(enum) {
     failed: ToolResult,
 };
 
-/// The rules' answer where they had one, the model's where they did not — one
-/// request, or none when the markup left nothing open. Run again on the page an
-/// identifier-first submit returns, where the password finally appears.
+/// Run again on the page an identifier-first submit returns, where the
+/// password finally appears.
 fn decideLogin(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -1533,8 +1531,6 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     const args = try parseArgs(LoginParams, arena, arguments);
     var outcome: lp.login.Outcome = .{};
 
-    // The fields a previous run recorded: fill them and submit, with no model
-    // call, so a saved script needs no API key.
     if (args.passwordSelector != null or args.usernameSelector != null) {
         return replayLogin(arena, session, registry, args, &outcome);
     }
@@ -1561,23 +1557,30 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         outcome.submitSelector = decided.submit;
         return verdict(arena, &outcome, "decided only, nothing was typed or submitted");
     }
-    if (decided.picks.password == null and !decided.picks.multi_step) {
-        return verdict(arena, &outcome, "no password field, and the page does not ask for one on a later step");
+    if (decided.picks.password == null) {
+        if (!decided.picks.multi_step) {
+            return verdict(arena, &outcome, "no password field, and the page does not ask for one on a later step");
+        }
+        if (args.username == null) {
+            return verdict(arena, &outcome, "the page asks for the username first, and none was given");
+        }
     }
 
     if (args.username) |username| {
-        const selector = decided.user.?;
+        const selector = decided.user orelse {
+            return verdict(arena, &outcome, "no selector could be built for the username field");
+        };
         try fillBySelector(session, registry, selector, username);
         outcome.usernameSelector = selector;
     }
 
     if (decided.picks.password == null) {
-        // Identifier first: submit what we have, then look for the password on
-        // the page that comes back. Where it lives is the only thing still
-        // open there, so nothing else is asked about again.
         try submitLogin(session, registry, decided.submit, decided.user, &outcome);
+        outcome.nextSelector = outcome.submitSelector;
+        outcome.submitSelector = null;
+        outcome.pressedEnter = false;
         decided = switch (try decideLogin(arena, session, registry, .{ .user = false, .multi_step = false }, &outcome)) {
-            .failed => |result| return result,
+            .failed => |failed| return unverified(arena, &outcome, loginVerdict, failed, "submitted the username, but could not find the password field"),
             .ok => |ok| ok,
         };
         if (decided.picks.password == null) {
@@ -1670,6 +1673,7 @@ fn loginVerdict(arena: std.mem.Allocator, outcome: *lp.login.Outcome, reason: ?[
             .usernameSelector = outcome.usernameSelector,
             .passwordSelector = outcome.passwordSelector,
             .submitSelector = outcome.submitSelector,
+            .nextSelector = outcome.nextSelector,
         }, compact);
     }
     return result;
@@ -1689,6 +1693,11 @@ fn replayLogin(
         const username = args.username orelse {
             return verdict(arena, outcome, "usernameSelector was given without a username");
         };
+        const target = try resolveBySelector(session, selector);
+        const element = target.node.is(Element) orelse return ToolError.InvalidParams;
+        if (lp.login.insecureAction(target.page, element)) {
+            return verdict(arena, outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
+        }
         try fillBySelector(session, registry, selector, username);
         outcome.usernameSelector = selector;
     }
@@ -1696,7 +1705,10 @@ fn replayLogin(
         // A recorded identifier-first login names both fields, and the
         // password's is not on this page yet: repeat the submit that raised it.
         if ((resolveBySelector(session, selector) catch null) == null and outcome.usernameSelector != null) {
-            try submitLogin(session, registry, args.submitSelector, args.usernameSelector, outcome);
+            try submitLogin(session, registry, args.nextSelector, args.usernameSelector, outcome);
+            outcome.nextSelector = outcome.submitSelector;
+            outcome.submitSelector = null;
+            outcome.pressedEnter = false;
         }
         const target = try resolveBySelector(session, selector);
         const element = target.node.is(Element) orelse return ToolError.InvalidParams;
@@ -3096,7 +3108,6 @@ test "tools: navStatus names the status, or says it has none" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    // No response yet.
     try std.testing.expectEqualStrings("unknown", navStatus(aa, frame));
 
     frame._http_status = 403;
@@ -3435,7 +3446,6 @@ test "acceptCookies: the recorded control is clicked without the model" {
     try std.testing.expect(!result.is_error);
     try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
-    // A replay repeats a decision, it does not check it.
     try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":false") != null);
     // What `--save` writes into the script, so the next run clicks it directly.
     try std.testing.expectEqualStrings("{\"selector\":\"#accept\"}", result.replay_args.?);
@@ -3494,7 +3504,6 @@ test "acceptCookies: the control Jev picks is clicked and the re-read verifies i
     try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
-    // The answer is recorded as a selector, so a replay asks nothing.
     try std.testing.expect(result.replay_args != null);
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
@@ -3623,7 +3632,6 @@ test "login: the password waits for the step that asks for it" {
     try std.testing.expect(!result.is_error);
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"loggedIn\":true") != null);
-    // A decision per step, and the verification after them.
     try std.testing.expect(std.mem.find(u8, result.text, "\"calls\":3") != null);
     try std.testing.expectEqualStrings(
         "{\"usernameSelector\":\"#user\",\"passwordSelector\":\"#pass\",\"submitSelector\":\"#signin-submit\"}",
@@ -3652,7 +3660,6 @@ test "login: a later step that asks for the password in the clear is refused" {
     , .{});
     const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, result.text, "input[type=password]") != null);
-    // The identifier did go, and the verdict says so.
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"loggedIn\":false") != null);
 
@@ -3669,15 +3676,13 @@ test "login: a recorded two-step login submits the identifier before the passwor
 
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#signin-submit"}
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#signin-submit","nextSelector":"#next"}
     , .{});
     const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
     try std.testing.expect(!result.is_error);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
-    // The recorded control belongs to the second step, so the first one is
-    // submitted with Enter in the field we just filled.
-    try std.testing.expect(std.mem.find(u8, result.text, "\"pressedEnter\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"nextSelector\":\"#next\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#signin-submit\"") != null);
 
     const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"selector":"#status"}
@@ -3703,7 +3708,6 @@ test "login: a verification that fails still reports that credentials went out" 
     try std.testing.expect(result.is_error);
     try std.testing.expect(std.mem.find(u8, result.text, "could not check whether the sign-in worked") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "HTTP 500") != null);
-    // What we did, not only what broke.
     try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
     try std.testing.expect(result.replay_args != null);
 }

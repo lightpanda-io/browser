@@ -788,16 +788,12 @@ fn runRepl(self: *Agent) void {
                 const result = self.runCommand(aa, tc);
                 self.terminal.endTool();
 
-                // Jev settles these in one call. Without its key a model can
-                // still do it the long way, which is what the command did
-                // before the tool existed. Asking first rather than checking
-                // the key keeps the replay path, which needs no key at all.
+                // Tried before checking the key: the replay path needs none.
                 if (result.failure == .missing_api_key) fallback: {
                     const maybe = Command.fallbackPrompt(aa, tc) catch null;
                     const prompt = maybe orelse break :fallback;
                     self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
-                        // No model either, so say which key was missing too.
                         self.printCommandResult(tc, result);
                     }
                     continue :repl;

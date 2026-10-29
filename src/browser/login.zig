@@ -114,8 +114,7 @@ pub fn questions(
     return .init(entries.items);
 }
 
-/// Which element plays which part. The rules' answer where they had one, the
-/// model's where they did not.
+/// Which element plays which part.
 pub const Picks = struct {
     user: ?choose.Candidate = null,
     password: ?choose.Candidate = null,
@@ -194,6 +193,9 @@ pub const Outcome = struct {
     usernameSelector: ?[]const u8 = null,
     passwordSelector: ?[]const u8 = null,
     submitSelector: ?[]const u8 = null,
+    /// The control that submitted the username on an identifier-first page;
+    /// null with `submitted` set means Enter did.
+    nextSelector: ?[]const u8 = null,
     /// Set when the form had no control of its own and Enter submitted it.
     pressedEnter: bool = false,
     candidates: ?usize = null,
@@ -240,8 +242,6 @@ test "browser.login: every part is asked over every element on the page" {
     defer registry.deinit();
     const candidates = try choose.collect(arena, frame.document.asNode(), frame, &registry);
 
-    // Newsletter box, Subscribe, the two sign-in fields, Log in, and the two
-    // links that must not be mistaken for it.
     try testing.expectEqual(7, candidates.len);
 
     const asked = try questions(arena, candidates, .{});

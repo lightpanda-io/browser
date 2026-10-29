@@ -88,7 +88,6 @@ pub fn collect(
     for (elements) |*el| {
         if (!el.disabled and el.overlay.any()) pinned += 1;
     }
-    // What is left of the budget once everything over the page has a place.
     var others: usize = max_options -| pinned;
 
     var out: std.ArrayList(Candidate) = try .initCapacity(arena, @min(elements.len, max_options));
@@ -167,8 +166,6 @@ pub fn ranked(
     questions: zenai.typesafe.Questions,
     id: []const u8,
 ) Error![]const Scored {
-    // Validates that the answer is one of the options we offered and is the
-    // argmax of its own probabilities.
     const chosen = try response.choice(id, questions);
     const answer = response.answer(id) orelse return error.AnswerMissing;
 
@@ -346,7 +343,6 @@ test "browser.choose: over the budget, a control over the page keeps its place" 
     try testing.expectEqual(max_options, candidates.len);
     try testing.expectEqual("Accept", candidates[max_options - 2].name);
     try testing.expectEqual("Reject", candidates[max_options - 1].name);
-    // Document order is untouched.
     try testing.expectEqual("page 0", candidates[0].name);
     try testing.expectEqual("page 1", candidates[1].name);
 }
