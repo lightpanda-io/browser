@@ -27,6 +27,7 @@ const Cache = @import("Cache.zig");
 
 const log = lp.log;
 const Blob = Sqlite.Blob;
+const Sha256 = std.crypto.hash.sha2.Sha256;
 const CacheGetRequest = Cache.CacheGetRequest;
 const RenewResponse = Cache.RenewResponse;
 const CachePutRequest = Cache.CachePutRequest;
@@ -41,7 +42,7 @@ entry_limit: u32,
 
 // When the schema changes, change this value, and the DB will be deleted and
 // re-created with the schema
-const schema_version = 2;
+const schema_version = 3;
 
 // body stays last so that reading columns before it hopefully doesn't visit
 // overflow pages.
@@ -264,32 +265,21 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, req: CacheGetRequest) 
         return .stale;
     }
 
-    var vary_it: HeaderIterator = try .init(entry.get(Blob, 8).data);
-    while (try vary_it.next()) |vary| {
-        const incoming = for (req.request_headers) |rh| {
-            if (std.ascii.eqlIgnoreCase(rh.name, vary.name)) {
-                break rh.value;
-            }
-        } else "";
-
-        if (!std.ascii.eqlIgnoreCase(vary.value, incoming)) {
-            log.debug(.cache, "miss", .{
-                .url = req.url,
-                .reason = "vary mismatch",
-                .header = vary.name,
-                .expected = vary.value,
-                .got = incoming,
-            });
-            return .miss;
-        }
-    }
-
     var header_it: HeaderIterator = try .init(try arena.dupe(u8, entry.get(Blob, 9).data));
     const headers = try arena.alloc(Http.Header, header_it.remaining);
     for (headers) |*h| {
         h.* = try header_it.pair();
     }
     try header_it.end();
+
+    const vary_digest = entry.get(Blob, 8).data;
+    if (vary_digest.len != Sha256.digest_length) {
+        return error.CorruptEntry;
+    }
+    if (!std.mem.eql(u8, vary_digest, &varyDigest(headers, req.request_headers))) {
+        log.debug(.cache, "miss", .{ .url = req.url, .reason = "vary mismatch" });
+        return .miss;
+    }
 
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
 
@@ -309,15 +299,10 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
     assertLowercaseNames(req.headers);
 
     // * 50 is just a guess
-    var encoded: std.Io.Writer.Allocating = try .initCapacity(self.allocator, req.vary_headers.len + req.headers.len * 50);
+    var encoded: std.Io.Writer.Allocating = try .initCapacity(self.allocator, req.headers.len * 50);
     defer encoded.deinit();
-
-    try HeaderEncoder.all(&encoded.writer, req.vary_headers);
-    const vary_len = encoded.written().len;
     try HeaderEncoder.all(&encoded.writer, req.headers);
-
-    const vary_headers = encoded.written()[0..vary_len];
-    const headers = encoded.written()[vary_len..];
+    const vary_digest = varyDigest(req.headers, req.request_headers);
 
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
@@ -337,8 +322,8 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
         req.content_type,
         req.etag,
         req.last_modified,
-        Blob{ .data = vary_headers },
-        Blob{ .data = headers },
+        Blob{ .data = &vary_digest },
+        Blob{ .data = encoded.written() },
         Blob{ .data = body },
     });
 
@@ -469,6 +454,30 @@ fn keepStoredHeaders(conn: Sqlite.Conn, encoder: *HeaderEncoder, req: RenewRespo
             try encoder.add(stored);
         }
     }
+}
+
+// One digest of the request's values for the names the response's Vary lists,
+// as Chrome's HttpVaryData: an absent header counts as empty, and a newline
+// ends each value so that two values can't read as one.
+fn varyDigest(headers: []const Http.Header, request_headers: []const Http.Header) [Sha256.digest_length]u8 {
+    var sha: Sha256 = .init(.{});
+    for (headers) |h| {
+        if (!std.mem.eql(u8, h.name, "vary")) {
+            continue;
+        }
+        var it = std.mem.splitScalar(u8, h.value, ',');
+        while (it.next()) |part| {
+            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
+            for (request_headers) |rh| {
+                if (std.ascii.eqlIgnoreCase(rh.name, name)) {
+                    sha.update(rh.value);
+                    break;
+                }
+            }
+            sha.update("\n");
+        }
+    }
+    return sha.finalResult();
 }
 
 fn isContentLength(name: []const u8) bool {
@@ -603,7 +612,7 @@ test "SqliteCache: basic put and get" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600, .must_revalidate = false },
         .headers = &.{.{ .name = "content-type", .value = "text/html" }},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     };
 
     try cache.put(req, "hello world");
@@ -636,7 +645,7 @@ test "SqliteCache: get expiration" {
         .cache_control = .{ .max_age = max_age },
         .etag = "ABC",
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     };
 
     try cache.put(req, "hello world");
@@ -673,7 +682,7 @@ test "SqliteCache: get expiration (without validators)" {
         .age_at_store = 900,
         .cache_control = .{ .max_age = max_age },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     };
 
     try cache.put(req, "hello world");
@@ -707,7 +716,7 @@ test "SqliteCache: put override" {
             .age_at_store = 0,
             .cache_control = .{ .max_age = 1000 },
             .headers = &.{},
-            .vary_headers = &.{},
+            .request_headers = &.{},
         };
         try cache.put(req, "hello world");
 
@@ -729,7 +738,7 @@ test "SqliteCache: put override" {
             .age_at_store = 0,
             .cache_control = .{ .max_age = 2000 },
             .headers = &.{},
-            .vary_headers = &.{},
+            .request_headers = &.{},
         };
         try cache.put(req, "goodbye world");
 
@@ -743,25 +752,28 @@ test "SqliteCache: put override" {
     }
 }
 
+// Stores a response that varies on `vary` to a request with `request_headers`.
+fn putVary(cache: *Cache, now: u64, vary: []const u8, request_headers: []const Http.Header) !void {
+    const req = try Cache.tryCache(testing.arena_allocator, .{
+        .timestamp = now,
+        .url = "https://example.com",
+        .status = 200,
+        .content_type = "text/html",
+        .headers = &.{
+            .{ .name = "cache-control", .value = "max-age=600" },
+            .{ .name = "vary", .value = vary },
+        },
+        .request_headers = request_headers,
+    });
+    try cache.put(req.?, "hello world");
+}
+
 test "SqliteCache: vary hit and miss" {
     var cache = try setupCache(testing.allocator);
     defer cache.deinit();
 
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
-    const req = CachePutRequest{
-        .url = "https://example.com",
-        .content_type = "text/html",
-        .status = 200,
-        .stored_at = now,
-        .age_at_store = 0,
-        .cache_control = .{ .max_age = 600 },
-        .headers = &.{},
-        .vary_headers = &.{
-            .{ .name = "Accept-Encoding", .value = "gzip" },
-        },
-    };
-
-    try cache.put(req, "hello world");
+    try putVary(&cache, now, "accept-encoding", &.{.{ .name = "Accept-Encoding", .value = "gzip" }});
 
     const hit = try cache.get(testing.arena_allocator, .{
         .url = "https://example.com",
@@ -778,6 +790,13 @@ test "SqliteCache: vary hit and miss" {
     });
     try testing.expect(mismatch == .miss);
 
+    const other_case = try cache.get(testing.arena_allocator, .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "GZIP" }},
+    });
+    try testing.expect(other_case == .miss);
+
     const missing_header = try cache.get(testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
@@ -790,29 +809,16 @@ test "SqliteCache: vary multiple headers" {
     var cache = try setupCache(testing.allocator);
     defer cache.deinit();
 
+    // The stored request lacked Accept-Language.
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
-    const req = CachePutRequest{
-        .url = "https://example.com",
-        .content_type = "text/html",
-        .status = 200,
-        .stored_at = now,
-        .age_at_store = 0,
-        .cache_control = .{ .max_age = 600 },
-        .headers = &.{},
-        .vary_headers = &.{
-            .{ .name = "Accept-Encoding", .value = "gzip" },
-            .{ .name = "Accept-Language", .value = "en" },
-        },
-    };
-
-    try cache.put(req, "hello world");
+    try putVary(&cache, now, "accept-encoding, accept-language", &.{.{ .name = "Accept-Encoding", .value = "gzip" }});
 
     const hit = try cache.get(testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
             .{ .name = "Accept-Encoding", .value = "gzip" },
-            .{ .name = "Accept-Language", .value = "en" },
+            .{ .name = "Accept-Language", .value = "" },
         },
     });
     try testing.expect(hit == .hit);
@@ -829,6 +835,25 @@ test "SqliteCache: vary multiple headers" {
     try testing.expect(mismatch == .miss);
 }
 
+test "SqliteCache: vary stores one digest of the request's values" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    try putVary(&cache, 5000, "authorization, cookie, x-foo", &.{
+        .{ .name = "Authorization", .value = "Bearer t" },
+        .{ .name = "cookie", .value = "who=a" },
+    });
+
+    const conn = try cache.kind.sqlite.pool.acquire();
+    defer cache.kind.sqlite.pool.release(conn);
+    var row = (try conn.row("select vary_headers from cache", .{})).?;
+    defer row.deinit();
+
+    var expected: [Sha256.digest_length]u8 = undefined;
+    Sha256.hash("Bearer t\nwho=a\n\n", &expected, .{});
+    try testing.expectEqual(&expected, row.get(Blob, 0).data);
+}
+
 test "SqliteCache: clear removes all entries" {
     var cache = try setupCache(testing.allocator);
     defer cache.deinit();
@@ -842,7 +867,7 @@ test "SqliteCache: clear removes all entries" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "body a");
 
     try cache.put(.{
@@ -853,7 +878,7 @@ test "SqliteCache: clear removes all entries" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "body b");
 
     try testing.expect((try cache.get(
@@ -906,7 +931,7 @@ test "SqliteCache: put after clear works" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     };
 
     try cache.put(req, "before clear");
@@ -941,7 +966,7 @@ test "SqliteCache: evict removes entry" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     };
 
     try cache.put(req, "hello world");
@@ -975,7 +1000,7 @@ test "SqliteCache: renew refreshes expiry" {
         .cache_control = .{ .max_age = 1000 },
         .etag = "ABC",
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "hello world");
 
     try cache.renew(testing.arena_allocator, .{
@@ -1013,7 +1038,7 @@ test "SqliteCache: renew preserves body" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "original body");
 
     try cache.renew(testing.arena_allocator, .{
@@ -1047,7 +1072,7 @@ test "SqliteCache: script cache is kept by renew and cleared by put" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     };
     try cache.put(req, "var a = 1;");
     try testing.expectEqual(null, try getScriptCache(&cache, now));
@@ -1094,7 +1119,7 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
             .{ .name = "etag", .value = "\"v1\"" },
             .{ .name = "link", .value = "</old>" },
         },
-        .vary_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
     }, "hello world");
 
     try cache.renew(testing.arena_allocator, .{
@@ -1145,7 +1170,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 1000 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "expired");
 
     // Expires at 6000 but has an etag: kept for revalidation.
@@ -1158,7 +1183,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
         .cache_control = .{ .max_age = 1000 },
         .etag = "ABC",
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "revalidate");
 
     // Expires at 7900: kept.
@@ -1170,7 +1195,7 @@ test "SqliteCache: maintenance purges expired entries without validators" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 1000 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "fresh");
 
     cache.maintenance(7000);
@@ -1234,7 +1259,7 @@ test "SqliteCache: evicts oldest entries over the limit" {
             .age_at_store = 0,
             .cache_control = .{ .max_age = 600 },
             .headers = &.{},
-            .vary_headers = &.{},
+            .request_headers = &.{},
         }, url);
     }
 
@@ -1280,7 +1305,7 @@ test "SqliteCache: starts over from an unreadable database" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "hello world");
 
     const result = try cache.get(testing.arena_allocator, .{
@@ -1329,7 +1354,7 @@ test "SqliteCache: starts over from another schema version" {
         .age_at_store = 0,
         .cache_control = .{ .max_age = 600 },
         .headers = &.{.{ .name = "x-test", .value = "1" }},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "hello world");
 
     const result = try cache.get(testing.arena_allocator, .{
@@ -1353,7 +1378,7 @@ fn putCorruptible(cache: *SqliteCache, now: u64) !void {
         .cache_control = .{ .max_age = 600 },
         .etag = "ABC",
         .headers = &.{.{ .name = "x-test", .value = "1" }},
-        .vary_headers = &.{},
+        .request_headers = &.{},
     }, "hello world");
 }
 
@@ -1379,7 +1404,7 @@ test "SqliteCache: get discards a corrupt entry" {
         "update cache set headers = x'010061ff00620100'",
         // count far larger than the pairs could hold
         "update cache set headers = x'ffff'",
-        // too short for the count
+        // not a SHA-256 digest
         "update cache set vary_headers = x'00'",
         "update cache set status = -1",
         "update cache set status = 70000",

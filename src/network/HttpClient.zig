@@ -4134,8 +4134,7 @@ pub const Transfer = struct {
     // The cache works in plain headers; req_headers carry a `source` alongside
     // them that it has no use for. The jar's cookies reach libcurl apart from
     // the request headers, so Cookie is what cacheLookup read from the jar,
-    // joined to any Cookie header. Cookie, Authorization and
-    // Proxy-Authorization go in as their SHA-256, so the cache never holds them.
+    // joined to any Cookie header.
     fn cacheRequestHeaders(self: *const Transfer) ![]http.Header {
         const arena = self.arena.allocator();
         var headers: std.ArrayList(http.Header) = try .initCapacity(arena, self.req_headers.items.len + 1);
@@ -4143,22 +4142,14 @@ pub const Transfer = struct {
         for (self.req_headers.items) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "cookie")) {
                 cookie = if (cookie) |c| try std.fmt.allocPrint(arena, "{s}; {s}", .{ c, hdr.value }) else hdr.value;
-            } else if (std.ascii.eqlIgnoreCase(hdr.name, "authorization") or std.ascii.eqlIgnoreCase(hdr.name, "proxy-authorization")) {
-                headers.appendAssumeCapacity(.{ .name = hdr.name, .value = try sha256Hex(arena, hdr.value) });
             } else {
                 headers.appendAssumeCapacity(.{ .name = hdr.name, .value = hdr.value });
             }
         }
         if (cookie) |c| {
-            headers.appendAssumeCapacity(.{ .name = "cookie", .value = try sha256Hex(arena, c) });
+            headers.appendAssumeCapacity(.{ .name = "cookie", .value = c });
         }
         return headers.items;
-    }
-
-    fn sha256Hex(arena: Allocator, value: []const u8) ![]const u8 {
-        var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
-        return arena.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
     }
 
     fn removeHeader(self: *Transfer, name: []const u8) void {
@@ -6702,7 +6693,7 @@ test "HttpClient: a Range request and a URL with userinfo skip the cache" {
     }
 }
 
-test "HttpClient: Vary sees the jar's cookies, and credentials only as digests" {
+test "HttpClient: Vary sees the jar's cookies" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
     var client: Client = undefined;
@@ -6720,23 +6711,13 @@ test "HttpClient: Vary sees the jar's cookies, and credentials only as digests" 
     defer jar.deinit();
     try jar.populateFromResponse(transfer.req.url, "who=a");
     transfer.cookie_jar = &jar;
-    try transfer.setHeader("Authorization", "Bearer t", .{});
     try transfer.setHeader("Accept", "text/html", .{});
     _ = try client.cacheLookup(&transfer);
 
-    const sha256 = struct {
-        fn hex(value: []const u8) [64]u8 {
-            var digest: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
-            return std.fmt.bytesToHex(digest, .lower);
-        }
-    };
     const headers = try transfer.cacheRequestHeaders();
-    try testing.expectEqual(3, headers.len);
-    try testing.expectEqual("Authorization", headers[0].name);
-    try testing.expectEqual(&sha256.hex("Bearer t"), headers[0].value);
-    try testing.expectEqual("Accept", headers[1].name);
-    try testing.expectEqual("text/html", headers[1].value);
-    try testing.expectEqual("cookie", headers[2].name);
-    try testing.expectEqual(&sha256.hex("who=a"), headers[2].value);
+    try testing.expectEqual(2, headers.len);
+    try testing.expectEqual("Accept", headers[0].name);
+    try testing.expectEqual("text/html", headers[0].value);
+    try testing.expectEqual("cookie", headers[1].name);
+    try testing.expectEqual("who=a", headers[1].value);
 }
