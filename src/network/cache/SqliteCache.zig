@@ -265,12 +265,7 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, req: CacheGetRequest) 
         return .stale;
     }
 
-    var header_it: HeaderIterator = try .init(try arena.dupe(u8, entry.get(Blob, 9).data));
-    const headers = try arena.alloc(Http.Header, header_it.remaining);
-    for (headers) |*h| {
-        h.* = try header_it.pair();
-    }
-    try header_it.end();
+    const headers = try decodeHeaders(arena, try arena.dupe(u8, entry.get(Blob, 9).data));
 
     const vary_digest = entry.get(Blob, 8).data;
     if (vary_digest.len != Sha256.digest_length) {
@@ -402,6 +397,10 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
     }
     try encoder.finish();
 
+    // The 304 vouches for the stored body for this request, under the merged
+    // headers' Vary, so the digest follows both.
+    const vary_digest = varyDigest(try decodeHeaders(arena, encoded.written()), req.request_headers);
+
     const directive = req.directive();
 
     try conn.exec(
@@ -413,8 +412,9 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
         \\     content_type = coalesce($5, content_type),
         \\     etag = coalesce($6, etag),
         \\     last_modified = coalesce($7, last_modified),
-        \\     headers = $8
-        \\ where url = $9
+        \\     vary_headers = $8,
+        \\     headers = $9
+        \\ where url = $10
     , .{
         directive.timestamp,
         directive.age_at_store,
@@ -423,6 +423,7 @@ pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !
         directive.content_type,
         directive.etag,
         directive.last_modified,
+        Blob{ .data = &vary_digest },
         Blob{ .data = encoded.written() },
         req.url,
     });
@@ -454,6 +455,17 @@ fn keepStoredHeaders(conn: Sqlite.Conn, encoder: *HeaderEncoder, req: RenewRespo
             try encoder.add(stored);
         }
     }
+}
+
+// The headers are borrowed from blob.
+fn decodeHeaders(arena: std.mem.Allocator, blob: []const u8) ![]Http.Header {
+    var it: HeaderIterator = try .init(blob);
+    const headers = try arena.alloc(Http.Header, it.remaining);
+    for (headers) |*h| {
+        h.* = try it.pair();
+    }
+    try it.end();
+    return headers;
 }
 
 // One digest of the request's values for the names the response's Vary lists,
@@ -1007,6 +1019,7 @@ test "SqliteCache: renew refreshes expiry" {
         .url = "https://example.com",
         .timestamp = now + 500,
         .headers = &.{},
+        .request_headers = &.{},
     });
 
     // Clock reset to now+500, so still fresh at now+1200
@@ -1045,6 +1058,7 @@ test "SqliteCache: renew preserves body" {
         .url = "https://example.com",
         .timestamp = now + 100,
         .headers = &.{},
+        .request_headers = &.{},
     });
 
     const result = try cache.get(
@@ -1084,7 +1098,7 @@ test "SqliteCache: script cache is kept by renew and cleared by put" {
     try cache.putScriptCache(req.url, "var a = 1;", "compiled");
     try testing.expectEqual("compiled", (try getScriptCache(&cache, now)).?);
 
-    try cache.renew(testing.arena_allocator, .{ .url = req.url, .timestamp = now + 100, .headers = &.{} });
+    try cache.renew(testing.arena_allocator, .{ .url = req.url, .timestamp = now + 100, .headers = &.{}, .request_headers = &.{} });
     try testing.expectEqual("compiled", (try getScriptCache(&cache, now + 100)).?);
 
     try cache.put(req, "var a = 1;");
@@ -1132,6 +1146,7 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
             .{ .name = "link", .value = "</a>" },
             .{ .name = "link", .value = "</b>" },
         },
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
     });
 
     const result = try cache.get(testing.arena_allocator, .{
@@ -1155,6 +1170,56 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
         try testing.expectEqual(e.name, h.name);
         try testing.expectEqual(e.value, h.value);
     }
+}
+
+test "SqliteCache: renew recomputes the vary digest" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
+    try cache.put(.{
+        .url = "https://example.com",
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 0 },
+        .etag = "\"v1\"",
+        .headers = &.{
+            .{ .name = "vary", .value = "accept-encoding" },
+            .{ .name = "vary", .value = "origin" },
+        },
+        .request_headers = &.{
+            .{ .name = "Accept-Encoding", .value = "gzip" },
+            .{ .name = "Origin", .value = "https://a.com" },
+        },
+    }, "hello world");
+
+    // The revalidating request differs from the stored one, and the 304's
+    // Vary replaces both stored lines.
+    try cache.renew(testing.arena_allocator, .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .headers = &.{
+            .{ .name = "cache-control", .value = "max-age=600" },
+            .{ .name = "vary", .value = "accept-encoding" },
+        },
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "br" }},
+    });
+
+    const hit = try cache.get(testing.arena_allocator, .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "br" }},
+    });
+    try testing.expect(hit == .hit);
+
+    const miss = try cache.get(testing.arena_allocator, .{
+        .url = "https://example.com",
+        .timestamp = now + 100,
+        .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
+    });
+    try testing.expect(miss == .miss);
 }
 
 test "SqliteCache: maintenance purges expired entries without validators" {
@@ -1439,7 +1504,7 @@ test "SqliteCache: renew discards a corrupt entry" {
     try putCorruptible(&cache, 5000);
     try corrupt(&cache, "update cache set headers = x'01'");
 
-    try cache.renew(testing.arena_allocator, .{ .url = "https://example.com", .timestamp = 5100, .headers = &.{} });
+    try cache.renew(testing.arena_allocator, .{ .url = "https://example.com", .timestamp = 5100, .headers = &.{}, .request_headers = &.{} });
     try testing.expectEqual(0, try entryCount(&cache));
 }
 

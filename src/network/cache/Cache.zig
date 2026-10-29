@@ -241,6 +241,8 @@ pub const RenewResponse = struct {
     url: []const u8,
     timestamp: u64,
     headers: []const Http.Header,
+    /// Request Headers of the revalidation, which the merged Vary may name.
+    request_headers: []const Http.Header,
 
     // What a revalidation response tells us about the cache entry (a null
     // value means: we were told nothing, keep what we have)

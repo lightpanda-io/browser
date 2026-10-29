@@ -1389,6 +1389,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
         .url = transfer._cache_key,
         .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
+        .request_headers = try transfer.cacheRequestHeaders(),
     }) catch |err| {
         log.warn(.cache, "renew failed", .{ .err = err });
     };
