@@ -162,6 +162,9 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .fail => .is_error,
             .invalid_params => .invalid_params,
         }, start);
+        // Same rule as the browser tools below: a cancelled request gets no
+        // response.
+        if (server.inFlightCancelled()) return;
         return switch (result) {
             .ok => |text| sendToolResultText(server, id, text, false),
             .fail => |text| sendToolResultText(server, id, text, true),
@@ -184,7 +187,11 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
+    // The spec says a cancelled request gets no response, success or
+    // failure: some tools swallow cancellation into a regular result
+    // (evaluate reports "promise: cancelled"), so both paths check.
     const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
+        if (server.inFlightCancelled()) return;
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -199,6 +206,7 @@ fn dispatchBrowserTool(
         };
         return server.sendError(id, code, browser_tools.errorMessage(err));
     };
+    if (server.inFlightCancelled()) return;
 
     if (result.image) |image| {
         const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };

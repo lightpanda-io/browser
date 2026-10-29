@@ -36,6 +36,7 @@ const sys_net = @import("../sys/net.zig");
 const Server = @import("Server.zig");
 const Transport = @import("Transport.zig");
 const router = @import("router.zig");
+const Queue = @import("Queue.zig").Queue;
 
 const log = lp.log;
 const posix = std.posix;
@@ -62,57 +63,7 @@ const Job = struct {
     next: ?*Job = null,
 };
 
-const Queue = struct {
-    mutex: std.Io.Mutex = .init,
-    cond: std.Io.Condition = .init,
-    head: ?*Job = null,
-    tail: ?*Job = null,
-    closed: bool = false,
-
-    /// Callers push only to a listed worker, whose queue is still open.
-    fn push(self: *Queue, job: *Job) void {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        std.debug.assert(!self.closed);
-        job.next = null;
-        if (self.tail) |t| t.next = job else self.head = job;
-        self.tail = job;
-        self.cond.signal(lp.io);
-    }
-
-    const Pop = union(enum) { job: *Job, timeout, closed };
-
-    /// The next job, waiting at most `timeout_ms` (`.timeout` on timeout or
-    /// spurious wakeup, so the worker can pump its session and retry).
-    /// `.closed` only once the queue is closed AND drained, so no pushed job
-    /// is ever left behind.
-    fn pop(self: *Queue, timeout_ms: u64) Pop {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        if (self.head == null) {
-            if (self.closed) return .closed;
-            if (timeout_ms == 0) return .timeout;
-            lp.timedWait(&self.cond, &self.mutex, timeout_ms * ns_per_ms) catch {};
-        }
-        const job = self.head orelse return if (self.closed) .closed else .timeout;
-        self.head = job.next;
-        if (self.head == null) self.tail = null;
-        return .{ .job = job };
-    }
-
-    fn isEmpty(self: *Queue) bool {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        return self.head == null;
-    }
-
-    fn close(self: *Queue) void {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        self.closed = true;
-        self.cond.signal(lp.io);
-    }
-};
+const JobQueue = Queue(Job);
 
 /// One session: its thread, its queue and, on that thread, its `Server`.
 /// Listed in `workers` until closed; its thread then drains the queue, tears
@@ -120,7 +71,7 @@ const Queue = struct {
 const Worker = struct {
     http: *HttpServer,
     id: []const u8,
-    queue: Queue = .{},
+    queue: JobQueue = .{},
     /// Guarded by `workers_mutex`, for `session_list`.
     url: ?[]const u8 = null,
 };
@@ -461,7 +412,7 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
     var wait_ms: u64 = 0;
     while (true) {
         const job = switch (worker.queue.pop(wait_ms)) {
-            .job => |job| job,
+            .item => |job| job,
             .timeout => {
                 wait_ms = if (server) |s| s.idle() else 0;
                 const timeout = timeout_ms orelse continue;

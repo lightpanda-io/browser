@@ -2011,6 +2011,13 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         var runner = page._session.runner(.{});
         const timer: std.Io.Timestamp = .now(lp.io, .boot);
         while (promise.state() == .pending) {
+            // A caller-abandoned request (MCP notifications/cancelled, the
+            // agent's Ctrl-C) must not hold the session for the full
+            // promise timeout: the tick below doesn't poll the session's
+            // cancel hook, so check it here like the Runner wait* loops do.
+            if (page._session.isCancelled()) {
+                return .{ .text = "promise: cancelled", .is_error = true };
+            }
             const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
             if (elapsed_ms >= eval_promise_timeout_ms) {
                 return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
