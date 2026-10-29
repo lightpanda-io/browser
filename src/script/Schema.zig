@@ -125,7 +125,7 @@ pub fn takesPrompt(tool: BrowserTool) bool {
         .click, .fill, .hover, .selectOption, .setChecked, .extract, .evaluate => true,
         // A wait targets what is not on the page yet, so a prompt leaves the model nothing to pick from.
         .waitForSelector, .waitForScript, .waitForState => false,
-        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool => false,
+        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
     };
 }
 
