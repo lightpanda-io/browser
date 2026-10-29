@@ -48,6 +48,7 @@ const Mode = enum {
     links,
     anchors,
     form,
+    listed,
     document_named,
 };
 
@@ -79,6 +80,7 @@ const Filters = union(Mode) {
     links,
     anchors,
     form: struct { form: *Form, form_id: ?[]const u8, image_buttons: bool, outputs: bool, listed: bool },
+    listed,
     document_named: []const u8,
 
     fn TypeOf(comptime mode: Mode) type {
@@ -109,7 +111,7 @@ const Filters = union(Mode) {
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
-        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form, .document_named => TreeWalker.FullExcludeSelf,
+        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form, .listed, .document_named => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .cells => TreeWalker.Children,
         .table_rows => Table.RowWalker,
         // A select's options can sit one level down, inside an <optgroup>, so
@@ -415,6 +417,16 @@ pub fn NodeLive(comptime mode: Mode) type {
                     // controls, this could be significantly faster.
                     return self._filter.form.asNode().contains(node);
                 },
+                .listed => {
+                    const el = node.is(Element) orelse return false;
+                    if (el._type != .html) {
+                        return false;
+                    }
+                    return isFormControl(el) or switch (el.getTag()) {
+                        .output, .fieldset, .object => true,
+                        else => false,
+                    };
+                },
                 .document_named => {
                     const el = node.is(Element) orelse return false;
                     return HTMLDocument.isNamed(el, self._filter);
@@ -471,6 +483,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .links => .{ ._data = .{ .links = self } },
                 .anchors => .{ ._data = .{ .anchors = self } },
                 .form => .{ ._data = .{ .form = self } },
+                .listed => .{ ._data = .{ .listed = self } },
                 .document_named => .{ ._data = .{ .document_named = self } },
             };
         }
