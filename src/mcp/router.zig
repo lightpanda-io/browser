@@ -1,9 +1,21 @@
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const protocol = @import("protocol.zig");
 
 const log = lp.log;
+
+// std.posix.poll is unavailable on Windows; waiting on the
+// input handle is the equivalent for a console file.
+extern "kernel32" fn WaitForSingleObject(
+    hHandle: std.os.windows.HANDLE,
+    dwMilliseconds: u32,
+) u32;
+
+const WAIT_OBJECT_0: u32 = 0;
+const WAIT_TIMEOUT: u32 = 258;
+const WAIT_FAILED: u32 = 0xFFFFFFFF;
 
 /// Generic over the server type. The server must expose: `allocator`, a
 /// `transport: Transport` field, and the per-method `handleInitialize`,
@@ -53,9 +65,19 @@ fn idleUntilInput(server: anytype, reader: *std.Io.Reader, file: std.Io.File) vo
         reader.bufferedLen() < reader.buffer.len)
     {
         const wait_ms = server.idle();
-        var fds = [_]std.posix.pollfd{.{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 }};
-        const ready = std.posix.poll(&fds, wait_ms) catch return;
-        if (ready > 0) return;
+        if (comptime builtin.os.tag == .windows) {
+            // The input handle is signaled when input is
+            // available; the timeout is the poll equivalent.
+            switch (WaitForSingleObject(file.handle, @intCast(wait_ms))) {
+                WAIT_OBJECT_0 => return,
+                WAIT_TIMEOUT => {},
+                else => return,
+            }
+        } else {
+            var fds = [_]std.posix.pollfd{.{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+            const ready = std.posix.poll(&fds, wait_ms) catch return;
+            if (ready > 0) return;
+        }
     }
 }
 
