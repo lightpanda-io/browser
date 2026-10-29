@@ -1619,7 +1619,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                     else => {},
                 }
             },
-            .pseudo_element => return null,
+            .pseudo_element, .never => return null,
             .universal, .attribute => {},
         }
     }
@@ -1666,7 +1666,7 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
             .class => classes.* += 1,
             .tag, .tag_name, .pseudo_element => elements.* += 1,
             .universal => {}, // zero specificity
-            .attribute => classes.* += 1,
+            .attribute, .never => classes.* += 1,
             .pseudo_class => |pc| {
                 switch (pc) {
                     // :where() has zero specificity
@@ -1703,8 +1703,8 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
 }
 
 fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) bool {
-    const node = el.asNode();
-    return SelectorList.matches(node, selector, node, null, frame);
+    // Outside @scope, a stylesheet's :scope is the root element.
+    return SelectorList.matches(el.asNode(), selector, frame.document.asNode(), null, frame);
 }
 
 /// Only the values the dumpers act on; everything else is `other`.
@@ -2948,6 +2948,10 @@ test "StyleManager: text-transform" {
     try testing.htmlRunner("css/text_transform.html", .{});
 }
 
+test "StyleManager: stylesheet :scope is the root element" {
+    try testing.htmlRunner("css/scope_pseudo.html", .{});
+}
+
 test "StyleManager: position" {
     try testing.htmlRunner("css/position.html", .{});
 }
@@ -3091,6 +3095,26 @@ test "StyleManager: computeSpecificity: :is() takes most specific inner" {
         .segments = &.{},
     };
     try testing.expectEqual(1 << 20, computeSpecificity(selector));
+}
+
+test "StyleManager: computeSpecificity: never-matching attribute keeps attribute weight" {
+    // :is([a^=""], div) -> (0, 1, 0): :is() takes its most specific argument,
+    // matching or not
+    const never_selector = Selector.Selector{
+        .first = .{ .parts = &.{.never} },
+        .segments = &.{},
+    };
+    const tag_selector = Selector.Selector{
+        .first = .{ .parts = &.{.{ .tag = .div }} },
+        .segments = &.{},
+    };
+    const selector = Selector.Selector{
+        .first = .{ .parts = &.{
+            .{ .pseudo_class = .{ .is = &.{ never_selector, tag_selector } } },
+        } },
+        .segments = &.{},
+    };
+    try testing.expectEqual(1 << 10, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: pseudo-class (general)" {

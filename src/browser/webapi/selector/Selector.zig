@@ -262,8 +262,8 @@ pub const Part = union(enum) {
     universal, // '*' any element
     pseudo_class: PseudoClass,
     attribute: Attribute,
-    // Matches no element.
-    pseudo_element,
+    pseudo_element, // Matches no element.
+    never, // never maches (and doesn't carry additional meaning like pseudo_element)
 };
 
 pub const Attribute = struct {
@@ -407,6 +407,7 @@ pub const Compound = struct {
                 try writer.writeAll("TODO");
             },
             .pseudo_element => try writer.writeAll("::pseudo-element"),
+            .never => try writer.writeAll("[never]"),
         };
     }
 };
