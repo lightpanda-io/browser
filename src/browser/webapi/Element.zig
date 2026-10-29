@@ -1244,18 +1244,31 @@ pub fn contentEditableState(self: *Element) ?bool {
     return null;
 }
 
-// An editing host takes focus like a form control does.
+// An editing host takes focus like a form control does. In a designMode
+// document, the document element is one too.
 pub fn isEditingHost(self: *Element) bool {
-    return self.contentEditableState() orelse false;
+    if (self.contentEditableState()) |editable| {
+        return editable;
+    }
+    if (self.is(Html) == null) {
+        return false;
+    }
+    const parent = self.asNode().parentNode() orelse return false;
+    const document = parent.is(Node.Document) orelse return false;
+    return document._design_mode;
 }
 
 // An editing host or a descendant of one: the nearest contenteditable
-// attribute in a true or false state decides.
+// attribute in a true or false state decides, then the document's designMode.
 pub fn isEditable(self: *Element) bool {
-    var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
-        if (el.contentEditableState()) |editable| {
-            return editable;
+    var node: ?*Node = self.asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Element)) |el| {
+            if (el.contentEditableState()) |editable| {
+                return editable;
+            }
+        } else if (n.is(Node.Document)) |document| {
+            return document._design_mode;
         }
     }
     return false;

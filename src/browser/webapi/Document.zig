@@ -91,6 +91,7 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 // an execCommand is running: a nested one is refused
 _exec_command_running: bool = false,
+_design_mode: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
 // extent() cache, keyed on style version and viewport.
@@ -174,6 +175,19 @@ pub fn isQuirksMode(self: *const Document) bool {
         }
     }
     return true;
+}
+
+fn getDesignMode(self: *const Document) []const u8 {
+    return if (self._design_mode) "on" else "off";
+}
+
+// Values other than "on" and "off" are ignored.
+fn setDesignMode(self: *Document, value: []const u8) void {
+    if (std.ascii.eqlIgnoreCase(value, "on")) {
+        self._design_mode = true;
+    } else if (std.ascii.eqlIgnoreCase(value, "off")) {
+        self._design_mode = false;
+    }
 }
 
 fn getCompatMode(self: *const Document) []const u8 {
@@ -1935,6 +1949,7 @@ pub const JsApi = struct {
     pub const charset = bridge.accessor(Document.getCharset, null, .{});
     pub const inputEncoding = bridge.accessor(Document.getCharset, null, .{});
     pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
+    pub const designMode = bridge.accessor(Document.getDesignMode, Document.setDesignMode, .{});
     pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
     pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
 };
