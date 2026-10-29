@@ -584,7 +584,7 @@ const StreamConsumer = struct {
             // A chunk that is not a Uint8Array is a TypeError.
             return self.finish(local, "Response body chunk is not a Uint8Array");
         }
-        const chunk_copy = try self.arena.dupe(u8, (try local.jsValueToZig(js.TypedArray(u8), value)).values);
+        const chunk_copy = try self.arena.dupe(u8, (try local.jsValueToZig(js.AllowSharedBufferSource, value)).bytes());
         try self.chunks.append(self.arena, chunk_copy);
         self.total_len += chunk_copy.len;
         try self.pumpRead();

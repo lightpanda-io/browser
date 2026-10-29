@@ -88,7 +88,7 @@ pub const Decoder = struct {
         const input = chunk.toZig(js.AllowSharedBufferSource) catch {
             return fail(controller, "The chunk is not an ArrayBuffer or ArrayBufferView");
         };
-        return self.decode(controller, input.bytes, false);
+        return self.decode(controller, input.bytes(), false);
     }
 
     /// What a split sequence left at the end decodes now: U+FFFD, or a

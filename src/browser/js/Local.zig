@@ -553,7 +553,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
             },
             .slice => {
                 if (ptr.sentinel() == null and ptr.child != u8) {
-                    if (try jsValueToTypedArray(ptr.child, js_val)) |value| {
+                    if (try self.jsValueToTypedArray(ptr.child, js_val)) |value| {
                         return value;
                     }
                 }
@@ -719,7 +719,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         // zig fmt: on
         => {
             const ValueType = @typeInfo(@FieldType(T, "values")).pointer.child;
-            const arr = (try jsValueToTypedArray(ValueType, js_val)) orelse return null;
+            const arr = (try self.jsValueToTypedArray(ValueType, js_val)) orelse return null;
             return .{ .values = arr };
         },
         js.BufferSource => {
@@ -729,12 +729,16 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             if (js_val.isArrayBufferView() and !js_val.isBufferSource()) {
                 return error.TypeError;
             }
-            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
-            return .{ .bytes = bytes };
+            if (!js_val.isArrayBuffer() and !js_val.isArrayBufferView()) {
+                return null;
+            }
+            return .{ .value = js_val };
         },
         js.AllowSharedBufferSource => {
-            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
-            return .{ .bytes = bytes };
+            if (!js_val.isArrayBuffer() and !js_val.isArrayBufferView()) {
+                return null;
+            }
+            return .{ .value = js_val };
         },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
@@ -844,8 +848,15 @@ pub fn assertDictionaryFieldOrder(comptime T: type) void {
     }
 }
 
-fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
-    return jsValueToArrayBufferSlice(T, false, js_val);
+// A copy, as a WebIDL sequence is: page code that runs before the slice is
+// used (a later argument's getter or valueOf) can detach or shrink the buffer.
+fn jsValueToTypedArray(self: *const Local, comptime T: type, js_val: js.Value) !?[]T {
+    const values = (try jsValueToArrayBufferSlice(T, false, js_val)) orelse return null;
+    return try self.call_arena.dupe(T, values);
+}
+
+pub fn bufferSourceBytes(js_val: js.Value) []u8 {
+    return (jsValueToArrayBufferSlice(u8, true, js_val) catch unreachable).?;
 }
 
 // With `any_view`, every ArrayBufferView is accepted as a byte slice regardless
