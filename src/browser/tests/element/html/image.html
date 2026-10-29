@@ -52,6 +52,19 @@
 }
 </script>
 
+<script id="sizes">
+{
+    const img = document.createElement('img');
+    testing.expectEqual('', img.sizes);
+
+    img.sizes = '(max-width: 600px) 480px, 800px';
+    testing.expectEqual('(max-width: 600px) 480px, 800px', img.getAttribute('sizes'));
+
+    img.setAttribute('sizes', 'auto');
+    testing.expectEqual('auto', img.sizes);
+}
+</script>
+
 <script id="width_height_setters">
 {
     const img = document.createElement('img');
