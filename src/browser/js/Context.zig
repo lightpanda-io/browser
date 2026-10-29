@@ -949,6 +949,15 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     var self = state.context;
 
     if (self.env.terminatePending()) {
+        // we can't do anything with this, the best we can doit drop it from
+        // the cache entry, so that if the terminate is canceled AND there's
+        // another request, it'll fetch it again
+        if (self.module_cache.getPtr(state.specifier)) |entry| {
+            if (entry.resolver_promise) |rp| {
+                rp.release();
+                entry.resolver_promise = null;
+            }
+        }
         var module_source = module_source_ catch return;
         module_source.deinit();
         return;
@@ -1089,6 +1098,13 @@ test "Context: terminated async module completion does not re-enter V8" {
         .resolver = resolver_global,
     };
 
+    // As _dynamicModuleCallback leaves it while the fetch is in flight.
+    try frame.js.module_cache.put(frame.js.arena.allocator(), state.specifier, .{
+        .module = null,
+        .module_promise = null,
+        .resolver_promise = try promise.persist(),
+    });
+
     const env = frame.js.env;
     env.terminate();
     js.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
@@ -1097,6 +1113,8 @@ test "Context: terminated async module completion does not re-enter V8" {
     dynamicModuleSourceCallback(&state, error.Abort);
 
     try testing.expectEqual(js.Promise.State.pending, promise.state());
+    // The abandoned promise is no longer handed to later imports.
+    try testing.expectEqual(null, frame.js.module_cache.get(state.specifier).?.resolver_promise);
 }
 
 // Used to make temporarily enter and exit a context, updating and restoring
