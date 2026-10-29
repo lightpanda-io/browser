@@ -415,3 +415,79 @@
   testing.expectEqual('50px', cs.getPropertyValue('width'));
 }
 </script>
+
+<script id=boxShorthands>
+{
+  // A four-side shorthand sets its longhands and reads back from them.
+  const d = document.createElement('div');
+  d.style.margin = '1px 2px 3px';
+  testing.expectEqual('2px', d.style.marginLeft);
+  testing.expectEqual('3px', d.style.marginBottom);
+  testing.expectEqual('1px 2px 3px', d.style.margin);
+  d.style.marginLeft = '4px';
+  testing.expectEqual('1px 2px 3px 4px', d.style.margin);
+  d.style.removeProperty('margin');
+  testing.expectEqual('', d.style.marginTop);
+
+  d.style.cssText = 'padding: 5px';
+  testing.expectEqual('5px', d.style.paddingRight);
+  testing.expectEqual('5px', d.style.padding);
+}
+</script>
+
+<script id=boxShorthandTopLevelValues>
+{
+  // Sides split at the top level, not inside a function.
+  const d = document.createElement('div');
+  d.style.borderColor = 'rgb(1, 2, 3) red';
+  testing.expectEqual('rgb(1, 2, 3)', d.style.borderTopColor);
+  testing.expectEqual('red', d.style.borderRightColor);
+  testing.expectEqual('rgb(1, 2, 3) red', d.style.borderColor);
+
+  d.style.margin = 'calc(1px + 1em) 3px';
+  testing.expectEqual('3px', d.style.marginLeft);
+  testing.expectEqual(true, d.style.marginBottom.startsWith('calc('));
+}
+</script>
+
+<script id=boxShorthandInvalidWritesNothing>
+{
+  const d = document.createElement('div');
+  d.style.borderColor = 'blue';
+  d.style.borderColor = 'red notacolor';
+  testing.expectEqual('blue', d.style.borderTopColor);
+  testing.expectEqual('blue', d.style.borderColor);
+
+  d.style.margin = '1px';
+  d.style.margin = '1px 2px 3px 4px 5px';
+  testing.expectEqual('1px', d.style.margin);
+
+  d.style.cssText = 'border-color: blue; border-color: red notacolor';
+  testing.expectEqual('blue', d.style.borderTopColor);
+}
+</script>
+
+<script id=boxShorthandVar>
+{
+  // A value with var() stays as written, in place of its sides.
+  const d = document.createElement('div');
+  d.style.margin = '1px';
+  d.style.margin = 'var(--x) 2px';
+  testing.expectEqual('var(--x) 2px', d.style.margin);
+  testing.expectEqual('', d.style.marginTop);
+  testing.expectEqual('margin: var(--x) 2px;', d.style.cssText);
+
+  d.style.margin = '3px';
+  testing.expectEqual('3px', d.style.margin);
+  testing.expectEqual('3px', d.style.marginTop);
+  testing.expectEqual('margin: 3px;', d.style.cssText);
+
+  d.style.setProperty('padding', 'var(--y)', 'important');
+  testing.expectEqual('important', d.style.getPropertyPriority('padding'));
+  d.style.removeProperty('padding');
+  testing.expectEqual('', d.style.padding);
+
+  d.style.cssText = 'padding: var(--y)';
+  testing.expectEqual('var(--y)', d.style.padding);
+}
+</script>

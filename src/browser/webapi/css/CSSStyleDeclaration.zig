@@ -248,6 +248,11 @@ fn inlineCascadedValue(style_manager: *StyleManager, element: *Element, name: St
 /// shorthand reads as its longhands when both are present with the same
 /// priority, the way the CSSOM serializes a shorthand.
 pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Frame) ?[]const u8 {
+    if (CssParser.boxShorthand(name.str())) |shorthand| {
+        // Kept as written when its value uses var()
+        if (self.findProperty(.wrap(shorthand.name))) |stored| return stored._value.str();
+        return self.boxValue(shorthand, frame);
+    }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
         const x = self.findProperty(.wrap(shorthand.x)) orelse return null;
         const pair = self.axisPair(x) orelse return null;
@@ -257,6 +262,53 @@ pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Fra
     }
     const prop = self.findProperty(name) orelse return null;
     return prop._value.str();
+}
+
+/// The four longhands of a four-side shorthand, when all are declared with the
+/// same priority.
+fn boxSides(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) ?[4]*const Property {
+    var sides: [4]*const Property = undefined;
+    for (shorthand.sides, 0..) |side, i| {
+        sides[i] = self.findProperty(.wrap(side)) orelse return null;
+        if (sides[i]._important != sides[0]._important) return null;
+    }
+    return sides;
+}
+
+/// The side values of a four-side shorthand, or null if any is invalid: an
+/// invalid declaration writes none of them.
+fn boxSideValues(shorthand: CssParser.BoxShorthand, value: []const u8) ?[4][]const u8 {
+    const values = CssParser.splitBoxSides(value) orelse return null;
+    for (shorthand.sides, values) |side, side_value| {
+        if (isColorProperty(side) and color.parse(side_value) == .invalid) {
+            return null;
+        }
+    }
+    return values;
+}
+
+/// A four-side shorthand in its shortest form: "1px", "1px 2px", "1px 2px 3px"
+/// or all four.
+fn formatBoxValue(sides: [4]*const Property, writer: *std.Io.Writer) !void {
+    const count: usize = if (!sides[3]._value.eql(sides[1]._value))
+        4
+    else if (!sides[2]._value.eql(sides[0]._value))
+        3
+    else if (!sides[1]._value.eql(sides[0]._value))
+        2
+    else
+        1;
+    for (sides[0..count], 0..) |side, i| {
+        if (i > 0) try writer.writeByte(' ');
+        try side._value.format(writer);
+    }
+}
+
+fn boxValue(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand, frame: *Frame) ?[]const u8 {
+    const sides = self.boxSides(shorthand) orelse return null;
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    formatBoxValue(sides, &buf.writer) catch return null;
+    return buf.written();
 }
 
 /// Both longhands of an axis shorthand, declared with the same priority: the
@@ -365,6 +417,11 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
 
 /// Whether a declared property is !important; false when it isn't declared.
 pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
+    if (CssParser.boxShorthand(name.str())) |shorthand| {
+        if (self.findProperty(.wrap(shorthand.name))) |stored| return stored._important;
+        const sides = self.boxSides(shorthand) orelse return false;
+        return sides[0]._important;
+    }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
         const x = self.findProperty(.wrap(shorthand.x)) orelse return false;
         const pair = self.axisPair(x) orelse return false;
@@ -398,6 +455,16 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
     const normalized = normalizePropertyName(frame.local_arena, declaration.name);
+    if (CssParser.boxShorthand(normalized)) |shorthand| {
+        if (!CssParser.containsVar(declaration.value)) {
+            const values = boxSideValues(shorthand, declaration.value) orelse return;
+            _ = try self.removeDeclared(shorthand.name, frame);
+            for (shorthand.sides, values) |side, value| {
+                try self.applyParsedDeclaration(.{ .name = side, .value = value, .important = declaration.important }, frame);
+            }
+            return;
+        }
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(declaration.value) orelse return;
         try self.applyParsedDeclaration(.{ .name = shorthand.x, .value = values.x, .important = declaration.important }, frame);
@@ -427,6 +494,21 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     // A declaration of a property we don't know is dropped, as in Chrome.
     if (isCustomProperty(normalized) == false and properties.isKnown(normalized) == false) {
         return false;
+    }
+    if (CssParser.boxShorthand(normalized)) |shorthand| {
+        if (CssParser.containsVar(value)) {
+            // Stored as written, below: its sides aren't known yet.
+            for (shorthand.sides) |side| {
+                _ = try self.removeDeclared(side, frame);
+            }
+        } else {
+            const values = boxSideValues(shorthand, value) orelse return false;
+            var changed = (try self.removeDeclared(shorthand.name, frame)) != null;
+            for (shorthand.sides, values) |side, side_value| {
+                changed = try self.setPropertyImpl(side, side_value, important, frame) or changed;
+            }
+            return changed;
+        }
     }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(value) orelse return false;
@@ -485,6 +567,15 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(frame.local_arena, property_name);
+    if (CssParser.boxShorthand(normalized)) |shorthand| {
+        const stored = try self.removeDeclared(shorthand.name, frame);
+        const old_value = stored orelse self.boxValue(shorthand, frame) orelse "";
+        var removed = stored != null;
+        for (shorthand.sides) |side| {
+            removed = (try self.removePropertyImpl(side, frame)) != null or removed;
+        }
+        return if (removed) old_value else null;
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const old_value = self.declaredValue(.wrap(shorthand.name), frame) orelse "";
         const x = try self.removePropertyImpl(shorthand.x, frame);
@@ -494,7 +585,12 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, fra
         }
         return old_value;
     }
-    const prop = self.findProperty(.wrap(normalized)) orelse return null;
+    return self.removeDeclared(normalized, frame);
+}
+
+/// Removes the declaration of exactly `name`, without expanding a shorthand.
+fn removeDeclared(self: *CSSStyleDeclaration, name: []const u8, frame: *Frame) !?[]const u8 {
+    const prop = self.findProperty(.wrap(name)) orelse return null;
 
     // the value might not be on the heap (it could be inlined in the small string
     // optimization), so we need to dupe it.
@@ -596,16 +692,29 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     var first = true;
     // An axis pair serializes once, where its first longhand sits.
     var skip: ?*const Property = null;
+    // As does a four-side shorthand with all four sides declared.
+    var boxes_written: std.StaticBitSet(CssParser.box_shorthands.len) = .empty;
     var it = self.iterator();
     while (it.next()) |prop| {
         if (prop == skip) {
             continue;
         }
+        const box = if (CssParser.boxLonghandIndex(prop._name.str())) |i| blk: {
+            const sides = self.boxSides(CssParser.box_shorthands[i]) orelse break :blk null;
+            if (boxes_written.isSet(i)) continue;
+            boxes_written.set(i);
+            break :blk .{ .index = i, .sides = sides };
+        } else null;
         if (!first) {
             try writer.writeByte(' ');
         }
         first = false;
-        if (self.axisPair(prop)) |pair| {
+        if (box) |b| {
+            try writer.writeAll(CssParser.box_shorthands[b.index].name);
+            try writer.writeAll(": ");
+            try formatBoxValue(b.sides, writer);
+            try formatDeclarationEnd(b.sides[0]._important, writer);
+        } else if (self.axisPair(prop)) |pair| {
             try pair.format(writer);
             skip = if (pair.x == prop) pair.y else pair.x;
         } else {
