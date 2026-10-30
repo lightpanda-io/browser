@@ -298,6 +298,26 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/markdown-negotiated")) {
+        var it = req.iterateHeaders();
+        while (it.next()) |header| {
+            if (!std.ascii.eqlIgnoreCase(header.name, "accept")) continue;
+            if (std.mem.indexOf(u8, header.value, "text/markdown") == null) break;
+            return req.respond("# Negotiated\n\nSent as *markdown*.\n", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/markdown; charset=utf-8" },
+                    .{ .name = "Vary", .value = "Accept" },
+                },
+            });
+        }
+        return req.respond("<!DOCTYPE html><h1>Negotiated</h1><p>Sent as HTML.</p>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                .{ .name = "Vary", .value = "Accept" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-target")) {
         return req.respond("<!DOCTYPE html><title>landed</title>", .{
             .extra_headers = &.{
