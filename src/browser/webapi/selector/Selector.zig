@@ -25,6 +25,7 @@ const Browser = @import("../../Browser.zig");
 
 const Parser = @import("Parser.zig");
 pub const List = @import("List.zig");
+const ClockCache = @import("../../../ClockCache.zig").ClockCache;
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
@@ -53,6 +54,8 @@ pub fn parseLeaky(arena: Allocator, input: []const u8) ![]const Selector {
 }
 
 /// One-off synthesized selectors use the `*Uncached` variants instead.
+/// The result is freed when its entry is evicted, which any later parse can
+/// do: use it right away, never hold it across another parse or into JS.
 pub fn cachedParse(browser: *Browser, input: []const u8) ![]const Selector {
     return browser.selector_cache.parse(input);
 }
@@ -60,11 +63,10 @@ pub fn cachedParse(browser: *Browser, input: []const u8) ![]const Selector {
 /// On the Browser because a parsed selector references no Frame/Context, so
 /// entries survive navigation. Per-entry arena so eviction can free one entry.
 pub const Cache = struct {
-    // Caps retained memory, not correctness; oldest entry evicted on overflow.
+    // Caps retained memory, not correctness.
     const max_entries = 1024;
 
-    allocator: Allocator,
-    map: std.StringArrayHashMapUnmanaged(Entry) = .empty,
+    clock: ClockCache(Entry),
 
     const Entry = struct {
         arena: std.heap.ArenaAllocator,
@@ -72,63 +74,57 @@ pub const Cache = struct {
     };
 
     pub fn init(allocator: Allocator) Cache {
-        return .{ .allocator = allocator };
+        return .{ .clock = .init(allocator, max_entries) };
     }
 
     pub fn deinit(self: *Cache) void {
-        for (self.map.values()) |*entry| {
-            entry.arena.deinit();
+        for (self.clock.entries()) |*entry| {
+            entry.value.arena.deinit();
         }
-        self.map.deinit(self.allocator);
+        self.clock.deinit();
     }
 
     fn parse(self: *Cache, input: []const u8) ![]const Selector {
         if (input.len == 0) {
             return error.SyntaxError;
         }
-        if (self.map.get(input)) |entry| {
+        if (self.clock.get(input)) |entry| {
             return entry.selectors;
         }
 
-        // The AST borrows slices of its input, so dupe the key into the arena.
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        // The AST borrows slices of its input, so dupe it into the arena.
+        var arena = std.heap.ArenaAllocator.init(self.clock.allocator);
         errdefer arena.deinit();
         const entry_arena = arena.allocator();
-        const owned = try entry_arena.dupe(u8, input);
-        const selectors = try Parser.parseList(entry_arena, owned);
+        const selectors = try Parser.parseList(entry_arena, try entry_arena.dupe(u8, input));
 
-        if (self.map.count() >= max_entries) {
-            self.evictOldest();
+        switch (try self.clock.insert(input, .{ .arena = arena, .selectors = selectors })) {
+            .exists => unreachable,
+            .inserted => |evicted| if (evicted) |e| {
+                var evicted_arena = e.arena;
+                evicted_arena.deinit();
+            },
         }
-        try self.map.put(self.allocator, owned, .{ .arena = arena, .selectors = selectors });
         return selectors;
-    }
-
-    // Insertion order is preserved, so index 0 is the oldest.
-    fn evictOldest(self: *Cache) void {
-        const key = self.map.keys()[0];
-        var arena = self.map.values()[0].arena;
-        std.debug.assert(self.map.orderedRemove(key));
-        arena.deinit();
     }
 };
 
 fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
-    var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+    var nodes: std.ArrayList(*Node) = .empty;
 
-    // One cache for the whole list: every selector walks the same root, and it
-    // fills lazily, so a subtree that no selector reaches costs nothing.
     var nth: List.NthCache = .{ .allocator = frame.local_arena };
     defer nth.deinit();
 
-    for (selectors) |selector| {
-        try List.collect(arena.allocator(), root, selector, &nodes, &nth, frame);
+    if (selectors.len == 1) {
+        try List.collect(arena.allocator(), root, selectors[0], &nodes, &nth, frame);
+    } else {
+        try List.collectAny(arena.allocator(), root, selectors, &nodes, &nth, frame);
     }
 
     const list = try arena.create(List);
     list.* = .{
         ._arena = arena,
-        ._nodes = nodes.keys(),
+        ._nodes = nodes.items,
     };
     return list;
 }
@@ -262,8 +258,8 @@ pub const Part = union(enum) {
     universal, // '*' any element
     pseudo_class: PseudoClass,
     attribute: Attribute,
-    // Matches no element.
-    pseudo_element,
+    pseudo_element, // Matches no element.
+    never, // never maches (and doesn't carry additional meaning like pseudo_element)
 };
 
 pub const Attribute = struct {
@@ -403,10 +399,28 @@ pub const Compound = struct {
                 try writer.writeByte(':');
                 try writer.writeAll(@tagName(val));
             },
-            .attribute => {
-                try writer.writeAll("TODO");
+            .attribute => |attr| {
+                try writer.print("[{f}", .{attr.original_name});
+                const op: []const u8, const value: []const u8 = switch (attr.matcher) {
+                    .presence => {
+                        try writer.writeByte(']');
+                        continue;
+                    },
+                    .exact => |v| .{ "=", v },
+                    .word => |v| .{ "~=", v },
+                    .prefix_dash => |v| .{ "|=", v },
+                    .starts_with => |v| .{ "^=", v },
+                    .ends_with => |v| .{ "$=", v },
+                    .substring => |v| .{ "*=", v },
+                };
+                try writer.print("{s}\"{s}\"", .{ op, value });
+                if (attr.value_case == .insensitive) {
+                    try writer.writeAll(" i");
+                }
+                try writer.writeByte(']');
             },
             .pseudo_element => try writer.writeAll("::pseudo-element"),
+            .never => try writer.writeAll("[never]"),
         };
     }
 };
@@ -458,33 +472,33 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
     var nth: List.NthCache = .{ .allocator = frame.local_arena };
     defer nth.deinit();
 
-    for (selectors) |selector| {
-        // Fast path: single compound with only an ID selector. With
-        // duplicate ids, the general walk below finds the first one under root.
-        if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-            const first = selector.first.parts[0];
-            if (first == .id) {
-                switch (Frame.getUniqueElementByIdFromNode(root, first.id)) {
-                    .none => continue,
-                    .one => |el| {
-                        const node = el.asNode();
-                        if (node != root and root.contains(node)) {
-                            return el;
-                        }
-                        continue;
-                    },
-                    .many => {},
-                }
-            }
-        }
+    if (selectors.len != 1) {
+        const node = List.initOneAny(root, selectors, &nth, frame) orelse return null;
+        return node.is(Node.Element);
+    }
 
-        if (List.initOne(root, selector, &nth, frame)) |node| {
-            if (node.is(Node.Element)) |el| {
-                return el;
+    const selector = selectors[0];
+    // Fast path: single compound with only an ID selector. With
+    // duplicate ids, the general walk below finds the first one under root.
+    if (selector.segments.len == 0 and selector.first.parts.len == 1) {
+        const first = selector.first.parts[0];
+        if (first == .id) {
+            switch (Frame.getUniqueElementByIdFromNode(root, first.id)) {
+                .none => return null,
+                .one => |el| {
+                    const node = el.asNode();
+                    if (node != root and root.contains(node)) {
+                        return el;
+                    }
+                    return null;
+                },
+                .many => {},
             }
         }
     }
-    return null;
+
+    const node = List.initOne(root, selector, &nth, frame) orelse return null;
+    return node.is(Node.Element);
 }
 
 const testing = @import("../../../testing.zig");

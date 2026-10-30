@@ -283,7 +283,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
             log.warn(.page_error, "uncaught exception", .{ .url = self._url, .caught = caught });
             return;
         },
-        .module => js_context.module(false, &ls.local, script, self._url, true) catch |err| {
+        .module => js_context.module(false, &ls.local, script, self._url, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }

@@ -1304,7 +1304,17 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         return false;
     }
 
+    // A stored 200 is not the part of the body a Range asks for, and the key
+    // of a URL with userinfo (which curl sends as Basic auth) would write the
+    // credentials into the cache.
+    if (transfer.findRequestHeader("Range") != null or
+        URL.getUsername(req.url).len > 0 or URL.getPassword(req.url).len > 0)
+    {
+        return false;
+    }
+
     const arena = transfer.arena;
+    transfer._cache_cookie = try transfer.getCookieString(arena.allocator());
 
     // Redirects rewrite req.url; the entry must be stored/renewed under the
     // URL this lookup ran against, not the final hop. req.url is arena-owned,
@@ -1379,6 +1389,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
         .url = transfer._cache_key,
         .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
+        .request_headers = try transfer.cacheRequestHeaders(),
     }) catch |err| {
         log.warn(.cache, "renew failed", .{ .err = err });
     };
@@ -1394,19 +1405,6 @@ fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse,
         return;
     }
     try transfer.bufferEvents(body);
-}
-
-// Everything the cache needs about this response. Names and values are
-// borrowed from the transfer arena, which outlives the put.
-fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
-    return Cache.tryCache(transfer.arena.allocator(), .{
-        .timestamp = lp.datetime.timestamp(.real),
-        .url = transfer._cache_key,
-        .status = rh.status,
-        .content_type = rh.contentType(),
-        .headers = transfer.res.headers,
-        .request_headers = try transfer.cacheRequestHeaders(),
-    });
 }
 
 // Store a cacheable response at completion, from the materialized response
@@ -1431,25 +1429,32 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const rh = &(transfer.res.header orelse return);
 
-    const maybe_req = cachePutRequest(transfer, rh) catch |err| {
-        log.warn(.http, "cache eligibility", .{ .err = err });
-        return;
-    };
-    const req = maybe_req orelse return;
-
-    if (comptime lp.IS_DEBUG) {
-        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .put = req });
-    }
-    cache.put(req, transfer.res.buffer.items) catch |err| {
+    const stored = storeResponse(cache, transfer, rh) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
         return;
     };
-    transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
+    if (stored) {
+        transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
+    }
+}
+
+fn storeResponse(cache: *Cache, transfer: *Transfer, rh: *http.ResponseHead) !bool {
+    const arena = transfer.arena.allocator();
+    return cache.put(arena, .{
+        .timestamp = lp.datetime.timestamp(.real),
+        .url = transfer._cache_key,
+        .status = rh.status,
+        .content_type = rh.contentType(),
+        .headers = transfer.res.headers,
+        .request_headers = try transfer.cacheRequestHeaders(),
+    }, transfer.res.buffer.items);
 }
 
 pub const SyncOptions = struct {
     // Whether to copy the response headers into SyncResponse.headers.
     copy_headers: bool = false,
+    // Write the body here instead of buffering it into SyncResponse.body.
+    body_writer: ?*std.Io.Writer = null,
 };
 
 const SyncContext = struct {
@@ -1480,8 +1485,9 @@ const SyncContext = struct {
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
 
+        // A streamed body's length is 0 here, but its content type is still wanted.
         const body_len = transfer.bodyLen();
-        if (body_len == 0 and self.options.copy_headers == false) {
+        if (body_len == 0 and self.options.body_writer == null and self.options.copy_headers == false) {
             return .proceed;
         }
 
@@ -1528,6 +1534,9 @@ const SyncContext = struct {
 
     fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
+        if (self.options.body_writer) |w| {
+            return w.writeAll(data);
+        }
         try self.body.appendSlice(try self.bodyAllocator(null), data);
     }
 
@@ -2106,7 +2115,7 @@ pub const Request = struct {
     const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
     const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
     const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
     pub const ResourceType = enum {
         document,
@@ -2323,9 +2332,11 @@ pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
         return transfer.failAsync(err);
     }
 
-    if (transfer.getContentLength()) |cl| {
-        if (cl > self.max_response_size) {
-            return transfer.failAsync(error.ResponseTooLarge);
+    if (!transfer.req.streaming) {
+        if (transfer.getContentLength()) |cl| {
+            if (cl > self.max_response_size) {
+                return transfer.failAsync(error.ResponseTooLarge);
+            }
         }
     }
 
@@ -2699,6 +2710,10 @@ pub const Transfer = struct {
     // rewrote it). Only meaningful while _cache_intent != .none.
     _cache_key: [:0]const u8 = "",
 
+    // The jar's cookies for the request, read by cacheLookup: what a response
+    // varying on Cookie is matched against at lookup and at store.
+    _cache_cookie: ?[]const u8 = null,
+
     // Content length reported on the CDP responseReceived event, and the
     // resource-timing size of a partial fetch.
     _content_length: usize = 0,
@@ -2943,6 +2958,7 @@ pub const Transfer = struct {
 
         const req = &self.req;
         req.sync = true;
+        if (opts.body_writer != null) req.streaming = true;
         req.ctx = &sync_ctx;
         req.header_callback = SyncContext.headerCallback;
         req.data_callback = SyncContext.dataCallback;
@@ -3754,8 +3770,9 @@ pub const Transfer = struct {
         // A partial fetch is exempt: the cap exists to bound how much body we
         // buffer, and this transfer buffers at most PARTIAL_DRAIN_MAX of it. Failing a 4 MB image
         // we were never going to read would turn the size limit into a
-        // spurious `error` event on a perfectly good response.
-        if (opts.check_content_length and self.req.partial == null) {
+        // spurious `error` event on a perfectly good response. A stream's
+        // batch is capped in dataCallback instead.
+        if (opts.check_content_length and self.req.partial == null and !self.req.streaming) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -4116,13 +4133,24 @@ pub const Transfer = struct {
     }
 
     // The cache works in plain headers; req_headers carry a `source` alongside
-    // them that it has no use for.
+    // them that it has no use for. The jar's cookies reach libcurl apart from
+    // the request headers, so Cookie is what cacheLookup read from the jar,
+    // joined to any Cookie header.
     fn cacheRequestHeaders(self: *const Transfer) ![]http.Header {
-        const headers = try self.arena.alloc(http.Header, self.req_headers.items.len);
-        for (self.req_headers.items, headers) |hdr, *out| {
-            out.* = .{ .name = hdr.name, .value = hdr.value };
+        const arena = self.arena.allocator();
+        var headers: std.ArrayList(http.Header) = try .initCapacity(arena, self.req_headers.items.len + 1);
+        var cookie = self._cache_cookie;
+        for (self.req_headers.items) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "cookie")) {
+                cookie = if (cookie) |c| try std.fmt.allocPrint(arena, "{s}; {s}", .{ c, hdr.value }) else hdr.value;
+            } else {
+                headers.appendAssumeCapacity(.{ .name = hdr.name, .value = hdr.value });
+            }
         }
-        return headers;
+        if (cookie) |c| {
+            headers.appendAssumeCapacity(.{ .name = "cookie", .value = c });
+        }
+        return headers.items;
     }
 
     fn removeHeader(self: *Transfer, name: []const u8) void {
@@ -4338,7 +4366,8 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
-            if (transfer.req.partial == null) {
+            // A stream only ever buffers its undelivered batch.
+            if (transfer.req.partial == null and !transfer.req.streaming) {
                 // Headers aren't materialized yet; read them off the conn.
                 const content_length: ?usize = blk: {
                     const hdr = conn.getResponseHeader("content-length", 0) orelse break :blk null;
@@ -6636,4 +6665,60 @@ test "HttpClient: encodedDataLength of a cache hit is the stored body, of a reva
 
     _ = try e.fetch("http://127.0.0.1:9582/raw/revalidated", null);
     try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
+}
+
+test "HttpClient: a Range request and a URL with userinfo skip the cache" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    client.cache = &cache;
+
+    // A miss tags the request to be stored: one that skips the cache stays untagged.
+    const cases = [_]struct { url: [:0]const u8, range: bool, intent: std.meta.Tag(CacheIntent) }{
+        .{ .url = "http://example.com/", .range = false, .intent = .store },
+        .{ .url = "http://example.com/", .range = true, .intent = .none },
+        .{ .url = "http://u:p@example.com/", .range = false, .intent = .none },
+        .{ .url = "http://u@example.com/", .range = false, .intent = .none },
+    };
+    for (cases) |case| {
+        const arena = try pool.acquire(.small, "test");
+        defer arena.release();
+        var transfer = testTransfer(arena);
+        transfer.req.url = case.url;
+        if (case.range) try transfer.setHeader("Range", "bytes=0-3", .{});
+        try testing.expectEqual(false, try client.cacheLookup(&transfer));
+        try testing.expectEqual(case.intent, std.meta.activeTag(transfer._cache_intent));
+    }
+}
+
+test "HttpClient: Vary sees the jar's cookies" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    client.cache = &cache;
+
+    const arena = try pool.acquire(.small, "test");
+    defer arena.release();
+    var transfer = testTransfer(arena);
+    transfer.req.credentials_mode = .include;
+    transfer.cookie_origin = .{ .url = transfer.req.url };
+    var jar = CookieJar.init(testing.allocator, null);
+    defer jar.deinit();
+    try jar.populateFromResponse(transfer.req.url, "who=a");
+    transfer.cookie_jar = &jar;
+    try transfer.setHeader("Accept", "text/html", .{});
+    _ = try client.cacheLookup(&transfer);
+
+    const headers = try transfer.cacheRequestHeaders();
+    try testing.expectEqual(2, headers.len);
+    try testing.expectEqual("Accept", headers[0].name);
+    try testing.expectEqual("text/html", headers[0].value);
+    try testing.expectEqual("cookie", headers[1].name);
+    try testing.expectEqual("who=a", headers[1].value);
 }

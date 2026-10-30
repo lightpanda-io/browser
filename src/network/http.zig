@@ -187,10 +187,20 @@ pub const StatusText = struct {
     pub fn fromStatusLine(line: []const u8) StatusText {
         const trimmed = std.mem.trimEnd(u8, line, "\r\n");
         // HTTP-version SP status-code SP [ reason-phrase ]
-        const sp1 = std.mem.findScalar(u8, trimmed, ' ') orelse return .{ ._len = 0 };
-        const sp2 = std.mem.findScalarPos(u8, trimmed, sp1 + 1, ' ') orelse return .{ ._len = 0 };
+        // Like libcurl, accept a tab wherever SP is expected.
+        const sp1 = std.mem.findAny(u8, trimmed, " \t") orelse return .{ ._len = 0 };
+        const sp2 = std.mem.findAnyPos(u8, trimmed, sp1 + 1, " \t") orelse return .{ ._len = 0 };
         const phrase = trimmed[sp2 + 1 ..];
-        const len = @min(phrase.len, MAX_LEN);
+
+        var len: usize = @min(phrase.len, MAX_LEN);
+        if (len < phrase.len) {
+            // Don't cut a UTF-8 sequence in half
+            var back: usize = 0;
+            while (back < 3 and phrase[len - back] & 0xC0 == 0x80) : (back += 1) {}
+            if (phrase[len - back] & 0xC0 != 0x80) {
+                len -= back;
+            }
+        }
 
         var st: StatusText = .{ ._len = @intCast(len) };
         @memcpy(st._buf[0..len], phrase[0..len]);
@@ -1124,6 +1134,15 @@ test "StatusText.fromStatusLine" {
     try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/2 200 \r\n").get().?);
     try testing.expectEqualSlices(u8, "", StatusText.fromStatusLine("HTTP/1.1 200\r\n").get().?);
     try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("x", 200)).get().?.len);
+    try testing.expectEqualSlices(u8, "OK", StatusText.fromStatusLine("HTTP/1.1\t200\tOK\r\n").get().?);
+
+    // the cap backs off to a UTF-8 boundary: 127 x's + "é" would split at 128
+    try testing.expectEqualSlices(u8, repeat("x", 127), StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("x", 127) ++ "é").get().?);
+    try testing.expectEqualSlices(u8, repeat("x", 126) ++ "é", StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("x", 126) ++ "éé").get().?);
+    // 4-byte sequence straddling the cap
+    try testing.expectEqualSlices(u8, repeat("x", 126), StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("x", 126) ++ "😀").get().?);
+    // Latin-1 continuation-looking bytes: hard cut, no unbounded walk back
+    try testing.expectEqual(StatusText.MAX_LEN, StatusText.fromStatusLine("HTTP/1.1 200 " ++ repeat("\xa1", 200)).get().?.len);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {

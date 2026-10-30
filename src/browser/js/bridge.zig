@@ -991,6 +991,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/TaskController.zig"),
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
+    @import("../webapi/event/SecurityPolicyViolationEvent.zig"),
     @import("../webapi/CData.zig"),
     @import("../webapi/cdata/Comment.zig"),
     @import("../webapi/cdata/Text.zig"),
@@ -1317,6 +1318,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/PeriodicWave.zig"),
     @import("../webapi/webaudio/BaseAudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioContext.zig"),
+    @import("../webapi/webaudio/AudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioCompletionEvent.zig"),
     @import("../webapi/webaudio/AudioNode.zig"),
     @import("../webapi/webaudio/AudioDestinationNode.zig"),
@@ -1325,6 +1327,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/ConstantSourceNode.zig"),
     @import("../webapi/webaudio/OscillatorNode.zig"),
     @import("../webapi/webaudio/GainNode.zig"),
+    @import("../webapi/webaudio/ConvolverNode.zig"),
     @import("../webapi/webaudio/DynamicsCompressorNode.zig"),
 });
 
@@ -1398,6 +1401,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/TaskController.zig"),
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
+    @import("../webapi/event/SecurityPolicyViolationEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),

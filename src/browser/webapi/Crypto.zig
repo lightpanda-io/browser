@@ -42,7 +42,7 @@ fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Executio
         return error.TypeMismatch;
     }
 
-    const buf = (try js_obj.toZig(js.AllowSharedBufferSource)).bytes;
+    const buf = (try js_obj.toZig(js.AllowSharedBufferSource)).bytes();
     if (buf.len > 65_536) {
         return QuotaExceededError.throw(js_obj.local, exec);
     }

@@ -238,7 +238,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
-        .module => js_context.module(false, &ls.local, script, self._url, true) catch |err| {
+        .module => js_context.module(false, &ls.local, script, self._url, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }

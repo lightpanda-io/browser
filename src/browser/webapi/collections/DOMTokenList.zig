@@ -97,7 +97,10 @@ pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bo
             "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols",
         },
         .rel => switch (self._element.getTag()) {
-            .link => &.{ "stylesheet", "preload", "modulepreload" },
+            // Resource hints are optional and ignored here, but reporting
+            // them unsupported sends prefetchers (quicklink, Gatsby) down
+            // their XHR fallback, fetching every link they would have hinted.
+            .link => &.{ "stylesheet", "preload", "modulepreload", "dns-prefetch", "preconnect", "prefetch" },
             else => &.{ "noopener", "noreferrer", "opener" },
         },
         // no supported tokens defined

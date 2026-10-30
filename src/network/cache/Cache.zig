@@ -80,11 +80,18 @@ pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheG
     };
 }
 
-pub fn put(self: *Cache, req: CachePutRequest, body: []const u8) !void {
-    return switch (self.kind) {
-        .noop => {},
-        inline else => |*c| c.put(req, body),
-    };
+/// Stores the response if it is cacheable; returns whether it did. The
+/// candidate's names and values only need to outlive the call.
+pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !bool {
+    switch (self.kind) {
+        .noop => return false,
+        inline else => |*c| {
+            const req = try tryCache(arena, candidate) orelse return false;
+            log.debug(.cache, "put", .{ .put = req });
+            try c.put(req, body);
+            return true;
+        },
+    }
 }
 
 pub fn putScriptCache(self: *Cache, url: []const u8, body: []const u8, bytes: []const u8) !void {
@@ -199,8 +206,8 @@ pub const CachePutRequest = struct {
     cache_control: CacheControl,
     /// Response Headers
     headers: []const Http.Header,
-    /// These are Request Headers used by Vary.
-    vary_headers: []const Http.Header,
+    /// Request Headers, which the response's Vary may name.
+    request_headers: []const Http.Header,
 
     // Validators for conditional requests.
     etag: ?[]const u8 = null,
@@ -219,10 +226,11 @@ pub const CachePutRequest = struct {
         // Logging all headers gets pretty verbose...
         // so we just log the Vary ones that matter for caching.
 
-        if (self.vary_headers.len > 0) {
-            for (self.vary_headers, 0..) |hdr, i| {
-                if (i > 0) try writer.print(", ", .{});
-                try writer.print("{s}: {s}", .{ hdr.name, hdr.value });
+        var sep: []const u8 = "";
+        for (self.headers) |hdr| {
+            if (std.mem.eql(u8, hdr.name, "vary")) {
+                try writer.print("{s}{s}", .{ sep, hdr.value });
+                sep = ", ";
             }
         }
         try writer.print("]", .{});
@@ -233,6 +241,8 @@ pub const RenewResponse = struct {
     url: []const u8,
     timestamp: u64,
     headers: []const Http.Header,
+    /// Request Headers of the revalidation, which the merged Vary may name.
+    request_headers: []const Http.Header,
 
     // What a revalidation response tells us about the cache entry (a null
     // value means: we were told nothing, keep what we have)
@@ -366,7 +376,7 @@ const ResponseHeaders = struct {
     }
 };
 
-const CacheCandidate = struct {
+pub const CacheCandidate = struct {
     timestamp: u64,
     url: [:0]const u8,
     status: u16,
@@ -403,7 +413,7 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
+fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
     const url = candidate.url;
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
@@ -480,7 +490,7 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
         .age_at_store = if (response.age) |a| parseDeltaSeconds(a) orelse 0 else 0,
         .cache_control = cc,
         .headers = candidate.headers,
-        .vary_headers = try varyHeaders(arena, response.vary, candidate.request_headers),
+        .request_headers = candidate.request_headers,
         .etag = if (response.etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (response.last_modified) |lm| try arena.dupe(u8, lm) else null,
     };
@@ -509,24 +519,6 @@ fn heuristicLifetime(last_modified: []const u8, now: u64) u64 {
 fn parseHttpDate(value: []const u8) ?i64 {
     const date_time = lp.datetime.DateTime.parse(value, .rfc822) catch return null;
     return date_time.unix(.seconds);
-}
-
-/// The request headers the Vary list names, which a later lookup has to match
-/// against. Names and values stay borrowed from the caller's headers.
-fn varyHeaders(arena: std.mem.Allocator, vary: ?[]const u8, request_headers: []const Http.Header) ![]const Http.Header {
-    const vary_value = vary orelse return &.{};
-
-    var headers: std.ArrayList(Http.Header) = .empty;
-    for (request_headers) |hdr| {
-        var iter = std.mem.splitScalar(u8, vary_value, ',');
-        while (iter.next()) |part| {
-            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
-            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
-                try headers.append(arena, hdr);
-            }
-        }
-    }
-    return headers.items;
 }
 
 const testing = @import("../../testing.zig");
@@ -722,22 +714,6 @@ test "Cache: tryCache vary headers" {
         .{ .name = "Accept-Encoding", .value = "gzip" },
         .{ .name = "User-Agent", .value = "lightpanda" },
     };
-
-    const stored = try tryCache(arena.allocator(), .{
-        .timestamp = test_now,
-        .url = "https://example.com",
-        .status = 200,
-        .content_type = "text/html",
-        .headers = &.{
-            .{ .name = "cache-control", .value = "max-age=300" },
-            .{ .name = "vary", .value = "accept-encoding, accept-language" },
-        },
-        .request_headers = &request_headers,
-    });
-
-    try testing.expectEqual(1, stored.?.vary_headers.len);
-    try testing.expectString("Accept-Encoding", stored.?.vary_headers[0].name);
-    try testing.expectString("gzip", stored.?.vary_headers[0].value);
 
     // Vary: * is never stored
     const wildcard = try tryCache(arena.allocator(), .{

@@ -143,6 +143,8 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
+_image_decodes: Element.Html.Image.Decodes = .{},
+
 _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
@@ -635,7 +637,7 @@ pub fn siteForCookies(self: *const Frame) Cookie.SiteForCookies {
 
 pub fn getTitle(self: *Frame) !?[]const u8 {
     if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
-        return try html_doc.getTitle(self);
+        return try html_doc.asDocument().getTitle(self);
     }
     return null;
 }
@@ -1630,9 +1632,9 @@ fn _documentIsComplete(self: *Frame) !void {
     try self.dispatchQueuedEvents();
     if (self.loadEventsAborted()) return;
 
-    // A close() from within our own load handler: the outer dispatch
-    // finishes the load steps.
-    if (self._load_event_in_progress) return;
+    // A close() from within our own load handler, or from the iframe
+    // element's (the tail of our load steps): no nested load (as in Chrome).
+    if (self._load_event_in_progress or self.document._iframe_load_in_progress) return;
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
@@ -2797,6 +2799,8 @@ fn dispatchQueuedEvents(self: *Frame) !void {
             if (image._generation != queued.generation) {
                 continue;
             }
+            // Without a fetch, the image is pending until its event fires.
+            image._complete = true;
         }
 
         if (html_element.is(Element.Html.Link)) |link| {
@@ -2834,6 +2838,7 @@ fn dispatchQueuedEvents(self: *Frame) !void {
     }
 
     to_process.clearRetainingCapacity();
+    Element.Html.Image.settleDecodes(self);
 }
 
 pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {

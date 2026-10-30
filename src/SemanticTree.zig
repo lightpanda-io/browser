@@ -30,6 +30,7 @@ const AXNode = @import("server/cdp/AXNode.zig");
 
 const NodeRegistry = @import("NodeRegistry.zig");
 const isAllWhitespace = @import("string.zig").isAllWhitespace;
+const isOneOf = @import("string.zig").isOneOf;
 
 const log = lp.log;
 const Frame = lp.Frame;
@@ -44,6 +45,8 @@ prune: bool,
 interactive_only: bool,
 max_depth: u32,
 max_bytes: ?u32,
+ids: bool,
+link_urls: bool,
 
 pub const Opts = struct {
     prune: bool = true,
@@ -51,6 +54,13 @@ pub const Opts = struct {
     max_depth: u32 = std.math.maxInt(u32) - 1,
     // Text output only.
     max_bytes: ?u32 = null,
+    /// Text form: lead each line with its backendNodeId and mark interactive
+    /// nodes `[i]`, for a reader that acts on nodes. A model that only reads
+    /// the page gets nothing from either.
+    ids: bool = true,
+    /// Text form: follow each link with ` -> ` and where it goes, without the
+    /// query or fragment, and as a bare path when it stays on this site.
+    link_urls: bool = false,
 };
 
 /// `frame` only seeds the owner lookup; the tree is walked with the frame
@@ -67,6 +77,8 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
         .interactive_only = opts.interactive_only,
         .max_depth = opts.max_depth,
         .max_bytes = opts.max_bytes,
+        .ids = opts.ids,
+        .link_urls = opts.link_urls,
     };
 }
 
@@ -101,11 +113,11 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 /// dropped lines are counted in `[more]` markers.
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     const max_bytes = self.max_bytes orelse {
-        var visitor: TextVisitor = .{ .writer = writer };
+        var visitor: TextVisitor = .{ .writer = writer, .tree = self };
         return self.visitAll(&visitor);
     };
     var collector: LineCollector = .{
-        .arena = self.arena,
+        .tree = self,
         .text = .init(self.arena),
         .focused = if (self.frame.document._active_element) |el| el.asNode() else null,
     };
@@ -118,18 +130,28 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
 
 const TextVisitor = struct {
     writer: *std.Io.Writer,
+    tree: Self,
     depth: u32 = 0,
+    /// Per open node, whether it took a line and so indents its children.
+    indents: std.ArrayList(bool) = .empty,
 
     pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !Walk {
+        // Without ids, a wrapper with no role, name or state would be a blank
+        // line: skip it and let its children take its place.
+        if (!self.tree.ids and isBlankLine(node, data)) {
+            try self.indents.append(self.tree.arena, false);
+            return .all;
+        }
+        try self.indents.append(self.tree.arena, true);
         try self.writer.splatByteAll(' ', self.depth);
-        const line = try writeTextLine(self.writer, node, data);
+        const line = try self.tree.writeTextLine(self.writer, node, data);
         try self.writer.writeByte('\n');
         self.depth += 1;
         return line.children;
     }
 
     pub fn leave(self: *TextVisitor) !void {
-        self.depth -= 1;
+        if (self.indents.pop().?) self.depth -= 1;
     }
 };
 
@@ -166,7 +188,7 @@ const Line = struct {
 };
 
 const LineCollector = struct {
-    arena: std.mem.Allocator,
+    tree: Self,
     text: std.Io.Writer.Allocating,
     focused: ?*Node,
     lines: std.ArrayList(Line) = .empty,
@@ -175,7 +197,7 @@ const LineCollector = struct {
     pub fn visit(self: *LineCollector, node: *Node, data: *NodeData) !Walk {
         const start = self.text.written().len;
         try self.text.writer.splatByteAll(' ', self.depth());
-        const line = try writeTextLine(&self.text.writer, node, data);
+        const line = try self.tree.writeTextLine(&self.text.writer, node, data);
         try self.text.writer.writeByte('\n');
         try self.append(data, start, .{
             .hidden = false,
@@ -208,7 +230,7 @@ const LineCollector = struct {
         const role_scope = critical_roles.get(data.role);
         const critical = inherited or role_scope != null;
         const chrome = (if (self.current) |p| self.lines.items[p].chrome_subtree else false) or chrome_roles.has(data.role);
-        try self.lines.append(self.arena, .{
+        try self.lines.append(self.tree.arena, .{
             .id = data.id,
             .start = @intCast(start),
             .end = @intCast(self.text.written().len),
@@ -839,6 +861,21 @@ const structural_roles = std.StaticStringMap(enum { wrapper, anchor }).initCompt
     .{ "region", .anchor },
 });
 
+/// Resolved href, query and fragment stripped; path alone when it stays on
+/// this site.
+fn linkTarget(self: Self, node: *Node) ?[]const u8 {
+    const el = node.is(Element) orelse return null;
+    const raw = el.getAttributeInterned("href") orelse return null;
+    const frame = self.frame;
+    const resolved = node.resolveURL(raw, frame, .{ .allocator = self.arena }) catch return raw;
+    if (lp.URL.isSameOrigin(resolved, frame.url)) {
+        const path = lp.URL.getPathname(resolved);
+        return if (path.len == 0) "/" else path;
+    }
+    const end = std.mem.findAny(u8, resolved, "?#") orelse resolved.len;
+    return resolved[0..end];
+}
+
 const Walk = enum {
     all,
     none,
@@ -852,37 +889,62 @@ const TextLine = struct {
     contentful: bool,
 };
 
-fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine {
-    var name_to_print: ?[]const u8 = null;
+fn textName(node: *Node, data: *const NodeData) ?[]const u8 {
     if (data.name) |n| {
-        if (n.len > 0) {
-            name_to_print = n;
-        }
-    } else if (node.is(CData.Text)) |text_node| {
-        const trimmed = std.mem.trim(u8, text_node.ownData(), " \t\r\n");
-        if (trimmed.len > 0) {
-            name_to_print = trimmed;
-        }
+        return if (n.len > 0) n else null;
     }
+    const text_node = node.is(CData.Text) orelse return null;
+    const trimmed = std.mem.trim(u8, text_node.ownData(), " \t\r\n");
+    return if (trimmed.len > 0) trimmed else null;
+}
 
-    const is_text_only = std.mem.eql(u8, data.role, "StaticText") or std.mem.eql(u8, data.role, "none") or std.mem.eql(u8, data.role, "generic");
+fn isTextOnly(data: *const NodeData) bool {
+    return isOneOf(data.role, &.{ "StaticText", "none", "generic" });
+}
 
-    try writer.print("{d}", .{data.id});
-    if (data.interactive) {
-        try writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
+fn contentful(node: *Node, data: *const NodeData) bool {
+    if (textName(node, data) != null) return true;
+    if (data.value) |v| if (v.len > 0) return true;
+    return data.checked != null or data.aria.expanded != null or data.aria.checked != null;
+}
+
+fn isBlankLine(node: *Node, data: *const NodeData) bool {
+    return isTextOnly(data) and data.options == null and !contentful(node, data);
+}
+
+fn writeTextLine(self: Self, writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine {
+    const name_to_print = textName(node, data);
+
+    // Fields are space-separated; without an id the line starts at its
+    // first field.
+    var sep: []const u8 = "";
+    if (self.ids) {
+        try writer.print("{d}", .{data.id});
+        if (data.interactive) {
+            try writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
+        }
+        sep = " ";
     }
-    if (!is_text_only) {
-        try writer.print(" {s}", .{data.role});
+    if (!isTextOnly(data)) {
+        try writer.print("{s}{s}", .{ sep, data.role });
+        sep = " ";
     }
     if (name_to_print) |n| {
-        try writer.writeAll(" '");
+        try writer.print("{s}'", .{sep});
         try writeOneLine(writer, n);
         try writer.writeByte('\'');
+        sep = " ";
+    }
+    if (self.link_urls and std.mem.eql(u8, data.role, "link")) {
+        if (self.linkTarget(node)) |target| {
+            try writer.print("{s}-> {s}", .{ sep, target });
+            sep = " ";
+        }
     }
 
     if (data.value) |v| {
         if (v.len > 0) {
-            try writer.writeAll(" value='");
+            try writer.print("{s}value='", .{sep});
             try writeEscapedNewlines(writer, v);
             try writer.writeByte('\'');
         }
@@ -921,7 +983,7 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         try writer.writeAll("]");
         return .{ .children = .none, .contentful = true }; // Native handling complete, do not walk children
     }
-    const contentful = name_to_print != null or (if (data.value) |v| v.len > 0 else false) or data.checked != null or data.aria.expanded != null or data.aria.checked != null;
+    const has_content = contentful(node, data);
 
     // A named one already says what its children say, but a heading or
     // code can still wrap a link.
@@ -934,7 +996,7 @@ fn writeTextLine(writer: *std.Io.Writer, node: *Node, data: *NodeData) !TextLine
         .controls
     else
         .all;
-    return .{ .children = children, .contentful = contentful };
+    return .{ .children = children, .contentful = has_content };
 }
 
 /// Each node is one line: a newline in a name would start another.
@@ -1210,6 +1272,41 @@ test "SemanticTree: JSON exposes custom ARIA states without changing native chec
     const native = find(parsed.value, "Native terms") orelse return error.NodeNotFound;
     try testing.expect(native.object.get("checked").?.bool);
     try testing.expect(native.object.get("ariaChecked") == null);
+}
+
+test "SemanticTree text without ids, with link targets" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<div><div><a href="/account/login?next=%2Fq3">Continue</a></div></div>
+        \\<a href="https://ad.example.net/clk;kw=acme?ord=1#top">Learn more</a>
+        \\<a href="http://localhost">Home</a>
+        \\<button>Send</button>
+    );
+
+    const st: Self = try .init(testing.arena_allocator, div.asNode(), &registry, frame, .{ .ids = false, .link_urls = true });
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const text = aw.written();
+
+    try testing.expect(std.mem.find(u8, text, "link 'Continue' -> /account/login\n") != null);
+    try testing.expect(std.mem.find(u8, text, "link 'Learn more' -> https://ad.example.net/clk;kw=acme\n") != null);
+    try testing.expect(std.mem.find(u8, text, "link 'Home' -> /\n") != null);
+    try testing.expect(std.mem.find(u8, text, "button 'Send'\n") != null);
+    try testing.expect(std.mem.find(u8, text, "[i]") == null);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
+    while (lines.next()) |line| {
+        const field = std.mem.trimStart(u8, line, " ");
+        try testing.expect(field.len > 0);
+        try testing.expect(!std.ascii.isDigit(field[0]));
+    }
 }
 
 test "SemanticTree max_depth" {

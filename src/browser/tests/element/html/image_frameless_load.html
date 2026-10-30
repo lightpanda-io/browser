@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 <body></body>
 
@@ -10,7 +11,7 @@
   // jQuery.parseHTML builds nodes in a createHTMLDocument document.
   const doc = document.implementation.createHTMLDocument('');
   const img = doc.createElement('img');
-  img.src = 'a.png';
+  img.src = '/images/small.png';
   let fired = false;
   img.addEventListener('load', () => fired = true);
   document.body.appendChild(img);

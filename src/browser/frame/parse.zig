@@ -45,6 +45,15 @@ pub const FragmentParseOpts = struct {
 };
 
 pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentParseOpts) !void {
+    // Empty input yields nothing, except in an <html> context, where the
+    // parser still creates <head> and <body>.
+    if (html.len == 0) {
+        const context = opts.context orelse node.is(Element) orelse return;
+        if (context.is(Element.Html.Html) == null) {
+            return;
+        }
+    }
+
     const previous_parse_mode = frame._parse_mode;
     frame._parse_mode = .fragment;
     defer frame._parse_mode = previous_parse_mode;

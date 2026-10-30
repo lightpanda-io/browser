@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <script id="Image">
@@ -34,7 +35,6 @@
     img.src = 'test.png';
     // src property returns resolved absolute URL
     testing.expectEqual(testing.BASE_URL + 'element/html/test.png', img.src);
-    testing.expectEqual(testing.BASE_URL + 'element/html/test.png', img.currentSrc);
     // getAttribute returns the raw attribute value
     testing.expectEqual('test.png', img.getAttribute('src'));
 
@@ -42,13 +42,27 @@
     testing.expectEqual(testing.ORIGIN + '/absolute/path.png', img.src);
     testing.expectEqual('/absolute/path.png', img.getAttribute('src'));
 
-    img.src = 'https://example.com/image.png';
-    testing.expectEqual('https://example.com/image.png', img.src);
-    testing.expectEqual('https://example.com/image.png', img.getAttribute('src'));
+    // browsers fetch this even though the image is detached: keep it local
+    img.src = 'http://localhost:9582/image.png';
+    testing.expectEqual('http://localhost:9582/image.png', img.src);
+    testing.expectEqual('http://localhost:9582/image.png', img.getAttribute('src'));
 
     img.alt = 'Test image';
     testing.expectEqual('Test image', img.alt);
     testing.expectEqual('Test image', img.getAttribute('alt'));
+}
+</script>
+
+<script id="sizes">
+{
+    const img = document.createElement('img');
+    testing.expectEqual('', img.sizes);
+
+    img.sizes = '(max-width: 600px) 480px, 800px';
+    testing.expectEqual('(max-width: 600px) 480px, 800px', img.getAttribute('sizes'));
+
+    img.setAttribute('sizes', 'auto');
+    testing.expectEqual('auto', img.sizes);
 }
 </script>
 
@@ -92,7 +106,9 @@
 {
     const img = document.createElement('img');
 
-    testing.expectEqual('eager', img.loading);
+    testing.diverges('Chrome: a missing loading attribute reads "auto", not the Eager default', () => {
+      testing.expectEqual('eager', img.loading);
+    });
 
     img.loading = 'lazy';
     testing.expectEqual('lazy', img.loading);
@@ -100,20 +116,26 @@
 }
 </script>
 
-<script id="complete">
-{
-    // Image with no src is complete per spec
-    const img = document.createElement('img');
-    testing.expectEqual(true, img.complete);
+<script id="complete" type=module>
+  // An image without a source is complete. One with a source is not until its
+  // load or error fires, even when it isn't fetched.
+  const state = await testing.async();
+  const img = document.createElement('img');
+  const initial = img.complete;
+  img.src = 'test.png';
+  const during = img.complete;
+  await new Promise(resolve => {
+    img.onload = resolve;
+    img.onerror = resolve;
+  });
 
-    // Image with src is also complete (headless browser, no actual fetch)
-    img.src = 'test.png';
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, initial);
+    testing.expectEqual(false, during);
     testing.expectEqual(true, img.complete);
-
-    // Image constructor also complete
-    const img2 = new Image();
-    testing.expectEqual(true, img2.complete);
-}
+    testing.expectEqual(true, new Image().complete);
+  });
 </script>
 
 <body></body>
@@ -126,7 +148,7 @@
   img.addEventListener("load", (e) => {
     state.resolve(e);
   });
-  img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
+  img.src = "/images/ok.png";
 
   await state.done((e) => {
     testing.expectEqual(false, e.bubbles);
@@ -135,7 +157,9 @@
     testing.expectEqual(false, e.composed);
     testing.expectEqual(true, e.isTrusted);
     testing.expectEqual(img, e.target);
-    testing.expectEqual(0, img.naturalWidth); // Images are not fetched by default.
+    testing.diverges('Lightpanda does not fetch images by default', () => {
+      testing.expectEqual(0, img.naturalWidth);
+    });
   });
 </script>
 
@@ -157,7 +181,7 @@
   let result = false;
   img.onload = () => result = true;
   document.body.appendChild(img);
-  img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
+  img.src = "/images/ok.png";
 
   testing.onload(() => testing.expectEqual(true, result));
 }
@@ -169,7 +193,9 @@
   // aborts the fetch of an older one.
   const img = document.createElement("img");
   const events = [];
+  // these URLs are 404s in a browser that fetches
   img.addEventListener("load", () => events.push(img.getAttribute("src")));
+  img.addEventListener("error", () => events.push(img.getAttribute("src")));
   document.body.appendChild(img);
   img.src = "a.png";
   img.removeAttribute("src");
@@ -190,12 +216,55 @@
 </script>
 
 <script id="decode" type=module>
+  const state = await testing.async();
+  const decoded = (img) => img.decode().then(() => 'resolved', (e) => e.name);
+
+  // no source: rejects
   const img = new Image();
   const p = img.decode();
+  p.catch(() => {});
   testing.expectEqual(true, p instanceof Promise);
-  testing.expectEqual(undefined, await p);
-  img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
-  testing.expectEqual(undefined, await img.decode());
+  const no_src = await decoded(img);
+
+  // waits for the load
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const loading = await decoded(img);
+  const loaded = await decoded(img);
+
+  // a new source while waiting rejects the pending decode
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+  const pending = decoded(img);
+  img.removeAttribute('src');
+  const superseded = await pending;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('EncodingError', no_src);
+    testing.expectEqual('resolved', loading);
+    testing.expectEqual('resolved', loaded);
+    testing.expectEqual('EncodingError', superseded);
+  });
+</script>
+
+<script id="empty_src_fires_error" type=module>
+  // An empty src selects nothing: that's an error. No src at all is not.
+  const state = await testing.async();
+  const events = [];
+  const empty = document.createElement('img');
+  empty.onload = () => events.push('empty:load');
+  empty.onerror = () => events.push('empty:error');
+  empty.src = '';
+  const none = document.createElement('img');
+  none.onload = () => events.push('none:load');
+  none.onerror = () => events.push('none:error');
+  document.body.append(empty, none);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('empty:error', events.join(','));
+    testing.expectEqual(true, empty.complete);
+  });
 </script>
 
 <script id="legacy_factory_function">
