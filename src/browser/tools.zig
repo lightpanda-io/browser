@@ -1701,7 +1701,7 @@ fn loginVerdict(arena: std.mem.Allocator, outcome: *lp.login.Outcome, reason: ?[
 
 /// The recorded form: fill the fields a previous run named and submit, with no
 /// model call and no verification — a replay repeats a decision, it does not
-/// make one.
+/// make one. With `decideOnly`, the fields are checked and nothing is typed.
 fn replayLogin(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -1710,21 +1710,27 @@ fn replayLogin(
     outcome: *lp.login.Outcome,
 ) ToolError!ToolResult {
     if (args.usernameSelector) |selector| {
-        const username = args.username orelse {
+        if (args.username == null and !args.decideOnly) {
             return verdict(arena, outcome, "usernameSelector was given without a username");
-        };
+        }
         const target = try resolveBySelector(session, selector);
         const element = target.node.is(Element) orelse return ToolError.InvalidParams;
         if (try lp.login.untrustedTarget(arena, target.page, element, try replaySubmitter(session, args.nextSelector orelse args.submitSelector))) {
             return verdict(arena, outcome, plaintext_refusal);
         }
-        try fillBySelector(session, registry, selector, username);
+        if (args.username) |username| if (!args.decideOnly) {
+            try fillBySelector(session, registry, selector, username);
+        };
         outcome.usernameSelector = selector;
     }
     if (args.passwordSelector) |selector| {
         // A recorded identifier-first login names both fields, and the
         // password's is not on this page yet: repeat the submit that raised it.
-        if ((resolveBySelector(session, selector) catch null) == null and outcome.usernameSelector != null) {
+        if (!try onPage(session, selector) and outcome.usernameSelector != null) {
+            if (args.decideOnly) {
+                outcome.passwordSelector = selector;
+                return verdict(arena, outcome, "decided only, nothing was typed or submitted; the password field is on a later step, so it was not checked");
+            }
             try submitLogin(session, registry, args.nextSelector, args.usernameSelector, outcome);
             outcome.nextSelector = outcome.submitSelector;
             outcome.submitSelector = null;
@@ -1738,15 +1744,28 @@ fn replayLogin(
         if (try lp.login.untrustedTarget(arena, target.page, element, try replaySubmitter(session, args.submitSelector))) {
             return verdict(arena, outcome, plaintext_refusal);
         }
-        try fillBySelector(session, registry, selector, args.password);
+        if (!args.decideOnly) try fillBySelector(session, registry, selector, args.password);
         outcome.passwordSelector = selector;
     }
 
+    if (args.decideOnly) {
+        outcome.submitSelector = args.submitSelector;
+        outcome.nextSelector = args.nextSelector;
+        return verdict(arena, outcome, "decided only, nothing was typed or submitted");
+    }
     try submitLogin(session, registry, args.submitSelector, args.passwordSelector orelse args.usernameSelector, outcome);
     return loginVerdict(arena, outcome, if (args.passwordSelector == null)
         "filled the username and submitted, without asking the model; no passwordSelector was given, so no password was typed"
     else
         "filled the fields given, without asking the model");
+}
+
+fn onPage(session: *lp.Session, selector: []const u8) ToolError!bool {
+    _ = resolveBySelector(session, selector) catch |err| switch (err) {
+        error.NodeNotFound => return false,
+        else => return err,
+    };
+    return true;
 }
 
 /// The recorded submit control, when it is on this page: its `formaction` is
@@ -3793,6 +3812,31 @@ test "acceptCookies: a missing key is reported so the REPL can ask a model inste
     // What `/acceptCookies` reads to fall back to the prompt it used to send.
     try std.testing.expectEqual(.missing_api_key, result.failure);
     try std.testing.expect(std.mem.find(u8, result.text, zenai.typesafe.env_var_name) != null);
+}
+
+test "login: a recorded call with decideOnly checks the fields and types nothing" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#submit","decideOnly":true}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "decided only") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "ada") == null);
+
+    const wrong = try call(aa, page.session, &registry, "login", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"hunter2","passwordSelector":"#user","decideOnly":true}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, wrong.text, "input[type=password]") != null);
 }
 
 test "login: a passwordSelector that is not a password field is refused" {
