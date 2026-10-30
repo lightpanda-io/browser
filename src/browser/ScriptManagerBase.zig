@@ -627,7 +627,7 @@ pub const Script = struct {
     // The encoding a remote script's Content-Type charset names.
     encoding: ?h5e.EncodingInfo = null,
 
-    // Set when the body is an http cache entry. Only classic scripts use it (for now).
+    // Set when the body is an http cache entry.
     script_cache: ?HttpClient.ScriptCache = null,
 
     extra: Extra,
@@ -1028,7 +1028,7 @@ pub const Script = struct {
                 },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.main_js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
+                    frame.main_js.module(false, local, self.source.content(), url, cacheable, self.script_cache) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -1078,7 +1078,6 @@ pub const Script = struct {
         });
     }
 
-    // currently only classic scripts participate in script caching
     fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
         const sc = self.script_cache orelse {
             // wasn't in the cache and isn't cacheable
