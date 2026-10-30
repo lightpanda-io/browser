@@ -630,8 +630,15 @@ fn runInterceptHandlers(
             if (err == error.TryCatchRethrow) {
                 if (try_catch.exceptionValue()) |exc| {
                     ctx.settleOne(i, exc);
-                    continue;
+                } else {
+                    const reason: ?js.Value = local.zigValueToJs(js.Undefined{}, .{}) catch null;
+                    ctx.settleOne(i, reason);
                 }
+                continue;
+            }
+            if (err == error.ExecutionTerminated) {
+                // Unwinding the whole call stack; don't settle anything.
+                return;
             }
             log.debug(.event, "Navigation.intercept handler", .{ .err = err });
             ctx.settleOne(i, null);

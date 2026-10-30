@@ -56,6 +56,9 @@ _source_element: ?*Element,
 // handlers.
 _intercepted: bool = false,
 _handlers: std.ArrayList(js.Function.Global) = .empty,
+// Set by scroll() once it's run its (no-op) scroll handling, so a second
+// call is a silent no-op rather than an error.
+_scrolled: bool = false,
 
 const NavigateEventOptions = struct {
     canIntercept: bool = false,
@@ -234,15 +237,37 @@ fn intercept(self: *NavigateEvent, opts: ?InterceptOptions, frame: *Frame) !Thro
     return .undefined;
 }
 
-fn scroll(self: *const NavigateEvent, frame: *Frame) Thrown {
-    if (self.sharedChecks("scroll", frame)) |exception| {
-        return .{ .exception = exception };
+// Unlike intercept(), scroll() isn't dispatch-only: it's only valid once the
+// navigation has committed, which (for an intercepted navigation) is while
+// its handler runs, after dispatch has already finished.
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigateevent-scroll
+fn scroll(self: *NavigateEvent, frame: *Frame) Thrown {
+    const local = frame.js.local.?;
+    if (self._proto._is_trusted == false) {
+        return .{ .exception = local.newException(
+            DOMException.init("scroll() may only be called on a trusted event.", "SecurityError"),
+        ) };
+    }
+    if (self._scrolled) {
+        return .undefined;
     }
     if (self._intercepted == false) {
-        return .{ .exception = frame.js.local.?.newException(
+        return .{ .exception = local.newException(
             DOMException.init("intercept() must be called before scroll()", "InvalidStateError"),
         ) };
     }
+
+    const committed = if (frame._ongoing_navigate) |ongoing|
+        ongoing.signal == self._signal and ongoing.committed_same_document
+    else
+        false;
+    if (!committed) {
+        return .{ .exception = local.newException(
+            DOMException.init("scroll() may only be called once the navigation has committed", "InvalidStateError"),
+        ) };
+    }
+
+    self._scrolled = true;
     return .undefined;
 }
 
