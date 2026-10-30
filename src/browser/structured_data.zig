@@ -53,7 +53,8 @@ const LinkRel = struct {
 const MicrodataItem = struct {
     types: []const []const u8,
     id: ?[]const u8,
-    properties: []const MicrodataProperty,
+    // null when the item was already expanded earlier in the output
+    properties: ?std.StringArrayHashMapUnmanaged(std.ArrayList(MicrodataValue)),
 
     pub fn jsonStringify(self: *const MicrodataItem, jw: anytype) !void {
         try jw.beginObject();
@@ -65,33 +66,17 @@ const MicrodataItem = struct {
             try jw.objectField("id");
             try jw.write(id);
         }
-
-        // Values are always arrays, grouped by name in first-seen order.
-        try jw.objectField("properties");
-        try jw.beginObject();
-        for (self.properties, 0..) |prop, i| {
-            for (self.properties[0..i]) |prev| {
-                if (std.mem.eql(u8, prev.name, prop.name)) break;
-            } else {
-                try jw.objectField(prop.name);
-                try jw.beginArray();
-                for (self.properties[i..]) |p| {
-                    if (std.mem.eql(u8, p.name, prop.name)) {
-                        try jw.write(p.value);
-                    }
-                }
-                try jw.endArray();
+        if (self.properties) |properties| {
+            try jw.objectField("properties");
+            try jw.beginObject();
+            for (properties.keys(), properties.values()) |name, values| {
+                try jw.objectField(name);
+                try jw.write(values.items);
             }
+            try jw.endObject();
         }
         try jw.endObject();
-
-        try jw.endObject();
     }
-};
-
-const MicrodataProperty = struct {
-    name: []const u8,
-    value: MicrodataValue,
 };
 
 const MicrodataValue = union(enum) {
@@ -257,14 +242,14 @@ pub fn collectStructuredData(
         }
     }
 
-    var microdata_memory: std.ArrayList(*Element) = .empty;
+    var microdata_states: MicrodataStates = .empty;
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
 
         // Top-level items; the ones with itemprop are values of another item.
         if (isItem(el) and !el.hasAttributeSafe(comptime .wrap("itemprop"))) {
-            try microdata.append(arena, try collectMicrodataItem(el, arena, frame, &microdata_memory));
+            try microdata.append(arena, try collectMicrodataItem(el, arena, frame, &microdata_states));
         }
 
         switch (el.getTag()) {
@@ -441,16 +426,20 @@ fn isItem(el: *Element) bool {
     return el._namespace == .html and el.hasAttributeSafe(comptime .wrap("itemscope"));
 }
 
-/// `memory` holds the items being collected, outermost first, so an item
-/// reached again through itemprop or itemref becomes a cycle, not a loop.
+/// Every item element seen so far: null while it is being expanded, so
+/// reaching it again is a cycle, then the expanded item.
+const MicrodataStates = std.AutoHashMapUnmanaged(*Element, ?*const MicrodataItem);
+
+/// Each item is expanded once per page. The spec expands an item again at
+/// every reference, which items shared through itemref make exponential;
+/// later references here get only its type and id.
 fn collectMicrodataItem(
     el: *Element,
     arena: Allocator,
     frame: *Frame,
-    memory: *std.ArrayList(*Element),
+    states: *MicrodataStates,
 ) Allocator.Error!*const MicrodataItem {
-    try memory.append(arena, el);
-    defer _ = memory.pop();
+    try states.put(arena, el, null);
 
     var types: std.ArrayList([]const u8) = .empty;
     if (el.getAttributeSafe(comptime .wrap("itemtype"))) |itemtype| {
@@ -466,28 +455,41 @@ fn collectMicrodataItem(
         }
     }
 
-    var properties: std.ArrayList(MicrodataProperty) = .empty;
+    var properties: std.StringArrayHashMapUnmanaged(std.ArrayList(MicrodataValue)) = .empty;
+    var element_names: std.ArrayList([]const u8) = .empty;
     for (try crawlMicrodataProperties(el, arena)) |prop_el| {
-        const value: MicrodataValue = if (!isItem(prop_el))
-            .{ .text = try microdataPropertyValue(prop_el, arena, frame) }
-        else if (std.mem.findScalar(*Element, memory.items, prop_el) != null)
-            .{ .text = "ERROR" } // the spec's value for an item that contains itself
+        const value: MicrodataValue = if (isItem(prop_el))
+            try microdataItemValue(prop_el, arena, frame, states)
         else
-            .{ .item = try collectMicrodataItem(prop_el, arena, frame, memory) };
+            .{ .text = try microdataPropertyValue(prop_el, arena, frame) };
 
         // a name repeated on the same element counts once
-        const first = properties.items.len;
+        element_names.clearRetainingCapacity();
         var names = std.mem.tokenizeAny(u8, prop_el.getAttributeSafe(comptime .wrap("itemprop")).?, &std.ascii.whitespace);
         while (names.next()) |name| {
-            for (properties.items[first..]) |p| {
-                if (std.mem.eql(u8, p.name, name)) break;
-            } else try properties.append(arena, .{ .name = name, .value = value });
+            const repeated = for (element_names.items) |seen| {
+                if (std.mem.eql(u8, seen, name)) break true;
+            } else false;
+            if (repeated) continue;
+            try element_names.append(arena, name);
+            const entry = try properties.getOrPutValue(arena, name, .empty);
+            try entry.value_ptr.append(arena, value);
         }
     }
 
     const item = try arena.create(MicrodataItem);
-    item.* = .{ .types = types.items, .id = id, .properties = properties.items };
+    item.* = .{ .types = types.items, .id = id, .properties = properties };
+    try states.put(arena, el, item);
     return item;
+}
+
+fn microdataItemValue(el: *Element, arena: Allocator, frame: *Frame, states: *MicrodataStates) !MicrodataValue {
+    const state = states.get(el) orelse return .{ .item = try collectMicrodataItem(el, arena, frame, states) };
+    // still being expanded: the item contains itself, for which the spec has "ERROR"
+    const expanded = state orelse return .{ .text = "ERROR" };
+    const stub = try arena.create(MicrodataItem);
+    stub.* = .{ .types = expanded.types, .id = expanded.id, .properties = null };
+    return .{ .item = stub };
 }
 
 /// The elements carrying the item's properties, in tree order: its
@@ -499,7 +501,8 @@ fn crawlMicrodataProperties(item: *Element, arena: Allocator) ![]*Element {
     var pending: std.ArrayList(*Element) = .empty;
     try visited.put(arena, item, {});
 
-    try appendChildElements(item, arena, &pending);
+    // Without itemref targets, popping `pending` visits elements in tree order.
+    var has_targets = false;
     if (item.getAttributeSafe(comptime .wrap("itemref"))) |itemref| {
         // the item's whole tree: a detached one is scanned from the node given
         const tree = item.asNode().getRootNode(.{});
@@ -507,15 +510,17 @@ fn crawlMicrodataProperties(item: *Element, arena: Allocator) ![]*Element {
         while (it.next()) |id| {
             if (Frame.getElementByIdFromNode(tree, id)) |target| {
                 try pending.append(arena, target);
+                has_targets = true;
             }
         }
     }
+    try pushChildElements(item, arena, &pending);
 
     while (pending.pop()) |candidate| {
         if ((try visited.getOrPut(arena, candidate)).found_existing) continue;
 
         if (!isItem(candidate)) {
-            try appendChildElements(candidate, arena, &pending);
+            try pushChildElements(candidate, arena, &pending);
         }
         if (candidate.getAttributeSafe(comptime .wrap("itemprop"))) |itemprop| {
             var names = std.mem.tokenizeAny(u8, itemprop, &std.ascii.whitespace);
@@ -525,21 +530,22 @@ fn crawlMicrodataProperties(item: *Element, arena: Allocator) ![]*Element {
         }
     }
 
-    std.mem.sort(*Element, results.items, {}, struct {
-        fn lessThan(_: void, a: *Element, b: *Element) bool {
-            const FOLLOWING: u16 = 0x04;
-            return a.asNode().compareDocumentPosition(b.asNode()) & FOLLOWING != 0;
-        }
-    }.lessThan);
+    if (has_targets) {
+        std.mem.sort(*Element, results.items, {}, struct {
+            fn lessThan(_: void, a: *Element, b: *Element) bool {
+                const FOLLOWING: u16 = 0x04;
+                return a.asNode().compareDocumentPosition(b.asNode()) & FOLLOWING != 0;
+            }
+        }.lessThan);
+    }
     return results.items;
 }
 
-fn appendChildElements(el: *Element, arena: Allocator, out: *std.ArrayList(*Element)) !void {
-    var it = el.asNode().childrenIterator();
-    while (it.next()) |child| {
-        if (child.is(Element)) |child_el| {
-            try out.append(arena, child_el);
-        }
+/// Last to first, so that popping them off `out` visits them in tree order.
+fn pushChildElements(el: *Element, arena: Allocator, out: *std.ArrayList(*Element)) !void {
+    var child = el.lastElementChild();
+    while (child) |c| : (child = c.previousElementSibling()) {
+        try out.append(arena, c);
     }
 }
 
@@ -770,6 +776,22 @@ test "structured_data: microdata cycle" {
 
     try expectMicrodata(
         \\[{"properties":{"a":[{"properties":{"b":[{"properties":{"a":["ERROR"]}}]}}]}}]
+    , data);
+}
+
+test "structured_data: microdata shared items expand once" {
+    const data = try testStructuredData(
+        \\<div itemscope itemref="a b"></div>
+        \\<div itemscope id="a" itemprop="p" itemref="c"></div>
+        \\<div itemscope id="b" itemprop="p" itemref="c"></div>
+        \\<div itemscope id="c" itemprop="q" itemtype="https://schema.org/Thing"><span itemprop="name">x</span></div>
+    );
+    defer testing.test_session.closeAllPages();
+
+    try expectMicrodata(
+        \\[{"properties":{"p":[{"properties":{"q":[{"type":["https://schema.org/Thing"],"properties":{"name":["x"]}}]}},
+    ++
+        \\{"properties":{"q":[{"type":["https://schema.org/Thing"]}]}}]}}]
     , data);
 }
 
