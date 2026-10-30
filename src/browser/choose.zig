@@ -101,7 +101,7 @@ pub fn collect(
             others -= 1;
         }
         const node = try registry.register(element.asNode());
-        const label = name(el);
+        const label = try arena.dupe(u8, name(el));
         out.appendAssumeCapacity(.{
             .key = try arena.print("{d}", .{node.id}),
             .element = element,
@@ -117,17 +117,19 @@ fn name(el: interactive.InteractiveElement) []const u8 {
 }
 
 /// Keys follow the `interactiveElements` tool's, so one vocabulary describes
-/// an element whoever is reading.
+/// an element whoever is reading. Every string is copied: the request is
+/// serialized on a helper thread while page JS runs and can free the
+/// attribute values these point into.
 fn describe(arena: std.mem.Allocator, el: interactive.InteractiveElement, label: []const u8) !std.json.Value {
     var obj: std.json.ObjectMap = .empty;
-    if (el.role) |role| try obj.put(arena, "role", .{ .string = role });
+    if (el.role) |role| try obj.put(arena, "role", .{ .string = try arena.dupe(u8, role) });
     if (label.len > 0) {
         try obj.put(arena, "name", .{ .string = truncateUtf8(label, max_name_bytes) });
     }
-    if (el.input_type) |t| try obj.put(arena, "inputType", .{ .string = t });
-    if (el.placeholder) |p| try obj.put(arena, "placeholder", .{ .string = p });
-    if (el.element_name) |n| try obj.put(arena, "elementName", .{ .string = n });
-    if (el.href) |h| if (h.len <= max_href_bytes) try obj.put(arena, "href", .{ .string = h });
+    if (el.input_type) |t| try obj.put(arena, "inputType", .{ .string = try arena.dupe(u8, t) });
+    if (el.placeholder) |p| try obj.put(arena, "placeholder", .{ .string = try arena.dupe(u8, p) });
+    if (el.element_name) |n| try obj.put(arena, "elementName", .{ .string = try arena.dupe(u8, n) });
+    if (el.href) |h| if (h.len <= max_href_bytes) try obj.put(arena, "href", .{ .string = try arena.dupe(u8, h) });
     return .{ .object = obj };
 }
 
