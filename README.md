@@ -263,6 +263,21 @@ longer clobber each other's page:
 - The `session_new`, `session_list` and `session_close` tools manage sessions
   explicitly. Sending `DELETE /mcp` with an `Mcp-Session-Id` closes that session.
 
+The `run` tool runs a [PandaScript](https://lightpanda.io/docs/usage/pandascript)
+in the caller's session, as `lightpanda run` does, and returns its console
+output and the value it returns. Pages the script opens are closed when it ends;
+cookies and storage stay, so a login carries over to the next `run`. An optional
+`timeout` in milliseconds (default 60000) stops a stuck script. A backend can
+drive Lightpanda with one POST:
+
+```bash
+curl -s http://127.0.0.1:9223/mcp -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "run", "arguments": { "script":
+    "const page = new Page();\nawait page.goto(\"https://example.com\");\nreturn page.extract({ title: \"title\", links: [\"a\"] });" } }
+}'
+```
+
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).

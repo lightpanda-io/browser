@@ -2117,6 +2117,14 @@ fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHa
     return page;
 }
 
+/// Close a top-level page, evicting its nodes from `registry` first: an entry
+/// left behind would point into the freed page.
+pub fn closePage(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, frame_id: u32) void {
+    const page = session.livePage(frame_id) orelse return;
+    registry.resetFrame(arena, &page.frame);
+    session.closePage(frame_id);
+}
+
 /// Start a navigation without waiting for it to load, so the agent script Runtime
 /// can drive several gotos concurrently. `receiver_frame_id`, when set, is the
 /// page a re-goto on the same `Page` object replaces — only that page is closed,
@@ -2131,12 +2139,7 @@ pub fn startGoto(
 ) ToolError!StartedGoto {
     // This path bypasses `call`, so it needs its own `$LP_*` substitution pass.
     const args = try parseArgs(GotoParams, arena, try substituteStringArgs(arena, .goto, arguments));
-    if (receiver_frame_id) |fid| {
-        if (session.livePage(fid)) |page| {
-            registry.resetFrame(arena, &page.frame);
-            session.closePage(fid);
-        }
-    }
+    if (receiver_frame_id) |fid| closePage(arena, session, registry, fid);
     const page = try openPage(session, args.url);
     return .{
         .frame_id = page.frame_id,
