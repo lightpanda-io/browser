@@ -54,3 +54,73 @@
   });
 }
 </script>
+
+<script id=defer_ignored>
+{
+  // defer has no effect on a dynamic script: it stays async, so it runs in
+  // completion order and doesn't wait for parsing.
+  window.deferIgnoredList = '';
+  for (const src of ['dynamic_order_defer1.js?delay_ms=200', 'dynamic_order_defer2.js']) {
+    const s = document.createElement('script');
+    s.src = src;
+    s.defer = true;
+    document.head.appendChild(s);
+  }
+  testing.onload(() => {
+    testing.expectEqual('21', deferIgnoredList);
+    testing.expectEqual(true, window.domLoadedBeforeDefer1);
+  });
+}
+</script>
+
+<script id=async_attribute_clears_force_async>
+{
+  // Adding the async attribute clears force-async, so once it's removed
+  // again the script is ordered.
+  window.attributeList = '';
+  for (const src of ['dynamic_order_attribute1.js?delay_ms=200', 'dynamic_order_attribute2.js']) {
+    const s = document.createElement('script');
+    s.src = src;
+    s.setAttribute('async', '');
+    s.removeAttribute('async');
+    document.head.appendChild(s);
+  }
+  testing.onload(() => {
+    testing.expectEqual('12', attributeList);
+  });
+}
+</script>
+
+<script id=module_ordered>
+{
+  // A dynamic module with async = false is ordered, not deferred.
+  window.moduleOrderedList = '';
+  for (const src of ['dynamic_order_module1.js?delay_ms=200', 'dynamic_order_module2.js']) {
+    const s = document.createElement('script');
+    s.type = 'module';
+    s.src = src;
+    s.async = false;
+    document.head.appendChild(s);
+  }
+  testing.onload(() => {
+    testing.expectEqual('12', moduleOrderedList);
+    testing.expectEqual(true, window.domLoadedBeforeModule1);
+  });
+}
+</script>
+
+<script id=module_force_async>
+{
+  // A default dynamic module is async, not deferred.
+  window.moduleAsyncList = '';
+  for (const src of ['dynamic_order_module_async1.js?delay_ms=200', 'dynamic_order_module_async2.js']) {
+    const s = document.createElement('script');
+    s.type = 'module';
+    s.src = src;
+    document.head.appendChild(s);
+  }
+  testing.onload(() => {
+    testing.expectEqual('21', moduleAsyncList);
+  });
+}
+</script>
