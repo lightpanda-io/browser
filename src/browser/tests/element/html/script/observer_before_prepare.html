@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!--
+Script-deferral snippets observe the parser and retype each <script> as it is
+inserted. The parser runs microtasks before preparing a script, so the observer
+gets there first and none of these run.
+-->
+
+<script>
+  window.seen = [];
+  window.ran = [];
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node.nodeName === 'SCRIPT' && node.dataset.deferred) {
+          window.seen.push(node.dataset.deferred);
+          node.type = 'text/lazyload';
+        }
+      }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+</script>
+
+<script data-deferred=inline>window.ran.push('inline');</script>
+<script data-deferred=blocking src="observer_before_prepare.js"></script>
+<script data-deferred=defer defer src="observer_before_prepare.js"></script>
+<script data-deferred=async async src="observer_before_prepare.js"></script>
+<script data-deferred=module type=module>window.ran.push('module');</script>
+
+<script id=retyped_scripts_do_not_run>
+  testing.expectEqual(['inline', 'blocking', 'defer', 'async', 'module'], window.seen);
+  testing.expectEqual([], window.ran);
+  testing.onload(() => testing.expectEqual([], window.ran));
+</script>
