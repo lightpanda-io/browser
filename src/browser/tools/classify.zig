@@ -22,6 +22,7 @@
 //! as JSON, are zenai's.
 
 const std = @import("std");
+const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 const jev = @import("jev.zig");
 
@@ -47,7 +48,47 @@ pub fn prepareQuestions(
     return json.addQuestions(arena, prepared, try jev.allPresetQuestions(arena));
 }
 
+pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct {
+        questions: std.json.Value,
+        selector: ?[]const u8 = null,
+        presets: bool = false,
+    };
+    const args = try parseArgs(Params, arena, arguments);
+    const page = try requireFrame(session);
+
+    const node = try resolveScope(session, registry, page, args.selector, null);
+    const prepared = prepareQuestions(arena, args.questions, args.presets) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return .{ .text = try arena.print("classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
+    };
+
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .classify,
+        .questions = prepared.questions,
+        .node = node,
+    })) {
+        .failed => |result| return result,
+        .ok => |ok| ok,
+    };
+    defer response.deinit();
+
+    const formatted = zenai.typesafe.json.formatAnswers(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
+
+    return .{ .text = formatted };
+}
+
 const testing = @import("../../testing.zig");
+
+const tools = @import("../tools.zig");
+const ToolError = tools.ToolError;
+const ToolResult = tools.ToolResult;
+const parseArgs = tools.parseArgs;
+const requireFrame = tools.requireFrame;
+const resolveScope = tools.resolveScope;
+const NodeRegistry = lp.NodeRegistry;
+const askPage = jev.askPage;
+const internalUnlessOom = jev.internalUnlessOom;
 
 test "browser.classify: a preset can be named by key alone" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);

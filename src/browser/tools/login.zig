@@ -40,6 +40,27 @@ const interactive = @import("../interactive.zig");
 const URL = @import("../URL.zig");
 const Element = @import("../webapi/Element.zig");
 const Form = @import("../webapi/element/html/Form.zig");
+
+const tools = @import("../tools.zig");
+const ToolError = tools.ToolError;
+const ToolResult = tools.ToolResult;
+const beginAction = tools.beginAction;
+const mapActionError = tools.mapActionError;
+const parseArgs = tools.parseArgs;
+const renderJson = tools.renderJson;
+const requireFrame = tools.requireFrame;
+const resolveBySelector = tools.resolveBySelector;
+const selectorFor = tools.selectorFor;
+const settleAction = tools.settleAction;
+const NodeRegistry = lp.NodeRegistry;
+const askPage = jev.askPage;
+const internalUnlessOom = jev.internalUnlessOom;
+const unusableAnswer = jev.unusableAnswer;
+const compact = jev.compact;
+const verdict = jev.verdict;
+const unverified = jev.unverified;
+const settle = jev.settle;
+const clickAndSettle = jev.clickAndSettle;
 const Frame = lp.Frame;
 
 const Questions = zenai.typesafe.Questions;
@@ -223,7 +244,373 @@ pub const Outcome = struct {
     reason: ?[]const u8 = null,
 };
 
+const LoginParams = struct {
+    password: []const u8,
+    username: ?[]const u8 = null,
+    usernameSelector: ?[]const u8 = null,
+    passwordSelector: ?[]const u8 = null,
+    submitSelector: ?[]const u8 = null,
+    nextSelector: ?[]const u8 = null,
+    /// Report which fields would be used and type nothing, so the picks can
+    /// be scored on a real page without sending credentials.
+    decideOnly: bool = false,
+};
+
+/// Which element plays which part on the page as it stands, and where it is.
+const Decided = union(enum) {
+    ok: struct {
+        page: *lp.Frame,
+        picks: Picks,
+        /// The identifier field, the password field and the control that
+        /// submits them, as selectors resolved before anything is typed: a
+        /// submit can navigate and free every node the picks point at.
+        user: ?[]const u8 = null,
+        password: ?[]const u8 = null,
+        submit: ?[]const u8 = null,
+        candidates: usize = 0,
+    },
+    failed: ToolResult,
+};
+
+/// Run again on the page an identifier-first submit returns, where the
+/// password finally appears.
+fn decideLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    wanted: Wanted,
+    outcome: *Outcome,
+) ToolError!Decided {
+    const page = try requireFrame(session);
+    const candidates = choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err);
+    if (candidates.len == 0) {
+        return .{ .failed = try verdict(arena, outcome, "nothing on this page can be filled in") };
+    }
+
+    const asked = try questions(arena, candidates, wanted);
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .login,
+        .questions = asked,
+        .node = page.document.asNode(),
+        .state = .{ .link_urls = false, .ids = true },
+    })) {
+        .failed => |result| return .{ .failed = result },
+        .ok => |ok| ok,
+    };
+    defer response.deinit();
+    outcome.calls += 1;
+
+    const chosen = picks(candidates, asked, response.value) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        else => return .{ .failed = try unusableAnswer(arena, .login, err) },
+    };
+
+    return .{ .ok = .{
+        .page = page,
+        .picks = chosen,
+        .user = if (chosen.user) |field| selectorFor(arena, page, field.element) else null,
+        .password = if (chosen.password) |field| selectorFor(arena, page, field.element) else null,
+        .submit = submitSelector(arena, page, chosen),
+        .candidates = candidates.len,
+    } };
+}
+
+/// The control that submits the sign-in form — null when Enter in the field is
+/// the better act, because none was picked or the one picked sits outside the
+/// field's own form and so submits something else, whatever it is labelled.
+fn submitSelector(arena: std.mem.Allocator, page: *lp.Frame, chosen: Picks) ?[]const u8 {
+    const control = chosen.submit orelse return null;
+    const field = chosen.password orelse chosen.user orelse return null;
+    if (!sameForm(field.element, control.element)) return null;
+    return selectorFor(arena, page, control.element);
+}
+
+const plaintext_refusal = "the page or the URL its form posts to is not https; refusing to send credentials";
+
+/// Not the model's decision to make, whatever it picked: a password goes into
+/// an `input[type=password]` on a form that posts over TLS, or nowhere.
+fn credentialRefusal(arena: std.mem.Allocator, page: *lp.Frame, chosen: Picks) error{OutOfMemory}!?[]const u8 {
+    if (chosen.password) |field| {
+        if (!isPasswordField(field.element)) {
+            return "the field picked for the password is not an input[type=password]";
+        }
+    }
+    if (chosen.user) |field| {
+        if (isPasswordField(field.element)) {
+            return "the field picked for the username is a password input";
+        }
+    }
+    if (chosen.password orelse chosen.user) |field| {
+        const submitter = if (chosen.submit) |control|
+            (if (sameForm(field.element, control.element)) control.element else null)
+        else
+            null;
+        if (try untrustedTarget(arena, page, field.element, submitter)) return plaintext_refusal;
+    }
+    return null;
+}
+
+pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const args = try parseArgs(LoginParams, arena, arguments);
+    var outcome: Outcome = .{};
+
+    if (args.passwordSelector != null or args.usernameSelector != null) {
+        return replayLogin(arena, session, registry, args, &outcome);
+    }
+
+    // Which field takes the identifier cannot matter when there is none to type.
+    var decided = switch (try decideLogin(arena, session, registry, .{ .user = args.username != null }, &outcome)) {
+        .failed => |result| return result,
+        .ok => |ok| ok,
+    };
+
+    if (decided.picks.user == null and decided.picks.password == null) {
+        return verdict(arena, &outcome, "no sign-in field on this page");
+    }
+    if (args.username != null and decided.picks.user == null) {
+        return verdict(arena, &outcome, "could not tell which field takes the username");
+    }
+    outcome.candidates = decided.candidates;
+    if (try credentialRefusal(arena, decided.page, decided.picks)) |reason| {
+        return verdict(arena, &outcome, reason);
+    }
+    if (args.decideOnly) {
+        outcome.usernameSelector = decided.user;
+        outcome.passwordSelector = decided.password;
+        outcome.submitSelector = decided.submit;
+        return verdict(arena, &outcome, "decided only, nothing was typed or submitted");
+    }
+    if (decided.picks.password == null) {
+        if (!decided.picks.multi_step) {
+            return verdict(arena, &outcome, "no password field, and the page does not ask for one on a later step");
+        }
+        if (args.username == null) {
+            return verdict(arena, &outcome, "the page asks for the username first, and none was given");
+        }
+    }
+
+    if (args.username) |username| {
+        const selector = decided.user orelse {
+            return verdict(arena, &outcome, "no selector could be built for the username field");
+        };
+        if (try fillCredential(arena, session, registry, selector, username, .user, decided.submit)) |reason| {
+            return verdict(arena, &outcome, reason);
+        }
+        outcome.usernameSelector = selector;
+    }
+
+    if (decided.picks.password == null) {
+        if (try submitLogin(arena, session, registry, decided.submit, decided.user, &outcome)) |reason| {
+            return verdict(arena, &outcome, reason);
+        }
+        outcome.nextSelector = outcome.submitSelector;
+        outcome.submitSelector = null;
+        outcome.pressedEnter = false;
+        decided = switch (try decideLogin(arena, session, registry, .{ .user = false, .multi_step = false }, &outcome)) {
+            .failed => |failed| return unverified(arena, &outcome, loginVerdict, failed, "submitted the username, but could not find the password field"),
+            .ok => |ok| ok,
+        };
+        if (decided.picks.password == null) {
+            return verdict(arena, &outcome, "submitted the username, but the next page shows no password field");
+        }
+        if (try credentialRefusal(arena, decided.page, decided.picks)) |reason| {
+            return verdict(arena, &outcome, reason);
+        }
+    }
+
+    const password_selector = decided.password orelse {
+        return verdict(arena, &outcome, "no selector could be built for the password field");
+    };
+    if (try fillCredential(arena, session, registry, password_selector, args.password, .password, decided.submit)) |reason| {
+        return verdict(arena, &outcome, reason);
+    }
+    outcome.passwordSelector = password_selector;
+
+    if (try submitLogin(arena, session, registry, decided.submit, password_selector, &outcome)) |reason| {
+        return verdict(arena, &outcome, reason);
+    }
+    return verifyLogin(arena, session, registry, &outcome);
+}
+
+/// Resolved by selector, so a replay repeats what we did, and checked on the
+/// node it resolves to now rather than on the pick: filling the username
+/// runs the page's input handlers, which can rebuild the form before the
+/// password goes in. A null `value` checks and types nothing.
+fn fillCredential(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    selector: []const u8,
+    value: ?[]const u8,
+    field: enum { user, password },
+    submit: ?[]const u8,
+) ToolError!?[]const u8 {
+    const target = try resolveBySelector(session, selector);
+    const element = target.node.is(Element) orelse return ToolError.InvalidParams;
+    switch (field) {
+        .user => if (isPasswordField(element)) return "the field for the username is a password input",
+        .password => if (!isPasswordField(element)) return "the field for the password is not an input[type=password]",
+    }
+    if (try untrustedTarget(arena, target.page, element, try submitterAt(session, submit))) {
+        return plaintext_refusal;
+    }
+    const text = value orelse return null;
+    const scope = beginAction(session);
+    lp.actions.fill(target.node, text, target.page) catch |err| return mapActionError(err);
+    _ = try settleAction(session, registry, scope);
+    return null;
+}
+
+/// Clicks `submit`, or presses Enter in `field` when there is no such control
+/// on the page. Where the form posts is checked again first, on the form as
+/// it stands after the fill.
+fn submitLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    submit: ?[]const u8,
+    field: ?[]const u8,
+    outcome: *Outcome,
+) ToolError!?[]const u8 {
+    const input = try resolveBySelector(session, field orelse return null);
+    const input_element = input.node.is(Element) orelse return ToolError.InvalidParams;
+    const control = try submitterAt(session, submit);
+    if (try untrustedTarget(arena, input.page, input_element, control)) {
+        return plaintext_refusal;
+    }
+
+    if (control) |element| {
+        try clickAndSettle(session, registry, element.asNode(), input.page);
+        outcome.submitSelector = submit;
+        outcome.submitted = true;
+        return null;
+    }
+
+    const scope = beginAction(session);
+    lp.actions.press(input.node, "Enter", input.page) catch |err| return mapActionError(err);
+    _ = try settleAction(session, registry, scope);
+    try settle(session);
+    outcome.pressedEnter = true;
+    outcome.submitted = true;
+    return null;
+}
+
+/// The page's own verdict on whether the sign-in worked. A failure is reported
+/// and never retried: a second attempt on a wrong password is how accounts get
+/// locked, and that call belongs to whoever owns the account.
+fn verifyLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    outcome: *Outcome,
+) ToolError!ToolResult {
+    var response = switch (try askPage(arena, session, registry, .{
+        .tool = .login,
+        .questions = try verifyQuestions(arena),
+        .node = (try requireFrame(session)).document.asNode(),
+        .state = .{ .link_urls = false },
+    })) {
+        .failed => |failed| return unverified(arena, outcome, loginVerdict, failed, "submitted, but could not check whether the sign-in worked"),
+        .ok => |ok| ok,
+    };
+    defer response.deinit();
+    outcome.calls += 1;
+
+    outcome.loginWall = response.value.noul(wall_key);
+    outcome.errorPage = response.value.noul(error_key);
+    outcome.loggedIn = (outcome.loginWall orelse 1) < jev.gate and (outcome.errorPage orelse 1) < jev.gate;
+    return loginVerdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
+}
+
+fn loginVerdict(arena: std.mem.Allocator, outcome: *Outcome, reason: ?[]const u8) ToolError!ToolResult {
+    var result = try verdict(arena, outcome, reason);
+    if (outcome.passwordSelector != null or outcome.usernameSelector != null) {
+        result.replay_args = try renderJson(arena, .{
+            .usernameSelector = outcome.usernameSelector,
+            .passwordSelector = outcome.passwordSelector,
+            .submitSelector = outcome.submitSelector,
+            .nextSelector = outcome.nextSelector,
+        }, compact);
+    }
+    return result;
+}
+
+/// The recorded form: fill the fields a previous run named and submit, with no
+/// model call and no verification — a replay repeats a decision, it does not
+/// make one. With `decideOnly`, the fields are checked and nothing is typed.
+fn replayLogin(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    args: LoginParams,
+    outcome: *Outcome,
+) ToolError!ToolResult {
+    if (args.usernameSelector) |selector| {
+        if (args.username == null and !args.decideOnly) {
+            return verdict(arena, outcome, "usernameSelector was given without a username");
+        }
+        const value = if (args.decideOnly) null else args.username;
+        if (try fillCredential(arena, session, registry, selector, value, .user, args.nextSelector orelse args.submitSelector)) |reason| {
+            return verdict(arena, outcome, reason);
+        }
+        outcome.usernameSelector = selector;
+    }
+    if (args.passwordSelector) |selector| {
+        // A recorded identifier-first login names both fields, and the
+        // password's is not on this page yet: repeat the submit that raised it.
+        if (!try onPage(session, selector) and outcome.usernameSelector != null) {
+            if (args.decideOnly) {
+                outcome.passwordSelector = selector;
+                return verdict(arena, outcome, "decided only, nothing was typed or submitted; the password field is on a later step, so it was not checked");
+            }
+            if (try submitLogin(arena, session, registry, args.nextSelector, args.usernameSelector, outcome)) |reason| {
+                return verdict(arena, outcome, reason);
+            }
+            outcome.nextSelector = outcome.submitSelector;
+            outcome.submitSelector = null;
+            outcome.pressedEnter = false;
+        }
+        const value = if (args.decideOnly) null else args.password;
+        if (try fillCredential(arena, session, registry, selector, value, .password, args.submitSelector)) |reason| {
+            return verdict(arena, outcome, reason);
+        }
+        outcome.passwordSelector = selector;
+    }
+
+    if (args.decideOnly) {
+        outcome.submitSelector = args.submitSelector;
+        outcome.nextSelector = args.nextSelector;
+        return verdict(arena, outcome, "decided only, nothing was typed or submitted");
+    }
+    if (try submitLogin(arena, session, registry, args.submitSelector, args.passwordSelector orelse args.usernameSelector, outcome)) |reason| {
+        return verdict(arena, outcome, reason);
+    }
+    return loginVerdict(arena, outcome, if (args.passwordSelector == null)
+        "filled the username and submitted, without asking the model; no passwordSelector was given, so no password was typed"
+    else
+        "filled the fields given, without asking the model");
+}
+
+fn onPage(session: *lp.Session, selector: []const u8) ToolError!bool {
+    _ = resolveBySelector(session, selector) catch |err| switch (err) {
+        error.NodeNotFound => return false,
+        else => return err,
+    };
+    return true;
+}
+
+/// The submit control, when it is on this page: its `formaction` is where the
+/// credentials go.
+fn submitterAt(session: *lp.Session, selector: ?[]const u8) ToolError!?*Element {
+    const target = resolveBySelector(session, selector orelse return null) catch |err| switch (err) {
+        error.NodeNotFound => return null,
+        else => return err,
+    };
+    return target.node.is(Element);
+}
+
 const testing = @import("../../testing.zig");
+const call = tools.call;
 
 /// A frame whose document holds `html` inside one wrapper element, attached so
 /// `<label for>` and form ownership both resolve.
@@ -337,4 +724,225 @@ test "browser.login: a credential goes only to https or loopback" {
     frame.url = "http://example.com/account";
     try testing.expect(try untrustedTarget(aa, frame, relative, null));
     try testing.expect(try untrustedTarget(aa, frame, loose, null));
+}
+
+test "login: the recorded selectors are filled and submitted without the model" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#submit"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
+    try std.testing.expectEqualStrings(
+        "{\"usernameSelector\":\"#user\",\"passwordSelector\":\"#pass\",\"submitSelector\":\"#submit\"}",
+        result.replay_args.?,
+    );
+
+    const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#status"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, status.text, "submitted") != null);
+
+    // The identifier is on the page, the password is masked everywhere the
+    // state is built — including the request a verification would send.
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "ada") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "*****") != null);
+}
+
+test "login: Jev picks the identifier, the password field and the submit control" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
+
+    // decideOnly, so nothing is typed and the decoy newsletter form is the
+    // only thing that could have been picked by mistake.
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","decideOnly":true}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"usernameSelector\":\"#user\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+}
+
+test "login: the password waits for the step that asks for it" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_two_step.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"loggedIn\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"calls\":3") != null);
+    try std.testing.expectEqualStrings(
+        "{\"usernameSelector\":\"#user\",\"passwordSelector\":\"#pass\",\"submitSelector\":\"#signin-submit\"}",
+        result.replay_args.?,
+    );
+
+    const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#status"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, status.text, "submitted") != null);
+}
+
+test "login: a later step that asks for the password in the clear is refused" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_two_step_cleartext.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, result.text, "input[type=password]") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"loggedIn\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+}
+
+test "login: a recorded two-step login submits the identifier before the password" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_two_step.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#signin-submit","nextSelector":"#next"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"nextSelector\":\"#next\"") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#signin-submit\"") != null);
+
+    const status = try call(aa, page.session, &registry, "markdown", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#status"}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, status.text, "submitted") != null);
+}
+
+test "login: a verification that fails still reports that credentials went out" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockJev.startFailingVerification(aa);
+    defer mock.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "could not check whether the sign-in worked") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "HTTP 500") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") != null);
+    try std.testing.expect(result.replay_args != null);
+}
+
+test "login: a recorded call with decideOnly checks the fields and types nothing" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2","usernameSelector":"#user","passwordSelector":"#pass","submitSelector":"#submit","decideOnly":true}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "decided only") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "ada") == null);
+
+    const wrong = try call(aa, page.session, &registry, "login", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"hunter2","passwordSelector":"#user","decideOnly":true}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, wrong.text, "input[type=password]") != null);
+}
+
+test "login: the password field is checked again after the username went in" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_field_swap.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"username":"ada","password":"hunter2"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, result.text, "input[type=password]") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
+}
+
+test "login: a passwordSelector that is not a password field is refused" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("login_form.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"hunter2","passwordSelector":"#user"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, result.text, "input[type=password]") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":false") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
 }
