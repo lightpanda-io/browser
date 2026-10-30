@@ -265,7 +265,8 @@ longer clobber each other's page:
 
 The `run` tool runs a [PandaScript](https://lightpanda.io/docs/usage/pandascript)
 in the caller's session, as `lightpanda run` does, and returns its console
-output and the value it returns. Pages the script opens are closed when it ends;
+output and the value it returns. It takes the source as `script`, or the `path`
+of a file that `save` wrote. Pages the script opens are closed when it ends;
 cookies and storage stay, so a login carries over to the next `run`. An optional
 `timeout` in milliseconds (default 60000) stops a stuck script. A backend can
 drive Lightpanda with one POST:
