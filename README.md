@@ -205,7 +205,8 @@ model at runtime.
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
 Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
 and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
-`OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
+`OPENAI_BASE_URL`, local models via Ollama or llama.cpp, and OpenAI Codex with a
+ChatGPT subscription (OAuth) instead of an API key. You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
 reference.
@@ -345,7 +346,10 @@ brew install cmake
 
 ### Build and run
 
-You can build the entire browser with `make build` or `make build-dev` for debug
+Run `make download-v8` once first to fetch the prebuilt V8 archive. Without it,
+the build compiles V8 from source, which takes 10+ minutes.
+
+Then build the entire browser with `make build` or `make build-dev` for debug
 env.
 
 But you can directly use the zig command: `zig build run`.
