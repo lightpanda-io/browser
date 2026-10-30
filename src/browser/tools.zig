@@ -1303,8 +1303,13 @@ const settle_timeout_ms: u32 = 2000;
 /// that never goes idle is not a failure here, only one we stop waiting for.
 fn settle(session: *lp.Session) ToolError!void {
     const frame = session.currentFrame() orelse return;
-    lp.actions.waitForState(.networkidle, settle_timeout_ms, frame._frame_id, session) catch |err| {
-        if (err == error.Cancelled) return ToolError.Cancelled;
+    lp.actions.waitForState(.networkidle, settle_timeout_ms, frame._frame_id, session) catch |err| switch (err) {
+        error.Cancelled => return ToolError.Cancelled,
+        error.Timeout => {},
+        else => {
+            log.debug(.browser, "settle error", .{ .err = @errorName(err) });
+            return ToolError.InternalError;
+        },
     };
 }
 
