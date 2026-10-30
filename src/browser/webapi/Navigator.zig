@@ -25,6 +25,7 @@ const Frame = @import("../Frame.zig");
 const BodyInit = @import("net/body_init.zig").BodyInit;
 
 const PluginArray = @import("PluginArray.zig");
+const MimeTypeArray = @import("MimeTypeArray.zig");
 const Permissions = @import("Permissions.zig");
 const ModelContext = @import("ModelContext.zig");
 const StorageManager = @import("StorageManager.zig");
@@ -42,12 +43,13 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_permissions", "_storage", "_ua_data" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_permissions", "_storage", "_ua_data" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
 
 _plugins: PluginArray = .{},
+_mime_types: MimeTypeArray = .{},
 _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
@@ -204,6 +206,10 @@ fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
 
+fn getMimeTypes(self: *Navigator) *MimeTypeArray {
+    return &self._mime_types;
+}
+
 fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
@@ -352,6 +358,7 @@ pub const JsApi = struct {
     pub const locks = bridge.accessor(Navigator.getLocks, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
+    pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{});
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{});
