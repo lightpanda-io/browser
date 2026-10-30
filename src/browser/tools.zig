@@ -1518,9 +1518,11 @@ fn submitSelector(arena: std.mem.Allocator, page: *lp.Frame, picks: lp.login.Pic
     return selectorFor(arena, page, control.element);
 }
 
+const plaintext_refusal = "the page or the URL its form posts to is not https; refusing to send credentials";
+
 /// Not the model's decision to make, whatever it picked: a password goes into
 /// an `input[type=password]` on a form that posts over TLS, or nowhere.
-fn credentialRefusal(page: *lp.Frame, picks: lp.login.Picks) ?[]const u8 {
+fn credentialRefusal(arena: std.mem.Allocator, page: *lp.Frame, picks: lp.login.Picks) error{OutOfMemory}!?[]const u8 {
     if (picks.password) |field| {
         if (!lp.login.isPasswordField(field.element)) {
             return "the field picked for the password is not an input[type=password]";
@@ -1532,9 +1534,11 @@ fn credentialRefusal(page: *lp.Frame, picks: lp.login.Picks) ?[]const u8 {
         }
     }
     if (picks.password orelse picks.user) |field| {
-        if (lp.login.insecureAction(page, field.element)) {
-            return "this form posts to a plaintext http:// URL; refusing to send credentials";
-        }
+        const submitter = if (picks.submit) |control|
+            (if (lp.login.sameForm(field.element, control.element)) control.element else null)
+        else
+            null;
+        if (try lp.login.untrustedTarget(arena, page, field.element, submitter)) return plaintext_refusal;
     }
     return null;
 }
@@ -1560,7 +1564,7 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         return verdict(arena, &outcome, "could not tell which field takes the username");
     }
     outcome.candidates = decided.candidates;
-    if (credentialRefusal(decided.page, decided.picks)) |reason| {
+    if (try credentialRefusal(arena, decided.page, decided.picks)) |reason| {
         return verdict(arena, &outcome, reason);
     }
     if (args.decideOnly) {
@@ -1598,7 +1602,7 @@ fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         if (decided.picks.password == null) {
             return verdict(arena, &outcome, "submitted the username, but the next page shows no password field");
         }
-        if (credentialRefusal(decided.page, decided.picks)) |reason| {
+        if (try credentialRefusal(arena, decided.page, decided.picks)) |reason| {
             return verdict(arena, &outcome, reason);
         }
     }
@@ -1707,8 +1711,8 @@ fn replayLogin(
         };
         const target = try resolveBySelector(session, selector);
         const element = target.node.is(Element) orelse return ToolError.InvalidParams;
-        if (lp.login.insecureAction(target.page, element)) {
-            return verdict(arena, outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
+        if (try lp.login.untrustedTarget(arena, target.page, element, try replaySubmitter(session, args.nextSelector orelse args.submitSelector))) {
+            return verdict(arena, outcome, plaintext_refusal);
         }
         try fillBySelector(session, registry, selector, username);
         outcome.usernameSelector = selector;
@@ -1727,8 +1731,8 @@ fn replayLogin(
         if (!lp.login.isPasswordField(element)) {
             return verdict(arena, outcome, "passwordSelector does not name an input[type=password]");
         }
-        if (lp.login.insecureAction(target.page, element)) {
-            return verdict(arena, outcome, "this form posts to a plaintext http:// URL; refusing to send credentials");
+        if (try lp.login.untrustedTarget(arena, target.page, element, try replaySubmitter(session, args.submitSelector))) {
+            return verdict(arena, outcome, plaintext_refusal);
         }
         try fillBySelector(session, registry, selector, args.password);
         outcome.passwordSelector = selector;
@@ -1739,6 +1743,16 @@ fn replayLogin(
         "filled the username and submitted, without asking the model; no passwordSelector was given, so no password was typed"
     else
         "filled the fields given, without asking the model");
+}
+
+/// The recorded submit control, when it is on this page: its `formaction` is
+/// where the credentials go.
+fn replaySubmitter(session: *lp.Session, selector: ?[]const u8) ToolError!?*Element {
+    const target = resolveBySelector(session, selector orelse return null) catch |err| switch (err) {
+        error.NodeNotFound => return null,
+        else => return err,
+    };
+    return target.node.is(Element);
 }
 
 const eval_promise_timeout_ms: u32 = 30_000;
@@ -2181,12 +2195,11 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
     // The same refusal `login` makes, on the path the driver guidance sends a
-    // model down when `login` declines: a password typed into a form an https
-    // page posts in the clear goes out in the clear.
+    // model down when `login` declines.
     if (resolved.node.is(Element)) |element| {
-        if (lp.login.isPasswordField(element) and lp.login.insecureAction(resolved.page, element)) {
+        if (lp.login.isPasswordField(element) and try lp.login.untrustedTarget(arena, resolved.page, element, null)) {
             return .{
-                .text = "this form posts to a plaintext http:// URL; refusing to fill a password into it",
+                .text = "the page or the URL its form posts to is not https; refusing to fill a password into it",
                 .is_error = true,
             };
         }
@@ -3760,7 +3773,7 @@ test "login: a passwordSelector that is not a password field is refused" {
     try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
 }
 
-test "fill: a password is not typed into a form an https page posts in the clear" {
+test "fill: a password is not typed where it would leave in the clear" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -3776,7 +3789,11 @@ test "fill: a password is not typed into a form an https page posts in the clear
     , .{});
     const refused = try call(aa, page.session, &registry, "fill", args, .{ .source = .user });
     try std.testing.expect(refused.is_error);
-    try std.testing.expect(std.mem.find(u8, refused.text, "plaintext http://") != null);
+    try std.testing.expect(std.mem.find(u8, refused.text, "not https") != null);
+
+    page.frame().?.url = "http://example.com/account";
+    const plaintext_page = try call(aa, page.session, &registry, "fill", args, .{ .source = .user });
+    try std.testing.expect(plaintext_page.is_error);
 
     // The identifier is not a credential the scheme can leak, so it still fills.
     const allowed = try call(aa, page.session, &registry, "fill", try std.json.parseFromSliceLeaky(std.json.Value, aa,

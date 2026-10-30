@@ -36,6 +36,7 @@ const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
 const interactive = @import("interactive.zig");
+const URL = @import("URL.zig");
 const Element = @import("webapi/Element.zig");
 const Form = @import("webapi/element/html/Form.zig");
 const Frame = lp.Frame;
@@ -163,15 +164,28 @@ pub fn isPasswordField(element: *Element) bool {
     return input._input_type == .password;
 }
 
-/// An https page whose form posts to a plaintext URL. A relative action
-/// inherits the page's scheme, so only an absolute `http://` is a downgrade.
-/// The model is not asked about this: the page's words are its own, the scheme
-/// is not.
-pub fn insecureAction(frame: *Frame, field: *Element) bool {
-    if (!std.mem.startsWith(u8, frame.url, "https://")) return false;
+/// Whether a credential typed into `field` could leave over plaintext: the
+/// page is not https or loopback (`URL.isPotentiallyTrustworthy`), or the URL
+/// the form posts to is not. That URL is what `Frame.submitForm` uses: the
+/// submitter's `formaction`, else the form's `action`; with no `submitter`,
+/// Enter clicks the form's default button. A form-less field posts with
+/// JavaScript, which leaves the page's own URL as all there is to check.
+pub fn untrustedTarget(arena: std.mem.Allocator, frame: *Frame, field: *Element, submitter: ?*Element) error{OutOfMemory}!bool {
+    if (!URL.isPotentiallyTrustworthy(frame.url)) return true;
     const form = Form.ownerOf(field) orelse return false;
-    const action = form.asElement().getAttributeInterned("action") orelse return false;
-    return std.ascii.startsWithIgnoreCase(action, "http://");
+    const button = submitter orelse form.getDefaultButton(frame);
+    const action = blk: {
+        if (button) |b| if (Form.isSubmitButton(b)) {
+            if (b.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
+        };
+        break :blk form.asElement().getAttributeInterned("action") orelse "";
+    };
+    if (action.len == 0) return false;
+    const target = URL.resolve(arena, frame.base(), action, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return true,
+    };
+    return !URL.isPotentiallyTrustworthy(target);
 }
 
 /// Whether `control` would submit the same form as `field`. A control outside
@@ -290,21 +304,36 @@ test "browser.login: a control outside the field's form submits something else" 
     try testing.expect(!sameForm(field, loose));
 }
 
-test "browser.login: an https page is not given a plaintext form action" {
+test "browser.login: a credential goes only to https or loopback" {
     defer testing.test_session.closeAllPages();
     const frame = try testFrame(
         \\<form action="http://example.com/login"><input id="u" name="u"></form>
         \\<form action="/login"><input id="v" name="v"></form>
+        \\<form action="/login"><input id="w" name="w"><button formaction="http://example.com/steal">Go</button></form>
+        \\<input id="loose" name="loose">
     );
+    const aa = testing.arena_allocator;
 
     const doc = frame.window._document;
     const plaintext = (doc.getElementById("u")).?;
     const relative = (doc.getElementById("v")).?;
+    const overridden = (doc.getElementById("w")).?;
+    const loose = (doc.getElementById("loose")).?;
 
-    // The test frame is not https, so nothing is a downgrade yet.
-    try testing.expect(!insecureAction(frame, plaintext));
+    frame.url = "http://127.0.0.1:9582/account";
+    // Loopback is as safe as https.
+    try testing.expect(try untrustedTarget(aa, frame, plaintext, null));
+    try testing.expect(!try untrustedTarget(aa, frame, relative, null));
 
     frame.url = "https://example.com/account";
-    try testing.expect(insecureAction(frame, plaintext));
-    try testing.expect(!insecureAction(frame, relative));
+    try testing.expect(try untrustedTarget(aa, frame, plaintext, null));
+    try testing.expect(!try untrustedTarget(aa, frame, relative, null));
+    // Enter clicks the default button, and its formaction wins over the form's.
+    try testing.expect(try untrustedTarget(aa, frame, overridden, null));
+    try testing.expect(!try untrustedTarget(aa, frame, loose, null));
+
+    // A page that is itself plaintext, as a redirect can land on.
+    frame.url = "http://example.com/account";
+    try testing.expect(try untrustedTarget(aa, frame, relative, null));
+    try testing.expect(try untrustedTarget(aa, frame, loose, null));
 }

@@ -236,7 +236,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .login => .{
-            .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks TypeSafe System One (Jev) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
+            .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks TypeSafe System One (Jev) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`, and credentials only go to an https (or loopback) page whose form posts to an https URL. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
             .summary = "Sign in, picking the fields with Jev",
             .input_schema = minify(
                 \\{
