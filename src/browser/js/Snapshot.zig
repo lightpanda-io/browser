@@ -394,6 +394,17 @@ fn createSnapshotContext(
         _ = v8.v8__Script__Run(script, context) orelse return error.ScriptRunFailed;
     }
 
+    {
+        // The global is a js_global instance, so js_global's prototype object,
+        // with a `constructor` of its own, would sit above it. Link the global to
+        // the interface's prototype as browsers do; its members live on the global.
+        const scope_func = v8.v8__FunctionTemplate__GetFunction(templates[global_scope_index], context);
+        const scope_proto = v8.v8__Object__Get(@ptrCast(scope_func), context, prototype_key) orelse return error.GlobalPrototypeMissing;
+        var maybe_result: v8.MaybeBool = undefined;
+        v8.v8__Object__SetPrototype(global_obj, context, @ptrCast(scope_proto), &maybe_result);
+        if (maybe_result.has_value == false or maybe_result.value == false) return error.GlobalPrototypeSetFailed;
+    }
+
     return v8.v8__SnapshotCreator__AddContext(snapshot_creator, context);
 }
 
