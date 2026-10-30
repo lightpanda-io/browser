@@ -263,17 +263,22 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const requesting_origin = URL.getOrigin(arena.allocator(), exec.url.*) catch null;
     const response_origin = URL.getOrigin(arena.allocator(), res._url) catch null;
 
-    if (requesting_origin) |fo| {
-        if (response_origin) |ro| {
-            if (std.mem.eql(u8, fo, ro)) {
-                res._type = .basic; // Same-origin
+    if (transfer.client.obey_cors) {
+        if (requesting_origin) |fo| {
+            if (response_origin) |ro| {
+                if (std.mem.eql(u8, fo, ro)) {
+                    res._type = .basic;
+                } else {
+                    res._type = .cors;
+                }
             } else {
-                res._type = .cors; // Cross-origin (for simplicity, assume CORS passed)
+                res._type = .basic;
             }
         } else {
             res._type = .basic;
         }
     } else {
+        // CORS disabled: don't filter/mark responses as cross-origin cors,
         res._type = .basic;
     }
 
