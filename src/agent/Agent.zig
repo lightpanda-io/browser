@@ -829,7 +829,8 @@ fn runRepl(self: *Agent) void {
                     }));
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args, result.navigated) orelse replayable);
                 }
-                self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
+                const seen = tc.forModel(aa, command_text) catch continue :repl;
+                self.recordSlashToolCall(seen.line, tc.name(), seen.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
             },

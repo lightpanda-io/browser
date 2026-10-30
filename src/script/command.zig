@@ -96,6 +96,19 @@ fn loginPrompt(arena: std.mem.Allocator, args: ?std.json.Value) error{OutOfMemor
     return try arena.print(login_prompt_head ++ "\npassword: {s}\n(this page asks only for the password)\n" ++ login_prompt_tail, .{password});
 }
 
+const redacted = "[redacted]";
+
+fn literalPassword(tc: Command.ToolCall) ?[]const u8 {
+    if (tc.tool != .login) return null;
+    const fields = switch (tc.args orelse return null) {
+        .object => |object| object,
+        else => return null,
+    };
+    const value = fields.get("password") orelse return null;
+    if (value != .string or value.string.len == 0 or placeholder(value) != null) return null;
+    return value.string;
+}
+
 fn hasName(names: []const []const u8, name: []const u8) bool {
     for (names) |n| {
         if (std.mem.eql(u8, n, name)) return true;
@@ -148,6 +161,19 @@ pub const Command = union(enum) {
 
         pub fn name(self: ToolCall) [:0]const u8 {
             return @tagName(self.tool);
+        }
+
+        /// The command as the model may see it: a `login` password typed
+        /// as-is rather than as a `$LP_*` placeholder is masked, in the line
+        /// and in the args alike.
+        pub fn forModel(self: ToolCall, arena: std.mem.Allocator, line: []const u8) error{OutOfMemory}!struct { line: []const u8, args: ?std.json.Value } {
+            const secret = literalPassword(self) orelse return .{ .line = line, .args = self.args };
+            var fields = try self.args.?.object.clone(arena);
+            try fields.put(arena, "password", .{ .string = redacted });
+            return .{
+                .line = try std.mem.replaceOwned(u8, arena, line, secret, redacted),
+                .args = .{ .object = fields },
+            };
         }
 
         fn schema(self: ToolCall) *const Schema {
@@ -817,4 +843,23 @@ test "parse: bare /login is a login call with its arguments still to find" {
     const tc = (try Command.parse(arena.allocator(), "/login")).tool_call;
     try testing.expectEqual(BrowserTool.login, tc.tool);
     try testing.expectEqual(null, tc.args);
+}
+
+test "forModel: a literal login password never reaches the model" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const line = "/login username=ada password=hunter2";
+    const literal = (try Command.parse(aa, line)).tool_call;
+    const masked = try literal.forModel(aa, line);
+    try testing.expectString("/login username=ada password=[redacted]", masked.line);
+    try testing.expectString("[redacted]", masked.args.?.object.get("password").?.string);
+    try testing.expectString("ada", masked.args.?.object.get("username").?.string);
+    // The command itself still carries it, for the tool to type.
+    try testing.expectString("hunter2", literal.args.?.object.get("password").?.string);
+
+    const placeholder_line = "/login password=$LP_PASSWORD";
+    const kept = try (try Command.parse(aa, placeholder_line)).tool_call.forModel(aa, placeholder_line);
+    try testing.expectString(placeholder_line, kept.line);
 }
