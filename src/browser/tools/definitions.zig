@@ -206,7 +206,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .classify => .{
-            .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ lp.jev.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
+            .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ tools.jev.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
             .summary = "Classify page state using semantic questions or presets",
             .input_schema = minify(
                 \\{
@@ -228,7 +228,7 @@ pub fn of(tool: Tool) Definition {
                 \\  "type": "object",
                 \\  "properties": {
                 \\    "prefer": { "type": "string", "enum":
-            ++ lp.Config.tagJsonArray(lp.consent.Prefer) ++
+            ++ lp.Config.tagJsonArray(tools.consent.Prefer) ++
                 \\, "description": "Whether to accept the cookies or refuse all non-essential ones. Defaults to 'accept'." },
                 \\    "selectors": { "type": "array", "items": { "type": "string" }, "description": "Optional CSS selectors of the controls to click in order, from an earlier call's result. Clicked without asking the model; one that is not on the page stops the clicking there." }
                 \\  }

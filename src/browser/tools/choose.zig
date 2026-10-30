@@ -27,15 +27,15 @@
 //! would otherwise be an option the model cannot resolve.
 
 const std = @import("std");
-const lp = @import("../lightpanda.zig");
+const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 
-const Element = @import("webapi/Element.zig");
-const DOMNode = @import("webapi/Node.zig");
+const Element = @import("../webapi/Element.zig");
+const DOMNode = @import("../webapi/Node.zig");
 const Frame = lp.Frame;
 const NodeRegistry = lp.NodeRegistry;
-const interactive = @import("interactive.zig");
-const truncateUtf8 = @import("../string.zig").truncateUtf8;
+const interactive = @import("../interactive.zig");
+const truncateUtf8 = @import("../../string.zig").truncateUtf8;
 
 const Question = zenai.typesafe.Question;
 const ChoiceEntry = zenai.typesafe.ChoiceEntry;
@@ -175,7 +175,7 @@ pub fn best(
     return null;
 }
 
-const testing = @import("../testing.zig");
+const testing = @import("../../testing.zig");
 
 /// Attached to the document, so `<label for>` resolves for field candidates.
 fn testCollect(html: []const u8) ![]const Candidate {

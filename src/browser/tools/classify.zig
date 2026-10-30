@@ -47,7 +47,7 @@ pub fn prepareQuestions(
     return json.addQuestions(arena, prepared, try jev.allPresetQuestions(arena));
 }
 
-const testing = @import("../testing.zig");
+const testing = @import("../../testing.zig");
 
 test "browser.classify: a preset can be named by key alone" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);

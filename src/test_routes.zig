@@ -1173,7 +1173,7 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
 
     // The mock sees the questions, not the page: one that offered no field
     // looking like a password is one that asks for it on a later step.
-    const later_step = pickFor(arena, asked, lp.login.password_key) == null;
+    const later_step = pickFor(arena, asked, lp.tools.login.password_key) == null;
 
     var it = asked.iterator();
     while (it.next()) |entry| {
@@ -1195,7 +1195,7 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
                 .object => |o| o,
                 else => .empty,
             };
-            const pick = pickOption(arena, options, hintFor(key)) orelse lp.choose.none_key;
+            const pick = pickOption(arena, options, hintFor(key)) orelse lp.tools.choose.none_key;
             try jw.objectField("choice");
             try jw.write(pick);
             // Rejected unless the probabilities cover exactly the options
@@ -1205,7 +1205,7 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
             const even: f64 = if (n < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(n - 1));
             // Where a candidate was chosen, `none` keeps a token share and the
             // others outrank it, as a model's answer would.
-            const spread = n > 2 and !std.mem.eql(u8, pick, lp.choose.none_key);
+            const spread = n > 2 and !std.mem.eql(u8, pick, lp.tools.choose.none_key);
             const none_share: f64 = if (spread) 0.05 else even;
             const share: f64 = if (spread) (1 - chosen - none_share) / @as(f64, @floatFromInt(n - 2)) else even;
             try jw.objectField("probabilities");
@@ -1216,7 +1216,7 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
                 try jw.objectField(option_key);
                 try jw.write(if (std.mem.eql(u8, option_key, pick))
                     chosen
-                else if (std.mem.eql(u8, option_key, lp.choose.none_key))
+                else if (std.mem.eql(u8, option_key, lp.tools.choose.none_key))
                     none_share
                 else
                     share);
@@ -1260,23 +1260,23 @@ fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
 fn yesTo(key: []const u8, deciding: bool, later_step: bool, banner_in_state: bool) bool {
     // The one question the mock answers from the page: whether the banner's
     // label is in the state it was sent.
-    if (std.mem.eql(u8, key, lp.consent.wall_key)) return banner_in_state;
+    if (std.mem.eql(u8, key, lp.tools.consent.wall_key)) return banner_in_state;
     if (!deciding) return false;
-    if (std.mem.eql(u8, key, lp.login.multi_step_key)) return later_step;
+    if (std.mem.eql(u8, key, lp.tools.login.multi_step_key)) return later_step;
     return isWall(key);
 }
 
 fn isWall(key: []const u8) bool {
-    return std.mem.eql(u8, key, lp.consent.wall_key) or std.mem.eql(u8, key, lp.login.wall_key) or
-        std.mem.eql(u8, key, lp.login.error_key);
+    return std.mem.eql(u8, key, lp.tools.consent.wall_key) or std.mem.eql(u8, key, lp.tools.login.wall_key) or
+        std.mem.eql(u8, key, lp.tools.login.error_key);
 }
 
 /// What a question is looking for, as a word its option's description carries.
 fn hintFor(key: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, key, lp.consent.control_key)) return "accept";
-    if (std.mem.eql(u8, key, lp.login.user_key)) return "user";
-    if (std.mem.eql(u8, key, lp.login.password_key)) return "password";
-    if (std.mem.eql(u8, key, lp.login.submit_key)) return "sign";
+    if (std.mem.eql(u8, key, lp.tools.consent.control_key)) return "accept";
+    if (std.mem.eql(u8, key, lp.tools.login.user_key)) return "user";
+    if (std.mem.eql(u8, key, lp.tools.login.password_key)) return "password";
+    if (std.mem.eql(u8, key, lp.tools.login.submit_key)) return "sign";
     return null;
 }
 
@@ -1303,7 +1303,7 @@ fn pickOption(arena: std.mem.Allocator, options: std.json.ObjectMap, hint: ?[]co
     var it = options.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
-        if (std.mem.eql(u8, key, lp.choose.none_key) or std.mem.eql(u8, key, lp.login.enter_key)) continue;
+        if (std.mem.eql(u8, key, lp.tools.choose.none_key) or std.mem.eql(u8, key, lp.tools.login.enter_key)) continue;
         const wanted = hint orelse return key;
         const described = std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}) catch continue;
         if (std.ascii.findIgnoreCase(described, wanted) != null) return key;

@@ -25,16 +25,16 @@
 //! followed by a pick from what the page shows then.
 
 const std = @import("std");
-const lp = @import("../lightpanda.zig");
 const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
+const jev = @import("jev.zig");
 
 const Questions = zenai.typesafe.Questions;
 const QuestionEntry = zenai.typesafe.QuestionEntry;
 
 /// The question ids, which also key the answers.
-pub const wall_key = @tagName(lp.jev.Preset.isConsentWall);
+pub const wall_key = @tagName(jev.Preset.isConsentWall);
 pub const control_key = "control";
 
 pub const Prefer = enum {
@@ -58,14 +58,14 @@ pub fn questions(
     prefer: Prefer,
 ) error{OutOfMemory}!Questions {
     const entries = try arena.alloc(QuestionEntry, 2);
-    entries[0] = lp.jev.presetQuestion(.isConsentWall);
+    entries[0] = jev.presetQuestion(.isConsentWall);
     entries[1] = .{ .key = control_key, .value = try choose.question(arena, prefer.instructions(), candidates, &.{}) };
     return .init(entries);
 }
 
 /// Just the banner question, for the re-read that verifies a click.
 pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
-    return lp.jev.presetQuestions(arena, &.{.isConsentWall});
+    return jev.presetQuestions(arena, &.{.isConsentWall});
 }
 
 /// What the tool reports. `dismissed` is what we did, `verified` is whether
@@ -91,7 +91,7 @@ pub const Outcome = struct {
     reason: ?[]const u8 = null,
 };
 
-const testing = @import("../testing.zig");
+const testing = @import("../../testing.zig");
 
 test "browser.consent: questions asks the banner and the pick in one request" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);

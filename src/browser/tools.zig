@@ -49,6 +49,11 @@ const diagnoseArgs = marshal.diagnoseArgs;
 const diagnoseMissingRequired = marshal.diagnoseMissingRequired;
 const lookupLpEnv = marshal.lookupLpEnv;
 pub const search = @import("tools/search.zig");
+pub const choose = @import("tools/choose.zig");
+pub const classify = @import("tools/classify.zig");
+pub const consent = @import("tools/consent.zig");
+pub const jev = @import("tools/jev.zig");
+pub const login = @import("tools/login.zig");
 
 const log = lp.log;
 
@@ -1169,7 +1174,7 @@ fn execClassify(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const page = try requireFrame(session);
 
     const node = try resolveScope(session, registry, page, args.selector, null);
-    const prepared = lp.classify.prepareQuestions(arena, args.questions, args.presets) catch |err| switch (err) {
+    const prepared = classify.prepareQuestions(arena, args.questions, args.presets) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .text = try arena.print("classify: invalid questions: {s}", .{@errorName(err)}), .is_error = true },
     };
@@ -1205,7 +1210,7 @@ const Ask = struct {
     questions: zenai.typesafe.Questions,
     /// The subtree the model is shown.
     node: *DOMNode,
-    state: lp.jev.StateOpts = .{},
+    state: jev.StateOpts = .{},
 };
 
 fn askPage(
@@ -1216,7 +1221,7 @@ fn askPage(
 ) ToolError!Asked {
     const page = try requireFrame(session);
     const loader_id = page._loader_id;
-    const state = lp.jev.buildState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
+    const state = jev.buildState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
     // On a helper thread, pumping here until it answers: a blocking read on
@@ -1331,11 +1336,11 @@ const max_consent_clicks = 2;
 
 fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
-        prefer: lp.consent.Prefer = .accept,
+        prefer: consent.Prefer = .accept,
         selectors: ?[]const []const u8 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
-    var outcome: lp.consent.Outcome = .{};
+    var outcome: consent.Outcome = .{};
 
     if (args.selectors) |selectors| {
         for (selectors) |selector| {
@@ -1360,8 +1365,8 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
 
     while (true) {
         const page = try requireFrame(session);
-        const candidates: []const lp.choose.Candidate = if (outcome.attempts < max_consent_clicks)
-            lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err)
+        const candidates: []const choose.Candidate = if (outcome.attempts < max_consent_clicks)
+            choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err)
         else
             &.{};
         if (outcome.attempts == 0) {
@@ -1372,9 +1377,9 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         }
 
         const questions = if (candidates.len > 0)
-            try lp.consent.questions(arena, candidates, args.prefer)
+            try consent.questions(arena, candidates, args.prefer)
         else
-            try lp.consent.verifyQuestions(arena);
+            try consent.verifyQuestions(arena);
         var response = switch (try askPage(arena, session, registry, .{
             .tool = .acceptCookies,
             .questions = questions,
@@ -1389,22 +1394,22 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         };
         defer response.deinit();
 
-        const wall = response.value.noul(lp.consent.wall_key);
+        const wall = response.value.noul(consent.wall_key);
         if (outcome.attempts == 0) {
             outcome.consentWall = wall;
-            if ((wall orelse 0) < lp.jev.gate) {
+            if ((wall orelse 0) < jev.gate) {
                 return verdict(arena, &outcome, "those controls are not a consent banner");
             }
         } else {
             outcome.consentWallAfter = wall;
-            if ((wall orelse 1) < lp.jev.gate) {
+            if ((wall orelse 1) < jev.gate) {
                 outcome.verified = true;
                 return consentVerdict(arena, &outcome, null);
             }
         }
         if (candidates.len == 0) break;
 
-        const best = lp.choose.best(candidates, response.value, questions, lp.consent.control_key) catch |err| switch (err) {
+        const best = choose.best(candidates, response.value, questions, consent.control_key) catch |err| switch (err) {
             error.OutOfMemory => return ToolError.OutOfMemory,
             else => {
                 const unusable = try unusableAnswer(arena, .acceptCookies, err);
@@ -1432,7 +1437,7 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     return consentVerdict(arena, &outcome, "clicked, but the banner is still there");
 }
 
-fn consentVerdict(arena: std.mem.Allocator, outcome: *lp.consent.Outcome, reason: ?[]const u8) ToolError!ToolResult {
+fn consentVerdict(arena: std.mem.Allocator, outcome: *consent.Outcome, reason: ?[]const u8) ToolError!ToolResult {
     var result = try verdict(arena, outcome, reason);
     // Only a dismissal the re-read confirmed is worth repeating.
     if (outcome.verified) {
@@ -1457,7 +1462,7 @@ const LoginParams = struct {
 const Decided = union(enum) {
     ok: struct {
         page: *lp.Frame,
-        picks: lp.login.Picks,
+        picks: login.Picks,
         /// The identifier field, the password field and the control that
         /// submits them, as selectors resolved before anything is typed: a
         /// submit can navigate and free every node the picks point at.
@@ -1475,16 +1480,16 @@ fn decideLogin(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *NodeRegistry,
-    wanted: lp.login.Wanted,
-    outcome: *lp.login.Outcome,
+    wanted: login.Wanted,
+    outcome: *login.Outcome,
 ) ToolError!Decided {
     const page = try requireFrame(session);
-    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err);
+    const candidates = choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err);
     if (candidates.len == 0) {
         return .{ .failed = try verdict(arena, outcome, "nothing on this page can be filled in") };
     }
 
-    const questions = try lp.login.questions(arena, candidates, wanted);
+    const questions = try login.questions(arena, candidates, wanted);
     var response = switch (try askPage(arena, session, registry, .{
         .tool = .login,
         .questions = questions,
@@ -1497,7 +1502,7 @@ fn decideLogin(
     defer response.deinit();
     outcome.calls += 1;
 
-    const picks = lp.login.picks(candidates, questions, response.value) catch |err| switch (err) {
+    const picks = login.picks(candidates, questions, response.value) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .failed = try unusableAnswer(arena, .login, err) },
     };
@@ -1515,10 +1520,10 @@ fn decideLogin(
 /// The control that submits the sign-in form — null when Enter in the field is
 /// the better act, because none was picked or the one picked sits outside the
 /// field's own form and so submits something else, whatever it is labelled.
-fn submitSelector(arena: std.mem.Allocator, page: *lp.Frame, picks: lp.login.Picks) ?[]const u8 {
+fn submitSelector(arena: std.mem.Allocator, page: *lp.Frame, picks: login.Picks) ?[]const u8 {
     const control = picks.submit orelse return null;
     const field = picks.password orelse picks.user orelse return null;
-    if (!lp.login.sameForm(field.element, control.element)) return null;
+    if (!login.sameForm(field.element, control.element)) return null;
     return selectorFor(arena, page, control.element);
 }
 
@@ -1526,30 +1531,30 @@ const plaintext_refusal = "the page or the URL its form posts to is not https; r
 
 /// Not the model's decision to make, whatever it picked: a password goes into
 /// an `input[type=password]` on a form that posts over TLS, or nowhere.
-fn credentialRefusal(arena: std.mem.Allocator, page: *lp.Frame, picks: lp.login.Picks) error{OutOfMemory}!?[]const u8 {
+fn credentialRefusal(arena: std.mem.Allocator, page: *lp.Frame, picks: login.Picks) error{OutOfMemory}!?[]const u8 {
     if (picks.password) |field| {
-        if (!lp.login.isPasswordField(field.element)) {
+        if (!login.isPasswordField(field.element)) {
             return "the field picked for the password is not an input[type=password]";
         }
     }
     if (picks.user) |field| {
-        if (lp.login.isPasswordField(field.element)) {
+        if (login.isPasswordField(field.element)) {
             return "the field picked for the username is a password input";
         }
     }
     if (picks.password orelse picks.user) |field| {
         const submitter = if (picks.submit) |control|
-            (if (lp.login.sameForm(field.element, control.element)) control.element else null)
+            (if (login.sameForm(field.element, control.element)) control.element else null)
         else
             null;
-        if (try lp.login.untrustedTarget(arena, page, field.element, submitter)) return plaintext_refusal;
+        if (try login.untrustedTarget(arena, page, field.element, submitter)) return plaintext_refusal;
     }
     return null;
 }
 
 fn execLogin(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(LoginParams, arena, arguments);
-    var outcome: lp.login.Outcome = .{};
+    var outcome: login.Outcome = .{};
 
     if (args.passwordSelector != null or args.usernameSelector != null) {
         return replayLogin(arena, session, registry, args, &outcome);
@@ -1645,10 +1650,10 @@ fn fillCredential(
     const target = try resolveBySelector(session, selector);
     const element = target.node.is(Element) orelse return ToolError.InvalidParams;
     switch (field) {
-        .user => if (lp.login.isPasswordField(element)) return "the field for the username is a password input",
-        .password => if (!lp.login.isPasswordField(element)) return "the field for the password is not an input[type=password]",
+        .user => if (login.isPasswordField(element)) return "the field for the username is a password input",
+        .password => if (!login.isPasswordField(element)) return "the field for the password is not an input[type=password]",
     }
-    if (try lp.login.untrustedTarget(arena, target.page, element, try submitterAt(session, submit))) {
+    if (try login.untrustedTarget(arena, target.page, element, try submitterAt(session, submit))) {
         return plaintext_refusal;
     }
     const text = value orelse return null;
@@ -1667,12 +1672,12 @@ fn submitLogin(
     registry: *NodeRegistry,
     submit: ?[]const u8,
     field: ?[]const u8,
-    outcome: *lp.login.Outcome,
+    outcome: *login.Outcome,
 ) ToolError!?[]const u8 {
     const input = try resolveBySelector(session, field orelse return null);
     const input_element = input.node.is(Element) orelse return ToolError.InvalidParams;
     const control = try submitterAt(session, submit);
-    if (try lp.login.untrustedTarget(arena, input.page, input_element, control)) {
+    if (try login.untrustedTarget(arena, input.page, input_element, control)) {
         return plaintext_refusal;
     }
 
@@ -1699,11 +1704,11 @@ fn verifyLogin(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *NodeRegistry,
-    outcome: *lp.login.Outcome,
+    outcome: *login.Outcome,
 ) ToolError!ToolResult {
     var response = switch (try askPage(arena, session, registry, .{
         .tool = .login,
-        .questions = try lp.login.verifyQuestions(arena),
+        .questions = try login.verifyQuestions(arena),
         .node = (try requireFrame(session)).document.asNode(),
         .state = .{ .link_urls = false },
     })) {
@@ -1713,13 +1718,13 @@ fn verifyLogin(
     defer response.deinit();
     outcome.calls += 1;
 
-    outcome.loginWall = response.value.noul(lp.login.wall_key);
-    outcome.errorPage = response.value.noul(lp.login.error_key);
-    outcome.loggedIn = (outcome.loginWall orelse 1) < lp.jev.gate and (outcome.errorPage orelse 1) < lp.jev.gate;
+    outcome.loginWall = response.value.noul(login.wall_key);
+    outcome.errorPage = response.value.noul(login.error_key);
+    outcome.loggedIn = (outcome.loginWall orelse 1) < jev.gate and (outcome.errorPage orelse 1) < jev.gate;
     return loginVerdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
 }
 
-fn loginVerdict(arena: std.mem.Allocator, outcome: *lp.login.Outcome, reason: ?[]const u8) ToolError!ToolResult {
+fn loginVerdict(arena: std.mem.Allocator, outcome: *login.Outcome, reason: ?[]const u8) ToolError!ToolResult {
     var result = try verdict(arena, outcome, reason);
     if (outcome.passwordSelector != null or outcome.usernameSelector != null) {
         result.replay_args = try renderJson(arena, .{
@@ -1740,7 +1745,7 @@ fn replayLogin(
     session: *lp.Session,
     registry: *NodeRegistry,
     args: LoginParams,
-    outcome: *lp.login.Outcome,
+    outcome: *login.Outcome,
 ) ToolError!ToolResult {
     if (args.usernameSelector) |selector| {
         if (args.username == null and !args.decideOnly) {
@@ -2248,7 +2253,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     // The same refusal `login` makes, on the path the driver guidance sends a
     // model down when `login` declines.
     if (resolved.node.is(Element)) |element| {
-        if (lp.login.isPasswordField(element) and try lp.login.untrustedTarget(arena, resolved.page, element, null)) {
+        if (login.isPasswordField(element) and try login.untrustedTarget(arena, resolved.page, element, null)) {
             return .{
                 .text = "the page or the URL its form posts to is not https; refusing to fill a password into it",
                 .is_error = true,
@@ -3588,8 +3593,8 @@ test "acceptCookies: the control Jev picks is clicked and the re-read verifies i
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(!result.is_error);
@@ -3612,8 +3617,8 @@ test "login: Jev picks the identifier, the password field and the submit control
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     // decideOnly, so nothing is typed and the decoy newsletter form is the
     // only thing that could have been picked by mistake.
@@ -3645,8 +3650,8 @@ test "classify: the page is still serviced while the model is asked" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.startSlow(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.startSlow(aa);
+    defer mock.stop();
 
     const before = try tickCount(aa, page.session, &registry);
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -3670,8 +3675,8 @@ test "classify: a page that navigates while the model is asked is not answered f
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.startSlow(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.startSlow(aa);
+    defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"questions":{"isBlocked":true}}
@@ -3692,8 +3697,8 @@ test "acceptCookies: a click that moves the page is followed by a pick on the pa
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(!result.is_error);
@@ -3712,8 +3717,8 @@ test "acceptCookies: a confirmation the first click raises is picked from afresh
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(!result.is_error);
@@ -3735,8 +3740,8 @@ test "login: the password waits for the step that asks for it" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"username":"ada","password":"hunter2"}
@@ -3765,8 +3770,8 @@ test "login: a later step that asks for the password in the clear is refused" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"username":"ada","password":"hunter2"}
@@ -3811,8 +3816,8 @@ test "login: a verification that fails still reports that credentials went out" 
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.startFailingVerification(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.startFailingVerification(aa);
+    defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"username":"ada","password":"hunter2"}
@@ -3875,8 +3880,8 @@ test "login: the password field is checked again after the username went in" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const jev = try testing.MockJev.start(aa);
-    defer jev.stop();
+    const mock = try testing.MockJev.start(aa);
+    defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"username":"ada","password":"hunter2"}

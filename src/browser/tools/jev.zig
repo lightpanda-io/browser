@@ -23,12 +23,12 @@
 //! and classify nothing.
 
 const std = @import("std");
-const lp = @import("../lightpanda.zig");
+const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
-const truncateUtf8 = @import("../string.zig").truncateUtf8;
+const truncateUtf8 = @import("../../string.zig").truncateUtf8;
 
 const Frame = lp.Frame;
-const DOMNode = @import("webapi/Node.zig");
+const DOMNode = @import("../webapi/Node.zig");
 const NodeRegistry = lp.NodeRegistry;
 const Content = zenai.typesafe.Content;
 

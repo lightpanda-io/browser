@@ -31,14 +31,15 @@
 //! page in its filled state, and only ever a username at that.
 
 const std = @import("std");
-const lp = @import("../lightpanda.zig");
+const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
-const interactive = @import("interactive.zig");
-const URL = @import("URL.zig");
-const Element = @import("webapi/Element.zig");
-const Form = @import("webapi/element/html/Form.zig");
+const jev = @import("jev.zig");
+const interactive = @import("../interactive.zig");
+const URL = @import("../URL.zig");
+const Element = @import("../webapi/Element.zig");
+const Form = @import("../webapi/element/html/Form.zig");
 const Frame = lp.Frame;
 
 const Questions = zenai.typesafe.Questions;
@@ -46,8 +47,8 @@ const QuestionEntry = zenai.typesafe.QuestionEntry;
 const ChoiceEntry = zenai.typesafe.ChoiceEntry;
 
 /// The question ids, which also key the answers.
-pub const wall_key = @tagName(lp.jev.Preset.isLoginWall);
-pub const error_key = @tagName(lp.jev.Preset.isErrorPage);
+pub const wall_key = @tagName(jev.Preset.isLoginWall);
+pub const error_key = @tagName(jev.Preset.isErrorPage);
 pub const user_key = "userField";
 pub const password_key = "passwordField";
 pub const submit_key = "submit";
@@ -140,7 +141,7 @@ pub fn picks(
     // or nothing at all, and both come to the same act: Enter in the field.
     out.submit = try pickOf(candidates, response, asked, submit_key);
     if (asked.has(multi_step_key)) {
-        out.multi_step = (response.noul(multi_step_key) orelse 0) >= lp.jev.gate;
+        out.multi_step = (response.noul(multi_step_key) orelse 0) >= jev.gate;
     }
     return out;
 }
@@ -153,7 +154,7 @@ fn pickOf(candidates: []const choose.Candidate, response: zenai.typesafe.types.A
 /// The page after the submit: did the sign-in wall go, and did an error take
 /// its place.
 pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
-    return lp.jev.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
+    return jev.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
 }
 
 /// `input[type=password]` and nothing else: the one place a password is
@@ -222,7 +223,7 @@ pub const Outcome = struct {
     reason: ?[]const u8 = null,
 };
 
-const testing = @import("../testing.zig");
+const testing = @import("../../testing.zig");
 
 /// A frame whose document holds `html` inside one wrapper element, attached so
 /// `<label for>` and form ownership both resolve.
