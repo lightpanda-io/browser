@@ -608,10 +608,13 @@
     // cross_document_cancel below) has canIntercept false and throws.
     let scroll_before_intercept;
     let handler_type_error;
+    let scroll_after_failed_handler;
     const {events} = recordNavigations(() => {
       navigation.addEventListener('navigate', (e) => {
         try { e.scroll(); } catch (err) { scroll_before_intercept = err; }
         try { e.intercept({handler: 123}); } catch (err) { handler_type_error = err; }
+        // A failed intercept() call must not count as having intercepted.
+        try { e.scroll(); } catch (err) { scroll_after_failed_handler = err; }
         e.intercept();
         e.scroll();
       }, {once: true});
@@ -621,7 +624,9 @@
     testing.expectTrue(e.canIntercept);
     testing.expectEqual('InvalidStateError', scroll_before_intercept.name);
     testing.expectEqual('intercept() must be called before scroll()', scroll_before_intercept.message);
-    testing.expectEqual('TypeError', handler_type_error.name);
+    testing.expectTrue(handler_type_error instanceof TypeError);
+    testing.expectEqual('InvalidStateError', scroll_after_failed_handler.name);
+    testing.expectEqual('intercept() must be called before scroll()', scroll_after_failed_handler.message);
 
     testing.withError((err) => {
       testing.expectEqual('InvalidStateError', err.name);

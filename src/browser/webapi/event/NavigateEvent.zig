@@ -205,7 +205,7 @@ const InterceptOptions = struct {
     // Not supported: we never defer scroll restoration or focus reset, so
     // these are accepted but otherwise ignored.
     focusReset: ?[]const u8 = null,
-    handler: ?js.Value = null,
+    handler: ?js.Function = null,
     scroll: ?[]const u8 = null,
 };
 
@@ -227,15 +227,7 @@ fn intercept(self: *NavigateEvent, opts: ?InterceptOptions, frame: *Frame) !Thro
     self._intercepted = true;
 
     if (opts) |o| {
-        if (o.handler) |handler_value| {
-            if (!handler_value.isFunction()) {
-                return .{
-                    .exception = local.newException(
-                        DOMException.init("intercept()'s handler must be a function.", "TypeError"),
-                    ),
-                };
-            }
-            const handler_fn = js.Function{ .local = local, .handle = @ptrCast(handler_value.handle) };
+        if (o.handler) |handler_fn| {
             try self._handlers.append(self._proto._arena.allocator(), try handler_fn.persist());
         }
     }
