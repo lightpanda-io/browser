@@ -215,6 +215,10 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/v1/systemone")) {
+        return systemOne(req, req_allocator);
+    }
+
     if (std.mem.eql(u8, path, "/xhr/redirect")) {
         return req.respond("", .{
             .status = .found,
@@ -1084,4 +1088,225 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     return req.respond("not found", .{ .status = .not_found });
+}
+
+/// A stand-in for TypeSafe System One. `classify` asserts exact answers for
+/// names it knows, so those come from a fixed body that deliberately leaves
+/// most presets unanswered. `acceptCookies` and `login` cannot: their choices
+/// are keyed by registry node ids, which differ per run, so an answer has to
+/// be built from the request that asked.
+fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
+    const classify_answers =
+        \\{
+        \\  "model": "jev-latest",
+        \\  "answers": {
+        \\    "isBlocked": {"type": "noul", "noul": 0.95},
+        \\    "isCaptcha": {"type": "noul", "noul": 0.05},
+        \\    "is_blocked": {"type": "noul", "noul": 0.95},
+        \\    "__category": {"type": "choice", "choice": "product", "probabilities": {"product": 0.95, "catalog": 0.05}, "confidence": 0.95},
+        \\    "page_type": {"type": "choice", "choice": "product", "probabilities": {"product": 0.9, "catalog": 0.1}, "confidence": 0.9},
+        \\    "completeness": {"type": "score", "score": 1.8, "legend": {"0": "empty", "1": "partial", "2": "full"}, "probabilities": {"0": 0.05, "1": 0.1, "2": 0.85}, "confidence": 0.85}
+        \\  }
+        \\}
+    ;
+
+    const no_verify = bearer(req, no_verify_key);
+    // Long enough that a caller blocking on the answer visibly stops its own
+    // page, and short enough not to slow the suite down.
+    if (bearer(req, slow_key)) lp.io.sleep(.fromMilliseconds(400), .awake) catch {};
+
+    var body_buf: [64 * 1024]u8 = undefined;
+    const body = if (req.head.method.requestHasBody())
+        try req.readerExpectNone(&body_buf).allocRemaining(arena, .limited(body_buf.len))
+    else
+        "";
+
+    const answers = fixed: {
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch
+            break :fixed classify_answers;
+        const questions = switch (parsed.object.get("questions") orelse .null) {
+            .object => |o| o,
+            else => break :fixed classify_answers,
+        };
+        break :fixed switch (requestKind(questions)) {
+            .other => classify_answers,
+            .deciding => try answerAsked(arena, questions, true, std.ascii.findIgnoreCase(body, banner_label) != null),
+            .verifying => if (no_verify)
+                return req.respond("the verification service is down", .{
+                    .status = .internal_server_error,
+                    .extra_headers = &.{.{ .name = "Content-Type", .value = "text/plain" }},
+                })
+            else
+                try answerAsked(arena, questions, false, std.ascii.findIgnoreCase(body, banner_label) != null),
+        };
+    };
+    return req.respond(answers, .{
+        .extra_headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+    });
+}
+
+/// What a request is: the one that decides, which offers page elements to
+/// choose between; the verification re-read that follows it, which asks the
+/// wall questions alone; or neither, which is `classify` asking something else.
+fn requestKind(asked: std.json.ObjectMap) enum { deciding, verifying, other } {
+    var all_walls = asked.count() > 0;
+    var it = asked.iterator();
+    while (it.next()) |entry| {
+        if (hintFor(entry.key_ptr.*) != null) return .deciding;
+        if (!isWall(entry.key_ptr.*)) all_walls = false;
+    }
+    return if (all_walls) .verifying else .other;
+}
+
+/// An answer per question asked. `deciding` is the request that offers
+/// elements; by the time the re-read asks, the fixture has taken the banner
+/// away or signed in, so its wall questions answer no.
+fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bool, banner_in_state: bool) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var jw: std.json.Stringify = .{ .writer = &out.writer };
+
+    try jw.beginObject();
+    try jw.objectField("model");
+    try jw.write("jev-latest");
+    try jw.objectField("answers");
+    try jw.beginObject();
+
+    // The mock sees the questions, not the page: one that offered no field
+    // looking like a password is one that asks for it on a later step.
+    const later_step = pickFor(arena, asked, lp.tools.login.password_key) == null;
+
+    var it = asked.iterator();
+    while (it.next()) |entry| {
+        const question = switch (entry.value_ptr.*) {
+            .object => |o| o,
+            else => continue,
+        };
+        const kind = switch (question.get("type") orelse .null) {
+            .string => |s| s,
+            else => continue,
+        };
+        const key = entry.key_ptr.*;
+        try jw.objectField(key);
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write(kind);
+        if (std.mem.eql(u8, kind, "choice")) {
+            const options: std.json.ObjectMap = switch (question.get("criteria") orelse .null) {
+                .object => |o| o,
+                else => .empty,
+            };
+            const pick = pickOption(arena, options, hintFor(key)) orelse lp.tools.choose.none_key;
+            try jw.objectField("choice");
+            try jw.write(pick);
+            // Rejected unless the probabilities cover exactly the options
+            // offered and sum to 1, with the choice as their argmax.
+            const n = options.count();
+            const chosen: f64 = if (n < 2) 1 else 0.7;
+            const even: f64 = if (n < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(n - 1));
+            // Where a candidate was chosen, `none` keeps a token share and the
+            // others outrank it, as a model's answer would.
+            const spread = n > 2 and !std.mem.eql(u8, pick, lp.tools.choose.none_key);
+            const none_share: f64 = if (spread) 0.05 else even;
+            const share: f64 = if (spread) (1 - chosen - none_share) / @as(f64, @floatFromInt(n - 2)) else even;
+            try jw.objectField("probabilities");
+            try jw.beginObject();
+            var option = options.iterator();
+            while (option.next()) |o| {
+                const option_key = o.key_ptr.*;
+                try jw.objectField(option_key);
+                try jw.write(if (std.mem.eql(u8, option_key, pick))
+                    chosen
+                else if (std.mem.eql(u8, option_key, lp.tools.choose.none_key))
+                    none_share
+                else
+                    share);
+            }
+            try jw.endObject();
+            try jw.objectField("confidence");
+            try jw.write(0.9);
+        } else {
+            const noul: f64 = if (yesTo(key, deciding, later_step, banner_in_state)) 0.95 else 0.05;
+            try jw.objectField(kind);
+            try jw.write(noul);
+        }
+        try jw.endObject();
+    }
+
+    try jw.endObject();
+    try jw.endObject();
+    return out.written();
+}
+
+/// The consent fixtures label their dialog with this, so the state a request
+/// carries shows whether the banner is still on the page.
+const banner_label = "Cookie notice";
+
+/// The API key a test sets to fail the verification re-read, while the
+/// decision before it is answered as usual.
+pub const no_verify_key = "test-key-no-verify";
+
+/// The API key a test sets to answer slowly.
+pub const slow_key = "test-key-slow";
+
+fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (!std.ascii.eqlIgnoreCase(h.name, "authorization")) continue;
+        return std.mem.endsWith(u8, h.value, key);
+    }
+    return false;
+}
+
+fn yesTo(key: []const u8, deciding: bool, later_step: bool, banner_in_state: bool) bool {
+    // The one question the mock answers from the page: whether the banner's
+    // label is in the state it was sent.
+    if (std.mem.eql(u8, key, lp.tools.consent.wall_key)) return banner_in_state;
+    if (!deciding) return false;
+    if (std.mem.eql(u8, key, lp.tools.login.multi_step_key)) return later_step;
+    return isWall(key);
+}
+
+fn isWall(key: []const u8) bool {
+    return std.mem.eql(u8, key, lp.tools.consent.wall_key) or std.mem.eql(u8, key, lp.tools.login.wall_key) or
+        std.mem.eql(u8, key, lp.tools.login.error_key);
+}
+
+/// What a question is looking for, as a word its option's description carries.
+fn hintFor(key: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, key, lp.tools.consent.control_key)) return "accept";
+    if (std.mem.eql(u8, key, lp.tools.login.user_key)) return "user";
+    if (std.mem.eql(u8, key, lp.tools.login.password_key)) return "password";
+    if (std.mem.eql(u8, key, lp.tools.login.submit_key)) return "sign";
+    return null;
+}
+
+/// How the question under `key` would be answered, or null when nothing
+/// offered fits it.
+fn pickFor(arena: std.mem.Allocator, asked: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const question = switch (asked.get(key) orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    const options: std.json.ObjectMap = switch (question.get("criteria") orelse .null) {
+        .object => |o| o,
+        else => return null,
+    };
+    return pickOption(arena, options, hintFor(key));
+}
+
+/// The first option whose description mentions the hint — a stand-in for the
+/// model's judgment, so the test exercises the question and answer plumbing
+/// rather than a canned node id. When nothing matches, the answer is `none`:
+/// a reworded fixture then fails the test that asked rather than quietly
+/// picking something else.
+fn pickOption(arena: std.mem.Allocator, options: std.json.ObjectMap, hint: ?[]const u8) ?[]const u8 {
+    var it = options.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (std.mem.eql(u8, key, lp.tools.choose.none_key) or std.mem.eql(u8, key, lp.tools.login.enter_key)) continue;
+        const wanted = hint orelse return key;
+        const described = std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}) catch continue;
+        if (std.ascii.findIgnoreCase(described, wanted) != null) return key;
+    }
+    return null;
 }

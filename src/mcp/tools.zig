@@ -36,6 +36,9 @@ const read_only: protocol.ToolAnnotations = .{ .readOnlyHint = true, .destructiv
 fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
     return switch (tool) {
         .nodeDetails, .findElement, .getUrl, .getCookies, .getEnv, .extract => read_only,
+        // Changes nothing on the page, but a third-party model answers it:
+        // not closed-world, and not the same twice.
+        .classify => .{ .readOnlyHint = true, .destructiveHint = false },
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
@@ -43,6 +46,8 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         .screenshot, .download => .{ .idempotentHint = true },
         .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .evaluate, .click, .press => .{},
+        // Clicks a control it chooses, and `login` sends credentials.
+        .acceptCookies, .login => .{},
         .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .scroll => .{ .destructiveHint = false, .openWorldHint = false },
         .pageTools => read_only,

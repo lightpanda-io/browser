@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in</title>
+  </head>
+  <body>
+    <!-- Typing the username turns the password field into a plain text
+         input: what the model picked is not what the password would go into. -->
+    <form id="signin" action="/session" method="post">
+      <label for="user">Username</label>
+      <input id="user" name="username" />
+      <label for="pass">Password</label>
+      <input id="pass" name="password" type="password" />
+      <button id="submit" type="submit">Sign in</button>
+    </form>
+    <script>
+      document.getElementById("user").addEventListener("input", function () {
+        document.getElementById("pass").type = "text";
+      });
+    </script>
+  </body>
+</html>
