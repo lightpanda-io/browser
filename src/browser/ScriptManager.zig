@@ -278,18 +278,17 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             break :blk .async;
         }
 
-        // Check for defer or module (before checking dynamic script default)
-        if (kind == .module or element.getAttributeInterned("defer") != null) {
-            break :blk .@"defer";
+        if (comptime from_parser) {
+            // dynamic script ignores defre
+            if (kind == .module or element.getAttributeInterned("defer") != null) {
+                break :blk .@"defer";
+            }
+            break :blk .normal;
         }
 
-        // For dynamically-inserted scripts (not from parser), default to async
-        // unless async was explicitly set.
-        if (comptime !from_parser) {
-            break :blk if (script_element._force_async) .async else .ordered;
-        }
-
-        break :blk .normal;
+        // Dynamically-inserted: defer has no effect. Async by default, in
+        // insertion order once force-async is cleared.
+        break :blk if (script_element._force_async) .async else .ordered;
     };
 
     if (comptime lp.IS_DEBUG) {
