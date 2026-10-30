@@ -559,7 +559,8 @@ pub fn gesturePoint(frame: *Frame, target: *Element) Point {
 /// returned.
 pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
     const point = gesturePoint(frame, target);
-    try moveSequence(frame, target, .{ .modifiers = modifiers, .x = point.x, .y = point.y });
+    // The point is in the owner frame's viewport, as updateHoverTarget expects.
+    try moveSequence(target.ownerFrame(frame) orelse frame, target, .{ .modifiers = modifiers, .x = point.x, .y = point.y });
 
     const g: Gesture = .{ .click_count = 1, .modifiers = modifiers, .x = point.x, .y = point.y };
     var pointer: PointerButtons = .{};
@@ -3152,8 +3153,65 @@ test "user_input: hover reports the element's centre point" {
     const target = frame.document.getElementById("hoverme").?;
     const rect = target.boundingClientRectValues(frame);
     try actions.hover(target.asNode(), frame);
+    const hovered = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerover','mouseover','pointerenter','mouseenter','pointermove','mousemove'].includes(e.type))
+    , .{});
+    // The hover boundary pairs and the move: 2 over + 2 enter + 2 move.
     try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
         frame.local_arena,
-        \\events.filter(e => e.type === 'pointerover' || e.type === 'pointermove').every(e => e.trusted && e.x === {d} && e.y === {d})
-    , .{rect.x + rect.width / 2, rect.y + rect.height / 2}), null)).isTrue());
+        "{s}.length === 6 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ hovered, hovered, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+}
+
+test "user_input: element click inside an iframe reports the point in each document's viewport" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const child = frame.child_frames.items[0];
+    const target = child.document.getElementById("middle").?;
+    const rect = target.boundingClientRectValues(child);
+
+    var main_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&main_ls);
+    defer main_ls.deinit();
+    _ = try main_ls.local.compileAndRun(
+        \\window.events = [];
+        \\for (const type of ['pointerover', 'mouseover']) {
+        \\  document.addEventListener(type, e => events.push({tag: e.target.tagName, x: e.clientX, y: e.clientY, trusted: e.isTrusted}));
+        \\}
+    , null);
+    var ls: js.Local.Scope = undefined;
+    child.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.events = [];
+        \\const target = document.getElementById('middle');
+        \\for (const type of ['pointerover','mouseover','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click']) {
+        \\  target.addEventListener(type, e => events.push({type, x:e.clientX, y:e.clientY, trusted:e.isTrusted}));
+        \\}
+    , null);
+
+    // MCP/CDP click passes the main frame for a node inside an iframe: the
+    // boundary events must still carry the point in each document's viewport.
+    try triggerClick(frame, target, .{});
+
+    const chain = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerover','mouseover','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click'].includes(e.type))
+    , .{});
+    // The whole chain sits in the child viewport, at the target's rect centre.
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 9 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ chain, chain, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+
+    // The iframe the pointer entered reports the point in the main viewport.
+    const iframe = child.iframe.?.asElement();
+    const child_rect = iframe.boundingClientRectValues(frame);
+    try testing.expect((try main_ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "events.length === 2 && events.every(e => e.trusted && e.tag === 'IFRAME' && e.x === {d} && e.y === {d})",
+        .{ child_rect.x + iframe.getClientLeft() + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop() + rect.y + rect.height / 2 },
+    ), null)).isTrue());
 }

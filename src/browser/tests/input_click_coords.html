@@ -9,10 +9,17 @@ body { margin: 0; }
 <div id="hoverme"></div>
 <script>
 window.events = [];
-for (const type of ['pointerover', 'pointermove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-  document.addEventListener(type, e => {
-    events.push({type, x: e.clientX, y: e.clientY, trusted: e.isTrusted, button: e.button});
-  });
+const push = type => e => {
+  events.push({type, x: e.clientX, y: e.clientY, trusted: e.isTrusted, button: e.button});
+};
+for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+  document.addEventListener(type, push(type));
+}
+// enter/leave don't bubble: listen on the elements themselves.
+for (const el of [document.getElementById('target'), document.getElementById('hoverme')]) {
+  for (const type of ['pointerenter', 'mouseenter']) {
+    el.addEventListener(type, push(type));
+  }
 }
 </script>
 </body></html>
