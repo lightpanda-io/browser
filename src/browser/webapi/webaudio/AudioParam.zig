@@ -28,6 +28,7 @@ const Bus = @import("dsp/Bus.zig");
 const Timeline = @import("dsp/Timeline.zig");
 const render = @import("render.zig");
 const AudioNode = @import("AudioNode.zig");
+const AudioContext = @import("AudioContext.zig");
 const BaseAudioContext = @import("BaseAudioContext.zig");
 
 const AudioParam = @This();
@@ -41,6 +42,8 @@ _rate: Rate,
 _fixed_rate: bool,
 // [[current value]]: what `value` reads. Rendering updates it.
 _intrinsic: f32,
+// realtime only: the quantum _intrinsic was last brought up to
+_rendered_frame: u64 = 0,
 _timeline: Timeline = .{},
 // nodes connected to this param
 _sources: std.ArrayList(*AudioNode) = .empty,
@@ -68,6 +71,9 @@ pub fn init(context: *BaseAudioContext, descriptor: Descriptor) !*AudioParam {
         ._fixed_rate = descriptor.fixed_rate,
         ._intrinsic = descriptor.default,
     };
+    if (context._type == .realtime) {
+        param._rendered_frame = context.subtype(AudioContext).currentFrame();
+    }
     return param;
 }
 
@@ -86,17 +92,40 @@ pub fn setInitial(self: *AudioParam, value: f32) !void {
     self._intrinsic = std.math.clamp(value, self._min, self._max);
 }
 
-// An AudioContext doesn't render, so its params read the timeline instead.
-fn getValue(self: *const AudioParam) f32 {
-    if (self._context._type == .realtime and self._timeline.isEmpty() == false) {
-        const value = self._timeline.valueAt(self._context.currentTime(), self._intrinsic);
-        return std.math.clamp(value, self._min, self._max);
-    }
+fn getValue(self: *AudioParam) f32 {
+    self.catchUp();
     return self._intrinsic;
+}
+
+// An AudioContext doesn't render, so _intrinsic is brought up to what
+// rendering the quanta elapsed since the last catch-up would have left in it,
+// as computeValues does. Automation for the current quantum shows once it has
+// passed, as in Chrome.
+fn catchUp(self: *AudioParam) void {
+    if (self._context._type != .realtime) {
+        return;
+    }
+    const frame = self._context.subtype(AudioContext).currentFrame();
+    if (frame == self._rendered_frame) {
+        return;
+    }
+    self._rendered_frame = frame;
+    if (self._timeline.isEmpty()) {
+        return;
+    }
+    // a-rate leaves the quantum's last frame, k-rate its first
+    const last = switch (self._rate) {
+        .@"a-rate" => frame - 1,
+        .@"k-rate" => frame - Bus.quantum,
+    };
+    const sample_rate: f64 = self._context._sample_rate;
+    const t = @as(f64, @floatFromInt(last)) / sample_rate;
+    self._intrinsic = std.math.clamp(self._timeline.valueAt(t, self._intrinsic), self._min, self._max);
 }
 
 fn setValue(self: *AudioParam, value: f32) !void {
     try finite(value);
+    self.catchUp();
     self._intrinsic = std.math.clamp(value, self._min, self._max);
     _ = try self.setValueAtTime(self._intrinsic, self._context.currentTime());
 }
@@ -180,12 +209,14 @@ fn setValueCurveAtTime(self: *AudioParam, values: []const f32, start_time: f64, 
 
 fn cancelScheduledValues(self: *AudioParam, cancel_time: f64) !*AudioParam {
     const time = try self.eventTime(cancel_time);
+    self.catchUp();
     self._timeline.cancelScheduledValues(time);
     return self;
 }
 
 fn cancelAndHoldAtTime(self: *AudioParam, cancel_time: f64) !*AudioParam {
     const time = try self.eventTime(cancel_time);
+    self.catchUp();
     try self._timeline.cancelAndHoldAtTime(self._context._arena.allocator(), time);
     return self;
 }
@@ -201,7 +232,8 @@ fn eventTime(self: *const AudioParam, time: f64) !f64 {
     return @max(time, self._context.currentTime());
 }
 
-fn ramp(self: *const AudioParam, kind: Timeline.Kind, value: f32, time: f64) Timeline.Event {
+fn ramp(self: *AudioParam, kind: Timeline.Kind, value: f32, time: f64) Timeline.Event {
+    self.catchUp();
     return .{
         .kind = kind,
         .time = time,
@@ -212,6 +244,7 @@ fn ramp(self: *const AudioParam, kind: Timeline.Kind, value: f32, time: f64) Tim
 }
 
 fn insert(self: *AudioParam, event: Timeline.Event) !void {
+    self.catchUp();
     // Rendering prunes as it goes; without it, the past is dropped here.
     if (self._context._type == .realtime) {
         self._timeline.prune(self._context.currentTime());

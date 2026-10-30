@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <form id="f">
@@ -306,7 +307,7 @@
 
 <script id="pattern_validation_message">
 {
-  testing.expectEqual('Please match the requested format.', $('#zip-bad').validationMessage);
+  testing.expectEqual('Please match the format requested.', $('#zip-bad').validationMessage);
   testing.expectEqual('', $('#zip-good').validationMessage);
 }
 </script>

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <script id="marquee_constructor">
@@ -34,19 +35,19 @@
   {
   const m = document.createElement('marquee')
 
-  // Limited-to-known-values with a default (missing/invalid -> default).
-  testing.expectEqual("scroll", m.behavior)
-  testing.expectEqual("left", m.direction)
+  // Plain DOMString reflection, not limited to known values.
+  testing.expectEqual("", m.behavior)
+  testing.expectEqual("", m.direction)
 
   m.setAttribute("behavior", "ALTERNATE")
-  testing.expectEqual("alternate", m.behavior)
+  testing.expectEqual("ALTERNATE", m.behavior)
   m.setAttribute("behavior", "nonsense")
-  testing.expectEqual("scroll", m.behavior)
+  testing.expectEqual("nonsense", m.behavior)
 
   m.setAttribute("direction", "Up")
-  testing.expectEqual("up", m.direction)
-  m.setAttribute("direction", "sideways")
-  testing.expectEqual("left", m.direction)
+  testing.expectEqual("Up", m.direction)
+  m.direction = "sideways"
+  testing.expectEqual("sideways", m.getAttribute("direction"))
   }
 </script>
 

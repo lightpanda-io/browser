@@ -378,7 +378,7 @@ fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
         .url => "Please enter a URL.",
         else => "Please enter a valid value.",
     };
-    if (self.suffersPatternMismatch(frame)) return "Please match the requested format.";
+    if (self.suffersPatternMismatch(frame)) return "Please match the format requested.";
     if (self.suffersTooLong()) return "Please shorten this text.";
     if (self.suffersTooShort()) return "Please lengthen this text.";
     if (self.suffersRangeUnderflow()) return "Value is too small.";
