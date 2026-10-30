@@ -64,10 +64,10 @@ pub const OngoingNavigation = struct {
     committed: ?js.PromiseResolver.Global = null,
     finished: ?js.PromiseResolver.Global = null,
     committed_same_document: bool = false,
-    // Set once the navigate event's intercept() ran. Consumed (and cleared)
-    // when the commit steps run the handler; released here otherwise (the
-    // navigation aborted before the handler ran).
-    intercept_handler: ?js.Function.Global = null,
+    // Set once the navigate event's intercept() ran, one per call. Consumed
+    // (and cleared) when the commit steps run the handlers; released here
+    // otherwise (the navigation aborted before the handlers ran).
+    intercept_handlers: []js.Function.Global = &.{},
 
     pub fn releasePromises(self: *OngoingNavigation) void {
         if (self.committed) |c| {
@@ -78,9 +78,9 @@ pub const OngoingNavigation = struct {
             f.release();
             self.finished = null;
         }
-        if (self.intercept_handler) |h| {
+        for (self.intercept_handlers) |h| {
             h.release();
-            self.intercept_handler = null;
         }
+        self.intercept_handlers = &.{};
     }
 };

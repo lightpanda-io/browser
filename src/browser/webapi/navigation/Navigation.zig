@@ -430,9 +430,11 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         return .canceled;
     }
 
-    if (event._handler) |handler| {
-        ongoing.intercept_handler = handler;
-        event._handler = null;
+    if (event._handlers.items.len > 0) {
+        const handlers = try frame.page_arena.alloc(js.Function.Global, event._handlers.items.len);
+        @memcpy(handlers, event._handlers.items);
+        ongoing.intercept_handlers = handlers;
+        event._handlers.clearRetainingCapacity();
     }
 
     if (params.same_document == false) {
@@ -527,9 +529,10 @@ pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
             // A newer navigation replaced it.
             return;
         }
-        if (ongoing_ptr.intercept_handler) |handler| {
-            ongoing_ptr.intercept_handler = null;
-            self.runInterceptHandler(handler, ongoing_ptr.signal, frame);
+        if (ongoing_ptr.intercept_handlers.len > 0) {
+            const handlers = ongoing_ptr.intercept_handlers;
+            ongoing_ptr.intercept_handlers = &.{};
+            self.runInterceptHandlers(handlers, ongoing_ptr.signal, frame);
             return;
         }
     }
@@ -550,69 +553,119 @@ pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
     }
 }
 
-fn runInterceptHandler(
+// The spec runs every handler registered by intercept(), then waits for all
+// of their results (a non-promise return counts as an already-fulfilled
+// one) before settling: the first rejection in handler-registration order
+// wins, otherwise it's a success.
+const WaitAllHandlers = struct {
+    navigation: *Navigation,
+    signal: *AbortSignal,
+    frame: *Frame,
+    pending: usize,
+    // Indexed like `handlers`, so the first non-null wins in registration order.
+    reasons: []?js.Value.Global,
+
+    fn settleOne(ctx: *WaitAllHandlers, index: usize, reason: ?js.Value) void {
+        if (reason) |r| {
+            ctx.reasons[index] = r.persist() catch null;
+        }
+        ctx.pending -= 1;
+        if (ctx.pending > 0) {
+            return;
+        }
+
+        var ls: js.Local.Scope = undefined;
+        ctx.frame.js.localScope(&ls);
+        defer ls.deinit();
+        const local = &ls.local;
+
+        for (ctx.reasons) |maybe_reason| {
+            const global = maybe_reason orelse continue;
+            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = global.local(local) });
+            global.release();
+            return;
+        }
+        ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
+    }
+};
+
+fn runInterceptHandlers(
     self: *Navigation,
-    handler: js.Function.Global,
+    handlers: []js.Function.Global,
     signal: *AbortSignal,
     frame: *Frame,
 ) void {
-    defer handler.release();
-
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
     const local = &ls.local;
 
-    const handler_fn = handler.local(local);
+    const reasons = frame.page_arena.alloc(?js.Value.Global, handlers.len) catch null;
+    const maybe_ctx = if (reasons != null) frame.page_arena.create(WaitAllHandlers) catch null else null;
+    const ctx = maybe_ctx orelse {
+        for (handlers) |handler| {
+            handler.release();
+        }
+        self.settleIntercept(signal, frame, .success);
+        return;
+    };
+    ctx.* = .{
+        .navigation = self,
+        .signal = signal,
+        .frame = frame,
+        .pending = handlers.len,
+        .reasons = reasons.?,
+    };
+    @memset(ctx.reasons, null);
 
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(local);
-    defer try_catch.deinit();
+    for (handlers, 0..) |handler, i| {
+        defer handler.release();
+        const handler_fn = handler.local(local);
 
-    const ret = handler_fn.callRethrow(js.Value, .{}) catch |err| {
-        if (err == error.TryCatchRethrow) {
-            if (try_catch.exceptionValue()) |exc| {
-                self.settleIntercept(signal, frame, .{ .failure = exc });
-                return;
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const ret = handler_fn.callRethrow(js.Value, .{}) catch |err| {
+            if (err == error.TryCatchRethrow) {
+                if (try_catch.exceptionValue()) |exc| {
+                    ctx.settleOne(i, exc);
+                    continue;
+                }
             }
-        }
-        log.debug(.event, "Navigation.intercept handler", .{ .err = err });
-        self.settleIntercept(signal, frame, .success);
-        return;
-    };
+            log.debug(.event, "Navigation.intercept handler", .{ .err = err });
+            ctx.settleOne(i, null);
+            continue;
+        };
 
-    if (!ret.isPromise()) {
-        self.settleIntercept(signal, frame, .success);
-        return;
+        if (!ret.isPromise()) {
+            ctx.settleOne(i, null);
+            continue;
+        }
+
+        const HandlerContext = struct { ctx: *WaitAllHandlers, index: usize };
+        const handler_ctx = frame.page_arena.create(HandlerContext) catch {
+            ctx.settleOne(i, null);
+            continue;
+        };
+        handler_ctx.* = .{ .ctx = ctx, .index = i };
+
+        const on_fulfilled = local.newCallback(struct {
+            fn f(c: *HandlerContext, _: ?js.Value) void {
+                c.ctx.settleOne(c.index, null);
+            }
+        }.f, handler_ctx);
+
+        const on_rejected = local.newCallback(struct {
+            fn f(c: *HandlerContext, reason: ?js.Value) void {
+                c.ctx.settleOne(c.index, reason);
+            }
+        }.f, handler_ctx);
+
+        _ = ret.toPromise().thenAndCatch(on_fulfilled, on_rejected) catch {
+            ctx.settleOne(i, null);
+        };
     }
-
-    const InterceptContext = struct {
-        navigation: *Navigation,
-        signal: *AbortSignal,
-        frame: *Frame,
-    };
-
-    const ctx = frame._session.arena.create(InterceptContext) catch {
-        self.settleIntercept(signal, frame, .success);
-        return;
-    };
-    ctx.* = .{ .navigation = self, .signal = signal, .frame = frame };
-
-    const on_fulfilled = local.newCallback(struct {
-        fn f(c: *InterceptContext, _: ?js.Value) void {
-            c.navigation.settleIntercept(c.signal, c.frame, .success);
-        }
-    }.f, ctx);
-
-    const on_rejected = local.newCallback(struct {
-        fn f(c: *InterceptContext, reason: ?js.Value) void {
-            c.navigation.settleIntercept(c.signal, c.frame, .{ .failure = reason.? });
-        }
-    }.f, ctx);
-
-    _ = ret.toPromise().thenAndCatch(on_fulfilled, on_rejected) catch {
-        self.settleIntercept(signal, frame, .success);
-    };
 }
 
 const InterceptResult = union(enum) { success, failure: js.Value };
