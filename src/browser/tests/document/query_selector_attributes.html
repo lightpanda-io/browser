@@ -162,8 +162,6 @@
 
   // Other attributes and foreign elements stay case-sensitive
   testing.expectEqual(null, document.querySelector('[name=q]'));
-  testing.diverges("Chrome doesn't enforce this case sensitivity", () => {
-    testing.expectEqual(null, document.querySelector('#caseSvg[type=matrix]'));
-  });
+  testing.expectEqual(null, document.querySelector('#caseSvg[type=matrix]'));
   testing.expectEqual('caseSvg', document.querySelector('#caseSvg[type=matrix i]')?.id);
 </script>
