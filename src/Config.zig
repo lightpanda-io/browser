@@ -480,6 +480,7 @@ pub const Commands = cli.Builder(.{
             .{ .name = "base_url", .type = ?[:0]const u8 },
             .{ .name = "system_prompt", .type = ?[:0]const u8 },
             .{ .name = "task", .type = ?[]const u8 },
+            .{ .name = "temperature", .type = ?f32 },
             .{ .name = "trace", .type = ?[]const u8, .path = true },
             .{ .name = "trace_results", .type = bool },
             .{ .name = "save", .type = ?[]const u8, .path = true },
