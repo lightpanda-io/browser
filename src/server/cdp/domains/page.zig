@@ -2306,7 +2306,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = bc.mainFrame() orelse unreachable;
         if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
-            if (std.mem.find(u8, transfer.res.buffer.items, "first") != null) {
+            if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }
         }

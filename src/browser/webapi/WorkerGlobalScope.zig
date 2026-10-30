@@ -417,7 +417,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    _ = ls.local.eval(response.body.items, url) catch |err| {
+    _ = ls.local.eval(response.body.items(), url) catch |err| {
         self.page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
         log.warn(.page_error, "uncaught exception", .{ .url = resolved_url, .caught = caught });
