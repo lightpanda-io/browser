@@ -609,6 +609,7 @@
     let scroll_before_intercept;
     let handler_type_error;
     let scroll_after_failed_handler;
+    let scroll_before_commit;
     const {events} = recordNavigations(() => {
       navigation.addEventListener('navigate', (e) => {
         try { e.scroll(); } catch (err) { scroll_before_intercept = err; }
@@ -616,7 +617,9 @@
         // A failed intercept() call must not count as having intercepted.
         try { e.scroll(); } catch (err) { scroll_after_failed_handler = err; }
         e.intercept();
-        e.scroll();
+        // scroll() only works once the navigation has committed, which for
+        // an intercepted navigation is inside the handler, after dispatch.
+        try { e.scroll(); } catch (err) { scroll_before_commit = err; }
       }, {once: true});
       history.pushState(null, '', '?intercept');
     });
@@ -627,6 +630,8 @@
     testing.expectTrue(handler_type_error instanceof TypeError);
     testing.expectEqual('InvalidStateError', scroll_after_failed_handler.name);
     testing.expectEqual('intercept() must be called before scroll()', scroll_after_failed_handler.message);
+    testing.expectEqual('InvalidStateError', scroll_before_commit.name);
+    testing.expectEqual('scroll() may only be called once the navigation has committed', scroll_before_commit.message);
 
     testing.withError((err) => {
       testing.expectEqual('InvalidStateError', err.name);
