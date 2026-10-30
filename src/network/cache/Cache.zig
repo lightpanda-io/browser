@@ -73,10 +73,10 @@ pub fn active(self: *Cache) ?*Cache {
     };
 }
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
+pub fn get(self: *Cache, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     return switch (self.kind) {
         .noop => .miss,
-        inline else => |*c| c.get(arena, req),
+        inline else => |*c| c.get(arena, body_allocator, req),
     };
 }
 
@@ -273,11 +273,12 @@ pub const RenewResponse = struct {
 };
 
 const CachedData = union(enum) {
-    buffer: []const u8,
+    // Allocated with the `body_allocator` given to `get`.
+    buffer: []u8,
 
-    pub fn deinit(self: CachedData) void {
+    pub fn deinit(self: CachedData, body_allocator: std.mem.Allocator) void {
         switch (self) {
-            .buffer => {},
+            .buffer => |buf| body_allocator.free(buf),
         }
     }
 

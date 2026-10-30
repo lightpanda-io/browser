@@ -2716,9 +2716,9 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         return self.queueLinkEvent(link, .@"error", generation);
     }
 
-    if (response.body.items.len > MAX_STYLESHEET_BYTES) {
+    if (response.body.items().len > MAX_STYLESHEET_BYTES) {
         log.debug(.http, "external stylesheet too large", .{
-            .bytes = response.body.items.len,
+            .bytes = response.body.items().len,
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
@@ -2754,7 +2754,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     else
         null;
     const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
-    const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
+    const text = try css_charset.decode(arena.allocator(), response.body.items(), protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.queueLinkEvent(link, .@"error", generation);
