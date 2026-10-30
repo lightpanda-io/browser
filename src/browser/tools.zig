@@ -1215,6 +1215,7 @@ fn askPage(
     ask: Ask,
 ) ToolError!Asked {
     const page = try requireFrame(session);
+    const loader_id = page._loader_id;
     const state = lp.jev.buildState(arena, page, ask.node, registry, ask.state) catch |err| return internalUnlessOom(err);
 
     var detail: Failure = .{};
@@ -1240,9 +1241,10 @@ fn askPage(
 
     // Pumping runs the page's own scripts, and a navigation among them tears
     // down the Page that every candidate element and node id points into (see
-    // `settleAction`). The answer describes a page that is no longer here.
+    // `settleAction`). The answer describes a page that is no longer here. By
+    // loader id: a new frame can reuse the old one's address.
     const now = session.currentFrame();
-    if (now == null or now.? != page) {
+    if (now == null or now.?._loader_id != loader_id) {
         response.deinit();
         registry.reset();
         return .{ .failed = .{
