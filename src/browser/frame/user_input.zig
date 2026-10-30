@@ -1344,11 +1344,15 @@ pub fn outermostEditingHost(target: *Element) ?*Element {
     var host: ?*Element = null;
     var current: ?*Element = target;
     while (current) |el| : (current = el.parentElement()) {
-        const editable = el.contentEditableState() orelse continue;
-        if (editable == false) {
-            break;
+        if (el.contentEditableState()) |editable| {
+            if (editable == false) {
+                break;
+            }
+            host = el;
+        } else if (el.isEditingHost()) {
+            // the body of a designMode document
+            host = el;
         }
-        host = el;
     }
     return host;
 }

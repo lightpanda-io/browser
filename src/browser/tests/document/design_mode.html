@@ -46,3 +46,21 @@
     testing.expectEqual('block', getComputedStyle(styled).display);
   }
 </script>
+
+<script id="insertText">
+  {
+    document.designMode = 'on';
+    const text = $('#p').firstChild;
+    getSelection().collapse(text, 4);
+    testing.expectEqual(true, document.execCommand('insertText', false, '!'));
+    testing.expectEqual('text!', $('#p').textContent);
+
+    // contenteditable=false content can't be edited
+    getSelection().collapse($('#ce-false').firstChild, 0);
+    testing.expectEqual(false, document.execCommand('insertText', false, '?'));
+    testing.expectEqual('fixed', $('#ce-false').textContent);
+
+    getSelection().removeAllRanges();
+    document.designMode = 'off';
+  }
+</script>
