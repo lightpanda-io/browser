@@ -72,7 +72,7 @@ pub fn postTask(self: *Scheduler, cb: js.Function.Global, options_: ?js.Value, e
     if (opts.signal) |signal| {
         if (signal._aborted) {
             cb.release();
-            rejectWithReason(resolver, signal._reason, local);
+            AbortSignal.rejectWithReason(resolver, "scheduler task abort", signal._reason);
             return resolver.promise();
         }
     }
@@ -108,7 +108,7 @@ pub fn yield(self: *Scheduler, exec: *js.Execution) !js.Promise {
     const state = self._current orelse TaskState{ .priority = .@"user-visible", .signal = null };
     if (state.signal) |signal| {
         if (signal._aborted) {
-            rejectWithReason(resolver, signal._reason, local);
+            AbortSignal.rejectWithReason(resolver, "scheduler task abort", signal._reason);
             return resolver.promise();
         }
     }
@@ -127,14 +127,6 @@ pub fn yield(self: *Scheduler, exec: *js.Execution) !js.Promise {
         .finalizer = Task.finalize,
     });
     return resolver.promise();
-}
-
-fn rejectWithReason(resolver: js.PromiseResolver, reason: AbortSignal.Reason, local: *const js.Local) void {
-    const value = AbortSignal.reasonJsValue(reason, local) catch {
-        resolver.rejectError("scheduler task abort", .{ .dom_exception = .{ .err = error.AbortError } });
-        return;
-    };
-    resolver.reject("scheduler task abort", value);
 }
 
 pub const Task = struct {
@@ -260,7 +252,7 @@ pub const Task = struct {
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
         defer ls.deinit();
-        rejectWithReason(resolver_global.local(&ls.local), reason, &ls.local);
+        AbortSignal.rejectWithReason(resolver_global.local(&ls.local), "scheduler task abort", reason);
     }
 };
 

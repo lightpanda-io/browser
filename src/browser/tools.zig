@@ -30,6 +30,7 @@ const Download = @import("Download.zig");
 const SelectorPath = @import("SelectorPath.zig");
 const Element = @import("webapi/Element.zig");
 const ModelContext = @import("webapi/ModelContext.zig");
+const AbortSignal = @import("webapi/AbortSignal.zig");
 const prompts = @import("tools/prompts.zig");
 const definitions = @import("tools/definitions.zig");
 const marshal = @import("tools/marshal.zig");
@@ -754,7 +755,8 @@ fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const
 /// Names the page's WebMCP tools: an agent won't call `pageTools` on every
 /// page just in case.
 fn pageToolsNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
-    const tools = frame.window.getModelContext().tools();
+    const mc = frame.window._model_context orelse return null;
+    const tools = mc.tools();
     if (tools.len == 0) return null;
     const tool_names = try arena.alloc([]const u8, tools.len);
     for (tools, tool_names) |t, *n| n.* = t.name;
@@ -1168,12 +1170,8 @@ const eval_promise_timeout_ms: u32 = 30_000;
 
 fn execPageTools(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
     const page = try requireFrame(session);
-    const tools = page.window.getModelContext().tools();
+    const tools = if (page.window._model_context) |mc| mc.tools() else &.{};
     if (tools.len == 0) return "This page registers no WebMCP tools.";
-
-    var ls: lp.js.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer ls.deinit();
 
     const Hints = struct {
         readOnlyHint: ?bool = null,
@@ -1183,17 +1181,17 @@ fn execPageTools(arena: std.mem.Allocator, session: *lp.Session) ToolError![]con
         name: []const u8,
         title: ?[]const u8,
         description: []const u8,
-        inputSchema: ?lp.js.Value,
+        inputSchema: ?std.json.Value,
         annotations: ?Hints,
     };
     const entries = arena.alloc(Entry, tools.len) catch return ToolError.OutOfMemory;
     for (tools, entries) |t, *e| {
-        const a = t.annotations;
+        const a = t.annotations orelse ModelContext.Annotations{};
         e.* = .{
             .name = t.name,
             .title = t.title,
             .description = t.description,
-            .inputSchema = if (t.input_schema) |s| ls.local.toLocal(s).toValue() else null,
+            .inputSchema = if (t.input_schema) |s| std.json.parseFromSliceLeaky(std.json.Value, arena, s, .{}) catch return ToolError.InternalError else null,
             .annotations = if (a.readOnlyHint or a.untrustedContentHint) .{
                 .readOnlyHint = if (a.readOnlyHint) true else null,
                 .untrustedContentHint = if (a.untrustedContentHint) true else null,
@@ -1210,10 +1208,8 @@ fn execCallPageTool(arena: std.mem.Allocator, session: *lp.Session, registry: *N
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = try requireFrame(session);
-    const tool = page.window.getModelContext().findTool(args.name) orelse return .{
-        .text = arena.print("No WebMCP tool named \"{s}\" on this page; pageTools lists them.", .{args.name}) catch return ToolError.OutOfMemory,
-        .is_error = true,
-    };
+    const mc = page.window._model_context orelse return noPageTool(arena, args.name);
+    const tool = mc.findTool(args.name) orelse return noPageTool(arena, args.name);
     const input_json = if (args.arguments) |a| blk: {
         if (a != .object) return .{ .text = "arguments: must be an object matching the tool's inputSchema", .is_error = true };
         break :blk std.json.Stringify.valueAlloc(arena, a, .{}) catch return ToolError.OutOfMemory;
@@ -1221,6 +1217,13 @@ fn execCallPageTool(arena: std.mem.Allocator, session: *lp.Session, registry: *N
 
     const result = try runPageTool(arena, page, tool, input_json);
     return settleScriptNavigation(arena, session, registry, page, result);
+}
+
+fn noPageTool(arena: std.mem.Allocator, name: []const u8) ToolError!ToolResult {
+    return .{
+        .text = arena.print("No WebMCP tool named \"{s}\" on this page; pageTools lists them.", .{name}) catch return ToolError.OutOfMemory,
+        .is_error = true,
+    };
 }
 
 fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelContext.Tool, input_json: []const u8) ToolError!ToolResult {
@@ -1233,9 +1236,12 @@ fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelCont
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    const exec = &page.js.execution;
+    const signal = AbortSignal.init(exec) catch return ToolError.OutOfMemory;
     var caught: lp.js.TryCatch.Caught = .{};
-    var value = tool.invoke(&ls.local, input_json, &caught) catch |err| return .{
+    var value = tool.invoke(exec, &ls.local, input_json, signal, &caught) catch |err| return .{
         .text = switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
             error.InvalidInput => "arguments: not valid JSON",
             error.ToolThrew => arena.dupe(u8, caught.exception orelse "tool threw") catch return ToolError.OutOfMemory,
         },
