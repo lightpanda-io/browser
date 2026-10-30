@@ -343,7 +343,7 @@ fn decodeAudioData(self: *BaseAudioContext, audio_data: js.Value, success_: ?js.
     }
     const local = frame.js.local.?;
     const bytes = try audio_data.toZig(js.BufferSource);
-    const buffer: ?*AudioBuffer = self.decode(bytes.bytes, local) catch |err| switch (err) {
+    const buffer: ?*AudioBuffer = self.decode(bytes.bytes(), local) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => null,
     };
