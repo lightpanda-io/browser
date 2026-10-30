@@ -221,7 +221,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .acceptCookies => .{
-            .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to TypeSafe System One (Jev), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selector` the control, and `reason` why nothing happened when nothing did. A page with nothing to click costs no model call; passing a `selector` clicks it and asks nothing, which is how a recorded call replays. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
+            .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to TypeSafe System One (Jev), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selectors` the controls clicked in order, and `reason` why nothing happened when nothing did. A click that leaves a banner up (a confirmation, say) is followed by one more pick. A page with nothing to click costs no model call; passing `selectors` clicks them in order and asks nothing, which is how a recorded call replays. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
             .summary = "Dismiss a cookie consent banner",
             .input_schema = minify(
                 \\{
@@ -230,7 +230,7 @@ pub fn of(tool: Tool) Definition {
                 \\    "prefer": { "type": "string", "enum":
             ++ lp.Config.tagJsonArray(lp.consent.Prefer) ++
                 \\, "description": "Whether to accept the cookies or refuse all non-essential ones. Defaults to 'accept'." },
-                \\    "selector": { "type": "string", "description": "Optional CSS selector of the control to click, from an earlier call's result. Clicked without asking the model; when it is not on the page, nothing is clicked." }
+                \\    "selectors": { "type": "array", "items": { "type": "string" }, "description": "Optional CSS selectors of the controls to click in order, from an earlier call's result. Clicked without asking the model; one that is not on the page stops the clicking there." }
                 \\  }
                 \\}
             ),

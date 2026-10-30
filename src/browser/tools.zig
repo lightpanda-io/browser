@@ -1332,24 +1332,31 @@ const max_consent_clicks = 2;
 fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         prefer: lp.consent.Prefer = .accept,
-        selector: ?[]const u8 = null,
+        selectors: ?[]const []const u8 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
     var outcome: lp.consent.Outcome = .{};
 
-    if (args.selector) |selector| {
-        // Most often the banner was already dismissed, by an earlier run's
-        // cookie: a replay repeats a decision, it does not make a new one.
-        const target = resolveBySelector(session, selector) catch |err| switch (err) {
-            error.NodeNotFound => return verdict(arena, &outcome, "the control given is not on this page, so nothing was clicked"),
-            else => return err,
-        };
-        try clickAndSettle(session, registry, target.node, target.page);
-        outcome.dismissed = true;
-        outcome.attempts = 1;
-        outcome.selector = selector;
-        return consentVerdict(arena, &outcome, "clicked the control given, without asking the model");
+    if (args.selectors) |selectors| {
+        for (selectors) |selector| {
+            // Most often the banner was already dismissed, by an earlier run's
+            // cookie: a replay repeats a decision, it does not make a new one.
+            const target = resolveBySelector(session, selector) catch |err| switch (err) {
+                error.NodeNotFound => return verdict(arena, &outcome, if (outcome.attempts == 0)
+                    "the control given is not on this page, so nothing was clicked"
+                else
+                    "the next control given is not on the page the last click left"),
+                else => return err,
+            };
+            try clickAndSettle(session, registry, target.node, target.page);
+            outcome.dismissed = true;
+            outcome.attempts += 1;
+        }
+        outcome.selectors = selectors;
+        return verdict(arena, &outcome, "clicked the controls given, without asking the model");
     }
+
+    var clicked: std.ArrayList([]const u8) = try .initCapacity(arena, max_consent_clicks);
 
     while (true) {
         const page = try requireFrame(session);
@@ -1415,7 +1422,8 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         };
 
         outcome.attempts += 1;
-        outcome.selector = selector;
+        clicked.appendAssumeCapacity(selector);
+        outcome.selectors = clicked.items;
         outcome.control = pick.candidate.name;
         outcome.confidence = pick.probability;
         try clickAndSettle(session, registry, pick.candidate.element.asNode(), page);
@@ -1426,8 +1434,9 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
 
 fn consentVerdict(arena: std.mem.Allocator, outcome: *lp.consent.Outcome, reason: ?[]const u8) ToolError!ToolResult {
     var result = try verdict(arena, outcome, reason);
-    if (outcome.selector) |selector| {
-        result.replay_args = try renderJson(arena, .{ .selector = selector }, compact);
+    // Only a dismissal the re-read confirmed is worth repeating.
+    if (outcome.verified) {
+        result.replay_args = try renderJson(arena, .{ .selectors = outcome.selectors }, compact);
     }
     return result;
 }
@@ -3460,15 +3469,13 @@ test "acceptCookies: the recorded control is clicked without the model" {
 
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"selector":"#accept"}
+        \\{"selectors":["#accept"]}
     , .{});
     const result = try call(aa, page.session, &registry, "acceptCookies", args, .{ .source = .user });
     try std.testing.expect(!result.is_error);
     try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "without asking the model") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":false") != null);
-    // What `--save` writes into the script, so the next run clicks it directly.
-    try std.testing.expectEqualStrings("{\"selector\":\"#accept\"}", result.replay_args.?);
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
@@ -3484,7 +3491,7 @@ test "acceptCookies: a recorded control that is gone clicks nothing and asks not
 
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"selector":"#gone"}
+        \\{"selectors":["#gone"]}
     , .{});
     const result = try call(aa, page.session, &registry, "acceptCookies", args, .{ .source = .user });
     try std.testing.expect(!result.is_error);
@@ -3542,7 +3549,8 @@ test "acceptCookies: the control Jev picks is clicked and the re-read verifies i
     try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
-    try std.testing.expect(result.replay_args != null);
+    // What `--save` writes into the script, so the next run clicks it directly.
+    try std.testing.expectEqualStrings("{\"selectors\":[\"#accept\"]}", result.replay_args.?);
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
@@ -3665,6 +3673,7 @@ test "acceptCookies: a confirmation the first click raises is picked from afresh
     try std.testing.expect(std.mem.find(u8, result.text, "\"attempts\":2") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
     try std.testing.expect(std.mem.find(u8, result.text, "Yes, accept them") != null);
+    try std.testing.expectEqualStrings("{\"selectors\":[\"#accept\",\"#confirm\"]}", result.replay_args.?);
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "Go back") == null);

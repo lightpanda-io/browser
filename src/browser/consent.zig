@@ -74,9 +74,11 @@ pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
 pub const Outcome = struct {
     dismissed: bool = false,
     verified: bool = false,
-    /// The control we clicked, as a selector that resolves to it again.
-    selector: ?[]const u8 = null,
-    /// Its accessible name, so a human reading the log sees what was clicked.
+    /// The controls we clicked, in order, as selectors that resolve to them
+    /// again.
+    selectors: ?[]const []const u8 = null,
+    /// The last one's accessible name, so a human reading the log sees what
+    /// was clicked.
     control: ?[]const u8 = null,
     /// The model's probability for that control.
     confidence: ?f64 = null,
