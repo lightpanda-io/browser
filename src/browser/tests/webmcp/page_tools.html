@@ -40,6 +40,18 @@
   });
 
   navigator.modelContext.registerTool({
+    name: 'bad_result',
+    description: 'Returns a result whose content getter throws',
+    execute: () => ({ get content() { throw new Error('bad getter'); } }),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'bad_rejection',
+    description: 'Rejects with a value that cannot be stringified',
+    execute: () => Promise.reject({ toString() { throw new Error('bad toString'); } }),
+  });
+
+  navigator.modelContext.registerTool({
     name: 'navigates',
     description: 'Loads another page',
     execute: () => { location.href = '../cdp/webmcp_fixture.html'; return 'leaving'; },

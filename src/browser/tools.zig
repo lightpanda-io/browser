@@ -829,7 +829,7 @@ pub const Tool = enum {
                 ),
             },
             .pageTools => .{
-                .description = "List the tools the current page registers for agents through WebMCP (`document.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Many pages register their tools after `load`: if the list is empty on a page you expect to have tools, call `waitForState` with `networkidle` and list again.",
+                .description = "List the tools the current page registers for agents through WebMCP (`navigator.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Many pages register their tools after `load`: if the list is empty on a page you expect to have tools, call `waitForState` with `networkidle` and list again.",
                 .summary = "List the page's WebMCP tools",
                 .input_schema = minify(
                     \\{ "type": "object", "properties": {} }
@@ -2082,10 +2082,10 @@ fn execCallPageTool(arena: std.mem.Allocator, session: *lp.Session, registry: *N
         .text = arena.print("No WebMCP tool named \"{s}\" on this page; pageTools lists them.", .{args.name}) catch return ToolError.OutOfMemory,
         .is_error = true,
     };
-    const input_json = if (args.arguments) |a|
-        std.json.Stringify.valueAlloc(arena, a, .{}) catch return ToolError.OutOfMemory
-    else
-        "{}";
+    const input_json = if (args.arguments) |a| blk: {
+        if (a != .object) return .{ .text = "arguments: must be an object matching the tool's inputSchema", .is_error = true };
+        break :blk std.json.Stringify.valueAlloc(arena, a, .{}) catch return ToolError.OutOfMemory;
+    } else "{}";
 
     const result = try runPageTool(arena, page, tool, input_json);
     return settleScriptNavigation(arena, session, registry, page, result);
@@ -2095,6 +2095,11 @@ fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelCont
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
+
+    // Reading the result runs page code too: getters, toString, toJSON.
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
 
     var caught: lp.js.TryCatch.Caught = .{};
     var value = tool.invoke(&ls.local, input_json, &caught) catch |err| return .{
@@ -2109,14 +2114,22 @@ fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelCont
         if (waitForPromise(page, promise)) |failed| return failed;
         value = promise.result();
         if (promise.state() == .rejected) return .{
-            .text = value.toStringSliceWithAlloc(arena) catch "tool rejected",
+            .text = value.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => caughtMessage(arena, &try_catch, err),
+            },
             .is_error = true,
         };
     }
     return pageToolResult(arena, value) catch |err| switch (err) {
-        error.OutOfMemory => ToolError.OutOfMemory,
-        else => .{ .text = "tool result could not be serialized", .is_error = true },
+        error.OutOfMemory => error.OutOfMemory,
+        else => .{ .text = caughtMessage(arena, &try_catch, err), .is_error = true },
     };
+}
+
+/// The thrown value's message, like a throwing tool reports.
+fn caughtMessage(arena: std.mem.Allocator, try_catch: *const lp.js.TryCatch, err: anyerror) []const u8 {
+    return try_catch.caughtOrError(arena, err).exception orelse @errorName(err);
 }
 
 /// Tools written for MCP return a `CallToolResult`; its text parts are the
@@ -2197,10 +2210,19 @@ fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
             return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
         }
         const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
-        _ = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
+        const tick = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
             error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
             else => return .{ .text = "promise: tick failed", .is_error = true },
         };
+        if (promise.state() != .pending) break;
+        // Idle or between timers: sleep, or a promise nothing settles spins the CPU.
+        const sleep_ms = switch (tick) {
+            .done => budget,
+            .ok => |next_ms| @min(next_ms, budget),
+        };
+        if (sleep_ms > 0) {
+            lp.io.sleep(.fromMilliseconds(sleep_ms), .awake) catch {};
+        }
     }
     return null;
 }
@@ -3485,12 +3507,12 @@ test "tools: goto names the page's WebMCP tools and pageTools lists them" {
         \\{"url":"http://localhost:9582/src/browser/tests/webmcp/page_tools.html"}
     , .{});
     const nav = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
-    try std.testing.expectEqualStrings("The page registers WebMCP tools (greet, mcp_shaped, mcp_error, throws, rejects, navigates): pageTools describes them, callPageTool runs one.\n\nNavigated. HTTP 200 OK.", nav.text);
+    try std.testing.expectEqualStrings("The page registers WebMCP tools (greet, mcp_shaped, mcp_error, throws, rejects, bad_result, bad_rejection, navigates): pageTools describes them, callPageTool runs one.\n\nNavigated. HTTP 200 OK.", nav.text);
 
     const list = try call(aa, session, &registry, "pageTools", null, .{ .source = .user });
     try std.testing.expect(!list.is_error);
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, aa, list.text, .{});
-    try std.testing.expectEqual(6, parsed.array.items.len);
+    try std.testing.expectEqual(8, parsed.array.items.len);
     const greet = parsed.array.items[0].object;
     try std.testing.expectEqualStrings("greet", greet.get("name").?.string);
     try std.testing.expectEqualStrings("Greet", greet.get("title").?.string);
@@ -3521,6 +3543,9 @@ test "tools: callPageTool runs the page's WebMCP tools" {
         .{ .args = "{\"name\":\"mcp_error\"}", .text = "no such order", .is_error = true },
         .{ .args = "{\"name\":\"throws\"}", .text = "boom", .is_error = true },
         .{ .args = "{\"name\":\"rejects\"}", .text = "Error: later", .is_error = true },
+        .{ .args = "{\"name\":\"bad_result\"}", .text = "bad getter", .is_error = true },
+        .{ .args = "{\"name\":\"bad_rejection\"}", .text = "bad toString", .is_error = true },
+        .{ .args = "{\"name\":\"greet\",\"arguments\":\"{\\\"who\\\":\\\"panda\\\"}\"}", .text = "arguments: must be an object matching the tool's inputSchema", .is_error = true },
         .{ .args = "{\"name\":\"missing\"}", .text = "No WebMCP tool named \"missing\" on this page; pageTools lists them.", .is_error = true },
     };
     for (cases) |c| {
