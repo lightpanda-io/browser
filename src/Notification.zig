@@ -103,6 +103,7 @@ const EventListeners = struct {
     download_will_begin: List = .{},
     download_progress: List = .{},
     download_data: List = .{},
+    virtual_time_budget_expired: List = .{},
 };
 
 const Events = union(enum) {
@@ -138,6 +139,7 @@ const Events = union(enum) {
     download_will_begin: *const DownloadWillBegin,
     download_progress: *const DownloadProgress,
     download_data: *const DownloadData,
+    virtual_time_budget_expired: *const VirtualTimeBudgetExpired,
 };
 pub const EventType = std.meta.FieldEnum(Events);
 
@@ -332,6 +334,8 @@ pub const DownloadWillBegin = struct {
     // The response's Content-Type, if it had one.
     content_type: ?[]const u8,
 };
+
+pub const VirtualTimeBudgetExpired = struct {};
 
 // Emitted by Download: once when it starts (`.in_progress`) and once when it
 // ends (`.completed`, or `.canceled` if it failed).
