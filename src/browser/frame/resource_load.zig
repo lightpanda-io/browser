@@ -255,13 +255,12 @@ const ImageLoad = struct {
         // is only still here to give its pending-load slot back.
         const current = self.generation == img._generation;
         if (current) {
+            // The previous image's dimensions held until now.
             img._complete = true;
-            if (kind == .load) {
-                if (self.dimensions) |dimensions| {
-                    img._natural_width = dimensions.width;
-                    img._natural_height = dimensions.height;
-                }
-            }
+            img._broken = kind == .@"error";
+            const dimensions = if (kind == .load) self.dimensions else null;
+            img._natural_width = if (dimensions) |d| d.width else 0;
+            img._natural_height = if (dimensions) |d| d.height else 0;
         }
 
         // Released before anything below, because everything below can run JS

@@ -27,15 +27,20 @@ const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
 
 const Event = @import("../Event.zig");
+const DOMException = @import("../DOMException.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 const Bus = @import("dsp/Bus.zig");
+const wav = @import("dsp/wav.zig");
 const Wavetable = @import("dsp/PeriodicWave.zig");
+
 const render = @import("render.zig");
 const AudioNode = @import("AudioNode.zig");
 const GainNode = @import("GainNode.zig");
 const AudioBuffer = @import("AudioBuffer.zig");
 const PeriodicWave = @import("PeriodicWave.zig");
+const AudioContext = @import("AudioContext.zig");
+const ConvolverNode = @import("ConvolverNode.zig");
 const OscillatorNode = @import("OscillatorNode.zig");
 const ConstantSourceNode = @import("ConstantSourceNode.zig");
 const OfflineAudioContext = @import("OfflineAudioContext.zig");
@@ -74,11 +79,13 @@ _silence: Bus = .{},
 
 pub const Type = enum(u8) {
     offline,
+    realtime,
 };
 
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
         .offline => OfflineAudioContext,
+        .realtime => AudioContext,
     };
 }
 
@@ -106,18 +113,23 @@ pub fn init(typ: Type, arena: *lp.Arena, sample_rate: f32, frame: *Frame) BaseAu
 
 pub fn deinit(self: *BaseAudioContext, page: *Page) void {
     for (self._nodes.items) |node| {
-        if (node._type == .scheduled_source) {
-            const source = node.subtype(AudioScheduledSourceNode);
-            switch (source._type) {
-                .oscillator => source.subtype(OscillatorNode).deinit(page),
-                .buffer_source => source.subtype(AudioBufferSourceNode).deinit(page),
-                .constant_source => {},
-            }
+        switch (node._type) {
+            .scheduled_source => {
+                const source = node.subtype(AudioScheduledSourceNode);
+                switch (source._type) {
+                    .oscillator => source.subtype(OscillatorNode).deinit(page),
+                    .buffer_source => source.subtype(AudioBufferSourceNode).deinit(page),
+                    .constant_source => {},
+                }
+            },
+            .convolver => node.subtype(ConvolverNode).deinit(page),
+            .destination, .dynamics_compressor, .gain => {},
         }
         page.removeTarget(node.asEventTarget());
     }
     switch (self._type) {
         .offline => self.subtype(OfflineAudioContext).deinit(page),
+        .realtime => {},
     }
     page.removeTarget(self.asEventTarget());
     self._arena.release();
@@ -136,7 +148,11 @@ pub fn asEventTarget(self: *BaseAudioContext) *EventTarget {
 }
 
 pub fn currentTime(self: *const BaseAudioContext) f64 {
-    return @as(f64, @floatFromInt(self._current_frame)) / self._sample_rate;
+    const frame = switch (self._type) {
+        .offline => self._current_frame,
+        .realtime => self.subtype(AudioContext).currentFrame(),
+    };
+    return @as(f64, @floatFromInt(frame)) / self._sample_rate;
 }
 
 pub fn registerNode(self: *BaseAudioContext, node: *AudioNode) !void {
@@ -213,6 +229,10 @@ pub fn setState(self: *BaseAudioContext, state: State) void {
     if (self._state == state) {
         return;
     }
+    switch (self._type) {
+        .offline => {},
+        .realtime => self.subtype(AudioContext).clockState(state),
+    }
     self._state = state;
     StateChangeTask.queue(self) catch |err| {
         log.warn(.js, "AudioContext statechange", .{ .err = err });
@@ -286,6 +306,10 @@ fn createConstantSource(self: *BaseAudioContext) !*ConstantSourceNode {
     return ConstantSourceNode.create(self, .{});
 }
 
+fn createConvolver(self: *BaseAudioContext) !*ConvolverNode {
+    return ConvolverNode.create(self, .{});
+}
+
 fn createDynamicsCompressor(self: *BaseAudioContext) !*DynamicsCompressorNode {
     return DynamicsCompressorNode.create(self, .{});
 }
@@ -311,6 +335,144 @@ fn createPeriodicWave(self: *BaseAudioContext, real: []const f32, imag: []const 
     });
 }
 
+// EncodingError for anything but WAV. This decodes now, but delivers the result
+// via a task
+fn decodeAudioData(self: *BaseAudioContext, audio_data: js.Value, success_: ?js.Function, error_: ?js.Function, frame: *Frame) !js.Promise {
+    if (audio_data.isArrayBuffer() == false) {
+        return error.TypeError;
+    }
+    const local = frame.js.local.?;
+    const bytes = try audio_data.toZig(js.BufferSource);
+    const buffer: ?*AudioBuffer = self.decode(bytes.bytes(), local) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => null,
+    };
+
+    if (buffer) |b| {
+        b.acquireRef();
+    }
+    errdefer if (buffer) |b| {
+        b.releaseRef(frame.page);
+    };
+
+    const resolver = local.createPromiseResolver();
+    const global = try resolver.persist();
+    errdefer global.release();
+
+    const success = if (success_) |f| try f.persist() else null;
+    errdefer if (success) |f| {
+        f.release();
+    };
+
+    const failure = if (error_) |f| try f.persist() else null;
+    errdefer if (failure) |f| {
+        f.release();
+    };
+
+    try DecodeTask.queue(.{
+        .context = self,
+        .resolver = global,
+        .success = success,
+        .failure = failure,
+        .buffer = buffer,
+    });
+    return resolver.promise();
+}
+
+fn decode(self: *BaseAudioContext, bytes: []const u8, local: *const js.Local) !*AudioBuffer {
+    const parsed = try wav.parse(bytes);
+    if (parsed.channels > AudioBuffer.max_channels) {
+        return error.EncodingError;
+    }
+    const length = parsed.resampledLength(self._sample_rate);
+    const buffer = try AudioBuffer.create(parsed.channels, length, self._sample_rate, local, self._page);
+    for (0..parsed.channels) |c| {
+        parsed.resample(c, self._sample_rate, buffer.channelData(c, local));
+    }
+    return buffer;
+}
+
+const DecodeTask = struct {
+    context: *BaseAudioContext,
+    resolver: js.PromiseResolver.Global,
+    success: ?js.Function.Global,
+    failure: ?js.Function.Global,
+    buffer: ?*AudioBuffer, // null when decoding failed
+
+    // Once queued, the task owns the handles and the buffer ref.
+    fn queue(task: DecodeTask) !void {
+        const context = task.context;
+        const frame = context._frame;
+        const created = try frame._factory.create(task);
+        errdefer frame._factory.destroy(created);
+
+        context.acquireRef();
+        errdefer context.releaseRef(frame.page);
+
+        try frame.js.scheduler.add(created, run, 0, .{
+            .name = "BaseAudioContext.decodeAudioData",
+            .finalizer = cancelled,
+        });
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const task: *DecodeTask = @ptrCast(@alignCast(ctx));
+        defer task.destroy();
+        const context = task.context;
+
+        var ls: js.Local.Scope = undefined;
+        context._frame.js.localScope(&ls);
+        defer ls.deinit();
+        const local = &ls.local;
+        const resolver = task.resolver.local(local);
+
+        // As in Chrome, the callback runs before the promise's reactions.
+        if (task.buffer) |buffer| {
+            if (task.success) |f| {
+                ls.toLocal(f).callWithThisReport(context, .{buffer}) catch |err| {
+                    log.debug(.js, "decodeAudioData callback", .{ .err = err });
+                };
+            }
+            resolver.resolve("BaseAudioContext.decodeAudioData", buffer);
+        } else {
+            const exception = try local.zigValueToJs(DOMException.init("Unable to decode audio data", "EncodingError"), .{});
+            if (task.failure) |f| {
+                ls.toLocal(f).callWithThisReport(context, .{exception}) catch |err| {
+                    log.debug(.js, "decodeAudioData callback", .{ .err = err });
+                };
+            }
+            resolver.reject("BaseAudioContext.decodeAudioData", exception);
+        }
+        return null;
+    }
+
+    fn cancelled(ctx: *anyopaque) void {
+        const task: *DecodeTask = @ptrCast(@alignCast(ctx));
+        task.destroy();
+    }
+
+    fn destroy(task: *DecodeTask) void {
+        const context = task.context;
+        const frame = context._frame;
+        task.resolver.release();
+
+        if (task.success) |f| {
+            f.release();
+        }
+
+        if (task.failure) |f| {
+            f.release();
+        }
+
+        if (task.buffer) |b| {
+            b.releaseRef(frame.page);
+        }
+
+        frame._factory.destroy(task);
+        context.releaseRef(frame.page);
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(BaseAudioContext);
 
@@ -327,6 +489,8 @@ pub const JsApi = struct {
     pub const createBuffer = bridge.function(BaseAudioContext.createBuffer, .{});
     pub const createBufferSource = bridge.function(BaseAudioContext.createBufferSource, .{});
     pub const createConstantSource = bridge.function(BaseAudioContext.createConstantSource, .{});
+    pub const createConvolver = bridge.function(BaseAudioContext.createConvolver, .{});
+    pub const decodeAudioData = bridge.function(BaseAudioContext.decodeAudioData, .{});
     pub const createDynamicsCompressor = bridge.function(BaseAudioContext.createDynamicsCompressor, .{});
     pub const createGain = bridge.function(BaseAudioContext.createGain, .{});
     pub const createOscillator = bridge.function(BaseAudioContext.createOscillator, .{});

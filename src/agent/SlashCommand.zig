@@ -66,7 +66,7 @@ pub const meta_commands = [_]MetaCommand{
     .{ .tag = .load, .name = "load", .hint = "<path>", .values = &.{}, .description = "Load and run a script from disk" },
     .{ .tag = .model, .name = "model", .hint = "[name]", .values = &.{}, .description = "Change the model" },
     .{ .tag = .provider, .name = "provider", .hint = "[name|null]", .values = &.{}, .description = "Change the provider, or 'null' to disable the LLM" },
-    .{ .tag = .searchEngine, .name = "searchEngine", .hint = tagHint(browser_tools.SearchEngine), .values = tagNames(browser_tools.SearchEngine), .description = "Change the web search engine" },
+    .{ .tag = .searchEngine, .name = "searchEngine", .hint = tagHint(browser_tools.search.Engine), .values = tagNames(browser_tools.search.Engine), .description = "Change the web search engine" },
 };
 
 /// Derived from `Command.LlmCommand` — name and description both come from the

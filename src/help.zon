@@ -104,7 +104,13 @@
     \\          Defaults to no dump.
     \\          Allowed values:
     \\              html               Serialized HTML of the DOM.
-    \\              markdown           Converts content to Markdown.
+    \\              markdown           Converts content to Markdown. Asks
+    \\                                 the server for markdown first; when
+    \\                                 it sends some, that is dumped as-is
+    \\                                 (logged as "markdown served"). Not
+    \\                                 with --dump-selector, --wait-selector,
+    \\                                 --wait-script or --inject-script,
+    \\                                 which need the DOM.
     \\              pdf                Text-only rendering of the page as a
     \\                                 PDF file (base64 with --json).
     \\              png                Text-only rendering of the page as a

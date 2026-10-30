@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<script>
+  window.domLoaded = false;
+  document.addEventListener('DOMContentLoaded', () => window.domLoaded = true);
+
+  function insertScript(src, async, onerror) {
+    const s = document.createElement('script');
+    s.src = src;
+    if (async === false) s.async = false;
+    if (onerror) s.onerror = onerror;
+    document.head.appendChild(s);
+  }
+</script>
+
+<script id=insertion_order>
+{
+  // The first script finishes downloading last, but still runs first.
+  window.orderedList = '';
+  insertScript('dynamic_order1.js?delay_ms=200', false);
+  insertScript('dynamic_order2.js', false);
+  testing.onload(() => {
+    testing.expectEqual('12', orderedList);
+    // Ordered scripts don't delay DOMContentLoaded.
+    testing.expectEqual(true, window.domLoadedBefore1);
+  });
+}
+</script>
+
+<script id=failure_does_not_block>
+{
+  window.failedOrderedError = false;
+  window.failureOrderedList = '';
+  insertScript('dynamic_order_missing.js?delay_ms=100', false, () => window.failedOrderedError = true);
+  insertScript('dynamic_order3.js', false);
+  testing.onload(() => {
+    testing.expectEqual(true, failedOrderedError);
+    testing.expectEqual('3', failureOrderedList);
+  });
+}
+</script>
+
+<script id=force_async_not_ordered>
+{
+  // A default (force-async) dynamic script doesn't wait for ordered ones.
+  window.mixedList = '';
+  insertScript('dynamic_order_mixed_ordered.js?delay_ms=200', false);
+  insertScript('dynamic_order_mixed_async.js');
+  testing.onload(() => {
+    testing.expectEqual('async,ordered', mixedList);
+  });
+}
+</script>

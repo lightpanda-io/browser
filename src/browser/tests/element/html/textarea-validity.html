@@ -58,6 +58,16 @@
 }
 </script>
 
+<script id="readonly">
+{
+  const ta = document.createElement('textarea');
+  ta.required = true;
+  ta.readOnly = true;
+  testing.expectEqual(false, ta.willValidate);
+  testing.expectEqual(true, ta.checkValidity());
+}
+</script>
+
 <script id="custom_validity">
 {
   const t = $('#filled-required');

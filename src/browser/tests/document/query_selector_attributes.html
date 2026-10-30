@@ -100,6 +100,15 @@
   testing.expectEqual(0, document.querySelectorAll('[href$=""]').length);
   testing.expectEqual(0, document.querySelectorAll('[href*=""]').length);
   testing.expectEqual(0, document.querySelectorAll('[href^="" i]').length);
+  // ~= matches nothing for an empty value or one with whitespace
+  testing.expectEqual(0, document.querySelectorAll('[href~=""]').length);
+  testing.expectEqual(0, document.querySelectorAll('[class~="a b"]').length);
+  // ...but stays a valid selector inside :not(), :is() and lists
+  const links = document.querySelectorAll('a').length;
+  testing.expectEqual(true, links > 0);
+  testing.expectEqual(links, document.querySelectorAll('a:not([href^=""])').length);
+  testing.expectEqual(links, document.querySelectorAll('a:is([href^=""], *)').length);
+  testing.expectEqual(links, document.querySelectorAll('[href^=""], a').length);
 </script>
 
 <script id="compound">

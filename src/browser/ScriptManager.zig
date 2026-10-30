@@ -91,7 +91,7 @@ fn tailHook(base: *ScriptManagerBase) void {
     // Page makes this safe to call multiple times.
     frame.documentIsLoaded();
 
-    if (base.async_scripts.first == null and self.frame_notified_of_completion == false) {
+    if (base.async_scripts.first == null and base.ordered_scripts.first == null and self.frame_notified_of_completion == false) {
         self.frame_notified_of_completion = true;
         frame.scriptsCompletedLoading();
     }
@@ -284,12 +284,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
 
         // For dynamically-inserted scripts (not from parser), default to async
-        // unless async was explicitly set to false (which removes the attribute)
-        // and defer was set to true (checked above)
+        // unless async was explicitly set.
         if (comptime !from_parser) {
-            // Script has src and no explicit async/defer attributes
-            // Per HTML spec, dynamically created scripts default to async
-            break :blk .async;
+            break :blk if (script_element._force_async) .async else .ordered;
         }
 
         break :blk .normal;
@@ -421,8 +418,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return self.evalNow(script);
     }
 
-    // async/defer: queue the script and fetch in the background; doneCallback
-    // routes it through the ready_scripts / defer_scripts draining.
+    // async/defer/ordered: queue the script and fetch in the background;
+    // doneCallback routes it through the ready_scripts / defer_scripts /
+    // ordered_scripts draining.
     self.base.scriptList(script).append(&script.node);
 
     const was_evaluating = self.base.is_evaluating;

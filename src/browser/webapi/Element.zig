@@ -1244,18 +1244,35 @@ pub fn contentEditableState(self: *Element) ?bool {
     return null;
 }
 
-// An editing host takes focus like a form control does.
+// An editing host takes focus like a form control does. In a designMode
+// document the body is one: the spec names the document element, but Chrome
+// edits and focuses the body, and so do we.
 pub fn isEditingHost(self: *Element) bool {
-    return self.contentEditableState() orelse false;
+    if (self.contentEditableState()) |editable| {
+        return editable;
+    }
+    if (self.is(Html.Body) == null) {
+        return false;
+    }
+    const root = self.asNode().parentNode() orelse return false;
+    if (root.is(Html.Html) == null) {
+        return false;
+    }
+    const document = (root.parentNode() orelse return false).is(Node.Document) orelse return false;
+    return document._design_mode;
 }
 
 // An editing host or a descendant of one: the nearest contenteditable
-// attribute in a true or false state decides.
+// attribute in a true or false state decides, then the document's designMode.
 pub fn isEditable(self: *Element) bool {
-    var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
-        if (el.contentEditableState()) |editable| {
-            return editable;
+    var node: ?*Node = self.asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Element)) |el| {
+            if (el.contentEditableState()) |editable| {
+                return editable;
+            }
+        } else if (n.is(Node.Document)) |document| {
+            return document._design_mode;
         }
     }
     return false;
@@ -2487,6 +2504,8 @@ pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
 
 pub const Tag = enum {
     a,
+    abbr,
+    acronym,
     address,
     audio,
     area,
@@ -2498,9 +2517,15 @@ pub const Tag = enum {
     br,
     button,
     base,
+    basefont,
+    bdi,
+    bdo,
+    big,
     canvas,
     caption,
+    center,
     circle,
+    cite,
     code,
     col,
     colgroup,
@@ -2520,6 +2545,7 @@ pub const Tag = enum {
     ellipse,
     em,
     fieldset,
+    figcaption,
     figure,
     frameset,
     form,
@@ -2543,6 +2569,7 @@ pub const Tag = enum {
     img,
     input,
     ins,
+    kbd,
     label,
     legend,
     li,
@@ -2550,12 +2577,16 @@ pub const Tag = enum {
     link,
     main,
     map,
+    mark,
     marquee,
     media,
     menu,
     meta,
     meter,
     nav,
+    nobr,
+    noembed,
+    noframes,
     noscript,
     object,
     ol,
@@ -2566,19 +2597,29 @@ pub const Tag = enum {
     path,
     param,
     picture,
+    plaintext,
     polygon,
     polyline,
     pre,
     progress,
     q,
+    rb,
     rect,
+    rp,
+    rt,
+    rtc,
+    ruby,
     s,
+    samp,
     script,
+    search,
     section,
     select,
     slot,
+    small,
     source,
     span,
+    strike,
     strong,
     style,
     sub,
@@ -2598,8 +2639,12 @@ pub const Tag = enum {
     title,
     tr,
     track,
+    tt,
+    u,
     ul,
+    @"var",
     video,
+    wbr,
     unknown,
 
     // If the tag is "unknown", we can't use the optimized tag matching, but
@@ -2620,13 +2665,13 @@ pub const Tag = enum {
             // Semantic Layout
             .article, .aside, .footer, .header, .main, .nav, .section,
             // Grouping / Containers
-            .address, .div, .fieldset, .figure, .p,
+            .address, .center, .div, .fieldset, .figcaption, .figure, .p, .search,
             // Headings
             .h1, .h2, .h3, .h4, .h5, .h6,
             // Lists
             .dl, .ol, .ul,
             // Preformatted / Quotes
-            .blockquote, .pre,
+            .blockquote, .plaintext, .pre,
             // Tables
             .table,
             // Other
@@ -2655,19 +2700,20 @@ pub const Tag = enum {
 
     // UA stylesheet display:none defaults per HTML Rendering §15.3.1
     // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
-    // The spec also lists basefont, noembed, noframes, rp; those tags are
-    // obsolete and not represented in this enum, so they fall through to
-    // `.unknown`/`.custom` and aren't matched here.
     pub fn isHiddenByUaStylesheet(self: Tag) bool {
         return switch (self) {
             .area,
             .base,
+            .basefont,
             .datalist,
             .head,
             .link,
             .meta,
+            .noembed,
+            .noframes,
             .noscript,
             .param,
+            .rp,
             .script,
             .source,
             .style,
@@ -2816,6 +2862,8 @@ pub const JsApi = struct {
     }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const part = bridge.accessor(Element.getPartList, Element.setPartList, .{ .ce_reactions = true });
+    // HTMLElement and SVGElement define their own; this one stands in for
+    // MathMLElement, which we don't have.
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{ .ce_reactions = true });
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});

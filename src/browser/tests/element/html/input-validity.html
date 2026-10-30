@@ -120,6 +120,16 @@
 
 <script id="will_validate">
 {
+  // readonly bars every type from validation, as in Chrome and Firefox
+  for (const type of ['text', 'number', 'checkbox', 'range']) {
+    const ro = document.createElement('input');
+    ro.type = type;
+    ro.required = true;
+    ro.readOnly = true;
+    testing.expectEqual(false, ro.willValidate);
+    testing.expectEqual(true, ro.checkValidity());
+  }
+
   testing.expectEqual(true, $('#filled-required').willValidate);
   testing.expectEqual(false, $('#hidden-required').willValidate);
   testing.expectEqual(false, $('#disabled-required').willValidate);
@@ -338,6 +348,23 @@
     $('#date-ok').value = '2025-01-01';
     testing.expectEqual(true, $('#date-ok').validity.rangeOverflow);
     testing.expectEqual(false, $('#date-ok').checkValidity());
+  }
+</script>
+
+<input id="time-night" type="time" min="22:00" max="02:00" value="23:00">
+
+<script id="time_range_past_midnight">
+  {
+    // min after max wraps past midnight: only the gap is out of range
+    const el = $('#time-night');
+    for (const value of ['23:00', '01:00']) {
+      el.value = value;
+      testing.expectEqual(false, el.validity.rangeUnderflow);
+      testing.expectEqual(false, el.validity.rangeOverflow);
+    }
+    el.value = '12:00';
+    testing.expectEqual(true, el.validity.rangeUnderflow);
+    testing.expectEqual(true, el.validity.rangeOverflow);
   }
 </script>
 

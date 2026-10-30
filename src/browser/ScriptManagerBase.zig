@@ -58,6 +58,10 @@ async_scripts: std.DoublyLinkedList,
 // dom_loaded == true. Workers never populate this list.
 defer_scripts: std.DoublyLinkedList,
 
+// Dynamically-inserted scripts with script.async = false. These are executed
+// in order
+ordered_scripts: std.DoublyLinkedList,
+
 // When an async script is ready, it's queued here.
 ready_scripts: std.DoublyLinkedList,
 
@@ -82,6 +86,7 @@ pub fn init(allocator: Allocator, http_client: *HttpClient, owner: GlobalScope) 
         .owner = owner,
         .async_scripts = .{},
         .defer_scripts = .{},
+        .ordered_scripts = .{},
         .ready_scripts = .{},
         .importmap = .empty,
         .is_evaluating = false,
@@ -115,6 +120,7 @@ pub fn reset(self: *ScriptManagerBase) void {
     self.importmap = .empty;
 
     clearList(&self.defer_scripts);
+    clearList(&self.ordered_scripts);
     clearList(&self.async_scripts);
     clearList(&self.ready_scripts);
     self.static_scripts_done = false;
@@ -139,6 +145,7 @@ pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLi
         .frame => |fe| switch (fe.mode) {
             .normal => unreachable, // not added to a list, executed immediately
             .@"defer" => &self.defer_scripts,
+            .ordered => &self.ordered_scripts,
             .async => &self.async_scripts,
         },
     };
@@ -514,8 +521,8 @@ pub fn evaluate(self: *ScriptManagerBase) void {
             var script: *Script = @fieldParentPtr("node", n);
             switch (script.extra) {
                 .frame => {
-                    // Only .async mode reaches ready_scripts (defer stays in
-                    // defer_scripts, normal is sync and never queued).
+                    // Only .async mode reaches ready_scripts (defer and ordered
+                    // stay in their lists, normal is sync and never queued).
                     defer script.deinit();
                     script.eval();
                 },
@@ -534,6 +541,19 @@ pub fn evaluate(self: *ScriptManagerBase) void {
                 .import => unreachable, // .import doesn't go through ready_scripts
                 .preload => unreachable, // .preload is buffered in the map, never queued
             }
+        }
+
+        // Ordered scripts don't wait for parsing, but they are executed in order
+        while (self.ordered_scripts.first) |n| {
+            var script: *Script = @fieldParentPtr("node", n);
+            if (script.complete == false) {
+                break;
+            }
+            defer {
+                _ = self.ordered_scripts.popFirst();
+                script.deinit();
+            }
+            script.eval();
         }
 
         if (self.static_scripts_done) {
@@ -607,7 +627,7 @@ pub const Script = struct {
     // The encoding a remote script's Content-Type charset names.
     encoding: ?h5e.EncodingInfo = null,
 
-    // Set when the body is an http cache entry. Only classic scripts use it (for now).
+    // Set when the body is an http cache entry.
     script_cache: ?HttpClient.ScriptCache = null,
 
     extra: Extra,
@@ -677,6 +697,9 @@ pub const Script = struct {
                 // <script defer> / <script type=module> — queued in
                 // defer_scripts, drained in document order.
                 @"defer",
+                // dynamic script with script.async = false. Drained in
+                // insertion order, but doesn't wait for parsing.
+                ordered,
                 // <script async> / dynamically-inserted scripts — queued in
                 // async_scripts; once HTTP completes, doneCallback moves to
                 // ready_scripts and evaluate drains them.
@@ -833,6 +856,7 @@ pub const Script = struct {
                     manager.ready_scripts.append(&self.node);
                 },
                 .@"defer" => {}, // stays in defer_scripts; drained in order
+                .ordered => {}, // stays in ordered_scripts; drained in order
                 .normal => unreachable, // syncRequest path doesn't go through callbacks
             },
             .import_async => {
@@ -1004,7 +1028,7 @@ pub const Script = struct {
                 },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.main_js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
+                    frame.main_js.module(false, local, self.source.content(), url, cacheable, self.script_cache) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -1054,7 +1078,6 @@ pub const Script = struct {
         });
     }
 
-    // currently only classic scripts participate in script caching
     fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
         const sc = self.script_cache orelse {
             // wasn't in the cache and isn't cacheable

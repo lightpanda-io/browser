@@ -204,6 +204,7 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .goto => "Navigates the page (re-navigating reuses the same object). Waits for `load`. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). Default timeout 10000 ms.",
         .evaluate => "Page-side JS escape hatch; returns text (JSON for objects/arrays).",
         .extract => "The only primitive returning a real JS value (object/array). The schema is its only argument. See schema below.",
+        .classify => "Classifies page state or candidate elements via TypeSafe Jev: an array of categories, or an object of presets and questions. Replay calls Jev live and needs `TYPESAFE_API_KEY`.",
         .waitForSelector => "`waitFor*` default timeout 5000 ms.",
         .waitForScript => "Re-evaluates page JS until truthy.",
         .waitForState => "",
@@ -211,8 +212,11 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .download => "Sends the session's cookies, so authenticated downloads work. Nothing is written unless the status is 200-203, and a failed download leaves `path` as it was.",
         .press => "Selector first! `page.press(\"Enter\")` binds \"Enter\" to `selector` and fails — use `page.press(null, \"Enter\")` or `page.press({ key: \"Enter\" })`.",
         .click, .fill, .scroll, .hover, .selectOption, .setChecked => "",
+        .acceptCookies => "Clicks the consent control Jev picks, then re-reads the page to check the banner went. Pass the `selectors` from an earlier result to click them with no model call; otherwise needs `TYPESAFE_API_KEY`.",
+        .login => "Fills the sign-in fields Jev picks and submits. Credentials go in as `$LP_*` placeholders. Pass the `*Selector` fields from an earlier result to replay with no model call; otherwise needs `TYPESAFE_API_KEY`.",
         .findElement => "`name` is a case-insensitive substring, or a JS regex literal like `/sign (in|up)/` (also case-insensitive).",
-        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .consoleLogs, .getUrl, .getCookies, .getEnv => "",
+        .callPageTool => "Runs a tool the page registered through WebMCP; returns its text result.",
+        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools => "",
     };
 }
 

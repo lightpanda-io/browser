@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in</title>
+  </head>
+  <body>
+    <form id="newsletter" action="/subscribe" method="post">
+      <label for="news-email">Newsletter email</label>
+      <input id="news-email" name="email" placeholder="you@example.com" />
+      <button type="submit">Subscribe</button>
+    </form>
+
+    <form id="signin" action="/session" method="post">
+      <label for="user">Username</label>
+      <input id="user" name="username" />
+      <label for="pass">Password</label>
+      <input id="pass" name="password" type="password" />
+      <button id="submit" type="submit">Sign in</button>
+      <a href="/reset">Forgot your password?</a>
+      <a href="/register">Create an account</a>
+    </form>
+
+    <p id="status">waiting</p>
+    <script>
+      document.getElementById("signin").addEventListener("submit", function (event) {
+        event.preventDefault();
+        document.getElementById("status").textContent = "submitted";
+      });
+    </script>
+  </body>
+</html>
