@@ -765,19 +765,20 @@ test "SqliteCache: put override" {
 }
 
 // Stores a response that varies on `vary` to a request with `request_headers`.
-fn putVary(cache: *Cache, now: u64, vary: []const u8, request_headers: []const Http.Header) !void {
-    const req = try Cache.tryCache(testing.arena_allocator, .{
-        .timestamp = now,
+fn putVary(cache: *SqliteCache, now: u64, vary: []const u8, request_headers: []const Http.Header) !void {
+    try cache.put(.{
         .url = "https://example.com",
-        .status = 200,
         .content_type = "text/html",
+        .status = 200,
+        .stored_at = now,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
         .headers = &.{
             .{ .name = "cache-control", .value = "max-age=600" },
             .{ .name = "vary", .value = vary },
         },
         .request_headers = request_headers,
-    });
-    try cache.put(req.?, "hello world");
+    }, "hello world");
 }
 
 test "SqliteCache: vary hit and miss" {
@@ -856,8 +857,8 @@ test "SqliteCache: vary stores one digest of the request's values" {
         .{ .name = "cookie", .value = "who=a" },
     });
 
-    const conn = try cache.kind.sqlite.pool.acquire();
-    defer cache.kind.sqlite.pool.release(conn);
+    const conn = try cache.pool.acquire();
+    defer cache.pool.release(conn);
     var row = (try conn.row("select vary_headers from cache", .{})).?;
     defer row.deinit();
 
