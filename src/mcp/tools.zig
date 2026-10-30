@@ -315,23 +315,8 @@ fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, time
     var returned: std.Io.Writer.Allocating = .init(arena);
     runtime.result_sink = &returned.writer;
 
-    var timer: RunTimer = .{ .runtime = runtime, .browser_env = &session.browser.env, .timeout_ms = timeout_ms };
-    // Interrupts stop JavaScript; the hook also ends navigations the script
-    // is waiting on.
-    const previous_hook = session.cancel_hook;
-    session.cancel_hook = .{ .context = @ptrCast(&timer), .check = RunTimer.isFired };
-    defer session.cancel_hook = previous_hook;
-    const thread = std.Thread.spawn(.{}, RunTimer.run, .{&timer}) catch
-        return .{ .fail = "could not start the script timer" };
-    const result = runtime.runSource(script, "<mcp>");
-    timer.finish();
-    thread.join();
-    const timed_out = timer.fired.load(.acquire);
-    if (timed_out) {
-        runtime.cancelTerminate();
-        session.browser.env.cancelTerminate();
-    }
-    const message = try result;
+    runtime.timeout_ms = timeout_ms;
+    const message = try runtime.runSource(script, "<mcp>");
 
     var output = console.toArrayList();
     if (capped.truncated) {
@@ -339,12 +324,12 @@ fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, time
         try output.print(arena, "[console output truncated at {d} bytes]\n", .{max_run_console_bytes});
     }
     try output.appendSlice(arena, returned.written());
-    if (timed_out) {
+    if (runtime.timed_out) {
         try output.print(arena, "script timed out after {d} ms\n", .{timeout_ms});
     } else if (message) |m| {
         try output.print(arena, "{s}\n", .{m});
     }
-    return if (timed_out or message != null) .{ .fail = output.items } else .{ .ok = output.items };
+    return if (runtime.timed_out or message != null) .{ .fail = output.items } else .{ .ok = output.items };
 }
 
 fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registry: *lp.NodeRegistry, before: []const u32) void {
@@ -355,54 +340,6 @@ fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registr
     }
     for (opened.items) |id| browser_tools.closePage(arena, session, registry, id);
 }
-
-/// Stops a `run` script that outlives its timeout, the way Ctrl-C stops
-/// `lightpanda run`: page JS can loop too, so both isolates are stopped.
-const RunTimer = struct {
-    runtime: *lp.Runtime,
-    browser_env: *js.Env,
-    timeout_ms: u32,
-    mutex: std.Io.Mutex = .init,
-    cond: std.Io.Condition = .init,
-    finished: bool = false,
-    fired: std.atomic.Value(bool) = .init(false),
-
-    fn run(self: *RunTimer) void {
-        const deadline: std.Io.Clock.Timestamp = .fromNow(lp.io, .{
-            .raw = .fromMilliseconds(self.timeout_ms),
-            .clock = .awake,
-        });
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        while (!self.finished) {
-            const left = deadline.durationFromNow(lp.io).raw.toNanoseconds();
-            if (left > 0) {
-                lp.timedWait(&self.cond, &self.mutex, @intCast(left)) catch {};
-                continue;
-            }
-            // Past the deadline. Both stops go through V8 interrupts, like the
-            // watchdog's: script code after an `await` runs inside a microtask
-            // checkpoint, where a direct terminate waits for the checkpoint
-            // to end. Ask again until the run returns.
-            self.fired.store(true, .release);
-            self.browser_env.requestTerminate();
-            self.runtime.requestTerminate();
-            lp.timedWait(&self.cond, &self.mutex, 100 * std.time.ns_per_ms) catch {};
-        }
-    }
-
-    fn isFired(context: *anyopaque) bool {
-        const self: *RunTimer = @ptrCast(@alignCast(context));
-        return self.fired.load(.acquire);
-    }
-
-    fn finish(self: *RunTimer) void {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        self.finished = true;
-        self.cond.signal(lp.io);
-    }
-};
 
 /// The session tools need a transport that routes by session id (HTTP's
 /// `Mcp-Session-Id`). Over stdio they are all unsupported, kept uniform so
