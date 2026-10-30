@@ -761,7 +761,7 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     const text_hidden = state.style_manager.hasVisibilityHiddenInherited(el);
     // A closed <details> renders only its summary; its other elements are
     // display:none, and its loose text isn't rendered either.
-    const closed_details = self_tag == .details and !el.hasAttributeSafe(comptime .wrap("open"));
+    const closed_details = if (el.is(Details)) |d| d.isClosed() else false;
 
     var it = el.asNode().childrenIterator();
     while (it.next()) |child| {
