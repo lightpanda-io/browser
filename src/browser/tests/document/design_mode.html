@@ -32,3 +32,17 @@
     testing.expectEqual('off', document.implementation.createHTMLDocument('').designMode);
   }
 </script>
+
+<style>#styled:read-write { display: none; }</style>
+<p id="styled">styled</p>
+
+<script id="computedStyle">
+  {
+    const styled = $('#styled');
+    testing.expectEqual('block', getComputedStyle(styled).display);
+    document.designMode = 'on';
+    testing.expectEqual('none', getComputedStyle(styled).display);
+    document.designMode = 'off';
+    testing.expectEqual('block', getComputedStyle(styled).display);
+  }
+</script>

@@ -182,11 +182,17 @@ fn getDesignMode(self: *const Document) []const u8 {
 }
 
 // Values other than "on" and "off" are ignored.
-fn setDesignMode(self: *Document, value: []const u8) void {
-    if (std.ascii.eqlIgnoreCase(value, "on")) {
-        self._design_mode = true;
-    } else if (std.ascii.eqlIgnoreCase(value, "off")) {
-        self._design_mode = false;
+fn setDesignMode(self: *Document, value: []const u8, frame: *Frame) void {
+    const on = if (std.ascii.eqlIgnoreCase(value, "on"))
+        true
+    else if (std.ascii.eqlIgnoreCase(value, "off"))
+        false
+    else
+        return;
+    if (on != self._design_mode) {
+        self._design_mode = on;
+        // :read-write now matches differently
+        frame.styleChanged();
     }
 }
 
