@@ -51,10 +51,11 @@ _info: ?js.Value.Global,
 _has_ua_visual_transition: bool,
 _source_element: ?*Element,
 
-// Set by intercept(). Only honored for same-document navigations; consumed
-// (and released) by Navigation once the commit steps run the handler.
+// Appended to by intercept(). Only honored for same-document navigations;
+// consumed (and released) by Navigation once the commit steps run the
+// handlers.
 _intercepted: bool = false,
-_handler: ?js.Function.Global = null,
+_handlers: std.ArrayList(js.Function.Global) = .empty,
 
 const NavigateEventOptions = struct {
     canIntercept: bool = false,
@@ -122,7 +123,7 @@ pub fn deinit(self: *NavigateEvent, page: *Page) void {
     if (self._form_data) |fd| {
         fd.releaseRef(page);
     }
-    if (self._handler) |handler| {
+    for (self._handlers.items) |handler| {
         handler.release();
     }
 }
@@ -235,10 +236,7 @@ fn intercept(self: *NavigateEvent, opts: ?InterceptOptions, frame: *Frame) !Thro
                 };
             }
             const handler_fn = js.Function{ .local = local, .handle = @ptrCast(handler_value.handle) };
-            if (self._handler) |previous| {
-                previous.release();
-            }
-            self._handler = try handler_fn.persist();
+            try self._handlers.append(self._proto._arena.allocator(), try handler_fn.persist());
         }
     }
     return .undefined;
