@@ -1219,8 +1219,7 @@ test "Context: terminated async module completion does not re-enter V8" {
     });
 
     const env = frame.js.env;
-    env.terminate();
-    js.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
     defer env.cancelTerminate();
 
     dynamicModuleSourceCallback(&state, error.Abort);

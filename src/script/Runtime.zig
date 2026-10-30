@@ -179,9 +179,7 @@ pub fn deinit(self: *Runtime) void {
 }
 
 /// Stops the run in flight, from any thread: script JS, page JS it is waiting
-/// on, and session waits (`goto`, `waitForSelector`, …). Both isolates stop
-/// through V8 interrupts, since code after an `await` runs inside a microtask
-/// checkpoint that `Env.terminate` would wait out.
+/// on, and session waits (`goto`, `waitForSelector`, …).
 pub fn cancel(self: *Runtime) void {
     self.cancelled.store(true, .release);
     self.session.browser.env.requestTerminate();
