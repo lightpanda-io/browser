@@ -35,6 +35,7 @@ const log = lp.log;
 const tavily = zenai.search.tavily;
 const brave = zenai.search.brave;
 const exa = zenai.search.exa;
+const parallel = zenai.search.parallel;
 const keenable = zenai.search.keenable;
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
@@ -1383,7 +1384,7 @@ const SearchParams = struct {
 /// timeout, so this only starts once connected.
 const default_search_timeout_ms: u32 = 10_000;
 
-pub const SearchEngine = enum { auto, brave, tavily, exa, keenable };
+pub const SearchEngine = enum { auto, brave, tavily, exa, parallel, keenable };
 /// Only the agent REPL's `/searchEngine` mutates this.
 pub var search_engine: SearchEngine = .auto;
 
@@ -1391,7 +1392,6 @@ pub var search_engine: SearchEngine = .auto;
 const api_engines = .{
     .{
         .tag = SearchEngine.brave,
-        .env_var = "BRAVE_API_KEY",
         .Client = brave.Client,
         .init_options = brave.Client.InitOptions{},
         // text_decorations=false: no <strong> markup in model-read snippets.
@@ -1400,7 +1400,6 @@ const api_engines = .{
     },
     .{
         .tag = SearchEngine.tavily,
-        .env_var = "TAVILY_API_KEY",
         .Client = tavily.Client,
         .init_options = tavily.Client.InitOptions{},
         .options = tavily.types.SearchOptions{ .max_results = 10 },
@@ -1408,7 +1407,6 @@ const api_engines = .{
     },
     .{
         .tag = SearchEngine.exa,
-        .env_var = "EXA_API_KEY",
         .Client = exa.Client,
         .init_options = exa.Client.InitOptions{},
         // highlights: Exa returns no snippet text unless contents is requested;
@@ -1417,8 +1415,18 @@ const api_engines = .{
         .collect = collectExa,
     },
     .{
+        .tag = SearchEngine.parallel,
+        .Client = parallel.Client,
+        .init_options = parallel.Client.InitOptions{},
+        // fast: ~1s budget instead of the ~3s default, well inside the tool timeout.
+        .options = parallel.types.SearchOptions{
+            .mode = .fast,
+            .advanced_settings = .{ .max_results = 10, .excerpt_settings = .{ .max_chars_per_result = 500 } },
+        },
+        .collect = collectParallel,
+    },
+    .{
         .tag = SearchEngine.keenable,
-        .env_var = "KEENABLE_API_KEY",
         .Client = keenable.Client,
         .init_options = keenable.Client.InitOptions{ .app_title = "lightpanda" },
         // snippet_max_length is a hint the API may round up to a word
@@ -1449,7 +1457,7 @@ fn joinEngines(comptime field: enum { tag, env_var }, comptime last_sep: []const
             const sep = if (i == 0) "" else if (i + 1 == api_engines.len) last_sep else ", ";
             out = out ++ sep ++ switch (field) {
                 .tag => @tagName(e.tag),
-                .env_var => e.env_var,
+                .env_var => e.Client.env_var_name,
             };
         }
         return out;
@@ -1463,7 +1471,7 @@ pub const search_cascade_prose = "tries " ++ joinEngines(.tag, ", then ") ++ " i
 /// The key `engine` uses right now; `null` selects a keyless engine's
 /// public endpoint.
 fn engineKey(comptime engine: anytype) error{MissingApiKey}!?[]const u8 {
-    if (lp.environ().getPosix(engine.env_var)) |key| return key;
+    if (engine.Client.envApiKey(lp.environ())) |key| return key;
     return if (comptime isKeyless(engine.Client)) null else error.MissingApiKey;
 }
 
@@ -1474,7 +1482,7 @@ const KeyStatus = struct {
 
 fn keyStatusOf(comptime e: anytype) KeyStatus {
     return .{
-        .env_var = e.env_var,
+        .env_var = e.Client.env_var_name,
         .state = if (engineKey(e)) |key| (if (key != null) .set else .keyless) else |_| .missing,
     };
 }
@@ -1539,7 +1547,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.js
 fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const api_key = engineKey(engine) catch return .{
-        .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
+        .text = "web search engine is set to " ++ label ++ " but " ++ engine.Client.env_var_name ++ " is not set in the environment",
         .is_error = true,
     };
     var detail: Failure = .{};
@@ -1667,6 +1675,16 @@ fn collectExa(arena: std.mem.Allocator, resp: exa.types.SearchResponse) !SearchR
             .snippet = if (highlights.len > 0) highlights[0] else "",
         };
     }
+    return .{ .hits = hits };
+}
+
+fn collectParallel(arena: std.mem.Allocator, resp: parallel.types.SearchResponse) !SearchResults {
+    const hits = try arena.alloc(Hit, resp.results.len);
+    for (resp.results, hits) |r, *hit| hit.* = .{
+        .title = r.title orelse "",
+        .url = r.url,
+        .snippet = if (r.excerpts.len > 0) r.excerpts[0] else "",
+    };
     return .{ .hits = hits };
 }
 
@@ -3902,6 +3920,25 @@ test "brave: no results render as a notice" {
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{})));
 
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{ .web = .{} })));
+}
+
+test "parallel results render the first excerpt as the body" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: parallel.types.SearchResponse = .{
+        .results = &.{
+            .{ .title = "Paris - Wikipedia", .url = "https://en.wikipedia.org/wiki/Paris", .excerpts = &.{ "Paris is the capital of France.", "## Geography" } },
+            .{ .url = "https://example.org/fr" },
+        },
+    };
+
+    const md = try renderResults(aa, try collectParallel(aa, resp));
+    try std.testing.expect(std.mem.find(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "## Geography") == null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **https://example.org/fr**") != null);
 }
 
 test "keenable results render the snippet as the body" {
