@@ -165,14 +165,17 @@ pub const Command = union(enum) {
 
         /// The command as the model may see it: a `login` password typed
         /// as-is rather than as a `$LP_*` placeholder is masked, in the line
-        /// and in the args alike.
+        /// and in the args alike. The line is rebuilt from the masked args
+        /// rather than searched: as typed, the password can be escaped
+        /// (`"pa\\"ss"`) and no longer match its parsed value.
         pub fn forModel(self: ToolCall, arena: std.mem.Allocator, line: []const u8) error{OutOfMemory}!struct { line: []const u8, args: ?std.json.Value } {
-            const secret = literalPassword(self) orelse return .{ .line = line, .args = self.args };
+            if (literalPassword(self) == null) return .{ .line = line, .args = self.args };
             var fields = try self.args.?.object.clone(arena);
             try fields.put(arena, "password", .{ .string = redacted });
+            const args: std.json.Value = .{ .object = fields };
             return .{
-                .line = try std.mem.replaceOwned(u8, arena, line, secret, redacted),
-                .args = .{ .object = fields },
+                .line = try arena.print("/{s} {f}", .{ self.name(), std.json.fmt(args, .{}) }),
+                .args = args,
             };
         }
 
@@ -853,11 +856,21 @@ test "forModel: a literal login password never reaches the model" {
     const line = "/login username=ada password=hunter2";
     const literal = (try Command.parse(aa, line)).tool_call;
     const masked = try literal.forModel(aa, line);
-    try testing.expectString("/login username=ada password=[redacted]", masked.line);
+    try testing.expectString("/login {\"username\":\"ada\",\"password\":\"[redacted]\"}", masked.line);
     try testing.expectString("[redacted]", masked.args.?.object.get("password").?.string);
     try testing.expectString("ada", masked.args.?.object.get("username").?.string);
     // The command itself still carries it, for the tool to type.
     try testing.expectString("hunter2", literal.args.?.object.get("password").?.string);
+
+    // Typed escaped, it does not match its parsed value.
+    const escaped_line =
+        \\/login {"username":"ada","password":"pa\"ss"}
+    ;
+    const escaped = (try Command.parse(aa, escaped_line)).tool_call;
+    try testing.expectString("pa\"ss", escaped.args.?.object.get("password").?.string);
+    const escaped_masked = try escaped.forModel(aa, escaped_line);
+    try testing.expect(std.mem.find(u8, escaped_masked.line, "ss\"") == null);
+    try testing.expect(std.mem.find(u8, escaped_masked.line, "[redacted]") != null);
 
     const placeholder_line = "/login password=$LP_PASSWORD";
     const kept = try (try Command.parse(aa, placeholder_line)).tool_call.forModel(aa, placeholder_line);
