@@ -806,9 +806,14 @@ fn runRepl(self: *Agent) void {
                 self.terminal.endTool();
 
                 // Tried before checking the key: the replay path needs none.
-                if (result.failure == .missing_api_key) fallback: {
-                    const maybe = Command.fallbackPrompt(aa, tc) catch null;
-                    const prompt = maybe orelse break :fallback;
+                if (result.failure == .missing_api_key) {
+                    // No prompt means no model may see this command (a literal
+                    // password), so it is not recorded into the conversation
+                    // either.
+                    const prompt = Command.fallbackPrompt(aa, tc) catch null orelse {
+                        self.printCommandResult(tc, result);
+                        continue :repl;
+                    };
                     self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         self.printCommandResult(tc, result);
