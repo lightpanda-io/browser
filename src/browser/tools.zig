@@ -1337,13 +1337,17 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
     var outcome: lp.consent.Outcome = .{};
 
     if (args.selector) |selector| {
-        if (resolveBySelector(session, selector) catch null) |target| {
-            try clickAndSettle(session, registry, target.node, target.page);
-            outcome.dismissed = true;
-            outcome.attempts = 1;
-            outcome.selector = selector;
-            return consentVerdict(arena, &outcome, "clicked the control given, without asking the model");
-        }
+        // Most often the banner was already dismissed, by an earlier run's
+        // cookie: a replay repeats a decision, it does not make a new one.
+        const target = resolveBySelector(session, selector) catch |err| switch (err) {
+            error.NodeNotFound => return verdict(arena, &outcome, "the control given is not on this page, so nothing was clicked"),
+            else => return err,
+        };
+        try clickAndSettle(session, registry, target.node, target.page);
+        outcome.dismissed = true;
+        outcome.attempts = 1;
+        outcome.selector = selector;
+        return consentVerdict(arena, &outcome, "clicked the control given, without asking the model");
     }
 
     const page = try requireFrame(session);
@@ -3478,6 +3482,24 @@ test "acceptCookies: the recorded control is clicked without the model" {
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
     try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+}
+
+test "acceptCookies: a recorded control that is gone clicks nothing and asks nothing" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("consent_banner.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#gone"}
+    , .{});
+    const result = try call(aa, page.session, &registry, "acceptCookies", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":false") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "not on this page") != null);
+    try std.testing.expectEqual(null, result.replay_args);
 }
 
 test "login: the recorded selectors are filled and submitted without the model" {
