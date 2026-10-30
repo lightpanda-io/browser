@@ -29,6 +29,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
 const Node = @import("../webapi/Node.zig");
+const Event = @import("../webapi/Event.zig");
 const Element = @import("../webapi/Element.zig");
 const Document = @import("../webapi/Document.zig");
 const user_input = @import("user_input.zig");
@@ -39,6 +40,7 @@ const Command = enum {
     insertText,
     delete,
     forwardDelete,
+    selectAll,
 
     // Command names are ASCII case-insensitive.
     fn parse(name: []const u8) ?Command {
@@ -68,6 +70,7 @@ pub fn exec(doc: *Document, name: []const u8, value: []const u8) !bool {
         .insertText => insertText(frame, value),
         .delete => delete(frame, false),
         .forwardDelete => delete(frame, true),
+        .selectAll => selectAll(frame),
     };
 }
 
@@ -82,6 +85,7 @@ pub fn isEnabled(doc: *Document, name: []const u8) bool {
     const command = Command.parse(name) orelse return false;
     return switch (command) {
         .insertText, .delete, .forwardDelete => editTarget(doc) != null,
+        .selectAll => true,
     };
 }
 
@@ -200,6 +204,62 @@ fn delete(frame: *Frame, forward: bool) !bool {
         },
     }
     return true;
+}
+
+// Like Ctrl+A
+fn selectAll(frame: *Frame) !bool {
+    const doc = frame.document;
+    const target: union(enum) {
+        root: *Element,
+        input: *Element.Html.Input,
+        textarea: *Element.Html.TextArea,
+    } = blk: {
+        if (doc._active_element) |el| {
+            if (el.is(Element.Html.Input)) |input| {
+                if (input.tracksSelection()) {
+                    break :blk .{ .input = input };
+                }
+            }
+            if (el.is(Element.Html.TextArea)) |textarea| {
+                break :blk .{ .textarea = textarea };
+            }
+        }
+
+        if (doc._selection._range) |range| {
+            const anchor = doc._selection.getAnchorNode() orelse range.asAbstractRange().getStartContainer();
+            const host = editingHostOf(anchor) orelse editingHostOf(range.asAbstractRange().getStartContainer());
+            if (host) |h| {
+                break :blk .{ .root = h };
+            }
+        }
+        if (doc.getBody()) |body| {
+            break :blk .{ .root = body.asElement() };
+        }
+        break :blk .{ .root = doc.getDocumentElement() orelse return true };
+    };
+
+    const event_target = switch (target) {
+        inline .input, .textarea => |ctl| ctl.asElement().asEventTarget(),
+        .root => |el| el.asEventTarget(),
+    };
+    const event = try Event.initTrusted(comptime .wrap("selectstart"), .{ .bubbles = true, .cancelable = true }, frame.page);
+    if (try frame._event_manager.dispatchCancelable(event_target, event)) {
+        return true;
+    }
+
+    switch (target) {
+        inline .input, .textarea => |ctl| try ctl.select(frame),
+        .root => |el| try doc._selection.selectAllChildren(el.asNode(), frame),
+    }
+    return true;
+}
+
+fn editingHostOf(node: *Node) ?*Element {
+    const el = node.is(Element) orelse node.parentElement() orelse return null;
+    if (el.isEditable() == false) {
+        return null;
+    }
+    return user_input.outermostEditingHost(el);
 }
 
 fn selectionInSelect(doc: *Document) bool {
