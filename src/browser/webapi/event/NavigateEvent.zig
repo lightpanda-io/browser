@@ -204,12 +204,26 @@ fn sharedChecks(self: *const NavigateEvent, comptime method: []const u8, frame: 
     return local.newException(DOMException.init(method ++ "() may only be called while the navigate event is being dispatched.", "InvalidStateError"));
 }
 
+const NavigationFocusReset = enum {
+    @"after-transition",
+    manual,
+
+    pub const js_enum_from_string = true;
+};
+
+const NavigationScrollBehavior = enum {
+    @"after-transition",
+    manual,
+
+    pub const js_enum_from_string = true;
+};
+
 const InterceptOptions = struct {
     // Not supported: we never defer scroll restoration or focus reset, so
     // these are accepted but otherwise ignored.
-    focusReset: ?[]const u8 = null,
+    focusReset: ?NavigationFocusReset = null,
     handler: ?js.Function = null,
-    scroll: ?[]const u8 = null,
+    scroll: ?NavigationScrollBehavior = null,
 };
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigateevent-intercept
