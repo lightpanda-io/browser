@@ -34,6 +34,7 @@ const log = lp.log;
 const tavily = zenai.search.tavily;
 const brave = zenai.search.brave;
 const exa = zenai.search.exa;
+const parallel = zenai.search.parallel;
 const keenable = zenai.search.keenable;
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
@@ -1342,7 +1343,7 @@ const SearchParams = struct {
 /// timeout, so this only starts once connected.
 const default_search_timeout_ms: u32 = 10_000;
 
-pub const SearchEngine = enum { auto, brave, tavily, exa, keenable };
+pub const SearchEngine = enum { auto, brave, tavily, exa, parallel, keenable };
 /// Only the agent REPL's `/searchEngine` mutates this.
 pub var search_engine: SearchEngine = .auto;
 
@@ -1374,6 +1375,18 @@ const api_engines = .{
         // capped at 3 sentences since the default excerpts run long.
         .options = exa.types.SearchOptions{ .numResults = 10, .contents = .{ .highlights = .{ .numSentences = 3 } } },
         .collect = collectExa,
+    },
+    .{
+        .tag = SearchEngine.parallel,
+        .env_var = "PARALLEL_API_KEY",
+        .Client = parallel.Client,
+        .init_options = parallel.Client.InitOptions{},
+        // fast: ~1s budget instead of the ~3s default, well inside the tool timeout.
+        .options = parallel.types.SearchOptions{
+            .mode = .fast,
+            .advanced_settings = .{ .max_results = 10, .excerpt_settings = .{ .max_chars_per_result = 500 } },
+        },
+        .collect = collectParallel,
     },
     .{
         .tag = SearchEngine.keenable,
@@ -1626,6 +1639,16 @@ fn collectExa(arena: std.mem.Allocator, resp: exa.types.SearchResponse) !SearchR
             .snippet = if (highlights.len > 0) highlights[0] else "",
         };
     }
+    return .{ .hits = hits };
+}
+
+fn collectParallel(arena: std.mem.Allocator, resp: parallel.types.SearchResponse) !SearchResults {
+    const hits = try arena.alloc(Hit, resp.results.len);
+    for (resp.results, hits) |r, *hit| hit.* = .{
+        .title = r.title orelse "",
+        .url = r.url,
+        .snippet = if (r.excerpts.len > 0) r.excerpts[0] else "",
+    };
     return .{ .hits = hits };
 }
 
@@ -3650,6 +3673,25 @@ test "brave: no results render as a notice" {
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{})));
 
     try std.testing.expectEqualStrings("No results.", try renderResults(aa, try collectBrave(aa, .{ .web = .{} })));
+}
+
+test "parallel results render the first excerpt as the body" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const resp: parallel.types.SearchResponse = .{
+        .results = &.{
+            .{ .title = "Paris - Wikipedia", .url = "https://en.wikipedia.org/wiki/Paris", .excerpts = &.{ "Paris is the capital of France.", "## Geography" } },
+            .{ .url = "https://example.org/fr" },
+        },
+    };
+
+    const md = try renderResults(aa, try collectParallel(aa, resp));
+    try std.testing.expect(std.mem.find(u8, md, "1. **Paris - Wikipedia**") != null);
+    try std.testing.expect(std.mem.find(u8, md, "Paris is the capital of France.") != null);
+    try std.testing.expect(std.mem.find(u8, md, "## Geography") == null);
+    try std.testing.expect(std.mem.find(u8, md, "2. **https://example.org/fr**") != null);
 }
 
 test "keenable results render the snippet as the body" {

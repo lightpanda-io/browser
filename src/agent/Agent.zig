@@ -942,7 +942,7 @@ const provider_off_keyword = "null";
 
 /// Keyless local providers (placeholder key), so reachability needs a live probe.
 /// Parallel to `local_completable`.
-const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
+const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp, .llmd };
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.credential == null) {
@@ -1064,6 +1064,10 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     }
     if (provider == .llama_cpp and settings.detectLocalProvider(self.allocator, .llama_cpp, self.model_base_url) == null) {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
+        return;
+    }
+    if (provider == .llmd and settings.detectLocalProvider(self.allocator, .llmd, self.model_base_url) == null) {
+        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llmd_default_base_url});
         return;
     }
     self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {
