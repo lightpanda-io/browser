@@ -90,7 +90,7 @@ pub fn initGuarded(opts_: ?InitOpts, guard: Guard, exec: *const Execution) !*Hea
 }
 
 // https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name
-pub fn isCorsSafelistedResponseHeaderName(name: []const u8) bool {
+fn isCorsSafelistedResponseHeaderName(name: []const u8) bool {
     const safelisted = [_][]const u8{
         "cache-control",
         "content-language",
