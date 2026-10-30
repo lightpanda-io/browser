@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=interfaces>
+{
+  const ctx = new AudioContext();
+  testing.expectEqual(BaseAudioContext.prototype, Object.getPrototypeOf(AudioContext.prototype));
+  testing.expectEqual(AudioNode.prototype, Object.getPrototypeOf(ConvolverNode.prototype));
+  testing.expectEqual('running', ctx.state);
+  testing.expectEqual(48000, ctx.sampleRate);
+  testing.expectEqual(true, ctx.baseLatency > 0);
+  testing.expectEqual(0, ctx.outputLatency);
+
+  const destination = ctx.destination;
+  testing.expectEqual(2, destination.maxChannelCount);
+  testing.expectEqual(2, destination.channelCount);
+  testing.expectEqual('explicit', destination.channelCountMode);
+  testing.expectError('IndexSizeError', () => { destination.channelCount = 3; });
+  testing.expectError('NotSupportedError', () => { destination.channelCount = 0; });
+
+  testing.expectEqual(44100, new AudioContext({sampleRate: 44100}).sampleRate);
+  testing.expectError('NotSupportedError', () => new AudioContext({sampleRate: 1000}));
+  testing.expectError('NotSupportedError', () => new AudioContext({sampleRate: 1e6}));
+}
+</script>
+
+<script id=lifecycle type=module>
+  const state = await testing.async();
+
+  const ctx = new AudioContext();
+  const events = [];
+  ctx.onstatechange = () => events.push(ctx.state);
+
+  const start = ctx.currentTime;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const running = ctx.currentTime;
+
+  await ctx.suspend();
+  const suspended = ctx.currentTime;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const still = ctx.currentTime;
+
+  await ctx.resume();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await ctx.close();
+  const errors = [];
+  for (const method of ['resume', 'suspend', 'close']) {
+    try { await ctx[method](); } catch (e) { errors.push(e.name); }
+  }
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, running > start);
+    // a whole number of quanta
+    testing.expectEqual(0, Math.round(running * 48000) % 128);
+    testing.expectEqual(suspended, still);
+    testing.expectEqual(['running', 'suspended', 'running', 'closed'], events);
+    testing.expectEqual(['InvalidStateError', 'InvalidStateError', 'InvalidStateError'], errors);
+    testing.expectEqual('closed', ctx.state);
+  });
+</script>
+
+<script id=params>
+{
+  const ctx = new AudioContext();
+  const gain = ctx.createGain();
+  gain.gain.value = 0.5;
+  testing.expectEqual(0.5, gain.gain.value);
+  gain.gain.setValueAtTime(0.25, 0);
+  testing.expectEqual(0.25, gain.gain.value);
+  // scheduled far ahead: not yet
+  gain.gain.setValueAtTime(1, 1000);
+  testing.expectEqual(0.25, gain.gain.value);
+}
+</script>
+
+<script id=convolver>
+{
+  const ctx = new AudioContext();
+  const convolver = ctx.createConvolver();
+  testing.expectEqual(true, convolver instanceof ConvolverNode);
+  testing.expectEqual(null, convolver.buffer);
+  testing.expectEqual(true, convolver.normalize);
+  testing.expectEqual(2, convolver.channelCount);
+  testing.expectEqual('clamped-max', convolver.channelCountMode);
+  testing.expectError('NotSupportedError', () => { convolver.channelCount = 3; });
+  testing.expectError('NotSupportedError', () => { convolver.channelCountMode = 'max'; });
+
+  testing.expectError('NotSupportedError', () => { convolver.buffer = ctx.createBuffer(1, 10, 44100); });
+  testing.expectError('NotSupportedError', () => { convolver.buffer = ctx.createBuffer(3, 10, 48000); });
+  const buffer = ctx.createBuffer(2, 10, 48000);
+  convolver.buffer = buffer;
+  testing.expectEqual(buffer, convolver.buffer);
+  convolver.buffer = null;
+  testing.expectEqual(null, convolver.buffer);
+
+  const fromOptions = new ConvolverNode(ctx, {buffer, disableNormalization: true});
+  testing.expectEqual(buffer, fromOptions.buffer);
+  testing.expectEqual(false, fromOptions.normalize);
+}
+</script>
+
+<script id=convolver_render type=module>
+  const state = await testing.async();
+
+  // no response: silence
+  const ctx = new OfflineAudioContext(1, 128, 8000);
+  const source = ctx.createConstantSource();
+  source.connect(ctx.createConvolver()).connect(ctx.destination);
+  source.start();
+  const rendered = await ctx.startRendering();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, rendered.getChannelData(0)[64]);
+  });
+</script>
+
+<script id=decode type=module>
+  const state = await testing.async();
+
+  // 16-bit mono WAV bytes
+  function wav(samples, rate) {
+    const bytes = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(bytes);
+    const text = (at, s) => [...s].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+    text(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, 'WAVEfmt '); view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    text(36, 'data'); view.setUint32(40, samples.length * 2, true);
+    samples.forEach((s, i) => view.setInt16(44 + i * 2, s, true));
+    return bytes;
+  }
+
+  const ctx = new AudioContext();
+  const order = [];
+  const buffer = await ctx.decodeAudioData(wav([0, 16384, -16384, 0], 48000), b => order.push(['callback', b.length]))
+    .then(b => { order.push('then'); return b; });
+  // resampled to the context's rate; the values depend on the resampler
+  const resampled = await ctx.decodeAudioData(wav([0, 16384, -16384, 0], 24000));
+
+  let callbackError = null;
+  let rejection = null;
+  try {
+    await ctx.decodeAudioData(new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0]).buffer, null, e => { callbackError = e; });
+  } catch (e) {
+    rejection = e;
+  }
+
+  let notBuffer = null;
+  try { await ctx.decodeAudioData(new Uint8Array(wav([0], 24000))); } catch (e) { notBuffer = e.name; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('TypeError', notBuffer);
+    testing.expectEqual([['callback', 4], 'then'], order);
+    testing.expectEqual(1, buffer.numberOfChannels);
+    testing.expectEqual(48000, buffer.sampleRate);
+    testing.expectEqual([0, 0.5, -0.5, 0], Array.from(buffer.getChannelData(0)));
+    testing.expectEqual(8, resampled.length);
+    testing.expectEqual(48000, resampled.sampleRate);
+
+    testing.expectEqual('EncodingError', rejection.name);
+    testing.expectEqual(true, rejection instanceof DOMException);
+    testing.expectEqual(rejection, callbackError);
+  });
+</script>

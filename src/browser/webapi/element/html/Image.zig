@@ -25,7 +25,10 @@ const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const DOMException = @import("../../DOMException.zig");
+
 const HtmlElement = @import("../Html.zig");
+const reflection = @import("../reflection.zig");
 
 const Picture = @import("Picture.zig");
 const Source = @import("Source.zig");
@@ -40,6 +43,8 @@ pub const Proto = HtmlElement;
 _generation: u32 = 0,
 // Per spec, false only while a fetch is in flight.
 _complete: bool = true,
+// No source was selected, or its fetch failed.
+_broken: bool = true,
 _natural_width: u32 = 0,
 _natural_height: u32 = 0,
 // Hash of the URL the last update selected, so a <picture> mutation that
@@ -110,13 +115,133 @@ fn getNaturalHeight(self: *const Image) u32 {
     return self._natural_height;
 }
 
+fn getWidth(self: *const Image) u32 {
+    return self.getDimension("width", self._natural_width);
+}
+
+fn setWidth(self: *Image, value: u32, frame: *Frame) !void {
+    return self.setDimension("width", value, frame);
+}
+
+fn getHeight(self: *const Image) u32 {
+    return self.getDimension("height", self._natural_height);
+}
+
+fn setHeight(self: *Image, value: u32, frame: *Frame) !void {
+    return self.setDimension("height", value, frame);
+}
+
+// We don't know. Use the attribute if it exists. Fallback to the natural siz
+fn getDimension(self: *const Image, comptime attr: []const u8, natural: u32) u32 {
+    const value = self.asConstElement().getAttributeInterned(attr) orelse return natural;
+    const parsed = reflection.parseInteger(value) orelse return natural;
+    if (parsed < 0 or parsed > std.math.maxInt(i32)) {
+        return natural;
+    }
+    return @intCast(parsed);
+}
+
+fn setDimension(self: *Image, comptime attr: []const u8, value: u32, frame: *Frame) !void {
+    const n = if (value > std.math.maxInt(i32)) 0 else value;
+    const str = try frame.local_arena.print("{d}", .{n});
+    try self.asElement().setAttributeSafe(comptime .wrap(attr), .wrap(str), frame);
+}
+
 fn getComplete(self: *const Image) bool {
     return self._complete;
 }
 
-/// Nothing is decoded here, so the image is always ready to insert.
-pub fn decode(_: *const Image, frame: *Frame) !js.Promise {
-    return frame.js.local.?.resolvePromise(js.Undefined{});
+/// Nothing is decoded here: the image is ready once its load has settled.
+pub fn decode(self: *Image, frame: *Frame) !js.Promise {
+    const resolver = frame.js.local.?.createPromiseResolver();
+    if (self._complete) {
+        settleDecode(resolver, self.isDecodable(self._generation, frame));
+    } else {
+        try frame._image_decodes.pending.append(frame.page_arena, .{
+            .image = self,
+            .generation = self._generation,
+            .resolver = try resolver.persist(),
+        });
+    }
+    return resolver.promise();
+}
+
+/// A frame's decode() promises still waiting on their image's load.
+pub const Decodes = struct {
+    settle_scheduled: bool = false,
+    pending: std.ArrayList(PendingDecode) = .empty,
+
+    const PendingDecode = struct {
+        image: *Image,
+        generation: u32,
+        resolver: js.PromiseResolver.Global,
+    };
+};
+
+/// Settles the decode() promises whose image has finished loading, or has
+/// moved on to another source (which rejects them).
+pub fn settleDecodes(frame: *Frame) void {
+    const decodes = &frame._image_decodes.pending;
+    if (decodes.items.len == 0) {
+        return;
+    }
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Settling runs microtasks, which can call decode() again and append.
+    var i: usize = 0;
+    while (i < decodes.items.len) {
+        const pending = decodes.items[i];
+        const image = pending.image;
+        if (pending.generation == image._generation and image._complete == false) {
+            i += 1;
+            continue;
+        }
+        _ = decodes.orderedRemove(i);
+        defer pending.resolver.release();
+        settleDecode(ls.toLocal(pending.resolver), image.isDecodable(pending.generation, frame));
+    }
+}
+
+fn isDecodable(self: *Image, generation: u32, frame: *Frame) bool {
+    return generation == self._generation and self._broken == false and
+        self.asElement().getDocument(frame)._frame != null;
+}
+
+fn settleDecode(resolver: js.PromiseResolver, decodable: bool) void {
+    if (decodable) {
+        return resolver.resolve("Image.decode", js.Undefined{});
+    }
+    resolver.reject("Image.decode", DOMException.init("The source image cannot be decoded.", "EncodingError"));
+}
+
+fn scheduleDecodeSettle(frame: *Frame) !void {
+    const decodes = &frame._image_decodes;
+    if (decodes.pending.items.len == 0 or decodes.settle_scheduled) {
+        return;
+    }
+    try frame.js.scheduler.add(frame, struct {
+        fn run(ctx: *anyopaque) !?u32 {
+            const f: *Frame = @ptrCast(@alignCast(ctx));
+            f._image_decodes.settle_scheduled = false;
+            settleDecodes(f);
+            return null;
+        }
+    }.run, 0, .{ .name = "Image.settleDecodes" });
+    decodes.settle_scheduled = true;
+}
+
+// The spec fires `error` when nothing could be selected, unless there was
+// nothing to select from.
+fn hasSourceToSelect(self: *Image) bool {
+    const element = self.asElement();
+    if (element.getAttributeInterned("src") != null or element.getAttributeInterned("srcset") != null) {
+        return true;
+    }
+    const parent = self.asNode()._parent orelse return false;
+    return parent.is(Picture) != null;
 }
 
 /// The one funnel for "this element's selected source may have changed":
@@ -136,23 +261,36 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
 
     self._generation +%= 1;
     self._complete = true;
-    self._natural_width = 0;
-    self._natural_height = 0;
+    self._broken = false;
+
+    // Pending decode() calls belong to the previous source and now reject.
+    try scheduleDecodeSettle(frame);
 
     const src = self.selectSource(frame);
     self._selected_hash = std.hash.Wyhash.hash(0, src);
     if (src.len == 0) {
+        self._broken = true;
+        self._natural_width = 0;
+        self._natural_height = 0;
+        if (self.hasSourceToSelect()) {
+            return frame.queueImageEvent(self, .@"error");
+        }
         return;
     }
 
-    // If image loading not desired, we just do fake "load" event.
+    // If image loading not desired, we just do fake "load" event. The image
+    // stays incomplete until it fires.
     if (frame._session.load_resources.image == false) {
         frame.page.status.noteSkipped(.image);
+        self._complete = false;
         return frame.queueImageEvent(self, .load);
     }
 
     Frame.resource_load.image(frame, self, src) catch |err| {
         log.debug(.http, "image fetch", .{ .err = err, .src = src });
+        self._broken = true;
+        self._natural_width = 0;
+        self._natural_height = 0;
         return frame.queueImageEvent(self, .@"error");
     };
 }
@@ -381,12 +519,13 @@ pub const JsApi = struct {
     pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{ .ce_reactions = true });
     pub const currentSrc = bridge.accessor(Image.getCurrentSrc, null, .{});
     pub const alt = reflect.string("alt");
-    pub const width = reflect.unsignedLong("width", .{});
-    pub const height = reflect.unsignedLong("height", .{});
+    pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{ .ce_reactions = true });
+    pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{ .ce_reactions = true });
     pub const crossOrigin = reflect.enumerated("crossorigin", &.{ "anonymous", "use-credentials" }, .{ .missing = null, .nullable = true, .invalid = "anonymous" });
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{ .ce_reactions = true });
     const reflect = Element.Reflect(Image);
     pub const srcset = reflect.string("srcset");
+    pub const sizes = reflect.string("sizes");
     pub const useMap = reflect.string("usemap");
     pub const isMap = reflect.boolean("ismap");
     pub const referrerPolicy = reflect.referrerPolicy();

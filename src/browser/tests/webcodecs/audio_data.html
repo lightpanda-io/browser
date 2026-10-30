@@ -87,3 +87,40 @@
   }
 }
 </script>
+
+<script id=copy_to_detached_destination>
+{
+  const src = new AudioData({
+    format: 'u8', sampleRate: 8000, numberOfFrames: 8,
+    numberOfChannels: 1, timestamp: 0, data: new Uint8Array(8),
+  });
+
+  // The destination is converted before the options: an invalid one throws
+  // without reading them.
+  let called = false;
+  testing.expectError('TypeError', () => src.copyTo(232, {planeIndex: 0, get frameOffset() { called = true; return 0; }}));
+  testing.expectEqual(false, called);
+
+  // An options getter that detaches the destination leaves it empty, rather
+  // than a write into the freed backing store.
+  const dest = new Uint8Array(8);
+  testing.expectError('RangeError', () => src.copyTo(dest, {
+    planeIndex: 0,
+    get frameOffset() { dest.buffer.transfer(0); return 0; },
+  }));
+  testing.expectEqual(0, dest.byteLength);
+}
+</script>
+
+<script id=init_detached_data>
+{
+  // data is read before format, whose getter detaches it: it's then empty,
+  // too small for the frames, rather than a read of the freed backing store.
+  const data = new Uint8Array(8);
+  testing.expectError('TypeError', () => new AudioData({
+    data,
+    get format() { data.buffer.transfer(0); return 'u8'; },
+    numberOfChannels: 1, numberOfFrames: 8, sampleRate: 8000, timestamp: 0,
+  }));
+}
+</script>

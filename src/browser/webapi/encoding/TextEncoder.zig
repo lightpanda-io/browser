@@ -62,7 +62,7 @@ pub fn encodeInto(_: *const TextEncoder, source_: js.Value, destination_: js.Val
     if (!destination_.isUint8Array()) {
         return error.InvalidArgument;
     }
-    const dest = (try destination_.toZig(js.AllowSharedBufferSource)).bytes;
+    const dest = (try destination_.toZig(js.AllowSharedBufferSource)).bytes();
 
     // V8 encodes straight into the destination, never writing a partial
     // sequence, and replaces lone surrogates as the USVString conversion would.

@@ -256,11 +256,13 @@ fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
 pub fn getWillValidate(self: *const Input) bool {
     // An input element is barred from constraint validation if:
     // - type is hidden, button, or reset
-    // - element is disabled
+    // - element is disabled or readonly (Chrome and Firefox bar readonly on
+    //   every type, not only those the attribute applies to)
     // - element has a datalist ancestor
+    const element = self.asConstElement();
     return switch (self._input_type) {
         .hidden, .button, .reset => false,
-        else => !self.asConstElement().isDisabled() and !self.hasDatalistAncestor(),
+        else => !element.isDisabled() and !element.hasAttributeInterned("readonly") and !self.hasDatalistAncestor(),
     };
 }
 
@@ -510,14 +512,31 @@ fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overf
     const typ = self._input_type;
     if (!hasNumericValue(typ)) return false;
     const value = valueToNumber(typ, self.getValue()) orelse return false;
-    const bound = valueToNumber(typ, switch (kind) {
-        .underflow => self.getMin(),
-        .overflow => self.getMax(),
-    }) orelse return false;
-    return switch (kind) {
-        .underflow => value < bound,
-        .overflow => value > bound,
+    const min = valueToNumber(typ, self.getMin());
+    const max = valueToNumber(typ, self.getMax());
+
+    // A time range with min after max wraps past midnight: only a value in
+    // the gap breaches it, and then it underflows and overflows at once.
+    if (typ == .time) if (min) |lo| if (max) |hi| if (lo > hi) {
+        return value < lo and value > hi;
     };
+
+    return switch (kind) {
+        .underflow => if (min) |lo| value < lo else false,
+        .overflow => if (max) |hi| value > hi else false,
+    };
+}
+
+/// For :in-range and :out-of-range: whether the value is within the range
+/// limitations, or null when the input has none (no valid min or max, except
+/// type=range, which always has defaults).
+pub fn isInRange(self: *const Input) ?bool {
+    const typ = self._input_type;
+    if (!hasNumericValue(typ)) return null;
+    if (typ != .range and valueToNumber(typ, self.getMin()) == null and valueToNumber(typ, self.getMax()) == null) {
+        return null;
+    }
+    return !self.suffersRangeUnderflow() and !self.suffersRangeOverflow();
 }
 
 fn radioGroupHasChecked(self: *Input) bool {

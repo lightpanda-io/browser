@@ -41,6 +41,7 @@ pub const ToolSession = @import("ToolSession.zig");
 pub const Notification = @import("Notification.zig");
 pub const Server = @import("server/Server.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
+pub const LimitedWriter = @import("LimitedWriter.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const crash_handler = @import("crash_handler.zig");
@@ -217,6 +218,25 @@ pub const FetchOpts = struct {
     json: bool = false,
 };
 
+fn navigateOpts(opts: FetchOpts) Frame.NavigateOpts {
+    return .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+        .header = if (acceptsMarkdown(opts)) markdown_accept else null,
+    };
+}
+
+/// A markdown dump asks the server for markdown first, HTML second. A server
+/// that honors it sends a text/markdown document, which is dumped as-is. Not
+/// when an option needs the page's DOM, which a markdown response has none of.
+fn acceptsMarkdown(opts: FetchOpts) bool {
+    return opts.dump_mode == .markdown and opts.selector == null and
+        opts.wait_selector == null and opts.wait_script == null and
+        opts.inject_script.items.len == 0;
+}
+
+const markdown_accept = "Accept: text/markdown,text/html;q=0.9,application/xhtml+xml;q=0.9,application/xml;q=0.8,*/*;q=0.7";
+
 /// `.load`, not `.done`: pages with constant background activity never go
 /// quiescent, so `.done` just rides the `wait_ms` cap. A lone
 /// `wait_selector`/`wait_script` is itself the wait, so no level applies
@@ -270,10 +290,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         const frame = page.frame().?;
         // not guaranteed to be valid after navigate
         const encoded_url = try URL.resolveNavigation(frame.call_arena, url, .{});
-        _ = try frame.navigate(encoded_url, .{
-            .reason = .address_bar,
-            .kind = .{ .push = null },
-        });
+        _ = try frame.navigate(encoded_url, navigateOpts(opts));
         pages.appendAssumeCapacity(page);
     }
 
@@ -369,6 +386,9 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         };
         if (err.* == null) {
             err.* = frame._last_navigate_error;
+        }
+        if (acceptsMarkdown(opts) and std.mem.eql(u8, frame.document.getContentType(), "text/markdown")) {
+            log.info(.app, "markdown served", .{ .url = frame.url });
         }
         if (err.* == null) {
             if (frame._bot_challenge) |challenge| {
@@ -843,6 +863,33 @@ test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, pages[3].frame().?, true, &aw.writer);
     try testing.expectString(@embedFile("browser/tests/markdown_source.txt"), aw.written());
+}
+
+test "fetch: a markdown dump asks the server for markdown" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    const url = "http://127.0.0.1:9582/markdown-negotiated";
+    const asked = try session.createPage();
+    try asked.navigate(url, navigateOpts(.{ .dump = .{}, .dump_mode = .markdown }));
+    // A markdown response has no DOM for the selector to match.
+    const not_asked = try session.createPage();
+    try not_asked.navigate(url, navigateOpts(.{ .dump = .{}, .dump_mode = .markdown, .selector = "h1" }));
+    var runner = session.runner(.{});
+    try runner.waitForAll(2000, .{ .until = .load });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, asked.frame().?, false, &aw.writer);
+    try testing.expectString("# Negotiated\n\nSent as *markdown*.\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, not_asked.frame().?, false, &aw.writer);
+    try testing.expectString("\n# Negotiated\n\nSent as HTML.\n", aw.written());
+
+    // Injected scripts run against the DOM too.
+    var scripts: std.ArrayList([]const u8) = .empty;
+    try scripts.append(testing.arena_allocator, "1");
+    try testing.expect(!acceptsMarkdown(.{ .dump = .{}, .dump_mode = .markdown, .inject_script = scripts }));
 }
 
 test "fetch: followMarkdownAlternates keeps a page that failed" {

@@ -219,6 +219,17 @@ pub const JsApi = struct {
         return buf.written();
     }
     pub const onslotchange = EventTarget.handlerAccessor(ShadowRoot, "slotchange");
+
+    pub const innerHTML = bridge.accessor(_getInnerHTML, _setInnerHTML, .{ .ce_reactions = true });
+    fn _getInnerHTML(self: *ShadowRoot, frame: *Frame) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        try self.asDocumentFragment().getInnerHTML(&buf.writer, frame);
+        return buf.written();
+    }
+    fn _setInnerHTML(self: *ShadowRoot, value: js.Value, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString] DOMString`: a JS null becomes "", not "null".
+        return self.asDocumentFragment().setInnerHTML(if (value.isNull()) "" else try value.toZig([]const u8), frame);
+    }
 };
 
 const testing = @import("../../testing.zig");

@@ -271,6 +271,23 @@
   }
 </script>
 
+<script id="ua_closed_details_rule_is_html_only">
+  {
+    // An SVG element named "details" isn't an HTMLDetailsElement, so the UA
+    // rule doesn't apply to its children.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const details = document.createElementNS('http://www.w3.org/2000/svg', 'details');
+    const child = document.createElement('p');
+    details.appendChild(child);
+    svg.appendChild(details);
+    document.body.appendChild(svg);
+
+    testing.expectEqual('block', window.getComputedStyle(child).display);
+
+    svg.remove();
+  }
+</script>
+
 <script id="ua_closed_dialog_is_hidden">
   {
     // dialog:not([open]) { display: none }

@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const ClockCache = @import("ClockCache.zig").ClockCache;
+const ClockCache = @import("../ClockCache.zig").ClockCache;
 
 const log = lp.log;
 

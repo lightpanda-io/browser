@@ -177,15 +177,27 @@ pub const ArrayBuffer = struct {
 };
 
 // An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
-// But not from an underying SharedBuffer
+// But not from an underying SharedBuffer.
+//
+// The `value` is checked when it's converted, but its bytes are only read by
+// `bytes()`. Don't hold the slice across anything that can run page code!
 pub const BufferSource = struct {
-    bytes: []const u8,
+    value: Value,
+
+    pub inline fn bytes(self: BufferSource) []const u8 {
+        return Local.bufferSourceBytes(self.value);
+    }
 };
 
 // An ArrayBuffer or any typed array kind or a DataView, exposed as its raw bytes.
 // The underlaying value *can* be a SharedBuffer
+// Its bytes are read as BufferSource's are.
 pub const AllowSharedBufferSource = struct {
-    bytes: []u8,
+    value: Value,
+
+    pub fn bytes(self: AllowSharedBufferSource) []u8 {
+        return Local.bufferSourceBytes(self.value);
+    }
 };
 
 pub const ArrayType = enum(u8) {
@@ -592,6 +604,35 @@ test "js: ArrayBuffers crossing Zig don't keep a reference to their backing stor
     _ = try from_js.toStringSmart();
     _ = try from_js.toZig(TypedArray(u8));
     try testing.expectEqual(1, backingStoreRefs(from_js.handle));
+}
+
+test "js: converted buffers don't point into a backing store page code can free" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const value = try local.exec("globalThis.view = new Uint8Array([1, 2, 3]); view", null);
+    const source = try value.toZig(BufferSource);
+    const shared = try value.toZig(AllowSharedBufferSource);
+    const typed = try value.toZig(TypedArray(u8));
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, source.bytes());
+
+    // BufferSources read their bytes when used, typed arrays are copies.
+    _ = try local.exec("view.buffer.transfer(0)", null);
+    try testing.expectEqual(0, source.bytes().len);
+    try testing.expectEqual(0, shared.bytes().len);
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, typed.values);
+
+    // A view a shrunk buffer leaves out of bounds is empty too.
+    const resizable = try local.exec("globalThis.rab = new ArrayBuffer(8, {maxByteLength: 8}); new Uint8Array(rab, 4, 4)", null);
+    const tail = try resizable.toZig(BufferSource);
+    try testing.expectEqual(4, tail.bytes().len);
+    _ = try local.exec("rab.resize(2)", null);
+    try testing.expectEqual(0, tail.bytes().len);
 }
 
 // A slice claiming `len` bytes over a 1-byte buffer. Only valid for code that

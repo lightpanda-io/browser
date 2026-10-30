@@ -582,7 +582,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                     .data = try str.toSliceWithAlloc(arena.allocator()),
                 } });
             } else {
-                const buffer = (try js_val.toZig(js.BufferSource)).bytes;
+                const buffer = (try js_val.toZig(js.BufferSource)).bytes();
 
                 const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
                 errdefer arena.release();

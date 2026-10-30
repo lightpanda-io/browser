@@ -24,6 +24,7 @@ const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
+const layout = @import("../layout.zig");
 const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
@@ -1243,18 +1244,35 @@ pub fn contentEditableState(self: *Element) ?bool {
     return null;
 }
 
-// An editing host takes focus like a form control does.
+// An editing host takes focus like a form control does. In a designMode
+// document the body is one: the spec names the document element, but Chrome
+// edits and focuses the body, and so do we.
 pub fn isEditingHost(self: *Element) bool {
-    return self.contentEditableState() orelse false;
+    if (self.contentEditableState()) |editable| {
+        return editable;
+    }
+    if (self.is(Html.Body) == null) {
+        return false;
+    }
+    const root = self.asNode().parentNode() orelse return false;
+    if (root.is(Html.Html) == null) {
+        return false;
+    }
+    const document = (root.parentNode() orelse return false).is(Node.Document) orelse return false;
+    return document._design_mode;
 }
 
 // An editing host or a descendant of one: the nearest contenteditable
-// attribute in a true or false state decides.
+// attribute in a true or false state decides, then the document's designMode.
 pub fn isEditable(self: *Element) bool {
-    var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
-        if (el.contentEditableState()) |editable| {
-            return editable;
+    var node: ?*Node = self.asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Element)) |el| {
+            if (el.contentEditableState()) |editable| {
+                return editable;
+            }
+        } else if (n.is(Node.Document)) |document| {
+            return document._design_mode;
         }
     }
     return false;
@@ -1698,7 +1716,7 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (axis == .width) {
         const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-        return self.boxWidth(owner);
+        return layout.boxWidth(self, owner);
     }
 
     if (self.fixedSize(frame, axis)) |size| return size;
@@ -1714,287 +1732,6 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return own.value;
     }
     return @max(own.value, self.contentAxis(frame, axis));
-}
-
-// Width flows down (height flows up): a block in normal flow is as wide as
-// its containing block.
-fn boxWidth(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, .box)) |width| {
-        return width;
-    }
-
-    if (self.fixedSize(owner, .width)) |size| {
-        style_manager.cacheWidth(self, .box, size);
-        return size;
-    }
-
-    const own = self.getElementAxis(owner, .width);
-    const width = blk: {
-        if (self.isRootContainer()) {
-            // html/body return their set value regardless of children.
-            break :blk own.value;
-        }
-        const sizing = style_manager.widthSizing(self);
-        if (sizing == .contents) {
-            break :blk 0;
-        }
-        if (style_manager.isFlexRowItem(self)) {
-            const row = style_manager.boxParent(self).?;
-            const item = self.flexBase(row.boxWidth(owner), owner);
-            // Snapped to Chrome's 1/64px layout unit, past the float error
-            const shrunk = @round(item.base * (1 - row.rowShrinkRatio(owner)) * 64) / 64;
-            var width = @max(item.floor, shrunk);
-            if (sizing == .grow and own.explicit == false) {
-                width = @max(width, self.growShare(owner));
-            }
-            break :blk self.clampWidth(width, .box, owner);
-        }
-        const width = if (own.explicit) own.value else switch (sizing) {
-            .fixed => |width| width,
-            .percent => |fraction| fraction * self.containingBlockWidth(owner),
-            .fill => self.fillWidth(owner),
-            .grow, .shrink => @max(own.value, self.contentWidth(.clipped, owner)),
-            .contents => unreachable,
-        };
-        break :blk self.clampWidth(width, .box, owner);
-    };
-    style_manager.cacheWidth(self, .box, width);
-    return width;
-}
-
-// How a box that clips its overflow counts toward its ancestors' content.
-const ContentMode = enum {
-    full,
-    clipped,
-};
-
-// What the box, with its margins, adds to its parent's content width.
-fn widthContribution(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
-        .shrink, .grow => @max(own.value, self.contentWidth(mode, owner)),
-        .percent, .fill => if (mode == .clipped and style_manager.clipsOverflowX(self)) 0 else self.contentWidth(mode, owner),
-        .contents => return self.contentWidth(mode, owner),
-    };
-    return self.clampWidth(width, .contribution, owner) + style_manager.inlineMargins(self, null);
-}
-
-const FlexBase = struct {
-    base: f64, // The width before the row shrinks it
-    floor: f64, // The least it shrinks to; base when it doesn't shrink
-};
-
-// Get a flex row's item hypothetical width and how far it can shrink.
-// No flex-basis (yet?)/
-fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
-    const style_manager = &owner._style_manager;
-    const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
-        .percent => |fraction| fraction * row_width,
-        .shrink, .grow, .fill => @max(own.value, self.contentWidth(.full, owner)),
-        .contents => return .{
-            .base = self.widthContribution(.full, owner),
-            .floor = self.widthContribution(.clipped, owner),
-        },
-    };
-    const base = self.clampWidth(width, .box, owner);
-    if (style_manager.flexShrinks(self) == false) {
-        return .{ .base = base, .floor = base };
-    }
-    return .{ .base = base, .floor = self.flexMinWidth(base, owner) };
-}
-
-// min-width: auto on a flex item: no narrower than its content, or than its
-// width if that's narrower; 0 if it clips its overflow (CSS Flexbox §4.5).
-// Content its descendants clip doesn't count. A declared min-width replaces
-// it, and clampWidth applies that one.
-fn flexMinWidth(self: *Element, base: f64, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    if (style_manager.widthLimits(self).min != null or style_manager.clipsOverflowX(self)) {
-        return 0;
-    }
-    if (self.getTag().isReplacedOrControl()) {
-        // Its intrinsic width is unknown
-        return base;
-    }
-    const own = self.getElementAxis(owner, .width);
-    const content = self.contentWidth(.clipped, owner);
-    // An auto width's fallback stands in for its text
-    return @min(base, if (own.explicit) content else @max(own.value, content));
-}
-
-// The fraction of its base each shrinking item of an overflowing flex row
-// gives up: the overflow split in proportion to the bases (a flex-shrink is
-// 0 or 1 here). Items that would drop below their floor freeze there and the
-// rest share what they couldn't give (CSS Flexbox §9.7). A wrapping row moves
-// items to a new line instead, so it shrinks nothing.
-fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    if (style_manager.flexWraps(self)) {
-        return 0;
-    }
-    if (style_manager.cachedWidth(self, .row_shrink)) |ratio| {
-        return ratio;
-    }
-
-    const row_width = self.boxWidth(owner);
-    var total: f64 = 0;
-    var items: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
-    while (nextFlexItem(&items, style_manager)) |el| {
-        total += el.flexBase(row_width, owner).base + flexItemMargins(el, row_width, style_manager);
-    }
-
-    var ratio: f64 = 0;
-    const overflow = total - row_width;
-    if (overflow > 0) {
-        // Freezing an item leaves more for the others to give, so the ratio
-        // only grows between passes and a frozen item stays frozen: each pass
-        // freezes at least one more item, or the count holds and it's settled.
-        var frozen_before: ?usize = null;
-        while (true) {
-            var frozen: usize = 0;
-            var given: f64 = 0;
-            var shrinkable: f64 = 0;
-            items = .init(self.asNode(), .{ .frame = owner });
-            while (nextFlexItem(&items, style_manager)) |el| {
-                const item = el.flexBase(row_width, owner);
-                if (item.base <= item.floor) {
-                    continue;
-                }
-                if (item.base * (1 - ratio) < item.floor) {
-                    frozen += 1;
-                    given += item.base - item.floor;
-                } else {
-                    shrinkable += item.base;
-                }
-            }
-            ratio = if (shrinkable == 0) 1 else std.math.clamp((overflow - given) / shrinkable, 0, 1);
-            if (frozen_before) |previous| {
-                if (frozen <= previous) break;
-            }
-            frozen_before = frozen;
-        }
-    }
-    style_manager.cacheWidth(self, .row_shrink, ratio);
-    return ratio;
-}
-
-// The next child of a flex row that is one of its items: rendered and in flow.
-fn nextFlexItem(children: *TreeWalker.FlatChildren, style_manager: *StyleManager) ?*Element {
-    while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(el) or style_manager.isFlexRowItem(el) == false) {
-            continue;
-        }
-        return el;
-    }
-    return null;
-}
-
-// display: contents has no margins; its children's are in its contribution.
-fn flexItemMargins(el: *Element, row_width: f64, style_manager: *StyleManager) f64 {
-    if (style_manager.widthSizing(el) == .contents) {
-        return 0;
-    }
-    return style_manager.inlineMargins(el, row_width);
-}
-
-// max-width caps the width, min-width wins over both.
-fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
-    const limits = owner._style_manager.widthLimits(self);
-    var clamped = width;
-    if (limits.max) |max| {
-        clamped = @min(clamped, self.resolveWidthLimit(max, of == .box, owner) orelse clamped);
-    }
-    if (limits.min) |min| {
-        clamped = @max(clamped, self.resolveWidthLimit(min, of == .box, owner) orelse clamped);
-    }
-    return clamped;
-}
-
-fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_percent: bool, owner: *Frame) ?f64 {
-    return switch (limit) {
-        .px => |px| px,
-        .percent => |fraction| if (resolve_percent) fraction * self.containingBlockWidth(owner) else null,
-    };
-}
-
-// A block in normal flow fills its containing block, less its margins.
-fn fillWidth(self: *Element, owner: *Frame) f64 {
-    const containing = self.containingBlockWidth(owner);
-    return @max(0, containing - owner._style_manager.inlineMargins(self, containing));
-}
-
-/// The width of the containing block; the viewport above the root.
-fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
-    if (owner._style_manager.position(self) == .fixed) {
-        return @floatFromInt(owner.page.getViewport().width);
-    }
-    const parent = owner._style_manager.containingBlock(self) orelse {
-        return @floatFromInt(owner.page.getViewport().width);
-    };
-    return parent.boxWidth(owner);
-}
-
-/// A growing flex item's share: the row's free space, after the siblings
-/// that don't grow and everyone's margins, split evenly among those that do.
-fn growShare(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    const parent = style_manager.boxParent(self) orelse return 0;
-    const row_width = parent.boxWidth(owner);
-    var taken: f64 = 0;
-    var growers: f64 = 0;
-    var items: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
-    while (nextFlexItem(&items, style_manager)) |el| {
-        switch (style_manager.widthSizing(el)) {
-            .grow => growers += 1,
-            // Its children are the row's items
-            .contents => taken += el.widthContribution(.clipped, owner),
-            // Only walks up, and the row's width never reads a child's box
-            else => taken += el.boxWidth(owner),
-        }
-        taken += flexItemMargins(el, row_width, style_manager);
-    }
-    return @max(0, row_width - taken) / @max(1, growers);
-}
-
-// The width the children would take unconstrained: the sum of their
-// contributions. In a flex row or grid they sit side by side; elsewhere
-// block-level children stack, so the widest counts, and inline-level ones
-// share one line that never wraps (the dummy layout has no line breaking,
-// which keeps the "append until the lane outgrows its shell" idiom
-// terminating).
-fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
-    const kind: StyleManager.WidthKind = if (mode == .clipped) .content else .full_content;
-    const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, kind)) |width| {
-        return width;
-    }
-
-    const in_row = style_manager.laysOutInRow(self);
-    var widest: f64 = 0;
-    var line: f64 = 0;
-    var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
-    while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(el)) {
-            continue;
-        }
-        const width = el.widthContribution(mode, owner);
-        if (in_row or style_manager.isBlockLevel(el) == false) {
-            line += width;
-        } else {
-            widest = @max(widest, line, width);
-            line = 0;
-        }
-    }
-    const width = @max(widest, line);
-    style_manager.cacheWidth(self, kind, width);
-    return width;
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -2091,7 +1828,7 @@ pub fn fixedSize(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
         const available: f64 = @floatFromInt(if (axis == .width) viewport.width else viewport.height);
         break :blk @max(0, available - start - end);
     };
-    if (axis == .width) size = self.clampWidth(size, .box, owner);
+    if (axis == .width) size = layout.clampWidth(self, size, .box, owner);
     return size;
 }
 
@@ -2190,7 +1927,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-    return @max(self.boxWidth(owner), self.contentWidth(.clipped, owner));
+    return @max(layout.boxWidth(self, owner), layout.contentWidth(self, .clipped, owner));
 }
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
@@ -2850,6 +2587,8 @@ pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
 
 pub const Tag = enum {
     a,
+    abbr,
+    acronym,
     address,
     audio,
     area,
@@ -2861,9 +2600,15 @@ pub const Tag = enum {
     br,
     button,
     base,
+    basefont,
+    bdi,
+    bdo,
+    big,
     canvas,
     caption,
+    center,
     circle,
+    cite,
     code,
     col,
     colgroup,
@@ -2883,6 +2628,7 @@ pub const Tag = enum {
     ellipse,
     em,
     fieldset,
+    figcaption,
     figure,
     frameset,
     form,
@@ -2906,6 +2652,7 @@ pub const Tag = enum {
     img,
     input,
     ins,
+    kbd,
     label,
     legend,
     li,
@@ -2913,12 +2660,16 @@ pub const Tag = enum {
     link,
     main,
     map,
+    mark,
     marquee,
     media,
     menu,
     meta,
     meter,
     nav,
+    nobr,
+    noembed,
+    noframes,
     noscript,
     object,
     ol,
@@ -2929,19 +2680,29 @@ pub const Tag = enum {
     path,
     param,
     picture,
+    plaintext,
     polygon,
     polyline,
     pre,
     progress,
     q,
+    rb,
     rect,
+    rp,
+    rt,
+    rtc,
+    ruby,
     s,
+    samp,
     script,
+    search,
     section,
     select,
     slot,
+    small,
     source,
     span,
+    strike,
     strong,
     style,
     sub,
@@ -2961,8 +2722,12 @@ pub const Tag = enum {
     title,
     tr,
     track,
+    tt,
+    u,
     ul,
+    @"var",
     video,
+    wbr,
     unknown,
 
     // If the tag is "unknown", we can't use the optimized tag matching, but
@@ -2983,13 +2748,13 @@ pub const Tag = enum {
             // Semantic Layout
             .article, .aside, .footer, .header, .main, .nav, .section,
             // Grouping / Containers
-            .address, .div, .fieldset, .figure, .p,
+            .address, .center, .div, .fieldset, .figcaption, .figure, .p, .search,
             // Headings
             .h1, .h2, .h3, .h4, .h5, .h6,
             // Lists
             .dl, .ol, .ul,
             // Preformatted / Quotes
-            .blockquote, .pre,
+            .blockquote, .plaintext, .pre,
             // Tables
             .table,
             // Other
@@ -3018,19 +2783,20 @@ pub const Tag = enum {
 
     // UA stylesheet display:none defaults per HTML Rendering §15.3.1
     // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
-    // The spec also lists basefont, noembed, noframes, rp; those tags are
-    // obsolete and not represented in this enum, so they fall through to
-    // `.unknown`/`.custom` and aren't matched here.
     pub fn isHiddenByUaStylesheet(self: Tag) bool {
         return switch (self) {
             .area,
             .base,
+            .basefont,
             .datalist,
             .head,
             .link,
             .meta,
+            .noembed,
+            .noframes,
             .noscript,
             .param,
+            .rp,
             .script,
             .source,
             .style,
@@ -3179,8 +2945,10 @@ pub const JsApi = struct {
     }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const part = bridge.accessor(Element.getPartList, Element.setPartList, .{ .ce_reactions = true });
+    // HTMLElement and SVGElement define their own; this one stands in for
+    // MathMLElement, which we don't have.
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
-    pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
+    pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{ .ce_reactions = true });
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const hasAttributeNS = bridge.function(Element.hasAttributeNS, .{});

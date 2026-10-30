@@ -27,6 +27,7 @@ const StyleManager = @import("../../StyleManager.zig");
 const Node = @import("../Node.zig");
 const Window = @import("../Window.zig");
 const Element = @import("../Element.zig");
+const DOMStringMap = @import("DOMStringMap.zig");
 const EventTarget = @import("../EventTarget.zig");
 const ElementInternals = @import("../ElementInternals.zig");
 const global_event_handlers = @import("../global_event_handlers.zig");
@@ -482,6 +483,28 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
+// spellcheck="true"/"" enables checking, "false" disables it, anything else
+// (or no attribute) inherits from the parent. The default is UA-defined:
+// Chrome checks everything.
+pub fn getSpellcheck(self: *HtmlElement) bool {
+    var node: ?*Node = self.asElement().asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        const el = n.is(Element) orelse continue;
+        const value = el.getAttributeSafe(comptime .wrap("spellcheck")) orelse continue;
+        if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "false")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn setSpellcheck(self: *HtmlElement, spellcheck: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("spellcheck"), .wrap(if (spellcheck) "true" else "false"), frame);
+}
+
 // The draggable IDL attribute reflects the enumerated content attribute:
 // "true" => true, "false" => false, anything else (or no attribute) is the
 // auto state, which defaults to true only for <img> and <a> with an href.
@@ -758,6 +781,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     // The text of an invisible element isn't included, but we still walk all
     // its children, since they can make themeselves visible again.
     const text_hidden = state.style_manager.hasVisibilityHiddenInherited(el);
+    // A closed <details> renders only its summary; its other elements are
+    // display:none, and its loose text isn't rendered either.
+    const closed_details = if (el.is(Details)) |d| d.isClosed() else false;
 
     var it = el.asNode().childrenIterator();
     while (it.next()) |child| {
@@ -781,9 +807,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                 const c = child.subtype(Node.CData);
                 switch (c._type) {
                     .text => {
-                        if (child_filter != .none or text_hidden) {
-                            // Text directly inside <select>/<optgroup> is skipped,
-                            // as is visibility:hidden text
+                        if (child_filter != .none or text_hidden or closed_details) {
+                            // Text directly inside <select>/<optgroup> or a closed
+                            // <details> is skipped, as is visibility:hidden text
                             continue;
                         }
                         if (table_ctx and isAllAsciiWhitespace(c.getData().str())) {
@@ -1100,6 +1126,11 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
     pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
+    pub const dataset = bridge.accessor(_dataset, null, .{});
+    fn _dataset(self: *HtmlElement, frame: *Frame) !*DOMStringMap {
+        return self.asElement().getDataset(frame);
+    }
+
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.local_arena);
@@ -1124,6 +1155,7 @@ pub const JsApi = struct {
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const inert = bridge.accessor(HtmlElement.getInert, HtmlElement.setInert, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
+    pub const spellcheck = bridge.accessor(HtmlElement.getSpellcheck, HtmlElement.setSpellcheck, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});

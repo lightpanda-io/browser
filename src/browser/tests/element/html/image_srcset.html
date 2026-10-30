@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 <body>
 
@@ -12,11 +13,14 @@
 <img id="parsed-srcset" srcset="/one.png 1x, /two.png 2x">
 
 <script>
-  // load doesn't bubble, but it can be captured before the elements exist
-  const fostered_loads = {};
-  document.addEventListener("load", (e) => {
-    fostered_loads[e.target.id] = (fostered_loads[e.target.id] ?? 0) + 1;
-  }, true);
+  // load and error don't bubble, but they can be captured before the
+  // elements exist. A browser that fetches gets error: these URLs are 404s.
+  const fostered_settled = {};
+  const onSettled = (e) => {
+    fostered_settled[e.target.id] = (fostered_settled[e.target.id] ?? 0) + 1;
+  };
+  document.addEventListener("load", onSettled, true);
+  document.addEventListener("error", onSettled, true);
 </script>
 
 <!-- foster parented: inserted before the table, not through the parser's append -->
@@ -28,9 +32,12 @@
 
 <script id="parsed">
 {
-  testing.expectEqual(testing.ORIGIN + "/from-source.png", document.getElementById("parsed-img").currentSrc);
   testing.expectEqual(testing.ORIGIN + "/from-src.png", document.getElementById("parsed-img").src);
-  testing.expectEqual(testing.ORIGIN + "/one.png", document.getElementById("parsed-srcset").currentSrc);
+  // browsers update currentSrc asynchronously, by load at the latest
+  testing.onload(() => {
+    testing.expectEqual(testing.ORIGIN + "/from-source.png", document.getElementById("parsed-img").currentSrc);
+    testing.expectEqual(testing.ORIGIN + "/one.png", document.getElementById("parsed-srcset").currentSrc);
+  });
 }
 </script>
 
@@ -41,8 +48,8 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual("TABLE", document.getElementById("fostered").nextElementSibling.tagName);
-    testing.expectEqual(1, fostered_loads["fostered"]);
-    testing.expectEqual(1, fostered_loads["fostered-picture"]);
+    testing.expectEqual(1, fostered_settled["fostered"]);
+    testing.expectEqual(1, fostered_settled["fostered-picture"]);
     testing.expectEqual(testing.ORIGIN + "/fostered-source.png", document.getElementById("fostered-picture").currentSrc);
   });
 </script>
@@ -159,10 +166,13 @@
   picture.append(source, img);
   document.body.append(picture);
 
+  // a browser that fetches gets error: /source.png is a 404
   let loads = 0;
   img.addEventListener("load", () => loads += 1);
+  img.addEventListener("error", () => loads += 1);
   await new Promise(resolve => {
     img.addEventListener("load", resolve, { once: true });
+    img.addEventListener("error", resolve, { once: true });
     source.srcset = "/source.png";
   });
 
@@ -173,7 +183,13 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(1, loads);
+    if (testing.IS_TEST_RUNNER) {
+      testing.expectEqual(1, loads);
+    } else {
+      // browsers restart the load on any <source> mutation in the <picture>,
+      // and when that settles depends on the server
+      testing.expectTrue(loads >= 1);
+    }
   });
 </script>
 
@@ -183,26 +199,39 @@
   // afterwards; otherwise the img keeps the src it picked while it was still
   // under the parser's wrapper, and later mutations compare against that.
   const state = await testing.async();
+  // a browser that fetches gets error: these URLs are 404s
+  const settled = (img) => new Promise(resolve => {
+    img.addEventListener("load", resolve, { once: true });
+    img.addEventListener("error", resolve, { once: true });
+  });
+
   const picture = document.createElement("picture");
   document.body.append(picture);
   picture.innerHTML = '<source srcset="/inner-source.png"><img src="/inner-img.png">';
   const img = picture.querySelector("img");
-  const parsed = img.currentSrc;
+  const img_settled = settled(img);
 
   // insertAdjacentHTML parses into a fragment and moves the children in one
   // at a time, so it goes through the insertion path
   const adjacent_picture = document.createElement("picture");
   document.body.append(adjacent_picture);
   adjacent_picture.insertAdjacentHTML("beforeend", '<source srcset="/adjacent-source.png"><img src="/adjacent-img.png">');
-  const adjacent = adjacent_picture.querySelector("img").currentSrc;
+  const adjacent_img = adjacent_picture.querySelector("img");
+  const adjacent_settled = settled(adjacent_img);
 
-  // let the parses' load events flush before counting
-  await new Promise(resolve => setTimeout(resolve, 10));
+  // browsers update currentSrc asynchronously, by the time the load settles
+  await Promise.all([img_settled, adjacent_settled]);
+  const parsed = img.currentSrc;
+  const adjacent = adjacent_img.currentSrc;
   let loads = 0;
   img.addEventListener("load", () => loads += 1);
+  img.addEventListener("error", () => loads += 1);
 
   // the source is gone, so the selection falls back to the img's own src
+  const removed_settled = settled(img);
   picture.querySelector("source").remove();
+  await removed_settled;
+  // leave room for a stray second load
   await new Promise(resolve => setTimeout(resolve, 10));
 
   state.resolve();

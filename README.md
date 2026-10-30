@@ -205,7 +205,7 @@ model at runtime.
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
 Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
 and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
-`OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
+`OPENAI_BASE_URL`, and local models via Ollama, llama.cpp or [LLMD](https://zml.ai/llmd). You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
 reference.
@@ -263,6 +263,21 @@ longer clobber each other's page:
 - The `session_new`, `session_list` and `session_close` tools manage sessions
   explicitly. Sending `DELETE /mcp` with an `Mcp-Session-Id` closes that session.
 
+The `run` tool runs a [PandaScript](https://lightpanda.io/docs/usage/pandascript)
+in the caller's session, as `lightpanda run` does, and returns its console
+output and the value it returns. Pages the script opens are closed when it ends;
+cookies and storage stay, so a login carries over to the next `run`. An optional
+`timeout` in milliseconds (default 60000) stops a stuck script. A backend can
+drive Lightpanda with one POST:
+
+```bash
+curl -s http://127.0.0.1:9223/mcp -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "run", "arguments": { "script":
+    "const page = new Page();\nawait page.goto(\"https://example.com\");\nreturn page.extract({ title: \"title\", links: [\"a\"] });" } }
+}'
+```
+
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
@@ -315,7 +330,7 @@ For full details, see our [Web Platform Tests results](https://perf.lightpanda.i
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.17.0`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
