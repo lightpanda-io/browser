@@ -127,27 +127,27 @@ pub const Picks = struct {
 /// An answer that reads back as "none of these" leaves its pick null, so the
 /// caller reports that instead of acting on a guess.
 pub fn picks(
-    arena: std.mem.Allocator,
     candidates: []const choose.Candidate,
     asked: Questions,
     response: zenai.typesafe.types.AskResponse,
 ) choose.Error!Picks {
     var out: Picks = .{};
     if (asked.has(user_key)) {
-        out.user = first(try choose.ranked(arena, candidates, response, asked, user_key));
+        out.user = try pickOf(candidates, response, asked, user_key);
     }
-    out.password = first(try choose.ranked(arena, candidates, response, asked, password_key));
+    out.password = try pickOf(candidates, response, asked, password_key);
     // No candidate above "none of these" means the model chose `enter_key`
     // or nothing at all, and both come to the same act: Enter in the field.
-    out.submit = first(try choose.ranked(arena, candidates, response, asked, submit_key));
+    out.submit = try pickOf(candidates, response, asked, submit_key);
     if (asked.has(multi_step_key)) {
         out.multi_step = (response.noul(multi_step_key) orelse 0) >= lp.jev.gate;
     }
     return out;
 }
 
-fn first(order: []const choose.Scored) ?choose.Candidate {
-    return if (order.len == 0) null else order[0].candidate;
+fn pickOf(candidates: []const choose.Candidate, response: zenai.typesafe.types.AskResponse, asked: Questions, key: []const u8) choose.Error!?choose.Candidate {
+    const scored = try choose.best(candidates, response, asked, key) orelse return null;
+    return scored.candidate;
 }
 
 /// The page after the submit: did the sign-in wall go, and did an error take

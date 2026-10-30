@@ -157,41 +157,22 @@ pub const Scored = struct {
 
 pub const Error = zenai.typesafe.types.ChoiceError || error{OutOfMemory};
 
-/// The candidates the model ranked above `none_key`, most probable first: an
-/// option it likes less than "nothing here does that" is not worth acting on.
-/// Empty when `none` or one of the `extra` options won, so the caller acts on
-/// nothing and the runners-up are a free second guess when the first fails.
-pub fn ranked(
-    arena: std.mem.Allocator,
+/// The candidate the model chose, or null when it chose `none_key` or one of
+/// the caller's `extra` options: nothing on the page is what it wants done.
+/// `choice` has already checked the pick is the argmax, so it outranks `none`.
+pub fn best(
     candidates: []const Candidate,
     response: zenai.typesafe.types.AskResponse,
     questions: zenai.typesafe.Questions,
     id: []const u8,
-) Error![]const Scored {
+) Error!?Scored {
     const chosen = try response.choice(id, questions);
     const answer = response.answer(id) orelse return error.AnswerMissing;
-
-    // Its pick is `none` or one of the caller's `extra` options: nothing on
-    // the page is what it wants done, so the runners-up are no help either.
     for (candidates) |candidate| {
-        if (std.mem.eql(u8, candidate.key, chosen)) break;
-    } else return &.{};
-
-    const floor = answer.probability(none_key) orelse 0;
-
-    var out: std.ArrayList(Scored) = .empty;
-    try out.ensureTotalCapacity(arena, candidates.len);
-    for (candidates) |candidate| {
-        const probability = answer.probability(candidate.key) orelse continue;
-        if (probability <= floor) continue;
-        out.appendAssumeCapacity(.{ .candidate = candidate, .probability = probability });
+        if (!std.mem.eql(u8, candidate.key, chosen)) continue;
+        return .{ .candidate = candidate, .probability = answer.probability(chosen) orelse return error.AnswerMissing };
     }
-    std.mem.sort(Scored, out.items, {}, moreProbable);
-    return out.items;
-}
-
-fn moreProbable(_: void, a: Scored, b: Scored) bool {
-    return a.probability > b.probability;
+    return null;
 }
 
 const testing = @import("../testing.zig");
@@ -267,7 +248,7 @@ test "browser.choose: question offers every candidate plus none" {
     try testing.expectString("Which one?", q.choice.instructions.text);
 }
 
-test "browser.choose: ranked drops the options none outranks" {
+test "browser.choose: best is the candidate the model chose, or none" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -275,26 +256,28 @@ test "browser.choose: ranked drops the options none outranks" {
     const candidates = [_]Candidate{
         .{ .key = "11", .element = undefined, .name = "a", .info = .{ .string = "a" } },
         .{ .key = "12", .element = undefined, .name = "b", .info = .{ .string = "b" } },
-        .{ .key = "13", .element = undefined, .name = "c", .info = .{ .string = "c" } },
     };
     const q = try question(aa, "Which one?", &candidates, &.{});
     const questions: zenai.typesafe.Questions = .init(&.{.{ .key = "pick", .value = q }});
 
-    const response = try answerFixture(aa, "pick", "12", &.{
-        .{ .key = "11", .value = 0.05 },
-        .{ .key = "12", .value = 0.6 },
-        .{ .key = "13", .value = 0.25 },
+    const picked = try answerFixture(aa, "pick", "12", &.{
+        .{ .key = "11", .value = 0.25 },
+        .{ .key = "12", .value = 0.65 },
         .{ .key = none_key, .value = 0.1 },
     });
+    const pick = (try best(&candidates, picked, questions, "pick")).?;
+    try testing.expectString("12", pick.candidate.key);
+    try testing.expectEqual(0.65, pick.probability);
 
-    const order = try ranked(aa, &candidates, response, questions, "pick");
-    // 11 scored below "nothing here does that", so it is not a second guess.
-    try testing.expectEqual(2, order.len);
-    try testing.expectString("12", order[0].candidate.key);
-    try testing.expectString("13", order[1].candidate.key);
+    const nothing = try answerFixture(aa, "pick", none_key, &.{
+        .{ .key = "11", .value = 0.25 },
+        .{ .key = "12", .value = 0.15 },
+        .{ .key = none_key, .value = 0.6 },
+    });
+    try testing.expectEqual(null, try best(&candidates, nothing, questions, "pick"));
 }
 
-test "browser.choose: ranked rejects an answer that is not the argmax" {
+test "browser.choose: best rejects an answer that is not the argmax" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -309,7 +292,7 @@ test "browser.choose: ranked rejects an answer that is not the argmax" {
         .{ .key = "11", .value = 0.2 },
         .{ .key = none_key, .value = 0.8 },
     });
-    try testing.expectError(error.ChoiceNotArgmax, ranked(aa, &candidates, response, questions, "pick"));
+    try testing.expectError(error.ChoiceNotArgmax, best(&candidates, response, questions, "pick"));
 }
 
 /// A choice answer as the API would return it.

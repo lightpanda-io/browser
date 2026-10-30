@@ -1130,7 +1130,7 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
         };
         break :fixed switch (requestKind(questions)) {
             .other => classify_answers,
-            .deciding => try answerAsked(arena, questions, true, true),
+            .deciding => try answerAsked(arena, questions, true, std.ascii.findIgnoreCase(body, banner_label) != null),
             .verifying => if (no_verify)
                 return req.respond("the verification service is down", .{
                     .status = .internal_server_error,
@@ -1204,7 +1204,7 @@ fn answerAsked(arena: std.mem.Allocator, asked: std.json.ObjectMap, deciding: bo
             const chosen: f64 = if (n < 2) 1 else 0.7;
             const even: f64 = if (n < 2) 0 else (1 - chosen) / @as(f64, @floatFromInt(n - 1));
             // Where a candidate was chosen, `none` keeps a token share and the
-            // runners-up outrank it: the answer a caller can fall back on.
+            // others outrank it, as a model's answer would.
             const spread = n > 2 and !std.mem.eql(u8, pick, lp.choose.none_key);
             const none_share: f64 = if (spread) 0.05 else even;
             const share: f64 = if (spread) (1 - chosen - none_share) / @as(f64, @floatFromInt(n - 2)) else even;
@@ -1258,9 +1258,9 @@ fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
 }
 
 fn yesTo(key: []const u8, deciding: bool, later_step: bool, banner_in_state: bool) bool {
-    // The consent re-read is the one place the mock can see what it is asked
-    // about: the banner's label, in the state it was sent.
-    if (std.mem.eql(u8, key, lp.consent.wall_key)) return deciding or banner_in_state;
+    // The one question the mock answers from the page: whether the banner's
+    // label is in the state it was sent.
+    if (std.mem.eql(u8, key, lp.consent.wall_key)) return banner_in_state;
     if (!deciding) return false;
     if (std.mem.eql(u8, key, lp.login.multi_step_key)) return later_step;
     return isWall(key);

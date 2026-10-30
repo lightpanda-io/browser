@@ -1325,7 +1325,8 @@ fn clickAndSettle(
     try settle(session);
 }
 
-/// Controls to try before giving up: the model's pick, then its runner-up.
+/// Clicks before giving up. Each is decided on the page the one before it
+/// left, so a confirmation the first click raises gets a pick of its own.
 const max_consent_clicks = 2;
 
 fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
@@ -1350,87 +1351,77 @@ fn execAcceptCookies(arena: std.mem.Allocator, session: *lp.Session, registry: *
         return consentVerdict(arena, &outcome, "clicked the control given, without asking the model");
     }
 
-    const page = try requireFrame(session);
-    const candidates = lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err);
-    if (candidates.len == 0) {
-        return verdict(arena, &outcome, "no control on this page could be clicked");
-    }
-    outcome.candidates = candidates.len;
-
-    const questions = try lp.consent.questions(arena, candidates, args.prefer);
-    var response = switch (try askPage(arena, session, registry, .{
-        .tool = .acceptCookies,
-        .questions = questions,
-        .node = page.document.asNode(),
-        .state = .{ .link_urls = false, .ids = true },
-    })) {
-        .failed => |result| return result,
-        .ok => |ok| ok,
-    };
-    defer response.deinit();
-
-    outcome.consentWall = response.value.noul(lp.consent.wall_key);
-    if ((outcome.consentWall orelse 0) < lp.jev.gate) {
-        return verdict(arena, &outcome, "those controls are not a consent banner");
-    }
-
-    const order = lp.choose.ranked(arena, candidates, response.value, questions, lp.consent.control_key) catch |err| switch (err) {
-        error.OutOfMemory => return ToolError.OutOfMemory,
-        else => return unusableAnswer(arena, .acceptCookies, err),
-    };
-    if (order.len == 0) {
-        return verdict(arena, &outcome, "no control here would dismiss the banner");
-    }
-
-    // Selectors for every control we might click, before clicking any of them:
-    // the first click can navigate, which frees the nodes the rest point at.
-    var tries: std.ArrayList(lp.choose.Scored) = try .initCapacity(arena, max_consent_clicks);
-    var selectors: std.ArrayList([]const u8) = try .initCapacity(arena, max_consent_clicks);
-    for (order[0..@min(order.len, max_consent_clicks)]) |scored| {
-        const selector = selectorFor(arena, page, scored.candidate.element) orelse continue;
-        tries.appendAssumeCapacity(scored);
-        selectors.appendAssumeCapacity(selector);
-    }
-
-    const verify_questions = try lp.consent.verifyQuestions(arena);
-    const url_before = try arena.dupe(u8, page.url);
-    for (tries.items, selectors.items) |scored, selector| {
-        // The runner-up was chosen on the page the first click left, and its
-        // selector was built there: a structural path can resolve on this one
-        // and name something else entirely. A banner here is a new question.
-        if (outcome.attempts > 0 and !std.mem.eql(u8, url_before, (try requireFrame(session)).url)) {
-            return consentVerdict(arena, &outcome, "clicked, and the click moved the page; ask again for the banner this one shows");
+    while (true) {
+        const page = try requireFrame(session);
+        const candidates: []const lp.choose.Candidate = if (outcome.attempts < max_consent_clicks)
+            lp.choose.collect(arena, page.document.asNode(), page, registry) catch |err| return internalUnlessOom(err)
+        else
+            &.{};
+        if (outcome.attempts == 0) {
+            if (candidates.len == 0) {
+                return verdict(arena, &outcome, "no control on this page could be clicked");
+            }
+            outcome.candidates = candidates.len;
         }
-        const target = resolveBySelector(session, selector) catch continue;
+
+        const questions = if (candidates.len > 0)
+            try lp.consent.questions(arena, candidates, args.prefer)
+        else
+            try lp.consent.verifyQuestions(arena);
+        var response = switch (try askPage(arena, session, registry, .{
+            .tool = .acceptCookies,
+            .questions = questions,
+            .node = page.document.asNode(),
+            .state = .{ .link_urls = false, .ids = candidates.len > 0 },
+        })) {
+            .failed => |failed| {
+                if (outcome.attempts == 0) return failed;
+                return unverified(arena, &outcome, consentVerdict, failed, "clicked, but could not check whether the banner went");
+            },
+            .ok => |ok| ok,
+        };
+        defer response.deinit();
+
+        const wall = response.value.noul(lp.consent.wall_key);
+        if (outcome.attempts == 0) {
+            outcome.consentWall = wall;
+            if ((wall orelse 0) < lp.jev.gate) {
+                return verdict(arena, &outcome, "those controls are not a consent banner");
+            }
+        } else {
+            outcome.consentWallAfter = wall;
+            if ((wall orelse 1) < lp.jev.gate) {
+                outcome.verified = true;
+                return consentVerdict(arena, &outcome, null);
+            }
+        }
+        if (candidates.len == 0) break;
+
+        const best = lp.choose.best(candidates, response.value, questions, lp.consent.control_key) catch |err| switch (err) {
+            error.OutOfMemory => return ToolError.OutOfMemory,
+            else => {
+                const unusable = try unusableAnswer(arena, .acceptCookies, err);
+                if (outcome.attempts == 0) return unusable;
+                return unverified(arena, &outcome, consentVerdict, unusable, "clicked, but the banner is still there");
+            },
+        };
+        const pick = best orelse {
+            if (outcome.attempts == 0) return verdict(arena, &outcome, "no control here would dismiss the banner");
+            break;
+        };
+        const selector = selectorFor(arena, page, pick.candidate.element) orelse {
+            if (outcome.attempts == 0) return verdict(arena, &outcome, "no selector could be built for the control the model picked");
+            break;
+        };
 
         outcome.attempts += 1;
         outcome.selector = selector;
-        outcome.control = scored.candidate.name;
-        outcome.confidence = scored.probability;
-        try clickAndSettle(session, registry, target.node, target.page);
+        outcome.control = pick.candidate.name;
+        outcome.confidence = pick.probability;
+        try clickAndSettle(session, registry, pick.candidate.element.asNode(), page);
         outcome.dismissed = true;
-
-        var verify = switch (try askPage(arena, session, registry, .{
-            .tool = .acceptCookies,
-            .questions = verify_questions,
-            .node = (try requireFrame(session)).document.asNode(),
-            .state = .{ .link_urls = false },
-        })) {
-            .failed => |failed| return unverified(arena, &outcome, consentVerdict, failed, "clicked it, but could not check whether the banner went"),
-            .ok => |ok| ok,
-        };
-        defer verify.deinit();
-
-        outcome.consentWallAfter = verify.value.noul(lp.consent.wall_key);
-        if ((outcome.consentWallAfter orelse 1) < lp.jev.gate) {
-            outcome.verified = true;
-            break;
-        }
     }
-    if (outcome.attempts == 0) {
-        return verdict(arena, &outcome, "no selector could be built for the control the model picked");
-    }
-    return consentVerdict(arena, &outcome, if (outcome.verified) null else "clicked, but the banner is still there");
+    return consentVerdict(arena, &outcome, "clicked, but the banner is still there");
 }
 
 fn consentVerdict(arena: std.mem.Allocator, outcome: *lp.consent.Outcome, reason: ?[]const u8) ToolError!ToolResult {
@@ -1497,7 +1488,7 @@ fn decideLogin(
     defer response.deinit();
     outcome.calls += 1;
 
-    const picks = lp.login.picks(arena, candidates, questions, response.value) catch |err| switch (err) {
+    const picks = lp.login.picks(candidates, questions, response.value) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .failed = try unusableAnswer(arena, .login, err) },
     };
@@ -3638,7 +3629,7 @@ test "classify: a page that navigates while the model is asked is not answered f
     try std.testing.expect(std.mem.find(u8, url.text, "consent_banner.html") != null);
 }
 
-test "acceptCookies: a click that moves the page stops the second guess" {
+test "acceptCookies: a click that moves the page is followed by a pick on the page it went to" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -3651,14 +3642,33 @@ test "acceptCookies: a click that moves the page stops the second guess" {
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(!result.is_error);
-    // #reject exists on the page the accept link went to, so the runner-up
-    // would have resolved there and clicked a control nobody chose.
-    try std.testing.expect(std.mem.find(u8, result.text, "\"attempts\":1") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":false") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "the click moved the page") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"attempts\":2") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
 
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
-    try std.testing.expect(std.mem.find(u8, tree.text, "Reject non-essential") != null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
+}
+
+test "acceptCookies: a confirmation the first click raises is picked from afresh" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("consent_banner_confirm.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const jev = try testing.MockJev.start(aa);
+    defer jev.stop();
+
+    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"attempts\":2") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "Yes, accept them") != null);
+
+    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, tree.text, "Go back") == null);
+    try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
 }
 
 test "login: the password waits for the step that asks for it" {

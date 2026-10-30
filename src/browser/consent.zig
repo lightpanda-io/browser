@@ -21,7 +21,8 @@
 //! Whether this page is a consent wall and which control dismisses it are
 //! both the model's call, asked in one request. Clicking the control and
 //! re-reading the page is the answer key, which is why this needs no
-//! labelled data, and the runners-up are a free second guess.
+//! labelled data. A click that leaves a banner up, a confirmation say, is
+//! followed by a pick from what the page shows then.
 
 const std = @import("std");
 const lp = @import("../lightpanda.zig");
