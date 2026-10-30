@@ -1351,7 +1351,6 @@ pub var search_engine: SearchEngine = .auto;
 const api_engines = .{
     .{
         .tag = SearchEngine.brave,
-        .env_var = "BRAVE_API_KEY",
         .Client = brave.Client,
         .init_options = brave.Client.InitOptions{},
         // text_decorations=false: no <strong> markup in model-read snippets.
@@ -1360,7 +1359,6 @@ const api_engines = .{
     },
     .{
         .tag = SearchEngine.tavily,
-        .env_var = "TAVILY_API_KEY",
         .Client = tavily.Client,
         .init_options = tavily.Client.InitOptions{},
         .options = tavily.types.SearchOptions{ .max_results = 10 },
@@ -1368,7 +1366,6 @@ const api_engines = .{
     },
     .{
         .tag = SearchEngine.exa,
-        .env_var = "EXA_API_KEY",
         .Client = exa.Client,
         .init_options = exa.Client.InitOptions{},
         // highlights: Exa returns no snippet text unless contents is requested;
@@ -1378,7 +1375,6 @@ const api_engines = .{
     },
     .{
         .tag = SearchEngine.parallel,
-        .env_var = "PARALLEL_API_KEY",
         .Client = parallel.Client,
         .init_options = parallel.Client.InitOptions{},
         // fast: ~1s budget instead of the ~3s default, well inside the tool timeout.
@@ -1390,7 +1386,6 @@ const api_engines = .{
     },
     .{
         .tag = SearchEngine.keenable,
-        .env_var = "KEENABLE_API_KEY",
         .Client = keenable.Client,
         .init_options = keenable.Client.InitOptions{ .app_title = "lightpanda" },
         // snippet_max_length is a hint the API may round up to a word
@@ -1421,7 +1416,7 @@ fn joinEngines(comptime field: enum { tag, env_var }, comptime last_sep: []const
             const sep = if (i == 0) "" else if (i + 1 == api_engines.len) last_sep else ", ";
             out = out ++ sep ++ switch (field) {
                 .tag => @tagName(e.tag),
-                .env_var => e.env_var,
+                .env_var => e.Client.env_var_name,
             };
         }
         return out;
@@ -1435,7 +1430,7 @@ pub const search_cascade_prose = "tries " ++ joinEngines(.tag, ", then ") ++ " i
 /// The key `engine` uses right now; `null` selects a keyless engine's
 /// public endpoint.
 fn engineKey(comptime engine: anytype) error{MissingApiKey}!?[]const u8 {
-    if (lp.environ().getPosix(engine.env_var)) |key| return key;
+    if (engine.Client.envApiKey(lp.environ())) |key| return key;
     return if (comptime isKeyless(engine.Client)) null else error.MissingApiKey;
 }
 
@@ -1446,7 +1441,7 @@ const KeyStatus = struct {
 
 fn keyStatusOf(comptime e: anytype) KeyStatus {
     return .{
-        .env_var = e.env_var,
+        .env_var = e.Client.env_var_name,
         .state = if (engineKey(e)) |key| (if (key != null) .set else .keyless) else |_| .missing,
     };
 }
@@ -1511,7 +1506,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.js
 fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const api_key = engineKey(engine) catch return .{
-        .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
+        .text = "web search engine is set to " ++ label ++ " but " ++ engine.Client.env_var_name ++ " is not set in the environment",
         .is_error = true,
     };
     var detail: Failure = .{};
