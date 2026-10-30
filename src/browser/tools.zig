@@ -29,6 +29,7 @@ const Selector = @import("webapi/selector/Selector.zig");
 const Download = @import("Download.zig");
 const SelectorPath = @import("SelectorPath.zig");
 const Element = @import("webapi/Element.zig");
+const ModelContext = @import("webapi/ModelContext.zig");
 
 const log = lp.log;
 const tavily = zenai.search.tavily;
@@ -270,6 +271,8 @@ pub const Tool = enum {
     getCookies,
     getEnv,
     download,
+    pageTools,
+    callPageTool,
 
     /// Telemetry wire id: append, never renumber. 0 is reserved for a name
     /// that matched no tool.
@@ -304,6 +307,8 @@ pub const Tool = enum {
             .getCookies => 27,
             .getEnv => 28,
             .download => 29,
+            .pageTools => 30,
+            .callPageTool => 31,
         };
     }
 
@@ -312,8 +317,8 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download => true,
-            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download, .callPageTool => true,
+            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools => false,
         };
     }
 
@@ -324,7 +329,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool => false,
         };
     }
 
@@ -334,7 +339,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool => false,
         };
     }
 
@@ -345,7 +350,7 @@ pub const Tool = enum {
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
-            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
+            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool => false,
         };
     }
 
@@ -355,7 +360,7 @@ pub const Tool = enum {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
             .screenshot => &.{"path"},
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => &.{},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool => &.{},
         };
     }
 
@@ -363,7 +368,7 @@ pub const Tool = enum {
     /// markdown, evaluate return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools, .callPageTool => true,
             .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download => false,
         };
     }
@@ -376,7 +381,7 @@ pub const Tool = enum {
     pub fn reportsPageState(self: Tool) bool {
         return switch (self) {
             .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download => false,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download, .pageTools, .callPageTool => false,
         };
     }
 
@@ -390,6 +395,7 @@ pub const Tool = enum {
             .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => .interaction,
             .waitForSelector, .waitForScript, .waitForState => .waiting,
             .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
+            .pageTools, .callPageTool => .page_tools,
         };
     }
 
@@ -400,6 +406,7 @@ pub const Tool = enum {
         interaction,
         waiting,
         state,
+        page_tools,
     };
 
     /// Per-tool LLM-facing metadata. Tool identity (name + predicates) lives
@@ -821,6 +828,27 @@ pub const Tool = enum {
                     \\}
                 ),
             },
+            .pageTools => .{
+                .description = "List the tools the current page registers for agents through WebMCP (`navigator.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Many pages register their tools after `load`: if the list is empty on a page you expect to have tools, call `waitForState` with `networkidle` and list again.",
+                .summary = "List the page's WebMCP tools",
+                .input_schema = minify(
+                    \\{ "type": "object", "properties": {} }
+                ),
+            },
+            .callPageTool => .{
+                .description = "Call a WebMCP tool the current page registered (see `pageTools`) and return its result: the text of an MCP-style `content` array, or JSON for any other value. A tool that throws or rejects reports its error. The tool runs the site's own code and may change the page or act on the user's account, so treat a tool without `readOnlyHint` like a form submit.",
+                .summary = "Call one of the page's WebMCP tools",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "name": { "type": "string", "description": "Tool name, as `pageTools` lists it." },
+                    \\    "arguments": { "type": "object", "description": "Optional. The tool's input, matching its `inputSchema`. Defaults to {}." }
+                    \\  },
+                    \\  "required": ["name"]
+                    \\}
+                ),
+            },
         };
     }
 };
@@ -1092,6 +1120,7 @@ fn callInner(
         if (session.currentFrame()) |frame| {
             if (result.navigated) {
                 if (try weaknessNote(arena, frame)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+                if (try pageToolsNote(arena, frame)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
             }
             const note = if (result.navigated)
                 try navErrorNote(arena, frame)
@@ -1166,6 +1195,8 @@ fn dispatch(
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session, substituted) },
         .download => try execDownload(arena, session, substituted),
+        .pageTools => .{ .text = try execPageTools(arena, session) },
+        .callPageTool => execCallPageTool(arena, session, registry, substituted),
     };
 }
 
@@ -1284,6 +1315,16 @@ fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const
     };
     if (url.len == 0 or std.mem.eql(u8, url, frame.url)) return null;
     return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
+}
+
+/// Names the page's WebMCP tools: an agent won't call `pageTools` on every
+/// page just in case.
+fn pageToolsNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
+    const tools = frame.window.getModelContext().tools();
+    if (tools.len == 0) return null;
+    const tool_names = try arena.alloc([]const u8, tools.len);
+    for (tools, tool_names) |t, *n| n.* = t.name;
+    return try arena.print("The page registers WebMCP tools ({s}): pageTools describes them, callPageTool runs one.", .{try std.mem.join(arena, ", ", tool_names)});
 }
 
 /// What a full browser would have shown that this page's reads will lack.
@@ -1904,7 +1945,6 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     };
     const args = try parseArgs(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
-    const before = session.currentFrame();
     const app_allocator = session.browser.app.allocator;
 
     const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
@@ -1952,10 +1992,16 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         result = .{ .text = "" };
     }
 
-    // Script may have queued a navigation (e.g. `top.location = …`).
+    return settleScriptNavigation(arena, session, registry, page, result);
+}
+
+/// Page script may have queued a navigation (e.g. `top.location = …`): wait
+/// for it, and if it left `page`, drop the stale node ids and say where it
+/// landed.
+fn settleScriptNavigation(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, page: *lp.Frame, result: ToolResult) ToolError!ToolResult {
     try awaitQueuedNavigation(session, page);
     const after = session.currentFrame() orelse return result;
-    if (before == null or before.? == after) return result;
+    if (after == page) return result;
 
     registry.reset();
     if (result.text.len == 0) return result; // silenced save=; don't re-emit via nav suffix
@@ -1964,7 +2010,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const text = arena.print("{s}\n(Navigated to {s}, HTTP {s}, title: {s})", .{
         result.text, after.url, navStatus(arena, after), page_title orelse "(none)",
     }) catch return ToolError.InternalError;
-    return .{ .text = text };
+    return .{ .text = text, .is_error = result.is_error };
 }
 
 fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
@@ -1988,6 +2034,131 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRe
 
 const eval_promise_timeout_ms: u32 = 30_000;
 
+fn execPageTools(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
+    const page = try requireFrame(session);
+    const tools = page.window.getModelContext().tools();
+    if (tools.len == 0) return "This page registers no WebMCP tools.";
+
+    var ls: lp.js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    const Hints = struct {
+        readOnlyHint: ?bool = null,
+        untrustedContentHint: ?bool = null,
+    };
+    const Entry = struct {
+        name: []const u8,
+        title: ?[]const u8,
+        description: []const u8,
+        inputSchema: ?lp.js.Value,
+        annotations: ?Hints,
+    };
+    const entries = arena.alloc(Entry, tools.len) catch return ToolError.OutOfMemory;
+    for (tools, entries) |t, *e| {
+        const a = t.annotations;
+        e.* = .{
+            .name = t.name,
+            .title = t.title,
+            .description = t.description,
+            .inputSchema = if (t.input_schema) |s| ls.local.toLocal(s).toValue() else null,
+            .annotations = if (a.readOnlyHint or a.untrustedContentHint) .{
+                .readOnlyHint = if (a.readOnlyHint) true else null,
+                .untrustedContentHint = if (a.untrustedContentHint) true else null,
+            } else null,
+        };
+    }
+    return std.json.Stringify.valueAlloc(arena, entries, .{ .emit_null_optional_fields = false }) catch ToolError.InternalError;
+}
+
+fn execCallPageTool(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct {
+        name: []const u8,
+        arguments: ?std.json.Value = null,
+    };
+    const args = try parseArgs(Params, arena, arguments);
+    const page = try requireFrame(session);
+    const tool = page.window.getModelContext().findTool(args.name) orelse return .{
+        .text = arena.print("No WebMCP tool named \"{s}\" on this page; pageTools lists them.", .{args.name}) catch return ToolError.OutOfMemory,
+        .is_error = true,
+    };
+    const input_json = if (args.arguments) |a| blk: {
+        if (a != .object) return .{ .text = "arguments: must be an object matching the tool's inputSchema", .is_error = true };
+        break :blk std.json.Stringify.valueAlloc(arena, a, .{}) catch return ToolError.OutOfMemory;
+    } else "{}";
+
+    const result = try runPageTool(arena, page, tool, input_json);
+    return settleScriptNavigation(arena, session, registry, page, result);
+}
+
+fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelContext.Tool, input_json: []const u8) ToolError!ToolResult {
+    var ls: lp.js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Reading the result runs page code too: getters, toString, toJSON.
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    var caught: lp.js.TryCatch.Caught = .{};
+    var value = tool.invoke(&ls.local, input_json, &caught) catch |err| return .{
+        .text = switch (err) {
+            error.InvalidInput => "arguments: not valid JSON",
+            error.ToolThrew => arena.dupe(u8, caught.exception orelse "tool threw") catch return ToolError.OutOfMemory,
+        },
+        .is_error = true,
+    };
+    if (value.isPromise()) {
+        const promise = value.toPromise();
+        if (waitForPromise(page, promise)) |failed| return failed;
+        value = promise.result();
+        if (promise.state() == .rejected) return .{
+            .text = value.toStringSliceWithAlloc(arena) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => caughtMessage(arena, &try_catch, err),
+            },
+            .is_error = true,
+        };
+    }
+    return pageToolResult(arena, value) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => .{ .text = caughtMessage(arena, &try_catch, err), .is_error = true },
+    };
+}
+
+/// The thrown value's message, like a throwing tool reports.
+fn caughtMessage(arena: std.mem.Allocator, try_catch: *const lp.js.TryCatch, err: anyerror) []const u8 {
+    return try_catch.caughtOrError(arena, err).exception orelse @errorName(err);
+}
+
+/// Tools written for MCP return a `CallToolResult`; its text parts are the
+/// answer. Anything else prints like an evaluate result.
+fn pageToolResult(arena: std.mem.Allocator, value: lp.js.Value) !ToolResult {
+    if (!value.isObject() or value.isArray()) return .{ .text = try evalResultText(arena, value) };
+    const obj = value.toObject();
+    const content = try obj.get("content");
+    if (!content.isArray()) return .{ .text = try evalResultText(arena, value) };
+
+    var text: std.Io.Writer.Allocating = .init(arena);
+    const parts = content.toArray();
+    for (0..parts.len()) |i| {
+        const part = try parts.get(@intCast(i));
+        if (!part.isObject()) continue;
+        const part_text = try part.toObject().get("text");
+        if (part_text.isString() == null) continue;
+        if (text.written().len > 0) try text.writer.writeByte('\n');
+        try text.writer.writeAll(try part_text.toStringSliceWithAlloc(arena));
+    }
+    // Text-less content (an image, a resource) still has an answer: the
+    // structured part, or failing that the object itself.
+    if (text.written().len == 0) {
+        const structured = try obj.get("structuredContent");
+        return .{ .text = try evalResultText(arena, if (structured.isObject()) structured else value) };
+    }
+    return .{ .text = text.written(), .is_error = (try obj.get("isError")).isTrue() };
+}
+
 /// Runs `fallback` only if `script` fails to *compile* — a compile failure ran
 /// nothing, so retrying is safe; a runtime throw keeps `script`'s error.
 fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fallback: ?[:0]const u8) ToolError!ToolResult {
@@ -2006,21 +2177,7 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
 
     if (js_result.isPromise()) {
         const promise = js_result.toPromise();
-        promise.markAsHandled();
-
-        var runner = page._session.runner(.{});
-        const timer: std.Io.Timestamp = .now(lp.io, .boot);
-        while (promise.state() == .pending) {
-            const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-            if (elapsed_ms >= eval_promise_timeout_ms) {
-                return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
-            }
-            const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
-            _ = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
-                error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
-                else => return .{ .text = "promise: tick failed", .is_error = true },
-            };
-        }
+        if (waitForPromise(page, promise)) |failed| return failed;
 
         const settled = promise.result();
         const rejected = promise.state() == .rejected;
@@ -2038,6 +2195,36 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
     };
     return .{ .text = text };
+}
+
+/// Runs `page` until `promise` settles. Returns the error result when it
+/// times out or the run is cancelled, null once it settled.
+fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
+    promise.markAsHandled();
+
+    var runner = page._session.runner(.{});
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
+    while (promise.state() == .pending) {
+        const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+        if (elapsed_ms >= eval_promise_timeout_ms) {
+            return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
+        }
+        const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
+        const tick = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
+            error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
+            else => return .{ .text = "promise: tick failed", .is_error = true },
+        };
+        if (promise.state() != .pending) break;
+        // Idle or between timers: sleep, or a promise nothing settles spins the CPU.
+        const sleep_ms = switch (tick) {
+            .done => budget,
+            .ok => |next_ms| @min(next_ms, budget),
+        };
+        if (sleep_ms > 0) {
+            lp.io.sleep(.fromMilliseconds(sleep_ms), .awake) catch {};
+        }
+    }
+    return null;
 }
 
 /// Objects/arrays serialize as JSON so `return obj` prints data, not
@@ -3306,6 +3493,71 @@ test "tools: goto says what a full browser would have shown" {
     , .{});
     const r = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
     try std.testing.expectEqualStrings("The page asked for WebGL, which Lightpanda does not provide: anything it renders that way is missing. 1 iframe(s) were not loaded: subframe loading is off.\n\nNavigated. HTTP 200 OK.", r.text);
+}
+
+test "tools: goto names the page's WebMCP tools and pageTools lists them" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/webmcp/page_tools.html"}
+    , .{});
+    const nav = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
+    try std.testing.expectEqualStrings("The page registers WebMCP tools (greet, mcp_shaped, mcp_error, throws, rejects, bad_result, bad_rejection, navigates): pageTools describes them, callPageTool runs one.\n\nNavigated. HTTP 200 OK.", nav.text);
+
+    const list = try call(aa, session, &registry, "pageTools", null, .{ .source = .user });
+    try std.testing.expect(!list.is_error);
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, aa, list.text, .{});
+    try std.testing.expectEqual(8, parsed.array.items.len);
+    const greet = parsed.array.items[0].object;
+    try std.testing.expectEqualStrings("greet", greet.get("name").?.string);
+    try std.testing.expectEqualStrings("Greet", greet.get("title").?.string);
+    try std.testing.expectEqualStrings("string", greet.get("inputSchema").?.object.get("properties").?.object.get("who").?.object.get("type").?.string);
+    try std.testing.expect(greet.get("annotations").?.object.get("readOnlyHint").?.bool);
+    const shaped = parsed.array.items[1].object;
+    try std.testing.expect(shaped.get("title") == null);
+    try std.testing.expect(shaped.get("inputSchema") == null);
+    try std.testing.expect(shaped.get("annotations") == null);
+}
+
+test "tools: callPageTool runs the page's WebMCP tools" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const goto_args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/webmcp/page_tools.html"}
+    , .{});
+    _ = try call(aa, session, &registry, "goto", goto_args, .{ .source = .user });
+
+    const cases = [_]struct { args: []const u8, text: []const u8, is_error: bool }{
+        .{ .args = "{\"name\":\"greet\",\"arguments\":{\"who\":\"panda\"}}", .text = "{\"greeting\":\"hello panda\"}", .is_error = false },
+        .{ .args = "{\"name\":\"mcp_shaped\"}", .text = "first\nsecond", .is_error = false },
+        .{ .args = "{\"name\":\"mcp_error\"}", .text = "no such order", .is_error = true },
+        .{ .args = "{\"name\":\"throws\"}", .text = "boom", .is_error = true },
+        .{ .args = "{\"name\":\"rejects\"}", .text = "Error: later", .is_error = true },
+        .{ .args = "{\"name\":\"bad_result\"}", .text = "bad getter", .is_error = true },
+        .{ .args = "{\"name\":\"bad_rejection\"}", .text = "bad toString", .is_error = true },
+        .{ .args = "{\"name\":\"greet\",\"arguments\":\"{\\\"who\\\":\\\"panda\\\"}\"}", .text = "arguments: must be an object matching the tool's inputSchema", .is_error = true },
+        .{ .args = "{\"name\":\"missing\"}", .text = "No WebMCP tool named \"missing\" on this page; pageTools lists them.", .is_error = true },
+    };
+    for (cases) |c| {
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, c.args, .{});
+        const r = try call(aa, session, &registry, "callPageTool", args, .{ .source = .user });
+        try std.testing.expectEqualStrings(c.text, r.text);
+        try std.testing.expectEqual(c.is_error, r.is_error);
+    }
+
+    const nav_args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"name\":\"navigates\"}", .{});
+    const nav = try call(aa, session, &registry, "callPageTool", nav_args, .{ .source = .user });
+    try std.testing.expectEqualStrings("leaving\n(Navigated to http://localhost:9582/src/browser/tests/cdp/webmcp_fixture.html, HTTP 200 OK, title: WebMCP CDP fixture)", nav.text);
 }
 
 test "tools: a read tool navigating by url flags an error status" {
