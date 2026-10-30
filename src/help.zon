@@ -108,8 +108,9 @@
     \\                                 the server for markdown first; when
     \\                                 it sends some, that is dumped as-is
     \\                                 (logged as "markdown served"). Not
-    \\                                 with --dump-selector, --wait-selector
-    \\                                 or --wait-script, which need the DOM.
+    \\                                 with --dump-selector, --wait-selector,
+    \\                                 --wait-script or --inject-script,
+    \\                                 which need the DOM.
     \\              pdf                Text-only rendering of the page as a
     \\                                 PDF file (base64 with --json).
     \\              png                Text-only rendering of the page as a

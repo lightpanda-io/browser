@@ -230,7 +230,8 @@ fn navigateOpts(opts: FetchOpts) Frame.NavigateOpts {
 /// when an option needs the page's DOM, which a markdown response has none of.
 fn acceptsMarkdown(opts: FetchOpts) bool {
     return opts.dump_mode == .markdown and opts.selector == null and
-        opts.wait_selector == null and opts.wait_script == null;
+        opts.wait_selector == null and opts.wait_script == null and
+        opts.inject_script.items.len == 0;
 }
 
 const markdown_accept = "Accept: text/markdown,text/html;q=0.9,application/xhtml+xml;q=0.9,application/xml;q=0.8,*/*;q=0.7";
@@ -883,6 +884,11 @@ test "fetch: a markdown dump asks the server for markdown" {
     aw.clearRetainingCapacity();
     try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, not_asked.frame().?, false, &aw.writer);
     try testing.expectString("\n# Negotiated\n\nSent as HTML.\n", aw.written());
+
+    // Injected scripts run against the DOM too.
+    var scripts: std.ArrayList([]const u8) = .empty;
+    try scripts.append(testing.arena_allocator, "1");
+    try testing.expect(!acceptsMarkdown(.{ .dump = .{}, .dump_mode = .markdown, .inject_script = scripts }));
 }
 
 test "fetch: followMarkdownAlternates keeps a page that failed" {
