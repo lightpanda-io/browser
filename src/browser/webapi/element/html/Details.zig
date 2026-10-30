@@ -44,6 +44,11 @@ pub fn asNode(self: *Details) *Node {
     return self.asElement().asNode();
 }
 
+// A closed <details> renders only its summary.
+pub fn isClosed(self: *Details) bool {
+    return self.getOpen() == false;
+}
+
 pub fn setOpen(self: *Details, open: bool, frame: *Frame) !void {
     if (open) {
         try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), frame);

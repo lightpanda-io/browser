@@ -1533,8 +1533,10 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
         if (el.parentElement()) |parent| {
-            if (parent.getTag() == .details and !parent.hasAttributeSafe(comptime .wrap("open"))) {
-                return true;
+            if (parent.is(Element.Html.Details)) |d| {
+                if (d.isClosed()) {
+                    return true;
+                }
             }
         }
     }
