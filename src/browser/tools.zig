@@ -1233,6 +1233,11 @@ fn askPage(
         else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
     };
 
+    if (session.isCancelled()) {
+        response.deinit();
+        return ToolError.Cancelled;
+    }
+
     // Pumping runs the page's own scripts, and a navigation among them tears
     // down the Page that every candidate element and node id points into (see
     // `settleAction`). The answer describes a page that is no longer here.
