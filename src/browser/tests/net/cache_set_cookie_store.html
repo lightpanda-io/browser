@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- Run with an HTTP cache in "store" mode, see HttpClient.zig -->
+<script id=cache_set_cookie_store type=module>
+  import { fetchTwice } from './cache_set_cookie.js';
+  {
+    const state = await testing.async();
+    state.resolve(await fetchTwice());
+
+    await state.done((data) => {
+      testing.expectEqual(String(data.n), data.first_cookie);
+      testing.expectEqual(null, data.cleared);
+      // served from the cache, with the stored cookie
+      testing.expectEqual(`served ${data.n}`, data.second);
+      testing.expectEqual(String(data.n), data.second_cookie);
+    });
+  }
+</script>

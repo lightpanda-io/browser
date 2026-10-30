@@ -481,6 +481,7 @@
     \\          Enable an experimental, unstable feature. Can be passed multiple times.
     \\          Behavior may change or be removed without notice.
     \\          Defaults to none enabled.
+    \\             httpcachesetcookie  enable the --http-cache-set-cookie flag
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to stylesheet for mcp and agent, and to none of them
@@ -517,6 +518,23 @@
     \\          soft: it is enforced at startup and when a browser session ends.
     \\          The cache can temporarily exceed it. 0 means no limit.
     \\          Defaults to 1000.
+    \\  --http-cache-set-cookie <MODE>
+    \\          What the HTTP cache does with a response that sets cookies.
+    \\          Allowed values:
+    \\             skip      Don't store responses with a Set-Cookie header.
+    \\
+    \\             store     Store responses with a Set-Cookie value, including
+    \\                       the Set-Cookie header. Warning: cached cookies will
+    \\                       be shared across all sessions that hit the cache.
+    \\
+    \\             strip     Store responses with a Set-Cookie value, removing
+    \\                       the Set-Cookie header. Warning: if the cache
+    \\                       outlives the JAR, the cookie will be lost.
+    \\
+    \\          This behavior / flag is likely to change. It is considered
+    \\          experimental and must be enabled with:
+    \\              --experimental-features httpcachesetcookie
+    \\          Defaults to "skip".
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.

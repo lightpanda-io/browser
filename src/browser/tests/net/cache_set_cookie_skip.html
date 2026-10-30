@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- Run with an HTTP cache in "skip" mode, see HttpClient.zig -->
+<script id=cache_set_cookie_skip type=module>
+  import { fetchTwice } from './cache_set_cookie.js';
+  {
+    const state = await testing.async();
+    state.resolve(await fetchTwice());
+
+    await state.done((data) => {
+      testing.expectEqual(String(data.n), data.first_cookie);
+      testing.expectEqual(null, data.cleared);
+      // went to the network again
+      testing.expectEqual(`served ${data.n + 1}`, data.second);
+      testing.expectEqual(String(data.n + 1), data.second_cookie);
+    });
+  }
+</script>

@@ -231,6 +231,16 @@ pub const HttpVersion = enum {
     @"1.1",
 };
 
+/// What the HTTP cache does with a response that sets cookies.
+pub const HttpCacheSetCookie = enum {
+    /// Don't store it.
+    skip,
+    /// Store it with its Set-Cookie, which a cache hit applies again.
+    store,
+    /// Store it without its Set-Cookie.
+    strip,
+};
+
 pub const LoadResources = packed struct(u6) {
     image: bool = false,
     iframe: bool = false,
@@ -243,9 +253,10 @@ pub const LoadResources = packed struct(u6) {
     none: bool = false,
 };
 
-pub const ExperimentalFeatures = packed struct(u2) {
+pub const ExperimentalFeatures = packed struct(u3) {
     cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
+    httpcachesetcookie: bool = false,
 };
 
 pub const DisabledFeatures = packed struct(u1) {
@@ -277,6 +288,7 @@ const CommonOptions = .{
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8, .path = true },
     .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "http_cache_set_cookie", .type = HttpCacheSetCookie, .default = .skip },
     .{ .name = "http_debug", .type = bool },
     .{ .name = "http_curves", .type = ?[:0]const u8, .validator = httpCurvesValidator },
     .{ .name = "render_font", .type = []const u8, .multiple = true, .path = true },
@@ -836,6 +848,13 @@ pub fn httpCacheEntryLimit(self: *const Config) u32 {
     };
 }
 
+pub fn httpCacheSetCookie(self: *const Config) HttpCacheSetCookie {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_set_cookie,
+        else => .skip,
+    };
+}
+
 pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie,
@@ -1343,6 +1362,13 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
     }
 
     var config = try Config.init(allocator, exec_name, command);
+    if (config.httpCacheSetCookie() != .skip and config.experimentalFeatures().httpcachesetcookie == false) {
+        log.fatal(.app, "experimental flag", .{
+            .err = "--http-cache-set-cookie is an experimental flag",
+            .tip = "enable it by also including '--experimental-features httpcachesetcookie'",
+        });
+        return error.InvalidArgument;
+    }
     config.command = invoked;
     return config;
 }
