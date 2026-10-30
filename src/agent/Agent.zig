@@ -178,6 +178,8 @@ conversation: Conversation,
 model: []u8,
 /// Per-turn reasoning budget for LLM turns. Mutable at runtime via `/effort`.
 effort: Config.Effort,
+/// `--temperature`: null leaves the provider's default.
+temperature: ?f32,
 script_file: ?[]const u8,
 /// `--url`: opened before the first turn, so a `--task` run does not spend a
 /// model turn navigating to its own start page.
@@ -374,6 +376,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .conversation = .init(allocator, system_prompt),
         .model = model,
         .effort = effort,
+        .temperature = opts.temperature,
         .stream_enabled = stream_enabled,
         .script_file = opts.script_file,
         .start_url = opts.url,
@@ -2163,6 +2166,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // / mode default, adjustable at runtime via /effort. Ignored by
             // non-thinking models.
             .effort = self.effort.level(),
+            .temperature = self.temperature,
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
             // streaming would bypass the `suppress_answer` guard in `runTurn`.
@@ -2272,6 +2276,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                     .none => .none,
                     else => .low,
                 },
+                .temperature = self.temperature,
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
                 .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
                 .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
