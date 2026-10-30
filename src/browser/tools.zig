@@ -118,6 +118,7 @@ pub const Tool = enum {
     getUrl,
     getCookies,
     getEnv,
+    popups,
     download,
     pageTools,
     callPageTool,
@@ -163,6 +164,7 @@ pub const Tool = enum {
             .classify => 32,
             .acceptCookies => 33,
             .login => 34,
+            .popups => 35,
         };
     }
 
@@ -172,7 +174,7 @@ pub const Tool = enum {
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
             .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download, .callPageTool, .classify, .acceptCookies, .login => true,
-            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools => false,
+            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => false,
         };
     }
 
@@ -183,7 +185,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -193,7 +195,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -204,7 +206,7 @@ pub const Tool = enum {
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
-            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -214,7 +216,7 @@ pub const Tool = enum {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
             .screenshot => &.{"path"},
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => &.{},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => &.{},
         };
     }
 
@@ -222,7 +224,7 @@ pub const Tool = enum {
     /// markdown, evaluate return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools, .callPageTool, .classify, .acceptCookies, .login => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools, .callPageTool, .classify, .acceptCookies, .login => true,
             .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download => false,
         };
     }
@@ -231,7 +233,7 @@ pub const Tool = enum {
     pub fn returnsJson(self: Tool) bool {
         return switch (self) {
             .extract, .classify, .acceptCookies, .login => true,
-            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .pageTools, .callPageTool, .download => false,
+            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .pageTools, .callPageTool, .download => false,
         };
     }
 
@@ -243,7 +245,7 @@ pub const Tool = enum {
     pub fn reportsPageState(self: Tool) bool {
         return switch (self) {
             .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -256,7 +258,7 @@ pub const Tool = enum {
             .extract, .classify, .evaluate => .extraction,
             .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .acceptCookies, .login => .interaction,
             .waitForSelector, .waitForScript, .waitForState => .waiting,
-            .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
+            .getUrl, .getCookies, .getEnv, .consoleLogs, .popups => .state,
             .pageTools, .callPageTool => .page_tools,
         };
     }
@@ -626,6 +628,7 @@ fn dispatch(
         .login => login.exec(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
+        .popups => execPopups(arena, session, registry, substituted),
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session, substituted) },
         .download => try execDownload(arena, session, substituted),
@@ -1515,11 +1518,23 @@ fn formatActionResult(
 const ActionScope = struct {
     frame: ?*lp.Frame,
     popups: usize,
+    await_late_popup: bool = false,
 };
 
-pub fn beginAction(session: *lp.Session) ActionScope {
+pub const BeginOpts = struct {
+    /// Watch for a window the action opens late (after a fetch or a timer).
+    /// Only for actions that act like a user's click; the rest skip the
+    /// watch and its worst-case cost on pages that never go quiescent.
+    await_late_popup: bool = false,
+};
+
+pub fn beginAction(session: *lp.Session, opts: BeginOpts) ActionScope {
     const frame = session.currentFrame();
-    return .{ .frame = frame, .popups = if (frame) |f| f.page.popups.items.len else 0 };
+    return .{
+        .frame = frame,
+        .popups = if (frame) |f| f.page.popups.items.len else 0,
+        .await_late_popup = opts.await_late_popup,
+    };
 }
 
 /// Where a settled action left the page.
@@ -1546,6 +1561,10 @@ pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: Action
     // next action can't dereference freed memory.
     if (before != null and before.? != page) registry.reset();
 
+    if (scope.await_late_popup and page.page.popups.items.len == scope.popups) {
+        awaitLatePopup(session, page, scope.popups);
+    }
+
     var note: []const u8 = "";
     if (page.page.popups.items.len > scope.popups) {
         // The action opened a new window (target=_blank or window.open).
@@ -1566,6 +1585,28 @@ pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: Action
     return .{ .frame = page, .note = note };
 }
 
+/// An action can open a window late: the handler fetches first (a one-time
+/// download URL), or opens from a timer. The popup count check above runs
+/// before any of that, so those windows used to land invisible. Watch for
+/// one while the page runs out its work. A page already quiescent resolves
+/// `.done` immediately and pays nothing; a page kept alive by timers or
+/// polling pays at most the budget.
+const late_popup_budget_ms = 1000;
+
+fn awaitLatePopup(session: *lp.Session, frame: *lp.Frame, popups_before: usize) void {
+    const root_frame_id = frame.page.frame._frame_id;
+    var runner = session.runner(.{});
+    var waited: u32 = 0;
+    while (frame.page.popups.items.len == popups_before and waited < late_popup_budget_ms) {
+        var conditions = [_]lp.Session.Runner.WaitCondition{.{ .frame_id = root_frame_id, .until = .done }};
+        const slice: u32 = @min(100, late_popup_budget_ms - waited);
+        const result = runner.waitResult(slice, &conditions) catch break;
+        waited += slice;
+        // Quiescent: whatever the handler was going to open, it has opened.
+        if (result == .completed) break;
+    }
+}
+
 /// `settleAction`, plus the resulting page URL and title tagged onto `body` so
 /// the caller (LLM, MCP client) can see whether the action navigated.
 fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, scope: ActionScope, body: []const u8) ToolError![]const u8 {
@@ -1584,7 +1625,7 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{ .await_late_popup = true });
 
     lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
@@ -1614,7 +1655,7 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
         }
     }
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{});
 
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
@@ -1632,7 +1673,7 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
         y: ?i32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{});
     const resolved: ?NodeAndPage = if (args.selector != null or args.backendNodeId != null)
         try resolveTarget(session, registry, args.selector, args.backendNodeId)
     else
@@ -1759,7 +1800,7 @@ fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{});
 
     lp.actions.hover(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
@@ -1786,7 +1827,7 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         target_node = try resolveOptionalNode(registry, args.backendNodeId);
     }
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{ .await_late_popup = true });
 
     lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
 
@@ -1805,7 +1846,7 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *N
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{});
 
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
@@ -1823,7 +1864,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{});
 
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| return mapActionError(err);
 
@@ -1951,6 +1992,57 @@ fn execConsoleLogs(arena: std.mem.Allocator, session: *lp.Session) ToolError![]c
 fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
     const page = try requireFrame(session);
     return page.url;
+}
+
+/// One entry of the `popups` listing: the page's main window first, then the
+/// windows it opened.
+const PopupEntry = struct {
+    id: u32,
+    url: []const u8,
+    title: ?[]const u8,
+    popup: bool,
+    current: bool,
+};
+
+/// List the windows of the current page (`window.open` / target=_blank), or
+/// make one current with `follow`. Frame ids are session-scoped, so a replay
+/// can't record a follow — the replayed action re-opens the window and
+/// `settleAction` follows it the way the live run did.
+fn execPopups(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct { follow: ?u32 = null };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
+    const page = try requireFrame(session);
+
+    if (args.follow) |frame_id| {
+        const target = session.findFrameByFrameId(frame_id) orelse
+            return .{ .text = try arena.print("no window with id {d}; call popups for the current ids", .{frame_id}), .is_error = true };
+        if (target.page != page.page) {
+            return .{ .text = try arena.print("window {d} belongs to another page; call popups for the current ids", .{frame_id}), .is_error = true };
+        }
+        session.followPopup(frame_id);
+        registry.reset();
+    }
+
+    const current_id: ?u32 = if (session.currentFrame()) |f| f._frame_id else null;
+    const root = &page.page.frame;
+    const entries = arena.alloc(PopupEntry, page.page.popups.items.len + 1) catch return ToolError.InternalError;
+    entries[0] = .{
+        .id = root._frame_id,
+        .url = root.url,
+        .title = root.getTitle() catch null,
+        .popup = false,
+        .current = current_id == root._frame_id,
+    };
+    for (page.page.popups.items, 1..) |popup, i| {
+        entries[i] = .{
+            .id = popup._frame_id,
+            .url = popup.url,
+            .title = popup.getTitle() catch null,
+            .popup = true,
+            .current = current_id == popup._frame_id,
+        };
+    }
+    return .{ .text = try renderJson(arena, entries, .{}) };
 }
 
 fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {

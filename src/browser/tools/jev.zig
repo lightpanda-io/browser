@@ -301,7 +301,7 @@ pub fn clickAndSettle(
     node: *DOMNode,
     page: *lp.Frame,
 ) ToolError!void {
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{ .await_late_popup = true });
     lp.actions.click(node, page) catch |err| return mapActionError(err);
     _ = try settleAction(session, registry, scope);
     try settle(session);
