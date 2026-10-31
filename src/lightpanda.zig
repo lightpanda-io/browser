@@ -81,6 +81,7 @@ pub const skill = @import("script/skill.zig");
 pub const docs = @import("docs.zig");
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
+pub const script_file = @import("script/file.zig");
 pub const Schema = @import("script/Schema.zig");
 pub const Command = @import("script/command.zig").Command;
 

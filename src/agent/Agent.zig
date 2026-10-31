@@ -1333,7 +1333,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     }
     const resolved = self.resolveSavePathAndMode(arena, parsed.filename) orelse return;
 
-    save.writeContentFile(resolved.path, self.save_buffer.bytes(), resolved.mode) catch |err| {
+    lp.script_file.write(resolved.path, self.save_buffer.bytes(), resolved.mode == .append) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ resolved.path, @errorName(err) });
         return;
     };
@@ -1515,7 +1515,7 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
 
-    save.writeContentFile(path, script, mode) catch |err| {
+    lp.script_file.write(path, script, mode == .append) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1767,9 +1767,6 @@ const ScriptOutput = struct {
     }
 };
 
-/// Upper bound on script source, whether read from a file or piped in.
-const max_script_bytes = 10 * 1024 * 1024;
-
 /// `lightpanda run -` reads the script from stdin.
 const stdin_script_path = "-";
 
@@ -1822,11 +1819,11 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
 fn readScriptSource(allocator: std.mem.Allocator, path: []const u8, from_stdin: bool) ![]u8 {
     if (!from_stdin) {
-        return std.Io.Dir.cwd().readFileAlloc(lp.io, path, allocator, .limited(max_script_bytes));
+        return lp.script_file.read(allocator, path);
     }
     var buf: [64 * 1024]u8 = undefined;
     var stdin = std.Io.File.stdin().readerStreaming(lp.io, &buf);
-    return stdin.interface.allocRemaining(allocator, .limited(max_script_bytes));
+    return stdin.interface.allocRemaining(allocator, .limited(lp.script_file.max_bytes));
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the
