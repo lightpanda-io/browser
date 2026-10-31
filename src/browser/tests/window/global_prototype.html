@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=global_prototype_is_window_prototype>
+    testing.expectEqual(true, Object.getPrototypeOf(window) === Window.prototype);
+    testing.expectEqual(true, window.constructor === Window);
+    testing.expectEqual(true, self.constructor === Window);
+    testing.expectEqual(true, globalThis.constructor === Window);
+    testing.expectEqual(false, Object.prototype.hasOwnProperty.call(window, "constructor"));
+    testing.expectEqual(true, window instanceof Window);
+    testing.expectEqual(true, window instanceof EventTarget);
+</script>
+
+<script id=global_members_survive>
+    testing.expectEqual("function", typeof window.addEventListener);
+    testing.expectEqual("function", typeof setTimeout);
+    testing.expectEqual(true, window.document === document);
+    testing.expectEqual(true, window.window === window);
+    testing.expectEqual("Window", window[Symbol.toStringTag]);
+</script>
+
