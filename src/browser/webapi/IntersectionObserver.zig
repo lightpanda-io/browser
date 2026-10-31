@@ -370,12 +370,11 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
     };
 
     // Frameless documents (DOMParser, createHTMLDocument) aren't rendered.
-    const node = target.asNode();
-    const connected = node.ownerFrame(frame) != null and node.isConnected();
-    const is_now_intersecting = connected and self.meetsThreshold(1.0);
+    const rendered = target.asNode().isConnected() and target.isVisible(frame);
+    const is_now_intersecting = rendered and self.meetsThreshold(1.0);
     if (!is_now_intersecting) {
-        // Not intersecting yet (e.g. observed while still detached) — keep
-        // tracking so a later attach is reported.
+        // Not intersecting yet (e.g. observed while still detached or hidden),
+        // keep tracking so a later attach or show is reported.
         return;
     }
 
