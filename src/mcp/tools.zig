@@ -1459,8 +1459,6 @@ test "MCP - run: a script that outlives its timeout is stopped" {
     try testing.expect(std.mem.find(u8, out.written(), "script timed out after 300 ms") != null);
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
 
-    // A loop in script code after an `await`: it runs inside a microtask
-    // checkpoint.
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"console.log('before');\nawait null;\nwhile (true) {}"}}}
