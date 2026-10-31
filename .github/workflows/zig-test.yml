@@ -112,6 +112,68 @@ jobs:
             commit.txt
           retention-days: 10
 
+  chrome-test:
+    name: html tests in chrome
+    needs: zig-fmt
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          repository: 'lightpanda-io/demo'
+          path: demo
+
+      - uses: ./.github/actions/install
+
+      # Always the current stable channel, not the runner image's copy, so
+      # a new Chrome stable release that changes a result fails here.
+      - id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        with:
+          chrome-version: stable
+
+      - run: echo "Chrome ${{ steps.chrome.outputs.chrome-version }}"
+
+      # Compiles first, so the wait covers the build.
+      - name: start test server
+        run: |
+          zig build -Dprebuilt_v8_path=v8/libc_v8.a test-server > test-server.log 2>&1 &
+          timeout 600 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:9582/reset; do sleep 1; done'
+
+      - name: start chrome
+        run: |
+          "${{ steps.chrome.outputs.chrome-path }}" \
+            --headless \
+            --disable-gpu \
+            --disable-popup-blocking \
+            --autoplay-policy=no-user-gesture-required \
+            --remote-debugging-port=9222 \
+            --user-data-dir=/tmp/chrome-cdp > chrome.log 2>&1 &
+          timeout 30 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:9222/json/version; do sleep 1; done'
+
+      - run: npm install
+        working-directory: demo
+
+      - name: run html tests
+        working-directory: demo
+        run: |
+          export BROWSER_ADDRESS=$(curl -sf http://127.0.0.1:9222/json/version | jq -r .webSocketDebuggerUrl)
+          BROWSER_REPO=${{ github.workspace }} node browser-tests/run.js
+
+      - name: test server and chrome logs
+        if: failure()
+        run: cat test-server.log chrome.log
+
   bench-fmt:
     name: perf-fmt
     needs: zig-test-release
