@@ -1530,14 +1530,6 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     return self;
 }
 
-/// Replace the whole document with `html`, as Blink's Document::SetContent
-/// does for CDP's Page.setDocumentContent: open(), write the markup, close().
-pub fn setContent(self: *Document, html: []const u8, frame: *Frame) !void {
-    _ = try self.open(frame);
-    try self.writeInternal(&.{html}, false, frame);
-    try self.close(frame);
-}
-
 pub fn close(self: *Document, call_frame: *Frame) !void {
     const frame = self._frame orelse call_frame;
 
