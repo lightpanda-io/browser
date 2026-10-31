@@ -160,7 +160,7 @@ pub fn registerNode(self: *BaseAudioContext, node: *AudioNode) !void {
 }
 
 // The built-in waveforms' tables, built on first use.
-pub fn basicWave(self: *BaseAudioContext, shape: Wavetable.Shape) !*const Wavetable {
+pub fn basicWave(self: *BaseAudioContext, shape: Wavetable.Shape) !*Wavetable {
     const slot = &self._waves[@backingInt(shape)];
     if (slot.*) |wave| {
         return wave;
