@@ -1174,6 +1174,8 @@ fn webSocketAccept(head: []const u8, out: *[28]u8, allow: Allow) ![]const u8 {
 // Exact (case-insensitive) match against a --remote-allow-origins value, or
 // anything if one is `*`, as Chrome does.
 fn isAllowedOrigin(value: []const u8, allowed: []const []const u8) bool {
+    // The literal string "null" (sent by some sandboxed contexts) is never a valid origin.
+    if (std.mem.eql(u8, value, "null")) return false;
     for (allowed) |origin| {
         if (std.mem.eql(u8, origin, "*") or std.ascii.eqlIgnoreCase(origin, value)) {
             return true;
@@ -1248,10 +1250,17 @@ test "http: isAllowedOrigin" {
     try testing.expectEqual(true, isAllowedOrigin("http://localhost:3000", &.{"http://localhost:3000"}));
     try testing.expectEqual(true, isAllowedOrigin("http://LOCALHOST:3000", &.{"http://localhost:3000"}));
     try testing.expectEqual(true, isAllowedOrigin("http://b.test", &.{ "http://a.test", "http://b.test" }));
-    try testing.expectEqual(true, isAllowedOrigin("null", &.{"*"}));
+    try testing.expectEqual(false, isAllowedOrigin("null", &.{"*"}));
     try testing.expectEqual(true, isAllowedOrigin("https://evil.com", &.{ "http://a.test", "*" }));
     try testing.expectEqual(false, isAllowedOrigin("http://localhost:3001", &.{"http://localhost:3000"}));
     try testing.expectEqual(false, isAllowedOrigin("http://a.test.evil.com", &.{"http://a.test"}));
+}
+
+test "http: Origin null always rejected" {
+    // The literal origin "null" must be rejected even when wildcard is allowed.
+    try testing.expectEqual(false, isAllowedOrigin("null", &.{"*"}));
+    try testing.expectEqual(false, isAllowedOrigin("null", &.{}));
+    try testing.expectEqual(false, isAllowedOrigin("NULL", &.{"*"}));
 }
 
 test "http: webSocketAccept honours the allowed origins" {
