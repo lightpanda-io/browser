@@ -2117,11 +2117,12 @@ fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHa
     return page;
 }
 
-/// Close a top-level page, evicting its nodes from `registry` first: an entry
-/// left behind would point into the freed page.
-pub fn closePage(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, frame_id: u32) void {
+/// Close a top-level page, evicting its nodes from `registry` first. The
+/// `frame_destroyed` eviction waits for the deferred page destroy, and covers
+/// only a ToolSession's registry.
+pub fn closePage(session: *lp.Session, registry: *NodeRegistry, frame_id: u32) void {
     const page = session.livePage(frame_id) orelse return;
-    registry.resetFrame(arena, &page.frame);
+    registry.resetFrame(&page.frame);
     session.closePage(frame_id);
 }
 
@@ -2139,7 +2140,7 @@ pub fn startGoto(
 ) ToolError!StartedGoto {
     // This path bypasses `call`, so it needs its own `$LP_*` substitution pass.
     const args = try parseArgs(GotoParams, arena, try substituteStringArgs(arena, .goto, arguments));
-    if (receiver_frame_id) |fid| closePage(arena, session, registry, fid);
+    if (receiver_frame_id) |fid| closePage(session, registry, fid);
     const page = try openPage(session, args.url);
     return .{
         .frame_id = page.frame_id,
