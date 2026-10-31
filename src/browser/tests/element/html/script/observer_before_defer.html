@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!--
+Nodes the parser inserts after a defer script queue MutationObserver records.
+Those are delivered before the defer script runs (the end of parsing spins the
+event loop), even though no script runs in between to drain them.
+-->
+
+<script id=records_delivered_before_defer>
+  window.seen = [];
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node.id) {
+          window.seen.push(node.id);
+        }
+      }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  testing.onload(() => testing.expectEqual(['after_defer'], window.seen_by_defer));
+</script>
+
+<script defer src="observer_before_defer.js"></script>
+<div id=after_defer></div>

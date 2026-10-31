@@ -2175,9 +2175,13 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     if (comptime from_parser) {
+        const script_node = script.asNode();
+        if (script_node.isConnected() == false) {
+            return;
+        }
         // parser-inserted scripts have force-async set to false, but only if
         // they have src or non-empty content
-        if (script._src.len > 0 or script.asNode().firstChild() != null) {
+        if (script._src.len > 0 or script_node.firstChild() != null) {
             script._force_async = false;
         }
     }

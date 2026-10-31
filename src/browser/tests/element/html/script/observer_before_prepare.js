@@ -1,1 +1,1 @@
-window.ran.push(document.currentScript.dataset.deferred);
+window.ran.push(document.currentScript.dataset.deferred || document.currentScript.dataset.removed);

@@ -652,6 +652,12 @@ pub const Script = struct {
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
 
+    // We have to run microtasks before we evaluate a script, but for a
+    // <script> tag, the parser already ran it. So we can safely skip it
+    // in that case. Miro-optimization, but it also helps to document the
+    // pieces.
+    microtask_pre_execute: bool = true,
+
     pub const Source = union(enum) {
         @"inline": []const u8,
         // Taken from the transfer (Transfer.takeBody), freed in deinit.
@@ -980,7 +986,7 @@ pub const Script = struct {
         // checkpoint though (empty JS stack): a script executing because a
         // running script inserted it must not drain the queue mid-task -
         // e.g. its own insertion record must survive for takeRecords().
-        if (frame.js.call_depth == 0) {
+        if (frame.js.call_depth == 0 and self.microtask_pre_execute) {
             local.runMicrotasks();
         }
 
