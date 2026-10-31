@@ -171,6 +171,107 @@
 }
 </script>
 
+<script id="insetShorthandSides">
+{
+  const style = document.createElement('div').style;
+  const cases = [
+    ['1px', ['1px', '1px', '1px', '1px']],
+    ['1px 2px', ['1px', '2px', '1px', '2px']],
+    ['1px 2px 3px', ['1px', '2px', '3px', '2px']],
+    ['1px 2px 3px 4px', ['1px', '2px', '3px', '4px']],
+  ];
+  for (const [value, expected] of cases) {
+    style.cssText = 'inset: ' + value;
+    testing.expectEqual(4, style.length);
+    for (const [index, side] of ['top', 'right', 'bottom', 'left'].entries()) {
+      testing.expectEqual(expected[index], style.getPropertyValue(side));
+    }
+    testing.expectEqual(value, style.getPropertyValue('inset'));
+    testing.expectEqual('inset: ' + value + ';', style.cssText);
+  }
+}
+</script>
+
+<script id="insetDeclarationOrderAndMaterialization">
+{
+  const div = document.createElement('div');
+  div.setAttribute('style', 'left: 40px; inset: 10px');
+  testing.expectEqual('10px', div.style.left);
+  div.style.left = '50px';
+  testing.expectEqual('10px 10px 10px 50px', div.style.inset);
+  const serialized = div.style.cssText;
+  div.setAttribute('style', serialized);
+  testing.expectEqual('50px', div.style.left);
+  testing.expectEqual(serialized, div.style.cssText);
+
+  div.setAttribute('style', 'inset: 10px; left: 40px');
+  testing.expectEqual('40px', div.style.left);
+  testing.expectEqual('10px 10px 10px 40px', div.style.inset);
+  div.style.inset = '2px 3px';
+  testing.expectEqual('3px', div.style.left);
+  testing.expectEqual('inset: 2px 3px;', div.style.cssText);
+}
+</script>
+
+<script id="insetPrioritiesAndRemoval">
+{
+  const style = document.createElement('div').style;
+  style.cssText = 'left: 40px !important; inset: 10px';
+  testing.expectEqual('40px', style.left);
+  testing.expectEqual('10px', style.top);
+  testing.expectEqual('', style.inset);
+  testing.expectEqual('', style.getPropertyPriority('inset'));
+  style.cssText = 'inset: 10px !important; left: 40px';
+  testing.expectEqual('10px', style.left);
+  testing.expectEqual('important', style.getPropertyPriority('inset'));
+
+  style.left = '50px';
+  testing.expectEqual('50px', style.left);
+  testing.expectEqual('', style.getPropertyPriority('left'));
+  testing.expectEqual('important', style.getPropertyPriority('top'));
+  testing.expectEqual('', style.inset);
+  style.removeProperty('inset');
+  testing.expectEqual(0, style.length);
+  style.setProperty('inset', '5px 6px 7px 8px', 'important');
+  testing.expectEqual('important', style.getPropertyPriority('inset'));
+  style.setProperty('inset', '3px');
+  testing.expectEqual('', style.getPropertyPriority('inset'));
+  testing.expectEqual('3px', style.inset);
+  style.top = '';
+  testing.expectEqual('', style.inset);
+  style.removeProperty('inset');
+  testing.expectEqual('', style.cssText);
+}
+</script>
+
+<script id="insetUnresolvedValuesAndRoundTrip">
+{
+  const style = document.createElement('div').style;
+  for (const value of ['1em 2rem', 'calc(100% - 2em) 3vh', 'var(--edges, 1px 2px)', 'inherit', 'initial', 'unset', 'revert', 'revert-layer']) {
+    style.cssText = 'inset: ' + value;
+    testing.expectEqual(value, style.inset);
+    const serialized = style.cssText;
+    style.cssText = serialized;
+    testing.expectEqual(value, style.inset);
+    testing.expectEqual(serialized, style.cssText);
+  }
+  style.cssText = 'inset: 10px';
+  style.setProperty('inset', 'inherit auto');
+  testing.expectEqual('10px', style.inset);
+  style.setProperty('inset', '1px 2px 3px 4px 5px');
+  testing.expectEqual('10px', style.inset);
+  style.top = 'inherit';
+  testing.expectEqual('', style.inset);
+  const serialized = style.cssText;
+  style.cssText = serialized;
+  testing.expectEqual('inherit', style.top);
+  testing.expectEqual('10px', style.right);
+
+  style.cssText = 'top: 1px; inset-inline-start: 2px; right: 3px; bottom: 4px; left: 5px';
+  testing.expectTrue(style.cssText.indexOf('inset-inline-start:') < style.cssText.indexOf('left:'));
+}
+</script>
+
 <script id="invalidPriority">
 {
   const div = $('#test-div');

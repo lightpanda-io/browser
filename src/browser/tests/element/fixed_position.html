@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<meta name="lp-mode" content="test">
+<script src="../testing.js"></script>
+<body></body>
+<script id="fixed_geometry_helpers">
+function fixedBox(css) {
+  const box = document.createElement('div');
+  box.setAttribute('style', 'position:fixed;' + css);
+  document.body.appendChild(box);
+  return box;
+}
+function expectBox(box, x, y, width, height) {
+  const rect = box.getBoundingClientRect();
+  testing.expectEqual([x, y, width, height], [rect.x, rect.y, rect.width, rect.height]);
+}
+testing.expectTrue(innerWidth > 0 && innerHeight > 0);
+</script>
+<script id="fixed_inset_fills_viewport_and_metrics">
+{
+  const box = fixedBox('inset:0');
+  expectBox(box, 0, 0, innerWidth, innerHeight);
+  testing.expectEqual([innerWidth, innerHeight], [box.clientWidth, box.clientHeight]);
+  testing.expectEqual([innerWidth, innerHeight], [box.offsetWidth, box.offsetHeight]);
+  testing.expectEqual([innerWidth, innerHeight], [box.scrollWidth, box.scrollHeight]);
+  box.scrollTop = 100;
+  box.scrollLeft = 100;
+  testing.expectEqual([0, 0], [box.scrollLeft, box.scrollTop]);
+  testing.expectEqual(box, document.elementFromPoint(100, 100));
+  box.remove();
+}
+</script>
+<script id="fixed_axis_start_end_and_explicit_size">
+{
+  const box = fixedBox('top:12px;left:18px;width:80px;height:30px;right:20px;bottom:40px');
+  expectBox(box, 18, 12, 80, 30);
+  box.style.left = 'auto';
+  box.style.top = 'auto';
+  expectBox(box, innerWidth - 100, innerHeight - 70, 80, 30);
+  box.remove();
+}
+</script>
+<script id="fixed_negative_and_percentage_insets">
+{
+  const box = fixedBox('left:-10px;right:10%;top:10%;bottom:-20px');
+  expectBox(box, -10, innerHeight / 10, innerWidth * 0.9 + 10, innerHeight * 0.9 + 20);
+  box.remove();
+}
+</script>
+<script id="fixed_viewport_units_and_percentage_size">
+{
+  const parent = document.createElement('div');
+  parent.style.width = '100px';
+  document.body.appendChild(parent);
+  const box = fixedBox('left:5vw;top:5vh;width:50%;height:25%');
+  parent.appendChild(box);
+  expectBox(box, innerWidth / 20, innerHeight / 20, innerWidth / 2, innerHeight / 4);
+  parent.remove();
+}
+</script>
+<script id="fixed_min_max_use_viewport_basis">
+{
+  const parent = document.createElement('div');
+  parent.style.width = '100px';
+  document.body.appendChild(parent);
+  const box = fixedBox('inset:0;min-width:20%;max-width:50%');
+  parent.appendChild(box);
+  testing.expectEqual(innerWidth / 2, box.getBoundingClientRect().width);
+  box.style.minWidth = '75%';
+  testing.expectEqual(innerWidth * 0.75, box.getBoundingClientRect().width);
+  parent.remove();
+}
+</script>
+<script id="fixed_auto_differs_from_intrinsic_or_unresolved_size">
+{
+  const box = fixedBox('left:0;right:0;top:0;bottom:0;width:0;height:0');
+  expectBox(box, 0, 0, 0, 0);
+  testing.expectTrue(document.elementFromPoint(0, 0) !== box);
+  box.style.width = 'max-content';
+  box.style.height = 'calc(20px + 10px)';
+  const rect = box.getBoundingClientRect();
+  testing.expectTrue(rect.width < innerWidth);
+  testing.expectTrue(rect.height < innerHeight);
+  box.style.width = 'auto';
+  box.style.height = 'auto';
+  expectBox(box, 0, 0, innerWidth, innerHeight);
+  box.remove();
+}
+</script>
+<script id="fixed_opposing_insets_clamp_empty_available_size">
+{
+  const box = fixedBox('left:100vw;right:20px;top:100vh;bottom:30px');
+  expectBox(box, innerWidth, innerHeight, 0, 0);
+  box.remove();
+}
+</script>
+<script id="fixed_window_scroll_and_scroll_into_view">
+{
+  const spacer = document.createElement('div');
+  spacer.style.height = '4000px';
+  document.body.appendChild(spacer);
+  const box = fixedBox('left:20px;top:30px;width:100px;height:60px');
+  window.scrollTo(0, 500);
+  expectBox(box, 20, 30, 100, 60);
+  box.scrollIntoView();
+  testing.expectEqual(500, scrollY);
+  box.scrollIntoViewIfNeeded();
+  testing.expectEqual(500, scrollY);
+  testing.expectEqual(box, document.elementFromPoint(25, 35));
+  window.scrollTo(0, 0);
+  box.remove();
+  spacer.remove();
+}
+</script>
+<script id="fixed_descendants_and_nested_fixed_anchor">
+{
+  const box = fixedBox('left:20px;top:30px;width:100px;height:80px');
+  box.innerHTML = '<span style="display:block;width:40px;height:20px">text</span>';
+  const child = box.firstElementChild;
+  const before = child.getBoundingClientRect();
+  box.style.left = '50px';
+  box.style.top = '70px';
+  const after = child.getBoundingClientRect();
+  testing.expectEqual([30, 40], [after.x - before.x, after.y - before.y]);
+  const parentRect = box.getBoundingClientRect();
+  testing.expectEqual([after.x - parentRect.x, after.y - parentRect.y], [child.offsetLeft, child.offsetTop]);
+  testing.expectEqual(child, document.elementFromPoint(after.x + 1, after.y + 1));
+  const nested = fixedBox('left:5px;top:6px;width:10px;height:10px');
+  child.appendChild(nested);
+  expectBox(nested, 5, 6, 10, 10);
+  box.remove();
+}
+</script>
+<script id="fixed_display_contents_does_not_suppress_child_scrolling">
+{
+  const spacer = document.createElement('div');
+  spacer.style.height = '4000px';
+  document.body.appendChild(spacer);
+  const wrapper = fixedBox('display:contents');
+  const child = document.createElement('div');
+  child.textContent = 'ordinary scrolling child';
+  wrapper.appendChild(child);
+  window.scrollTo(0, 500);
+  child.scrollIntoViewIfNeeded();
+  testing.expectTrue(scrollY !== 500);
+  window.scrollTo(0, 500);
+  child.scrollIntoView();
+  testing.expectTrue(scrollY !== 500);
+  window.scrollTo(0, 0);
+  wrapper.remove();
+  spacer.remove();
+}
+</script>
+<script id="fixed_auto_y_uses_the_same_preorder_origin_for_input">
+{
+  const spacer = document.createElement('div');
+  spacer.style.height = '4000px';
+  const box = fixedBox('left:10px;width:20px;height:10px');
+  document.body.appendChild(spacer);
+  const y = box.getBoundingClientRect().y;
+  testing.expectTrue(y >= 0 && y + 1 < innerHeight);
+  window.scrollTo(0, 500);
+  testing.expectEqual(y, box.getBoundingClientRect().y);
+  testing.expectEqual(box, document.elementFromPoint(15, y + 1));
+  window.scrollTo(0, 0);
+  box.remove();
+  spacer.remove();
+}
+</script>
+<script id="fixed_replaced_auto_preserves_attribute_size">
+{
+  const image = document.createElement('img');
+  image.setAttribute('width', '120');
+  image.setAttribute('height', '60');
+  image.style.cssText = 'position:fixed;inset:0';
+  document.body.appendChild(image);
+  expectBox(image, 0, 0, 120, 60);
+  image.remove();
+}
+</script>
+<script id="fixed_late_candidate_and_invalidation_controls">
+{
+  const container = document.createElement('div');
+  container.innerHTML = '<div></div>'.repeat(200);
+  document.body.appendChild(container);
+  document.elementFromPoint(40, 40);
+  const box = fixedBox('inset:0');
+  testing.expectEqual(box, document.elementFromPoint(40, 40));
+  box.style.pointerEvents = 'none';
+  testing.expectTrue(document.elementFromPoint(40, 40) !== box);
+  box.style.pointerEvents = 'auto';
+  testing.expectEqual(box, document.elementFromPoint(40, 40));
+  box.style.display = 'none';
+  testing.expectTrue(document.elementFromPoint(40, 40) !== box);
+  box.style.display = 'block';
+  testing.expectEqual(box, document.elementFromPoint(40, 40));
+  box.remove();
+  testing.expectTrue(document.elementFromPoint(40, 40) !== box);
+  container.remove();
+}
+</script>
+<script id="fixed_stylesheet_and_shorthand_mutation">
+{
+  const sheet = document.createElement('style');
+  sheet.textContent = '#fixed-cascade {position:fixed;inset:10px 20px 30px 40px}';
+  document.head.appendChild(sheet);
+  const box = document.createElement('div');
+  box.id = 'fixed-cascade';
+  box.setAttribute('style', 'left:7px;inset:0');
+  document.body.appendChild(box);
+  expectBox(box, 0, 0, innerWidth, innerHeight);
+  box.style.left = '50px';
+  expectBox(box, 50, 0, innerWidth - 50, innerHeight);
+  box.style.removeProperty('inset');
+  expectBox(box, 40, 10, innerWidth - 60, innerHeight - 40);
+  box.remove();
+  sheet.remove();
+}
+</script>
+<script id="fixed_shadow_and_slot_candidates">
+{
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = host.attachShadow({mode:'open'});
+  root.innerHTML = '<div id="cover" style="position:fixed;inset:0"><slot></slot></div>';
+  const cover = root.getElementById('cover');
+  testing.expectEqual(host, document.elementFromPoint(100, 100));
+  testing.expectEqual(cover, root.elementFromPoint(100, 100));
+  const child = document.createElement('span');
+  child.style.cssText = 'position:fixed;left:10px;top:10px;width:20px;height:20px';
+  host.appendChild(child);
+  testing.expectEqual(child, document.elementFromPoint(15, 15));
+  host.remove();
+}
+</script>

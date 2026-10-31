@@ -87,6 +87,47 @@ pub fn splitAxisPair(value: []const u8) ?AxisPair {
     return .{ .x = x, .y = y };
 }
 
+pub const inset_sides = [_][]const u8{ "top", "right", "bottom", "left" };
+
+/// Expand physical inset components without resolving their values. Functions
+/// stay intact so unresolved calc(), var() and anchor() values survive CSSOM.
+pub fn splitInset(value: []const u8) ?[4][]const u8 {
+    var stream: TokenStream = .init(value);
+    var parts: [4][]const u8 = undefined;
+    var count: usize = 0;
+    while (stream.next()) |first| {
+        if (isWhitespaceOrComment(first.token)) continue;
+        if (count == parts.len) return null;
+        switch (first.token) {
+            .ident, .number, .percentage, .dimension, .function => {},
+            else => return null,
+        }
+        var end = first.end;
+        var depth: usize = 0;
+        updateDepth(first.token, &depth);
+        while (depth > 0) {
+            const next = stream.next() orelse return null;
+            switch (next.token) {
+                .bad_string, .bad_url => return null,
+                else => {},
+            }
+            updateDepth(next.token, &depth);
+            end = next.end;
+        }
+        parts[count] = value[first.start..end];
+        count += 1;
+    }
+    if (count == 0) return null;
+    if (count > 1) {
+        for (parts[0..count]) |part| {
+            inline for (.{ "initial", "inherit", "unset", "revert", "revert-layer" }) |keyword| {
+                if (std.ascii.eqlIgnoreCase(part, keyword)) return null;
+            }
+        }
+    }
+    return .{ parts[0], parts[if (count > 1) 1 else 0], parts[if (count > 2) 2 else 0], parts[if (count > 3) 3 else if (count > 1) 1 else 0] };
+}
+
 const TokenSpan = struct {
     token: Tokenizer.Token,
     start: usize,
@@ -676,6 +717,28 @@ pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, n
 }
 
 const testing = std.testing;
+
+test "splitInset: physical side expansion preserves component values" {
+    const cases = .{
+        .{ "1px", .{ "1px", "1px", "1px", "1px" } },
+        .{ "1px 2px", .{ "1px", "2px", "1px", "2px" } },
+        .{ "1px 2px 3px", .{ "1px", "2px", "3px", "2px" } },
+        .{ "1px 2px 3px 4px", .{ "1px", "2px", "3px", "4px" } },
+        .{ "calc(100% - 2em) var(--edge, min(1px, 2px))", .{ "calc(100% - 2em)", "var(--edge, min(1px, 2px))", "calc(100% - 2em)", "var(--edge, min(1px, 2px))" } },
+        .{ "/* before */ -1em/**/2vh /* after */", .{ "-1em", "2vh", "-1em", "2vh" } },
+        .{ "inherit", .{ "inherit", "inherit", "inherit", "inherit" } },
+        .{ "revert-layer", .{ "revert-layer", "revert-layer", "revert-layer", "revert-layer" } },
+    };
+    inline for (cases) |case| {
+        const parts = splitInset(case[0]) orelse return error.InvalidInset;
+        inline for (case[1], 0..) |expected, index| {
+            try testing.expectEqualStrings(expected, parts[index]);
+        }
+    }
+    for ([_][]const u8{ "", "1px 2px 3px 4px 5px", "inherit auto", "auto initial", "calc(1px + 2px" }) |invalid| {
+        try testing.expect(splitInset(invalid) == null);
+    }
+}
 
 test "RulesIterator: single rule" {
     var it = RulesIterator.init(".test { color: red; }");

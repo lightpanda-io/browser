@@ -32,6 +32,11 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
         return width;
     }
 
+    if (self.fixedSize(owner, .width)) |size| {
+        style_manager.cacheWidth(self, .box, size);
+        return size;
+    }
+
     const own = self.getElementAxis(owner, .width);
     const width = blk: {
         if (self.isRootContainer()) {
@@ -207,7 +212,7 @@ fn flexItemMargins(el: *Element, row_width: f64, style_manager: *StyleManager) f
 }
 
 // max-width caps the width, min-width wins over both.
-fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
+pub fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
     const limits = owner._style_manager.widthLimits(self);
     var clamped = width;
     if (limits.max) |max| {
@@ -234,6 +239,9 @@ fn fillWidth(self: *Element, owner: *Frame) f64 {
 
 /// The width of the containing block; the viewport above the root.
 fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
+    if (owner._style_manager.position(self) == .fixed) {
+        return @floatFromInt(owner.page.getViewport().width);
+    }
     const parent = owner._style_manager.containingBlock(self) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
