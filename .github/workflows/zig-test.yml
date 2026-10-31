@@ -149,29 +149,18 @@ jobs:
           zig build -Dprebuilt_v8_path=v8/libc_v8.a test-server > test-server.log 2>&1 &
           timeout 600 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:9582/reset; do sleep 1; done'
 
-      - name: start chrome
-        run: |
-          google-chrome-stable \
-            --headless \
-            --disable-gpu \
-            --disable-popup-blocking \
-            --autoplay-policy=no-user-gesture-required \
-            --remote-debugging-port=9222 \
-            --user-data-dir=/tmp/chrome-cdp > chrome.log 2>&1 &
-          timeout 30 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:9222/json/version; do sleep 1; done'
-
       - run: npm install
         working-directory: demo
 
+      # run.js launches Chrome itself, with the same pinned environment
+      # (locale, timezone, no field trials, no audio device) as locally.
       - name: run html tests
         working-directory: demo
-        run: |
-          export BROWSER_ADDRESS=$(curl -sf http://127.0.0.1:9222/json/version | jq -r .webSocketDebuggerUrl)
-          BROWSER_REPO=${{ github.workspace }} node browser-tests/run.js
+        run: BROWSER_REPO=${{ github.workspace }} node browser-tests/run.js
 
-      - name: test server and chrome logs
+      - name: test server log
         if: failure()
-        run: cat test-server.log chrome.log
+        run: cat test-server.log
 
   bench-fmt:
     name: perf-fmt
