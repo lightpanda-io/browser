@@ -32,14 +32,14 @@ const V4 = @Vector(4, f32);
 const I4 = @Vector(4, i32);
 
 // Frequency (already detuned and clamped) constant over the quantum.
-pub fn processKRate(wave: *const PeriodicWave, destination: []f32, virtual_read_index: f64, frequency: f32) f64 {
+pub fn processKRate(wave: *PeriodicWave, destination: []f32, virtual_read_index: f64, frequency: f32) !f64 {
     const size = wave.size;
     const size_f: f64 = @floatFromInt(size);
     const inv_size: f64 = 1.0 / size_f;
     const mask = size - 1;
     const n = destination.len;
 
-    const data = wave.waveData(frequency);
+    const data = try wave.waveData(frequency);
     const incr = frequency * wave.rate_scale;
 
     var index = virtual_read_index;
@@ -125,7 +125,7 @@ fn kRateScalar(destination: []f32, virtual_read_index: f64, incr: f32, mask: u32
 
 // Per-frame phase increments (frequency * rate_scale), from an a-rate
 // frequency or detune.
-pub fn processARate(wave: *const PeriodicWave, destination: []f32, virtual_read_index: f64, increments: []const f32) f64 {
+pub fn processARate(wave: *PeriodicWave, destination: []f32, virtual_read_index: f64, increments: []const f32) !f64 {
     const size = wave.size;
     const size_f: f64 = @floatFromInt(size);
     const inv_size: f64 = 1.0 / size_f;
@@ -141,7 +141,7 @@ pub fn processARate(wave: *const PeriodicWave, destination: []f32, virtual_read_
         for (0..4) |m| {
             const incr = increments[k + m];
             big = big and @abs(incr) >= interpolate_2_point;
-            data[m] = wave.waveData(inv_rate_scale * incr);
+            data[m] = try wave.waveData(inv_rate_scale * incr);
         }
         if (big) {
             index = aRateVectorKernel(destination[k..][0..4], index, increments[k..][0..4], size, &data);
@@ -157,7 +157,7 @@ pub fn processARate(wave: *const PeriodicWave, destination: []f32, virtual_read_
 
     while (k < destination.len) : (k += 1) {
         const incr = increments[k];
-        const data = wave.waveData(inv_rate_scale * incr);
+        const data = try wave.waveData(inv_rate_scale * incr);
         destination[k] = interpolate(index, @abs(incr), mask, data);
         index += incr;
         index -= @floor(index * inv_size) * size_f;

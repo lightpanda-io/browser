@@ -48,7 +48,7 @@ _proto: *AudioScheduledSourceNode,
 _frequency: *AudioParam,
 _detune: *AudioParam,
 _type: OscillatorType = .sine,
-_table: *const Wavetable,
+_table: *Wavetable,
 // holds a ref while set
 _custom: ?*PeriodicWave = null,
 _virtual_read_index: f64 = 0,
@@ -203,9 +203,9 @@ pub fn process(self: *OscillatorNode, r: *render.Quantum, output: *Bus) !void {
     if (sample_accurate) {
         // Chrome reads the increments from the quantum's first frame even
         // when the source starts part way in.
-        index = oscillator.processARate(table, destination, index, increments[0..n]);
+        index = try oscillator.processARate(table, destination, index, increments[0..n]);
     } else {
-        index = oscillator.processKRate(table, destination, index, frequency);
+        index = try oscillator.processKRate(table, destination, index, frequency);
     }
     self._virtual_read_index = index;
 }
