@@ -256,7 +256,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const base_url = frame.base();
 
     const src = element.getAttributeInterned("src") orelse {
-        return self.addInlineScript(script_element, kind);
+        return self.addInlineScript(script_element, from_parser, kind);
     };
 
     // The script is remote (even data: and blob: are synthesized via HttpClient)
@@ -465,7 +465,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
 // A <script> with no src. Runs synchronously right now, except an inline
 // module during parsing, which waits its turn in defer_scripts.
-fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, kind: Script.Extra.FrameExtra.Kind) !void {
+fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, from_parser: bool, kind: Script.Extra.FrameExtra.Kind) !void {
     const node = script_element.asElement().asNode();
 
     const source_len = node.childTextContentLen();
@@ -505,6 +505,7 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, k
             .script_element = script_element,
             .frame = frame,
         } },
+        .microtask_pre_execute = !from_parser, //parser already ran it
     };
 
     // An inline module found during parsing waits its turn in document order.

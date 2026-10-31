@@ -529,6 +529,11 @@ fn _popCallback(self: *Parser, node: *Node) !void {
     // Flush before any nodeComplete so Build.complete (and any custom-element
     // callbacks reachable from it) observe the final text data.
     try self.flushPendingText();
+    if (node.is(Element.Html.Script) != null) {
+        // https://html.spec.whatwg.org/#scriptEndTag: a MutationObserver sees
+        // the script, and can stop it from running, before it's prepared.
+        self.checkpoint();
+    }
     try self.frame.nodeComplete(node);
 }
 
@@ -1044,7 +1049,10 @@ fn maybeCheckpoint(self: *Parser) void {
     if (self.inserted_since_checkpoint < CHECKPOINT_INTERVAL) {
         return;
     }
+    self.checkpoint();
+}
 
+fn checkpoint(self: *Parser) void {
     // only the navigation parse, and only at an empty JS stack: a fragment
     // parse, document.write or a parse run by a script must not drain the
     // queue mid-task.
