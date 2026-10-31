@@ -2390,7 +2390,7 @@ test "cdp.page: setDocumentContent refuses while the document is still loading" 
         _ = try runner.tickForFrame(page_frame_id, 20, .{});
         const frame = bc.mainFrame() orelse unreachable;
         if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
-            if (std.mem.find(u8, transfer.res.buffer.items, "first") != null) {
+            if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }
         }
