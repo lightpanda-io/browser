@@ -1460,13 +1460,12 @@ test "MCP - run: a script that outlives its timeout is stopped" {
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
 
     // A loop in script code after an `await`: it runs inside a microtask
-    // checkpoint. The timeout leaves room for the goto, which can take longer
-    // than 300 ms with a debug V8.
+    // checkpoint.
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run","arguments":{"timeout":2000,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('loaded');\nwhile (true) {}"}}}
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"console.log('before');\nawait null;\nwhile (true) {}"}}}
     );
-    try testing.expectEqual("loaded\nscript timed out after 2000 ms\n", try testToolText(aa, out.written()));
+    try testing.expectEqual("before\nscript timed out after 300 ms\n", try testToolText(aa, out.written()));
 
     // /xhr/hang replies after 2 s.
     out.clearRetainingCapacity();
