@@ -1412,11 +1412,6 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
 fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
     transfer.setCachedResponse(cached, cache_state);
-    // Not on a revalidation: the 304 set its own cookies, which the stale
-    // entry's could overwrite.
-    if (cache_state == .local and self.cache.set_cookie == .store) {
-        try transfer.applySetCookies(cached.headers);
-    }
     if (self.interceptResponse(transfer, .cached)) {
         return;
     }
@@ -6739,20 +6734,20 @@ test "HttpClient: encodedDataLength of a cache hit is the stored body, of a reva
     try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
 }
 
-test "HttpClient: --http-cache-set-cookie" {
+test "HttpClient: privatecache caches Set-Cookie responses" {
     const client = &testing.test_browser.http_client;
     const previous = client.cache;
     defer client.cache = previous;
 
-    inline for (.{ .skip, .strip, .store }) |mode| {
+    inline for (.{ .{ false, "skip" }, .{ true, "strip" } }) |mode| {
         var cache: Cache = .{
             .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) },
-            .set_cookie = mode,
+            .set_cookie = mode[0],
         };
         defer cache.deinit();
         client.cache = &cache;
 
-        try testing.htmlRunner("net/cache_set_cookie_" ++ @tagName(mode) ++ ".html", .{});
+        try testing.htmlRunner("net/cache_set_cookie_" ++ mode[1] ++ ".html", .{});
     }
 }
 
