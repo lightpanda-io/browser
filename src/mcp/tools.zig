@@ -41,6 +41,8 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         .classify => .{ .readOnlyHint = true, .destructiveHint = false },
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
+        // Listing is read-only, but `follow` makes a different window current.
+        .popups => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
         // Overwrite `path`.
         .screenshot, .download => .{ .idempotentHint = true },
@@ -858,6 +860,133 @@ test "MCP - submitting a target=_blank form follows the new window" {
     ;
     try router.handleMessage(server, testing.arena_allocator, click);
     try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?q=1") != null);
+}
+
+test "MCP - click follows a window opened by a timer" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#delayed" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+}
+
+test "MCP - click follows a window opened after a fetch" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#fetched" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?f=1") != null);
+}
+
+test "MCP - popups lists opened windows and follows one" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    // The click auto-follows the first popup.
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#sync" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it.") != null);
+
+    // A second window.open, from the followed popup: evaluate settles
+    // nothing, so the window is only visible through popups.
+    out.clearRetainingCapacity();
+    const open_second =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "evaluate",
+        \\    "arguments": { "script": "return window.open('mcp_actions.html?q=2', 'second') != null;" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, open_second);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+
+    out.clearRetainingCapacity();
+    const list =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "popups", "arguments": {} }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, list);
+    const Entry = struct { id: u32, url: []const u8, title: ?[]const u8, popup: bool, current: bool };
+    const text = try testToolText(testing.arena_allocator, out.written());
+    const entries = try std.json.parseFromSliceLeaky([]Entry, testing.arena_allocator, text, .{});
+    try testing.expectEqual(@as(usize, 3), entries.len);
+    try testing.expect(std.mem.endsWith(u8, entries[0].url, "mcp_async_popup.html"));
+    try testing.expectEqual(false, entries[0].popup);
+    try testing.expect(std.mem.endsWith(u8, entries[1].url, "mcp_actions.html"));
+    try testing.expectEqual(true, entries[1].current);
+    try testing.expect(std.mem.endsWith(u8, entries[2].url, "mcp_actions.html?q=2"));
+    try testing.expectEqual(false, entries[2].current);
+    const second_id = entries[2].id;
+    const root_id = entries[0].id;
+
+    // Follow the second window; getUrl confirms it is current.
+    out.clearRetainingCapacity();
+    const follow = try std.fmt.allocPrint(testing.arena_allocator, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{second_id});
+    try router.handleMessage(server, testing.arena_allocator, follow);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+
+    const get_url =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 5,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "getUrl", "arguments": {} }
+        \\}
+    ;
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expect(std.mem.find(u8, out.written(), "mcp_actions.html?q=2") != null);
+
+    // Back to the main page by its id.
+    out.clearRetainingCapacity();
+    const back = try std.fmt.allocPrint(testing.arena_allocator, "{{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{root_id});
+    try router.handleMessage(server, testing.arena_allocator, back);
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expect(std.mem.find(u8, out.written(), "mcp_async_popup.html") != null);
 }
 
 test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
