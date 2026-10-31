@@ -18,6 +18,10 @@
   @media (min-width: 768px) {
     #hide-on-desktop { display: none; }
   }
+  /* Matches: 767.98px ≤ 1920px ≤ 1920.5px → #decimal-hit hidden. */
+  @media (min-width: 767.98px) and (max-width: 1920.5px) {
+    #decimal-hit { display: none; }
+  }
   /* Doesn't match: 1920px > 767px → #hide-on-mobile stays visible. */
   @media (max-width: 767px) {
     #hide-on-mobile { display: none; }
@@ -94,6 +98,7 @@
 <body>
   <div id="hide-on-desktop">desktop</div>
   <div id="hide-on-mobile">mobile</div>
+  <div id="decimal-hit">decimal-hit</div>
   <div id="hidden-by-or">or-hit</div>
   <div id="not-hidden-by-or">or-miss</div>
   <div id="hidden-by-not">not-hit</div>
@@ -118,6 +123,12 @@
 <script id=cascade_matching_query_hides>
 {
   testing.expectFalse($('#hide-on-desktop').checkVisibility());
+}
+</script>
+
+<script id=cascade_decimal_lengths>
+{
+  testing.expectFalse($('#decimal-hit').checkVisibility());
 }
 </script>
 

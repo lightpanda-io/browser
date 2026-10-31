@@ -126,7 +126,7 @@
   testing.expectEqual(true,  window.matchMedia('(min-width: 30em)').matches);
   // 121em = 1936px > 1920px → does not match.
   testing.expectEqual(false, window.matchMedia('(min-width: 121em)').matches);
-  // u32-overflowing em / rem fails closed instead of panicking.
+  // Huge em / rem lengths stay huge instead of wrapping.
   testing.expectEqual(false, window.matchMedia('(min-width: 268435456em)').matches);
   testing.expectEqual(false, window.matchMedia('(min-width: 268435456rem)').matches);
 }
@@ -149,6 +149,14 @@
   testing.expectEqual(false, window.matchMedia('(min-width: 10pt)').matches);
   testing.expectEqual(false, window.matchMedia('(min-width: 1in)').matches);
   testing.expectEqual(false, window.matchMedia('(min-width: 50vw)').matches);
+}
+</script>
+
+<script id=matchMedia_decimal_lengths>
+{
+  // Breakpoint ranges with fractional maxima, as Bootstrap and @artsy/fresnel write them.
+  testing.expectEqual(true,  window.matchMedia('(min-width:1920px) and (max-width:2047.98px)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-width:1200px) and (max-width:1919.98px)').matches);
 }
 </script>
 
