@@ -394,6 +394,65 @@
 }
 </script>
 
+<script id="positionedBoxStretchesBetweenOffsets">
+{
+  // An absolutely positioned box with an auto width, pinned on both sides,
+  // spans its containing block less its offsets and margins. The
+  // containing block is the nearest positioned ancestor, else the viewport
+  // (Twitch's app shell: `position: absolute; inset: 0`).
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position: relative; width: 700px';
+  const inner = document.createElement('div');
+  inner.style.width = '300px';
+  const box = document.createElement('div');
+  const child = document.createElement('div');
+  child.style.width = '40px';
+  box.appendChild(child);
+  inner.appendChild(box);
+  outer.appendChild(inner);
+  document.body.appendChild(outer);
+
+  const width = (css) => { box.style.cssText = css; return box.offsetWidth; };
+  testing.expectEqual(700, width('position: absolute; inset: 0'));
+  testing.expectEqual(700, width('position: absolute; left: 0; right: 0'));
+  testing.expectEqual(700, width('position: absolute; inset-inline: 0'));
+  testing.expectEqual(700, width('position: absolute; inset: 0 0 0 0'));
+  testing.expectEqual(670, width('position: absolute; left: 10px; right: 20px'));
+  // A longhand after the shorthand wins
+  testing.expectEqual(690, width('position: absolute; inset: 0; left: 10px'));
+  testing.expectEqual(40, width('position: absolute; inset: 0; right: auto'));
+  testing.expectEqual(40, width('position: absolute; inset-inline: 0; inset-inline-end: auto'));
+  testing.expectEqual(660, width('position: absolute; left: 10px; right: 20px; margin: 0 5px'));
+  testing.expectEqual(560, width('position: absolute; left: 10%; right: 10%'));
+  testing.expectEqual(700, width('position: absolute; inset: 0; display: inline'));
+  // A percentage width resolves against the positioned ancestor too
+  testing.expectEqual(350, width('position: absolute; width: 50%'));
+  testing.expectEqual(100, width('position: absolute; inset: 0; width: 100px'));
+
+  // An auto side, or an auto-width table, shrinks to its content
+  testing.expectEqual(40, width('position: absolute; left: 0'));
+  testing.expectEqual(40, width('position: absolute; inset: 0 auto 0 0'));
+  testing.expectEqual(40, width('position: absolute; left: 0; right: auto'));
+  testing.expectEqual(40, width('position: absolute; inset: 0; display: table'));
+
+  // Offsets don't apply in flow
+  testing.expectEqual(300, width('left: 10px; right: 10px'));
+  testing.expectEqual(300, width('position: relative; left: 10px; right: 10px'));
+
+  // A fixed box, or one with no positioned ancestor, sizes off the viewport
+  testing.expectEqual(window.innerWidth, width('position: fixed; inset: 0'));
+  outer.style.position = 'static';
+  testing.expectEqual(window.innerWidth, width('position: absolute; inset: 0'));
+
+  // Its in-flow children fill it
+  outer.style.position = 'relative';
+  box.style.cssText = 'position: absolute; left: 50px; right: 50px';
+  child.style.width = '';
+  testing.expectEqual(600, child.offsetWidth);
+  outer.remove();
+}
+</script>
+
 <script id="flexAndGridItemWidths">
 {
   // Row-flex items shrink to their content unless they grow, in which case
