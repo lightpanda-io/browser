@@ -248,6 +248,12 @@ fn inlineCascadedValue(style_manager: *StyleManager, element: *Element, name: St
 /// shorthand reads as its longhands when both are present with the same
 /// priority, the way the CSSOM serializes a shorthand.
 pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Frame) ?[]const u8 {
+    if (name.eql(comptime .wrap("inset"))) {
+        const quad = self.insetQuad() orelse return null;
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        quad.formatValue(&buf.writer) catch return null;
+        return buf.written();
+    }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
         const x = self.findProperty(.wrap(shorthand.x)) orelse return null;
         const pair = self.axisPair(x) orelse return null;
@@ -257,6 +263,64 @@ pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Fra
     }
     const prop = self.findProperty(name) orelse return null;
     return prop._value.str();
+}
+
+const InsetQuad = struct {
+    parts: [4]*const Property,
+
+    fn contains(self: InsetQuad, prop: *const Property) bool {
+        for (self.parts) |part| {
+            if (part == prop) return true;
+        }
+        return false;
+    }
+
+    fn formatValue(self: InsetQuad, writer: *std.Io.Writer) !void {
+        const top, const right, const bottom, const left = self.parts;
+        const count: usize = if (!right._value.eql(left._value)) 4 else if (!top._value.eql(bottom._value)) 3 else if (!top._value.eql(right._value)) 2 else 1;
+        for (self.parts[0..count], 0..) |part, index| {
+            if (index > 0) try writer.writeByte(' ');
+            try part._value.format(writer);
+        }
+    }
+
+    fn format(self: InsetQuad, writer: *std.Io.Writer) !void {
+        try writer.writeAll("inset: ");
+        try self.formatValue(writer);
+        try formatDeclarationEnd(self.parts[0]._important, writer);
+    }
+};
+
+fn insetQuad(self: *const CSSStyleDeclaration) ?InsetQuad {
+    var parts: [4]*const Property = undefined;
+    for (CssParser.inset_sides, &parts) |side, *part| {
+        part.* = self.findProperty(.wrap(side)) orelse return null;
+        if (part.*._important != parts[0]._important) return null;
+    }
+    var has_wide_keyword = false;
+    var all_equal = true;
+    for (parts) |part| {
+        has_wide_keyword = has_wide_keyword or CssWideKeyword.parse(part._value.str()) != null;
+        all_equal = all_equal and part._value.eql(parts[0]._value);
+    }
+    if (has_wide_keyword and !all_equal) return null;
+    return .{ .parts = parts };
+}
+
+fn adjacentInsetQuad(self: *const CSSStyleDeclaration) ?InsetQuad {
+    const quad = self.insetQuad() orelse return null;
+    var count: usize = 0;
+    var it = self.iterator();
+    while (it.next()) |prop| {
+        if (quad.contains(prop)) {
+            count += 1;
+            if (count == quad.parts.len) return quad;
+        } else if (count > 0) {
+            // Recombining across a logical inset could change its precedence.
+            return null;
+        }
+    }
+    return null;
 }
 
 /// Both longhands of an axis shorthand, declared with the same priority: the
@@ -365,6 +429,10 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
 
 /// Whether a declared property is !important; false when it isn't declared.
 pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
+    if (name.eql(comptime .wrap("inset"))) {
+        const quad = self.insetQuad() orelse return false;
+        return quad.parts[0]._important;
+    }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
         const x = self.findProperty(.wrap(shorthand.x)) orelse return false;
         const pair = self.axisPair(x) orelse return false;
@@ -398,6 +466,13 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
     const normalized = normalizePropertyName(frame.local_arena, declaration.name);
+    if (std.ascii.eqlIgnoreCase(normalized, "inset")) {
+        const values = CssParser.splitInset(declaration.value) orelse return;
+        for (CssParser.inset_sides, values) |side, value| {
+            try self.applyParsedDeclaration(.{ .name = side, .value = value, .important = declaration.important }, frame);
+        }
+        return;
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(declaration.value) orelse return;
         try self.applyParsedDeclaration(.{ .name = shorthand.x, .value = values.x, .important = declaration.important }, frame);
@@ -427,6 +502,15 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     // A declaration of a property we don't know is dropped, as in Chrome.
     if (isCustomProperty(normalized) == false and properties.isKnown(normalized) == false) {
         return false;
+    }
+    if (std.ascii.eqlIgnoreCase(normalized, "inset")) {
+        const values = CssParser.splitInset(value) orelse return false;
+        var changed = false;
+        for (CssParser.inset_sides, values) |side, part| {
+            const side_changed = try self.setPropertyImpl(side, part, important, frame);
+            changed = changed or side_changed;
+        }
+        return changed;
     }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(value) orelse return false;
@@ -485,6 +569,15 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(frame.local_arena, property_name);
+    if (std.ascii.eqlIgnoreCase(normalized, "inset")) {
+        const old_value = try frame.call_arena.dupe(u8, self.declaredValue(.wrap("inset"), frame) orelse "");
+        var removed = false;
+        for (CssParser.inset_sides) |side| {
+            const previous = try self.removePropertyImpl(side, frame);
+            removed = removed or previous != null;
+        }
+        return if (removed) old_value else null;
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const old_value = self.declaredValue(.wrap(shorthand.name), frame) orelse "";
         const x = try self.removePropertyImpl(shorthand.x, frame);
@@ -585,6 +678,8 @@ fn replaceDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Decla
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     var first = true;
+    const quad = self.adjacentInsetQuad();
+    var inset_written = false;
     // An axis pair serializes once, where its first longhand sits.
     var skip: ?*const Property = null;
     var it = self.iterator();
@@ -592,11 +687,16 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
         if (prop == skip) {
             continue;
         }
+        const is_inset = if (quad) |q| q.contains(prop) else false;
+        if (is_inset and inset_written) continue;
         if (!first) {
             try writer.writeByte(' ');
         }
         first = false;
-        if (self.axisPair(prop)) |pair| {
+        if (is_inset) {
+            try quad.?.format(writer);
+            inset_written = true;
+        } else if (self.axisPair(prop)) |pair| {
             try pair.format(writer);
             skip = if (pair.x == prop) pair.y else pair.x;
         } else {
@@ -1339,6 +1439,19 @@ test "CSS property value storage is reused" {
     const property = style.findProperty(comptime .wrap("transform")).?;
     try testing.expectEqual(first_ptr, property._value.suffix.ptr);
     try std.testing.expectEqualStrings("translate3d(3px,0,0)", property._value.str());
+}
+
+test "removing inset preserves its returned owned value" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var style = CSSStyleDeclaration{};
+    defer style.clearProperties(frame);
+    const value = "1234567890123px";
+    try style.setProperty("inset", value, "important", frame);
+    const removed = try style.removeProperty("inset", frame);
+    try testing.expectEqual(value, removed);
+    try testing.expectEqual(@as(u32, 0), style.length());
 }
 
 test "normalizePropertyValue: unitless zero to 0px" {

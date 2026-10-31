@@ -163,8 +163,8 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
                 break :blk .{ 0, 0 };
             }
             break :blk .{
-                target.getElementAxis(frame, .width).value,
-                target.getElementAxis(frame, .height).value,
+                target.fixedSize(frame, .width) orelse target.getElementAxis(frame, .width).value,
+                target.fixedSize(frame, .height) orelse target.getElementAxis(frame, .height).value,
             };
         };
 

@@ -101,6 +101,12 @@ _extent: ?struct {
     viewport_height: u32,
     extent: Extent,
 } = null,
+_fixed_boxes: ?struct {
+    version: usize,
+    viewport_width: u32,
+    viewport_height: u32,
+    present: bool,
+} = null,
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
 // Ordered stack of dialogs opened with showModal(), topmost last. Stands in
@@ -1017,29 +1023,38 @@ pub fn hitTestVertical(self: *Document, y: f64, frame: *Frame) !?*Element {
 }
 
 fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
-    // DFS in flat-tree order (shadow content inside its host, slotted nodes
-    // inside their slot, as Element.calculateDocumentPosition lays them out);
-    // topmost = last visited element whose rect contains (x, y).
+    const HitTestOrder = @import("../HitTestOrder.zig");
+    // Geometry supplies candidates in flat-tree order; context paths rank
+    // overlapping boxes without letting descendants escape their context.
     //
     // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
     // monotonically increasing in document order. So we maintain a running
     // preorder counter instead of calling calculateDocumentPosition per node
-    // (which itself is O(N)). Once the counter's y passes the query y, no
-    // later element can contain the point, and we can return.
+    // (which itself is O(N)). Only documents without viewport-fixed boxes
+    // can stop when that counter passes the query: a later fixed box may
+    // extend back over the point.
     //
     // Hidden subtrees still count towards the index so positions agree with
     // getBoundingClientRect; the hidden verdict just rides down the stack.
     var topmost: ?*Element = null;
+    var topmost_order: ?*const HitTestOrder = null;
 
     const root = self.asNode();
     const owner = root.ownerFrame(frame) orelse return null;
     const style_manager = &owner._style_manager;
+    const has_fixed = self.hasFixedBoxes(owner);
 
     // (x, y) is viewport-relative; the faux layout is in document coordinates.
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    const Entry = struct { node: *Node, hidden: bool };
+    const Entry = struct {
+        node: *Node,
+        hidden: bool,
+        fixed_y: ?f64 = null,
+        context: ?*const HitTestOrder = null,
+        paint_parent: ?*const HitTestOrder = null,
+    };
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
 
@@ -1049,28 +1064,53 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const entry = stack.pop() orelse break;
         const node = entry.node;
         var hidden = entry.hidden;
+        var fixed_y = entry.fixed_y;
+        var context = entry.context;
+        var paint_parent = entry.paint_parent;
         const pos = preorder_index * 5.0;
 
-        if (pos > y) {
+        if (!has_fixed and pos > y) {
             // Monotonic: no later element has top <= y, so none can contain (x, y).
             return topmost;
         }
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
+            if (has_fixed) {
+                if (element.fixedOriginY(owner, pos)) |top| fixed_y = top - pos;
+            }
             hidden = hidden or style_manager.hasDisplayNone(element);
+            const props = style_manager.stackingProps(element);
+            const creates_context = element == self.getDocumentElement() or props.createsContext();
+            const order: usize = @intFromFloat(preorder_index);
+            const owns_order = creates_context or props.positioned();
+            if (owns_order) {
+                const key = try frame.local_arena.create(HitTestOrder);
+                key.* = .context(context, props.level(), order);
+                if (creates_context) context = key;
+                paint_parent = key;
+            }
+
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
             if (!hidden and style_manager.isHitTestable(element)) {
-                if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
-                    if (ignore_x) {
-                        topmost = element;
-                    } else {
-                        // only bother calculating the horiziontal position for
-                        // elements contained by the vertical band
-                        const left = element.horizontalPosition(frame);
-                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
-                            topmost = element;
+                const top = if (fixed_y) |delta| pos + delta else pos - @as(f64, @floatFromInt(owner.window.getScrollY()));
+                if (viewport_y >= top) {
+                    const height = element.boxAxis(owner, .height);
+                    if ((fixed_y == null or height > 0) and viewport_y <= top + height) {
+                        const left = if (ignore_x) 0 else if (fixed_y != null) element.clientOrigin(owner).x else element.horizontalPosition(owner);
+                        const query_x = if (fixed_y != null) viewport_x else x;
+                        const width = if (ignore_x) 0 else element.boxAxis(owner, .width);
+                        if (ignore_x or ((fixed_y == null or width > 0) and query_x >= left and query_x <= left + width)) {
+                            const key = if (owns_order) paint_parent.? else blk: {
+                                const key = try frame.local_arena.create(HitTestOrder);
+                                key.* = .box(paint_parent, order);
+                                break :blk key;
+                            };
+                            if (topmost_order == null or key.above(topmost_order.?)) {
+                                topmost = element;
+                                topmost_order = key;
+                            }
                         }
                     }
                 }
@@ -1081,12 +1121,44 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
+            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden, .fixed_y = fixed_y, .context = context, .paint_parent = paint_parent });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }
 
     return topmost;
+}
+
+// A fixed box can occur after the monotonic hit-test band. Remember its
+// presence for the same style/viewport generation as the layout caches, so
+// ordinary documents keep their early-return path on subsequent input.
+fn hasFixedBoxes(self: *Document, frame: *Frame) bool {
+    const version = frame.page.style_version;
+    const viewport = frame.page.getViewport();
+    if (self._fixed_boxes) |cached| {
+        if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
+            return cached.present;
+        }
+    }
+    var present = false;
+    var walker: TreeWalker.Flat = .init(self.asNode(), .{ .frame = frame });
+    while (walker.next()) |node| {
+        const element = node.is(Element) orelse continue;
+        if (frame._style_manager.fixedAxis(element, .height) != null) {
+            present = true;
+            break;
+        }
+    }
+    // A failed rule rebuild must not cache a false absence; the next input
+    // can retry after the allocation failure has cleared.
+    if (frame._style_manager.dirty) return true;
+    self._fixed_boxes = .{
+        .version = frame.page.style_version,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+        .present = present,
+    };
+    return present;
 }
 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
@@ -2273,4 +2345,45 @@ test "Document: isRelaxableTo" {
     // Unrelated domain, and the empty string.
     try testing.expectEqual(false, isRelaxableTo("a.example.com", "example.org"));
     try testing.expectEqual(false, isRelaxableTo("a.example.com", ""));
+}
+
+test "Document: stacking order routes trusted mouse input" {
+    const input = @import("../frame/user_input.zig");
+    const page = try testing.pageTest("input_stacking.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<div style="position:absolute;width:0;height:0"><button id="cover" style="position:absolute;width:100px;height:100px;z-index:2">Cover</button></div><div id="underParent" style="position:absolute;width:0;height:0"><button id="under" style="position:absolute;width:100px;height:100px;z-index:1">Under</button></div>';
+        \\window.clicks = [];
+        \\document.addEventListener('click', e => clicks.push({id:e.target.id, trusted:e.isTrusted}));
+    , null);
+    const cover = frame.document.getElementById("cover").?;
+    const under = frame.document.getElementById("under").?;
+    const c = cover.boundingClientRectValues(frame);
+    const u = under.boundingClientRectValues(frame);
+    const left = @max(c.x, u.x);
+    const right = @min(c.x + c.width, u.x + u.width);
+    const top = @max(c.y, u.y);
+    const bottom = @min(c.y + c.height, u.y + u.height);
+    try testing.expect(right > left and bottom > top);
+    const x = (left + right) / 2;
+    const y = top + @min(10, (bottom - top) / 2);
+    try input.triggerMouseMove(frame, x, y);
+    try input.triggerMousePress(frame, x, y, input.mouse_button.main, 1);
+    try input.triggerMouseRelease(frame, x, y, input.mouse_button.main, 1);
+    try testing.expectEqual("[{\"id\":\"cover\",\"trusted\":true}]", try (try ls.local.compileAndRun("JSON.stringify(clicks)", null)).toZig([]const u8));
+
+    // A very high descendant must stay behind the higher ancestor context.
+    _ = try ls.local.compileAndRun("document.getElementById('under').style.zIndex = '999'; document.getElementById('underParent').style.zIndex = '0'; clicks = []", null);
+    try input.triggerMousePress(frame, x, y, input.mouse_button.main, 1);
+    try input.triggerMouseRelease(frame, x, y, input.mouse_button.main, 1);
+    try testing.expect((try ls.local.compileAndRun("clicks.length === 1 && clicks[0].id === 'cover' && clicks[0].trusted", null)).isTrue());
+
+    _ = try ls.local.compileAndRun("document.getElementById('cover').style.pointerEvents = 'none'; clicks = []", null);
+    try input.triggerMousePress(frame, x, y, input.mouse_button.main, 1);
+    try input.triggerMouseRelease(frame, x, y, input.mouse_button.main, 1);
+    try testing.expect((try ls.local.compileAndRun("clicks.length === 1 && clicks[0].id === 'under' && clicks[0].trusted", null)).isTrue());
 }

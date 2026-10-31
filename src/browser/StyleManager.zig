@@ -37,6 +37,7 @@ const CSSRule = @import("webapi/css/CSSRule.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
+const DOMMatrixReadOnly = @import("webapi/DOMMatrixReadOnly.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -60,6 +61,7 @@ geometry: Group(Geometry) = .{},
 touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
 flow: Group(Flow) = .{},
+stacking: Group(Stacking) = .{},
 
 widths: WidthMemo = .{},
 
@@ -734,6 +736,16 @@ pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     return !p.visibility_hidden and !p.pointer_events_none and self.generatesBox(el);
 }
 
+/// Paint-order inputs share the existing cascade and effective position.
+pub fn stackingProps(self: *StyleManager, el: *Element) Stacking.Computed {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    if (!self.generatesBox(el)) return .{};
+    var props = self.stacking.ownProps(self.arena.allocator(), el, self.frame);
+    props.position = self.flowProps(el).position;
+    return props;
+}
+
 /// Computed text-transform, which inherits: the nearest of `el` and its
 /// ancestors with its own value, else none.
 pub fn textTransform(self: *StyleManager, el: *Element) TextTransform {
@@ -836,6 +848,39 @@ pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Ax
     self.rebuildIfDirty() catch return null;
     const length = @field(self.geometryProps(el), @tagName(axis));
     return length.resolve(self.frame.page.getViewport());
+}
+
+pub const FixedAxis = struct {
+    start: ?f64,
+    end: ?f64,
+    size: ?f64,
+    auto_size: bool,
+};
+
+/// Physical insets and size for the viewport-based fixed-box approximation.
+/// Null insets are auto or unresolved; only an actual auto size may stretch
+/// between two resolved insets. Transformed containing blocks are not resolved.
+pub fn fixedAxis(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?FixedAxis {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    if (self.flowProps(el).position != .fixed or self.visibilityProps(el).isHidden(.{}) or !self.generatesBox(el)) {
+        return null;
+    }
+    const geometry = self.geometryProps(el);
+    const viewport = self.frame.page.getViewport();
+    return .{
+        .start = resolveFixedLength(@field(geometry, if (axis == .width) "left" else "top"), viewport, axis),
+        .end = resolveFixedLength(@field(geometry, if (axis == .width) "right" else "bottom"), viewport, axis),
+        .size = resolveFixedLength(@field(geometry, @tagName(axis)), viewport, axis),
+        .auto_size = @field(geometry, @tagName(axis) ++ "_auto"),
+    };
+}
+
+fn resolveFixedLength(length: Length, viewport: Viewport, comptime axis: Element.Axis) ?f64 {
+    if (length.unit == .percent) {
+        return @as(f64, length.value) * @as(f64, @floatFromInt(@field(viewport, @tagName(axis)))) / 100.0;
+    }
+    return length.resolve(viewport);
 }
 
 /// Like declaredSize, but only the inline style counts.
@@ -2320,7 +2365,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "top", "right", "bottom", "left", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -2331,8 +2376,14 @@ const Geometry = struct {
         overscroll_y_contains: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
+        width_auto: ?bool = null,
+        height_auto: ?bool = null,
         min_width: ?Length = null,
         max_width: ?Length = null,
+        top: ?Length = null,
+        right: ?Length = null,
+        bottom: ?Length = null,
+        left: ?Length = null,
         margin_left: ?Length = null,
         margin_right: ?Length = null,
 
@@ -2384,13 +2435,29 @@ const Geometry = struct {
                 self.overscroll_y_contains = overscrollContains(value);
             } else if (std.ascii.eqlIgnoreCase(name, "width")) {
                 self.width = Length.parse(value);
+                self.width_auto = autoSize(value);
             } else if (std.ascii.eqlIgnoreCase(name, "height")) {
                 self.height = Length.parse(value);
+                self.height_auto = autoSize(value);
             } else if (std.ascii.eqlIgnoreCase(name, "min-width")) {
                 self.min_width = Length.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "max-width")) {
                 self.max_width = Length.parse(value);
+            } else {
+                inline for (CssParser.inset_sides) |side| {
+                    if (std.ascii.eqlIgnoreCase(name, side)) {
+                        @field(self, side) = Length.parseMargin(value);
+                        return;
+                    }
+                }
             }
+        }
+
+        fn autoSize(value: []const u8) bool {
+            inline for (.{ "auto", "initial", "unset" }) |keyword| {
+                if (std.ascii.eqlIgnoreCase(value, keyword)) return true;
+            }
+            return false;
         }
 
         // `overlay` is Chrome's legacy alias of auto.
@@ -2450,7 +2517,7 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u217) {
+    const Computed = packed struct(u359) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -2460,9 +2527,15 @@ const Geometry = struct {
         overscroll_y_contains: bool = false,
         width: Length = .{},
         height: Length = .{},
+        width_auto: bool = true,
+        height_auto: bool = true,
         // auto, none and the intrinsic keywords don't limit
         min_width: Length = .{},
         max_width: Length = .{},
+        top: Length = .{},
+        right: Length = .{},
+        bottom: Length = .{},
+        left: Length = .{},
         // auto, and values that need layout, are 0
         margin_left: Length = .{},
         margin_right: Length = .{},
@@ -2648,16 +2721,81 @@ const Flow = struct {
     };
 };
 
+/// Paint-order inputs for the renderless hit tester. This is not a CSS renderer:
+/// geometry, floats, flex/grid order, top-layer and 3D painting remain approximate.
+const Stacking = struct {
+    const Declared = struct {
+        const names = [_][]const u8{ "z-index", "opacity", "transform", "isolation" };
+        // Outer null: undeclared/invalid. Inner null: the explicit auto value.
+        z_index: ??i32 = null,
+        opacity_context: ?bool = null,
+        transform_context: ?bool = null,
+        isolation_context: ?bool = null,
+
+        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
+            if (std.ascii.eqlIgnoreCase(name, "z-index")) {
+                if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
+                    self.z_index = @as(?i32, null);
+                } else if (std.fmt.parseInt(i32, value, 10)) |z| {
+                    self.z_index = @as(?i32, z);
+                } else |_| {}
+            } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
+                if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) self.opacity_context = false;
+                const percentage = std.mem.endsWith(u8, value, "%");
+                const number = if (percentage) value[0 .. value.len - 1] else value;
+                if (std.fmt.parseFloat(f64, number)) |opacity| {
+                    if (std.math.isFinite(opacity)) self.opacity_context = opacity < (if (percentage) @as(f64, 100) else 1);
+                } else |_| {}
+            } else if (std.ascii.eqlIgnoreCase(name, "transform")) {
+                if (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) {
+                    self.transform_context = false;
+                } else if (value.len > 0) {
+                    var matrix = DOMMatrixReadOnly.identity();
+                    var is_2d = true;
+                    DOMMatrixReadOnly.parseTransformList(value, &matrix, &is_2d) catch return;
+                    self.transform_context = true;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "isolation")) {
+                if (std.ascii.eqlIgnoreCase(value, "isolate")) self.isolation_context = true;
+                if (std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) self.isolation_context = false;
+            }
+        }
+    };
+
+    const Computed = struct {
+        position: Position = .static,
+        z_index: ?i32 = null,
+        opacity_context: bool = false,
+        transform_context: bool = false,
+        isolation_context: bool = false,
+
+        pub fn positioned(self: Computed) bool {
+            return self.position != .static;
+        }
+
+        pub fn createsContext(self: Computed) bool {
+            return (self.positioned() and self.z_index != null) or
+                self.position == .fixed or self.position == .sticky or
+                self.opacity_context or self.transform_context or self.isolation_context;
+        }
+
+        pub fn level(self: Computed) i32 {
+            return if (self.positioned()) self.z_index orelse 0 else 0;
+        }
+    };
+};
+
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Stacking.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
     touch_action: TouchAction.Declared = .{},
     text: Text.Declared = .{},
     flow: Flow.Declared = .{},
+    stacking: Stacking.Declared = .{},
 
     fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -2823,6 +2961,13 @@ fn Slots(comptime Declared: type) type {
         slots: [Declared.names.len]Slot = @splat(.{}),
 
         fn apply(self: *Self, name: []const u8, value: []const u8, important: bool) void {
+            if (std.ascii.eqlIgnoreCase(name, "inset")) {
+                const values = CssParser.splitInset(value) orelse return;
+                inline for (CssParser.inset_sides, values) |side, side_value| {
+                    self.apply(side, side_value, important);
+                }
+                return;
+            }
             if (CssParser.axisShorthand(name)) |shorthand| {
                 const values = CssParser.splitAxisPair(value) orelse return;
                 self.apply(shorthand.x, values.x, important);
@@ -3098,6 +3243,142 @@ test "StyleManager: position" {
     try testing.htmlRunner("css/position.html", .{});
 }
 
+test "StyleManager: fixed axes resolve physical insets and viewport dimensions" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const el = try frame.document.createElement("div", null, frame);
+    const viewport = frame.page.getViewport();
+    const width: f64 = @floatFromInt(viewport.width);
+    const height: f64 = @floatFromInt(viewport.height);
+
+    try el.setStyle("position: fixed; inset: -10px 2in 10vh -25vw; width: 50%; height: 25%", frame);
+    try std.testing.expectEqual(FixedAxis{ .start = -width / 4, .end = 192, .size = width / 2, .auto_size = false }, sm.fixedAxis(el, .width).?);
+    try std.testing.expectEqual(FixedAxis{ .start = -10, .end = height / 10, .size = height / 4, .auto_size = false }, sm.fixedAxis(el, .height).?);
+    // The ordinary size API still leaves percentages to its existing caller.
+    try testing.expectEqual(null, sm.declaredSize(el, .width));
+    try std.testing.expectEqual(WidthSizing{ .percent = 0.5 }, sm.widthSizing(el));
+
+    try el.setStyle("position: fixed; top: -12.5%; right: 10vh; bottom: 10vw; left: -12.5%; width: 72pt; height: 6pc", frame);
+    try std.testing.expectEqual(FixedAxis{ .start = -width / 8, .end = height / 10, .size = 96, .auto_size = false }, sm.fixedAxis(el, .width).?);
+    try std.testing.expectEqual(FixedAxis{ .start = -height / 8, .end = width / 10, .size = 96, .auto_size = false }, sm.fixedAxis(el, .height).?);
+
+    try el.setStyle("position: fixed; inset: auto calc(100% - 10px) 2em var(--left)", frame);
+    const unresolved = FixedAxis{ .start = null, .end = null, .size = null, .auto_size = true };
+    try std.testing.expectEqual(unresolved, sm.fixedAxis(el, .width).?);
+    try std.testing.expectEqual(unresolved, sm.fixedAxis(el, .height).?);
+}
+
+test "StyleManager: fixed auto sizes are distinct from unresolved and intrinsic sizes" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const el = try frame.document.createElement("div", null, frame);
+
+    const cases = .{
+        .{ "position: fixed; inset: 0", true },
+        .{ "position: fixed; inset: 0; width: auto; height: AUTO", true },
+        .{ "position: fixed; inset: 0; width: initial; height: unset", true },
+        .{ "position: fixed; inset: 0; width: calc(100% - 10px); height: 2em", false },
+        .{ "position: fixed; inset: 0; width: var(--size); height: inherit", false },
+        .{ "position: fixed; inset: 0; width: min-content; height: max-content", false },
+        .{ "position: fixed; inset: 0; width: fit-content(40px); height: fit-content", false },
+        .{ "position: fixed; inset: 0; width: -10px; height: -25%", false },
+    };
+    inline for (cases) |case| {
+        try el.setStyle(case[0], frame);
+        const expected = FixedAxis{ .start = 0, .end = 0, .size = null, .auto_size = case[1] };
+        try std.testing.expectEqual(expected, sm.fixedAxis(el, .width).?);
+        try std.testing.expectEqual(expected, sm.fixedAxis(el, .height).?);
+        try testing.expectEqual(null, sm.declaredSize(el, .width));
+        try testing.expectEqual(null, sm.declaredSize(el, .height));
+    }
+}
+
+test "StyleManager: fixed inset shorthand preserves declaration order and importance" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const cases = .{
+        .{ "position: fixed; left: 40px; inset: 1px 2px 3px 4px", @as(f64, 4), @as(f64, 2) },
+        .{ "position: fixed; inset: 1px 2px 3px 4px; left: 40px", @as(f64, 40), @as(f64, 2) },
+        .{ "position: fixed; left: 40px !important; inset: 1px 2px 3px 4px", @as(f64, 40), @as(f64, 2) },
+        .{ "position: fixed; inset: 1px 2px 3px 4px !important; left: 40px", @as(f64, 4), @as(f64, 2) },
+        .{ "position: fixed; inset: 1px 2px; inset: 10px 20px !important; right: 40px !important", @as(f64, 20), @as(f64, 40) },
+    };
+    inline for (cases) |case| {
+        const el = try frame.document.createElement("div", null, frame);
+        try el.setStyle(case[0], frame);
+        const expected = FixedAxis{ .start = case[1], .end = case[2], .size = null, .auto_size = true };
+        try std.testing.expectEqual(expected, sm.fixedAxis(el, .width).?);
+        const scanned = inlineDeclared(Geometry.Declared, el, frame).props(.any);
+        const materialized = extractDeclared(Geometry.Declared, try el.getOrCreateStyle(frame)).props(.any);
+        try std.testing.expectEqual(scanned, materialized);
+    }
+}
+
+test "StyleManager: fixed axes honor sheet cascade and inline style invalidation" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const el = try doc.createElement("div", null, frame);
+    _ = try body.appendChild(el.asNode(), frame);
+    try el.setAttributeSafe(comptime .wrap("class"), .wrap("fixed"), frame);
+    try el.setStyle("left: 1px; inset: 10px; right: 12px !important; width: calc(100% - 20px)", frame);
+    try testing.expectEqual(null, sm.fixedAxis(el, .width));
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".fixed { position: fixed; inset: 2px 4px; left: 8px !important; width: 30% }", frame);
+    _ = try body.insertBefore(style_el.asNode(), el.asNode(), frame);
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    try std.testing.expectEqual(FixedAxis{ .start = 8, .end = 12, .size = null, .auto_size = false }, sm.fixedAxis(el, .width).?);
+    try std.testing.expectEqual(FixedAxis{ .start = 10, .end = 10, .size = null, .auto_size = true }, sm.fixedAxis(el, .height).?);
+
+    _ = try sheet.insertRule(".fixed { width: auto !important; top: 5px !important }", 1, frame);
+    try testing.expectEqual(true, sm.fixedAxis(el, .width).?.auto_size);
+    try testing.expectEqual(5, sm.fixedAxis(el, .height).?.start.?);
+
+    const style = (try el.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("inset", "6px", null, frame);
+    try std.testing.expectEqual(FixedAxis{ .start = 8, .end = 6, .size = null, .auto_size = true }, sm.fixedAxis(el, .width).?);
+    try std.testing.expectEqual(FixedAxis{ .start = 5, .end = 6, .size = null, .auto_size = true }, sm.fixedAxis(el, .height).?);
+    try style.setProperty("position", "static", null, frame);
+    try testing.expectEqual(null, sm.fixedAxis(el, .width));
+    _ = try style.removeProperty("position", frame);
+    try testing.expectEqual(8, sm.fixedAxis(el, .width).?.start.?);
+    try el.setAttributeSafe(comptime .wrap("class"), .wrap("ordinary"), frame);
+    try testing.expectEqual(null, sm.fixedAxis(el, .width));
+}
+
+test "StyleManager: fixed axes require an own generated fixed box" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const parent = try frame.document.createElement("div", null, frame);
+    const el = try frame.document.createElement("div", null, frame);
+    _ = try parent.asNode().appendChild(el.asNode(), frame);
+    try parent.setStyle("position: fixed; inset: 0", frame);
+    try testing.expectEqual(true, sm.inFixedBox(el));
+    try testing.expectEqual(null, sm.fixedAxis(el, .width));
+    inline for (.{ "static", "relative", "absolute", "sticky" }) |position_value| {
+        try el.setStyle("position: " ++ position_value ++ "; inset: 0", frame);
+        try testing.expectEqual(null, sm.fixedAxis(el, .width));
+    }
+    try el.setStyle("position: fixed; inset: 0; display: contents", frame);
+    try testing.expectEqual(null, sm.fixedAxis(el, .width));
+    try el.setStyle("position: fixed; inset: 0; display: none", frame);
+    try testing.expectEqual(null, sm.fixedAxis(el, .height));
+    try el.setStyle("position: fixed; inset: 0; visibility: hidden", frame);
+    try testing.expectEqual(0, sm.fixedAxis(el, .width).?.start.?);
+    try parent.setStyle("display: none", frame);
+    try testing.expectEqual(null, sm.fixedAxis(el, .width));
+}
+
 test "StyleManager: text-transform without rules skips the memo" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -3347,8 +3628,8 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .visibility = .{ .display = .none } },
         .{ .visibility = .{ .display = .other, .box = .block_level } },
         .{ .visibility = .{ .display = .none, .visibility_hidden = true } },
-        .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true } },
-        .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true } },
+        .{ .visibility = .{ .opacity_zero = true, .pointer_events_none = true }, .stacking = .{ .opacity_context = true } },
+        .{ .visibility = .{ .opacity_zero = false, .pointer_events_none = true }, .stacking = .{ .opacity_context = false } },
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
@@ -3359,14 +3640,14 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
         .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true } },
         .{},
-        .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
-        .{ .geometry = .{ .height = .{} } },
-        .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{} } },
-        .{ .geometry = .{ .width = .{} } },
+        .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px }, .width_auto = false, .height_auto = false } },
+        .{ .geometry = .{ .height = .{}, .height_auto = true } },
+        .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{}, .width_auto = false, .height_auto = false } },
+        .{ .geometry = .{ .width = .{}, .width_auto = false } },
         .{ .visibility = .{ .display = .flex, .box = .block_level } },
         .{ .visibility = .{ .display = .grid, .box = .atomic_inline } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .relative, .floated = false } },
+        .{ .geometry = .{ .width = .{ .unit = .content }, .width_auto = false }, .flow = .{ .position = .absolute, .floated = true } },
+        .{ .geometry = .{ .width = .{ .unit = .content }, .width_auto = false }, .flow = .{ .position = .relative, .floated = false } },
     };
 
     var i: usize = 0;
@@ -3379,6 +3660,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         try std.testing.expectEqual(expected[i].visibility, inlineDeclared(Visibility.Declared, el, frame).props(.any));
         try std.testing.expectEqual(expected[i].geometry, inlineDeclared(Geometry.Declared, el, frame).props(.any));
         try std.testing.expectEqual(expected[i].flow, inlineDeclared(Flow.Declared, el, frame).props(.any));
+        try std.testing.expectEqual(expected[i].stacking, inlineDeclared(Stacking.Declared, el, frame).props(.any));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
         const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame)).props(.any);
@@ -3670,6 +3952,20 @@ test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
     _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
     try testing.expectEqual(true, sm.dirty);
     try testing.expectEqual(false, sm.isHidden(c, .{}));
+}
+
+test "StyleManager: stacking uses the same effective position as geometry" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const el = try frame.document.createElement("div", null, frame);
+    const sm = &frame._style_manager;
+    for ([_][]const u8{ "position: -webkit-sticky", "position: fixed; position: unset", "position: relative", "position: initial" }) |css| {
+        try el.setStyle(css, frame);
+        try testing.expectEqual(sm.position(el), sm.stackingProps(el).position);
+    }
+    try el.setStyle("display: contents; position: relative", frame);
+    try testing.expectEqual(.relative, sm.position(el));
+    try testing.expectEqual(false, sm.stackingProps(el).positioned());
 }
 
 // Child-combinator rules whose subject compound has no id, class or tag
