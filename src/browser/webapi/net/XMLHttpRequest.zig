@@ -386,7 +386,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         self._response_status_text = try self._arena.dupe(u8, st);
     }
     self._response_url = self._url;
-    self._response_len = resp.body.items.len;
+    self._response_len = resp.body.items().len;
 
     for (resp.headers) |hdr| {
         if (std.mem.eql(u8, hdr.name, "content-type")) {
@@ -402,7 +402,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
     try self.applyResponseHeaders(resp.headers);
 
-    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
+    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items());
 
     var ls: js.Local.Scope = undefined;
     exec.js.localScope(&ls);

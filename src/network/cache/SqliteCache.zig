@@ -217,11 +217,11 @@ pub fn maintenance(self: *SqliteCache, now: u64) void {
     log.debug(.cache, "maintenance", .{ .purged = purged, .evicted = conn.changes() });
 }
 
-pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
+pub fn get(self: *SqliteCache, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    return readEntry(conn, arena, req) catch |err| switch (err) {
+    return readEntry(conn, arena, body_allocator, req) catch |err| switch (err) {
         error.CorruptEntry => {
             discardCorrupt(conn, req.url);
             return .miss;
@@ -230,7 +230,7 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !
     };
 }
 
-fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
+fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     var entry = try conn.row(
         \\ select status, stored_at, age_at_store, max_age, must_revalidate,
         \\     content_type, etag, last_modified, vary_headers, headers,
@@ -285,7 +285,8 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, req: CacheGetRequest) 
         .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
         .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
         .script_cache = if (entry.get(?Blob, 10)) |b| try arena.dupe(u8, b.data) else null,
-        .data = .{ .buffer = try arena.dupe(u8, entry.get(Blob, 11).data) },
+        // Last, so nothing after it can fail and leak it.
+        .data = .{ .buffer = try body_allocator.dupe(u8, entry.get(Blob, 11).data) },
     };
     return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
@@ -629,7 +630,7 @@ test "SqliteCache: basic put and get" {
 
     try cache.put(req, "hello world");
 
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
@@ -663,14 +664,14 @@ test "SqliteCache: get expiration" {
     try cache.put(req, "hello world");
 
     // age = 50 + 900 = 950 < 1000: fresh
-    const fresh = try cache.get(testing.arena_allocator, .{
+    const fresh = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 50,
         .request_headers = &.{},
     });
     try testing.expect(fresh == .hit);
 
-    const stale = try cache.get(testing.arena_allocator, .{
+    const stale = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 200,
         .request_headers = &.{},
@@ -700,14 +701,14 @@ test "SqliteCache: get expiration (without validators)" {
     try cache.put(req, "hello world");
 
     // age = 50 + 900 = 950 < 1000: fresh
-    const fresh = try cache.get(testing.arena_allocator, .{
+    const fresh = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 50,
         .request_headers = &.{},
     });
     try testing.expect(fresh == .hit);
 
-    const stale = try cache.get(testing.arena_allocator, .{
+    const stale = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 200,
         .request_headers = &.{},
@@ -732,7 +733,7 @@ test "SqliteCache: put override" {
         };
         try cache.put(req, "hello world");
 
-        const result = try cache.get(testing.arena_allocator, .{
+        const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
             .url = "https://example.com",
             .timestamp = 5000,
             .request_headers = &.{},
@@ -754,7 +755,7 @@ test "SqliteCache: put override" {
         };
         try cache.put(req, "goodbye world");
 
-        const result = try cache.get(testing.arena_allocator, .{
+        const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
             .url = "https://example.com",
             .timestamp = 10000,
             .request_headers = &.{},
@@ -788,7 +789,7 @@ test "SqliteCache: vary hit and miss" {
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
     try putVary(&cache, now, "accept-encoding", &.{.{ .name = "Accept-Encoding", .value = "gzip" }});
 
-    const hit = try cache.get(testing.arena_allocator, .{
+    const hit = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
@@ -796,21 +797,21 @@ test "SqliteCache: vary hit and miss" {
     try testing.expect(hit == .hit);
     try testing.expectEqual("hello world", hit.hit.data.buffer);
 
-    const mismatch = try cache.get(testing.arena_allocator, .{
+    const mismatch = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "br" }},
     });
     try testing.expect(mismatch == .miss);
 
-    const other_case = try cache.get(testing.arena_allocator, .{
+    const other_case = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "GZIP" }},
     });
     try testing.expect(other_case == .miss);
 
-    const missing_header = try cache.get(testing.arena_allocator, .{
+    const missing_header = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
@@ -826,7 +827,7 @@ test "SqliteCache: vary multiple headers" {
     const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
     try putVary(&cache, now, "accept-encoding, accept-language", &.{.{ .name = "Accept-Encoding", .value = "gzip" }});
 
-    const hit = try cache.get(testing.arena_allocator, .{
+    const hit = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -837,7 +838,7 @@ test "SqliteCache: vary multiple headers" {
     try testing.expect(hit == .hit);
     try testing.expectEqual("hello world", hit.hit.data.buffer);
 
-    const mismatch = try cache.get(testing.arena_allocator, .{
+    const mismatch = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{
@@ -896,6 +897,7 @@ test "SqliteCache: clear removes all entries" {
 
     try testing.expect((try cache.get(
         testing.arena_allocator,
+        testing.arena_allocator,
         .{
             .url = "https://example.com/a",
             .timestamp = now,
@@ -903,6 +905,7 @@ test "SqliteCache: clear removes all entries" {
         },
     )) == .hit);
     try testing.expect((try cache.get(
+        testing.arena_allocator,
         testing.arena_allocator,
         .{
             .url = "https://example.com/b",
@@ -915,6 +918,7 @@ test "SqliteCache: clear removes all entries" {
 
     try testing.expect((try cache.get(
         testing.arena_allocator,
+        testing.arena_allocator,
         .{
             .url = "https://example.com/a",
             .timestamp = now,
@@ -922,6 +926,7 @@ test "SqliteCache: clear removes all entries" {
         },
     )) == .miss);
     try testing.expect((try cache.get(
+        testing.arena_allocator,
         testing.arena_allocator,
         .{
             .url = "https://example.com/b",
@@ -950,14 +955,14 @@ test "SqliteCache: put after clear works" {
     try cache.put(req, "before clear");
     try cache.clear();
 
-    try testing.expect((try cache.get(testing.arena_allocator, .{
+    try testing.expect((try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
     })) == .miss);
 
     try cache.put(req, "after clear");
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
@@ -984,12 +989,13 @@ test "SqliteCache: evict removes entry" {
 
     try cache.put(req, "hello world");
 
-    const before = try cache.get(testing.arena_allocator, .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} });
+    const before = try cache.get(testing.arena_allocator, testing.arena_allocator, .{ .url = "https://example.com", .timestamp = now, .request_headers = &.{} });
     try testing.expect(before == .hit);
 
     cache.evict("https://example.com");
 
     try testing.expect((try cache.get(
+        testing.arena_allocator,
         testing.arena_allocator,
         .{
             .url = "https://example.com",
@@ -1024,14 +1030,14 @@ test "SqliteCache: renew refreshes expiry" {
     });
 
     // Clock reset to now+500, so still fresh at now+1200
-    const fresh = try cache.get(testing.arena_allocator, .{
+    const fresh = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 1200,
         .request_headers = &.{},
     });
     try testing.expect(fresh == .hit);
 
-    const stale = try cache.get(testing.arena_allocator, .{
+    const stale = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 1500,
         .request_headers = &.{},
@@ -1063,6 +1069,7 @@ test "SqliteCache: renew preserves body" {
     });
 
     const result = try cache.get(
+        testing.arena_allocator,
         testing.arena_allocator,
         .{
             .url = "https://example.com",
@@ -1107,7 +1114,7 @@ test "SqliteCache: script cache is kept by renew and cleared by put" {
 }
 
 fn getScriptCache(cache: *SqliteCache, now: u64) !?[]const u8 {
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com/a.js",
         .timestamp = now,
         .request_headers = &.{},
@@ -1150,7 +1157,7 @@ test "SqliteCache: renew merges the 304's headers into the stored ones" {
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
     });
 
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 100,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
@@ -1208,14 +1215,14 @@ test "SqliteCache: renew recomputes the vary digest" {
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "br" }},
     });
 
-    const hit = try cache.get(testing.arena_allocator, .{
+    const hit = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 100,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "br" }},
     });
     try testing.expect(hit == .hit);
 
-    const miss = try cache.get(testing.arena_allocator, .{
+    const miss = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now + 100,
         .request_headers = &.{.{ .name = "Accept-Encoding", .value = "gzip" }},
@@ -1266,17 +1273,17 @@ test "SqliteCache: maintenance purges expired entries without validators" {
 
     cache.maintenance(7000);
 
-    try testing.expect((try cache.get(testing.arena_allocator, .{
+    try testing.expect((try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com/expired",
         .timestamp = 7000,
         .request_headers = &.{},
     })) == .miss);
-    try testing.expect((try cache.get(testing.arena_allocator, .{
+    try testing.expect((try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com/revalidate",
         .timestamp = 7000,
         .request_headers = &.{},
     })) == .revalidate);
-    try testing.expect((try cache.get(testing.arena_allocator, .{
+    try testing.expect((try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com/fresh",
         .timestamp = 7000,
         .request_headers = &.{},
@@ -1331,7 +1338,7 @@ test "SqliteCache: evicts oldest entries over the limit" {
 
     cache.maintenance(now + urls.len);
 
-    const evicted = try cache.get(testing.arena_allocator, .{
+    const evicted = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com/a",
         .timestamp = now,
         .request_headers = &.{},
@@ -1339,7 +1346,7 @@ test "SqliteCache: evicts oldest entries over the limit" {
     try testing.expect(evicted == .miss);
 
     for (urls[1..]) |url| {
-        const hit = try cache.get(testing.arena_allocator, .{
+        const hit = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
             .url = url,
             .timestamp = now + urls.len,
             .request_headers = &.{},
@@ -1374,7 +1381,7 @@ test "SqliteCache: starts over from an unreadable database" {
         .request_headers = &.{},
     }, "hello world");
 
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
@@ -1423,7 +1430,7 @@ test "SqliteCache: starts over from another schema version" {
         .request_headers = &.{},
     }, "hello world");
 
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = now,
         .request_headers = &.{},
@@ -1486,7 +1493,7 @@ test "SqliteCache: get discards a corrupt entry" {
         try putCorruptible(&cache, now);
         try corrupt(&cache, sql);
 
-        const result = try cache.get(testing.arena_allocator, .{
+        const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
             .url = "https://example.com",
             .timestamp = now,
             .request_headers = &.{},
@@ -1514,7 +1521,7 @@ test "SqliteCache: clock gone backwards" {
     defer cache.deinit();
 
     try putCorruptible(&cache, 5000);
-    const result = try cache.get(testing.arena_allocator, .{
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
         .url = "https://example.com",
         .timestamp = 4000,
         .request_headers = &.{},

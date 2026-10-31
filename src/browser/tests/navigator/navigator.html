@@ -41,7 +41,7 @@
     'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
     'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
     'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
-    'plugins', 'doNotTrack', 'globalPrivacyControl',
+    'plugins', 'mimeTypes', 'doNotTrack', 'globalPrivacyControl',
   ]) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
     testing.expectEqual('function', typeof desc.get); // accessor on prototype
@@ -65,6 +65,25 @@
   // WebIDL: indexed getter => @@iterator (Chrome: [...navigator.plugins] works)
   testing.expectEqual('function', typeof navigator.plugins[Symbol.iterator]);
   testing.expectEqual(0, [...navigator.plugins].length);
+</script>
+
+<script id=navigator_mime_types>
+  // No MIME type is exposed: an empty MimeTypeArray, the same object on every read.
+  testing.expectEqual(true, navigator.mimeTypes instanceof MimeTypeArray);
+  testing.expectEqual(navigator.mimeTypes, navigator.mimeTypes);
+  testing.expectEqual(0, navigator.mimeTypes.length);
+  testing.expectEqual(null, navigator.mimeTypes.item(0));
+  testing.expectEqual(null, navigator.mimeTypes.namedItem('application/pdf'));
+  testing.expectEqual(undefined, navigator.mimeTypes[0]);
+  testing.expectEqual(false, 'application/pdf' in navigator.mimeTypes);
+  testing.expectEqual(0, [...navigator.mimeTypes].length);
+
+  // Scripts that fingerprint the browser count its keys.
+  testing.expectEqual(0, Object.keys(navigator.mimeTypes).length);
+
+  testing.expectEqual('function', typeof MimeType);
+  testing.expectError('TypeError', () => new MimeType());
+  testing.expectError('TypeError', () => new MimeTypeArray());
 </script>
 
 <script id=navigator_native_descriptor_walk>

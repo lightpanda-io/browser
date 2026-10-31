@@ -56,6 +56,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setBypassCSP,
         bringToFront,
         setInterceptFileChooserDialog,
+        setDocumentContent,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -75,6 +76,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .printToPDF => return printToPDF(cmd),
         .getLayoutMetrics => return getLayoutMetrics(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        .setDocumentContent => return setDocumentContent(cmd),
         // CSP isn't enforced, there is a single page, and no file chooser
         // ever opens: each of these already holds.
         .setBypassCSP, .bringToFront, .setInterceptFileChooserDialog => return cmd.sendResult(null, .{}),
@@ -387,6 +389,35 @@ fn stopLoading(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     bc.session.stopLoading(frame._frame_id);
+    return cmd.sendResult(null, .{});
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-setDocumentContent
+// Puppeteer's page.setContent() sends this. Blink answers it with
+// Document::SetContent: open() the document, write the markup, close().
+fn setDocumentContent(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        frameId: []const u8,
+        html: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame_id = try id.parseFrameId(params.frameId);
+    const frame = bc.session.findFrameByFrameId(frame_id) orelse {
+        return cmd.sendError(-32000, "No frame for given id found", .{});
+    };
+
+    // open() is a no-op while the frame's own parser is running, which would
+    // leave the document untouched and still report success. Blink aborts the
+    // load instead; until we do too, say so.
+    if (frame._load_state == .parsing) {
+        return cmd.sendError(-32000, "Document is still loading", .{});
+    }
+
+    const doc = frame.document;
+    _ = try doc.open(frame);
+    try doc.write(.init(&.{params.html}), frame);
+    try doc.close(frame);
     return cmd.sendResult(null, .{});
 }
 
@@ -2290,6 +2321,98 @@ test "cdp.frame: reload" {
     }
 }
 
+test "cdp.page: setDocumentContent replaces the document" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SDC", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const frame = bc.mainFrame() orelse unreachable;
+    const frame_id = id.toFrameId(frame._frame_id);
+
+    try ctx.processMessage(.{ .id = 60, .method = "Page.setDocumentContent", .params = .{
+        .frameId = &frame_id,
+        .html = "<html><body><p id=\"x\">hello</p><script>document.body.dataset.ran = '1'</script></body></html>",
+    } });
+    try ctx.expectSentResult(null, .{ .id = 60 });
+    try testing.waitForPage(bc);
+
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec(
+            \\document.getElementById('x').textContent === 'hello' &&
+            \\document.body.dataset.ran === '1' &&
+            \\document.body.children.length === 2 &&
+            \\document.readyState === 'complete'
+        , null);
+        try testing.expect(v.toBool());
+    }
+
+    // A second call replaces the first content rather than appending to it.
+    try ctx.processMessage(.{ .id = 61, .method = "Page.setDocumentContent", .params = .{
+        .frameId = &frame_id,
+        .html = "<p id=\"y\">again</p>",
+    } });
+    try ctx.expectSentResult(null, .{ .id = 61 });
+    try testing.waitForPage(bc);
+
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("document.getElementById('x') === null && document.getElementById('y').textContent === 'again'", null);
+        try testing.expect(v.toBool());
+    }
+
+    try ctx.processMessage(.{ .id = 62, .method = "Page.setDocumentContent", .params = .{
+        .frameId = "FID-4000000000",
+        .html = "<p>nope</p>",
+    } });
+    try ctx.expectSentError(-32000, "No frame for given id found", .{ .id = 62 });
+}
+
+test "cdp.page: setDocumentContent refuses while the document is still loading" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SDC2", .session_id = "SID-SDC2", .target_id = "TID-SDC2-00000".* });
+    _ = try bc.session.createPage();
+    try ctx.processMessage(.{ .id = 70, .method = "Page.navigate", .params = .{ .url = "http://127.0.0.1:9582/stop_loading/streaming.html" } });
+
+    // Tick until the first chunk has arrived; the server holds the rest back.
+    var runner = bc.session.runner(.{});
+    const page_frame_id = bc.page_handle.?.frame_id;
+    var attempts: usize = 0;
+    while (true) : (attempts += 1) {
+        _ = try runner.tickForFrame(page_frame_id, 20, .{});
+        const frame = bc.mainFrame() orelse unreachable;
+        if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
+            if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
+                break;
+            }
+        }
+        if (attempts == 200) {
+            return error.FirstChunkNeverArrived;
+        }
+    }
+
+    const frame = bc.mainFrame() orelse unreachable;
+    const frame_id = id.toFrameId(frame._frame_id);
+    try ctx.processMessage(.{ .id = 71, .method = "Page.setDocumentContent", .params = .{
+        .frameId = &frame_id,
+        .html = "<p id=\"x\">hello</p>",
+    } });
+    try ctx.expectSentError(-32000, "Document is still loading", .{ .id = 71 });
+
+    // Don't wait out the server's held-back second chunk.
+    try ctx.processMessage(.{ .id = 72, .method = "Page.stopLoading" });
+    try ctx.expectSentResult(null, .{ .id = 72 });
+    try testing.waitForPage(bc);
+}
+
 test "cdp.page: stopLoading finishes a streaming document with what has arrived" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -2306,7 +2429,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = bc.mainFrame() orelse unreachable;
         if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
-            if (std.mem.find(u8, transfer.res.buffer.items, "first") != null) {
+            if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }
         }

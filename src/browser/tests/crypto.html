@@ -2963,7 +2963,7 @@
 
   const results = {};
   // HKDF and PBKDF2 have no export operation: NotSupportedError comes before
-  // the extractable check (Chrome 152 still gives InvalidAccessError).
+  // the extractable check.
   const noExport = {};
   for (const format of ["raw", "jwk", "spki", "pkcs8"]) {
     noExport[`hkdf ${format}`] = await outcome(() => subtle.exportKey(format, hkdf));
@@ -2996,20 +2996,18 @@
 
   state.resolve();
   await state.done(() => {
-    testing.diverges("Chrome checks extractable before the export operation", () => {
-      testing.expectEqual({
-        "hkdf raw": "NotSupportedError",
-        "pbkdf2 raw": "NotSupportedError",
-        "hkdf jwk": "NotSupportedError",
-        "pbkdf2 jwk": "NotSupportedError",
-        "hkdf spki": "NotSupportedError",
-        "pbkdf2 spki": "NotSupportedError",
-        "hkdf pkcs8": "NotSupportedError",
-        "pbkdf2 pkcs8": "NotSupportedError",
-        "wrap hkdf": "NotSupportedError",
-        "wrap pbkdf2": "NotSupportedError",
-      }, noExport);
-    });
+    testing.expectEqual({
+      "hkdf raw": "NotSupportedError",
+      "pbkdf2 raw": "NotSupportedError",
+      "hkdf jwk": "NotSupportedError",
+      "pbkdf2 jwk": "NotSupportedError",
+      "hkdf spki": "NotSupportedError",
+      "pbkdf2 spki": "NotSupportedError",
+      "hkdf pkcs8": "NotSupportedError",
+      "pbkdf2 pkcs8": "NotSupportedError",
+      "wrap hkdf": "NotSupportedError",
+      "wrap pbkdf2": "NotSupportedError",
+    }, noExport);
     testing.expectEqual({
       "wrap hkdf, unwrap-only key": "InvalidAccessError",
       "aes locked raw": "InvalidAccessError",
@@ -3168,7 +3166,8 @@
   results["publicExponent Uint16Array"] = await rsa(new Uint16Array([1, 1]));
   results["publicExponent DataView"] = await rsa(new DataView(new Uint8Array([1, 0, 1]).buffer));
   results["publicExponent ArrayBuffer"] = await rsa(new Uint8Array([1, 0, 1]).buffer);
-  const sharedExponent = await rsa(new Uint8Array(new SharedArrayBuffer(3)));
+  // Chrome 156 crashes the renderer on a shared publicExponent.
+  const sharedExponent = testing.IS_TEST_RUNNER ? await rsa(new Uint8Array(new SharedArrayBuffer(3))) : "skipped";
   // A shared keyData is a TypeError of its conversion, before the algorithm.
   results["import view, unknown algorithm"] = await outcome(() => subtle.importKey("raw", view, "NOPE", false, ["encrypt"]));
   // A SharedArrayBuffer is a BufferSource that fails its conversion, not a
@@ -3211,7 +3210,7 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual(expected, results);
-    testing.diverges("Chrome takes a shared publicExponent", () => {
+    testing.diverges("Chrome 156 crashes on a shared publicExponent, so it is skipped", () => {
       testing.expectEqual("TypeError", sharedExponent);
     });
   });
@@ -3415,8 +3414,6 @@
       "import raw-public rsa": "NotSupportedError",
       "import raw-public ec sign": "SyntaxError",
     }, results);
-    testing.diverges("Chrome checks extractable before the export operation", () => {
-      testing.expectEqual("NotSupportedError", hkdfExport);
-    });
+    testing.expectEqual("NotSupportedError", hkdfExport);
   });
 </script>

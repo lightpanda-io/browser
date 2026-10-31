@@ -278,8 +278,7 @@ fn getResponseBody(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, no_body, .{});
     };
     const body = switch (transfer._response_pause) {
-        .final => transfer.res.buffer.items,
-        .cached => |cached| cached,
+        .final, .cached => transfer.res.buffer.items(),
         .redirect, .failed => return cmd.sendError(-32000, no_body, .{}),
     };
     // Like Chrome, always base64, whatever the body is.

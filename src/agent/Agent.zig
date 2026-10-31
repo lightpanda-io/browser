@@ -464,19 +464,17 @@ fn globalTools() []const ProviderTool {
 
 /// Called from the sighandler thread. Flips `cancel_requested` for the LLM
 /// streaming/HTTP probe and any code polling `Session.isCancelled`, then asks
-/// V8 to bail out of whatever JS is running. Both hooks are thread-safe
-/// (`Env.terminate` takes a mutex); no terminal touches from this context.
+/// V8 to bail out of whatever JS is running. No terminal touches from this
+/// context.
 fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
     self.http_interrupt.fire();
     {
         self.script_runtime_mutex.lockUncancelable(lp.io);
         defer self.script_runtime_mutex.unlock(lp.io);
-        if (self.active_script_runtime) |runtime| {
-            runtime.terminate();
-        }
+        if (self.active_script_runtime) |runtime| runtime.cancel();
     }
-    self.ts.browser.env.terminate();
+    self.ts.browser.env.requestTerminate();
 }
 
 /// Lives in main's stack so it can be registered with the sighandler before the
@@ -1798,7 +1796,6 @@ fn runScript(self: *Agent, path: []const u8) bool {
         self.script_runtime_mutex.lockUncancelable(lp.io);
         self.active_script_runtime = null;
         self.script_runtime_mutex.unlock(lp.io);
-        runtime.cancelTerminate();
         self.ts.browser.env.cancelTerminate();
         self.cancel_requested.store(false, .release);
     }

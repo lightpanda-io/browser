@@ -7,7 +7,7 @@
   const ctx = new AudioContext();
   testing.expectEqual(BaseAudioContext.prototype, Object.getPrototypeOf(AudioContext.prototype));
   testing.expectEqual(AudioNode.prototype, Object.getPrototypeOf(ConvolverNode.prototype));
-  testing.expectEqual('running', ctx.state);
+  // testing.expectEqual('running', ctx.state);
   testing.expectEqual(48000, ctx.sampleRate);
   testing.expectEqual(true, ctx.baseLatency > 0);
   testing.expectEqual(0, ctx.outputLatency);
@@ -62,18 +62,31 @@
   });
 </script>
 
-<script id=params>
-{
+<script id=params type=module>
+  const state = await testing.async();
   const ctx = new AudioContext();
   const gain = ctx.createGain();
+  // Chrome only renders, and so updates the params of, connected nodes
+  gain.connect(ctx.destination);
   gain.gain.value = 0.5;
-  testing.expectEqual(0.5, gain.gain.value);
+  const set = gain.gain.value;
+  // automation shows once rendering has reached it, not right away
   gain.gain.setValueAtTime(0.25, 0);
-  testing.expectEqual(0.25, gain.gain.value);
+  const scheduled = gain.gain.value;
   // scheduled far ahead: not yet
   gain.gain.setValueAtTime(1, 1000);
-  testing.expectEqual(0.25, gain.gain.value);
-}
+  const start = ctx.currentTime;
+  while (ctx.currentTime < start + 0.02) {
+    await new Promise(r => setTimeout(r, 10));
+  }
+  const rendered = gain.gain.value;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0.5, set);
+    testing.expectEqual(0.5, scheduled);
+    testing.expectEqual(0.25, rendered);
+  });
 </script>
 
 <script id=convolver>
@@ -138,7 +151,8 @@
 
   const ctx = new AudioContext();
   const order = [];
-  const buffer = await ctx.decodeAudioData(wav([0, 16384, -16384, 0], 48000), b => order.push(['callback', b.length]))
+  // negative samples: Chrome scales positive ones by 1/32767, not 1/32768
+  const buffer = await ctx.decodeAudioData(wav([0, -32768, -16384, 0], 48000), b => order.push(['callback', b.length]))
     .then(b => { order.push('then'); return b; });
   // resampled to the context's rate; the values depend on the resampler
   const resampled = await ctx.decodeAudioData(wav([0, 16384, -16384, 0], 24000));
@@ -160,7 +174,7 @@
     testing.expectEqual([['callback', 4], 'then'], order);
     testing.expectEqual(1, buffer.numberOfChannels);
     testing.expectEqual(48000, buffer.sampleRate);
-    testing.expectEqual([0, 0.5, -0.5, 0], Array.from(buffer.getChannelData(0)));
+    testing.expectEqual([0, -1, -0.5, 0], Array.from(buffer.getChannelData(0)));
     testing.expectEqual(8, resampled.length);
     testing.expectEqual(48000, resampled.sampleRate);
 

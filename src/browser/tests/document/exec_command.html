@@ -1,7 +1,10 @@
 <!DOCTYPE html>
+<meta charset="UTF-8">
 <meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <body>
+<!-- Chrome's selectAll on the document collapses when the first text is editable -->
+<p id="first">first</p>
 <div id="host" contenteditable>abc</div>
 <div id="plain">plain</div>
 <input id="text" value="hello">
@@ -437,6 +440,216 @@
     testing.expectEqual([true, 'a '], run('a b', h => at(h.firstChild, 3), false));
   });
   getSelection().removeAllRanges();
+}
+</script>
+
+<script>
+  // selectstart targets from the last selectAll
+  let selectstarts = [];
+  document.addEventListener('selectstart', e => {
+    selectstarts.push(`${e.target.id || e.target.nodeName}:${e.bubbles}:${e.cancelable}:${e.isTrusted}`);
+  }, true);
+  function selectAll() {
+    selectstarts = [];
+    return document.execCommand('selectAll');
+  }
+  function reset() {
+    getSelection().removeAllRanges();
+    document.activeElement.blur();
+  }
+  // the whole body is selected. Chrome trims the range to the first and last
+  // text, so the edge elements are only partly in it.
+  function bodySelected() {
+    const s = getSelection();
+    return s.rangeCount === 1 && s.isCollapsed === false && s.containsNode($('#first'), true) && s.containsNode($('#plain'), true);
+  }
+</script>
+
+<script id="select_all_queries">
+{
+  reset();
+  testing.expectEqual(true, document.queryCommandSupported('selectAll'));
+  testing.expectEqual(true, document.queryCommandSupported('SELECTALL'));
+  // enabled with nothing focused or selected
+  testing.expectEqual(true, document.queryCommandEnabled('selectAll'));
+  testing.expectEqual(false, document.queryCommandState('selectAll'));
+  testing.expectEqual(false, document.queryCommandIndeterm('selectAll'));
+  testing.expectEqual('', document.queryCommandValue('selectAll'));
+
+  const doc = document.implementation.createHTMLDocument('');
+  testing.expectEqual(false, doc.queryCommandSupported('selectAll'));
+  testing.expectEqual(false, doc.queryCommandEnabled('selectAll'));
+  testing.expectEqual(false, doc.execCommand('selectAll'));
+}
+</script>
+
+<script id="select_all_document">
+{
+  reset();
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+
+  // a caret in plain text
+  getSelection().collapse($('#plain').firstChild, 2);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(true, bodySelected());
+
+  // a focused control without a text selection
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  document.body.appendChild(cb);
+  reset();
+  cb.focus();
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+  cb.remove();
+  reset();
+}
+</script>
+
+<script id="select_all_controls">
+{
+  reset();
+  const input = $('#text');
+  input.value = 'hello';
+  input.focus();
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 5], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual(['text:true:true:true'], selectstarts);
+
+  // readonly still selects
+  const ro = $('#ro');
+  ro.focus();
+  ro.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 2], [ro.selectionStart, ro.selectionEnd]);
+
+  const area = $('#area');
+  area.value = 'abc\ndef';
+  area.focus();
+  area.setSelectionRange(2, 2);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 7], [area.selectionStart, area.selectionEnd]);
+  testing.expectEqual(['area:true:true:true'], selectstarts);
+
+  // the focused control wins over a selection elsewhere
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  getSelection().collapse(host.firstChild, 1);
+  input.focus();
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 5], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual(['text:true:true:true'], selectstarts);
+  reset();
+}
+</script>
+
+<script id="select_all_contenteditable">
+{
+  reset();
+  const host = $('#host');
+  host.innerHTML = 'ab<b>cd</b><div id="inner">ef</div>';
+  getSelection().collapse(host.querySelector('b').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  testing.expectEqual('abcdef', getSelection().toString().replace(/\s/g, ''));
+  testing.expectEqual(false, getSelection().containsNode($('#plain'), true));
+
+  // the outermost host
+  getSelection().collapse($('#inner').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  testing.expectEqual('abcdef', getSelection().toString().replace(/\s/g, ''));
+
+  // a non-editable island isn't in the host
+  host.innerHTML = 'ab<span contenteditable=false>xy</span>';
+  getSelection().collapse(host.querySelector('span').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+
+  // focus alone doesn't count
+  reset();
+  host.innerHTML = 'abc';
+  host.focus();
+  getSelection().removeAllRanges();
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+
+  // a selection crossing the host: the anchor's host, else the start's
+  reset();
+  getSelection().setBaseAndExtent(host.firstChild, 1, $('#plain').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  testing.expectEqual('abc', getSelection().toString());
+  getSelection().setBaseAndExtent(host.firstChild, 1, $('#first').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  getSelection().setBaseAndExtent($('#plain').firstChild, 1, host.firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  getSelection().setBaseAndExtent($('#first').firstChild, 1, host.firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+  reset();
+}
+</script>
+
+<script id="select_all_canceled">
+{
+  reset();
+  const cancel = e => e.preventDefault();
+  document.addEventListener('selectstart', cancel);
+
+  getSelection().collapse($('#plain').firstChild, 2);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, getSelection().isCollapsed);
+  testing.expectEqual(2, getSelection().anchorOffset);
+
+  const input = $('#text');
+  input.focus();
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([1, 1], [input.selectionStart, input.selectionEnd]);
+
+  document.removeEventListener('selectstart', cancel);
+  reset();
+}
+</script>
+
+<script id="select_all_nested">
+{
+  reset();
+  let nested = null;
+  document.addEventListener('selectstart', () => { nested = document.execCommand('selectAll'); }, {once: true});
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(false, nested);
+  testing.expectEqual(true, bodySelected());
+  reset();
+}
+</script>
+
+<script id="select_all_select_event" type=module>
+{
+  // Chrome fires select before execCommand returns; we queue it, as select() does
+  const state = await testing.async();
+  const input = document.createElement('input');
+  input.value = 'hey';
+  document.body.appendChild(input);
+  input.focus();
+  input.addEventListener('select', e => state.resolve([e.target === input, input.selectionStart, input.selectionEnd]), {once: true});
+  document.execCommand('selectAll');
+  await state.done(res => {
+    testing.expectEqual([true, 0, 3], res);
+    input.remove();
+  });
 }
 </script>
 

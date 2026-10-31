@@ -52,6 +52,10 @@ result_sink: ?*std.Io.Writer = null,
 pending_gotos: std.ArrayList(PendingGoto),
 /// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
 run_timer: std.Io.Timestamp,
+/// Cancels a run that outlives it. Null runs without a deadline.
+timeout_ms: ?u32 = null,
+timed_out: bool = false,
+cancelled: std.atomic.Value(bool) = .init(false),
 
 /// The runtime installs exactly the recorded browser tools as script
 /// primitives — the same set the recorder writes — so every recorded call
@@ -161,6 +165,8 @@ pub fn init(
 }
 
 pub fn deinit(self: *Runtime) void {
+    // A cancel that lands after the run returned leaves the isolate terminating.
+    self.env.cancelTerminate();
     // Free leftover Globals while the isolate is still alive (a run terminated
     // mid-flight can leave some).
     for (self.pending_gotos.items) |*pending| pending.reset();
@@ -172,19 +178,17 @@ pub fn deinit(self: *Runtime) void {
     allocator.destroy(self);
 }
 
-pub fn terminate(self: *Runtime) void {
-    self.env.terminate();
-}
-
-/// Like `terminate`, but through a V8 interrupt, so it also stops code that
-/// runs after an `await`, inside a microtask checkpoint that `terminate`
-/// would wait out.
-pub fn requestTerminate(self: *Runtime) void {
+/// Stops the run in flight, from any thread: script JS, page JS it is waiting
+/// on, and session waits (`goto`, `waitForSelector`, …).
+pub fn cancel(self: *Runtime) void {
+    self.cancelled.store(true, .release);
+    self.session.browser.env.requestTerminate();
     self.env.requestTerminate();
 }
 
-pub fn cancelTerminate(self: *Runtime) void {
-    self.env.cancelTerminate();
+fn checkCancel(context: *anyopaque) bool {
+    const self: *Runtime = @ptrCast(@alignCast(context));
+    return self.cancelled.load(.acquire);
 }
 
 fn createContext(self: *Runtime) InitError!void {
@@ -283,6 +287,42 @@ fn setObjectProperty(
 /// runtime's call arena and valid until deinit or the next run.
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     _ = self.call_arena.reset(.retain_capacity);
+    self.timed_out = false;
+
+    const previous_hook = self.session.cancel_hook;
+    self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
+    defer self.session.cancel_hook = previous_hook;
+
+    var done: std.Io.Event = .unset;
+    const deadline = if (self.timeout_ms) |ms|
+        std.Thread.spawn(.{}, cancelAtDeadline, .{ self, &done, ms }) catch
+            return try self.dupeError("could not start the script timer")
+    else
+        null;
+    const result = self.evaluate(source, name);
+    if (deadline) |thread| {
+        done.set(lp.io);
+        thread.join();
+    }
+    if (self.cancelled.swap(false, .acq_rel)) {
+        self.env.cancelTerminate();
+        self.session.browser.env.cancelTerminate();
+    }
+    return result;
+}
+
+fn cancelAtDeadline(self: *Runtime, done: *std.Io.Event, timeout_ms: u32) void {
+    const deadline: std.Io.Clock.Timestamp = .fromNow(lp.io, .{ .raw = .fromMilliseconds(timeout_ms), .clock = .awake });
+    // Spurious wakeups also report Timeout; only the deadline counts.
+    while (true) {
+        if (done.waitTimeout(lp.io, .{ .deadline = deadline })) |_| return else |_| {}
+        if (deadline.compare(.lte, .now(lp.io, .awake))) break;
+    }
+    self.timed_out = true;
+    self.cancel();
+}
+
+fn evaluate(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     self.run_timer = .now(lp.io, .boot);
 
     var hs: lp.js.HandleScope = undefined;
@@ -1108,9 +1148,9 @@ fn runTestScript(runtime: *Runtime, source: []const u8) !void {
     }
 }
 
-fn terminateRuntimeSoon(runtime: *Runtime) void {
+fn cancelRuntimeSoon(runtime: *Runtime) void {
     lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
-    runtime.terminate();
+    runtime.cancel();
 }
 
 test "agent script runtime: goto and evaluate dispatch through browser tools" {
@@ -1525,7 +1565,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     try testing.expectString("value ok tail\n", sink.written());
 }
 
-test "agent script runtime: terminate interrupts local JavaScript" {
+test "agent script runtime: cancel interrupts local JavaScript" {
     defer testing.test_session.closeAllPages();
 
     var registry = NodeRegistry.init(testing.allocator);
@@ -1534,12 +1574,34 @@ test "agent script runtime: terminate interrupts local JavaScript" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    const thread = try std.Thread.spawn(.{}, terminateRuntimeSoon, .{runtime});
-    defer runtime.cancelTerminate();
-    defer thread.join();
+    // After an `await` the loop runs inside a microtask checkpoint.
+    for ([_][]const u8{ "while (true) {}", "await null;\nwhile (true) {}" }) |source| {
+        const thread = try std.Thread.spawn(.{}, cancelRuntimeSoon, .{runtime});
+        defer thread.join();
+        try testing.expect(try runtime.runSource(source, "agent-runtime-cancel-test.js") != null);
+    }
 
-    const message = try runtime.runSource("while (true) {}", "agent-runtime-terminate-test.js");
-    try testing.expect(message != null);
+    var returned: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    runtime.result_sink = &returned.writer;
+    try testing.expectEqual(null, try runtime.runSource("return 'ok';", "agent-runtime-cancel-test.js"));
+    try testing.expectString("ok\n", returned.written());
+}
+
+test "agent script runtime: timeout_ms cancels a run that outlives it" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    runtime.timeout_ms = 50;
+    try testing.expect(try runtime.runSource("while (true) {}", "agent-runtime-timeout-test.js") != null);
+    try testing.expect(runtime.timed_out);
+
+    try testing.expectEqual(null, try runtime.runSource("void 0;", "agent-runtime-timeout-test.js"));
+    try testing.expect(!runtime.timed_out);
 }
 
 test "agent script runtime: agent variables persist and page globals are isolated" {

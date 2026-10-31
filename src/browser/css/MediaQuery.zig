@@ -28,8 +28,8 @@
 //!               `device-width` / `min-device-width` / `max-device-width`,
 //!               `device-height` / `min-device-height` / `max-device-height`,
 //!               `orientation` (portrait | landscape).
-//!   - Length values: `<int>px`, `<int>em` (1em = 16px), `<int>rem`,
-//!     and bare `0`.
+//!   - Length values: `<number>px`, `<number>em` (1em = 16px),
+//!     `<number>rem`, and bare `0`.
 //!   - Operators: `,` (OR), `and`, `not`, `only`.
 //!
 //! Per spec, any unrecognized media type, unsupported feature, or malformed
@@ -42,6 +42,7 @@
 const std = @import("std");
 
 const Viewport = @import("../Viewport.zig");
+const Tokenizer = @import("Tokenizer.zig");
 
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.
@@ -297,29 +298,31 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
 
     var buf: [max_feature_name_len]u8 = undefined;
     const lname = stripDevice(std.ascii.lowerString(&buf, name));
+    const width: f64 = @floatFromInt(viewport.width);
+    const height: f64 = @floatFromInt(viewport.height);
     if (std.mem.eql(u8, lname, "min-width")) {
         const px = parseLengthPx(value) orelse return false;
-        return viewport.width >= px;
+        return width >= px;
     }
     if (std.mem.eql(u8, lname, "max-width")) {
         const px = parseLengthPx(value) orelse return false;
-        return viewport.width <= px;
+        return width <= px;
     }
     if (std.mem.eql(u8, lname, "width")) {
         const px = parseLengthPx(value) orelse return false;
-        return viewport.width == px;
+        return width == px;
     }
     if (std.mem.eql(u8, lname, "min-height")) {
         const px = parseLengthPx(value) orelse return false;
-        return viewport.height >= px;
+        return height >= px;
     }
     if (std.mem.eql(u8, lname, "max-height")) {
         const px = parseLengthPx(value) orelse return false;
-        return viewport.height <= px;
+        return height <= px;
     }
     if (std.mem.eql(u8, lname, "height")) {
         const px = parseLengthPx(value) orelse return false;
-        return viewport.height == px;
+        return height == px;
     }
     if (std.mem.eql(u8, lname, "orientation")) {
         if (std.ascii.eqlIgnoreCase(value, "landscape")) return viewport.width >= viewport.height;
@@ -342,33 +345,27 @@ fn evalBoolean(name: []const u8, viewport: Viewport) bool {
     return false;
 }
 
-/// Parse `<int>px`, `<int>em` (1em=16px), `<int>rem`, or bare `0`.
-/// Negative lengths are rejected per the Media Queries spec (`<length>` in
-/// media features may not be negative). Returns null on any other form.
-fn parseLengthPx(value: []const u8) ?u32 {
+/// Parse `<number>px`, `<number>em` (1em=16px), `<number>rem`, or bare `0`:
+/// a single dimension or zero number token. Negative lengths are rejected per
+/// the Media Queries spec (`<length>` in media features may not be negative).
+/// Returns null on any other form.
+fn parseLengthPx(value: []const u8) ?f64 {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
-    if (trimmed.len == 0) return null;
-    if (trimmed[0] == '-') return null;
-
-    var i: usize = 0;
-    if (i < trimmed.len and trimmed[i] == '+') i += 1;
-    const num_start = i;
-    while (i < trimmed.len and std.ascii.isDigit(trimmed[i])) i += 1;
-    if (i == num_start) return null;
-
-    const num = std.fmt.parseInt(u32, trimmed[num_start..i], 10) catch return null;
-    const unit = std.mem.trim(u8, trimmed[i..], &std.ascii.whitespace);
-
-    if (unit.len == 0) {
-        return if (num == 0) 0 else null;
-    }
-    if (std.ascii.eqlIgnoreCase(unit, "px")) return num;
-    // `em` / `rem`: 1em = 16px. `std.math.mul` returns an error on u32 overflow
-    // (e.g. `268435456em` would otherwise wrap or panic in debug); treat that
-    // as an unparseable length so the query fails closed per MQ4.
-    if (std.ascii.eqlIgnoreCase(unit, "em")) return std.math.mul(u32, num, 16) catch null;
-    if (std.ascii.eqlIgnoreCase(unit, "rem")) return std.math.mul(u32, num, 16) catch null;
-    return null;
+    var tokenizer: Tokenizer = .{ .input = trimmed };
+    const px: f64 = switch (tokenizer.next() orelse return null) {
+        .number => |n| if (n.value == 0) 0 else return null,
+        .dimension => |d| blk: {
+            if (d.value < 0) return null;
+            const v: f64 = d.value;
+            if (std.ascii.eqlIgnoreCase(d.unit, "px")) break :blk v;
+            if (std.ascii.eqlIgnoreCase(d.unit, "em")) break :blk v * 16;
+            if (std.ascii.eqlIgnoreCase(d.unit, "rem")) break :blk v * 16;
+            return null;
+        },
+        else => return null,
+    };
+    if (tokenizer.next() != null) return null;
+    return px;
 }
 
 const testing = std.testing;
@@ -600,15 +597,12 @@ test "MediaQuery: comments are stripped" {
     try testing.expect(!matches("/* unterminated", v));
 }
 
-test "MediaQuery: em / rem overflow fails closed" {
+test "MediaQuery: huge em / rem lengths do not wrap" {
     const v = Viewport.default;
-    // 268435456 × 16 overflows u32 (would wrap to 0); the evaluator must
-    // treat the length as unparseable and the query as non-matching.
+    // 268435456 × 16 is past u32; the length stays huge instead of wrapping.
     try testing.expect(!matches("(min-width: 268435456em)", v));
     try testing.expect(!matches("(min-width: 268435456rem)", v));
-    // Just below the overflow threshold still parses (but doesn't match
-    // because 268435455 × 16 > viewport width).
-    try testing.expect(!matches("(min-width: 268435455em)", v));
+    try testing.expect(matches("(max-width: 268435456em)", v));
 }
 
 test "MediaQuery: unimplemented units fail closed" {
@@ -630,11 +624,49 @@ test "MediaQuery: range syntax is unsupported (fails closed)" {
     try testing.expect(!matches("(600px <= width <= 1200px)", v));
 }
 
-test "MediaQuery: decimal lengths are rejected" {
+test "MediaQuery: decimal lengths" {
     const v = Viewport.default;
-    try testing.expect(!matches("(min-width: 600.5px)", v));
-    try testing.expect(!matches("(min-width: 0.5em)", v));
-    try testing.expect(!matches("(width: 1920.0px)", v));
+    try testing.expect(matches("(min-width: 600.5px)", v));
+    try testing.expect(matches("(min-width: .5em)", v));
+    try testing.expect(matches("(width: 1920.0px)", v));
+    try testing.expect(!matches("(min-width: 1920.01px)", v));
+    try testing.expect(!matches("(max-width: 1919.98px)", v));
+    try testing.expect(!matches("(min-width: 120.0625em)", v)); // 1921px
+}
+
+test "MediaQuery: exponent lengths" {
+    const v = Viewport.default;
+    try testing.expect(matches("(min-width: 1e2px)", v));
+    try testing.expect(matches("(min-width: 1E2px)", v));
+    try testing.expect(matches("(min-width: +1e2px)", v));
+    try testing.expect(matches("(width: 1.92e3px)", v));
+    try testing.expect(matches("(width: 19200e-1px)", v));
+}
+
+test "MediaQuery: malformed numbers fail closed" {
+    const v = Viewport.default;
+    try testing.expect(!matches("(min-width: 600.px)", v));
+    try testing.expect(!matches("(min-width: 1.2.3px)", v));
+    try testing.expect(!matches("(min-width: 1e)", v));
+    try testing.expect(!matches("(min-width: 1e+px)", v));
+    try testing.expect(!matches("(min-width: e2px)", v));
+    try testing.expect(!matches("(min-width: -1e2px)", v));
+    // A number, whitespace, then an ident: not a dimension.
+    try testing.expect(!matches("(min-width: 600.5 px)", v));
+}
+
+test "MediaQuery: negative zero is zero" {
+    const v = Viewport.default;
+    try testing.expect(matches("(min-width: -0px)", v));
+    try testing.expect(matches("(min-width: -0)", v));
+}
+
+test "MediaQuery: breakpoint ranges with .98 / .02 maxima" {
+    // Bootstrap writes `max-width: 767.98px`; @artsy/fresnel writes
+    // `(min-width: Npx) and (max-width: M - 0.02px)`.
+    const v = Viewport{ .width = 1024, .height = 768 };
+    try testing.expect(matches("(min-width:1023px) and (max-width:1199.98px)", v));
+    try testing.expect(!matches("(min-width:992px) and (max-width:1022.98px)", v));
 }
 
 test "MediaQuery: whitespace-tight and -loose features" {
@@ -657,11 +689,8 @@ test "MediaQuery: additional comment placements" {
     try testing.expect(matches("(min-width: 600px /* ) ( */ )", v));
 }
 
-test "MediaQuery: u32 boundaries on length" {
+test "MediaQuery: large lengths" {
     const v = Viewport.default;
-    // u32 max parses; the viewport (1920) doesn't reach it.
-    try testing.expect(!matches("(min-width: 4294967295px)", v));
-    // Beyond u32 max overflows parseInt and fails closed.
     try testing.expect(!matches("(min-width: 4294967296px)", v));
     try testing.expect(!matches("(min-width: 9999999999px)", v));
 }

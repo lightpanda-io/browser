@@ -2175,9 +2175,13 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     if (comptime from_parser) {
+        const script_node = script.asNode();
+        if (script_node.isConnected() == false) {
+            return;
+        }
         // parser-inserted scripts have force-async set to false, but only if
         // they have src or non-empty content
-        if (script._src.len > 0 or script.asNode().firstChild() != null) {
+        if (script._src.len > 0 or script_node.firstChild() != null) {
             script._force_async = false;
         }
     }
@@ -2716,9 +2720,9 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         return self.queueLinkEvent(link, .@"error", generation);
     }
 
-    if (response.body.items.len > MAX_STYLESHEET_BYTES) {
+    if (response.body.items().len > MAX_STYLESHEET_BYTES) {
         log.debug(.http, "external stylesheet too large", .{
-            .bytes = response.body.items.len,
+            .bytes = response.body.items().len,
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
@@ -2754,7 +2758,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     else
         null;
     const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
-    const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
+    const text = try css_charset.decode(arena.allocator(), response.body.items(), protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.queueLinkEvent(link, .@"error", generation);
@@ -4628,8 +4632,7 @@ test "Frame: scriptAddedCallback does not run a module when termination is pendi
     // The sticky terminate is set but V8's own state was consumed by the
     // JSEntry unwind of whatever the terminate landed in.
     const env = frame.js.env;
-    env.terminate();
-    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
 
     try frame.scriptAddedCallback(false, element.as(HtmlElement.Script));
     env.cancelTerminate();
@@ -4654,8 +4657,7 @@ test "Frame: iframeAddedCallback does not create a frame when termination is pen
 
     const env = frame.js.env;
     const contexts_before = env.contexts.items.len;
-    env.terminate();
-    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
     defer env.cancelTerminate();
 
     try frame.iframeAddedCallback(iframe);

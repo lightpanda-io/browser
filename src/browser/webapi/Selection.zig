@@ -68,7 +68,7 @@ fn isInTree(self: *const Selection) bool {
     return anchor_node.isConnected() and focus_node.isConnected();
 }
 
-fn getAnchorNode(self: *const Selection) ?*Node {
+pub fn getAnchorNode(self: *const Selection) ?*Node {
     const range = self._range orelse return null;
 
     const node = switch (self._direction) {
@@ -619,7 +619,7 @@ fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset
     }
 }
 
-fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
+pub fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
     if (parent._type == .document_type) return error.InvalidNodeType;
 
     // If the node is not contained in the document, do not change the selection
