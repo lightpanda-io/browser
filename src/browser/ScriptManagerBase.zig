@@ -1359,8 +1359,7 @@ test "ScriptManagerBase: evaluate drops a ready async module when termination is
     // The sticky terminate is set but V8's own state was consumed by the
     // JSEntry unwind of whatever the terminate landed in.
     const env = frame.js.env;
-    env.terminate();
-    js.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
 
     sm.evaluate();
     env.cancelTerminate();
