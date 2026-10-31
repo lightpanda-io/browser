@@ -5,6 +5,7 @@ ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 # option test filter make test F="server"
 F=
+COMPLETION_BASH ?= bash
 
 # Extra flags forwarded to every `$(ZIG) build` invocation, e.g.:
 #   ZIGFLAGS=-Ddev_fast=false make test
@@ -77,7 +78,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test coverage bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test test-completion-bash coverage bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -127,6 +128,10 @@ run-debug: build-dev
 
 test:
 	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) test -freference-trace
+
+## Test the generated Bash completion script (COMPLETION_BASH=/bin/bash)
+test-completion-bash: build-dev
+	@COMPLETION_BASH="$(COMPLETION_BASH)" $(COMPLETION_BASH) tests/completion-bash.sh ./zig-out/bin/lightpanda
 
 ## Run unit tests under kcov, report in zig-out/coverage/index.html (F= filters)
 coverage:
