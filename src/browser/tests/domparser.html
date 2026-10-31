@@ -545,15 +545,17 @@
     '<?1x?><a/>',
     '<?xml version="2.0"?><a/>', // only 1.x versions are accepted
     '<?xml version="10.0"?><a/>',
+    '<?xml version="1."?><a/>',  // VersionNum is '1.' [0-9]+
     '<?xml version=1.0?><a/>',
     '<?xml encoding="UTF-8"?><a/>', // version is required
     '<a>&undefined;</a>',        // no DTD declares the entity
   ]) {
     testing.expectEqual(bad + ' -> error', bad + (isError(p.parseFromString(bad, 'text/xml')) ? ' -> error' : ' -> ok'));
   }
-  // VersionNum is '1.' [0-9]+.
-  testing.diverges("Chrome accepts version=\"1.\"", () => {
-    testing.expectEqual(true, isError(p.parseFromString('<?xml version="1."?><a/>', 'text/xml')));
+  // An external DTD the parser doesn't read could declare it, so it isn't a
+  // well-formedness error.
+  testing.diverges("Chrome rejects an entity an unread external DTD could declare", () => {
+    testing.expectEqual(false, isError(p.parseFromString('<!DOCTYPE a SYSTEM "a.dtd"><a>&undefined;</a>', 'text/xml')));
   });
 
   // legal documents must not be flagged
@@ -570,8 +572,6 @@
     // DOCTYPE internal subset (old Illustrator exports); xml5ever has no DTD
     // support, so the entities stay unexpanded, but the document must parse.
     '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [\n\t<!ENTITY ns_svg "http://www.w3.org/2000/svg">\n]>\n<svg xmlns="&ns_svg;"><rect/></svg>',
-    // A DTD could declare it.
-    '<!DOCTYPE a SYSTEM "a.dtd"><a>&undefined;</a>',
     '<a>\x7F</a>',       // discouraged but legal code points
   ]) {
     testing.expectEqual(good + ' -> ok', good + (isError(p.parseFromString(good, 'text/xml')) ? ' -> error' : ' -> ok'));

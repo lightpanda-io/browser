@@ -8,7 +8,8 @@
   testing.expectEqual(BaseAudioContext.prototype, Object.getPrototypeOf(AudioContext.prototype));
   testing.expectEqual(AudioNode.prototype, Object.getPrototypeOf(ConvolverNode.prototype));
   // testing.expectEqual('running', ctx.state);
-  testing.expectEqual(48000, ctx.sampleRate);
+  // Chrome takes the hardware's rate: 44100 with no audio device
+  testing.expectEqual(true, [44100, 48000].includes(ctx.sampleRate));
   testing.expectEqual(true, ctx.baseLatency > 0);
   testing.expectEqual(0, ctx.outputLatency);
 
@@ -28,7 +29,7 @@
 <script id=lifecycle type=module>
   const state = await testing.async();
 
-  const ctx = new AudioContext();
+  const ctx = new AudioContext({sampleRate: 48000});
   const events = [];
   ctx.onstatechange = () => events.push(ctx.state);
 
@@ -64,7 +65,7 @@
 
 <script id=params type=module>
   const state = await testing.async();
-  const ctx = new AudioContext();
+  const ctx = new AudioContext({sampleRate: 48000});
   const gain = ctx.createGain();
   // Chrome only renders, and so updates the params of, connected nodes
   gain.connect(ctx.destination);
@@ -91,7 +92,7 @@
 
 <script id=convolver>
 {
-  const ctx = new AudioContext();
+  const ctx = new AudioContext({sampleRate: 48000});
   const convolver = ctx.createConvolver();
   testing.expectEqual(true, convolver instanceof ConvolverNode);
   testing.expectEqual(null, convolver.buffer);
@@ -149,7 +150,7 @@
     return bytes;
   }
 
-  const ctx = new AudioContext();
+  const ctx = new AudioContext({sampleRate: 48000});
   const order = [];
   // negative samples: Chrome scales positive ones by 1/32767, not 1/32768
   const buffer = await ctx.decodeAudioData(wav([0, -32768, -16384, 0], 48000), b => order.push(['callback', b.length]))
