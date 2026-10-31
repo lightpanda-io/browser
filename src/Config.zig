@@ -76,6 +76,24 @@ fn logFilterValidator(allocator: Allocator, args: *std.process.Args.Iterator, li
     }
 }
 
+fn v8FlagsUnsafeValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?[]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    // Reject flags known to expose native bindings or weaken sandbox isolation.
+    const dangerous = [_][]const u8{
+        "--allow-natives-syntax",
+        "--expose-gc",
+        "--expose-wasm",
+        "--no-verify-heap",
+        "--turbo-fast-api-calls",
+    };
+    for (dangerous) |flag| {
+        if (std.mem.contains(u8, str, flag)) {
+            return error.InvalidArgument;
+        }
+    }
+    target.* = try allocator.dupe(u8, str);
+}
+
 fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?log.Level) !void {
     const str = args.next() orelse return error.MissingArgument;
     if (std.mem.eql(u8, str, "error")) {
@@ -298,7 +316,7 @@ const CommonOptions = .{
     .{ .name = "disable_features", .type = DisabledFeatures, .default = DisabledFeatures{} },
     .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
-    .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
+    .{ .name = "v8_flags_unsafe", .type = ?[]const u8, .validator = v8FlagsUnsafeValidator },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{
@@ -1920,4 +1938,16 @@ test "Config: --unix-socket" {
     defer arena.deinit();
     const config = try parseArgs(arena.allocator(), .{ .vector = &vector });
     try std.testing.expectEqualStrings("/tmp/lp.sock", config.mode.serve.unix_socket.?);
+}
+
+test "Config: v8_flags_unsafe rejects dangerous flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Dangerous flags must be rejected by validator (assertion fix for F-03).
+    try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), .{ .vector = &[_][*:0]const u8{
+        "lightpanda", "serve", "--v8-flags-unsafe", "--allow-natives-syntax",
+    } }));
+    try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), .{ .vector = &[_][*:0]const u8{
+        "lightpanda", "serve", "--v8-flags-unsafe", "--expose-gc",
+    } }));
 }
