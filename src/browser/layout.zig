@@ -226,10 +226,12 @@ fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_per
     };
 }
 
-// A block in normal flow fills its containing block, less its margins.
+// A block in normal flow fills its containing block, less its margins; a
+// positioned box pinned on both sides, less its offsets too.
 fn fillWidth(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
     const containing = containingBlockWidth(self, owner);
-    return @max(0, containing - owner._style_manager.inlineMargins(self, containing));
+    return @max(0, containing - style_manager.inlineMargins(self, containing) - style_manager.inlineInsets(self, containing));
 }
 
 /// The width of the containing block; the viewport above the root.

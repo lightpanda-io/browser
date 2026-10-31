@@ -870,11 +870,18 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
         .content => return .shrink,
         .auto => {},
     }
-    if (vis.box != .block_level or el.getTag().isReplacedOrControl()) {
-        return .shrink;
-    }
     const flow = self.flowProps(el);
-    if (flow.position.outOfFlow() or flow.floated) {
+    if (flow.position.outOfFlow()) {
+        // Pinned on both sides, it stretches between them (CSS 2 §10.3.7).
+        // It's blockified, so an inline box does too; a table and a
+        // replaced box keep their own width.
+        const geometry = self.geometryProps(el);
+        if (vis.box == .table or el.getTag().isReplacedOrControl() or geometry.left.unit == .auto or geometry.right.unit == .auto) {
+            return .shrink;
+        }
+        return .fill;
+    }
+    if (vis.box != .block_level or el.getTag().isReplacedOrControl() or flow.floated) {
         return .shrink;
     }
     const parent = self.boxParent(el) orelse return .fill;
@@ -918,11 +925,30 @@ pub fn inlineMargins(self: *StyleManager, el: *Element, containing_width: ?f64) 
     self.assertOwns(el);
     self.rebuildIfDirty() catch return 0;
     const geometry = self.geometryProps(el);
+    return self.inlineSum(geometry.margin_left, geometry.margin_right, containing_width);
+}
+
+/// The left and right offsets of a positioned box, 0 for one in flow. A
+/// percentage resolves against the containing block's width.
+pub fn inlineInsets(self: *StyleManager, el: *Element, containing_width: f64) f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return 0;
+    if (self.flowProps(el).position.outOfFlow() == false) {
+        return 0;
+    }
+    const geometry = self.geometryProps(el);
+    return self.inlineSum(geometry.left, geometry.right, containing_width);
+}
+
+// A left and right length together, in px. A percentage resolves against
+// the containing block's width (0 when it isn't known); auto and values
+// that need layout are 0.
+fn inlineSum(self: *StyleManager, left: Length, right: Length, containing_width: ?f64) f64 {
     const viewport = self.frame.page.getViewport();
     var total: f64 = 0;
-    for ([_]Length{ geometry.margin_left, geometry.margin_right }) |margin| {
-        total += margin.resolve(viewport) orelse switch (margin.unit) {
-            .percent => if (containing_width) |width| @as(f64, margin.value) / 100.0 * width else 0,
+    for ([_]Length{ left, right }) |length| {
+        total += length.resolve(viewport) orelse switch (length.unit) {
+            .percent => if (containing_width) |width| @as(f64, length.value) / 100.0 * width else 0,
             else => 0,
         };
     }
@@ -959,10 +985,26 @@ fn generatesBox(self: *StyleManager, el: *Element) bool {
 }
 
 /// The nearest ancestor whose width el's percentages and fill resolve
-/// against. A plain inline box is skipped: a block inside a span sizes off
-/// the block around the span.
+/// against; null for the viewport. A plain inline box is skipped: a block
+/// inside a span sizes off the block around the span. An absolutely
+/// positioned box sizes off its nearest positioned ancestor, a fixed one
+/// off the viewport.
 pub fn containingBlock(self: *StyleManager, el: *Element) ?*Element {
     self.assertOwns(el);
+    self.rebuildIfDirty() catch return self.boxParent(el);
+    switch (self.flowProps(el).position) {
+        .fixed => return null,
+        .absolute => {
+            var current = self.boxParent(el);
+            while (current) |c| : (current = self.boxParent(c)) {
+                if (self.flowProps(c).position != .static) {
+                    return c;
+                }
+            }
+            return null;
+        },
+        .static, .relative, .sticky => {},
+    }
     return self.blockContainer(self.boxParent(el) orelse return null);
 }
 
@@ -2320,7 +2362,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -2335,6 +2377,8 @@ const Geometry = struct {
         max_width: ?Length = null,
         margin_left: ?Length = null,
         margin_right: ?Length = null,
+        left: ?Length = null,
+        right: ?Length = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
@@ -2350,28 +2394,25 @@ const Geometry = struct {
                 self.flex_grow = flexShorthandGrows(value);
                 self.flex_no_shrink = flexShorthandNoShrink(value);
             } else if (std.ascii.eqlIgnoreCase(name, "margin")) {
-                var count: usize = 0;
-                // margin: top [right [bottom [left]]]
-                var tokens: [4][]const u8 = undefined;
-                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
-                while (it.next()) |token| : (count += 1) {
-                    if (count == tokens.len) {
-                        return;
-                    }
-                    tokens[count] = token;
-                }
-                if (count == 0) {
-                    return;
-                }
-                const right = tokens[@min(count - 1, 1)];
-                self.margin_right = Length.parseMargin(right);
-                self.margin_left = Length.parseMargin(if (count == 4) tokens[3] else right);
+                const sides = boxSides(value) orelse return;
+                self.margin_left = sides.left;
+                self.margin_right = sides.right;
             } else if (std.ascii.eqlIgnoreCase(name, "margin-inline")) {
-                // margin-inline: start [end], in a left-to-right flow
-                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
-                const start = it.next() orelse return;
-                self.margin_left = Length.parseMargin(start);
-                self.margin_right = Length.parseMargin(it.next() orelse start);
+                const sides = inlineSides(value) orelse return;
+                self.margin_left = sides.left;
+                self.margin_right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "inset")) {
+                const sides = boxSides(value) orelse return;
+                self.left = sides.left;
+                self.right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "inset-inline")) {
+                const sides = inlineSides(value) orelse return;
+                self.left = sides.left;
+                self.right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "left") or std.ascii.eqlIgnoreCase(name, "inset-inline-start")) {
+                self.left = Length.parseMargin(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "right") or std.ascii.eqlIgnoreCase(name, "inset-inline-end")) {
+                self.right = Length.parseMargin(value);
             } else if (std.ascii.eqlIgnoreCase(name, "margin-left") or std.ascii.eqlIgnoreCase(name, "margin-inline-start")) {
                 self.margin_left = Length.parseMargin(value);
             } else if (std.ascii.eqlIgnoreCase(name, "margin-right") or std.ascii.eqlIgnoreCase(name, "margin-inline-end")) {
@@ -2391,6 +2432,40 @@ const Geometry = struct {
             } else if (std.ascii.eqlIgnoreCase(name, "max-width")) {
                 self.max_width = Length.parse(value);
             }
+        }
+
+        const Sides = struct { left: Length, right: Length };
+
+        // The left and right of a `top [right [bottom [left]]]` shorthand
+        // (margin, inset).
+        fn boxSides(value: []const u8) ?Sides {
+            var count: usize = 0;
+            var tokens: [4][]const u8 = undefined;
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            while (it.next()) |token| : (count += 1) {
+                if (count == tokens.len) {
+                    return null;
+                }
+                tokens[count] = token;
+            }
+            if (count == 0) {
+                return null;
+            }
+            const right = tokens[@min(count - 1, 1)];
+            return .{
+                .left = Length.parseMargin(if (count == 4) tokens[3] else right),
+                .right = Length.parseMargin(right),
+            };
+        }
+
+        // `start [end]` (margin-inline, inset-inline), in a left-to-right flow
+        fn inlineSides(value: []const u8) ?Sides {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            const start = it.next() orelse return null;
+            return .{
+                .left = Length.parseMargin(start),
+                .right = Length.parseMargin(it.next() orelse start),
+            };
         }
 
         // `overlay` is Chrome's legacy alias of auto.
@@ -2450,7 +2525,7 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u217) {
+    const Computed = packed struct(u287) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -2466,6 +2541,9 @@ const Geometry = struct {
         // auto, and values that need layout, are 0
         margin_left: Length = .{},
         margin_right: Length = .{},
+        // Positioned boxes only; auto, and values that need layout, are auto
+        left: Length = .{},
+        right: Length = .{},
     };
 };
 
