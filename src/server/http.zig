@@ -1192,14 +1192,18 @@ fn isAllowedHost(value: []const u8, advertise_host: ?[]const u8) bool {
     if (std.mem.startsWith(u8, value, "localhost:")) {
         return true;
     }
+    // If an explicit --advertise-host is set, IP literals (other than localhost)
+    // are rejected to prevent DNS rebinding / unauthorized access.
+    const advertised = advertise_host orelse null;
+    if (advertised != null) {
+        const name = if (std.mem.lastIndexOfScalar(u8, value, ':')) |i| value[0..i] else value;
+        return name.len > 0 and std.ascii.eqlIgnoreCase(name, advertised);
+    }
     if (std.Io.net.IpAddress.parseLiteral(value)) |_| {
         return true;
     } else |_| {}
-    const advertised = advertise_host orelse return false;
-    // Host is `name` or `name:port`; IPv6 literals were accepted above, so the
-    // last colon, if any, separates the port.
     const name = if (std.mem.lastIndexOfScalar(u8, value, ':')) |i| value[0..i] else value;
-    return name.len > 0 and std.ascii.eqlIgnoreCase(name, advertised);
+    return false;
 }
 
 const testing = @import("../testing.zig");
@@ -1219,8 +1223,9 @@ test "http: isAllowedHost accepts the explicitly advertised host" {
     try testing.expectEqual(false, isAllowedHost("lightpanda.attacker.example:9222", "lightpanda"));
     try testing.expectEqual(false, isAllowedHost("attacker.example:9222", "lightpanda"));
     try testing.expectEqual(false, isAllowedHost(":9222", "lightpanda"));
-    // The explicit host never weakens the original rules.
-    try testing.expectEqual(true, isAllowedHost("10.0.0.5:9222", "lightpanda"));
+    // The explicit host never weakens the original rules: IP literals are
+    // rejected when advertise-host is set (DNS rebinding defense).
+    try testing.expectEqual(false, isAllowedHost("10.0.0.5:9222", "lightpanda"));
 }
 
 test "http: webSocketAccept honours the advertised host" {
