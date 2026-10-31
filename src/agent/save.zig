@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Pure helpers behind the agent's `/save`: parsing the command, validating and
-//! picking filenames, writing script files, and shaping the synthesis prompt.
+//! picking filenames, and shaping the synthesis prompt.
 //! State-bearing orchestration (path resolution against the active session,
 //! LLM synthesis turns) lives on `Agent`.
 
@@ -95,22 +95,6 @@ pub fn fileExists(path: []const u8) !bool {
         else => return err,
     };
     return true;
-}
-
-pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void {
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = mode != .append });
-    defer file.close(lp.io);
-    var offset: u64 = 0;
-    if (mode == .append) {
-        offset = try file.length(lp.io);
-        if (offset > 0 and content.len > 0) {
-            try file.writePositionalAll(lp.io, "\n", offset);
-            offset += 1;
-        }
-    }
-    try file.writePositionalAll(lp.io, content, offset);
-    offset += content.len;
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writePositionalAll(lp.io, "\n", offset);
 }
 
 /// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model

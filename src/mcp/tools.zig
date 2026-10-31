@@ -104,10 +104,10 @@ const run_schema = browser_tools.minify(
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "script": { "type": "string", "description": "The agent script source, as `save` writes it or `lightpanda run` takes it." },
+    \\    "script": { "type": "string", "description": "The agent script source, as `save` writes it or `lightpanda run` takes it. Pass this or `path`." },
+    \\    "path": { "type": "string", "description": "A script file to run instead of `script`, such as one `save` wrote. Relative to the server's working directory." },
     \\    "timeout": { "type": "integer", "description": "Optional. Milliseconds before the script is stopped and reported as an error with its output so far. At least 1; defaults to 60000." }
-    \\  },
-    \\  "required": ["script"]
+    \\  }
     \\}
 );
 
@@ -124,7 +124,7 @@ pub const extra_tools = [_]McpTool{
         .name = "run",
         .title = "Run an agent script",
         .annotations = .{},
-        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
+        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. Pass the source as `script`, or the `path` of a file `save` wrote. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
         .inputSchema = run_schema,
     },
     .{
@@ -272,7 +272,7 @@ fn handleSave(arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult 
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
         return .{ .fail = "out of memory" };
 
-    writeScript(args.path, script) catch |err| {
+    lp.script_file.write(args.path, script, false) catch |err| {
         const msg = arena.print("could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
             return .{ .fail = "could not write script file" };
         return .{ .fail = msg };
@@ -287,14 +287,25 @@ const default_run_timeout_ms = 60_000;
 const max_run_console_bytes = 64 * 1024;
 
 fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Value) ExtraResult {
-    const Args = struct { script: []const u8, timeout: ?u32 = null };
-    const args = browser_tools.parseArgs(Args, arena, arguments) catch
-        return .{ .invalid_params = "expected { script: string, timeout?: integer }" };
+    const Args = struct { script: ?[]const u8 = null, path: ?[]const u8 = null, timeout: ?u32 = null };
+    const usage = "expected { script: string } or { path: string }, with an optional timeout: integer";
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch return .{ .invalid_params = usage };
+    if ((args.script == null) == (args.path == null)) return .{ .invalid_params = usage };
     if (args.timeout == 0) return .{ .invalid_params = "timeout must be at least 1 ms" };
-    return runScript(server, arena, args.script, args.timeout orelse default_run_timeout_ms) catch .{ .fail = "out of memory" };
+
+    const script = args.script orelse blk: {
+        const path = args.path.?;
+        if (!browser_tools.isPathSafe(path)) return .{ .fail = browser_tools.unsafe_path_message };
+        break :blk lp.script_file.read(arena, path) catch |err| {
+            const msg = arena.print("could not read {s}: {s}", .{ path, @errorName(err) }) catch
+                return .{ .fail = "could not read script file" };
+            return .{ .fail = msg };
+        };
+    };
+    return runScript(server, arena, script, args.path orelse "<mcp>", args.timeout orelse default_run_timeout_ms) catch .{ .fail = "out of memory" };
 }
 
-fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, timeout_ms: u32) error{OutOfMemory}!ExtraResult {
+fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, name: []const u8, timeout_ms: u32) error{OutOfMemory}!ExtraResult {
     const active = server.active_session;
     const session = active.session;
 
@@ -316,7 +327,7 @@ fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, time
     runtime.result_sink = &returned.writer;
 
     runtime.timeout_ms = timeout_ms;
-    const message = try runtime.runSource(script, "<mcp>");
+    const message = try runtime.runSource(script, name);
 
     var output = console.toArrayList();
     if (capped.truncated) {
@@ -398,13 +409,6 @@ fn handleSessionClose(server: *Server, arena: std.mem.Allocator, arguments: ?std
 fn okFmt(arena: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ExtraResult {
     const msg = arena.print(fmt, args) catch return .{ .fail = "out of memory" };
     return .{ .ok = msg };
-}
-
-fn writeScript(path: []const u8, content: []const u8) !void {
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
-    defer file.close(lp.io);
-    try file.writeStreamingAll(lp.io, content);
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeStreamingAll(lp.io, "\n");
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -1348,6 +1352,40 @@ test "MCP - save writes the script to disk" {
 
     const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
+}
+
+test "MCP - run: runs a script that save wrote" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try testing.tmpPath(&tmp, "script.js");
+
+    try router.handleMessage(server, aa, try aa.print(
+        \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"save","arguments":{{"path":"{s}","script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.evaluate(\"document.getElementById('btn').textContent\");"}}}}}}
+    , .{path}));
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa, try aa.print(
+        \\{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"run","arguments":{{"path":"{s}"}}}}}}
+    , .{path}));
+    try testing.expectEqual("Click Me\n", try testToolText(aa, out.written()));
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"path":"../script.js"}}}
+    );
+    try testing.expectEqual(browser_tools.unsafe_path_message, try testToolText(aa, out.written()));
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa, try aa.print(
+        \\{{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{{"name":"run","arguments":{{"path":"{s}","script":"return 1;"}}}}}}
+    , .{path}));
+    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32602 } }, out.written());
 }
 
 test "MCP - run: a script drives the session and returns its output" {
