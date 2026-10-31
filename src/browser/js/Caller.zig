@@ -1027,6 +1027,169 @@ pub const Function = struct {
     };
 };
 
+/// V8 Fast API integration.
+pub const FastFunction = struct {
+    pub const Options = struct {
+        static: bool,
+        exposed: Function.Opts.Exposed,
+    };
+
+    inline fn isPointer(comptime T: type) bool {
+        const Inner = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
+        return @typeInfo(Inner) == .pointer;
+    }
+
+    /// Only primitives and V8 values are allowed.
+    fn Arg(comptime T: type) type {
+        // Treat pointers as V8 values; we can change this in the future.
+        if (comptime isPointer(T)) {
+            return ?*const v8.Value;
+        }
+        // Primitives.
+        return switch (comptime T) {
+            void, bool, i32, u32, i64, u64, f32, f64 => T,
+            else => @compileError("type '" ++ @typeName(T) ++ "' is not allowed in Fast Functions"),
+        };
+    }
+
+    fn toCTypeEnum(comptime T: type) v8.CTypeInfo {
+        // Treat pointers as V8 values; we can change this in the future.
+        if (comptime isPointer(T)) {
+            return .{ .type = v8.kCTypeInfoType_V8Value };
+        }
+        // Primitives.
+        return switch (T) {
+            void => .{ .type = v8.kCTypeInfoType_Void },
+            bool => .{ .type = v8.kCTypeInfoType_Bool },
+            u8 => unreachable, // u8 return crashes TurboFan.
+            i32 => .{ .type = v8.kCTypeInfoType_Int32 },
+            u32 => .{ .type = v8.kCTypeInfoType_Uint32 },
+            i64 => .{ .type = v8.kCTypeInfoType_Int64 },
+            u64 => .{ .type = v8.kCTypeInfoType_Uint64 },
+            f32 => .{ .type = v8.kCTypeInfoType_Float32 },
+            f64 => .{ .type = v8.kCTypeInfoType_Float64 },
+            else => unreachable,
+        };
+    }
+
+    /// Mirrors `.optional` / `.pointer` branches from `Local.jsValueToZig`.
+    fn toZigObject(comptime T: type, handle: ?*const v8.Value) error{InvalidArgument}!T {
+        const value = handle.?;
+        if (@typeInfo(T) == .optional) {
+            if (v8.v8__Value__IsNullOrUndefined(value)) return null;
+        }
+        if (!v8.v8__Value__IsObject(value)) return error.InvalidArgument;
+        const Pointer = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
+        return TaggedOpaque.fromJS(Pointer, @ptrCast(value));
+    }
+
+    fn canReturnErr(comptime T: type) struct { type, bool } {
+        return switch (@typeInfo(T)) {
+            .error_union => |info| .{ info.payload, true },
+            .error_set => unreachable,
+            else => .{ T, false },
+        };
+    }
+
+    /// Creates a constant `v8.CFunction`.
+    pub fn create(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        // Bunch of comptime-known stuff.
+        const Fn = @TypeOf(function);
+        const info = @typeInfo(Fn).@"fn";
+        const P = info.param_types;
+        // TODO: Check if last argument is `*js.Execution` or `*const js.Execution`.
+        if (comptime !options.static and P.len == 0) {
+            @compileError("non-static fast functions need a receiver parameter");
+        }
+        // Parameters bound from JS arguments; a non-static function's `self`
+        // comes from the receiver instead.
+        const offset = if (options.static) 0 else 1;
+        const JsP = P[offset..];
+        const R, const can_return_err = canReturnErr(info.return_type orelse {
+            @compileError("fast functions cannot return generic types");
+        });
+        // TODO: Support this in the future.
+        if (comptime can_return_err) {
+            @compileError("fast functions cannot return errors currently");
+        }
+        const Opts = *const v8.FastApiCallbackOptions;
+
+        const type_safe_call = struct {
+            inline fn wrap(c_args: anytype, opts: Opts) R {
+                var args: ParameterTypes(Fn) = undefined;
+                if (comptime !options.static) {
+                    // Cannot fail.
+                    args[0] = TaggedOpaque.fromJS(P[0].?, @ptrCast(c_args[0].?)) catch unreachable;
+                }
+                inline for (JsP, 0..) |param_type, i| {
+                    const c_arg = c_args[i + 1];
+                    args[i + offset] = blk: {
+                        const ParamType = param_type.?;
+                        if (comptime isPointer(ParamType)) {
+                            break :blk toZigObject(ParamType, c_arg) catch {
+                                // On failure, we get into handle scope, this
+                                // should only be done with `opts.isolate`.
+                                const isolate_handle = opts.isolate.?;
+                                const isolate: js.Isolate = .{ .handle = isolate_handle };
+                                var scope: js.HandleScope = undefined;
+                                scope.initWithIsolateHandle(isolate_handle);
+                                defer scope.deinit();
+                                _ = isolate.throwException(isolate.createTypeError("invalid argument"));
+                                return std.mem.zeroes(R);
+                            };
+                        }
+                        // Primitive.
+                        break :blk c_arg;
+                    };
+                }
+                return @call(.auto, function, args);
+            }
+        }.wrap;
+
+        // Zig doesn't allow us to build parameter lists in comptime. So we
+        // switch on the JS argument count and prefer a wrapper depending on it.
+        const func = switch (comptime JsP.len) {
+            0 => struct {
+                fn wrap(recv: ?*const v8.Value, opts: Opts) callconv(.c) R {
+                    return type_safe_call(.{recv}, opts);
+                }
+            }.wrap,
+            1 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(JsP[0].?), opts: Opts) callconv(.c) R {
+                    return type_safe_call(.{ recv, a0 }, opts);
+                }
+            }.wrap,
+            2 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(JsP[0].?), a1: Arg(JsP[1].?), opts: Opts) callconv(.c) R {
+                    return type_safe_call(.{ recv, a0, a1 }, opts);
+                }
+            }.wrap,
+            3 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(JsP[0].?), a1: Arg(JsP[1].?), a2: Arg(JsP[2].?), opts: Opts) callconv(.c) R {
+                    return type_safe_call(.{ recv, a0, a1, a2 }, opts);
+                }
+            }.wrap,
+            else => @compileError("exceeded argument limit for fast functions"),
+        };
+
+        const args = comptime blk: {
+            // [receiver] + [JS arguments] + [v8.FastApiCallbackOptions].
+            var list: [JsP.len + 2]v8.CTypeInfo = undefined;
+            list[0] = .{ .type = v8.kCTypeInfoType_V8Value };
+            for (JsP, 1..) |t, i| list[i] = toCTypeEnum(t.?);
+            list[list.len - 1] = .{ .type = v8.kCTypeInfoType_CallbackOptions };
+            break :blk list;
+        };
+        const func_info: *const v8.CFunctionInfo = &.{
+            .return_info = toCTypeEnum(R),
+            .arg_count = args.len,
+            .arg_info = &args,
+        };
+
+        return &.{ .address = @ptrCast(&func), .type_info = func_info };
+    }
+};
+
 // If we call a method in javascript: cat.lives('nine');
 //
 // Then we'd expect a Zig function with 2 parameters: a self and the string.
