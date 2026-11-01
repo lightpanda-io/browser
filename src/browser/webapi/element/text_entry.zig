@@ -22,7 +22,6 @@
 const std = @import("std");
 
 const Frame = @import("../../Frame.zig");
-const Factory = @import("../../Factory.zig");
 
 const CData = @import("../CData.zig");
 const Event = @import("../Event.zig");
@@ -67,7 +66,7 @@ pub fn TextEntry(comptime T: type) type {
             }
             const len: u32 = @intCast(self.getValue().len);
             try applySelectionRange(self, 0, len, .none, frame);
-            try frame.queueElementEvent(Factory.protoOf(self), .select);
+            try frame.queueElementEvent(self.asHtml(), .select);
         }
 
         pub fn innerInsert(self: *T, str: []const u8, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
@@ -461,7 +460,7 @@ pub fn TextEntry(comptime T: type) type {
             if (self._selectionchange_pending) {
                 return;
             }
-            try frame.queueElementEvent(Factory.protoOf(self), .selectionchange);
+            try frame.queueElementEvent(self.asHtml(), .selectionchange);
             self._selectionchange_pending = true;
         }
 

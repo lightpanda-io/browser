@@ -33,6 +33,9 @@ pub const Proto = HtmlElement;
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _sheet: ?*CSSStyleSheet = null,
 
+pub fn asHtml(self: *Style) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Style) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -83,7 +86,7 @@ pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
         return;
     }
 
-    try frame.queueLoad(Factory.protoOf(self));
+    try frame.queueLoad(self.asHtml());
 }
 
 pub fn getType(self: *const Style) []const u8 {
