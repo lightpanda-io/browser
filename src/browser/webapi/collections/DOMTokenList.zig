@@ -264,40 +264,50 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
     const allocator = frame.call_arena;
+    var tokens = try self.getTokens(allocator);
+    const initial_length = tokens.count();
+    var attribute_value = self.getValue();
+    var i: usize = 0;
 
-    var i: i32 = 0;
-    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
-
-    var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
-    while (it.next()) |token| {
-        const gop = try seen.getOrPut(allocator, token);
-        if (gop.found_existing) {
-            continue;
+    // Value-iterator forEach follows Array.prototype.forEach: snapshot the
+    // length, but read each indexed value from the live list. Attribute values
+    // are immutable slices replaced on writes, so their identity detects
+    // changes to this list without invalidating on unrelated page mutations.
+    while (i < initial_length) : (i += 1) {
+        const current_value = self.getValue();
+        if (current_value.ptr != attribute_value.ptr or current_value.len != attribute_value.len) {
+            try self.readTokens(&tokens, allocator);
+            attribute_value = current_value;
         }
+        if (i >= tokens.count()) continue;
+
+        const token = tokens.keys()[i];
         var caught: js.TryCatch.Caught = .{};
-        cb.tryCall(void, .{ token, i, self }, &caught) catch |err| {
+        cb.tryCall(void, .{ token, @as(i32, @intCast(i)), self }, &caught) catch |err| {
             frame.page.recordJsError(err);
             log.debug(.js, "forEach callback", .{ .caught = caught, .source = "DOMTokenList" });
             return;
         };
-        i += 1;
     }
 }
 
 fn getTokens(self: *const DOMTokenList, allocator: std.mem.Allocator) !Lookup {
-    const value = self.getValue();
-    if (value.len == 0) {
-        return .empty;
-    }
-
     var list: Lookup = .empty;
+    try self.readTokens(&list, allocator);
+    return list;
+}
+
+fn readTokens(self: *const DOMTokenList, list: *Lookup, allocator: std.mem.Allocator) !void {
+    list.clearRetainingCapacity();
+    const value = self.getValue();
+    if (value.len == 0) return;
+
     try list.ensureTotalCapacity(allocator, 4);
 
     var it = std.mem.tokenizeAny(u8, value, WHITESPACE);
     while (it.next()) |token| {
         try list.put(allocator, token, {});
     }
-    return list;
 }
 
 fn validateToken(token: []const u8) !void {
