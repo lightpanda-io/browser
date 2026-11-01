@@ -21,11 +21,13 @@ const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
+const Mime = @import("../../../Mime.zig");
 const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Event = @import("../../Event.zig");
+const reflection = @import("../reflection.zig");
 
 const HtmlElement = @import("../Html.zig");
 const MediaError = @import("../../media/MediaError.zig");
@@ -123,42 +125,109 @@ pub fn as(self: *Media, comptime T: type) *T {
     return self.is(T).?;
 }
 
-fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) ![]const u8 {
-    const pos = std.mem.findScalar(u8, mime_type, ';') orelse mime_type.len;
-    const base_type = std.mem.trim(u8, mime_type[0..pos], &std.ascii.whitespace);
-
-    const lower = try std.ascii.allocLowerString(frame.local_arena, base_type);
-
-    if (isProbablySupported(lower)) {
-        return "probably";
+// Answers follow Chrome's tables: single-codec types are "probably" on their
+// own, containers are "maybe" until every listed codec is one they can hold.
+fn canPlayType(_: *const Media, mime_type: []const u8) []const u8 {
+    var it = Mime.ContentTypeIterator.init(mime_type);
+    var buf: [32]u8 = undefined;
+    if (it.essence.len > buf.len) {
+        return "";
     }
-    if (isMaybeSupported(lower)) {
-        return "maybe";
+    const container = containers.get(std.ascii.lowerString(&buf, it.essence)) orelse return "";
+
+    const codecs = while (it.next()) |param| {
+        if (std.ascii.eqlIgnoreCase(param.key, "codecs")) break param.value;
+    } else "";
+    if (codecs.len == 0) {
+        return if (container.implied) "probably" else "maybe";
     }
-    return "";
+
+    var result: []const u8 = "probably";
+    var ids = std.mem.splitScalar(u8, codecs, ',');
+    while (ids.next()) |raw| {
+        const codec = parseCodec(std.mem.trim(u8, raw, " \t")) orelse return "";
+        if (container.codecs.contains(codec.kind) == false) {
+            return "";
+        }
+        if (codec.ambiguous) {
+            result = "maybe";
+        }
+    }
+    return result;
 }
 
-fn isProbablySupported(mime_type: []const u8) bool {
-    if (std.mem.eql(u8, mime_type, "video/mp4")) return true;
-    if (std.mem.eql(u8, mime_type, "video/webm")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/mp4")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/webm")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/mpeg")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/mp3")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/ogg")) return true;
-    if (std.mem.eql(u8, mime_type, "video/ogg")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/wav")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/wave")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/x-wav")) return true;
-    return false;
-}
+const Codec = enum { mp3, pcm, vorbis, opus, flac, vp8, vp9, vp09, av1, avc, aac };
+const Codecs = std.EnumSet(Codec);
 
-fn isMaybeSupported(mime_type: []const u8) bool {
-    if (std.mem.eql(u8, mime_type, "audio/aac")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/x-m4a")) return true;
-    if (std.mem.eql(u8, mime_type, "video/x-m4v")) return true;
-    if (std.mem.eql(u8, mime_type, "audio/flac")) return true;
-    return false;
+const Container = struct {
+    // A single-codec type: "probably" without a codecs parameter.
+    implied: bool = false,
+    codecs: Codecs,
+};
+
+const audio_codecs: []const Codec = &.{ .mp3, .pcm, .vorbis, .opus, .flac, .aac };
+
+const containers: std.StaticStringMap(Container) = .initComptime(.{
+    .{ "audio/mpeg", Container{ .implied = true, .codecs = .initOne(.mp3) } },
+    .{ "audio/mp3", Container{ .implied = true, .codecs = .empty } },
+    .{ "audio/aac", Container{ .implied = true, .codecs = .empty } },
+    .{ "audio/flac", Container{ .implied = true, .codecs = .empty } },
+    .{ "audio/wav", Container{ .codecs = .initOne(.pcm) } },
+    .{ "audio/x-wav", Container{ .codecs = .initOne(.pcm) } },
+    .{ "audio/ogg", Container{ .codecs = .initMany(&.{ .vorbis, .opus, .flac }) } },
+    .{ "video/ogg", Container{ .codecs = .initMany(&.{ .vorbis, .opus, .flac, .vp8 }) } },
+    .{ "application/ogg", Container{ .codecs = .initMany(&.{ .vorbis, .opus, .flac, .vp8 }) } },
+    .{ "audio/webm", Container{ .codecs = .initMany(&.{ .vorbis, .opus }) } },
+    .{ "video/webm", Container{ .codecs = .initMany(&.{ .vorbis, .opus, .vp8, .vp9, .vp09, .av1 }) } },
+    .{ "audio/mp4", Container{ .codecs = .initMany(&.{ .mp3, .opus, .flac, .aac }) } },
+    .{ "video/mp4", Container{ .codecs = .initMany(&.{ .mp3, .opus, .flac, .aac, .vp09, .av1, .avc }) } },
+    .{ "audio/x-m4a", Container{ .codecs = .initOne(.aac) } },
+    .{ "video/x-m4v", Container{ .codecs = .initMany(&.{ .aac, .avc }) } },
+    .{ "audio/x-matroska", Container{ .codecs = .initMany(audio_codecs) } },
+    .{ "video/x-matroska", Container{ .codecs = .initMany(audio_codecs ++ &[_]Codec{ .vp8, .vp09, .av1, .avc }) } },
+});
+
+const ParsedCodec = struct {
+    kind: Codec,
+    // No profile given (`avc1`, `mp4a.40`): Chrome answers "maybe".
+    ambiguous: bool = false,
+};
+
+// Codec ids are case-sensitive. Profile suffixes aren't validated.
+fn parseCodec(id: []const u8) ?ParsedCodec {
+    const exact: std.StaticStringMap(ParsedCodec) = comptime .initComptime(.{
+        .{ "mp3", ParsedCodec{ .kind = .mp3 } },
+        .{ "mp4a.69", ParsedCodec{ .kind = .mp3 } },
+        .{ "mp4a.6B", ParsedCodec{ .kind = .mp3 } },
+        .{ "1", ParsedCodec{ .kind = .pcm } },
+        .{ "vorbis", ParsedCodec{ .kind = .vorbis } },
+        .{ "opus", ParsedCodec{ .kind = .opus } },
+        .{ "flac", ParsedCodec{ .kind = .flac } },
+        .{ "vp8", ParsedCodec{ .kind = .vp8 } },
+        .{ "vp8.0", ParsedCodec{ .kind = .vp8 } },
+        .{ "vp9", ParsedCodec{ .kind = .vp9 } },
+        .{ "mp4a.67", ParsedCodec{ .kind = .aac } },
+        .{ "mp4a.40", ParsedCodec{ .kind = .aac, .ambiguous = true } },
+        .{ "avc1", ParsedCodec{ .kind = .avc, .ambiguous = true } },
+        .{ "avc3", ParsedCodec{ .kind = .avc, .ambiguous = true } },
+    });
+    if (exact.get(id)) |codec| {
+        return codec;
+    }
+
+    const prefixes = [_]struct { []const u8, Codec }{
+        .{ "mp4a.40.", .aac },
+        .{ "avc1.", .avc },
+        .{ "avc3.", .avc },
+        .{ "vp09.", .vp09 },
+        .{ "av01.", .av1 },
+    };
+    for (prefixes) |prefix| {
+        if (id.len > prefix[0].len and std.mem.startsWith(u8, id, prefix[0])) {
+            return .{ .kind = prefix[1] };
+        }
+    }
+    return null;
 }
 
 pub fn play(self: *Media, frame: *Frame) !js.Promise {
@@ -230,8 +299,11 @@ fn getVolume(self: *const Media) f64 {
     return self._volume;
 }
 
-fn setVolume(self: *Media, value: f64) void {
-    self._volume = @max(0.0, @min(1.0, value));
+fn setVolume(self: *Media, value: f64) !void {
+    if ((value >= 0.0 and value <= 1.0) == false) {
+        return error.IndexSizeError;
+    }
+    self._volume = value;
 }
 
 fn getMuted(self: *const Media) bool {
@@ -332,6 +404,19 @@ fn performAutomaticTrackSelection(self: *Media, frame: *Frame) !void {
     }
 }
 
+// Missing and invalid values are metadata (Chrome), the empty string is auto.
+fn getPreload(self: *const Media) []const u8 {
+    const value = self.asConstElement().getAttributeSafe(comptime .wrap("preload")) orelse return "metadata";
+    if (value.len == 0) {
+        return "auto";
+    }
+    return reflection.enumeratedValue(value, &.{ "none", "metadata", "auto" }, null, "metadata").?;
+}
+
+fn setPreload(self: *Media, value: []const u8, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("preload"), .wrap(value), frame);
+}
+
 pub fn getSrc(self: *const Media, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
     const src = element.getAttributeInterned("src") orelse return "";
@@ -374,7 +459,7 @@ pub const JsApi = struct {
     pub const controls = reflect.boolean("controls");
     pub const loop = reflect.boolean("loop");
     pub const muted = bridge.accessor(Media.getMuted, Media.setMuted, .{});
-    pub const preload = reflect.enumerated("preload", &.{ "none", "metadata", "auto" }, .{ .missing = "auto" });
+    pub const preload = bridge.accessor(Media.getPreload, Media.setPreload, .{ .ce_reactions = true });
     pub const volume = bridge.accessor(Media.getVolume, Media.setVolume, .{});
     pub const playbackRate = bridge.accessor(Media.getPlaybackRate, Media.setPlaybackRate, .{});
     pub const currentTime = bridge.accessor(Media.getCurrentTime, Media.setCurrentTime, .{});

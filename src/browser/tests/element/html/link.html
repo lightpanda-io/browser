@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <link id="lh1" rel="stylesheet" href="/styles/main.css" media="screen" as="style" crossorigin="anonymous">
@@ -57,7 +58,7 @@
   const state = await testing.async();
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = 'https://lightpanda.io/opensource-browser/15';
+  link.href = '/styles/latin1-header.css';
 
   link.addEventListener('load', (e) => {
     state.resolve(e);
@@ -107,7 +108,7 @@
   // Append to DOM,
   document.head.appendChild(link);
   // then set href.
-  link.href = 'https://lightpanda.io/opensource-browser/15';
+  link.href = '/styles/visibility.css';
 
   testing.onload(() => testing.expectEqual(true, result));
 }
@@ -119,7 +120,7 @@
   // stylesheet fetching is off by default and a bare preload has no `as`, so
   // neither touches the network. modulepreload actually fetches, so it needs
   // a real file — the load event still fires synthetically either way.
-  const hrefs = ['/nope', '/nope', 'script/modulepreload.js'];
+  const hrefs = ['/styles/visibility.css', '/nope', 'script/modulepreload.js'];
   const results = rels.map(() => false);
   rels.forEach((rel, i) => {
     let link = document.createElement('link')
@@ -131,9 +132,11 @@
 
 
   testing.onload(() => {
-    results.forEach((r) => {
-      testing.expectEqual(true, r);
+    testing.expectEqual(true, results[0]);
+    testing.diverges('Chrome: a preload without `as` is never fetched and fires no load', () => {
+      testing.expectEqual(true, results[1]);
     });
+    testing.expectEqual(true, results[2]);
   });
 }
 </script>
@@ -145,7 +148,7 @@
   const removed = [];
   const link1 = document.createElement('link');
   link1.rel = 'stylesheet';
-  link1.href = '/nope';
+  link1.href = '/styles/visibility.css';
   link1.addEventListener('load', () => removed.push('load'));
   document.head.appendChild(link1);
   link1.remove();
@@ -153,10 +156,10 @@
   const repointed = [];
   const link2 = document.createElement('link');
   link2.rel = 'stylesheet';
-  link2.href = '/nope';
+  link2.href = '/styles/visibility.css';
   link2.addEventListener('load', () => repointed.push('load'));
   document.head.appendChild(link2);
-  link2.href = '/nope2';
+  link2.href = '/styles/visibility2.css';
 
   testing.onload(() => {
     testing.expectEqual([], removed);
@@ -176,7 +179,9 @@
   link.href = '/styles/visibility.css';
   document.head.appendChild(link);
   testing.onload(() => {
-    testing.expectEqual(before, document.styleSheets.length);
+    testing.diverges('Chrome: always fetches stylesheets', () => {
+      testing.expectEqual(before, document.styleSheets.length);
+    });
   });
 }
 </script>

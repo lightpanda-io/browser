@@ -114,8 +114,8 @@ pub fn NodeLive(comptime mode: Mode) type {
         .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form, .listed, .document_named => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .cells => TreeWalker.Children,
         .table_rows => Table.RowWalker,
-        // A select's options can sit one level down, inside an <optgroup>, so
-        // these two walk the subtree and filter on the parent instead.
+        // A select's options can sit anywhere below it, so these two walk the
+        // subtree and filter on the option's ancestors instead.
         .select_options, .selected_options => TreeWalker.FullExcludeSelf,
     };
     return struct {
@@ -338,20 +338,11 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .select_options, .selected_options => {
                     const opt = node.is(Element.Html.Option) orelse return false;
 
-                    // we have an option, but it's only a match IF
-                    // 1 - this is a direct child of the root (i.e. the <select>)
-                    // OR
-                    // 2 - this is a direct child of an <optgroup> which, itself
-                    //     is a direct child of the root (i.e. the <select>)
-
+                    // only if it's in the root <select>'s list of options
                     const parent = node.parentNode() orelse return false;
-                    if (parent == self._tw._root) {
-                        // case 1: it _is_ a direct child of the root
-                    } else {
-                        if (parent.is(Element.Html.OptGroup) == null or parent.parentNode() != self._tw._root) {
-                            return false;
-                        }
-                        // the parent is an optgroup and its parent is the root
+                    const pos = Element.Html.Select.listPosition(parent) orelse return false;
+                    if (pos.select.asNode() != self._tw._root) {
+                        return false;
                     }
 
                     return if (comptime mode == .selected_options) opt.getSelected() else true;
