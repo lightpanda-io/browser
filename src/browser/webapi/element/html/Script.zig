@@ -38,6 +38,10 @@ _executed: bool = false,
 // dynamic scripts are forced to be async by default
 _force_async: bool = true,
 
+pub fn asHtml(self: *Script) *HtmlElement {
+    return Factory.protoOf(self);
+}
+
 pub fn asElement(self: *Script) *Element {
     return Factory.protoOf(self).asElement();
 }
