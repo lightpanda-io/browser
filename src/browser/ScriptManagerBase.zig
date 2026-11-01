@@ -658,6 +658,9 @@ pub const Script = struct {
     // pieces.
     microtask_pre_execute: bool = true,
 
+    // Where a parser-inserted inline script is in its document.
+    text_position: js.Local.SourcePosition = .{},
+
     pub const Source = union(enum) {
         @"inline": []const u8,
         // Taken from the transfer (Transfer.takeBody), freed in deinit.
@@ -1025,7 +1028,7 @@ pub const Script = struct {
                 },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.main_js.module(false, local, self.source.content(), url, cacheable, self.script_cache) catch break :blk false;
+                    frame.main_js.module(false, local, self.source.content(), url, self.text_position, cacheable, self.script_cache) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -1078,7 +1081,9 @@ pub const Script = struct {
     fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
         const sc = self.script_cache orelse {
             // wasn't in the cache and isn't cacheable
-            return local.eval(text, self.url);
+            const result = try local.compileWithCache(text, self.url, self.text_position, null);
+            _ = try result.script.run();
+            return;
         };
 
         if (text.ptr != self.source.content().ptr) {
@@ -1095,7 +1100,7 @@ pub const Script = struct {
             return local.eval(text, self.url);
         }
 
-        const result = try local.compileWithCache(text, self.url, sc.bytes);
+        const result = try local.compileWithCache(text, self.url, .{}, sc.bytes);
         _ = try result.script.run();
 
         if (sc.bytes != null) {
