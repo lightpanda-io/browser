@@ -453,6 +453,54 @@
 }
 </script>
 
+<script id="outOfFlowBoxesDontSizeTheirParent">
+{
+  // An out-of-flow box doesn't size its parent. A slide holding an
+  // absolutely positioned image is as wide as its other content, so
+  // slides-per-page isn't 0 (and pages never Infinity).
+  const row = document.createElement('div');
+  row.style.cssText = 'display: flex; width: 1000px';
+  const slide = document.createElement('div');
+  const media = document.createElement('div');
+  media.style.position = 'relative';
+  const img = document.createElement('img');
+  img.width = 2000;
+  img.style.position = 'absolute';
+  media.appendChild(img);
+  const title = document.createElement('div');
+  title.style.width = '200px';
+  slide.append(media, title);
+  row.appendChild(slide);
+  document.body.appendChild(row);
+  testing.expectEqual(200, slide.offsetWidth);
+  testing.expectEqual(5, Math.floor(row.clientWidth / slide.offsetWidth));
+  row.remove();
+
+  for (const position of ['absolute', 'fixed']) {
+    const box = document.createElement('div');
+    box.style.display = 'inline-block';
+    const child = document.createElement('div');
+    child.style.width = '40px';
+    const positioned = document.createElement('div');
+    positioned.style.cssText = `position: ${position}; width: 500px`;
+    box.append(child, positioned);
+    document.body.appendChild(box);
+    testing.expectEqual(40, box.offsetWidth, position);
+    box.remove();
+  }
+
+  // It still extends its scroller's scrollable area
+  const scroller = document.createElement('div');
+  scroller.style.cssText = 'position: relative; overflow: auto; width: 300px';
+  const wide = document.createElement('div');
+  wide.style.cssText = 'position: absolute; width: 900px; height: 10px';
+  scroller.appendChild(wide);
+  document.body.appendChild(scroller);
+  testing.expectEqual(900, scroller.scrollWidth);
+  scroller.remove();
+}
+</script>
+
 <script id="flexAndGridItemWidths">
 {
   // Row-flex items shrink to their content unless they grow, in which case
