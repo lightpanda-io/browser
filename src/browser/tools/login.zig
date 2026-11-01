@@ -455,7 +455,7 @@ fn fillCredential(
         return plaintext_refusal;
     }
     const text = value orelse return null;
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{});
     lp.actions.fill(target.node, text, target.page) catch |err| return mapActionError(err);
     _ = try settleAction(session, registry, scope);
     return null;
@@ -486,7 +486,7 @@ fn submitLogin(
         return null;
     }
 
-    const scope = beginAction(session);
+    const scope = beginAction(session, .{ .await_late_popup = true });
     lp.actions.press(input.node, "Enter", input.page) catch |err| return mapActionError(err);
     _ = try settleAction(session, registry, scope);
     try settle(session);
