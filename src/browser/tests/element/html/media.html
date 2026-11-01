@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <audio id="audio1" src="test.mp3"></audio>
@@ -7,13 +8,17 @@
 <script id="canPlayType_audio">
   {
     const audio = document.getElementById('audio1');
+    // single-codec types are "probably" on their own, containers "maybe"
     testing.expectEqual('probably', audio.canPlayType('audio/mp3'));
     testing.expectEqual('probably', audio.canPlayType('audio/mpeg'));
-    testing.expectEqual('probably', audio.canPlayType('audio/webm'));
-    testing.expectEqual('probably', audio.canPlayType('audio/ogg'));
-    testing.expectEqual('probably', audio.canPlayType('audio/wav'));
-    testing.expectEqual('maybe', audio.canPlayType('audio/aac'));
-    testing.expectEqual('maybe', audio.canPlayType('audio/flac'));
+    testing.expectEqual('probably', audio.canPlayType(' AUDIO/MPEG '));
+    testing.expectEqual('probably', audio.canPlayType('audio/aac'));
+    testing.expectEqual('probably', audio.canPlayType('audio/flac'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/webm'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/ogg'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/wav'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/mp4'));
+    testing.expectEqual('', audio.canPlayType('audio/wave'));
     testing.expectEqual('', audio.canPlayType('audio/invalid'));
     testing.expectEqual('', audio.canPlayType('video/invalid'));
   }
@@ -22,9 +27,10 @@
 <script id="canPlayType_video">
   {
     const video = document.getElementById('video1');
-    testing.expectEqual('probably', video.canPlayType('video/mp4'));
-    testing.expectEqual('probably', video.canPlayType('video/webm'));
-    testing.expectEqual('probably', video.canPlayType('video/ogg'));
+    testing.expectEqual('maybe', video.canPlayType('video/mp4'));
+    testing.expectEqual('maybe', video.canPlayType('video/webm'));
+    testing.expectEqual('maybe', video.canPlayType('video/ogg'));
+    testing.expectEqual('', video.canPlayType('video/quicktime'));
     testing.expectEqual('', video.canPlayType('video/invalid'));
   }
 </script>
@@ -32,8 +38,28 @@
 <script id="canPlayType_with_codecs">
   {
     const audio = document.getElementById('audio1');
-    testing.expectEqual('probably', audio.canPlayType('audio/mp3; codecs="mp3"'));
     testing.expectEqual('probably', audio.canPlayType('video/mp4; codecs="avc1.42E01E"'));
+    testing.expectEqual('probably', audio.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'));
+    testing.expectEqual('probably', audio.canPlayType('video/webm;codecs=vp8'));
+    testing.expectEqual('probably', audio.canPlayType('video/webm; codecs="vp9, opus"'));
+    testing.expectEqual('probably', audio.canPlayType('audio/ogg; codecs="flac"'));
+    testing.expectEqual('probably', audio.canPlayType('audio/wav; codecs="1"'));
+    testing.expectEqual('probably', audio.canPlayType('audio/mpeg; codecs="mp3"'));
+    testing.expectEqual('probably', audio.canPlayType('audio/mpeg; codecs='));
+
+    // no profile
+    testing.expectEqual('maybe', audio.canPlayType('video/mp4; codecs="avc1"'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/mp4; codecs="mp4a.40"'));
+
+    // single-codec types take no codecs parameter
+    testing.expectEqual('', audio.canPlayType('audio/mp3; codecs="mp3"'));
+    testing.expectEqual('', audio.canPlayType('audio/flac; codecs="flac"'));
+
+    // a codec the container can't hold, or an unknown one, sinks the whole list
+    testing.expectEqual('', audio.canPlayType('audio/webm; codecs="vp8"'));
+    testing.expectEqual('', audio.canPlayType('video/ogg; codecs="vp9"'));
+    testing.expectEqual('', audio.canPlayType('video/mp4; codecs="avc1.42E01E, bogus"'));
+    testing.expectEqual('', audio.canPlayType('video/mp4; codecs="AVC1.42E01E"'));
   }
 </script>
 
@@ -42,16 +68,19 @@
     const audio = document.getElementById('audio1');
     testing.expectEqual(true, audio.paused);
 
+    // Chrome rejects it: pause() interrupts the load
     var resolved = false;
     audio.play().then(() => {
       resolved = true;
-    });
+    }, () => {});
     testing.expectEqual(false, audio.paused);
 
     audio.pause();
     testing.expectEqual(true, audio.paused);
     testing.onload(() => {
-      testing.expectEqual(true, resolved);
+      testing.diverges('Lightpanda fakes playback', () => {
+        testing.expectEqual(true, resolved);
+      });
     })
   }
 </script>
@@ -66,37 +95,40 @@
     audio.addEventListener('pause', () => events.push('pause'));
     audio.addEventListener('emptied', () => events.push('emptied'));
 
-    // First play: paused -> playing, fires play + playing
-    audio.play();
-    testing.expectEqual('play,playing', events.join(','));
+    // Chrome queues play, and fires playing only once media is loaded
+    testing.diverges('Lightpanda fakes playback', () => {
+      // First play: paused -> playing, fires play + playing
+      audio.play().catch(() => {});
+      testing.expectEqual('play,playing', events.join(','));
 
-    // Second play: already playing, no events
-    audio.play();
-    testing.expectEqual('play,playing', events.join(','));
+      // Second play: already playing, no events
+      audio.play().catch(() => {});
+      testing.expectEqual('play,playing', events.join(','));
 
-    // Pause: playing -> paused, fires pause
-    audio.pause();
-    testing.expectEqual('play,playing,pause', events.join(','));
+      // Pause: playing -> paused, fires pause
+      audio.pause();
+      testing.expectEqual('play,playing,pause', events.join(','));
 
-    // Second pause: already paused, no event
-    audio.pause();
-    testing.expectEqual('play,playing,pause', events.join(','));
+      // Second pause: already paused, no event
+      audio.pause();
+      testing.expectEqual('play,playing,pause', events.join(','));
 
-    // Third play: resume from pause, fires play + playing (verified in Chrome)
-    audio.play();
-    testing.expectEqual('play,playing,pause,play,playing', events.join(','));
+      // Third play: resume from pause, fires play + playing
+      audio.play().catch(() => {});
+      testing.expectEqual('play,playing,pause,play,playing', events.join(','));
 
-    // Pause again
-    audio.pause();
-    testing.expectEqual('play,playing,pause,play,playing,pause', events.join(','));
+      // Pause again
+      audio.pause();
+      testing.expectEqual('play,playing,pause,play,playing,pause', events.join(','));
 
-    // Load: resets state, fires emptied
-    audio.load();
-    testing.expectEqual('play,playing,pause,play,playing,pause,emptied', events.join(','));
+      // Load: resets state, fires emptied
+      audio.load();
+      testing.expectEqual('play,playing,pause,play,playing,pause,emptied', events.join(','));
 
-    // Play after load: fires play + playing
-    audio.play();
-    testing.expectEqual('play,playing,pause,play,playing,pause,emptied,play,playing', events.join(','));
+      // Play after load: fires play + playing
+      audio.play().catch(() => {});
+      testing.expectEqual('play,playing,pause,play,playing,pause,emptied,play,playing', events.join(','));
+    });
   }
 </script>
 
@@ -109,11 +141,9 @@
     audio.volume = 0.5;
     testing.expectEqual(0.5, audio.volume);
 
-    audio.volume = 1.5; // Should clamp to 1.0
-    testing.expectEqual(1.0, audio.volume);
-
-    audio.volume = -0.5; // Should clamp to 0.0
-    testing.expectEqual(0.0, audio.volume);
+    testing.expectError('IndexSizeError', () => { audio.volume = 1.5; });
+    testing.expectError('IndexSizeError', () => { audio.volume = -0.5; });
+    testing.expectEqual(0.5, audio.volume);
 
     audio.muted = true;
     testing.expectEqual(true, audio.muted);
@@ -165,10 +195,11 @@
     testing.expectEqual(0, audio.readyState); // HAVE_NOTHING initially
     testing.expectEqual(0, audio.networkState); // NETWORK_EMPTY initially
 
-    audio.play();
-    // In headless mode, play() immediately succeeds without actual media loading
-    testing.expectEqual(4, audio.readyState); // HAVE_ENOUGH_DATA in headless
-    testing.expectEqual(1, audio.networkState); // NETWORK_IDLE in headless
+    audio.play().catch(() => {});
+    testing.diverges('Lightpanda fakes playback', () => {
+      testing.expectEqual(4, audio.readyState);
+      testing.expectEqual(1, audio.networkState);
+    });
   }
 </script>
 
@@ -177,12 +208,14 @@
     // Create a fresh element to test load() behavior
     const audio = document.createElement('audio');
     audio.currentTime = 50;
-    audio.play();
+    audio.play().catch(() => {});
 
     audio.load();
     testing.expectEqual(true, audio.paused);
-    testing.expectEqual(0, audio.currentTime);
     testing.expectEqual(0, audio.readyState);
+    testing.diverges('Chrome: load() of an element without a source keeps the position', () => {
+      testing.expectEqual(0, audio.currentTime);
+    });
   }
 </script>
 
@@ -228,6 +261,15 @@
 <script id="attributes_preload">
   {
     const audio = document.createElement('audio');
+    testing.expectEqual('metadata', audio.preload);
+
+    audio.preload = '';
+    testing.expectEqual('auto', audio.preload);
+
+    audio.preload = 'bogus';
+    testing.expectEqual('metadata', audio.preload);
+
+    audio.preload = 'AUTO';
     testing.expectEqual('auto', audio.preload);
 
     audio.preload = 'none';
@@ -246,7 +288,9 @@
 
     audio.src = 'test.mp3';
     testing.expectEqual(testing.BASE_URL + 'element/html/test.mp3', audio.src);
-    testing.expectEqual(testing.BASE_URL + 'element/html/test.mp3', audio.currentSrc);
+    testing.diverges('Lightpanda sets currentSrc without running resource selection', () => {
+      testing.expectEqual(testing.BASE_URL + 'element/html/test.mp3', audio.currentSrc);
+    });
   }
 </script>
 

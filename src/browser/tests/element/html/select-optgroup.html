@@ -1,10 +1,11 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!--
-  A select's list of options is its option children PLUS the option children of
-  its optgroup children:
-  https://html.spec.whatwg.org/multipage/form-elements.html#the-select-element
+  A select's list of options is its option descendants, in tree order, except
+  those below a select, hr, option, datalist or a second optgroup:
+  https://html.spec.whatwg.org/multipage/form-elements.html#get-the-list-of-options
 -->
 
 <form id="grouped_form">
@@ -160,12 +161,76 @@
     <option value="buried">buried</option>
   </div>
 </select>
-<script id="options_are_not_arbitrary_descendants">
+<script id="options_are_descendants">
   {
-    // Only children and optgroup grandchildren count — not every descendant.
+    // The parser keeps the <div>, and its option is in the list.
     const select = $('#nested_too_deep')
-    testing.expectEqual(1, select.options.length)
-    testing.expectEqual('direct', select.options[0].value)
+    testing.expectEqual('DIV', select.children[1].tagName)
+    testing.expectEqual(['direct', 'buried'], Array.from(select.options, (o) => o.value))
+  }
+</script>
+
+<select id="wrapped">
+  <span><div><optgroup><option value="deep"></option></optgroup></div></span>
+  <button><option value="in_button"></option></button>
+  <datalist><option value="in_datalist"></option></datalist>
+  <option value="last"></option>
+</select>
+<script id="options_skip_datalist">
+  {
+    const select = $('#wrapped')
+    testing.expectEqual(['deep', 'in_button', 'last'], Array.from(select.options, (o) => o.value))
+    testing.expectEqual(select, select.options[0].parentNode.parentNode.parentNode.parentNode)
+  }
+</script>
+
+<script id="options_skip_closing_elements">
+  {
+    // The parser builds none of these, so build them by hand.
+    const select = document.createElement('select')
+    const option = (value) => {
+      const o = document.createElement('option')
+      o.value = value
+      return o
+    }
+
+    const outer = option('outer')
+    outer.appendChild(option('in_option'))
+    const hr = document.createElement('hr')
+    hr.appendChild(option('in_hr'))
+    const inner = document.createElement('select')
+    inner.appendChild(option('in_select'))
+    select.append(outer, hr, inner, option('last'))
+
+    testing.expectEqual(['outer', 'last'], Array.from(select.options, (o) => o.value))
+    testing.expectEqual(1, inner.options.length)
+    testing.expectEqual(0, select.selectedIndex)
+  }
+</script>
+
+<script id="options_wrapper_insert_remove">
+  {
+    // A selected option arriving or leaving inside a wrapper updates the
+    // select's selection like a bare one.
+    const select = document.createElement('select')
+    select.innerHTML = '<option value=a></option><option value=b></option>'
+    testing.expectEqual('a', select.value)
+
+    const div = document.createElement('div')
+    div.innerHTML = '<span><option value=c selected></option></span>'
+    select.appendChild(div)
+    testing.expectEqual('c', select.value)
+    testing.expectEqual(2, select.selectedIndex)
+
+    div.remove()
+    testing.expectEqual('a', select.value)
+    testing.expectEqual(2, select.length)
+
+    // innerHTML on a wrapper already in the select
+    const span = document.createElement('span')
+    select.appendChild(span)
+    span.innerHTML = '<option value=d selected></option>'
+    testing.expectEqual('d', select.value)
   }
 </script>
 
