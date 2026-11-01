@@ -44,6 +44,9 @@ _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
 _generation: u32 = 0,
 _processed_rel: []const u8 = "",
 
+pub fn asHtml(self: *Link) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Link) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -142,26 +145,26 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
-            if (Frame.preload.scriptHint(frame, Factory.protoOf(self), href)) {
+            if (Frame.preload.scriptHint(frame, self.asHtml(), href)) {
                 // load/error fires when the fetch settles
                 return;
             }
         }
         // synthetic load, fires next tick
-        return frame.queueLoad(Factory.protoOf(self));
+        return frame.queueLoad(self.asHtml());
     }
 
     if (std.mem.eql(u8, rel, "modulepreload")) {
         // "as" defaults to script in this case
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
-            if (Frame.preload.moduleHint(frame, Factory.protoOf(self), href)) {
+            if (Frame.preload.moduleHint(frame, self.asHtml(), href)) {
                 // load/error fires when the fetch settles
                 return;
             }
         }
         // synthetic load, fires next tick
-        return frame.queueLoad(Factory.protoOf(self));
+        return frame.queueLoad(self.asHtml());
     }
 }
 

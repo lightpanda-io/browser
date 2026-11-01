@@ -39,6 +39,9 @@ pub const Proto = HtmlElement;
 _return_value: []const u8 = "",
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
+pub fn asHtml(self: *Dialog) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Dialog) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -119,7 +122,7 @@ pub fn close(self: *Dialog, return_value: ?[]const u8, frame: *Frame) !void {
     if (return_value) |v| {
         try self.setReturnValue(v, frame);
     }
-    try frame.queueElementEvent(Factory.protoOf(self), .close);
+    try frame.queueElementEvent(self.asHtml(), .close);
 }
 
 pub fn getReturnValue(self: *const Dialog) []const u8 {

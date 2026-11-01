@@ -39,6 +39,9 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _executed: bool = false,
 _window: ?*Window = null,
 
+pub fn asHtml(self: *IFrame) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *IFrame) *Element {
     return Factory.protoOf(self).asElement();
 }
