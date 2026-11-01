@@ -26,10 +26,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
 const Event = @import("../Event.zig");
-const EventTarget = @import("../EventTarget.zig");
 const DOMException = @import("../DOMException.zig");
 
 const Execution = js.Execution;

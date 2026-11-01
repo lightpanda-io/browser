@@ -22,11 +22,10 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
-const EventTarget = @import("EventTarget.zig");
-const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 
 const Worker = @import("Worker.zig");
+const EventTarget = @import("EventTarget.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const ServiceWorkerRegistration = @import("ServiceWorkerRegistration.zig");

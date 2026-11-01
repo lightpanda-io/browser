@@ -24,7 +24,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const JS = @import("../js/js.zig");
-const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 

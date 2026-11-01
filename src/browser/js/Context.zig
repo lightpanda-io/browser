@@ -24,7 +24,6 @@ const HttpClient = @import("../../network/HttpClient.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
-const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const js = @import("js.zig");
 const Env = @import("Env.zig");

@@ -21,7 +21,6 @@
 // license). The four-wide paths reproduce the SSE2 kernels' f32/f64 mix, so
 // the samples match Chrome on x86-64 bit for bit, given the same tables.
 
-const std = @import("std");
 const PeriodicWave = @import("PeriodicWave.zig");
 
 // Below these phase increments, 2-point interpolation is too coarse.

@@ -31,7 +31,6 @@ const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("Node.zig");
-const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
 const collections = @import("collections.zig");

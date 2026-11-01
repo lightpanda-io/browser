@@ -29,7 +29,6 @@ const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
-const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
