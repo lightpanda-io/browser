@@ -43,6 +43,9 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_module" },
 };
 
+// /cache/set-cookie responses sent; only ever touched from the test HTTP server thread.
+var cache_set_cookie_count: u32 = 0;
+
 // Written byte for byte by /raw/<name>, so the encodedDataLength tests know
 // how many header and body bytes crossed the wire. A request carrying
 // If-None-Match gets `not_modified`.
@@ -135,6 +138,7 @@ pub fn handle(req: *std.http.Server.Request) !void {
         // A test process gets its own server, so this state starts fresh for
         // it. A long-lived `zig build test-server` is reset per fixture instead.
         for (&serve_counts) |*sc| sc.count = 0;
+        cache_set_cookie_count = 0;
         sse_flag.store(false, .release);
         sse_reconnect_hits.store(0, .release);
         {
@@ -143,6 +147,23 @@ pub fn handle(req: *std.http.Server.Request) !void {
             beacon_record_count = 0;
         }
         return req.respond("", .{});
+    }
+
+    if (std.mem.eql(u8, path, "/cache/set-cookie")) {
+        // Heuristically cacheable (Last-Modified). The body and the cookie
+        // carry the count, so a fixture can tell a cache hit from the network.
+        cache_set_cookie_count += 1;
+        var body_buf: [32]u8 = undefined;
+        const body = try std.mem.print(&body_buf, "served {d}", .{cache_set_cookie_count});
+        var cookie_buf: [64]u8 = undefined;
+        const cookie = try std.mem.print(&cookie_buf, "lp_cache_test={d}; Path=/", .{cache_set_cookie_count});
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Last-Modified", .value = "Mon, 01 Jan 2024 00:00:00 GMT" },
+                .{ .name = "Set-Cookie", .value = cookie },
+            },
+        });
     }
 
     if (std.mem.eql(u8, path, "/")) {

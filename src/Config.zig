@@ -243,9 +243,10 @@ pub const LoadResources = packed struct(u6) {
     none: bool = false,
 };
 
-pub const ExperimentalFeatures = packed struct(u2) {
+pub const ExperimentalFeatures = packed struct(u3) {
     cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
+    privatecache: bool = false,
 };
 
 pub const DisabledFeatures = packed struct(u1) {

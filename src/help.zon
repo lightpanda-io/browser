@@ -481,6 +481,12 @@
     \\          Enable an experimental, unstable feature. Can be passed multiple times.
     \\          Behavior may change or be removed without notice.
     \\          Defaults to none enabled.
+    \\             privatecache  Let the HTTP cache (--http-cache-dir) store
+    \\                           responses with a Set-Cookie header, removing
+    \\                           the header. The cache and the cookie store
+    \\                           have different lifetimes and are shared
+    \\                           differently, so a cached response without its
+    \\                           Set-Cookie can make later requests fail.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to stylesheet for mcp and agent, and to none of them

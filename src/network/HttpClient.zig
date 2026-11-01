@@ -2474,15 +2474,7 @@ fn fulfillRedirectInner(
     location: []const u8,
 ) !void {
     // retrieve cookies from the fulfilled response's headers.
-    if (transfer.req.credentialsAllowed()) {
-        if (transfer.cookie_jar) |jar| {
-            for (headers) |hdr| {
-                if (std.mem.eql(u8, hdr.name, "set-cookie")) {
-                    try jar.populateFromResponse(transfer.req.url, hdr.value);
-                }
-            }
-        }
-    }
+    try transfer.applySetCookies(headers);
 
     transfer.redirectTiming(headers);
     try transfer.applyRedirectTarget(transfer.req.url, location, status);
@@ -3703,6 +3695,19 @@ pub const Transfer = struct {
         }
     }
 
+    // Applies the response's Set-Cookie headers to the jar.
+    fn applySetCookies(self: *const Transfer, headers: []const http.Header) !void {
+        if (self.req.credentialsAllowed() == false) {
+            return;
+        }
+        const jar = self.cookie_jar orelse return;
+        for (headers) |hdr| {
+            if (std.mem.eql(u8, hdr.name, "set-cookie")) {
+                try jar.populateFromResponse(self.req.url, hdr.value);
+            }
+        }
+    }
+
     // Make a cache entry this transfer's response. Takes ownership of
     // `cached`: its body becomes res.buffer.
     fn setCachedResponse(self: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) void {
@@ -3813,18 +3818,10 @@ pub const Transfer = struct {
 
         self.setResponseHeaders(try conn.collectResponseHeaders(arena.allocator()));
 
-        if (self.req.credentialsAllowed()) {
-            if (self.cookie_jar) |jar| {
-                for (self.res.headers) |hdr| {
-                    if (std.mem.eql(u8, hdr.name, "set-cookie")) {
-                        jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
-                            log.err(.http, "set cookie", .{ .err = err, .req = self });
-                            return err;
-                        };
-                    }
-                }
-            }
-        }
+        self.applySetCookies(self.res.headers) catch |err| {
+            log.err(.http, "set cookie", .{ .err = err, .req = self });
+            return err;
+        };
         self.res.materialized = true;
     }
 
@@ -6735,6 +6732,23 @@ test "HttpClient: encodedDataLength of a cache hit is the stored body, of a reva
 
     _ = try e.fetch("http://127.0.0.1:9582/raw/revalidated", null);
     try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
+}
+
+test "HttpClient: privatecache caches Set-Cookie responses" {
+    const client = &testing.test_browser.http_client;
+    const previous = client.cache;
+    defer client.cache = previous;
+
+    inline for (.{ .{ false, "skip" }, .{ true, "strip" } }) |mode| {
+        var cache: Cache = .{
+            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) },
+            .set_cookie = mode[0],
+        };
+        defer cache.deinit();
+        client.cache = &cache;
+
+        try testing.htmlRunner("net/cache_set_cookie_" ++ mode[1] ++ ".html", .{});
+    }
 }
 
 test "HttpClient: a Range request and a URL with userinfo skip the cache" {
