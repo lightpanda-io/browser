@@ -86,6 +86,10 @@ next_doc_order: u32 = 1,
 // When true, rules need to be rebuilt
 dirty: bool = false,
 
+// A rule's selector reads the style attribute, so any inline style write can
+// change what it matches.
+reads_style_attribute: bool = false,
+
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
 last_rule_sheet: ?*CSSStyleSheet = null,
@@ -562,6 +566,9 @@ fn addSelectorRules(
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, important: Declarations, layer: u16) !void {
+    if (readsStyleAttribute(selector)) {
+        self.reads_style_attribute = true;
+    }
     const matched = unwrapWhere(selector);
     const placement = placeSelector(matched) orelse return;
     const rank_and_order = try self.nextPriority(layer);
@@ -578,6 +585,67 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Decla
             }
         }
     }
+}
+
+fn readsStyleAttribute(selector: Selector.Selector) bool {
+    if (compoundReadsStyleAttribute(selector.first)) {
+        return true;
+    }
+    for (selector.segments) |segment| {
+        if (compoundReadsStyleAttribute(segment.compound)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn compoundReadsStyleAttribute(compound: Selector.Compound) bool {
+    for (compound.parts) |part| {
+        const nested: []const Selector.Selector = switch (part) {
+            .attribute => |attr| {
+                if (attr.name.eql(comptime .wrap("style"))) {
+                    return true;
+                }
+                continue;
+            },
+            .pseudo_class => |pseudo| switch (pseudo) {
+                .not, .is, .where, .has => |selectors| selectors,
+                .nth_child_of, .nth_last_child_of => |of| of.selectors,
+                else => continue,
+            },
+            else => continue,
+        };
+        for (nested) |selector| {
+            if (readsStyleAttribute(selector)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Whether an inline style write of `name` can change what the style manager
+/// computes: a property it cascades, font-size (text wraps at it) or a custom
+/// property, or any property once a selector reads the style attribute. A
+/// transform or a z-index on its own changes none of it.
+pub fn inlineWriteAffectsCascade(self: *StyleManager, name: []const u8) bool {
+    self.rebuildIfDirty() catch return true;
+    return self.reads_style_attribute or cascadesProperty(name);
+}
+
+fn cascadesProperty(name: []const u8) bool {
+    if (isCustomProperty(name)) {
+        return true;
+    }
+    if (CssParser.axisShorthand(name)) |shorthand| {
+        return cascadesProperty(shorthand.x) or cascadesProperty(shorthand.y);
+    }
+    for (Declarations.names ++ [_][]const u8{ "font", "font-size" }) |tracked| {
+        if (std.ascii.eqlIgnoreCase(name, tracked)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer
@@ -625,6 +693,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.dirty = false;
     errdefer self.dirty = true;
+    self.reads_style_attribute = false;
     var caps: [group_fields.len]Capacities = undefined;
     inline for (group_fields, &caps) |field, *c| {
         c.* = @field(self, field).capacities();
@@ -3176,6 +3245,10 @@ test "StyleManager: position" {
     try testing.htmlRunner("css/position.html", .{});
 }
 
+test "StyleManager: inline style writes" {
+    try testing.htmlRunner("css/inline_style_writes.html", .{});
+}
+
 test "StyleManager: text-transform without rules skips the memo" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -3544,6 +3617,44 @@ test "StyleManager: memo: reuse and invalidation" {
     sm.sheetModified();
     try testing.expectEqual(false, sm.isHidden(p, .{}));
     try testing.expectEqual(2, sm.visibility.memo.count());
+}
+
+test "StyleManager: memo: an inline write it doesn't cascade keeps it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div></div>");
+    const div = body.firstChild().?.as(Element);
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+
+    // A carousel moves each slide with a transform, many times a second
+    const version = frame.page.style_version;
+    try style.setProperty("transform", "translateX(-50px)", null, frame);
+    try style.setProperty("z-index", "2", null, frame);
+    _ = try style.removeProperty("transform", frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectString("z-index: 2;", div.getAttributeSafe(comptime .wrap("style")).?);
+
+    // A property it computes, a shorthand of one or a custom property does
+    for ([_][2][]const u8{ .{ "margin-left", "4px" }, .{ "overflow", "hidden" }, .{ "--offset", "4px" } }) |write| {
+        const before = frame.page.style_version;
+        try style.setProperty(write[0], write[1], null, frame);
+        try testing.expect(frame.page.style_version != before);
+    }
+
+    // Once a selector reads the style attribute, any write can change a match
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("[style*=rotate] { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(div));
+    try style.setProperty("transform", "rotate(5deg)", null, frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(div));
 }
 
 test "StyleManager: memo: inherited values, any query order" {

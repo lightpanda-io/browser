@@ -911,6 +911,10 @@ pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Fra
     _ = try self._attributes.putSafe(name, value, self, frame);
 }
 
+pub fn setInertStyleAttribute(self: *Element, value: String, frame: *Frame) !void {
+    try self._attributes.putInertStyle(value, self, frame);
+}
+
 pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
     const shadow_root = self.hostedShadowRoot(frame) orelse return null;
     if (shadow_root._mode == .closed) return null;
