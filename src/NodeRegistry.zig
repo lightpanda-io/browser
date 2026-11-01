@@ -75,16 +75,18 @@ pub fn reset(self: *NodeRegistry) void {
 /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
 /// IDs valid. Must run before the page's arena is freed — attribution reads
 /// each node's document.
-pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
+pub fn resetFrame(self: *NodeRegistry, frame: *const Frame) void {
+    if (self.lookup_by_id.count() == 0) return;
     const page = frame.page;
-    var doomed: std.ArrayListUnmanaged(*Node) = .empty;
+    var doomed: std.ArrayList(*Node) = .empty;
+    defer doomed.deinit(self.allocator);
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
         const node = node_ptr.*;
         // The document table is the browser's, so a sibling page's node
         // resolves correctly through this page's frame.
         if (node.dom.getDocument(frame)._page == page) {
-            doomed.append(arena, node) catch return;
+            doomed.append(self.allocator, node) catch return;
         }
     }
     for (doomed.items) |node| {
@@ -95,6 +97,14 @@ pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
         }
         self.node_pool.destroy(node);
     }
+}
+
+/// `frame_destroyed` listener: a page's nodes go with its root frame, however
+/// the page was closed.
+pub fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
+    if (frame.parent != null) return;
+    const self: *NodeRegistry = @ptrCast(@alignCast(ctx));
+    self.resetFrame(frame);
 }
 
 /// The id of the ListMarker AX node of `li`, the same on every call.
@@ -193,9 +203,6 @@ test "NodeRegistry: resetFrame" {
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var page_a = try testing.pageTest("cdp/registry1.html", .{});
     defer page_a.close();
     var page_b = try testing.pageTest("cdp/registry2.html", .{});
@@ -212,7 +219,7 @@ test "NodeRegistry: resetFrame" {
     const a_marker = try registry.listMarkerId(ra);
     const b_marker = try registry.listMarkerId(rb);
 
-    registry.resetFrame(arena.allocator(), frame_a);
+    registry.resetFrame(frame_a);
 
     // An evicted node's marker goes with it.
     try testing.expectEqual(null, registry.listMarkerOwner(a_marker));
