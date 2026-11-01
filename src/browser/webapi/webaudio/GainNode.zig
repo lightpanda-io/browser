@@ -18,8 +18,6 @@
 
 // https://webaudio.github.io/web-audio-api/#GainNode
 
-const std = @import("std");
-
 const js = @import("../../js/js.zig");
 const Factory = @import("../../Factory.zig");
 

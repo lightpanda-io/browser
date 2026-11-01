@@ -26,7 +26,6 @@ const Event = @import("../../Event.zig");
 const EventTarget = @import("../../EventTarget.zig");
 const DOMException = @import("../../DOMException.zig");
 
-const idb = @import("idb.zig");
 const Engine = @import("Engine.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
 const IDBRequest = @import("IDBRequest.zig");

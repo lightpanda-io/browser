@@ -19,7 +19,6 @@
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Lock
 // https://w3c.github.io/web-locks/#lock

@@ -28,7 +28,6 @@ const ImportMap = @import("ImportMap.zig");
 const h5e = @import("parser/html5ever.zig");
 
 const Element = @import("webapi/Element.zig");
-const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const log = lp.log;
 const String = lp.String;

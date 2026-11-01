@@ -24,7 +24,6 @@ const lp = @import("lightpanda");
 
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
-const Factory = @import("../Factory.zig");
 const Element = @import("../webapi/Element.zig");
 const image_dimensions = @import("../image_dimensions.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
