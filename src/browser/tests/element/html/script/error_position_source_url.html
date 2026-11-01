@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+<body>
+<script>
+  const locations = [];
+  const onerrorLocations = [];
+  const stacks = [];
+  window.addEventListener('error', (e) => {
+    if (!(e.error instanceof TypeError || e.error instanceof SyntaxError)) return;
+    locations.push([e.filename, e.lineno, e.colno]);
+    stacks.push(e.error.stack);
+    e.preventDefault();
+  });
+  window.onerror = (message, source, line, column) => {
+    onerrorLocations.push([source, line, column]);
+  };
+</script>
+
+<p>first</p><script>null.first;
+//# sourceURL=source-classic.js
+</script>
+<p>later</p><script>void 0;
+  null.later;
+//# sourceURL=source-later.js
+</script>
+<script>reportError(new SyntaxError('manual'));
+//# sourceURL=source-manual.js
+</script>
+<script id=runtime>
+  testing.expectEqual([
+    ['source-classic.js', 1, 6],
+    ['source-later.js', 2, 8],
+    ['source-manual.js', 1, 13],
+  ], locations);
+  testing.expectEqual(locations, onerrorLocations);
+  testing.expectTrue(stacks[0].includes('source-classic.js:1:6'));
+  testing.expectTrue(stacks[1].includes('source-later.js:2:8'));
+</script>
+
+<script>window.savedStackTraceLimit = Error.stackTraceLimit; Error.stackTraceLimit = 0;</script>
+<p>no stack</p><script>null.noStack;
+//# sourceURL=source-no-stack.js
+</script>
+<script id=stack_trace_limit>
+  Error.stackTraceLimit = savedStackTraceLimit;
+  testing.expectEqual(['source-no-stack.js', 1, 6], locations.at(-1));
+  testing.expectEqual(locations, onerrorLocations);
+</script>
+
+<p>syntax</p><script>var = 1;
+//# sourceURL=source-syntax.js
+</script>
+<script id=syntax>
+  testing.expectEqual([location.href, 51, 26], locations.at(-1));
+  testing.expectEqual(locations, onerrorLocations);
+</script>
+
+<script id=nested_compilation>
+  const script = document.createElement('script');
+  script.textContent = 'var = 1;\n//# sourceURL=source-nested.js';
+  document.body.appendChild(script);
+  testing.expectEqual([location.href, 1, 5], locations.at(-1));
+  testing.expectEqual(locations, onerrorLocations);
+</script>
+
+<p>module</p><script type=module>null.module;
+//# sourceURL=source-module.js
+</script>
+<p>module later</p><script type=module>void 0;
+  null.moduleLater;
+//# sourceURL=source-module-later.js
+</script>
+<p>module syntax</p><script type=module>var = 1;
+//# sourceURL=source-module-syntax.js
+</script>
+<script id=modules>
+  testing.onload(() => {
+    testing.expectEqual(['source-module.js', 1, 6], locations.find(l => l[0] === 'source-module.js'));
+    testing.expectEqual(['source-module-later.js', 2, 8], locations.find(l => l[0] === 'source-module-later.js'));
+    testing.expectEqual([location.href, 74, 45], locations.find(l => l[0] === location.href && l[1] === 74));
+    testing.expectEqual(locations, onerrorLocations);
+    testing.expectEqual(9, locations.length);
+  });
+</script>

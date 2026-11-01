@@ -475,7 +475,7 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
         };
         const stack = blk: {
             if (comptime lp.IS_DEBUG == false) {
-                // SetCaptureStackTraceForUncaughtExceptions is only set in Debug
+                // Release retains only one frame, for error locations.
                 break :blk "";
             }
 

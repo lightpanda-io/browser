@@ -366,6 +366,30 @@ test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created
     }, .{});
 }
 
+test "cdp.runtime: sourceURL exceptions use script-relative coordinates" {
+    testing.expectLog(&.{.page_error});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "hi.html" });
+    try ctx.processMessage(.{ .id = 63, .method = "Runtime.enable" });
+
+    const frame = bc.mainFrame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const compiled = try ls.local.compileWithCache(
+        \\reportError(new TypeError('source-url'));
+        \\//# sourceURL=inline-source-url.js
+    , "inline-source-url.js", .{ .line = 10, .column = 20 }, null);
+    _ = try compiled.script.run();
+
+    try ctx.expectSentEvent("Runtime.exceptionThrown", .{
+        .exceptionDetails = .{ .lineNumber = 0, .columnNumber = 12, .url = "inline-source-url.js" },
+    }, .{});
+}
+
 test "cdp.runtime: an exception whose error event is cancelled is not reported" {
     testing.expectLog(&.{.page_error});
 
