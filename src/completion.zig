@@ -124,7 +124,7 @@ fn writeBash(w: *Writer, exec_name: []const u8) !void {
         \\}}
         \\
         \\_{f}() {{
-        \\    local cur prev cmd i
+        \\    local cur prev cmd i candidate
         \\    cur="${{COMP_WORDS[COMP_CWORD]}}"
         \\    prev="${{COMP_WORDS[COMP_CWORD-1]}}"
         \\    cmd=""
@@ -173,13 +173,19 @@ fn writeBash(w: *Writer, exec_name: []const u8) !void {
         try w.writeAll("            fi\n            ;;\n");
     }
 
-    try w.print("    esac\n}}\ncomplete -F _{f} {s}\n", .{ ident, exec_name });
+    try w.print(
+        "    esac\n}}\nif type compopt >/dev/null 2>&1; then\n    complete -F _{f} {s}\nelse\n    complete -o filenames -F _{f} {s}\nfi\n",
+        .{ ident, exec_name, ident, exec_name },
+    );
 }
 
 fn writeBashAction(w: *Writer, values: Values, ident: Ident) !void {
     switch (values) {
         .none, .any => {},
-        .path => try w.writeAll("compopt -o filenames 2>/dev/null; mapfile -t COMPREPLY < <(compgen -f -- \"$cur\"); "),
+        .path => try w.writeAll(
+            "if type compopt >/dev/null 2>&1; then compopt -o filenames 2>/dev/null; fi; " ++
+                "COMPREPLY=(); while IFS= read -r candidate; do COMPREPLY+=(\"$candidate\"); done < <(compgen -f -- \"$cur\"); ",
+        ),
         .one_of => |one_of| {
             try w.writeAll("COMPREPLY=($(compgen -W \"");
             try writeJoined(w, one_of);
