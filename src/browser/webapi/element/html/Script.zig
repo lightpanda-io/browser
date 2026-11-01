@@ -32,7 +32,8 @@ const Script = @This();
 pub const Proto = HtmlElement;
 
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
-_src: []const u8 = "",
+// null without a src attribute: src="" still makes the script external
+_src: ?[]const u8 = null,
 _executed: bool = false,
 // dynamic scripts are forced to be async by default
 _force_async: bool = true,
@@ -50,8 +51,9 @@ pub fn asNode(self: *Script) *Node {
 }
 
 pub fn getSrc(self: *Script, frame: *Frame) ![]const u8 {
-    if (self._src.len == 0) return "";
-    return self.asNode().resolveURLReflect(self._src, frame, .{});
+    const src = self._src orelse return "";
+    if (src.len == 0) return "";
+    return self.asNode().resolveURLReflect(src, frame, .{});
 }
 
 fn setSrc(self: *Script, src: []const u8, frame: *Frame) !void {
@@ -126,7 +128,7 @@ pub const Build = struct {
     pub fn complete(node: *Node, _: *Frame) !void {
         const self = node.as(Script);
         const element = self.asElement();
-        self._src = element.getAttributeInterned("src") orelse "";
+        self._src = element.getAttributeInterned("src");
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
@@ -141,15 +143,18 @@ pub const Build = struct {
         }
 
         const self = element.as(Script);
-        self._src = element.getAttributeInterned("src") orelse "";
-        if (self._src.len > 0 and element.asNode().isConnected()) {
+        self._src = element.getAttributeInterned("src");
+        const src = self._src orelse return;
+        // Unlike the spec, Chrome doesn't prepare the script when src is set
+        // to empty.
+        if (src.len > 0 and element.asNode().isConnected()) {
             try frame.scriptAddedCallback(false, self);
         }
     }
 
     pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
         if (name.eql(comptime .wrap("src"))) {
-            element.as(Script)._src = "";
+            element.as(Script)._src = null;
         }
     }
 
