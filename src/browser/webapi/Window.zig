@@ -794,7 +794,12 @@ pub fn getInnerHeight(self: *const Window, frame: *Frame) u32 {
 fn iframeViewport(self: *const Window, comptime axis: Element.Axis) ?u32 {
     const iframe = self._frame.iframe orelse return null;
     const parent = self._frame.parent orelse return null;
-    return @intFromFloat(@max(0, iframe.asElement().boxAxis(parent, axis)));
+    const el = iframe.asElement();
+    if (!el.isVisible(parent)) {
+        return 0;
+    }
+    // lossyCast saturates: a `width=1e10` or `inf` attribute is out of u32 range
+    return std.math.lossyCast(u32, el.boxAxis(parent, axis));
 }
 
 fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
