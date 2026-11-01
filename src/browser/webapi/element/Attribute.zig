@@ -218,18 +218,26 @@ pub const List = struct {
 
     pub fn put(self: *List, name: String, value: String, element: *Element, frame: *Frame) ![]const u8 {
         const result = try self.getEntryAndNormalizedName(name, frame);
-        return self._put(result, value, element, frame);
+        return self._put(result, value, element, frame, .dom);
     }
 
     pub fn putSafe(self: *List, name: String, value: String, element: *Element, frame: *Frame) ![]const u8 {
         const entry = self.getEntryWithNormalizedName(name);
-        return self._put(.{ .entry = entry, .normalized = name }, value, element, frame);
+        return self._put(.{ .entry = entry, .normalized = name }, value, element, frame, .dom);
+    }
+
+    // A style attribute whose change no selector or cascaded value can see
+    // (StyleManager.inlineWriteAffectsCascade), so the cascade's memos stay.
+    pub fn putInertStyle(self: *List, value: String, element: *Element, frame: *Frame) !void {
+        const name = comptime String.wrap("style");
+        const entry = self.getEntryWithNormalizedName(name);
+        _ = try self._put(.{ .entry = entry, .normalized = name }, value, element, frame, .layout);
     }
 
     // Returns the entry's canonical name, not the *Entry: attributeChange can
     // run script which mutates the list, moving or shifting entries. The
     // canonical name is interned, so it stays valid.
-    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) ![]const u8 {
+    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame, comptime change: enum { dom, layout }) ![]const u8 {
         const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(result.normalized, element);
 
@@ -270,7 +278,10 @@ pub const List = struct {
             };
             try owner.addElementId(parent, element, entry.value());
         }
-        owner.domChanged();
+        switch (change) {
+            .dom => owner.domChanged(),
+            .layout => owner.layoutObserversChanged(),
+        }
         owner.attributeChange(element, .wrap(name), .wrap(entry.value()), old_value);
         return name;
     }
