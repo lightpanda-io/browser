@@ -594,6 +594,186 @@
 }
 </script>
 
+<script id=forEach_mutation_replaces_next_token>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  div.classList.forEach((value, index, list) => {
+    visited.push([value, index]);
+    if (index === 0) {
+      list.remove('b');
+      list.add('c');
+    }
+  });
+
+  testing.expectEqual([['a', 0], ['c', 1]], visited);
+  testing.expectEqual('a c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_appends_after_initial_length>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  div.classList.forEach((value, index, list) => {
+    visited.push(value);
+    if (index === 0) list.add('c');
+  });
+
+  testing.expectEqual(['a', 'b'], visited);
+  testing.expectEqual('a b c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_removes_current_token>
+{
+  const div = document.createElement('div');
+  div.className = 'a b c';
+
+  const visited = [];
+  const indices = [];
+  div.classList.forEach((value, index, list) => {
+    visited.push(value);
+    indices.push(index);
+    if (index === 0) list.remove(value);
+  });
+
+  testing.expectEqual(['a', 'c'], visited);
+  testing.expectEqual([0, 1], indices);
+  testing.expectEqual('b c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_clears_list>
+{
+  const div = document.createElement('div');
+  div.className = 'a b c';
+
+  const visited = [];
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    if (index === 0) div.className = '';
+  });
+
+  testing.expectEqual(['a'], visited);
+  testing.expectEqual('', div.className);
+}
+</script>
+
+<script id=forEach_mutation_reorders_tokens>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  const indices = [];
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    indices.push(index);
+    if (index === 0) div.className = 'b a';
+  });
+
+  testing.expectEqual(['a', 'a'], visited);
+  testing.expectEqual([0, 1], indices);
+  testing.expectEqual('b a', div.className);
+}
+</script>
+
+<script id=forEach_mutation_set_attribute>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    if (index === 0) div.setAttribute('class', 'a c');
+  });
+
+  testing.expectEqual(['a', 'c'], visited);
+  testing.expectEqual('a c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_attr_value>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  const classAttribute = div.getAttributeNode('class');
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    if (index === 0) classAttribute.value = 'a c';
+  });
+
+  testing.expectEqual(['a', 'c'], visited);
+  testing.expectEqual('a c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_removes_attribute>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    if (index === 0) div.removeAttribute('class');
+  });
+
+  testing.expectEqual(['a'], visited);
+  testing.expectEqual(null, div.getAttribute('class'));
+}
+</script>
+
+<script id=forEach_mutation_nested_call>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const outer = [];
+  const inner = [];
+  div.classList.forEach((value, index) => {
+    outer.push(value);
+    if (index === 0) {
+      div.classList.forEach((nestedValue, nestedIndex) => {
+        inner.push(nestedValue);
+        if (nestedIndex === 0) {
+          div.classList.remove('b');
+          div.classList.add('c');
+        }
+      });
+    }
+  });
+
+  testing.expectEqual(['a', 'c'], outer);
+  testing.expectEqual(['a', 'c'], inner);
+  testing.expectEqual('a c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_unrelated_attribute>
+{
+  const div = document.createElement('div');
+  div.className = 'a b c';
+
+  const visited = [];
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    div.setAttribute('data-growth', `${index}`);
+  });
+
+  testing.expectEqual(['a', 'b', 'c'], visited);
+  testing.expectEqual('a b c', div.className);
+}
+</script>
+
 <script id=iterators_empty_list>
 {
   const div = document.createElement('div');
