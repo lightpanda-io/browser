@@ -350,6 +350,9 @@
     \\           One-shot mode: run a single user turn, print the final answer
     \\           to stdout, and exit. Conflicts with the positional script. With
     \\           --save, the answer is suppressed and a script is written instead.
+    \\  --temperature <FLOAT>
+    \\          Sampling temperature sent with each model request (e.g. 0.1).
+    \\          Defaults to the provider's or server's own default.
     \\  --trace <PATH>
     \\          Write one JSON line per step to PATH: each model call (latency,
     \\          input, cached and output tokens) and each tool call (arguments,
