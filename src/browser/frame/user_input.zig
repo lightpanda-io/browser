@@ -546,13 +546,24 @@ fn mouseUpAndClick(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
     }
 }
 
+/// The point a real gesture on `target` reports: the centre of its bounding
+/// rect in the target document's viewport, where a user's pointer would sit.
+/// An element with no box (display:none, detached) stays at (0, 0).
+pub fn gesturePoint(frame: *Frame, target: *Element) Point {
+    const owner = target.ownerFrame(frame) orelse frame;
+    const rect = target.boundingClientRectValues(owner);
+    return .{ .x = rect.x + rect.width / 2, .y = rect.y + rect.height / 2 };
+}
+
 /// The trusted primary-button gesture a real user click produces; widgets key
 /// off pointerdown/mousedown, not click alone. A focus failure is logged, not
 /// returned.
 pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
-    try moveSequence(frame, target, .{ .modifiers = modifiers });
+    const point = gesturePoint(frame, target);
+    // The point is in the owner frame's viewport, as updateHoverTarget expects.
+    try moveSequence(target.ownerFrame(frame) orelse frame, target, .{ .modifiers = modifiers, .x = point.x, .y = point.y });
 
-    const g: Gesture = .{ .click_count = 1, .modifiers = modifiers };
+    const g: Gesture = .{ .click_count = 1, .modifiers = modifiers, .x = point.x, .y = point.y };
     var pointer: PointerButtons = .{};
     try pointer.press(frame, target, g);
     _ = try pointer.release(frame, target, g);
@@ -3386,4 +3397,100 @@ test "user_input: shadow mouse press and release on shadow siblings clicks the h
     try triggerMousePress(frame, start.x + 1, start.y + 1, mouse_button.main, 1);
     try triggerMouseRelease(frame, end.x + end.width - 1, end.y + 1, mouse_button.main, 1);
     try testing.expect((try ls.local.compileAndRun("events.length === 1 && events[0].listener === 'host' && events[0].trusted", null)).isTrue());
+}
+
+test "user_input: element clicks report the element's centre point" {
+    const page = try testing.pageTest("input_click_coords.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const target = frame.document.getElementById("target").?;
+    const rect = target.boundingClientRectValues(frame);
+    try triggerClick(frame, target, .{});
+    const chain = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerdown','mousedown','pointerup','mouseup','click'].includes(e.type))
+    , .{});
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 5 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ chain, chain, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+}
+
+test "user_input: hover reports the element's centre point" {
+    const page = try testing.pageTest("input_click_coords.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const actions = @import("../actions.zig");
+    const target = frame.document.getElementById("hoverme").?;
+    const rect = target.boundingClientRectValues(frame);
+    try actions.hover(target.asNode(), frame);
+    const hovered = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerover','mouseover','pointerenter','mouseenter','pointermove','mousemove'].includes(e.type))
+    , .{});
+    // The hover boundary pairs and the move: 2 over + 2 enter + 2 move.
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 6 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ hovered, hovered, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+}
+
+test "user_input: element click inside an iframe reports the point in each document's viewport" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const child = frame.child_frames.items[0];
+    const target = child.document.getElementById("middle").?;
+    const rect = target.boundingClientRectValues(child);
+
+    var main_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&main_ls);
+    defer main_ls.deinit();
+    _ = try main_ls.local.compileAndRun(
+        \\window.events = [];
+        \\for (const type of ['pointerover', 'mouseover']) {
+        \\  document.addEventListener(type, e => events.push({tag: e.target.tagName, x: e.clientX, y: e.clientY, trusted: e.isTrusted}));
+        \\}
+    , null);
+    var ls: js.Local.Scope = undefined;
+    child.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.events = [];
+        \\const target = document.getElementById('middle');
+        \\for (const type of ['pointerover','mouseover','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click']) {
+        \\  target.addEventListener(type, e => events.push({type, x:e.clientX, y:e.clientY, trusted:e.isTrusted}));
+        \\}
+    , null);
+
+    // MCP/CDP click passes the main frame for a node inside an iframe: the
+    // boundary events must still carry the point in each document's viewport.
+    try triggerClick(frame, target, .{});
+
+    const chain = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerover','mouseover','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click'].includes(e.type))
+    , .{});
+    // The whole chain sits in the child viewport, at the target's rect centre.
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 9 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ chain, chain, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+
+    // The iframe the pointer entered reports the point in the main viewport.
+    const iframe = child.iframe.?.asElement();
+    const child_rect = iframe.boundingClientRectValues(frame);
+    try testing.expect((try main_ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "events.length === 2 && events.every(e => e.trusted && e.tag === 'IFRAME' && e.x === {d} && e.y === {d})",
+        .{ child_rect.x + iframe.getClientLeft() + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop() + rect.y + rect.height / 2 },
+    ), null)).isTrue());
 }
