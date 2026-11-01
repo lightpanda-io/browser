@@ -67,9 +67,13 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
 }
 
 // How a box that clips its overflow counts toward its ancestors' content.
+// Out-of-flow boxes take no room in their parent's flow, so they don't size
+// it, but they still extend a scroller's scrollable area.
 pub const ContentMode = enum {
     full,
     clipped,
+    // clipped, with out-of-flow boxes counted
+    scrollable,
 };
 
 // What the box, with its margins, adds to its parent's content width.
@@ -79,7 +83,7 @@ fn widthContribution(self: *Element, comptime mode: ContentMode, owner: *Frame) 
     const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
         .fixed => |width| width,
         .shrink, .grow => @max(own.value, contentWidth(self, mode, owner)),
-        .percent, .fill => if (mode == .clipped and style_manager.clipsOverflowX(self)) 0 else contentWidth(self, mode, owner),
+        .percent, .fill => if (mode != .full and style_manager.clipsOverflowX(self)) 0 else contentWidth(self, mode, owner),
         .contents => return contentWidth(self, mode, owner),
     };
     return clampWidth(self, width, .contribution, owner) + style_manager.inlineMargins(self, null);
@@ -271,7 +275,11 @@ fn growShare(self: *Element, owner: *Frame) f64 {
 // which keeps the "append until the lane outgrows its shell" idiom
 // terminating).
 pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
-    const kind: StyleManager.WidthKind = if (mode == .clipped) .content else .full_content;
+    const kind: StyleManager.WidthKind = switch (mode) {
+        .full => .full_content,
+        .clipped => .content,
+        .scrollable => .scrollable_content,
+    };
     const style_manager = &owner._style_manager;
     if (style_manager.cachedWidth(self, kind)) |width| {
         return width;
@@ -284,6 +292,9 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     while (children.next()) |node| {
         const el = node.is(Element) orelse continue;
         if (style_manager.hasDisplayNone(el)) {
+            continue;
+        }
+        if (mode != .scrollable and style_manager.isOutOfFlow(el)) {
             continue;
         }
         const width = widthContribution(el, mode, owner);

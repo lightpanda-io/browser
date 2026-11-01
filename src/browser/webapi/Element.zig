@@ -1862,7 +1862,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-    return @max(layout.boxWidth(self, owner), layout.contentWidth(self, .clipped, owner));
+    return @max(layout.boxWidth(self, owner), layout.contentWidth(self, .scrollable, owner));
 }
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:

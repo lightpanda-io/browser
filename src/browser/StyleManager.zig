@@ -1063,6 +1063,13 @@ pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     return flow.position.outOfFlow() == false and flow.floated == false;
 }
 
+/// position: absolute or fixed
+pub fn isOutOfFlow(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.flowProps(el).position.outOfFlow();
+}
+
 /// Own property, not inherited.
 pub fn position(self: *StyleManager, el: *Element) Position {
     self.assertOwns(el);
@@ -1108,7 +1115,7 @@ fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
 }
 
 // row_shrink is a flex row's shrink ratio, not a width
-pub const WidthKind = enum { box, content, full_content, row_shrink };
+pub const WidthKind = enum { box, content, full_content, scrollable_content, row_shrink };
 
 /// Element's computed widths (see layout.boxWidth), valid for one style
 /// version and viewport. Each read otherwise walks up to the root and down
@@ -1123,6 +1130,7 @@ const WidthMemo = struct {
         box: ?f64 = null,
         content: ?f64 = null,
         full_content: ?f64 = null,
+        scrollable_content: ?f64 = null,
         row_shrink: ?f64 = null,
     };
 };
