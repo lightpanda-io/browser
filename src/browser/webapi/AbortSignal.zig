@@ -27,7 +27,7 @@ const Event = @import("Event.zig");
 const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
 const DOMException = @import("DOMException.zig");
-const ModelContextTool = @import("ModelContext.zig").Tool;
+const ModelContext = @import("ModelContext.zig");
 const LockRequest = @import("LockManager.zig").LockRequest;
 
 const log = lp.log;
@@ -39,9 +39,10 @@ pub const Proto = EventTarget;
 
 const Dependend = union(enum) {
     signal: *AbortSignal,
-    model_context_tool: *ModelContextTool,
     // Handled by the owning signal's markAborted (which runs for dependent
     // signals too, unlike this union's markAborted).
+    model_context_tool: *ModelContext.Tool,
+    model_context_call: *ModelContext.ToolCall,
     scheduler_task: *Scheduler.Task,
     fetch: *Fetch, // The fetch removes itself when it completes.
     lock_request: *LockRequest,
@@ -55,18 +56,14 @@ const Dependend = union(enum) {
                 try dep.markAborted(reason_, exec);
                 return true;
             },
-            .model_context_tool => |dep| {
-                try dep.markAborted(exec);
-                return true;
-            },
-            .scheduler_task, .fetch, .lock_request => return false,
+            .model_context_tool, .model_context_call, .scheduler_task, .fetch, .lock_request => return false,
         }
     }
 
     fn dispatchAbortEvent(self: Dependend, exec: *const Execution) !void {
         switch (self) {
             .signal => |dep| try dep.dispatchAbortEvent(exec),
-            .model_context_tool, .scheduler_task, .fetch, .lock_request => {},
+            .model_context_tool, .model_context_call, .scheduler_task, .fetch, .lock_request => {},
         }
     }
 };
@@ -145,13 +142,15 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
     }
 
     // Unlike the loop in abort(), this runs for dependent signals too, so a
-    // task or fetch registered on an any() signal still gets rejected.
+    // task, fetch or tool registered on an any() signal still gets rejected.
     for (self._dependents.items) |dep| {
         switch (dep) {
             .scheduler_task => |task| task.onAbort(self._reason, exec),
             .fetch => |fetch| fetch.abort(self._reason),
             .lock_request => |lr| lr.onAbort(self._reason, exec),
-            else => {},
+            .model_context_tool => |tool| tool.onAbort(self._reason, exec),
+            .model_context_call => |call| call.onAbort(self._reason, exec),
+            .signal => {},
         }
     }
 }
@@ -278,6 +277,16 @@ pub fn reasonJsValue(reason: Reason, local: *const js.Local) !js.Value {
         .js_val => |global| local.toLocal(global),
         .undefined => local.zigValueToJs(defaultReason(), .{}),
     };
+}
+
+/// Rejects `resolver` with `reason`, falling back to a plain AbortError if the
+/// reason can't be converted.
+pub fn rejectWithReason(resolver: js.PromiseResolver, comptime source: []const u8, reason: Reason) void {
+    const value = reasonJsValue(reason, resolver.local) catch {
+        resolver.rejectError(source, .{ .dom_exception = .{ .err = error.AbortError } });
+        return;
+    };
+    resolver.reject(source, value);
 }
 
 const TimeoutCallback = struct {

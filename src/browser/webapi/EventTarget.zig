@@ -33,6 +33,7 @@ const Window = @import("Window.zig");
 const FileReader = @import("FileReader.zig");
 const AbortSignal = @import("AbortSignal.zig");
 const MessagePort = @import("MessagePort.zig");
+const ModelContext = @import("ModelContext.zig");
 const Performance = @import("Performance.zig");
 const Permissions = @import("Permissions.zig");
 const Notification = @import("Notification.zig");
@@ -100,6 +101,7 @@ pub const Type = enum(u8) {
     idb_transaction,
     media_query_list,
     message_port,
+    model_context,
     navigation,
     navigation_history_entry,
     node,
@@ -148,6 +150,7 @@ pub fn Subtype(comptime tag: Type) type {
         .idb_transaction => IDBTransaction,
         .media_query_list => MediaQueryList,
         .message_port => MessagePort,
+        .model_context => ModelContext,
         .navigation => Navigation,
         .navigation_history_entry => NavigationHistoryEntry,
         .node => Node,
@@ -409,6 +412,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .video_encoder => writer.writeAll("<VideoEncoder>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
+        .model_context => writer.writeAll("<ModelContext>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
         .text_track => writer.writeAll("<TextTrack>"),
         .text_track_cue => writer.writeAll("<TextTrackCue>"),
@@ -452,6 +456,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .idb_transaction => return "[object IDBTransaction]",
         .media_query_list => return "[object MediaQueryList]",
         .message_port => return "[object MessagePort]",
+        .model_context => return "[object ModelContext]",
         .navigation => return "[object Navigation]",
         .navigation_history_entry => return "[object NavigationHistoryEntry]",
         .node => return "[object Node]",
