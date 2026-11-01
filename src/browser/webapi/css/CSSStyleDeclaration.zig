@@ -389,7 +389,7 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
     } else false;
 
     if (try self.setPropertyImpl(property_name, value, important, frame)) {
-        try self.syncStyleAttribute(frame);
+        try self.syncStyleAttribute(property_name, frame);
     }
 }
 
@@ -479,7 +479,7 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
         return error.NoModificationAllowed;
     }
     const result = (try self.removePropertyImpl(property_name, frame)) orelse return "";
-    try self.syncStyleAttribute(frame);
+    try self.syncStyleAttribute(property_name, frame);
     return result;
 }
 
@@ -507,11 +507,20 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 // Serialize current properties back to the element's style attribute so that
 // DOM serialization (outerHTML, getAttribute) reflects JS-modified styles.
-fn syncStyleAttribute(self: *CSSStyleDeclaration, frame: *Frame) !void {
+// `changed` is the one property written, when that's all that changed.
+fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?[]const u8, frame: *Frame) !void {
     const element = self._element orelse return;
     const css_text = try self.getCssText(frame);
     self._syncing = true;
     defer self._syncing = false;
+    if (changed) |name| {
+        // Carousels write a transform on every slide each frame: one doesn't
+        // need every cached style and width recomputed.
+        const owner = element.ownerFrame(frame) orelse frame;
+        if (owner._style_manager.inlineWriteAffectsCascade(name) == false) {
+            return element.setInertStyleAttribute(.wrap(css_text), frame);
+        }
+    }
     try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), frame);
 }
 
@@ -552,7 +561,7 @@ fn setFloat(self: *CSSStyleDeclaration, value: js.Value, frame: *Frame) !void {
     // `[LegacyNullToEmptyString] CSSOMString`: null becomes "", undefined becomes "undefined".
     const str = if (value.isNull()) "" else try value.toZig([]const u8);
     if (try self.setPropertyImpl("float", str, false, frame)) {
-        try self.syncStyleAttribute(frame);
+        try self.syncStyleAttribute(null, frame);
     }
 }
 
@@ -580,7 +589,7 @@ fn replaceDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Decla
     self.clearProperties(frame);
 
     try self.applyDeclarations(declarations, frame);
-    try self.syncStyleAttribute(frame);
+    try self.syncStyleAttribute(null, frame);
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <style>
+    .row { display: flex; width: 600px }
+    .slide { width: 200px; flex-shrink: 0 }
+  </style>
+</head>
+<body>
+<div class="row"><div class="slide" id="a"></div><div class="slide" id="b"></div></div>
+
+<script id="transformMovesWithoutResizing">
+{
+  // A carousel transforms each slide and measures it
+  const a = $('#a');
+  const x = a.getBoundingClientRect().x;
+  a.style.transform = 'translateX(-50px)';
+  testing.expectEqual(x - 50, a.getBoundingClientRect().x);
+  testing.expectEqual(200, a.offsetWidth);
+  testing.expectEqual('matrix(1, 0, 0, 1, -50, 0)', getComputedStyle(a).transform);
+  a.style.transform = '';
+  testing.expectEqual(x, a.getBoundingClientRect().x);
+  testing.expectEqual('none', getComputedStyle(a).transform);
+
+  // What the cascade reads still applies
+  a.style.width = '100px';
+  testing.expectEqual(100, a.offsetWidth);
+  a.style.display = 'none';
+  testing.expectFalse(a.checkVisibility());
+  a.style.cssText = '';
+  testing.expectEqual(200, a.offsetWidth);
+}
+</script>
+
+<script id="selectorOnTheStyleAttribute">
+{
+  const sheet = document.createElement('style');
+  sheet.textContent = '.slide[style*="rotate"] { display: none }';
+  document.head.appendChild(sheet);
+
+  const b = $('#b');
+  testing.expectTrue(b.checkVisibility());
+  b.style.transform = 'rotate(5deg)';
+  testing.expectFalse(b.checkVisibility());
+  b.style.removeProperty('transform');
+  testing.expectTrue(b.checkVisibility());
+  sheet.remove();
+}
+</script>
