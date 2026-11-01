@@ -21,7 +21,8 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
 const http = @import("../../../network/http.zig");
-const Transfer = @import("../../../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../../network/HttpClient.zig");
+const Transfer = HttpClient.Transfer;
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -367,6 +368,9 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return;
     }
 
+    const cross_origin = transfer._cors_cross_origin;
+    const allow_wildcard = !transfer.req.credentialsAllowed();
+
     var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
         log.debug(.http, "sync request failed", .{
             .source = "xhr",
@@ -400,7 +404,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             break;
         }
     }
-    try self.applyResponseHeaders(resp.headers);
+    try self.applyResponseHeaders(resp.headers, cross_origin, allow_wildcard);
 
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items());
 
@@ -660,10 +664,15 @@ fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
     self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
 }
 
-fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header, cross_origin: bool, allow_wildcard: bool) !void {
+    const expose_headers = if (cross_origin) HttpClient.findHeader(headers, "access-control-expose-headers") else null;
+
     const allocator = self._arena.allocator();
     for (headers) |hdr| {
         if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
+        if (cross_origin and !Headers.isCorsExposedResponseHeaderName(hdr.name, expose_headers, allow_wildcard)) {
             continue;
         }
         try self._response_headers.append(allocator, .{
@@ -710,7 +719,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         };
     }
 
-    try self.applyResponseHeaders(transfer.responseHeaders());
+    try self.applyResponseHeaders(transfer.responseHeaders(), transfer._cors_cross_origin, !transfer.req.credentialsAllowed());
 
     self._response_status = transfer.responseStatus().?;
     self._exec.page.status.noteResponse(.xhr, transfer);
