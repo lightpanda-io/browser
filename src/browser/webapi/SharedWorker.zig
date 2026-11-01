@@ -28,8 +28,6 @@
 // another page is still connected, the worker dies and the surviving port
 // goes quiet (entanglement is severed; nothing dangles).
 
-const std = @import("std");
-
 const js = @import("../js/js.zig");
 
 const URL = @import("../URL.zig");

@@ -36,7 +36,6 @@ const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
 const jev = @import("jev.zig");
-const interactive = @import("../interactive.zig");
 const URL = @import("../URL.zig");
 const Element = @import("../webapi/Element.zig");
 const Form = @import("../webapi/element/html/Form.zig");

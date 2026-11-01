@@ -19,12 +19,10 @@
 //! zlib utilities.
 
 const Byte = u8;
+const Bytef = Byte;
 pub const uInt = c_uint;
 const uLong = c_ulong;
-const Bytef = Byte;
-const voidpc = ?*const anyopaque;
 const voidpf = ?*anyopaque;
-const voidp = ?*anyopaque;
 
 pub const MAX_WBITS = @as(c_int, 15);
 

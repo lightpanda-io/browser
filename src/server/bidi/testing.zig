@@ -35,7 +35,6 @@ pub const arena = base.arena_allocator;
 pub const expect = std.testing.expect;
 pub const expectEqual = base.expectEqual;
 pub const expectError = base.expectError;
-const expectString = base.expectString;
 pub const expectLog = base.expectLog;
 pub const silenceLog = base.silenceLog;
 

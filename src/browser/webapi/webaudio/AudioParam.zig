@@ -19,7 +19,6 @@
 // https://webaudio.github.io/web-audio-api/#AudioParam
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");

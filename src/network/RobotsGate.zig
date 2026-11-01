@@ -25,7 +25,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const URL = @import("../browser/URL.zig");
-const ArenaPool = @import("../ArenaPool.zig");
 
 const http = @import("http.zig");
 const Robots = @import("Robots.zig");
