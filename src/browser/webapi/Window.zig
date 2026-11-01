@@ -780,14 +780,21 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
-fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().width;
+fn getInnerWidth(self: *const Window, frame: *Frame) u32 {
+    return self.iframeViewport(.width) orelse frame.page.getViewport().width;
 }
 
 // Faux-layout viewport height, used to decide whether an element is already
 // within view (e.g. scrollIntoViewIfNeeded).
-pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().height;
+pub fn getInnerHeight(self: *const Window, frame: *Frame) u32 {
+    return self.iframeViewport(.height) orelse frame.page.getViewport().height;
+}
+
+// The viewport of a window inside an iframe is the iframe's box.
+fn iframeViewport(self: *const Window, comptime axis: Element.Axis) ?u32 {
+    const iframe = self._frame.iframe orelse return null;
+    const parent = self._frame.parent orelse return null;
+    return @intFromFloat(@max(0, iframe.asElement().boxAxis(parent, axis)));
 }
 
 fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
