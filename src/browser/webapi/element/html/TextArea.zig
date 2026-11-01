@@ -54,6 +54,9 @@ _selectionchange_pending: bool = false,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 
+pub fn asHtml(self: *TextArea) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *TextArea) *Element {
     return Factory.protoOf(self).asElement();
 }

@@ -126,6 +126,9 @@ _selection_direction: Selection.SelectionDirection = .none,
 // A queued selectionchange not yet fired; later changes fold into it.
 _selectionchange_pending: bool = false,
 
+pub fn asHtml(self: *Input) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Input) *Element {
     return Factory.protoOf(self).asElement();
 }

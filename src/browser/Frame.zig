@@ -1537,7 +1537,7 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
         else => false,
     };
     if (parsing_html and (iframe.srcAttribute().len > 0 or iframe.hasSrcdoc())) {
-        self.queueElementEvent(Factory.protoOf(iframe), .load) catch |err| {
+        self.queueElementEvent(iframe.asHtml(), .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe.srcAttribute() });
         };
         if (delays_load) {
@@ -2549,11 +2549,11 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
 }
 
 pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEvent.Kind) !void {
-    try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .generation = image._generation });
+    try self.queueEvent(.{ .element = image.asHtml(), .kind = kind, .generation = image._generation });
 }
 
 fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind, generation: u32) !void {
-    try self.queueEvent(.{ .element = Factory.protoOf(link), .kind = kind, .generation = generation });
+    try self.queueEvent(.{ .element = link.asHtml(), .kind = kind, .generation = generation });
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
@@ -2648,7 +2648,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     if (session.load_resources.stylesheet == false) {
         self.page.status.noteSkipped(.stylesheet);
-        return self.queueLoad(Factory.protoOf(link));
+        return self.queueLoad(link.asHtml());
     }
 
     // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.

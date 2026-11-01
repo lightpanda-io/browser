@@ -47,6 +47,9 @@ _generation: u32 = 0, // bumped when src changes. Drop inflight loads for old UR
 
 const ReadyState = enum(u8) { none, loading, loaded, @"error" };
 
+pub fn asHtml(self: *Track) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Track) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -266,7 +269,7 @@ const TrackLoad = struct {
         if (self.generation == track._generation) {
             const loaded = fetched and track.addParsedCues(arena.allocator(), self.body.items, frame);
             track._ready_state = if (loaded) .loaded else .@"error";
-            frame.queueElementEvent(Factory.protoOf(track), if (loaded) .load else .@"error") catch |err| {
+            frame.queueElementEvent(track.asHtml(), if (loaded) .load else .@"error") catch |err| {
                 log.warn(.frame, "track queue event", .{ .err = err });
             };
         }

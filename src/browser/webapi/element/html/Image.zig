@@ -68,6 +68,9 @@ pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
     return el.as(Image);
 }
 
+pub fn asHtml(self: *Image) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Image) *Element {
     return Factory.protoOf(self).asElement();
 }
