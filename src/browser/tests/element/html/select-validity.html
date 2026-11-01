@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <form id="f">
@@ -54,10 +55,13 @@
 
 <script id="disabled_passes">
 {
-  // Disabled is barred from constraint validation; willValidate=false.
+  // Disabled is barred from constraint validation, so checkValidity() passes,
+  // but its validity still reports the missing value.
   testing.expectEqual(false, $('#disabled').willValidate);
-  testing.expectEqual(false, $('#disabled').validity.valueMissing);
-  testing.expectEqual(true, $('#disabled').validity.valid);
+  testing.expectEqual(true, $('#disabled').validity.valueMissing);
+  testing.expectEqual(false, $('#disabled').validity.valid);
+  testing.expectEqual(true, $('#disabled').checkValidity());
+  testing.expectEqual(false, $('#disabled').matches(':invalid'));
 }
 </script>
 
