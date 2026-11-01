@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<script>
+  const locations = [];
+  const onerrorLocations = [];
+  const stacks = [];
+  window.addEventListener('error', (e) => {
+    if (!(e.error instanceof TypeError)) return;
+    locations.push([e.filename, e.lineno, e.colno]);
+    stacks.push(e.error.stack);
+    e.preventDefault();
+  });
+  window.onerror = (message, source, line, column) => {
+    onerrorLocations.push([source, line, column]);
+  };
+</script>
+
+<p>first</p><script>null.first;
+//# sourceURL=source-classic.js
+</script>
+<p>later</p><script>void 0;
+  null.later;
+//# sourceURL=source-later.js
+</script>
+<script id=classic>
+  testing.expectEqual([
+    ['source-classic.js', 1, 6],
+    ['source-later.js', 2, 8],
+  ], locations);
+  testing.expectEqual(locations, onerrorLocations);
+  testing.expectTrue(stacks[0].includes('source-classic.js:1:6'));
+  testing.expectTrue(stacks[1].includes('source-later.js:2:8'));
+</script>
+
+<p>module</p><script type=module>null.module;
+//# sourceURL=source-module.js
+</script>
+<p>module later</p><script type=module>void 0;
+  null.moduleLater;
+//# sourceURL=source-module-later.js
+</script>
+<script id=modules>
+  testing.onload(() => {
+    testing.expectEqual([
+      ['source-classic.js', 1, 6],
+      ['source-later.js', 2, 8],
+      ['source-module.js', 1, 6],
+      ['source-module-later.js', 2, 8],
+    ], locations);
+    testing.expectEqual(locations, onerrorLocations);
+    testing.expectTrue(stacks[2].includes('source-module.js:1:6'));
+    testing.expectTrue(stacks[3].includes('source-module-later.js:2:8'));
+  });
+</script>
