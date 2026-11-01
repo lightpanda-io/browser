@@ -234,6 +234,55 @@
 }
 </script>
 
+<script id="blocksStack">
+{
+  // A block-level box starts a line of its own at its parent's left edge,
+  // whatever comes before it. So a full-width block doesn't overhang its
+  // container, and the last item of a long list is still in the viewport.
+  const section = document.createElement('div');
+  section.innerHTML = '<h2>Title</h2><p>Text</p>';
+  const list = document.createElement('div');
+  for (let i = 0; i < 400; i++) {
+    list.appendChild(document.createElement('div'));
+  }
+  section.appendChild(list);
+  document.body.appendChild(section);
+
+  const first = list.firstElementChild;
+  const last = list.lastElementChild;
+  testing.expectEqual(section.offsetLeft, list.offsetLeft);
+  testing.expectEqual(first.offsetLeft, last.offsetLeft);
+  testing.expectEqual(section.getBoundingClientRect().right, list.getBoundingClientRect().right);
+  testing.expectTrue(last.getBoundingClientRect().left < window.innerWidth);
+  section.remove();
+
+  // Inline-level boxes share a line, which a block-level one ends
+  const line = document.createElement('div');
+  line.innerHTML = '<span>a</span><span>b</span><div></div><span>c</span>';
+  document.body.appendChild(line);
+  const [a, b, , c] = line.children;
+  testing.expectTrue(b.offsetLeft > a.offsetLeft);
+  testing.expectEqual(a.offsetLeft, c.offsetLeft);
+  line.remove();
+
+  // A grid stretches its items, so they stack too (a theme's single-column
+  // grid body); a flex row keeps them side by side
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display: grid; grid-template-columns: 100%';
+  grid.innerHTML = '<div></div><a href="#">link</a><div></div><main></main>';
+  document.body.appendChild(grid);
+  testing.expectEqual(grid.firstElementChild.offsetLeft, grid.lastElementChild.offsetLeft);
+  grid.remove();
+
+  const row = document.createElement('div');
+  row.style.display = 'flex';
+  row.innerHTML = '<div style="width: 100px"></div><div style="width: 100px"></div>';
+  document.body.appendChild(row);
+  testing.expectEqual(100, row.lastElementChild.offsetLeft - row.firstElementChild.offsetLeft);
+  row.remove();
+}
+</script>
+
 <script id="translateX">
 {
   const shell = document.createElement('div');

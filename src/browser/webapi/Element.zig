@@ -2074,9 +2074,10 @@ fn countSubtreeNodes(node: *Node, frame: *const Frame) f64 {
     return count;
 }
 
-// The horizontal position follows the same single-row assumption as
-// contentAxis: an element sits to the right of the visible element
-// siblings before it.
+// An element sits to the right of the visible element siblings before it on
+// its line. A block-level box takes a line of its own at its parent's left
+// edge, as it fills the parent's width (layout.boxWidth); only a flex row's
+// items, sized by their content, share a line whatever their display.
 
 // translateX is commonly used to shift elements around, e.g. in a carousel to
 // shift things around. So we honor any transform: translateX inline styles.
@@ -2096,18 +2097,34 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
             }
         }
-        var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
-        while (siblings.next()) |s| {
-            if (s == current) break;
-            if (s.is(Element)) |el| {
-                if (!style_manager.hasDisplayNone(el)) {
-                    x += el.getElementAxis(frame, .width).value;
-                }
-            }
-        }
+        x += lineOffset(current, parent, style_manager, frame);
         current = parent;
     }
 
+    return x;
+}
+
+fn lineOffset(node: *Node, parent: *Node, style_manager: *StyleManager, frame: *Frame) f64 {
+    const el = node.is(Element) orelse return 0;
+    const in_row = style_manager.isFlexRowItem(el);
+    if (in_row == false and style_manager.isBlockLevel(el)) {
+        return 0;
+    }
+
+    var x: f64 = 0.0;
+    var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
+    while (siblings.next()) |s| {
+        if (s == node) break;
+        const sibling = s.is(Element) orelse continue;
+        if (style_manager.hasDisplayNone(sibling)) {
+            continue;
+        }
+        if (in_row == false and style_manager.isBlockLevel(sibling)) {
+            x = 0;
+            continue;
+        }
+        x += sibling.getElementAxis(frame, .width).value;
+    }
     return x;
 }
 
