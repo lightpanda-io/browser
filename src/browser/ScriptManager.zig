@@ -259,6 +259,13 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return self.addInlineScript(script_element, from_parser, kind);
     };
 
+    // https://html.spec.whatwg.org/#prepare-the-script-element: an empty src
+    // fires error without a fetch. Like Chrome, whitespace counts as empty.
+    if (std.mem.trim(u8, src, "\t\n\x0c\r ").len == 0) {
+        script_element._executed = true;
+        return frame.queueElementEvent(script_element.asHtml(), .@"error");
+    }
+
     // The script is remote (even data: and blob: are synthesized via HttpClient)
 
     // Set once arena ownership is resolved — transferred to `script`, or

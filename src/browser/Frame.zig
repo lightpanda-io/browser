@@ -2181,7 +2181,7 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
         }
         // parser-inserted scripts have force-async set to false, but only if
         // they have src or non-empty content
-        if (script._src.len > 0 or script_node.firstChild() != null) {
+        if (script._src != null or script_node.firstChild() != null) {
             script._force_async = false;
         }
     }
@@ -3684,7 +3684,7 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     }
 
     if (node.is(Element.Html.Script)) |script| {
-        if ((comptime from_parser == false) and script._src.len == 0) {
+        if ((comptime from_parser == false) and script._src == null) {
             // Script was added via JavaScript without a src attribute.
             // Only skip if it has no inline content either — scripts with
             // textContent/text should still execute per spec.

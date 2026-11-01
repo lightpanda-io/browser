@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!--
+  An empty src fires error at the script from a task, without a fetch
+  (https://html.spec.whatwg.org/#prepare-the-script-element); Chrome also
+  treats a whitespace-only src as empty. The script is already started, so its
+  text never runs and a later src doesn't load it. A fetch would run this
+  page's HTML as a script: a SyntaxError reported to window.
+-->
+
+<script>window.parser_events = [];</script>
+<script src="" onload="parser_events.push('load')" onerror="parser_events.push('error')">window.parser_text_ran = true;</script>
+<script src=" " onload="parser_events.push('blank load')" onerror="parser_events.push('blank error')"></script>
+<script type=module src="" onerror="parser_events.push('module error')"></script>
+<script type=text/plain src="" onerror="parser_events.push('text/plain error')"></script>
+
+<script id=parser_inserted>
+  testing.onload(() => {
+    testing.expectEqual(undefined, window.parser_text_ran);
+    testing.expectEqual('error,blank error,module error', parser_events.join(','));
+  });
+</script>
+
+<script id=inserted>
+  testing.async().then((state) => {
+    const events = [];
+    const s = document.createElement('script');
+    s.setAttribute('src', '');
+    s.onload = () => events.push('load');
+    s.onerror = (e) => {
+      events.push(`error trusted=${e.isTrusted} bubbles=${e.bubbles}`);
+      state.resolve();
+    };
+    document.head.appendChild(s);
+    Promise.resolve().then(() => events.push('microtask'));
+    events.push('appended');
+    setTimeout(() => state.resolve(), 500);
+
+    state.done(() => {
+      testing.expectEqual('appended,microtask,error trusted=true bubbles=false', events.join(','));
+    });
+  });
+</script>
+
+<script id=inserted_with_text>
+  testing.async().then((state) => {
+    window.inserted_text_ran = false;
+    const events = [];
+    const s = document.createElement('script');
+    s.src = '';
+    s.text = 'window.inserted_text_ran = true;';
+    s.onload = () => events.push('load');
+    s.onerror = () => {
+      events.push('error');
+      state.resolve();
+    };
+    document.head.appendChild(s);
+    setTimeout(() => state.resolve(), 500);
+
+    state.done(() => {
+      testing.expectFalse(window.inserted_text_ran);
+      testing.expectEqual('error', events.join(','));
+    });
+  });
+</script>
+
+<script id=already_started>
+  window.started_events = [];
+  const started = document.createElement('script');
+  started.src = '';
+  started.onload = () => started_events.push('load');
+  started.onerror = () => started_events.push('error');
+  document.head.appendChild(started);
+  started.src = 'empty.js';
+  testing.onload(() => {
+    testing.expectEqual('error', started_events.join(','));
+  });
+</script>
