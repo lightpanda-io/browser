@@ -36,6 +36,8 @@ _src: []const u8 = "",
 _executed: bool = false,
 // dynamic scripts are forced to be async by default
 _force_async: bool = true,
+// Where the document parser found the script's text.
+_text_position: js.Local.SourcePosition = .{},
 
 pub fn asElement(self: *Script) *Element {
     return Factory.protoOf(self).asElement();

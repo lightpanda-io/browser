@@ -100,6 +100,16 @@ pub extern "c" fn html5ever_parse_fragment(
     allow_declarative_shadow: bool,
 ) void;
 
+// 0-based, the column in UTF-16 code units.
+pub const TextPosition = extern struct {
+    line: u32,
+    column: u32,
+};
+
+// Where the text of a <script> from html5ever_parse_document(_with_encoding)
+// starts, given its ParsedNode.data.
+pub extern "c" fn html5ever_script_text_position(data: *anyopaque) Nullable(TextPosition);
+
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
 pub extern "c" fn html5ever_attribute_iterator_count(ctx: *anyopaque) usize;
 

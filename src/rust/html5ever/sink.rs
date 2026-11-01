@@ -25,7 +25,8 @@ use crate::types::*;
 
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::StrTendril;
-use html5ever::{local_name, Attribute, QualName};
+use html5ever::tokenizer::BufferQueue;
+use html5ever::{local_name, ns, Attribute, QualName};
 
 type Arena<'arena> = &'arena typed_arena::Arena<ElementData>;
 
@@ -33,14 +34,90 @@ type Arena<'arena> = &'arena typed_arena::Arena<ElementData>;
 pub struct ElementData {
     pub qname: QualName,
     pub mathml_annotation_xml_integration_point: bool,
+    // Where the text of a <script> in a document starts.
+    pub text_position: Option<TextPosition>,
 }
 impl ElementData {
-    fn new(qname: QualName, flags: ElementFlags) -> Self {
+    fn new(qname: QualName, flags: ElementFlags, text_position: Option<TextPosition>) -> Self {
         Self {
             qname: qname,
             mathml_annotation_xml_integration_point: flags.mathml_annotation_xml_integration_point,
+            text_position: text_position,
         }
     }
+}
+
+// A document parse's input, for the position the tokenizer is at in it.
+pub struct DocumentInput<'a> {
+    text: &'a str,
+    // The queue the tokenizer reads `text` from: what it hasn't read yet.
+    unread: &'a BufferQueue,
+    // Counting resumes from the previous position, or a minified document
+    // (one long line) would be rescanned for each of its scripts.
+    last: Cell<Counted>,
+}
+
+#[derive(Clone, Copy)]
+struct Counted {
+    offset: usize,
+    line: usize,
+    column: usize,
+}
+
+impl<'a> DocumentInput<'a> {
+    pub fn new(text: &'a str, unread: &'a BufferQueue) -> Self {
+        // Not a column: Chrome decodes a BOM away, the tokenizer reads past it.
+        let bom_len = if text.starts_with('\u{feff}') { 3 } else { 0 };
+        Self {
+            text: text,
+            unread: unread,
+            last: Cell::new(Counted {
+                offset: bom_len,
+                line: 0,
+                column: 0,
+            }),
+        }
+    }
+
+    // As in Chrome, a lone \r doesn't end a line.
+    fn position(&self) -> Option<TextPosition> {
+        let unread = self.unread.clone();
+        let unread_len: usize = std::iter::from_fn(|| unread.pop_front())
+            .map(|chunk| chunk.len())
+            .sum();
+        let read = self.text.len().checked_sub(unread_len)?;
+
+        let last = self.last.get();
+        let segment = self.text.as_bytes().get(last.offset..read)?;
+        let counted = match segment.iter().rposition(|&b| b == b'\n') {
+            Some(i) => Counted {
+                offset: read,
+                line: last.line + segment.iter().filter(|&&b| b == b'\n').count(),
+                column: utf16_len(&segment[i + 1..]),
+            },
+            None => Counted {
+                offset: read,
+                line: last.line,
+                column: last.column + utf16_len(segment),
+            },
+        };
+        self.last.set(counted);
+
+        Some(TextPosition {
+            line: u32::try_from(counted.line).unwrap_or(u32::MAX),
+            column: u32::try_from(counted.column).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+fn utf16_len(utf8: &[u8]) -> usize {
+    utf8.iter()
+        .map(|&b| match b {
+            0x80..=0xBF => 0, // continuation byte
+            0xF0..=0xFF => 2, // outside the BMP: a surrogate pair
+            _ => 1,
+        })
+        .sum()
 }
 
 // Mirrors Parser.ParsedNode (an extern struct). Every element Ref the tree
@@ -80,6 +157,9 @@ pub struct Sink<'arena> {
     pub append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
     pub attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
     pub allow_declarative_shadow: bool,
+    // Only for the parse of a document from its source, not of a fragment
+    // or of document.write() input.
+    pub input: Option<DocumentInput<'arena>>,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -139,7 +219,17 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn create_element(&self, name: QualName, attrs: Vec<Attribute>, flags: ElementFlags) -> Ref {
-        let data = self.arena.alloc(ElementData::new(name.clone(), flags));
+        // Browsers compile an inline script with the document position of its
+        // text, which starts right after the start tag the tokenizer just read.
+        let text_position = match &self.input {
+            Some(input) if name.ns == ns!(html) && name.local == local_name!("script") => {
+                input.position()
+            }
+            _ => None,
+        };
+        let data = self
+            .arena
+            .alloc(ElementData::new(name.clone(), flags, text_position));
 
         unsafe {
             let mut attribute_iterator = CAttributeIterator { vec: attrs, pos: 0 };

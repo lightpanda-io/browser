@@ -178,9 +178,8 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
     v8.v8__Isolate__SetOOMErrorHandler(isolate_handle, oomCallback);
 
-    if (comptime lp.IS_DEBUG) {
-        v8.v8__Isolate__SetCaptureStackTraceForUncaughtExceptions(isolate_handle, true, 64);
-    }
+    // Error locations need a frame even when Error.stackTraceLimit is zero.
+    v8.v8__Isolate__SetCaptureStackTraceForUncaughtExceptions(isolate_handle, true, if (lp.IS_DEBUG) 64 else 1);
 
     isolate.enter();
     errdefer isolate.exit();

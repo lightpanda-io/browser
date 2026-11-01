@@ -377,7 +377,7 @@ pub fn stringToPersistedFunction(
 
 // `cacheable` is about our module map. `script_cache` is the HTTP cache entry
 // the source came from, see compileModule.
-pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, cacheable: bool, script_cache: ?HttpClient.ScriptCache) !(if (want_result) ModuleEntry else void) {
+pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, position: js.Local.SourcePosition, cacheable: bool, script_cache: ?HttpClient.ScriptCache) !(if (want_result) ModuleEntry else void) {
     // Evaluating this module evaluates its static imports, which
     // compileModule queued along with it.
     defer self.flushModuleCodeCaches(local);
@@ -421,7 +421,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         if (cacheable and !gop.found_existing) {
             gop.key_ptr.* = owned_url;
         }
-        const m = try self.compileModule(local, src, owned_url, script_cache);
+        const m = try self.compileModule(local, src, owned_url, position, script_cache);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
@@ -475,7 +475,7 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
         };
         const stack = blk: {
             if (comptime lp.IS_DEBUG == false) {
-                // SetCaptureStackTraceForUncaughtExceptions is only set in Debug
+                // Release retains only one frame, for error locations.
                 break :blk "";
             }
 
@@ -525,13 +525,13 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
 
 // Compiles a module, consuming the cached bytes of `script_cache` if it has
 // any, and queuing fresh ones if it doesn't (or if V8 rejected them).
-fn compileModule(self: *Context, local: *const js.Local, src: []const u8, name: []const u8, script_cache: ?HttpClient.ScriptCache) !js.Module {
+fn compileModule(self: *Context, local: *const js.Local, src: []const u8, name: []const u8, position: js.Local.SourcePosition, script_cache: ?HttpClient.ScriptCache) !js.Module {
     const sc = script_cache orelse {
-        const result = try compileModuleSource(local, src, name, null);
+        const result = try compileModuleSource(local, src, name, position, null);
         return result.module;
     };
 
-    const result = try compileModuleSource(local, src, name, sc.bytes);
+    const result = try compileModuleSource(local, src, name, position, sc.bytes);
     const mod = result.module;
 
     if (sc.bytes != null) {
@@ -599,13 +599,13 @@ const ModuleCompileResult = struct {
     cache_rejected: bool,
 };
 
-fn compileModuleSource(local: *const js.Local, src: []const u8, name: []const u8, cached_data: ?[]const u8) !ModuleCompileResult {
+fn compileModuleSource(local: *const js.Local, src: []const u8, name: []const u8, position: js.Local.SourcePosition, cached_data: ?[]const u8) !ModuleCompileResult {
     var origin_handle: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT2(
         &origin_handle,
         try local.isolate.initStringHandle(name),
-        0, // resource_line_offset
-        0, // resource_column_offset
+        std.math.lossyCast(c_int, position.line),
+        std.math.lossyCast(c_int, position.column),
         false, // resource_is_shared_cross_origin
         -1, // script_id
         null, // source_map_url
@@ -921,7 +921,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
     try_catch.init(local);
     defer try_catch.deinit();
 
-    const mod = try self.compileModule(local, source.src(), normalized_specifier, source.script.script_cache);
+    const mod = try self.compileModule(local, source.src(), normalized_specifier, .{}, source.script.script_cache);
     try self.postCompileModule(mod, normalized_specifier, local);
     // waitForImport can cause module_cache to be mutated (via HttpClient.tick),
     // so we need to refetch this incase the hashmap changed
@@ -1098,7 +1098,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         try_catch.init(local);
         defer try_catch.deinit();
 
-        break :blk self.module(true, local, ms.src(), state.specifier, true, ms.script.script_cache) catch |err| {
+        break :blk self.module(true, local, ms.src(), state.specifier, .{}, true, ms.script.script_cache) catch |err| {
             const caught = try_catch.caughtOrError(self.local_arena, err);
             log.debug(.js, "module compilation failed", .{
                 .caught = caught,

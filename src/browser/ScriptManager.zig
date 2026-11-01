@@ -506,6 +506,9 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
             .frame = frame,
         } },
         .microtask_pre_execute = !from_parser, //parser already ran it
+        // As in Chrome, a parsed <script> that a script only gives its text
+        // later reports positions in that text.
+        .text_position = if (from_parser) script_element._text_position else .{},
     };
 
     // An inline module found during parsing waits its turn in document order.

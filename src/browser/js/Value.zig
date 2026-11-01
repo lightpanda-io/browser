@@ -70,17 +70,33 @@ pub fn errorLocation(self: Value, allocator: Allocator) !ErrorLocation {
     const l = self.local;
     const message = v8.v8__Exception__CreateMessage(l.isolate.handle, self.handle) orelse return .{};
 
+    var line = v8.v8__Message__GetLineNumber(message, l.handle);
+    var column = v8.v8__Message__GetStartColumn(message);
+    var resource_name = v8.v8__Message__GetScriptResourceName(message);
+
+    if (v8.v8__Message__GetStackTrace(message)) |stack| {
+        if (v8.v8__StackTrace__GetFrameCount(stack) > 0) {
+            const frame = v8.v8__StackTrace__GetFrame(stack, l.isolate.handle, 0).?;
+            const script_id = v8.v8__Message__GetScriptId(message);
+            // Frames account for sourceURL; messages retain document offsets.
+            // A syntax error can have a caller's frame, not the failing script's.
+            if (script_id == 0 or line <= 0 or script_id == v8.v8__StackFrame__GetScriptId(frame)) {
+                line = v8.v8__StackFrame__GetLineNumber(frame);
+                column = v8.v8__StackFrame__GetColumn(frame) - 1;
+                resource_name = v8.v8__StackFrame__GetScriptNameOrSourceURL(frame);
+            }
+        }
+    }
+
     var location: ErrorLocation = .{};
-    const line = v8.v8__Message__GetLineNumber(message, l.handle);
     if (line > 0) {
         location.line = @intCast(line);
     }
-    // V8's column is 0-based.
-    const column = v8.v8__Message__GetStartColumn(message);
+    // V8's message column is 0-based.
     if (column >= 0) {
         location.column = @intCast(column + 1);
     }
-    if (v8.v8__Message__GetScriptResourceName(message)) |handle| {
+    if (resource_name) |handle| {
         const name: Value = .{ .local = l, .handle = handle };
         if (name.isString()) |str| {
             location.url = try str.toSliceWithAlloc(allocator);

@@ -188,9 +188,17 @@ pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js
 
 // Compile `src` into a context-bound Script
 pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Script {
-    const result = try self.compileWithCache(src, name, null);
+    const result = try self.compileWithCache(src, name, .{}, null);
     return result.script;
 }
+
+// Where a script's source starts in the resource `name`, e.g. an inline script
+// in its document. 0-based, the column in UTF-16 code units. V8 adds it to the
+// positions it reports, the column only on the source's first line.
+pub const SourcePosition = struct {
+    line: u32 = 0,
+    column: u32 = 0,
+};
 
 const CompileResult = struct {
     script: js.Script,
@@ -203,13 +211,25 @@ const CompileResult = struct {
 
 // Like compile, but takes an optional cached_data which is a previously
 // compiled and serialized script (see Script.Unbound.createCodeCache)
-pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
+pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, position: SourcePosition, cached_data: ?[]const u8) !CompileResult {
     const script_name = try self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = try self.isolate.initStringHandle(src);
 
     // Create ScriptOrigin
     var origin: v8.ScriptOrigin = undefined;
-    v8.v8__ScriptOrigin__CONSTRUCT(&origin, @ptrCast(script_name));
+    v8.v8__ScriptOrigin__CONSTRUCT2(
+        &origin,
+        script_name,
+        std.math.lossyCast(c_int, position.line),
+        std.math.lossyCast(c_int, position.column),
+        false, // resource_is_shared_cross_origin
+        -1, // script_id
+        null, // source_map_url
+        false, // resource_is_opaque
+        false, // is_wasm
+        false, // is_module
+        null, // host_defined_options
+    );
 
     // The Source takes ownership of the CachedData pointer (it holds it in a
     // unique_ptr), so we must not delete it ourselves — Source__DESTRUCT does.
