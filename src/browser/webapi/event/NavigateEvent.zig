@@ -41,7 +41,7 @@ pub const Proto = Event;
 _proto: *Event,
 _navigation_type: NavigationType,
 _destination: *NavigationDestination,
-_can_intercept: bool, // TODO. Not supported, currently always false
+_can_intercept: bool,
 _user_initiated: bool,
 _hash_change: bool,
 _signal: *AbortSignal,
@@ -50,6 +50,15 @@ _download_request: ?[]const u8,
 _info: ?js.Value.Global,
 _has_ua_visual_transition: bool,
 _source_element: ?*Element,
+
+// Appended to by intercept(). Only honored for same-document navigations;
+// consumed (and released) by Navigation once the commit steps run the
+// handlers.
+_intercepted: bool = false,
+_handlers: std.ArrayList(js.Function.Global) = .empty,
+// Set by scroll() once it's run its (no-op) scroll handling, so a second
+// call is a silent no-op rather than an error.
+_scrolled: bool = false,
 
 const NavigateEventOptions = struct {
     canIntercept: bool = false,
@@ -116,6 +125,9 @@ pub fn deinit(self: *NavigateEvent, page: *Page) void {
     }
     if (self._form_data) |fd| {
         fd.releaseRef(page);
+    }
+    for (self._handlers.items) |handler| {
+        handler.release();
     }
 }
 
@@ -192,29 +204,85 @@ fn sharedChecks(self: *const NavigateEvent, comptime method: []const u8, frame: 
     return local.newException(DOMException.init(method ++ "() may only be called while the navigate event is being dispatched.", "InvalidStateError"));
 }
 
-// Not supported: canIntercept is always false, so this always throws.
-fn intercept(self: *const NavigateEvent, _: ?js.Value, frame: *Frame) !Thrown {
+const NavigationFocusReset = enum {
+    @"after-transition",
+    manual,
+
+    pub const js_enum_from_string = true;
+};
+
+const NavigationScrollBehavior = enum {
+    @"after-transition",
+    manual,
+
+    pub const js_enum_from_string = true;
+};
+
+const InterceptOptions = struct {
+    // Not supported: we never defer scroll restoration or focus reset, so
+    // these are accepted but otherwise ignored.
+    focusReset: ?NavigationFocusReset = null,
+    handler: ?js.Function = null,
+    scroll: ?NavigationScrollBehavior = null,
+};
+
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigateevent-intercept
+fn intercept(self: *NavigateEvent, opts: ?InterceptOptions, frame: *Frame) !Thrown {
     const local = frame.js.local.?;
     if (self.sharedChecks("intercept", frame)) |exception| {
         return .{ .exception = exception };
     }
 
-    if (self._can_intercept == false) {
+    if (!self._can_intercept) {
         const message = try frame.page_arena.print(
             "A navigation with URL '{s}' cannot be intercepted by in a window with origin '{s}' and URL '{s}'.",
             .{ self._destination._url, frame.origin orelse "null", frame.url },
         );
         return .{ .exception = local.newException(DOMException.init(message, "SecurityError")) };
     }
+
+    self._intercepted = true;
+
+    if (opts) |o| {
+        if (o.handler) |handler_fn| {
+            try self._handlers.append(self._proto._arena.allocator(), try handler_fn.persist());
+        }
+    }
     return .undefined;
 }
 
-fn scroll(self: *const NavigateEvent, frame: *Frame) Thrown {
-    if (self.sharedChecks("scroll", frame)) |exception| {
-        return .{ .exception = exception };
+// Unlike intercept(), scroll() isn't dispatch-only: it's only valid once the
+// navigation has committed, which (for an intercepted navigation) is while
+// its handler runs, after dispatch has already finished.
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigateevent-scroll
+fn scroll(self: *NavigateEvent, frame: *Frame) Thrown {
+    const local = frame.js.local.?;
+    if (self._proto._is_trusted == false) {
+        return .{ .exception = local.newException(
+            DOMException.init("scroll() may only be called on a trusted event.", "SecurityError"),
+        ) };
     }
-    // Only an intercepted navigation can be scrolled, and we never intercept.
-    return .{ .exception = frame.js.local.?.newException(DOMException.init("intercept() must be called before scroll()", "InvalidStateError")) };
+    if (self._scrolled) {
+        return .undefined;
+    }
+    if (self._intercepted == false) {
+        return .{ .exception = local.newException(
+            DOMException.init("intercept() must be called before scroll()", "InvalidStateError"),
+        ) };
+    }
+
+    const committed = if (frame._ongoing_navigate) |ongoing|
+        ongoing.signal == self._signal and ongoing.committed_same_document
+    else
+        false;
+    if (!committed) {
+        return .{ .exception = local.newException(
+            DOMException.init("scroll() may only be called once the navigation has committed", "InvalidStateError"),
+        ) };
+    }
+
+    self._scrolled = true;
+    return .undefined;
 }
 
 pub const JsApi = struct {
