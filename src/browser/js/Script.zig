@@ -123,11 +123,11 @@ test "Script: code cache round-trips and rejects a source mismatch" {
     defer testing.allocator.free(bytes);
     try testing.expect(bytes.len > 0);
 
-    const hit = try ls.local.compileWithCache(src, "cache_test", bytes);
+    const hit = try ls.local.compileWithCache(src, "cache_test", .{}, bytes);
     try testing.expectEqual(false, hit.cache_rejected);
     try testing.expectEqual(42, try (try hit.script.run()).toI32());
 
-    const miss = try ls.local.compileWithCache("1 + 1;", "cache_test", bytes);
+    const miss = try ls.local.compileWithCache("1 + 1;", "cache_test", .{}, bytes);
     try testing.expectEqual(true, miss.cache_rejected);
     try testing.expectEqual(2, try (try miss.script.run()).toI32());
 }

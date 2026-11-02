@@ -513,6 +513,9 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
             .frame = frame,
         } },
         .microtask_pre_execute = !from_parser, //parser already ran it
+        // The sourceURL opt-out is conservative: strings and ordinary comments
+        // containing the marker also keep script-relative positions.
+        .text_position = if (from_parser and std.mem.indexOf(u8, source, "sourceURL=") == null) script_element._text_position else .{},
     };
 
     // An inline module found during parsing waits its turn in document order.

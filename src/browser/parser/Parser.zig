@@ -520,16 +520,23 @@ fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
     }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
-    self._popCallback(getNode(node_ref)) catch |err| {
+    self._popCallback(getParsed(node_ref)) catch |err| {
         self.err = .{ .err = err, .source = .pop };
     };
 }
 
-fn _popCallback(self: *Parser, node: *Node) !void {
+fn _popCallback(self: *Parser, pn: *ParsedNode) !void {
+    const node = pn.node;
     // Flush before any nodeComplete so Build.complete (and any custom-element
     // callbacks reachable from it) observe the final text data.
     try self.flushPendingText();
-    if (node.is(Element.Html.Script) != null) {
+    if (node.is(Element.Html.Script)) |script| {
+        // Not at creation: settleDocument may have rebuilt the element since.
+        if (pn.data) |data| {
+            if (h5e.html5ever_script_text_position(data).unwrap()) |position| {
+                script._text_position = .{ .line = position.line, .column = position.column };
+            }
+        }
         // https://html.spec.whatwg.org/#scriptEndTag: a MutationObserver sees
         // the script, and can stop it from running, before it's prepared.
         self.checkpoint();
@@ -1089,6 +1096,7 @@ fn pollTerminate(self: *Parser) bool {
 }
 
 const testing = @import("../../testing.zig");
+const TreeWalker = @import("../webapi/TreeWalker.zig");
 test "Parser: isWellFormedXML" {
     try testing.expectEqual(true, isWellFormedXML("<?xml version=\"1.0\"?><a><b/>&nbsp;&amp;</a>"));
     try testing.expectEqual(true, isWellFormedXML("<!DOCTYPE svg [ <!ENTITY x \"y\"> ]><svg/>"));
@@ -1096,4 +1104,32 @@ test "Parser: isWellFormedXML" {
     try testing.expectEqual(false, isWellFormedXML("<a>unclosed"));
     try testing.expectEqual(false, isWellFormedXML("<a x=1/>"));
     try testing.expectEqual(false, isWellFormedXML("<?xml version=\"2.0\"?><a/>"));
+}
+
+test "Parser: where a document's scripts have their text" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const html = "\u{FEFF}<script>a</script><script>b</script>\r\n" ++
+        "<p>lone\rcr</p><script>c</script>\n" ++
+        "<p>é😀</p><script>d</script><script\n" ++
+        " data-x>e</script>\n" ++
+        "<template><b>t</b></template><script>f</script>";
+    const doc = try Frame.parse.htmlDocument(frame, html, .{});
+
+    var positions: std.ArrayList(js.Local.SourcePosition) = .empty;
+    var it = TreeWalker.Full.ElementsOf(Element.Html.Script).init(doc.asNode(), .{});
+    while (it.next()) |script| {
+        try positions.append(testing.arena_allocator, script._text_position);
+    }
+    // 0-based, the columns in UTF-16 code units. As in Chrome, a BOM takes no
+    // column and a lone \r doesn't end a line.
+    try testing.expectEqualSlices(js.Local.SourcePosition, &.{
+        .{ .line = 0, .column = 8 },
+        .{ .line = 0, .column = 26 },
+        .{ .line = 1, .column = 22 },
+        .{ .line = 2, .column = 18 },
+        .{ .line = 3, .column = 8 },
+        .{ .line = 4, .column = 37 },
+    }, positions.items);
 }
