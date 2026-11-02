@@ -36,7 +36,21 @@ const user_input = @import("user_input.zig");
 
 const log = lp.log;
 
+// Per-document options for other commands, set by styleWithCSS, useCSS and
+// defaultParagraphSeparator.
+pub const Settings = struct {
+    // format with inline style rather than element, "style=font-weight: bold"
+    // vs <b>..</b>. We don't currently support any styling commands.
+    css: bool = false,
+
+    // the block insertParagraph makes when there's none to split
+    paragraph_separator: enum { div, p } = .div,
+};
+
 const Command = enum {
+    styleWithCSS,
+    useCSS,
+    defaultParagraphSeparator,
     insertText,
     delete,
     forwardDelete,
@@ -67,7 +81,25 @@ pub fn exec(doc: *Document, name: []const u8, value: []const u8) !bool {
     doc._exec_command_running = true;
     defer doc._exec_command_running = false;
 
+    const settings = &doc._exec_command_settings;
     return switch (command) {
+        .styleWithCSS => {
+            settings.css = !std.ascii.eqlIgnoreCase(value, "false");
+            return true;
+        },
+        .useCSS => {
+            settings.css = std.ascii.eqlIgnoreCase(value, "false");
+            return true;
+        },
+        .defaultParagraphSeparator => {
+            if (std.ascii.eqlIgnoreCase(value, "div")) {
+                settings.paragraph_separator = .div;
+            } else if (std.ascii.eqlIgnoreCase(value, "p")) {
+                settings.paragraph_separator = .p;
+            }
+            // Yes, ignore any other value, but still return true.
+            return true;
+        },
         .insertText => insertText(frame, value),
         .delete => delete(frame, false),
         .forwardDelete => delete(frame, true),
@@ -87,7 +119,29 @@ pub fn isEnabled(doc: *Document, name: []const u8) bool {
     const command = Command.parse(name) orelse return false;
     return switch (command) {
         .insertText, .delete, .forwardDelete, .insertLineBreak => editTarget(doc) != null,
-        .selectAll => true,
+        .selectAll, .styleWithCSS, .useCSS, .defaultParagraphSeparator => true,
+    };
+}
+
+pub fn queryState(doc: *const Document, name: []const u8) bool {
+    if (doc._frame == null) {
+        return false;
+    }
+    const command = Command.parse(name) orelse return false;
+    return switch (command) {
+        .styleWithCSS => doc._exec_command_settings.css,
+        else => false,
+    };
+}
+
+pub fn queryValue(doc: *const Document, name: []const u8) []const u8 {
+    if (doc._frame == null) {
+        return "";
+    }
+    const command = Command.parse(name) orelse return "";
+    return switch (command) {
+        .defaultParagraphSeparator => @tagName(doc._exec_command_settings.paragraph_separator),
+        else => "",
     };
 }
 
