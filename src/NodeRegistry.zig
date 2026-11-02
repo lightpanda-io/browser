@@ -102,7 +102,7 @@ pub fn resetFrame(self: *NodeRegistry, frame: *const Frame) void {
 /// `frame_destroyed` listener: a page's nodes go with its root frame, however
 /// the page was closed.
 pub fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
-    if (frame.parent != null) return;
+    if (frame != &frame.page.frame) return;
     const self: *NodeRegistry = @ptrCast(@alignCast(ctx));
     self.resetFrame(frame);
 }
