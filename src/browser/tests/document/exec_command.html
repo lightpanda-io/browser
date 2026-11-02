@@ -60,6 +60,79 @@
 }
 </script>
 
+<script id="settings">
+{
+  // always enabled, even with nothing selected; no events
+  getSelection().removeAllRanges();
+  document.activeElement.blur();
+  events = [];
+  for (const cmd of ['styleWithCSS', 'useCSS', 'defaultParagraphSeparator']) {
+    testing.expectEqual(true, document.queryCommandSupported(cmd));
+    testing.expectEqual(true, document.queryCommandEnabled(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+  }
+
+  testing.expectEqual(false, document.queryCommandState('styleWithCSS'));
+  testing.expectEqual('', document.queryCommandValue('styleWithCSS'));
+  // anything but "false" turns it on
+  for (const [value, css] of [['true', true], ['FALSE', false], ['', true], ['False', false], ['0', true], [null, true]]) {
+    document.execCommand('styleWithCSS', false, 'false');
+    testing.expectEqual(true, document.execCommand('styleWithCSS', false, value));
+    testing.expectEqual(css, document.queryCommandState('styleWithCSS'));
+  }
+  testing.expectEqual(true, document.execCommand('styleWithCSS'));
+  testing.expectEqual(true, document.queryCommandState('STYLEWITHCSS'));
+  testing.expectEqual(false, document.queryCommandIndeterm('styleWithCSS'));
+
+  // the opposite: "false" turns CSS on; it has no state of its own
+  testing.expectEqual(true, document.execCommand('useCSS', false, 'true'));
+  testing.expectEqual(false, document.queryCommandState('styleWithCSS'));
+  testing.expectEqual(true, document.execCommand('useCSS', false, 'false'));
+  testing.expectEqual(true, document.queryCommandState('styleWithCSS'));
+  testing.expectEqual(false, document.queryCommandState('useCSS'));
+  testing.expectEqual(true, document.execCommand('useCSS'));
+  testing.expectEqual(false, document.queryCommandState('styleWithCSS'));
+
+  testing.expectEqual('div', document.queryCommandValue('defaultParagraphSeparator'));
+  testing.expectEqual(false, document.queryCommandState('defaultParagraphSeparator'));
+  testing.expectEqual(true, document.execCommand('defaultParagraphSeparator', false, 'P'));
+  testing.expectEqual('p', document.queryCommandValue('defaultparagraphseparator'));
+  // Chrome ignores anything but div and p, yet returns true
+  for (const value of ['h1', ' div', 'br', '', null]) {
+    testing.expectEqual(true, document.execCommand('defaultParagraphSeparator', false, value));
+    testing.expectEqual('p', document.queryCommandValue('defaultParagraphSeparator'));
+  }
+  testing.expectEqual(true, document.execCommand('defaultParagraphSeparator', false, 'div'));
+  testing.expectEqual('div', document.queryCommandValue('defaultParagraphSeparator'));
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="settings_per_document">
+{
+  document.execCommand('styleWithCSS', false, 'true');
+  document.execCommand('defaultParagraphSeparator', false, 'p');
+
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  testing.expectEqual(false, doc.queryCommandState('styleWithCSS'));
+  testing.expectEqual('div', doc.queryCommandValue('defaultParagraphSeparator'));
+  iframe.remove();
+
+  // without a frame, nothing is supported
+  const frameless = document.implementation.createHTMLDocument('');
+  testing.expectEqual(false, frameless.queryCommandSupported('styleWithCSS'));
+  testing.expectEqual(false, frameless.execCommand('styleWithCSS', false, 'true'));
+  testing.expectEqual(false, frameless.queryCommandState('styleWithCSS'));
+  testing.expectEqual(false, frameless.execCommand('defaultParagraphSeparator', false, 'p'));
+  testing.expectEqual('', frameless.queryCommandValue('defaultParagraphSeparator'));
+
+  document.execCommand('styleWithCSS', false, 'false');
+  document.execCommand('defaultParagraphSeparator', false, 'div');
+}
+</script>
+
 <script id="insert_text_nothing_editable">
 {
   document.activeElement.blur();

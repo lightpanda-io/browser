@@ -91,6 +91,7 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 // an execCommand is running: a nested one is refused
 _exec_command_running: bool = false,
+_exec_command_settings: exec_command.Settings = .{},
 _design_mode: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
@@ -1648,13 +1649,17 @@ fn queryCommandEnabled(self: *Document, command: []const u8) bool {
     return exec_command.isEnabled(self, command);
 }
 
-// No supported command has a state or value yet.
-fn queryCommandState(_: *const Document, _: []const u8) bool {
+fn queryCommandIndeterm(_: *const Document, _: []const u8) bool {
+    // No supported command is ever indeterminate.
     return false;
 }
 
-fn queryCommandValue(_: *const Document, _: []const u8) []const u8 {
-    return "";
+fn queryCommandState(self: *const Document, command: []const u8) bool {
+    return exec_command.queryState(self, command);
+}
+
+fn queryCommandValue(self: *const Document, command: []const u8) []const u8 {
+    return exec_command.queryValue(self, command);
 }
 
 fn hasFocus(self: *Document) bool {
@@ -2162,8 +2167,9 @@ pub const JsApi = struct {
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
     pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
     pub const execCommand = bridge.function(Document.execCommand, .{});
+
+    pub const queryCommandIndeterm = bridge.function(Document.queryCommandIndeterm, .{});
     pub const queryCommandEnabled = bridge.function(Document.queryCommandEnabled, .{});
-    pub const queryCommandIndeterm = bridge.function(Document.queryCommandState, .{});
     pub const queryCommandState = bridge.function(Document.queryCommandState, .{});
     pub const queryCommandSupported = bridge.function(Document.queryCommandSupported, .{});
     pub const queryCommandValue = bridge.function(Document.queryCommandValue, .{});
