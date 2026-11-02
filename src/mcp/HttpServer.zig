@@ -268,6 +268,20 @@ pub fn closeSession(self: *HttpServer, id: []const u8) bool {
     return true;
 }
 
+/// HTTP DELETE permanently terminates this session id.
+/// The session_close tool still permits a fresh session with the same id.
+fn terminateHttpSession(self: *HttpServer, id: []const u8) !void {
+    if (Server.isDefault(id)) return;
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    if (self.reaped.contains(id)) return;
+    const worker = self.workers.get(id) orelse return;
+    const owned_id = try self.allocator.dupe(u8, id);
+    errdefer self.allocator.free(owned_id);
+    try self.reaped.putNoClobber(self.allocator, owned_id, {});
+    self.removeLocked(worker);
+}
+
 fn findOrSpawnLocked(self: *HttpServer, id: ?[]const u8) !*Worker {
     if (id) |name| {
         if (self.workers.get(name)) |worker| return worker;
@@ -587,7 +601,9 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     };
 
     if (method == .DELETE) {
-        if (session_id) |sid| _ = self.closeSession(sid);
+        if (session_id) |sid| self.terminateHttpSession(sid) catch {
+            return request.respond("", .{ .status = .internal_server_error, .keep_alive = false });
+        };
         return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
     }
 
@@ -821,6 +837,22 @@ test "HttpServer - sessions run on their own threads" {
     );
     defer testing.allocator.free(deleted);
     try testing.expect(std.mem.find(u8, deleted, "\\\"slow\\\"") == null);
+}
+
+test "HttpServer - DELETE tombstones an HTTP MCP session id" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    const port = server.port;
+    const request =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_list"}}
+    ;
+    const first = try testPost(testing.allocator, port, "deleted", request);
+    defer testing.allocator.free(first);
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", request, null));
+    // Sending DELETE twice must not remove the tombstone.
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", request, null));
 }
 
 test "HttpServer - idle sessions are reaped" {
