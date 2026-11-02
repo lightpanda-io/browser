@@ -500,3 +500,26 @@
     testing.expectEqual(5, el.selectionEnd);
   }
 </script>
+
+
+<script id="scrollHeight_autosize_zero_height">
+  const ta = document.createElement('textarea')
+  ta.textContent = 'Hello'
+  ta.style.height = '0px'
+  document.body.appendChild(ta)
+  testing.expectTrue(ta.scrollHeight > 0)
+  testing.expectTrue(ta.scrollHeight > ta.clientHeight)
+  ta.style.height = ta.scrollHeight + 'px'
+  testing.expectTrue(ta.getBoundingClientRect().height > 0)
+
+  // The measured height also reflects JS-set values and preserved newlines.
+  ta.style.height = '0px'
+  ta.value = 'First line\nSecond line'
+  testing.expectTrue(ta.scrollHeight > 0)
+  testing.expectTrue(ta.scrollHeight > ta.clientHeight)
+
+  // A hidden textarea still reports zero, as other hidden elements do.
+  ta.style.display = 'none'
+  testing.expectEqual(0, ta.scrollHeight)
+  ta.remove()
+</script>
