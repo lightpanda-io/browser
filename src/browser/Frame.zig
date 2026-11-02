@@ -2439,6 +2439,12 @@ pub fn domChanged(self: *Frame) void {
 /// layout observers. Both are no-ops unless something they track changed.
 pub fn renderingChanged(self: *Frame) void {
     self.styleChanged();
+    self.layoutObserversChanged();
+}
+
+/// A change that can move a box without changing any selector match or
+/// cascaded value, like an inline transform: only the layout observers look.
+pub fn layoutObserversChanged(self: *Frame) void {
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
 }
