@@ -40,3 +40,22 @@
     testing.expectEqual(['error:module-throw'], reported);
   });
 </script>
+
+<script id=dynamic_import_tla_reject type=module>
+  // import() rejects with exactly what a module's top-level await, or a
+  // dependency's, rejected with, and with the same value when imported again.
+  const state = await testing.async();
+  const error = await import('./modules/tla-reject.js').then(() => 'resolved', (e) => e);
+  const again = await import('./modules/tla-reject.js').then(() => 'resolved', (e) => e);
+  const value = await import('./modules/tla-reject-value.js').then(() => 'resolved', (e) => e);
+  const dependency = await import('./modules/imports-tla-reject.js').then(() => 'resolved', (e) => e);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, error instanceof TypeError);
+    testing.expectEqual('tla-boom', error.message);
+    testing.expectEqual(true, again === error);
+    testing.expectEqual('s', value);
+    testing.expectEqual(true, dependency instanceof TypeError);
+    testing.expectEqual('tla-boom', dependency.message);
+  });
+</script>

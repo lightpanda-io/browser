@@ -1171,10 +1171,8 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
             }
 
             defer l.runMicrotasks();
-            _ = l.toLocal(s.resolver).reject("catch callback", js.Value{
-                .local = l,
-                .handle = v8.v8__FunctionCallbackInfo__Data(callback_handle).?,
-            });
+            // the rejection reason, e.g. what the module's top-level await threw
+            _ = l.toLocal(s.resolver).reject("catch callback", info.getArg(0, l));
         }
     }.callback, @ptrCast(state));
 
