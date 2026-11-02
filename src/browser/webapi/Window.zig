@@ -75,7 +75,7 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
-_model_context: ModelContext = .init,
+_model_context: ?*ModelContext = null,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: *Performance,
@@ -268,8 +268,13 @@ fn getScheduler(self: *Window) *Scheduler {
     return &self._scheduler;
 }
 
-pub fn getModelContext(self: *Window) *ModelContext {
-    return &self._model_context;
+pub fn getModelContext(self: *Window) !*ModelContext {
+    if (self._model_context) |mc| {
+        return mc;
+    }
+    const mc = try ModelContext.init(self);
+    self._model_context = mc;
+    return mc;
 }
 
 fn getScreen(self: *Window) *Screen {

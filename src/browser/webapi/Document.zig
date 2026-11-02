@@ -42,6 +42,7 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const ModelContext = @import("ModelContext.zig");
 const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
@@ -853,6 +854,12 @@ fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     fonts.acquireRef();
     self._fonts = fonts;
     return fonts;
+}
+
+/// Null for a document without a browsing context, like one from DOMParser.
+fn getModelContext(self: *const Document) !?*ModelContext {
+    const frame = self._frame orelse return null;
+    return frame.window.getModelContext();
 }
 
 fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
@@ -2044,6 +2051,7 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
+    pub const modelContext = bridge.accessor(Document.getModelContext, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});
     pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});

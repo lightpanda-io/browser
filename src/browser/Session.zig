@@ -595,6 +595,17 @@ pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {
     return null;
 }
 
+/// The frame showing the document with this loader id, which a navigation
+/// replaces even though the frame keeps its id.
+pub fn findFrameByLoaderId(self: *Session, loader_id: u32) ?*Frame {
+    for (self.pages.items) |page| {
+        if (page.findFrameByLoaderId(loader_id)) |frame| {
+            return frame;
+        }
+    }
+    return null;
+}
+
 pub fn runner(self: *Session, opts: Runner.Opts) Runner {
     return Runner.init(self, opts);
 }
