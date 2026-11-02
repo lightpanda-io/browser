@@ -25,6 +25,10 @@
   .upper { CONTENT: "upper"; }
   .pseudo::before, .pseudo::after { content: "pseudo"; }
   .hover:hover { content: "hover"; }
+  .initial { content: initial; }
+  .unset { content: UNSET; }
+  .revert { content: revert; }
+  .inherit { content: inherit; }
 </style>
 
 <div id=plain></div>
@@ -40,6 +44,14 @@
 <div id=pseudo class=pseudo></div>
 <div id=hover class=hover></div>
 <div id=inline class=probe style="content: 'inline'"></div>
+<div id=initial class="probe initial"></div>
+<div id=unset class="probe unset"></div>
+<div id=revert class="probe revert"></div>
+<div class=probe>
+  <span id=inherit class=inherit><span id=inherit-twice class=inherit></span></span>
+  <span id=inherit-inline style="content: inherit"></span>
+</div>
+<div><span id=inherit-nothing class=inherit></span></div>
 
 <script id=cascade>
 {
@@ -64,6 +76,23 @@
   testing.expectEqual('normal', content('hover'));
 
   testing.expectEqual('normal', content('child'));
+}
+</script>
+
+<script id=cssWideKeywords>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('normal', content('initial'));
+  testing.expectEqual('normal', content('unset'));
+  // No UA style sets content on an element.
+  testing.expectEqual('normal', content('revert'));
+
+  // Only an explicit inherit reads the parent's.
+  testing.expectEqual('"a|b:1;c|d:2"', content('inherit'));
+  testing.expectEqual('"a|b:1;c|d:2"', content('inherit-twice'));
+  testing.expectEqual('"a|b:1;c|d:2"', content('inherit-inline'));
+  testing.expectEqual('normal', content('inherit-nothing'));
 }
 </script>
 

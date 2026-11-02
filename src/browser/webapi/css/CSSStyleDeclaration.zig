@@ -186,8 +186,7 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
             }
 
             if (wrapped.eql(comptime .wrap("content"))) {
-                const value = style_manager.contentValue(element) orelse return "normal";
-                return computedContent(value, frame);
+                return cascadedContent(style_manager, element, owner, frame);
             }
 
             // Resolved in pixels, as the synthetic text metrics measure it.
@@ -244,6 +243,21 @@ const CssWideKeyword = enum {
         return map.get(std.ascii.lowerString(&buf, value));
     }
 };
+
+/// The computed `content`. It doesn't inherit, so only an explicit `inherit`
+/// reads the parent's. No UA style sets it on an element, so `revert` reads
+/// like `unset`: the initial `normal`.
+fn cascadedContent(style_manager: *StyleManager, element: *Element, owner: *Frame, frame: *Frame) []const u8 {
+    var current = element;
+    while (true) {
+        const value = style_manager.contentValue(current) orelse return "normal";
+        const keyword = CssWideKeyword.parse(value) orelse return computedContent(value, frame);
+        switch (keyword) {
+            .initial, .unset, .revert => return "normal",
+            .inherit => current = current.asNode().flatTreeParentElement(owner) orelse return "normal",
+        }
+    }
+}
 
 /// The computed value inline styles
 fn inlineCascadedValue(style_manager: *StyleManager, element: *Element, name: String, frame: *Frame) []const u8 {
