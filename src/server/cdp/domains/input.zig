@@ -117,6 +117,7 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
         type: Type,
         button: Button = .none,
         clickCount: i32 = 0,
+        modifiers: u4 = 0,
         deltaX: f64 = 0,
         deltaY: f64 = 0,
         // Many optional parameters are not implemented yet, see documentation url.
@@ -154,11 +155,12 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
         .forward => dom_button.fifth,
     };
 
+    const modifiers = cdpModifiers(params.modifiers);
     switch (params.type) {
-        .mousePressed => try Frame.user_input.triggerMousePress(frame, params.x, params.y, button, params.clickCount),
-        .mouseReleased => try Frame.user_input.triggerMouseRelease(frame, params.x, params.y, button, params.clickCount),
-        .mouseMoved => try Frame.user_input.triggerMouseMove(frame, params.x, params.y),
-        .mouseWheel => try Frame.user_input.triggerMouseWheel(frame, params.x, params.y, params.deltaX, params.deltaY),
+        .mousePressed => try Frame.user_input.triggerMousePressWithModifiers(frame, params.x, params.y, button, params.clickCount, modifiers),
+        .mouseReleased => try Frame.user_input.triggerMouseReleaseWithModifiers(frame, params.x, params.y, button, params.clickCount, modifiers),
+        .mouseMoved => try Frame.user_input.triggerMouseMoveWithModifiers(frame, params.x, params.y, modifiers),
+        .mouseWheel => try Frame.user_input.triggerMouseWheelWithModifiers(frame, params.x, params.y, params.deltaX, params.deltaY, modifiers),
     }
     // result already sent
 }
@@ -4103,4 +4105,36 @@ test "cdp.input: dispatchDragEvent dragCancel ends the drag without events" {
         \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||link|link',
         \\'dragleave|a|-|false|true|false|text/plain+text/uri-list||none|link'
     );
+}
+
+test "cdp.input: mouse modifiers reach pointer, mouse, hover and wheel events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.modifierEvents = [];
+        \\for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'wheel']) {
+        \\  document.getElementById('btn').addEventListener(type, e => modifierEvents.push([type, e.altKey, e.ctrlKey, e.metaKey, e.shiftKey]));
+        \\}
+    , null);
+    const x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y + 1", null)).toF64();
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseMoved", .x = x, .y = y, .modifiers = 15 } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .clickCount = 1, .modifiers = 15 } });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseReleased", .x = x, .y = y, .button = "left", .clickCount = 1, .modifiers = 15 } });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseWheel", .x = x, .y = y, .deltaY = 1, .modifiers = 15 } });
+    try testing.expect((try ls.local.compileAndRun(
+        \\modifierEvents.length === 10 && modifierEvents.every(e => e.slice(1).every(Boolean))
+    , null)).isTrue());
+    // An omitted bitmask must clear flags instead of retaining a previous event's state.
+    _ = try ls.local.compileAndRun("modifierEvents = []", null);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseMoved", .x = x, .y = y } });
+    try testing.expect((try ls.local.compileAndRun("modifierEvents.length === 2 && modifierEvents.every(e => e.slice(1).every(v => !v))", null)).isTrue());
 }

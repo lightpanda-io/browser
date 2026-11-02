@@ -647,6 +647,10 @@ pub fn pointInFrame(from: *Frame, to: *Frame, x: f64, y: f64) Point {
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
+    return triggerMousePressWithModifiers(frame, x, y, button, click_count, .{});
+}
+
+pub fn triggerMousePressWithModifiers(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32, modifiers: Modifiers) !void {
     const hit = try mouseHitTest(frame, x, y);
     const target = hit.target orelse {
         // Don't leave a prior gesture's state for the next message to misread.
@@ -671,14 +675,19 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
         .click_count = if (click_count > 0) @intCast(click_count) else 0,
         .x = hit.x,
         .y = hit.y,
+        .modifiers = modifiers,
     });
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
+    return triggerMouseMoveWithModifiers(frame, x, y, .{});
+}
+
+pub fn triggerMouseMoveWithModifiers(frame: *Frame, x: f64, y: f64, modifiers: Modifiers) !void {
     const hit = try mouseHitTest(frame, x, y);
     const target = hit.target orelse {
         // A miss ends hover without releasing a held button.
-        updateHoverTarget(frame, null, HoverContext{ .x = x, .y = y, .buttons = frame.page.input_pointer.held });
+        updateHoverTarget(frame, null, HoverContext{ .x = x, .y = y, .buttons = frame.page.input_pointer.held, .modifiers = modifiers });
         return;
     };
     if (comptime lp.IS_DEBUG) {
@@ -691,10 +700,14 @@ pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
         });
     }
 
-    try moveSequence(hit.frame, target, .{ .buttons_down = frame.page.input_pointer.held, .x = hit.x, .y = hit.y });
+    try moveSequence(hit.frame, target, .{ .buttons_down = frame.page.input_pointer.held, .x = hit.x, .y = hit.y, .modifiers = modifiers });
 }
 
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
+    return triggerMouseReleaseWithModifiers(frame, x, y, button, click_count, .{});
+}
+
+pub fn triggerMouseReleaseWithModifiers(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32, modifiers: Modifiers) !void {
     const pointer = &frame.page.input_pointer;
     // A release that misses every element still lets go of the button, so
     // the next message doesn't read it as held.
@@ -722,10 +735,15 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
         .click_count = if (click_count > 0) @intCast(click_count) else 0,
         .x = hit.x,
         .y = hit.y,
+        .modifiers = modifiers,
     });
 }
 
 pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
+    return triggerMouseWheelWithModifiers(frame, x, y, delta_x, delta_y, .{});
+}
+
+pub fn triggerMouseWheelWithModifiers(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: Modifiers) !void {
     const hit = try mouseHitTest(frame, x, y);
     const target = hit.target orelse blk: {
         // Over an iframe whose document takes nothing, the wheel goes nowhere.
@@ -745,7 +763,7 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
         });
     }
 
-    try wheel(hit.frame, target, hit.x, hit.y, delta_x, delta_y);
+    try wheelWithModifiers(hit.frame, target, hit.x, hit.y, delta_x, delta_y, modifiers);
 }
 
 /// A wheel over `target`: a trusted `wheel`, then the scroll unless it was
@@ -753,6 +771,10 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
 /// targets listening only to that, and makes it cancelable only while a
 /// listener on its dispatch path is non-passive.
 pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
+    return wheelWithModifiers(frame, target, x, y, delta_x, delta_y, .{});
+}
+
+pub fn wheelWithModifiers(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: Modifiers) !void {
     // Listeners live in the event manager of the element's own frame, which
     // is not the caller's when the element belongs to an iframe's document.
     const owner = target.ownerFrame(frame) orelse return;
@@ -765,6 +787,10 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
         .clientY = y,
         .deltaX = delta_x,
         .deltaY = delta_y,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
     }, owner);
     event.asEvent()._cancelable_unless_passive = true;
     const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
