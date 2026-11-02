@@ -1071,6 +1071,18 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         return;
     }
 
+    // A frame that got its about:blank window while iframe loading was off
+    // loads nothing else while it stays off; fragment navigations still run.
+    if (target.iframe) |iframe| {
+        const document_url = resolved_url[0 .. std.mem.indexOfScalar(u8, resolved_url, '#') orelse resolved_url.len];
+        if (iframe._blank_only and !target._session.load_resources.iframe and !URL.isAboutBlank(document_url)) {
+            target.page.status.noteSkipped(.iframe);
+            // don't defer this, the caller is responsible for freeing it on error
+            arena.release();
+            return;
+        }
+    }
+
     if (URL.isFetchable(resolved_url) == false) {
         log.info(.browser, "navigate unsupported scheme", .{ .url = resolved_url });
         // don't defer this, the caller is responsible for freeing it on error
@@ -2204,12 +2216,6 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (iframe._executed) {
         return;
     }
-    if (self._session.load_resources.iframe == false) {
-        self.page.status.noteSkipped(.iframe);
-        iframe._executed = true;
-        return;
-    }
-
     const src = blk: {
         if (iframe.hasSrcdoc()) {
             // srcdoc takes precedence over src, even when empty
@@ -2227,6 +2233,15 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         }
         break :blk src;
     };
+
+    // With iframe loading off, an iframe that needs no request still gets its
+    // about:blank window, as scripts expect one right after insertion.
+    const loading = self._session.load_resources.iframe;
+    if (loading == false and !URL.isAboutBlank(src)) {
+        self.page.status.noteSkipped(.iframe);
+        iframe._executed = true;
+        return;
+    }
 
     if (iframe._window != null) {
         // This frame is being re-navigated. We need to do this through a
@@ -2258,6 +2273,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         self._pending_loads += 1;
     }
     new_frame.iframe = iframe;
+    iframe._blank_only = !loading;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
 
@@ -4218,6 +4234,10 @@ test "WebApi: Frame" {
 
 test "WebApi: Frames" {
     try testing.htmlRunner("frames", .{});
+}
+
+test "WebApi: Frames with iframe loading off" {
+    try testing.htmlRunner("frames/loading_off", .{ .load_resources = .{ .worker = true, .iframe = false } });
 }
 
 test "WebApi: Frame Blob" {
