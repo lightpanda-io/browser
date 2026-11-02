@@ -57,9 +57,13 @@
   await register('rejects', async () => { throw new TypeError('later'); });
 
   const find = async (name) => (await mc.getTools()).find((t) => t.name === name);
+  const errors = {};
   const run = (name, ...args) => find(name).then((t) => mc.executeTool(t, ...args)).then(
     (v) => v,
-    (e) => e.name + ': ' + e.message,
+    (e) => {
+      errors[name] = e;
+      return e.name + ': ' + e.message;
+    },
   );
 
   const results = [
@@ -83,8 +87,8 @@
   results.push(await mc.executeTool({ name: 'nope', description: 'd', window, origin: location.origin }).catch((e) => e.name));
   results.push(await mc.executeTool({ name: 'echo', description: 'd', window }).catch((e) => e.name));
 
-  state.resolve({ results, received });
-  await state.done(({ results, received }) => {
+  state.resolve({ results, received, errors });
+  await state.done(({ results, received, errors }) => {
     testing.expectEqual([
       '{"a":[1,2]}',
       '{}',
@@ -101,6 +105,11 @@
       'TypeError',
     ], results);
     testing.expectEqual([{ a: [1, 2] }, {}, [1, 2, 3]], received);
+    // Read long after the tool threw: the exception was first read into the
+    // call arena, which every JS -> Zig call since then reuses.
+    testing.diverges('the message is the exception\'s', () => {
+      testing.expectEqual('boom', errors.throws.message);
+    });
   });
 }
 </script>

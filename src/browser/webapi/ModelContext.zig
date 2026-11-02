@@ -401,7 +401,12 @@ pub const ToolCall = struct {
                 self.succeed(local, result);
             }
         } else |err| switch (err) {
-            error.ToolThrew => self.fail(local, executionFailed(caught.exception orelse "Unknown error")),
+            error.ToolThrew => {
+                // `caught` is on the call arena, but the DOMException keeps
+                // its message.
+                const message = if (caught.exception) |exception| try exec.page_arena.dupe(u8, exception) else "Unknown error";
+                self.fail(local, executionFailed(message));
+            },
             // `input_json` was serialized from an object.
             error.InvalidInput => unreachable,
             error.OutOfMemory => return error.OutOfMemory,
