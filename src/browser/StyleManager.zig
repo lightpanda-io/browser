@@ -629,23 +629,36 @@ fn compoundReadsStyleAttribute(compound: Selector.Compound) bool {
 /// property, or any property once a selector reads the style attribute. A
 /// transform or a z-index on its own changes none of it.
 pub fn inlineWriteAffectsCascade(self: *StyleManager, name: []const u8) bool {
-    self.rebuildIfDirty() catch return true;
+    if (self.dirty) return true;
     return self.reads_style_attribute or cascadesProperty(name);
 }
+
+const tracked_properties = blk: {
+    const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
+    var kvs: [names.len]struct { []const u8 } = undefined;
+    for (names, &kvs) |name, *kv| {
+        kv.* = .{name};
+    }
+    break :blk std.StaticStringMap(void).initComptime(kvs);
+};
 
 fn cascadesProperty(name: []const u8) bool {
     if (isCustomProperty(name)) {
         return true;
     }
+    // A shorthand is shorter than its longhands, so nothing longer is tracked
+    var buf: [tracked_properties.max_len]u8 = undefined;
+    if (name.len > buf.len) {
+        return false;
+    }
+    return cascadesLowerProperty(std.ascii.lowerString(&buf, name));
+}
+
+fn cascadesLowerProperty(name: []const u8) bool {
     if (CssParser.axisShorthand(name)) |shorthand| {
-        return cascadesProperty(shorthand.x) or cascadesProperty(shorthand.y);
+        return cascadesLowerProperty(shorthand.x) or cascadesLowerProperty(shorthand.y);
     }
-    for (Declarations.names ++ [_][]const u8{ "font", "font-size" }) |tracked| {
-        if (std.ascii.eqlIgnoreCase(name, tracked)) {
-            return true;
-        }
-    }
-    return false;
+    return tracked_properties.has(name);
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer

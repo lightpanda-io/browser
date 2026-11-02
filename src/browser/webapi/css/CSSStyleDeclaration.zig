@@ -518,7 +518,7 @@ fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?[]const u8, frame: *
         // need every cached style and width recomputed.
         const owner = element.ownerFrame(frame) orelse frame;
         if (owner._style_manager.inlineWriteAffectsCascade(name) == false) {
-            return element.setInertStyleAttribute(.wrap(css_text), frame);
+            return element._attributes.putInertStyle(.wrap(css_text), element, frame);
         }
     }
     try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), frame);
