@@ -268,12 +268,20 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
     var i: i32 = 0;
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
 
-    var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
+    // if the attribute changes, we need to limit the iteration to the
+    // initial length. We lazily capture that, since it probably won't be needed
+    var limit: ?usize = null;
+    var value = self.getValue();
+    var it = std.mem.tokenizeAny(u8, value, WHITESPACE);
     while (it.next()) |token| {
         const gop = try seen.getOrPut(allocator, token);
         if (gop.found_existing) {
             continue;
         }
+        if (limit != null and limit.? <= i) {
+            return;
+        }
+
         var caught: js.TryCatch.Caught = .{};
         cb.tryCall(void, .{ token, i, self }, &caught) catch |err| {
             frame.page.recordJsError(err);
@@ -281,6 +289,22 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
             return;
         };
         i += 1;
+
+        const new_value = self.getValue();
+        if (new_value.ptr != value.ptr) {
+            if (limit == null) {
+                // `it` is still on the original value; seen holds its first i tokens
+                while (it.next()) |t| try seen.put(allocator, t, {});
+                limit = seen.count();
+            }
+            value = new_value;
+            it = std.mem.tokenizeAny(u8, value, WHITESPACE);
+            seen.clearRetainingCapacity();
+            while (seen.count() < i) {
+                const t = it.next() orelse return;
+                try seen.put(allocator, t, {});
+            }
+        }
     }
 }
 
