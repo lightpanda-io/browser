@@ -330,7 +330,8 @@ fn getBodyUsed(self: *const Request) bool {
     if (self._body == null and self._body_stream == null) {
         return false;
     }
-    return self._body_used;
+    const stream = self._body_view orelse self._body_stream;
+    return self._body_used or if (stream) |s| s._disturbed else false;
 }
 
 pub fn bodyBytes(self: *Request) !?[]const u8 {

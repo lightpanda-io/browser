@@ -588,3 +588,28 @@
     testing.expectEqual(0, bytes.length);
   });
 </script>
+
+<script id=body_used_by_stream_reader type=module>
+  const state = await testing.async();
+  const make = body => new Response(body);
+
+  for (const body of ['payload', '']) {
+    const value = make(body);
+    const reader = value.body.getReader();
+    testing.expectFalse(value.bodyUsed);
+    const read = reader.read();
+    testing.expectTrue(value.bodyUsed);
+    await read;
+    reader.releaseLock();
+    testing.expectTrue(value.bodyUsed);
+  }
+
+  const canceled = make('payload');
+  await canceled.body.cancel();
+  testing.expectTrue(canceled.bodyUsed);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(make(null).bodyUsed);
+  });
+</script>

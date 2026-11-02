@@ -364,7 +364,7 @@ fn getBodyUsed(self: *const Response) bool {
     return switch (self._body) {
         .empty => false,
         .stream => |stream| stream._disturbed,
-        .bytes, .errored => self._body_used,
+        .bytes, .errored => self._body_used or if (self._body_stream) |stream| stream._disturbed else false,
     };
 }
 
