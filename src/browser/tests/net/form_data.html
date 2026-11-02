@@ -563,6 +563,26 @@
 }
 </script>
 
+<script id=nonSubmitButtonsSkipped>
+{
+  // <input type=button> and <input type=reset> are buttons that are never
+  // the submitter, so they never contribute an entry, like their <button>
+  // counterparts.
+  const form = document.createElement('form');
+  form.innerHTML = `
+    <input name=data value=test>
+    <input type=button name=cancel value=Cancel>
+    <input type=reset name=clear value=Clear>
+    <button type=button name=b value=b></button>
+    <button type=reset name=r value=r></button>`;
+
+  const fd = new FormData(form);
+  testing.expectEqual(['data'], Array.from(fd.keys()));
+  testing.expectEqual(null, fd.get('cancel'));
+  testing.expectEqual(null, fd.get('clear'));
+}
+</script>
+
 <script id=mixedSubmitTypes>
 {
   // Test mix of input[type=submit], input[type=image], and button

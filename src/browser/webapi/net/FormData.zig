@@ -887,6 +887,10 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
                         continue;
                     }
                 }
+                if (input_type == .reset or input_type == .button) {
+                    // Buttons that can never be the submitter.
+                    continue;
+                }
                 if (input_type == .hidden and std.ascii.eqlIgnoreCase(name, "_charset_")) {
                     // The FormData's charset is used as the value for hidden
                     // field name "_charset"
