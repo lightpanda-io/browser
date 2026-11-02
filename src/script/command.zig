@@ -189,6 +189,16 @@ pub const Command = union(enum) {
         /// - a string field can't be quoted unambiguously.
         fn isRecorded(self: ToolCall) bool {
             if (!self.tool.isRecorded()) return false;
+            if (self.tool == .popups) {
+                // A bare listing is noise. A follow changes where every
+                // later recorded action runs, so it surfaces even though
+                // its frame id is session-scoped: the script synthesis must
+                // see that the session moved to the popup and encode the
+                // popup flow for itself, rather than silently replaying
+                // those actions against the main page.
+                const args = self.args orelse return false;
+                return args == .object and args.object.contains("follow");
+            }
             const s = self.schema();
             const required = self.tool.replayRequires();
             const args = self.args orelse return s.required.len == 0 and required.len == 0;

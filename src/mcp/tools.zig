@@ -965,6 +965,32 @@ test "MCP - click follows a window opened after a fetch" {
     try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?f=1") != null);
 }
 
+test "MCP - click with a late navigation reports the page it landed on" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    // The navigation commits while the late-popup watch is still running.
+    // The watch must not read the freed page, and the result must describe
+    // where the click landed — not the page it left.
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#late_nav" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "mcp_async_popup.html") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window") == null);
+}
+
 test "MCP - popups lists opened windows and follows one" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);

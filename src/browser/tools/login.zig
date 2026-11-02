@@ -61,6 +61,9 @@ const verdict = jev.verdict;
 const unverified = jev.unverified;
 const settle = jev.settle;
 const clickAndSettle = jev.clickAndSettle;
+/// Same budget as `jev.settle`'s, which this file's submit path folds into
+/// `tools.settleWatchingPopups`.
+const settle_timeout_ms: u32 = 2000;
 const Frame = lp.Frame;
 
 const Questions = zenai.typesafe.Questions;
@@ -486,10 +489,13 @@ fn submitLogin(
         return null;
     }
 
-    const scope = beginAction(session, .{ .await_late_popup = true });
+    const scope = beginAction(session, .{});
     lp.actions.press(input.node, "Enter", input.page) catch |err| return mapActionError(err);
     _ = try settleAction(session, registry, scope);
-    try settle(session);
+    // Same fold as `jev.clickAndSettle`: one wait for the settle and the
+    // late-popup watch, then a pass to follow a window the wait caught.
+    try tools.settleWatchingPopups(session, scope.popups, settle_timeout_ms);
+    _ = try settleAction(session, registry, scope);
     outcome.pressedEnter = true;
     outcome.submitted = true;
     return null;

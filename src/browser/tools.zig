@@ -170,11 +170,12 @@ pub const Tool = enum {
 
     /// State-mutating: surfaces in JavaScript recordings. Read-only tools
     /// (queries, env probes) stay out so a replay doesn't bloat the script
-    /// with noise.
+    /// with noise. `popups` is the arg-dependent exception — `command.zig`
+    /// records a follow, and skips the bare listing.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download, .callPageTool, .classify, .acceptCookies, .login => true,
-            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => false,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download, .callPageTool, .classify, .acceptCookies, .login, .popups => true,
+            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools => false,
         };
     }
 
@@ -1551,8 +1552,17 @@ const Settled = struct {
 /// writes its own result calls this directly.
 pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: ActionScope) ToolError!Settled {
     const before = scope.frame;
-    if (before) |b| {
-        try awaitQueuedNavigation(session, b);
+    // The navigation wait is keyed by the page's root frame id, taken from a
+    // frame resolved now rather than from `scope.frame`: a caller that
+    // settles twice around a wait (the settle fold below) holds a scope
+    // whose frame a navigation during the wait freed. Root frame ids survive
+    // a commit (see `_tool_frame_override`), so the live frame keys the same
+    // root the scope meant; `before` itself is only ever compared, never
+    // dereferenced.
+    if (before != null) {
+        if (session.currentFrame()) |live| {
+            try awaitQueuedNavigation(session, live);
+        }
     }
     var page = try requireFrame(session);
     // A queued navigation that swaps the root frame tears down the previous
@@ -1561,8 +1571,23 @@ pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: Action
     // next action can't dereference freed memory.
     if (before != null and before.? != page) registry.reset();
 
-    if (scope.await_late_popup and page.page.popups.items.len == scope.popups) {
-        awaitLatePopup(session, page, scope.popups);
+    // The watch is only worth its cost when the action did not already
+    // navigate: after a navigation the fresh page's analytics timers would
+    // hold it from its quiescent exit for the full budget on every
+    // navigating click, and a window the old document was about to open is
+    // lost with the old Page anyway.
+    if (scope.await_late_popup and page == before and page.page.popups.items.len == scope.popups) {
+        try awaitLatePopup(session, page, scope.popups);
+        // The watch ends the moment the page goes quiet, which can leave the
+        // click's own late navigation queued rather than committed (its
+        // handler ran during the watch). Drain it the way the path above
+        // does, then re-resolve and re-check the registry: a navigation that
+        // committed or commits here frees the Page `before` pointed at, and
+        // the popup check below plus the caller's URL/title must see the
+        // live page.
+        try awaitQueuedNavigation(session, page);
+        page = try requireFrame(session);
+        if (page != before) registry.reset();
     }
 
     var note: []const u8 = "";
@@ -1593,17 +1618,46 @@ pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: Action
 /// polling pays at most the budget.
 const late_popup_budget_ms = 1000;
 
-fn awaitLatePopup(session: *lp.Session, frame: *lp.Frame, popups_before: usize) void {
-    const root_frame_id = frame.page.frame._frame_id;
+/// The wait rides the runner's condition (`popups_above`), so it ends the
+/// moment a window opens and never holds a frame pointer across a tick: the
+/// runner re-resolves the page for the condition each pass, which is what
+/// keeps a navigation committing mid-watch from leaving this loop reading a
+/// freed Page.
+fn awaitLatePopup(session: *lp.Session, frame: *lp.Frame, popups_before: usize) ToolError!void {
     var runner = session.runner(.{});
-    var waited: u32 = 0;
-    while (frame.page.popups.items.len == popups_before and waited < late_popup_budget_ms) {
-        var conditions = [_]lp.Session.Runner.WaitCondition{.{ .frame_id = root_frame_id, .until = .done }};
-        const slice: u32 = @min(100, late_popup_budget_ms - waited);
-        const result = runner.waitResult(slice, &conditions) catch break;
-        waited += slice;
-        // Quiescent: whatever the handler was going to open, it has opened.
-        if (result == .completed) break;
+    var conditions = [_]lp.Session.Runner.WaitCondition{.{
+        .frame_id = frame.page.frame._frame_id,
+        .until = .done,
+        .popups_above = popups_before,
+    }};
+    if (runner.waitResult(late_popup_budget_ms, &conditions)) |_| {} else |err| switch (err) {
+        // A cancel must not come out as a plain "Clicked".
+        error.Cancelled => return ToolError.Cancelled,
+        // Best effort otherwise: a tick error (a script exception, a page
+        // freed by a late navigation) just ends the watch.
+        else => log.debug(.browser, "late popup watch", .{ .err = err }),
+    }
+}
+
+/// A `settle` wait (network idle) that also ends the moment the page's popup
+/// count grows. Lets a tool fold the late-popup watch into its settle wait —
+/// `settleAction`'s quiescence watch followed by a settle wait would run the
+/// same idle detection twice — and costs a popup-open nothing: the follow is
+/// a second `settleAction` pass on the caller's side.
+pub fn settleWatchingPopups(session: *lp.Session, popups_before: usize, timeout_ms: u32) ToolError!void {
+    const frame = session.currentFrame() orelse return;
+    var runner = session.runner(.{});
+    var conditions = [_]lp.Session.Runner.WaitCondition{.{
+        .frame_id = frame._frame_id,
+        .until = .networkidle,
+        .popups_above = popups_before,
+    }};
+    if (runner.waitResult(timeout_ms, &conditions)) |_| {} else |err| switch (err) {
+        error.Cancelled => return ToolError.Cancelled,
+        else => {
+            log.debug(.browser, "settle error", .{ .err = err });
+            return ToolError.InternalError;
+        },
     }
 }
 
@@ -2005,19 +2059,30 @@ const PopupEntry = struct {
 };
 
 /// List the windows of the current page (`window.open` / target=_blank), or
-/// make one current with `follow`. Frame ids are session-scoped, so a replay
-/// can't record a follow — the replayed action re-opens the window and
-/// `settleAction` follows it the way the live run did.
+/// make one current with `follow`. A bare listing stays out of recordings;
+/// a follow is recorded (`ToolCall.isRecorded`) so the script synthesis sees
+/// where the session went: the id itself is session-scoped, and a window the
+/// settle watch re-derives on replay is followed again the way the live run
+/// did.
 fn execPopups(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct { follow: ?u32 = null };
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try requireFrame(session);
 
     if (args.follow) |frame_id| {
-        const target = session.findFrameByFrameId(frame_id) orelse
+        // Only the page's own windows qualify: `findFrameByFrameId` also
+        // finds nested frames, so checking through it let an iframe id make
+        // itself current — and then no listing entry would ever read
+        // `current: true`.
+        const root = &page.page.frame;
+        const is_window = frame_id == root._frame_id or blk: {
+            for (page.page.popups.items) |popup| {
+                if (popup._frame_id == frame_id) break :blk true;
+            }
+            break :blk false;
+        };
+        if (!is_window) {
             return .{ .text = try arena.print("no window with id {d}; call popups for the current ids", .{frame_id}), .is_error = true };
-        if (target.page != page.page) {
-            return .{ .text = try arena.print("window {d} belongs to another page; call popups for the current ids", .{frame_id}), .is_error = true };
         }
         session.followPopup(frame_id);
         registry.reset();
@@ -2975,4 +3040,82 @@ test "fill: a password is not typed where it would leave in the clear" {
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
     try std.testing.expect(std.mem.find(u8, tree.text, "ada") != null);
+}
+
+test "popups: a follow id must be one of the page's windows" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/semantic_tree_iframe.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    // An iframe is a frame but not a window: `findFrameByFrameId` would find
+    // it, and following it would leave the listing without a `current` entry.
+    const iframe_id = page.frame().?.child_frames.items[0]._frame_id;
+    const refused = try call(aa, session, &registry, "popups", try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"follow\":{d}}}", .{iframe_id}), .{}), .{ .source = .user });
+    try std.testing.expect(refused.is_error);
+    try std.testing.expect(std.mem.find(u8, refused.text, "no window with id") != null);
+
+    const unknown = try call(aa, session, &registry, "popups", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"follow":999999}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(unknown.is_error);
+
+    // The main window's own id follows back to itself.
+    const root = try call(aa, session, &registry, "popups", try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"follow\":{d}}}", .{page.frame_id}), .{}), .{ .source = .user });
+    try std.testing.expect(!root.is_error);
+}
+
+test "popups: a follow outranks the script Runtime's tool frame override" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("ticking.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"return window.open('about:blank', 'w') != null;"}
+    , .{}), .{ .source = .user });
+    const root = page.frame().?;
+    const popup = root.page.popups.items[0];
+
+    // The Runtime binds every call to the handle's frame; an explicit follow
+    // on the same page must win over that binding, and keep winning after
+    // the Runtime unbinds.
+    session.setToolFrameOverride(root._frame_id);
+    session.followPopup(popup._frame_id);
+    try testing.expectEqual(popup._frame_id, session.currentFrame().?._frame_id);
+    session.setToolFrameOverride(null);
+    try testing.expectEqual(popup._frame_id, session.currentFrame().?._frame_id);
+    session._followed_popup = null;
+}
+
+test "click: a cancel during the late-popup watch stays cancelled" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_async_popup.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    var hook_ctx: u8 = 0;
+    const Always = struct {
+        fn check(_: *anyopaque) bool {
+            return true;
+        }
+    };
+    session.cancel_hook = .{ .context = @ptrCast(&hook_ctx), .check = Always.check };
+    defer session.cancel_hook = null;
+
+    // The first runner wait on this path is the watch; the cancel must come
+    // out of the click rather than end the watch as a plain "Clicked".
+    const result = call(aa, session, &registry, "click", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#delayed"}
+    , .{}), .{ .source = .user });
+    try std.testing.expectError(error.Cancelled, result);
 }

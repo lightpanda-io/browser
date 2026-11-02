@@ -95,7 +95,9 @@ _nav_cursor: usize = 0,
 _tool_frame_override: ?u32 = null,
 
 // A popup the last tool action opened (target=_blank). Tools act on it, as
-// a user whose click opened a tab would, until it goes away.
+// a user whose click opened a tab would, until it goes away. On the same
+// page it outranks `_tool_frame_override`: `popups {follow}` is an explicit
+// switch of windows, and the Runtime re-arms the override around every call.
 _followed_popup: ?u32 = null,
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
@@ -552,7 +554,21 @@ pub fn primaryPage(self: *Session) ?PageHandle {
 pub fn currentFrame(self: *Session) ?*Frame {
     if (self._tool_frame_override) |frame_id| {
         // No pages[0] fallthrough: the override targets one specific page.
-        return self.findFrameByFrameId(frame_id);
+        const override_frame = self.findFrameByFrameId(frame_id) orelse return null;
+        // A follow on the same page outranks the per-call handle binding:
+        // the user explicitly switched windows, and the Runtime re-arms the
+        // override around every call, so the follow would never otherwise
+        // survive one. A stale follow (window closed) is dropped here; one
+        // pointing at another page is not produced (both followPopup callers
+        // validate against the current page) but is ignored rather than
+        // hijacking the handle's frame.
+        if (self._followed_popup) |popup_id| {
+            if (self.findFrameByFrameId(popup_id)) |popup| {
+                if (popup.page == override_frame.page) return popup;
+            }
+            self._followed_popup = null;
+        }
+        return override_frame;
     }
     if (self._followed_popup) |frame_id| {
         if (self.findFrameByFrameId(frame_id)) |frame| {

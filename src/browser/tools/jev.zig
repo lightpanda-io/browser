@@ -301,10 +301,16 @@ pub fn clickAndSettle(
     node: *DOMNode,
     page: *lp.Frame,
 ) ToolError!void {
-    const scope = beginAction(session, .{ .await_late_popup = true });
+    const scope = beginAction(session, .{});
     lp.actions.click(node, page) catch |err| return mapActionError(err);
     _ = try settleAction(session, registry, scope);
-    try settle(session);
+    // One wait for both jobs: the settle and the late-popup watch. Separate,
+    // `settleAction`'s quiescence watch would run to its budget and this
+    // wait would then start its idle detection over. Ends the moment a
+    // window opens; the follow is the second `settleAction` pass, which
+    // also re-checks the registry after whatever the wait drove.
+    try tools.settleWatchingPopups(session, scope.popups, settle_timeout_ms);
+    _ = try settleAction(session, registry, scope);
 }
 
 const testing = @import("../../testing.zig");
