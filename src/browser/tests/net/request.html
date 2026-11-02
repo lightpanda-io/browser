@@ -688,3 +688,37 @@
     testing.expectTrue(r.bodyUsed);
   });
 </script>
+
+<script id=clone_unusable_body type=module>
+  const state = await testing.async();
+  const make = () => new Request('https://example.com', { method: 'POST', body: 'payload' });
+
+  const consumed = make();
+  await consumed.text();
+  testing.expectError('TypeError', () => consumed.clone());
+
+  const locked = make();
+  const reader = locked.body.getReader();
+  testing.expectFalse(locked.bodyUsed);
+  testing.expectError('TypeError', () => locked.clone());
+  reader.releaseLock();
+  const unlockedClone = locked.clone();
+  const clonedText = await unlockedClone.text();
+
+  const disturbed = make();
+  const disturbedReader = disturbed.body.getReader();
+  await disturbedReader.read();
+  disturbedReader.releaseLock();
+  testing.expectError('TypeError', () => disturbed.clone());
+
+  // Reading a null body does not make the Request unusable.
+  const empty = new Request('https://example.com');
+  await empty.text();
+  const emptyClone = empty.clone();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('payload', clonedText);
+    testing.expectEqual(null, emptyClone.body);
+  });
+</script>

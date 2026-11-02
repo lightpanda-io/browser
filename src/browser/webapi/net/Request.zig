@@ -352,7 +352,7 @@ fn checkUnusable(self: *const Request, local: *const js.Local) !void {
     if (self._body_used) {
         return local.typeError("Body has already been read");
     }
-    const stream = self._body_view orelse return;
+    const stream = self._body_view orelse self._body_stream orelse return;
     if (stream._disturbed or stream.getLocked()) {
         return local.typeError("Body is disturbed or locked");
     }
@@ -487,6 +487,7 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *Request, exec: *const Execution) !*Request {
+    try self.checkUnusable(exec.js.local.?);
     // No stream tee: a stream body is drained so each copy owns its bytes.
     const body = self.bodyBytes() catch |err| switch (err) {
         error.TypeError => return exec.js.local.?.typeError("Failed to read ReadableStream body"),
