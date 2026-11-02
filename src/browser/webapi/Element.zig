@@ -1853,33 +1853,15 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
+    if (self.is(Html.TextArea)) |textarea| {
+        return textarea.getScrollHeight(frame);
+    }
+
     const height = self.getElementAxis(frame, .height).value;
 
     // The root scroller reports what the viewport scrolls over.
     if (self.isRootContainer()) {
         return self.rootScrollSize(frame, .height) orelse height;
-    }
-
-    // A textarea's value is rendered as anonymous text content, not regular
-    // child boxes. In particular, setting height: 0 before reading scrollHeight
-    // must not collapse the measured content to zero: this is how auto-sizing
-    // textarea components determine their intrinsic height.
-    if (self.is(Html.TextArea)) |textarea| {
-        const owner = self.ownerFrame(frame) orelse return height;
-        const font_size = owner._style_manager.computedFontSize(self);
-        const width = self.getElementAxis(frame, .width).value;
-        // With no CSS width, use the HTML textarea's default 20 columns as
-        // a fallback line width rather than treating the value as zero-height.
-        const line_width = if (width > 0) width else font_size * 12;
-        const value = textarea.getValue();
-        const lines = text_measure.layout(value, font_size, line_width, .{
-            .collapse = false,
-            .newlines = true,
-        });
-        const trailing_newline: u32 = @intFromBool(std.mem.endsWith(u8, value, "\n"));
-        const line_count = @max(@as(u32, 1), lines.count + trailing_newline);
-        const text_height = @ceil(@as(f64, @floatFromInt(line_count)) * font_size * text_measure.LINE_HEIGHT);
-        return @max(height, text_height);
     }
 
     return @max(height, self.contentAxis(frame, .height));
