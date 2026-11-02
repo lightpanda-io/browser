@@ -810,15 +810,15 @@ test "cdp.Emulation: invalid geolocation leaves the current override intact" {
         .{ .latitude = 0, .longitude = -180.1, .accuracy = 1 },
         .{ .latitude = 0, .longitude = 0, .accuracy = -1 },
     };
-    for (cases) |params| {
-        try ctx.processMessage(.{ .id = 2, .method = "Emulation.setGeolocationOverride", .params = params });
-        try ctx.expectSentError(-32000, "Invalid geolocation", .{ .id = 2 });
+    for (cases, 0..) |params, i| {
+        try ctx.processMessage(.{ .id = i + 2, .method = "Emulation.setGeolocationOverride", .params = params });
+        try ctx.expectSentError(-32000, "Invalid geolocation", .{ .id = i + 2 });
         try testing.expectEqual(45, ctx.cdp().browser.geolocation_override.?.latitude);
         try testing.expectEqual(90, ctx.cdp().browser.geolocation_override.?.longitude);
         try testing.expectEqual(10, ctx.cdp().browser.geolocation_override.?.accuracy);
     }
-    try ctx.processMessage(.{ .id = 3, .method = "Emulation.setGeolocationOverride", .params = .{ .latitude = -90, .longitude = 180, .accuracy = 0 } });
-    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 10, .method = "Emulation.setGeolocationOverride", .params = .{ .latitude = -90, .longitude = 180, .accuracy = 0 } });
+    try ctx.expectSentResult(null, .{ .id = 10 });
     try testing.expectEqual(-90, ctx.cdp().browser.geolocation_override.?.latitude);
     try testing.expectEqual(180, ctx.cdp().browser.geolocation_override.?.longitude);
     try testing.expectEqual(0, ctx.cdp().browser.geolocation_override.?.accuracy);
