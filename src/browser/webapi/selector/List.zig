@@ -1147,18 +1147,19 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
 }
 
 fn matchesNthPattern(index: usize, pattern: Selector.NthPattern) bool {
-    const a = pattern.a;
-    const b = pattern.b;
+    // i64, so index - b can't overflow even when b is at the i32 limits.
+    const a: i64 = pattern.a;
+    const b: i64 = pattern.b;
+    const index_i: i64 = @intCast(index);
 
     // Special case: a=0 means we're matching a specific index
     if (a == 0) {
-        return @as(i32, @intCast(index)) == b;
+        return index_i == b;
     }
 
     // For an+b pattern, we need to find if there's an integer n >= 0
     // such that an + b = index
     // Rearranging: n = (index - b) / a
-    const index_i = @as(i32, @intCast(index));
     const diff = index_i - b;
 
     // Check if (index - b) is divisible by a

@@ -351,3 +351,16 @@
     testing.expectEqual('def-submit def-checked def-radio def-b', ids());
 }
 </script>
+
+<ul id="nth_big"><li>1</li><li>2</li><li>3</li></ul>
+<script id="nth_out_of_range">
+{
+    // Integers past the i32 range clamp instead of overflowing.
+    const texts = (sel) => Array.from(document.querySelectorAll(sel)).map((li) => li.textContent).join();
+    testing.expectEqual('', texts('#nth_big li:nth-child(99999999999)'));
+    testing.expectEqual('', texts('#nth_big li:nth-child(99999999999n)'));
+    testing.expectEqual('1,2,3', texts('#nth_big li:nth-child(n-99999999999)'));
+    testing.expectEqual('3', texts('#nth_big li:nth-child(-99999999999n+3)'));
+    testing.expectEqual('3', texts('#nth_big li:nth-last-child(-99999999999n+1)'));
+}
+</script>

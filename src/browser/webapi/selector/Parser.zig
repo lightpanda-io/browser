@@ -832,7 +832,8 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
         return .{ .a = 2, .b = 0 };
     }
 
-    // Parse An+B notation
+    // Parse An+B notation. Out-of-range integers clamp (saturate) rather
+    // than overflow: a stylesheet or querySelector can hold any digit count.
     var a: i32 = 0;
     var b: i32 = 0;
     var has_n = false;
@@ -859,7 +860,7 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
         var digit_count: usize = 0;
         p = self.peek();
         while (std.ascii.isDigit(p)) {
-            num = num * 10 + @as(i32, p - '0');
+            num = num *| 10 +| @as(i32, p - '0');
             self.input = self.input[1..];
             digit_count += 1;
             p = self.peek();
@@ -898,7 +899,7 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
         var digit_count: usize = 0;
         p = self.peek();
         while (std.ascii.isDigit(p)) {
-            num = num * 10 + @as(i32, p - '0');
+            num = num *| 10 +| @as(i32, p - '0');
             self.input = self.input[1..];
             digit_count += 1;
             p = self.peek();
