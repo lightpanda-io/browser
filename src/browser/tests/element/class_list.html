@@ -774,6 +774,54 @@
 }
 </script>
 
+<script id=forEach_mutation_appends_at_last_index>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  div.classList.forEach((value, index, list) => {
+    visited.push(value);
+    if (index === 1) list.add('c');
+  });
+
+  testing.expectEqual(['a', 'b'], visited);
+  testing.expectEqual('a b c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_duplicates_in_original>
+{
+  const div = document.createElement('div');
+  div.className = 'a b b';
+
+  const visited = [];
+  div.classList.forEach((value, index, list) => {
+    visited.push(value);
+    if (index === 0) list.add('c');
+  });
+
+  testing.expectEqual(['a', 'b'], visited);
+  testing.expectEqual('a b c', div.className);
+}
+</script>
+
+<script id=forEach_mutation_duplicates_in_new_value>
+{
+  const div = document.createElement('div');
+  div.className = 'a b';
+
+  const visited = [];
+  div.classList.forEach((value, index) => {
+    visited.push(value);
+    if (index === 0) div.className = 'a a c';
+  });
+
+  testing.expectEqual(['a', 'c'], visited);
+  testing.expectEqual('a a c', div.className);
+}
+</script>
+
 <script id=iterators_empty_list>
 {
   const div = document.createElement('div');
