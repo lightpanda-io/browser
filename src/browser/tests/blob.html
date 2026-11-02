@@ -277,3 +277,21 @@
     testing.expectEqual("honied", sliceMidText);
   });
 </script>
+
+<script id=text_strips_utf8_bom type=module>
+  const state = await testing.async();
+  const blob = new Blob([new Uint8Array([239, 187, 191, 65, 239, 187, 191, 66])], { type: "text/plain;charset=windows-1252" });
+  const text = await blob.text();
+  const fileText = await new File([blob], "bom.txt").text();
+  const bytes = Array.from(await blob.bytes());
+  const empty = await new Blob([new Uint8Array([239, 187, 191])]).text();
+  const partial = await new Blob([new Uint8Array([239, 187])]).text();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("A\uFEFFB", text);
+    testing.expectEqual("A\uFEFFB", fileText);
+    testing.expectEqual([239, 187, 191, 65, 239, 187, 191, 66], bytes);
+    testing.expectEqual("", empty);
+    testing.expectEqual("\uFFFD", partial);
+  });
+</script>

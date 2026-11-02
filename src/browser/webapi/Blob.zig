@@ -345,7 +345,7 @@ fn textStream(self: *const Blob, exec: *const Execution) !*ReadableStream {
 /// Returns a Promise that resolves with a string containing
 /// the contents of the blob, interpreted as UTF-8.
 pub fn text(self: *const Blob, exec: *Execution) !js.Promise {
-    return exec.js.local.?.resolvePromise(self._slice);
+    return exec.js.local.?.resolvePromise(@import("net/body_init.zig").stripUtf8Bom(self._slice));
 }
 
 /// Extension to Blob; works on Firefox and Safari.
