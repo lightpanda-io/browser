@@ -132,9 +132,6 @@ const Start = struct {
     ok: bool = false,
 };
 
-/// Why a session id answers 404.
-const Tombstone = enum { expired, deleted };
-
 pub const SessionInfo = struct {
     id: []const u8,
     url: ?[]const u8,
@@ -161,7 +158,7 @@ workers: std.StringHashMapUnmanaged(*Worker) = .empty,
 /// doesn't silently get a fresh browser. Kept until `session_new` or
 /// `session_close` names the id: an entry is just the id, against the isolate
 /// it freed. Guarded by `workers_mutex`.
-tombstones: std.StringHashMapUnmanaged(Tombstone) = .empty,
+tombstones: std.StringHashMapUnmanaged(void) = .empty,
 session_timeout_ms: ?u64,
 /// Backs minted session ids (`s1`, `s2`, …).
 session_seq: u32 = 0,
@@ -276,8 +273,9 @@ pub fn closeSession(self: *HttpServer, id: []const u8) bool {
 }
 
 /// HTTP DELETE: close session `id` and tombstone it, so later requests get 404
-/// instead of a fresh session. Deleting a tombstoned id again is a no-op. False
-/// if there is no such session. The default lives as long as the process.
+/// instead of a fresh session. Deleting a tombstoned id again, or the default
+/// (which lives as long as the process), succeeds and does nothing. False if
+/// there is no such session.
 fn deleteSession(self: *HttpServer, id: []const u8) bool {
     if (Server.isDefault(id)) return true;
     self.workers_mutex.lockUncancelable(lp.io);
@@ -287,25 +285,22 @@ fn deleteSession(self: *HttpServer, id: []const u8) bool {
     self.removeLocked(worker);
     // Close first: an id we fail to remember only lets a later request start
     // a fresh session, as it did before tombstones.
-    self.tombstoneLocked(id, .deleted) catch |err| {
+    self.tombstoneLocked(id) catch |err| {
         log.warn(.mcp, "mcp session tombstone", .{ .session = id, .err = err });
     };
     return true;
 }
 
-fn tombstoneLocked(self: *HttpServer, id: []const u8, tombstone: Tombstone) !void {
+fn tombstoneLocked(self: *HttpServer, id: []const u8) !void {
     const owned_id = try self.allocator.dupe(u8, id);
     errdefer self.allocator.free(owned_id);
-    try self.tombstones.putNoClobber(self.allocator, owned_id, tombstone);
+    try self.tombstones.putNoClobber(self.allocator, owned_id, {});
 }
 
 fn findOrSpawnLocked(self: *HttpServer, id: ?[]const u8) !*Worker {
     if (id) |name| {
         if (self.workers.get(name)) |worker| return worker;
-        if (self.tombstones.get(name)) |tombstone| return switch (tombstone) {
-            .expired => error.SessionExpired,
-            .deleted => error.SessionDeleted,
-        };
+        if (self.tombstones.contains(name)) return error.SessionEnded;
         return self.spawnLocked(name, null);
     }
     var buf: [16]u8 = undefined;
@@ -355,7 +350,7 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     if (!worker.queue.isEmpty()) return false;
     if (self.workers.get(worker.id) != worker) return true;
 
-    self.tombstoneLocked(worker.id, .expired) catch return false;
+    self.tombstoneLocked(worker.id) catch return false;
     log.info(.mcp, "mcp session reaped", .{ .session = worker.id });
     self.removeLocked(worker);
     return true;
@@ -617,16 +612,17 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     };
 
     if (method == .DELETE) {
-        if (session_id) |sid| if (!self.deleteSession(sid)) {
-            return request.respond("Unknown session\n", .{ .status = .not_found, .keep_alive = keep_alive });
-        };
+        if (session_id) |sid| {
+            if (!self.deleteSession(sid)) {
+                return request.respond("Unknown session\n", .{ .status = .not_found, .keep_alive = keep_alive });
+            }
+        }
         return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
     }
 
     var job: Job = .{ .body = body, .out = out };
     const routed = self.submit(arena, target(arena, session_id, body), &job) catch |err| switch (err) {
-        error.SessionExpired => return request.respond("Session expired, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
-        error.SessionDeleted => return request.respond("Session was deleted, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
+        error.SessionEnded => return request.respond("Session ended, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
         else => {
             log.err(.mcp, "mcp session routing", .{ .err = err });
             return request.respond("", .{ .status = .internal_server_error, .keep_alive = false });
@@ -872,10 +868,7 @@ test "HttpServer - DELETE tombstones a session id" {
     defer testing.allocator.free(listed);
     try testing.expect(std.mem.find(u8, listed, "\\\"deleted\\\"") == null);
 
-    var body: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer body.deinit();
-    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", call, &body.writer));
-    try testing.expect(std.mem.find(u8, body.written(), "deleted") != null);
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
     try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
     try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
 
