@@ -24,7 +24,8 @@
 //! sessions run in parallel. Connection threads never touch a browser: they
 //! queue a `Job` on the session's worker and wait for it. Routing follows
 //! `Mcp-Session-Id`: an `initialize` without one mints a fresh session, an
-//! unknown id creates it, a known one joins it, a reaped one gets 404.
+//! unknown id creates it, a known one joins it, a reaped or deleted id gets
+//! 404 until a named session_new explicitly reuses the id.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -268,18 +269,23 @@ pub fn closeSession(self: *HttpServer, id: []const u8) bool {
     return true;
 }
 
-/// HTTP DELETE permanently terminates this session id.
-/// The session_close tool still permits a fresh session with the same id.
+/// HTTP DELETE tombstones this session id: further HTTP requests return 404
+/// until session_new reuses its name or session_close clears the tombstone.
 fn terminateHttpSession(self: *HttpServer, id: []const u8) !void {
     if (Server.isDefault(id)) return;
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
     if (self.reaped.contains(id)) return;
     const worker = self.workers.get(id) orelse return;
+    try self.rememberLocked(id);
+    self.removeLocked(worker);
+}
+
+/// Called with workers_mutex held. The map owns the copied key on success.
+fn rememberLocked(self: *HttpServer, id: []const u8) !void {
     const owned_id = try self.allocator.dupe(u8, id);
     errdefer self.allocator.free(owned_id);
     try self.reaped.putNoClobber(self.allocator, owned_id, {});
-    self.removeLocked(worker);
 }
 
 fn findOrSpawnLocked(self: *HttpServer, id: ?[]const u8) !*Worker {
@@ -335,11 +341,7 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     if (!worker.queue.isEmpty()) return false;
     if (self.workers.get(worker.id) != worker) return true;
 
-    const id = self.allocator.dupe(u8, worker.id) catch return false;
-    self.reaped.putNoClobber(self.allocator, id, {}) catch {
-        self.allocator.free(id);
-        return false;
-    };
+    self.rememberLocked(worker.id) catch return false;
     log.info(.mcp, "mcp session reaped", .{ .session = worker.id });
     self.removeLocked(worker);
     return true;
