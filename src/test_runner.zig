@@ -24,13 +24,16 @@ const Allocator = std.mem.Allocator;
 
 const BORDER: [80]u8 = @splat('=');
 
-// Dependencies report through std.log, which would print between the progress
-// dots. Tests that exercise those error paths assert on the result instead.
+// zenai logs every non-2xx response, and some tests make the mocked APIs fail
+// on purpose; they assert on the result instead.
 pub const std_options: std.Options = .{
-    .logFn = noLog,
+    .logFn = testLog,
 };
 
-fn noLog(comptime _: std.log.Level, comptime _: @EnumLiteral(), comptime _: []const u8, _: anytype) void {}
+fn testLog(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    if (scope == .zenai) return;
+    std.log.defaultLog(level, scope, format, args);
+}
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
