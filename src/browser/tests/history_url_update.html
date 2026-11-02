@@ -18,3 +18,29 @@
     history.replaceState(null, '', originalUrl);
   }
 </script>
+
+<script id=cross_origin_rejected>
+  {
+    // pushState/replaceState may only change the path, query and fragment
+    // of an http(s) URL: another scheme, host, port or user is a SecurityError
+    // and leaves the URL and the history alone.
+    const originalUrl = location.href;
+    const originalLength = history.length;
+    const otherPort = location.protocol + '//' + location.hostname + ':' + (Number(location.port) + 1) + '/x';
+    const withUser = location.protocol + '//user@' + location.host + '/x';
+    const otherHost = location.protocol + '//example.com/x';
+    const otherScheme = 'https://' + location.host + '/x';
+
+    for (const url of [otherHost, otherPort, withUser, otherScheme, 'http://[']) {
+      testing.expectError('SecurityError', () => history.pushState(null, '', url));
+      testing.expectError('SecurityError', () => history.replaceState(null, '', url));
+    }
+    testing.expectEqual(originalUrl, location.href);
+    testing.expectEqual(originalLength, history.length);
+
+    // A same-origin absolute URL is fine.
+    history.replaceState(null, '', location.origin + '/same-origin-path');
+    testing.expectEqual('/same-origin-path', location.pathname);
+    history.replaceState(null, '', originalUrl);
+  }
+</script>

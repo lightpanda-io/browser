@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const URL = @import("../URL.zig");
 
 const PopStateEvent = @import("event/PopStateEvent.zig");
 
@@ -58,10 +59,7 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     const target = self._frame;
     const session = target._session;
     const arena = session.arena;
-    const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena.allocator(), target.url, u, .{})
-    else
-        try arena.dupeSentinel(u8, target.url, 0);
+    const url = try stateUrl(target, _url, arena.allocator());
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
 
@@ -95,10 +93,7 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
     const target = self._frame;
     const session = target._session;
     const arena = session.arena;
-    const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena.allocator(), target.url, u, .{})
-    else
-        try arena.dupeSentinel(u8, target.url, 0);
+    const url = try stateUrl(target, _url, arena.allocator());
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
 
@@ -125,6 +120,46 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
     if (result == .fired) {
         try navigation.commitSameDocument(result.fired, target);
     }
+}
+
+// The URL pushState and replaceState move the document to: `url_` parsed
+// against the document's URL, which must be able to have its URL rewritten
+// to it. Either failing is a SecurityError.
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#shared-history-push/replace-state-steps
+fn stateUrl(target: *const Frame, url_: ?[]const u8, allocator: std.mem.Allocator) ![:0]const u8 {
+    const raw = url_ orelse return allocator.dupeSentinel(u8, target.url, 0);
+    const url = URL.resolve(allocator, target.url, raw, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.SecurityError,
+    };
+    if (!canHaveUrlRewritten(target.url, url)) {
+        return error.SecurityError;
+    }
+    return url;
+}
+
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#can-have-its-url-rewritten
+fn canHaveUrlRewritten(document_url: [:0]const u8, target_url: [:0]const u8) bool {
+    // Scheme, username, password, host and port must all be the same.
+    if (!std.mem.eql(u8, URL.getProtocol(document_url), URL.getProtocol(target_url)) or
+        !std.mem.eql(u8, URL.getUsername(document_url), URL.getUsername(target_url)) or
+        !std.mem.eql(u8, URL.getPassword(document_url), URL.getPassword(target_url)) or
+        !std.mem.eql(u8, URL.getHost(document_url), URL.getHost(target_url)))
+    {
+        return false;
+    }
+    // HTTP(S) URLs may differ in path, query and fragment.
+    if (URL.isRemoteScheme(target_url)) {
+        return true;
+    }
+    if (!std.mem.eql(u8, URL.getPathname(document_url), URL.getPathname(target_url))) {
+        return false;
+    }
+    // file: URLs may differ in query and fragment; any other only in fragment.
+    if (std.mem.eql(u8, URL.getProtocol(target_url), "file:")) {
+        return true;
+    }
+    return std.mem.eql(u8, URL.getSearch(document_url), URL.getSearch(target_url));
 }
 
 fn goInner(delta: i32, frame: *Frame) !void {
