@@ -277,3 +277,29 @@
     testing.expectEqual("honied", sliceMidText);
   });
 </script>
+
+<script id=native_endings_preserve_binary type=module>
+  const state = await testing.async();
+  const bytes = new Uint8Array([65, 13, 10, 66, 13, 67]);
+  const inner = new Blob([bytes]);
+  const view = new DataView(bytes.buffer, 1, 4);
+  const cases = [
+    [bytes, [65, 13, 10, 66, 13, 67]],
+    [bytes.buffer, [65, 13, 10, 66, 13, 67]],
+    [view, [13, 10, 66, 13]],
+    [inner, [65, 13, 10, 66, 13, 67]],
+  ];
+  const results = [];
+  for (const [part, expected] of cases) {
+    const blob = new Blob(["x\r\n", part, "\ry"], { endings: "native" });
+    const file = new File(["x\r\n", part, "\ry"], "binary.dat", { endings: "native" });
+    results.push([Array.from(await blob.bytes()), Array.from(await file.bytes()), [120, 10, ...expected, 10, 121]]);
+  }
+  state.resolve();
+  await state.done(() => {
+    for (const [blob, file, expected] of results) {
+      testing.expectEqual(expected, blob);
+      testing.expectEqual(expected, file);
+    }
+  });
+</script>

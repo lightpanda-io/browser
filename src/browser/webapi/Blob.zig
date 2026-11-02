@@ -91,20 +91,29 @@ pub fn init(parts_: ?js.Value, opts_: ?js.Value, exec: *const Execution) !*Blob 
     return self;
 }
 
-pub fn collectParts(value: js.Value, exec: *const Execution) !?[]const []const u8 {
+pub const Part = struct {
+    bytes: []const u8,
+    is_string: bool,
+};
+
+pub fn collectParts(value: js.Value, exec: *const Execution) !?[]const Part {
     if (value.isUndefined()) {
         return null;
     }
     const it = (try value.iterator()) orelse return error.TypeError;
 
-    var parts: std.ArrayList([]const u8) = .empty;
+    var parts: std.ArrayList(Part) = .empty;
     while (try it.next()) |part| {
-        try parts.append(exec.call_arena, try part.toStringSmart());
+        const blob_part: ?*Blob = part.local.jsValueToZig(*Blob, part) catch null;
+        try parts.append(exec.call_arena, .{
+            .bytes = try part.toStringSmart(),
+            .is_string = blob_part == null and !part.isArrayBuffer() and !part.isArrayBufferView(),
+        });
     }
     return parts.items;
 }
 
-pub fn buildValue(parts_: ?[]const []const u8, opts: InitOptions, exec: *const Execution) !Blob {
+pub fn buildValue(parts_: ?[]const Part, opts: InitOptions, exec: *const Execution) !Blob {
     const use_native_endings = blk: {
         if (std.mem.eql(u8, opts.endings, "native")) {
             break :blk true;
@@ -121,7 +130,7 @@ pub fn buildValue(parts_: ?[]const []const u8, opts: InitOptions, exec: *const E
         };
         var len: usize = 0;
         for (parts) |part| {
-            len += part.len;
+            len += part.bytes.len;
         }
         // +256, ~struct overhead, mime dupe, ...
         const arena = try exec.getPinnedArena(len + 256, "blob");
@@ -130,7 +139,7 @@ pub fn buildValue(parts_: ?[]const []const u8, opts: InitOptions, exec: *const E
         var w: Writer = .fixed(buf);
 
         for (parts) |part| {
-            try writePartWithEndings(part, use_native_endings, &w);
+            try writePartWithEndings(part.bytes, use_native_endings and part.is_string, &w);
         }
         break :blk .{ w.buffered(), arena };
     };
