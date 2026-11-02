@@ -1362,6 +1362,10 @@ fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
     var runner = page._session.runner(.{});
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     while (promise.state() == .pending) {
+        // The tick doesn't poll the cancel hook; the Runner wait* loops check it too.
+        if (page._session.isCancelled()) {
+            return .{ .text = "promise: cancelled", .is_error = true };
+        }
         const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
         if (elapsed_ms >= eval_promise_timeout_ms) {
             return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
