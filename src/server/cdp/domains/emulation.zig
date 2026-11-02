@@ -190,17 +190,28 @@ fn setGeolocationOverride(cmd: *CDP.Command) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const browser = &cmd.cdp.browser;
-    if (params.latitude) |lat| {
-        if (params.longitude) |lon| {
-            browser.geolocation_override = .{
-                .latitude = lat,
-                .longitude = lon,
-                .accuracy = params.accuracy orelse 0,
-            };
-            return cmd.sendResult(null, .{});
-        }
+    // Chrome only supplies a position when all three required fields are
+    // present; a partial override emulates POSITION_UNAVAILABLE.
+    const latitude = params.latitude orelse {
+        browser.geolocation_override = null;
+        return cmd.sendResult(null, .{});
+    };
+    const longitude = params.longitude orelse {
+        browser.geolocation_override = null;
+        return cmd.sendResult(null, .{});
+    };
+    const accuracy = params.accuracy orelse {
+        browser.geolocation_override = null;
+        return cmd.sendResult(null, .{});
+    };
+    if (!(latitude >= -90 and latitude <= 90 and longitude >= -180 and longitude <= 180 and accuracy >= 0)) {
+        return cmd.sendError(-32000, "Invalid geolocation", .{});
     }
-    browser.geolocation_override = null;
+    browser.geolocation_override = .{
+        .latitude = latitude,
+        .longitude = longitude,
+        .accuracy = accuracy,
+    };
     return cmd.sendResult(null, .{});
 }
 
@@ -786,4 +797,47 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
 
     const v = try ls.local.exec("window.__geo_code === 1", null);
     try testing.expect(v.isTrue());
+}
+
+test "cdp.Emulation: invalid geolocation leaves the current override intact" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setGeolocationOverride", .params = .{ .latitude = 45, .longitude = 90, .accuracy = 10 } });
+    const cases = [_]struct { latitude: f64, longitude: f64, accuracy: f64 }{
+        .{ .latitude = 90.1, .longitude = 0, .accuracy = 1 },
+        .{ .latitude = -90.1, .longitude = 0, .accuracy = 1 },
+        .{ .latitude = 0, .longitude = 180.1, .accuracy = 1 },
+        .{ .latitude = 0, .longitude = -180.1, .accuracy = 1 },
+        .{ .latitude = 0, .longitude = 0, .accuracy = -1 },
+    };
+    for (cases) |params| {
+        try ctx.processMessage(.{ .id = 2, .method = "Emulation.setGeolocationOverride", .params = params });
+        try ctx.expectSentError(-32000, "Invalid geolocation", .{ .id = 2 });
+        try testing.expectEqual(45, ctx.cdp().browser.geolocation_override.?.latitude);
+        try testing.expectEqual(90, ctx.cdp().browser.geolocation_override.?.longitude);
+        try testing.expectEqual(10, ctx.cdp().browser.geolocation_override.?.accuracy);
+    }
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.setGeolocationOverride", .params = .{ .latitude = -90, .longitude = 180, .accuracy = 0 } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(-90, ctx.cdp().browser.geolocation_override.?.latitude);
+    try testing.expectEqual(180, ctx.cdp().browser.geolocation_override.?.longitude);
+    try testing.expectEqual(0, ctx.cdp().browser.geolocation_override.?.accuracy);
+}
+
+test "cdp.Emulation: incomplete geolocation emulates position unavailable" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const Params = struct { latitude: ?f64 = null, longitude: ?f64 = null, accuracy: ?f64 = null };
+    const cases = [_]Params{
+        .{ .latitude = 1, .longitude = 2 },
+        .{ .latitude = 1, .accuracy = 3 },
+        .{ .longitude = 2, .accuracy = 3 },
+    };
+    for (cases) |params| {
+        try ctx.processMessage(.{ .id = 1, .method = "Emulation.setGeolocationOverride", .params = .{ .latitude = 1, .longitude = 2, .accuracy = 3 } });
+        try testing.expect(ctx.cdp().browser.geolocation_override != null);
+        try ctx.processMessage(.{ .id = 2, .method = "Emulation.setGeolocationOverride", .params = params });
+        try ctx.expectSentResult(null, .{ .id = 2 });
+        try testing.expect(ctx.cdp().browser.geolocation_override == null);
+    }
 }
