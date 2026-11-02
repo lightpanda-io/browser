@@ -1853,6 +1853,10 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
+    if (self.is(Html.TextArea)) |textarea| {
+        return textarea.getScrollHeight(frame);
+    }
+
     const height = self.getElementAxis(frame, .height).value;
 
     // The root scroller reports what the viewport scrolls over.
