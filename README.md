@@ -206,7 +206,8 @@ It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
 Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
 and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
 `OPENAI_BASE_URL`, local models via Ollama, llama.cpp or [LLMD](https://zml.ai/llmd),
-and OpenAI Codex with a ChatGPT subscription instead of an API key. You can also run
+and OpenAI Codex with a ChatGPT subscription instead of an API key (run
+`/provider codex` in the REPL to log in). You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
 reference.
@@ -339,8 +340,6 @@ Lightpanda also depends on
 [v8](https://chromium.googlesource.com/v8/v8.git),
 [Libcurl](https://curl.se/libcurl/) and [html5ever](https://github.com/servo/html5ever).
 
-To be able to build the v8 engine, you have to install some libs:
-
 For **Debian/Ubuntu based Linux**:
 
 ```
@@ -348,6 +347,8 @@ sudo apt install xz-utils ca-certificates \
     pkg-config libglib2.0-dev \
     clang make curl git
 ```
+`pkg-config` and `libglib2.0-dev` are only needed to build V8 from source (see
+below).
 You also need to [install Rust](https://rust-lang.org/tools/install/).
 
 For systems with [**Nix**](https://nixos.org/download/), you can use the devShell.
@@ -362,8 +363,11 @@ brew install cmake
 
 ### Build and run
 
-Run `make download-v8` once first to fetch the prebuilt V8 archive. Without it,
-the build compiles V8 from source, which takes 10+ minutes.
+Run `make download-v8` once first to fetch the prebuilt V8 archive; both
+`make` and `zig build` pick it up. Without it, or on a platform with no
+published archive (the download then fails), the build compiles V8 from source,
+which takes several minutes. See
+[CONTRIBUTING.md](CONTRIBUTING.md#skip-the-v8-source-build) for details.
 
 Then build the entire browser with `make build` or `make build-dev` for debug
 env.
@@ -372,8 +376,9 @@ But you can directly use the zig command: `zig build run`.
 
 #### Embed v8 snapshot
 
-Lighpanda uses v8 snapshot. By default, it is created on startup but you can
-embed it by using the following commands:
+Lightpanda uses a v8 snapshot. `make build` builds and embeds it. With a plain
+`zig build`, it is created on startup instead, unless you embed it by using the
+following commands:
 
 Generate the snapshot.
 ```
