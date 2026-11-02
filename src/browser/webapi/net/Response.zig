@@ -136,7 +136,12 @@ fn initWithArena(arena: *lp.Arena, body_: ?BodyInit, opts_: ?InitOpts, exec: *co
     const body: Body = blk: {
         const b = body_ orelse break :blk .empty;
         switch (b) {
-            .stream => |stream| break :blk .{ .stream = stream },
+            .stream => |stream| {
+                if (stream._disturbed or stream.getLocked()) {
+                    return exec.js.typeError("Body stream is disturbed or locked");
+                }
+                break :blk .{ .stream = stream };
+            },
             else => {
                 const extracted = try b.extract(arena.allocator());
                 content_type = extracted.content_type;

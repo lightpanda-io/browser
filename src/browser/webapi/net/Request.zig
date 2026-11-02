@@ -179,6 +179,9 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     var body_stream: ?*ReadableStream = null;
     const body = if (opts.body) |b| blk: {
         if (b == .stream) {
+            if (b.stream._disturbed or b.stream.getLocked()) {
+                return exec.js.typeError("Body stream is disturbed or locked");
+            }
             // Drained on first use, not here: the stream may not be closed yet.
             body_stream = b.stream;
             break :blk null;

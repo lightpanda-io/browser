@@ -688,3 +688,32 @@
     testing.expectTrue(r.bodyUsed);
   });
 </script>
+
+<script id=reject_unusable_stream_body type=module>
+  const state = await testing.async();
+  const make = stream => new Request('https://example.com', { method: 'POST', body: stream });
+  const locked = new ReadableStream();
+  const reader = locked.getReader();
+  testing.expectError('TypeError', () => make(locked));
+  reader.releaseLock();
+  // Locking alone does not disturb the stream; it is usable after release.
+  testing.expectEqual(locked, make(locked).body);
+
+  const disturbed = new ReadableStream({ start(c) { c.close(); } });
+  const read = disturbed.getReader();
+  await read.read();
+  read.releaseLock();
+  testing.expectError('TypeError', () => make(disturbed));
+
+  const canceled = new ReadableStream();
+  await canceled.cancel();
+  testing.expectError('TypeError', () => make(canceled));
+
+  const closed = new ReadableStream({ start(c) { c.close(); } });
+  const value = make(closed);
+  const text = await value.text();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('', text);
+  });
+</script>
