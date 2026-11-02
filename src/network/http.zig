@@ -179,7 +179,7 @@ pub const AuthChallenge = struct {
 
 // The actual reason phrase from the server, verbatim. HTTP/2 has none, so "".
 pub const StatusText = struct {
-    pub const MAX_LEN = 128;
+    const MAX_LEN = 128;
 
     _len: ?u8 = null,
     _buf: [MAX_LEN]u8 = undefined,

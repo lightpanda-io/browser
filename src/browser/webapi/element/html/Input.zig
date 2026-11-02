@@ -82,7 +82,7 @@ pub const Type = enum {
     }
 
     // https://html.spec.whatwg.org/multipage/input.html#dom-input-value
-    pub fn valueMode(self: Type) ValueMode {
+    fn valueMode(self: Type) ValueMode {
         return switch (self) {
             .hidden, .submit, .image, .reset, .button => .default,
             .checkbox, .radio => .default_on,
@@ -92,7 +92,7 @@ pub const Type = enum {
     }
 };
 
-pub const ValueMode = enum {
+const ValueMode = enum {
     // The IDL value is the current value (_value).
     value,
     // The IDL value is the value content attribute, or "".

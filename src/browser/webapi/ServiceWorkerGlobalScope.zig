@@ -544,14 +544,14 @@ pub fn getRegistration(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*S
     return r;
 }
 
-pub fn getServiceWorker(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*ServiceWorker {
+fn getServiceWorker(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*ServiceWorker {
     const registration = try self.getRegistration(exec);
     return registration.worker(self);
 }
 
 // TODO: Need an `ExtendableCookieChangeEvent` so that we can fire change
 // notifications (for now, reads work)
-pub fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
+fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
     if (self._cookie_store) |cs| {
         return cs;
     }

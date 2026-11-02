@@ -784,7 +784,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     return self.navigateInner(self.getCurrentEntry()._url, .reload, .{ .info = opts.info, .state = state }, frame);
 }
 
-pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?NavigationOptions, frame: *Frame) !NavigationReturn {
+fn traverseTo(self: *Navigation, key: []const u8, _opts: ?NavigationOptions, frame: *Frame) !NavigationReturn {
     const opts = _opts orelse NavigationOptions{};
     for (self._entries.items, 0..) |entry, i| {
         if (std.mem.eql(u8, key, entry._key)) {

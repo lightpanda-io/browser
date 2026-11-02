@@ -53,7 +53,7 @@ pub const EncodeIntoResult = struct {
     written: usize,
 };
 
-pub fn encodeInto(_: *const TextEncoder, source_: js.Value, destination_: js.Value) !EncodeIntoResult {
+fn encodeInto(_: *const TextEncoder, source_: js.Value, destination_: js.Value) !EncodeIntoResult {
     // The source is a USVString, so anything is stringified, as encode does.
     // Binding it as a []const u8 would instead hand us the raw bytes of a
     // typed array, which could even alias the destination.

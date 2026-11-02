@@ -93,15 +93,15 @@ pub const Command = union(enum) {
 
 // A command's path parameters are its leading fields (see `parse`); the rest
 // come from the body.
-pub const ElementId = struct {
+const ElementId = struct {
     id: []const u8,
 };
 
-pub const SwitchToWindow = struct {
+const SwitchToWindow = struct {
     handle: []const u8,
 };
 
-pub const ElementName = struct {
+const ElementName = struct {
     id: []const u8,
     name: []const u8,
 };
@@ -111,7 +111,7 @@ pub const Find = struct {
     value: []const u8,
 };
 
-pub const FindFrom = struct {
+const FindFrom = struct {
     id: []const u8,
     using: Using,
     value: []const u8,
@@ -381,7 +381,7 @@ pub fn process(cmd: *BiDi.Command) !void {
 }
 
 // POST /session/{id}/url.
-pub const NavigateTo = struct {
+const NavigateTo = struct {
     url: [:0]const u8,
 };
 fn navigateTo(cmd: *BiDi.Command, p: NavigateTo) !void {
@@ -460,7 +460,7 @@ fn windowRect(viewport: Viewport) struct { x: i32, y: i32, width: u32, height: u
 }
 
 // POST /session/{id}/window/rect.
-pub const SetWindowRect = struct {
+const SetWindowRect = struct {
     x: ?i32 = null,
     y: ?i32 = null,
     width: ?u31 = null,
@@ -497,7 +497,7 @@ fn takeScreenshot(cmd: *BiDi.Command) !void {
 }
 
 // POST /session/{id}/actions.
-pub const PerformActions = struct {
+const PerformActions = struct {
     actions: []const std.json.Value,
 };
 fn performActions(cmd: *BiDi.Command, p: PerformActions) !void {
@@ -767,7 +767,7 @@ fn isEditable(element: *Node.Element) bool {
 }
 
 // POST /session/{id}/element/{id}/value.
-pub const SendKeys = struct {
+const SendKeys = struct {
     id: []const u8,
     text: []const u8,
 };
@@ -824,7 +824,7 @@ fn getTimeouts(cmd: *BiDi.Command) !void {
 }
 
 // POST /session/{id}/timeouts
-pub const SetTimeouts = struct {
+const SetTimeouts = struct {
     script: ScriptTimeout = .absent,
     pageLoad: ?u32 = null,
     implicit: ?u32 = null,
@@ -874,7 +874,7 @@ fn getAllCookies(cmd: *BiDi.Command) !void {
 }
 
 // GET /session/{id}/cookie/{name}
-pub const CookieName = struct {
+const CookieName = struct {
     name: []const u8,
 };
 fn getNamedCookie(cmd: *BiDi.Command, p: CookieName) !void {
@@ -892,7 +892,7 @@ fn getNamedCookie(cmd: *BiDi.Command, p: CookieName) !void {
 }
 
 // POST /session/{id}/cookie
-pub const AddCookie = struct {
+const AddCookie = struct {
     cookie: struct {
         name: []const u8,
         value: []const u8,

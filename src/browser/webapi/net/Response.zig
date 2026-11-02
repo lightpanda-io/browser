@@ -437,7 +437,7 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
 
 // Returns a ReadableStream<string> that decodes the body as UTF-8, ignoring
 // any Content-Type charset (Fetch's non-standard streaming text accessor).
-pub fn textStream(self: *Response, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *Response, exec: *const Execution) !*ReadableStream {
     const local = exec.js.local.?;
     try self.checkUnusable(local);
 

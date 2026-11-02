@@ -79,7 +79,7 @@ pub fn getKind(self: *const Track) TextTrack.Kind {
     return .metadata;
 }
 
-pub fn parentMedia(self: *Track) ?*Media {
+fn parentMedia(self: *Track) ?*Media {
     const parent = self.asNode()._parent orelse return null;
     return parent.is(Media);
 }

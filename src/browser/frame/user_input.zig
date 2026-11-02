@@ -95,7 +95,7 @@ const CompatHover = struct {
 // hovered item so that trasitions can fire the correct events. e.g. mouseout
 // bubbles up normally, but mouseleave will only fire on parents where the new
 // target isn't part of.
-pub fn updateHoverTarget(frame: *Frame, to: ?*Element, emitter: anytype) void {
+fn updateHoverTarget(frame: *Frame, to: ?*Element, emitter: anytype) void {
     const page = frame.page;
     const from = page.input_hover_target;
     if (from == to) {
@@ -820,7 +820,7 @@ fn deltaToScroll(d: f64) i32 {
 }
 
 /// One string of a drag's data, for one MIME type (CDP Input.DragDataItem).
-pub const DragItem = struct {
+const DragItem = struct {
     mimeType: []const u8,
     data: []const u8,
 };
@@ -990,7 +990,7 @@ fn emitDrag(
 }
 
 // pointerId 1 is the mouse.
-pub const first_touch_pointer_id: i32 = 2;
+const first_touch_pointer_id: i32 = 2;
 // Chrome's touch slop, also the tap slop: inside it touchmove is suppressed.
 const tap_slop_px = 15;
 // Chrome's multi-tap window: the next tap must start within this time of the
@@ -998,7 +998,7 @@ const tap_slop_px = 15;
 const multi_tap_ms = 400;
 const multi_tap_slop_px = 20;
 
-pub const TouchContact = struct {
+const TouchContact = struct {
     target: *Element,
     point: Touch.Point,
     start: Touch.Point,
@@ -1068,7 +1068,7 @@ const TouchType = enum {
     touchcancel,
 };
 
-pub const LastTap = struct {
+const LastTap = struct {
     count: u32,
     x: f64,
     y: f64,
@@ -1359,7 +1359,7 @@ pub fn outermostEditingHost(target: *Element) ?*Element {
 
 /// Mousedown default action. A mousedown outside any focusable element moves
 /// focus to the body.
-pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
+fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     if (outermostEditingHost(target)) |host| {
         try host.focus(frame);
         return;

@@ -48,7 +48,7 @@ state: State,
 frame: *Frame,
 skipped: ?Skipped = null,
 
-pub const Skipped = struct {
+const Skipped = struct {
     allocator: std.mem.Allocator,
     set: *PruneSet,
 };

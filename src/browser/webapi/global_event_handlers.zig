@@ -120,7 +120,7 @@ pub const Handler = enum {
 };
 
 /// The WindowEventHandlers mixin: on Window, and on body/frameset elements.
-pub const WindowHandler = enum {
+const WindowHandler = enum {
     onafterprint,
     onbeforeprint,
     onbeforeunload,

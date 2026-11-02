@@ -67,7 +67,7 @@ const PendingNavigate = struct {
     until: Until,
     reply: BiDi.Reply,
 
-    pub const Until = enum { interactive, complete };
+    const Until = enum { interactive, complete };
 };
 
 pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {

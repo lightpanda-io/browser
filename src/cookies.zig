@@ -179,7 +179,7 @@ const JsonCookie = struct {
 /// Netscape cookie file format parser with `#HttpOnly_` addition from curl.
 /// https://docs.cyotek.com/cyowcopy/1.10/netscapecookieformat.html
 /// https://curl.se/docs/http-cookies.html
-pub const NetscapeFormat = struct {
+const NetscapeFormat = struct {
     /// Parses and loads cookies in Netscape format.
     /// Returns number of cookies loaded.
     pub fn parse(jar: *Cookie.Jar, slice: []const u8) !usize {

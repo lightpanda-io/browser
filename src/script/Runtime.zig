@@ -477,7 +477,7 @@ fn construct(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
     }
 }
 
-pub const PageMethod = struct {
+const PageMethod = struct {
     name: []const u8,
     callback: Callback,
     /// Rendered by `zig build docs`.

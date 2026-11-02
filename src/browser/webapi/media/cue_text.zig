@@ -375,7 +375,7 @@ fn appendCodepoint(arena: Allocator, out: *std.ArrayList(u8), codepoint: u32) !v
 
 // "collect a WebVTT timestamp", requiring the whole input to be consumed.
 // Returns the time in milliseconds.
-pub fn parseTimestamp(input: []const u8) ?u64 {
+fn parseTimestamp(input: []const u8) ?u64 {
     var pos: usize = 0;
     const value = collectTimestamp(input, &pos) orelse return null;
     if (pos != input.len) {
@@ -441,7 +441,7 @@ fn collectDigits(input: []const u8, pos: *usize) ?Digits {
 }
 
 // Hours are at least two digits; "100:00:00.000" is valid.
-pub fn formatTimestamp(buf: []u8, ms: u64) ![]const u8 {
+fn formatTimestamp(buf: []u8, ms: u64) ![]const u8 {
     const hours = ms / 3_600_000;
     const minutes = (ms / 60_000) % 60;
     const seconds = (ms / 1000) % 60;

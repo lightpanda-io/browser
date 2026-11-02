@@ -360,20 +360,6 @@ pub fn getIncumbent(self: *Context) *Frame {
     };
 }
 
-pub fn stringToPersistedFunction(
-    self: *Context,
-    function_body: []const u8,
-    comptime parameter_names: []const []const u8,
-    extensions: []const *const v8.Object,
-) !js.Function.Global {
-    var ls: js.Local.Scope = undefined;
-    self.localScope(&ls);
-    defer ls.deinit();
-
-    const js_function = try ls.local.compileFunction(function_body, parameter_names, extensions);
-    return js_function.persist();
-}
-
 // `cacheable` is about our module map. `script_cache` is the HTTP cache entry
 // the source came from, see compileModule.
 pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, position: js.Local.SourcePosition, cacheable: bool, script_cache: ?HttpClient.ScriptCache) !(if (want_result) ModuleEntry else void) {

@@ -205,7 +205,7 @@ pub const TransformStreamDefaultController = struct {
     }
 
     /// Enqueue a raw JS value, preserving its type. Used by the JS-facing API.
-    pub fn enqueueValue(self: *TransformStreamDefaultController, value: js.Value) !void {
+    fn enqueueValue(self: *TransformStreamDefaultController, value: js.Value) !void {
         try self._stream._readable._controller.enqueueValue(value);
     }
 

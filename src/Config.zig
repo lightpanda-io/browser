@@ -249,7 +249,7 @@ pub const ExperimentalFeatures = packed struct(u3) {
     privatecache: bool = false,
 };
 
-pub const DisabledFeatures = packed struct(u1) {
+const DisabledFeatures = packed struct(u1) {
     cors: bool = false,
 };
 
@@ -357,7 +357,7 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// in `Agent.init` (explicit flag > remembered > mode default), so there is
 /// no Config-level accessor like `agentVerbosity`.
 pub const Effort = zenai.provider.Effort;
-pub const SearchEngine = @import("browser/tools/search.zig").Engine;
+const SearchEngine = @import("browser/tools/search.zig").Engine;
 
 /// Controls how chatty `agent` mode is on stderr.
 pub const AgentVerbosity = enum {

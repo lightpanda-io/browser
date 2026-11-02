@@ -382,7 +382,7 @@ fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
     return self._location.assign(url, frame);
 }
 
-pub fn getHistory(self: *Window) *History {
+fn getHistory(self: *Window) *History {
     return &self._history;
 }
 

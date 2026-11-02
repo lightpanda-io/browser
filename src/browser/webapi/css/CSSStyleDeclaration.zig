@@ -628,7 +628,7 @@ pub const Iterator = struct {
     }
 };
 
-pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
+fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     var node = self._properties.first;
     while (node) |n| {
         const prop = Property.fromNodeLink(n);

@@ -780,8 +780,8 @@ pub const CurlLockData = enum(c.curl_lock_data) {
 };
 
 pub const CurlLockAccess = c.curl_lock_access;
-pub const CurlLockFunction = *const fn (?*Curl, CurlLockData, CurlLockAccess, ?*anyopaque) callconv(.c) void;
-pub const CurlUnlockFunction = *const fn (?*Curl, CurlLockData, ?*anyopaque) callconv(.c) void;
+const CurlLockFunction = *const fn (?*Curl, CurlLockData, CurlLockAccess, ?*anyopaque) callconv(.c) void;
+const CurlUnlockFunction = *const fn (?*Curl, CurlLockData, ?*anyopaque) callconv(.c) void;
 
 const CurlSHOption = enum(c.CURLSHoption) {
     share = c.CURLSHOPT_SHARE,

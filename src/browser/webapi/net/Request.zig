@@ -76,7 +76,7 @@ pub const InitOpts = struct {
     signal: ?*AbortSignal = null,
 };
 
-pub const ReferrerValue = union(enum) {
+const ReferrerValue = union(enum) {
     client,
     none,
     url: [:0]const u8,
@@ -418,7 +418,7 @@ pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
 }
 
 // Returns a ReadableStream that decodes the body as UTF-8.
-pub fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
     const local = exec.js.local.?;
     try self.checkUnusable(local);
 
@@ -517,7 +517,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
     return request;
 }
 
-pub fn getReferrer(self: *Request) []const u8 {
+fn getReferrer(self: *Request) []const u8 {
     return switch (self._referrer) {
         .client => "about:client",
         .none => "",
@@ -525,7 +525,7 @@ pub fn getReferrer(self: *Request) []const u8 {
     };
 }
 
-pub fn getReferrerPolicy(self: *Request) []const u8 {
+fn getReferrerPolicy(self: *Request) []const u8 {
     const policy = self._referrer_policy orelse return "";
     return switch (policy) {
         .no_referrer => "no-referrer",

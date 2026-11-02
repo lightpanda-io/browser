@@ -31,7 +31,7 @@ pub fn init(self: *HandleScope, isolate: js.Isolate) void {
     self.initWithIsolateHandle(isolate.handle);
 }
 
-pub fn initWithIsolateHandle(self: *HandleScope, isolate: *v8.Isolate) void {
+fn initWithIsolateHandle(self: *HandleScope, isolate: *v8.Isolate) void {
     v8.v8__HandleScope__CONSTRUCT(&self.handle, isolate);
 }
 

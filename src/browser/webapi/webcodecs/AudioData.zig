@@ -57,7 +57,7 @@ pub const Format = enum {
         };
     }
 
-    pub fn isPlanar(self: Format) bool {
+    fn isPlanar(self: Format) bool {
         return switch (self) {
             .u8, .s16, .s32, .f32 => false,
             else => true,

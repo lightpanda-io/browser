@@ -18,7 +18,7 @@
 
 //! brotli utilities.
 
-pub const BROTLI_BOOL = c_int;
+const BROTLI_BOOL = c_int;
 pub const BROTLI_TRUE: BROTLI_BOOL = 1;
 pub const BROTLI_FALSE: BROTLI_BOOL = 0;
 
@@ -30,14 +30,14 @@ const brotli_free_func = ?*const fn (@"opaque": ?*anyopaque, address: ?*anyopaqu
 
 pub const BrotliEncoderState = opaque {};
 
-pub const BrotliEncoderOperation = enum(c_int) {
+const BrotliEncoderOperation = enum(c_int) {
     process = 0,
     flush = 1,
     finish = 2,
     emit_metadata = 3,
 };
 
-pub const BrotliEncoderParameter = enum(c_int) {
+const BrotliEncoderParameter = enum(c_int) {
     mode = 0,
     quality = 1,
     lgwin = 2,
@@ -62,7 +62,7 @@ pub extern fn BrotliEncoderTakeOutput(state: *BrotliEncoderState, size: *usize) 
 
 pub const BrotliDecoderState = opaque {};
 
-pub const BrotliDecoderResult = enum(c_int) {
+const BrotliDecoderResult = enum(c_int) {
     @"error" = 0,
     success = 1,
     needs_more_input = 2,

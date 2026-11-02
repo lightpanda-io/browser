@@ -173,7 +173,7 @@ pub fn shutdown(sock: socket_t, how: ShutdownHow) !void {
     }
 }
 
-pub fn getsockname(sock: socket_t, addr: *posix.sockaddr, len: *posix.socklen_t) !void {
+fn getsockname(sock: socket_t, addr: *posix.sockaddr, len: *posix.socklen_t) !void {
     const rc = c.getsockname(sock, addr, len);
     if (rc != 0) {
         return errnoError(c.errno(rc));

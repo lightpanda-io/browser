@@ -445,7 +445,7 @@ pub fn chainOffsetOf(comptime Leaf: type, comptime T: type) usize {
 }
 
 // Offset from T to its Proto
-pub fn protoOffset(comptime T: type) usize {
+fn protoOffset(comptime T: type) usize {
     const P = reflect.Proto(T).?;
     return chainOffsetOf(T, T) - chainOffsetOf(T, P);
 }

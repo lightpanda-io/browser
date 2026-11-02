@@ -108,7 +108,7 @@ fn getCustomError(self: *const ValidityState) bool {
     return false;
 }
 
-pub fn getValid(self: *const ValidityState, frame: *Frame) bool {
+fn getValid(self: *const ValidityState, frame: *Frame) bool {
     if (self.customFlags()) |flags| return !flags.any();
     return !self.getValueMissing() and
         !self.getTypeMismatch() and

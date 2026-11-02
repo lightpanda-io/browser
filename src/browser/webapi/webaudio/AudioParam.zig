@@ -48,7 +48,7 @@ _timeline: Timeline = .{},
 _sources: std.ArrayList(*AudioNode) = .empty,
 _sum: Bus = .{},
 
-pub const Rate = enum { @"a-rate", @"k-rate" };
+const Rate = enum { @"a-rate", @"k-rate" };
 
 pub const Descriptor = struct {
     default: f32,

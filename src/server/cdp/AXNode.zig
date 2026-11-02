@@ -510,7 +510,7 @@ pub const Writer = struct {
         value: AXValue,
     };
 
-    pub const AriaState = enum { true, false, mixed };
+    const AriaState = enum { true, false, mixed };
 
     /// Like Chrome, any other token, even " false ", reads as true.
     fn parseAriaState(value: []const u8) AriaState {

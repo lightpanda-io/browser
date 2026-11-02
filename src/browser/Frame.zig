@@ -1586,7 +1586,7 @@ pub fn scriptCreatedParserDone(self: *Frame) void {
     self.documentIsComplete();
 }
 
-pub fn documentIsComplete(self: *Frame) void {
+fn documentIsComplete(self: *Frame) void {
     if (self._load_state == .complete) {
         // Ideally, documentIsComplete would only be called once, but with
         // dynamic scripts, it can be hard to keep track of that. An async

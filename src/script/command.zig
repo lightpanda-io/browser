@@ -288,7 +288,7 @@ pub const Command = union(enum) {
     /// password to another's form. Without the convention, a model can do
     /// that matching where there is no key, and the user names the variables
     /// where there is one.
-    pub const BareLogin = union(enum) {
+    const BareLogin = union(enum) {
         args: std.json.Value,
         prompt: []const u8,
         usage: []const u8,

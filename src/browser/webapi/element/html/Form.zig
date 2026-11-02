@@ -209,7 +209,7 @@ pub fn reset(self: *Form, frame: *Frame) !void {
 
 /// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
 /// Like submit(), but fires the submit event and validates the form.
-pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
+fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
     const submitter_element = if (submitter) |s| blk: {
         // The submitter must be a submit button.
         if (isSubmitButton(s) == false) {

@@ -143,7 +143,7 @@ pub fn maintenance(self: *Cache, now: u64) void {
 /// for freshness arithmetic and storage.
 const max_delta_seconds: u64 = 2147483648;
 
-pub fn parseDeltaSeconds(value: []const u8) ?u64 {
+fn parseDeltaSeconds(value: []const u8) ?u64 {
     const seconds = std.fmt.parseInt(u64, value, 10) catch |err| switch (err) {
         error.Overflow => return max_delta_seconds,
         error.InvalidCharacter => return null,
@@ -151,7 +151,7 @@ pub fn parseDeltaSeconds(value: []const u8) ?u64 {
     return @min(seconds, max_delta_seconds);
 }
 
-pub const CacheControl = struct {
+const CacheControl = struct {
     max_age: u64,
     must_revalidate: bool = false,
 };

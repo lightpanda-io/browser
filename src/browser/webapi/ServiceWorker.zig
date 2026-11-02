@@ -76,7 +76,7 @@ pub fn asEventTarget(self: *ServiceWorker) *EventTarget {
     return self._proto;
 }
 
-pub fn getScriptURL(self: *const ServiceWorker) []const u8 {
+fn getScriptURL(self: *const ServiceWorker) []const u8 {
     const scope = self._scope orelse return "";
     return scope._proto.url;
 }

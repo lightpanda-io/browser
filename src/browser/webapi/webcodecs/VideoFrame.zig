@@ -54,7 +54,7 @@ _timestamp: i64,
 _duration: ?u64,
 _color_space: VideoColorSpace.Value,
 
-pub const PixelFormat = enum {
+const PixelFormat = enum {
     I420,
     I420P10,
     I420P12,
@@ -79,7 +79,7 @@ pub const PixelFormat = enum {
     BGRA,
     BGRX,
 
-    pub const Plane = struct {
+    const Plane = struct {
         // bytes per sample times samples per position (2 for NV12's UV)
         sample_bytes: u32,
         // sub-sampling factors
@@ -87,7 +87,7 @@ pub const PixelFormat = enum {
         height: u32,
     };
 
-    pub fn planes(self: PixelFormat) []const Plane {
+    fn planes(self: PixelFormat) []const Plane {
         return switch (self) {
             .NV12 => &.{ .{ .sample_bytes = 1, .width = 1, .height = 1 }, .{ .sample_bytes = 2, .width = 2, .height = 2 } },
             .RGBA, .RGBX, .BGRA, .BGRX => &.{.{ .sample_bytes = 4, .width = 1, .height = 1 }},
@@ -110,7 +110,7 @@ pub const PixelFormat = enum {
     }
 
     // The format without its alpha plane/channel.
-    pub fn opaqueFormat(self: PixelFormat) PixelFormat {
+    fn opaqueFormat(self: PixelFormat) PixelFormat {
         return switch (self) {
             .I420A => .I420,
             .I420AP10 => .I420P10,
@@ -127,7 +127,7 @@ pub const PixelFormat = enum {
         };
     }
 
-    pub fn isRgb(self: PixelFormat) bool {
+    fn isRgb(self: PixelFormat) bool {
         return switch (self) {
             .RGBA, .RGBX, .BGRA, .BGRX => true,
             else => false,
