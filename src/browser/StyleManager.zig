@@ -63,7 +63,8 @@ flow: Group(Flow) = .{},
 
 widths: WidthMemo = .{},
 
-// Keyed by property name, pruning to what is (hopefully) one or few rules
+// Keyed by property name, pruning to what is (hopefully) one or few rules.
+// Custom properties, and `content`: see keyedName.
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
 
 /// The thing to remember about layers is that we can't determine priority's
@@ -519,7 +520,8 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
 // Custom properties are keyed by name instead, and lazily parse the selector.
-// Returns whether the rule set any tracked property.
+// Returns whether the rule set a tracked or a custom property. Nothing
+// memoizes `content`.
 fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
@@ -534,11 +536,12 @@ fn addSelectorRules(
     }
 
     const arena = self.arena.allocator();
-    const before = self.next_doc_order;
+    var changed = false;
 
     if (customs.len > 0) {
         const priority = try self.nextPriority(layer);
         for (customs) |custom| {
+            changed = changed or isCustomProperty(custom.name);
             const gop = try self.custom_rules.getOrPut(arena, custom.name);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = .{};
@@ -554,12 +557,14 @@ fn addSelectorRules(
     }
 
     if (relevant) {
+        const before = self.next_doc_order;
         const selectors = SelectorParser.parseList(arena, selector_text) catch &.{};
         for (selectors) |selector| {
             try self.addTrackedRule(selector, props, important, layer);
         }
+        changed = changed or self.next_doc_order != before;
     }
-    return self.next_doc_order != before;
+    return changed;
 }
 
 // One priority per selector, shared by every group it lands in: doc_order
@@ -674,6 +679,20 @@ fn nextPriority(self: *StyleManager, layer: u16) !u64 {
 
 fn isCustomProperty(name: []const u8) bool {
     return std.mem.startsWith(u8, name, "--");
+}
+
+/// The custom_rules key for a declaration of `name`, or null when it isn't
+/// looked up by name. `content` only matters to scripts reading it back, often
+/// from a probe element: @ant-design/cssinjs reads which styles a static CSS
+/// file already ships from a `content` rule.
+fn keyedName(name: []const u8) ?[]const u8 {
+    if (isCustomProperty(name)) {
+        return name;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "content")) {
+        return "content";
+    }
+    return null;
 }
 
 pub fn sheetModified(self: *StyleManager) void {
@@ -1676,8 +1695,7 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     return false;
 }
 
-/// The CSSOM twin of addRawRule; returns whether the rule set any tracked
-/// property.
+/// The CSSOM twin of addRawRule; returns what addSelectorRules does.
 fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     return self.addRuleAs(style_rule, style_rule._selector_text);
 }
@@ -1739,12 +1757,15 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     if (style_rule._rules != null or !self.appendable(sheet, rule)) {
         return self.sheetModified();
     }
-    const added = self.addRule(style_rule) catch return self.sheetModified();
-    if (!added) {
+    const before = self.next_doc_order;
+    const changed = self.addRule(style_rule) catch return self.sheetModified();
+    if (self.next_doc_order != before) {
+        self.last_rule_sheet = sheet;
+    }
+    if (!changed) {
         // Nothing tracked changed, so every memoized answer still holds.
         return;
     }
-    self.last_rule_sheet = sheet;
     self.cascadeChanged();
 }
 
@@ -1766,7 +1787,7 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     return false;
 }
 
-/// The CSSOM counterpart to foldDeclarations' `--*` branch. Names within one
+/// The CSSOM counterpart to foldDeclarations' keyed branch. Names within one
 /// declaration block are already unique, so there is nothing to dedup here.
 ///
 /// Unlike the selector text, both strings have to be copied: they can point
@@ -1779,10 +1800,7 @@ fn extractCustomDeclarations(self: *StyleManager, style: *CSSStyleProperties) ![
     var customs: std.ArrayList(CustomDeclaration) = .empty;
     var it = style.asCSSStyleDeclaration().iterator();
     while (it.next()) |property| {
-        const name = property._name.str();
-        if (isCustomProperty(name) == false) {
-            continue;
-        }
+        const name = keyedName(property._name.str()) orelse continue;
         try customs.append(arena, .{
             .name = try arena.dupe(u8, name),
             .value = try arena.dupe(u8, property._value.str()),
@@ -2883,7 +2901,7 @@ const ParsedCustomRule = struct {
     priority: u64, // packed the same way as a group Rule.priority
 };
 
-/// A `--*` declaration on its way from a rule block into custom_rules.
+/// A keyed declaration on its way from a rule block into custom_rules.
 const CustomDeclaration = struct {
     name: []const u8,
     value: []const u8,
@@ -2952,8 +2970,8 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
     return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr), null) catch unreachable;
 }
 
-/// `--*` declarations of one block, keyed by name so a block declaring the same
-/// custom property twice keeps only the winner.
+/// Keyed declarations of one block, by name so a block declaring the same
+/// property twice keeps only the winner.
 const CustomSink = struct {
     allocator: Allocator,
     map: std.StringArrayHashMapUnmanaged(CustomDeclaration) = .empty,
@@ -2963,18 +2981,18 @@ const CustomSink = struct {
 // materialized object was built from: a normal declaration never overrides an
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
-// case-sensitive and goes to `customs` when there is one.
+// case-sensitive. Keyed declarations go to `customs` when there is one.
 fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, customs: ?*CustomSink) !Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = declarations;
     while (it.next()) |declaration| {
-        if (isCustomProperty(declaration.name)) {
+        if (keyedName(declaration.name)) |name| {
             const sink = customs orelse continue;
-            const gop = try sink.map.getOrPut(sink.allocator, declaration.name);
+            const gop = try sink.map.getOrPut(sink.allocator, name);
             if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
                 continue;
             }
-            gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
+            gop.value_ptr.* = .{ .name = name, .value = declaration.value, .important = declaration.important };
             continue;
         }
         slots.apply(declaration.name, declaration.value, declaration.important);
@@ -3088,24 +3106,7 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
 
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        if (self.inlineStyleValue(elem, property_name)) |value| {
-            return value;
-        }
-
-        var winner: ?[]const u8 = null;
-        var priority: u64 = 0;
-        for (rules) |rule| {
-            if (rule.priority <= priority) {
-                continue;
-            }
-            if (matchesSelector(elem, rule.selector, self.frame) == false) {
-                continue;
-            }
-            winner = rule.value;
-            priority = rule.priority;
-        }
-
-        if (winner) |value| {
+        if (self.keyedValue(elem, property_name, rules)) |value| {
             return value;
         }
     }
@@ -3113,7 +3114,42 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
     return null;
 }
 
-/// Gets the parsed rule for a custom property name
+/// Declared `content` of `el`, or null when nothing declares it. It doesn't
+/// inherit, so only `el`'s own declarations count.
+pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+
+    const rules = self.parsedCustomRules("content") catch |err| blk: {
+        log.err(.browser, "StyleManager content", .{ .err = err });
+        break :blk &.{};
+    };
+    return self.keyedValue(el, comptime .wrap("content"), rules);
+}
+
+/// The inline declaration of a keyed property on `el`, or else the value of
+/// the highest priority rule matching it.
+fn keyedValue(self: *StyleManager, el: *Element, property_name: String, rules: []const ParsedCustomRule) ?[]const u8 {
+    if (self.inlineStyleValue(el, property_name)) |value| {
+        return value;
+    }
+
+    var winner: ?[]const u8 = null;
+    var priority: u64 = 0;
+    for (rules) |rule| {
+        if (rule.priority <= priority) {
+            continue;
+        }
+        if (matchesSelector(el, rule.selector, self.frame) == false) {
+            continue;
+        }
+        winner = rule.value;
+        priority = rule.priority;
+    }
+    return winner;
+}
+
+/// Gets the parsed rules for a keyed property name
 fn parsedCustomRules(self: *StyleManager, name: []const u8) ![]const ParsedCustomRule {
     const property = self.custom_rules.getPtr(name) orelse return &.{};
     if (property.parsed) |parsed| {
@@ -3880,6 +3916,35 @@ test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
     _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
     try testing.expectEqual(true, sm.dirty);
     try testing.expectEqual(false, sm.isHidden(c, .{}));
+}
+
+test "StyleManager: ruleInserted: a content rule keeps the memos" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"a\"></div>");
+    const a = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { content: \"first\" }", frame);
+    _ = try body.insertBefore(style_el.asNode(), a.asNode(), frame);
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    try testing.expectString("\"first\"", sm.contentValue(a).?);
+
+    // CSS-in-JS inserts its rules one at a time, many of them pseudo-element
+    // content
+    const version = frame.page.style_version;
+    _ = try sheet.insertRule(".a::before { content: \"\" }", 1, frame);
+    _ = try sheet.insertRule(".a { content: \"second\" }", 2, frame);
+    try testing.expectEqual(false, sm.dirty);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectString("\"second\"", sm.contentValue(a).?);
 }
 
 // Child-combinator rules whose subject compound has no id, class or tag

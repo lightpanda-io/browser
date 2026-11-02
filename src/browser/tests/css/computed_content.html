@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<head>
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  getComputedStyle().content: the declared value from the cascade, with its
+  strings serialized in double quotes. It doesn't inherit. @ant-design/cssinjs
+  reads which styles a static CSS file already ships from a probe element's
+  computed content, and injects the others itself.
+-->
+
+<style>
+  .probe { content: "a|b:1;c|d:2"; }
+  .single { content: 'it\'s "quoted"'; }
+  .escaped { content: "\2014 x\"y\\z"; }
+  .list { content: "a"   counter(item)   "b"; }
+  .both { content: "class"; }
+  .both.again { content: "compound"; }
+  #id-wins { content: "id"; }
+  .twice { content: "first"; }
+  .twice { content: "second"; }
+  @media (min-width: 1px) { .media { content: "media"; } }
+  .upper { CONTENT: "upper"; }
+  .pseudo::before, .pseudo::after { content: "pseudo"; }
+  .hover:hover { content: "hover"; }
+</style>
+
+<div id=plain></div>
+<div id=probe class=probe><span id=child></span></div>
+<div id=single class=single></div>
+<div id=escaped class=escaped></div>
+<div id=list class=list></div>
+<div id=compound class="both again"></div>
+<div id=id-wins class="both again"></div>
+<div id=twice class=twice></div>
+<div id=media class=media></div>
+<div id=upper class=upper></div>
+<div id=pseudo class=pseudo></div>
+<div id=hover class=hover></div>
+<div id=inline class=probe style="content: 'inline'"></div>
+
+<script id=cascade>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('normal', content('plain'));
+  testing.expectEqual('"a|b:1;c|d:2"', content('probe'));
+  testing.expectEqual('"it\'s \\"quoted\\""', content('single'));
+  testing.expectEqual('"\u2014x\\"y\\\\z"', content('escaped'));
+  testing.expectEqual('"a" counter(item) "b"', content('list'));
+
+  testing.expectEqual('"compound"', content('compound'));
+  testing.expectEqual('"id"', content('id-wins'));
+  testing.expectEqual('"second"', content('twice'));
+  testing.expectEqual('"media"', content('media'));
+  testing.expectEqual('"upper"', content('upper'));
+  testing.expectEqual('"inline"', content('inline'));
+  testing.expectEqual('"inline"', getComputedStyle($('#inline')).getPropertyValue('content'));
+
+  // Rules for a pseudo-element or an interaction state don't reach the element.
+  testing.expectEqual('normal', content('pseudo'));
+  testing.expectEqual('normal', content('hover'));
+
+  testing.expectEqual('normal', content('child'));
+}
+</script>
+
+<script id=probeElement>
+{
+  const probe = document.createElement('div');
+  probe.className = 'probe';
+  document.body.appendChild(probe);
+  testing.expectEqual('"a|b:1;c|d:2"', getComputedStyle(probe).content);
+  probe.remove();
+}
+</script>
+
+<script id=insertedRule>
+{
+  const sheet = document.styleSheets[0];
+  sheet.insertRule('.inserted { content: "inserted" }', sheet.cssRules.length);
+  const el = document.createElement('div');
+  el.className = 'inserted';
+  document.body.appendChild(el);
+  testing.expectEqual('"inserted"', getComputedStyle(el).content);
+  testing.expectEqual('"a|b:1;c|d:2"', getComputedStyle($('#probe')).content);
+}
+</script>

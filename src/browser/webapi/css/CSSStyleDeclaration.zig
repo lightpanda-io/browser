@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const color = @import("../../color.zig");
 const CssParser = @import("../../css/Parser.zig");
+const Tokenizer = @import("../../css/Tokenizer.zig");
 const properties = @import("../../css/properties.zig");
 const StyleManager = @import("../../StyleManager.zig");
 
@@ -99,6 +100,105 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     return value;
 }
 
+// Each string serialized in double quotes, as Chrome computes `content`, and
+// the rest as declared.
+fn computedContent(value: []const u8, frame: *Frame) []const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    writeComputedContent(&buf.writer, value) catch return value;
+    return buf.written();
+}
+
+fn writeComputedContent(writer: *std.Io.Writer, value: []const u8) !void {
+    var tokenizer: Tokenizer = .{ .input = std.mem.trim(u8, value, &std.ascii.whitespace) };
+    var start: usize = 0;
+    while (tokenizer.next()) |token| : (start = tokenizer.position) {
+        switch (token) {
+            .string => |raw| try writeCssString(writer, raw),
+            .bad_string, .bad_url => return error.WriteFailed,
+            .white_space => try writer.writeByte(' '),
+            .comment => {},
+            else => try writer.writeAll(tokenizer.input[start..tokenizer.position]),
+        }
+    }
+}
+
+// `raw` is a string token's source between its quotes: its escapes are
+// resolved, then the string is serialized as CSSOM does.
+fn writeCssString(writer: *std.Io.Writer, raw: []const u8) !void {
+    try writer.writeByte('"');
+    var i: usize = 0;
+    while (i < raw.len) {
+        const c = raw[i];
+        i += 1;
+        if (c != '\\') {
+            try writeStringByte(writer, c);
+            continue;
+        }
+        if (i == raw.len) {
+            break;
+        }
+        switch (raw[i]) {
+            // An escaped newline continues the string on the next line.
+            '\n', '\r', '\x0C' => i += newlineLen(raw[i..]),
+            '0'...'9', 'a'...'f', 'A'...'F' => {
+                const hex_start = i;
+                while (i < raw.len and i - hex_start < 6 and std.ascii.isHex(raw[i])) {
+                    i += 1;
+                }
+                const parsed = std.fmt.parseInt(u32, raw[hex_start..i], 16) catch unreachable;
+                if (i < raw.len and (raw[i] == ' ' or raw[i] == '\t')) {
+                    i += 1;
+                } else if (i < raw.len) {
+                    i += newlineLen(raw[i..]);
+                }
+                const cp: u21 = switch (parsed) {
+                    1...0xD7FF, 0xE000...0x10FFFF => @intCast(parsed),
+                    else => 0xFFFD,
+                };
+                try writeStringCodepoint(writer, cp);
+            },
+            else => |escaped| {
+                // Any other code point stands for itself. A multi-byte one's
+                // continuation bytes are copied as they come.
+                i += 1;
+                try writeStringByte(writer, escaped);
+            },
+        }
+    }
+    try writer.writeByte('"');
+}
+
+fn newlineLen(s: []const u8) usize {
+    return switch (s[0]) {
+        '\r' => if (s.len > 1 and s[1] == '\n') 2 else 1,
+        '\n', '\x0C' => 1,
+        else => 0,
+    };
+}
+
+fn writeStringByte(writer: *std.Io.Writer, byte: u8) !void {
+    if (byte < 0x80) {
+        return writeStringCodepoint(writer, byte);
+    }
+    return writer.writeByte(byte);
+}
+
+fn writeStringCodepoint(writer: *std.Io.Writer, cp: u21) !void {
+    switch (cp) {
+        0 => try writer.writeAll("\u{FFFD}"),
+        0x01...0x1F, 0x7F => try writer.print("\\{x} ", .{cp}),
+        '"', '\\' => {
+            try writer.writeByte('\\');
+            try writer.writeByte(@intCast(cp));
+        },
+        else => {
+            var utf8: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(cp, &utf8) catch unreachable;
+            try writer.writeAll(utf8[0..len]);
+        },
+    }
+}
+
 fn computedColor(value: []const u8, frame: *Frame) []const u8 {
     const parsed = switch (color.parse(value)) {
         .value => |v| v,
@@ -159,6 +259,11 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
 
             if (isCustomProperty(normalized)) {
                 return style_manager.customPropertyValue(element, wrapped) orelse "";
+            }
+
+            if (wrapped.eql(comptime .wrap("content"))) {
+                const value = style_manager.contentValue(element) orelse return "normal";
+                return computedContent(value, frame);
             }
 
             // Resolved in pixels, as the synthetic text metrics measure it.
@@ -1303,6 +1408,10 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: CSSStyleDeclaration computed transform" {
     try testing.htmlRunner("css/computed_transform.html", .{});
+}
+
+test "WebApi: CSSStyleDeclaration computed content" {
+    try testing.htmlRunner("css/computed_content.html", .{});
 }
 
 test "WebApi: CSSStyleDeclaration computed inheritance" {
