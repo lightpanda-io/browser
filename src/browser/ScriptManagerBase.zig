@@ -920,11 +920,6 @@ pub const Script = struct {
         frame.document._current_script = fe.script_element;
         defer frame.document._current_script = previous_script;
 
-        // Clear the document.write insertion point for this script
-        const previous_write_insertion_point = frame.document._write_insertion_point;
-        frame.document._write_insertion_point = null;
-        defer frame.document._write_insertion_point = previous_write_insertion_point;
-
         // inline scripts aren't cached. remote ones are.
         const cacheable = self.source == .remote;
 
