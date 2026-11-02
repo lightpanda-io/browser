@@ -136,13 +136,15 @@ pub const Tool = struct {
 
     fn resolveRegistration(ctx: *anyopaque) anyerror!?u32 {
         const self: *Tool = @ptrCast(@alignCast(ctx));
+        // Gone when the tool was unregistered first, which fires its own
+        // toolchange.
+        const registration = self.takeRegistration() orelse return null;
+        defer registration.release();
+
         const mc = self.ctx;
         mc.dispatchToolChange() catch |err| {
             log.debug(.js, "toolchange dispatch", .{ .err = err });
         };
-
-        const registration = self.takeRegistration() orelse return null;
-        defer registration.release();
 
         var ls: js.Local.Scope = undefined;
         mc._exec.js.localScope(&ls);
@@ -622,4 +624,5 @@ const testing = @import("../../testing.zig");
 test "WebApi: ModelContext" {
     try testing.htmlRunner("webmcp/model_context.html", .{});
     try testing.htmlRunner("webmcp/execute_tool.html", .{});
+    try testing.htmlRunner("webmcp/register_abort.html", .{});
 }
