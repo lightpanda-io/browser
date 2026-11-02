@@ -15,6 +15,9 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+  # TEMPORARY: lets this run on the PR to test the auth fix. Remove before merge.
+  pull_request:
+
 permissions:
   contents: write
 
@@ -61,6 +64,7 @@ jobs:
       - name: open a pull request
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_TOKEN: ${{ github.token }}
           BRANCH: v8-deps-regen
         run: |
           if git diff --quiet -- nix/v8-deps.nix; then
@@ -73,7 +77,7 @@ jobs:
           git commit -m "nix: regenerate v8-deps.nix"
           # One fixed branch, force-pushed: a re-run refreshes the open PR
           # instead of stacking a second one.
-          git push --force origin "HEAD:refs/heads/$BRANCH"
+          git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
           if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
             echo "refreshed the open pull request"
             exit 0
@@ -111,6 +115,7 @@ jobs:
       - name: open a pull request
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_TOKEN: ${{ github.token }}
           BRANCH: zig-deps-regen
         run: |
           if git diff --quiet -- nix/zig-deps.nix; then
@@ -123,7 +128,7 @@ jobs:
           git commit -m "nix: regenerate zig-deps.nix"
           # One fixed branch, force-pushed: a re-run refreshes the open PR
           # instead of stacking a second one.
-          git push --force origin "HEAD:refs/heads/$BRANCH"
+          git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
           if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
             echo "refreshed the open pull request"
             exit 0
