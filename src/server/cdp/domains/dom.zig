@@ -289,7 +289,11 @@ fn querySelector(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
-    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse return error.NodeNotFoundForGivenId;
+    // As in Chrome, no match is a nodeId of 0, not an error: clients
+    // (chromedp's ByQuery, for one) read 0 as "not found yet" and poll.
+    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse {
+        return cmd.sendResult(.{ .nodeId = 0 }, .{});
+    };
     const dom_node = element.asNode();
     const registered_node = try bc.node_registry.register(dom_node);
 
@@ -1313,7 +1317,7 @@ test "cdp.dom: querySelector Node not found" {
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 1, .selector = "a" },
     });
-    try ctx.expectSentError(-31998, "NodeNotFoundForGivenId", .{ .id = 4 });
+    try ctx.expectSentResult(.{ .nodeId = 0 }, .{ .id = 4 });
 
     try ctx.processMessage(.{
         .id = 5,
