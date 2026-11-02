@@ -52,13 +52,9 @@ pub fn init(session: *Session, _: Opts) Runner {
 pub const WaitCondition = struct {
     frame_id: u32,
     until: lp.Config.WaitUntil = .done,
-    /// In addition to `until`, complete the moment the page's popup count
-    /// grows past this. The late-popup watch (tools.zig) sets it so a window
-    /// the action opens late ends the wait as soon as it opens, instead of a
-    /// poll noticing it up to a slice later. A navigation keeps the root
-    /// frame id on its replacement page, whose popup list starts empty, so
-    /// the condition simply never fires there and `until` still bounds the
-    /// wait.
+    /// Also complete once the page's popup count exceeds this. A
+    /// navigation's replacement page starts with no popups, so there `until`
+    /// alone bounds the wait.
     popups_above: ?usize = null,
     status: Status = .pending,
 
@@ -287,9 +283,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             continue;
         };
 
-        // The popup half of the condition: a window opened ends the wait on
-        // the spot. With no window yet, `until` below still applies — a page
-        // that goes quiescent ends the watch even though nothing opened.
         if (condition.popups_above) |count| {
             if (page.popups.items.len > count) {
                 condition.status = .complete;

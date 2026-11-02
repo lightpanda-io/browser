@@ -970,9 +970,8 @@ test "MCP - click with a late navigation reports the page it landed on" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
     defer server.deinit();
 
-    // The navigation commits while the late-popup watch is still running.
-    // The watch must not read the freed page, and the result must describe
-    // where the click landed — not the page it left.
+    // The navigation commits during the late-popup watch; the result must
+    // describe the new page.
     const click =
         \\{
         \\  "jsonrpc": "2.0",
@@ -1051,9 +1050,8 @@ test "MCP - popups lists opened windows and follows one" {
     const second_id = entries[2].id;
     const root_id = entries[0].id;
 
-    // Follow the second window; getUrl confirms it is current.
     out.clearRetainingCapacity();
-    const follow = try std.fmt.allocPrint(testing.arena_allocator, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{second_id});
+    const follow = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{second_id});
     try router.handleMessage(server, testing.arena_allocator, follow);
     try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
 
@@ -1069,9 +1067,8 @@ test "MCP - popups lists opened windows and follows one" {
     try router.handleMessage(server, testing.arena_allocator, get_url);
     try testing.expect(std.mem.find(u8, out.written(), "mcp_actions.html?q=2") != null);
 
-    // Back to the main page by its id.
     out.clearRetainingCapacity();
-    const back = try std.fmt.allocPrint(testing.arena_allocator, "{{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{root_id});
+    const back = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{root_id});
     try router.handleMessage(server, testing.arena_allocator, back);
     out.clearRetainingCapacity();
     try router.handleMessage(server, testing.arena_allocator, get_url);
