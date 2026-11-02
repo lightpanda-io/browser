@@ -152,7 +152,7 @@ pub fn init(
 
     const id = if (details.id) |id| try arena.dupe(u8, id) else blk: {
         const uuid = try arena.alloc(u8, 36);
-        @import("../../../id.zig").uuidv4(uuid);
+        @import("../../../id.zig").uuidv4(@ptrCast(uuid));
         break :blk uuid;
     };
 
