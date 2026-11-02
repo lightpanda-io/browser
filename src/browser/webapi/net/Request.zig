@@ -159,6 +159,9 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .url => .default,
         .request => |r| r._cache,
     };
+    if (cache == .@"only-if-cached" and mode != .@"same-origin") {
+        return exec.js.typeError("only-if-cached requires same-origin mode");
+    }
     const credentials: Credentials = opts.credentials orelse switch (input) {
         .url => .@"same-origin",
         .request => |r| r._credentials,

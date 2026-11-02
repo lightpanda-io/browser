@@ -688,3 +688,18 @@
     testing.expectTrue(r.bodyUsed);
   });
 </script>
+
+<script id=only_if_cached_mode>
+  const url = 'https://example.com/api';
+  for (const mode of ['cors', 'no-cors']) {
+    testing.expectError('TypeError', () => new Request(url, { cache: 'only-if-cached', mode }));
+  }
+  testing.expectError('TypeError', () => new Request(url, { cache: 'only-if-cached' }));
+  const cached = new Request(url, { cache: 'only-if-cached', mode: 'same-origin' });
+  testing.expectEqual('only-if-cached', cached.cache);
+  testing.expectEqual('only-if-cached', new Request(cached).cache);
+  testing.expectError('TypeError', () => new Request(cached, { mode: 'cors' }));
+  const cors = new Request(url);
+  testing.expectError('TypeError', () => new Request(cors, { cache: 'only-if-cached' }));
+  testing.expectEqual('reload', new Request(cached, { mode: 'cors', cache: 'reload' }).cache);
+</script>
