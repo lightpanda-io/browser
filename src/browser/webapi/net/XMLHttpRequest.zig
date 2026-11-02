@@ -25,6 +25,7 @@ const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
+const html5ever = @import("../../parser/html5ever.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
@@ -521,12 +522,31 @@ fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execut
     }
 }
 
-fn getResponseText(self: *const XMLHttpRequest) []const u8 {
-    // TODO: per WHATWG XHR "get a text response", the bytes must be decoded
-    // using the final encoding derived from the final MIME type
-    // (_override_mime ?? _response_mime). Currently the raw bytes are
-    // returned and V8 treats them as UTF-8.
-    return self._response_data.items;
+fn getResponseText(self: *const XMLHttpRequest, exec: *const Execution) ![]const u8 {
+    return self.textResponse(exec);
+}
+
+// The received bytes decoded with the final charset, UTF-8 when there is
+// none. As decode does, a BOM picks the encoding and is dropped.
+// https://xhr.spec.whatwg.org/#text-response
+fn textResponse(self: *const XMLHttpRequest, exec: *const Execution) ![]const u8 {
+    const encoding = self.finalCharset() orelse html5ever.EncodingInfo.utf8();
+    return html5ever.validUtf8(exec.local_arena, encoding, self._response_data.items);
+}
+
+// The charset parameter of the override MIME type, else of the response's.
+// https://xhr.spec.whatwg.org/#final-charset
+fn finalCharset(self: *const XMLHttpRequest) ?html5ever.EncodingInfo {
+    var label: ?[]const u8 = null;
+    if (self._response_mime) |*mime| {
+        label = mime.explicitCharset();
+    }
+    if (self._override_mime) |*mime| {
+        if (mime.explicitCharset()) |charset| {
+            label = charset;
+        }
+    }
+    return html5ever.EncodingInfo.forLabel(label);
 }
 
 pub fn getStatus(self: *const XMLHttpRequest) u16 {
@@ -550,7 +570,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     // current bytes directly instead of caching a value that would go
     // stale as more data arrives.
     if (self._response_type == .default or self._response_type == .text) {
-        return .{ .text = self._response_data.items };
+        return .{ .text = try self.textResponse(exec) };
     }
 
     if (self._ready_state != .done) {

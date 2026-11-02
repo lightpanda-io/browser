@@ -870,3 +870,42 @@ handler runs, abort() cancels the re-send and no load is delivered.
     testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
   }
 </script>
+
+<script id=xhr_response_text_charset type=module>
+  // responseText is decoded with the final charset: the override MIME
+  // type's charset, else the response's, else UTF-8. A BOM wins.
+  const load = (bytes, type, override) => new Promise((resolve) => {
+    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type }));
+    const req = new XMLHttpRequest();
+    req.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(req.responseText + '|' + req.response);
+    };
+    req.open('GET', url);
+    if (override) req.overrideMimeType(override);
+    req.send();
+  });
+
+  const cafe1252 = [0x63, 0x61, 0x66, 0xE9];
+  const cafeUtf8 = [0x63, 0x61, 0x66, 0xC3, 0xA9];
+
+  const state = await testing.async();
+  Promise.all([
+    load(cafe1252, 'text/plain;charset=windows-1252'),
+    load(cafe1252, 'text/plain', 'text/plain; charset=iso-8859-1'),
+    // An override without a charset keeps the response's.
+    load(cafe1252, 'text/plain;charset=windows-1252', 'text/plain'),
+    load(cafe1252, 'text/plain'),
+    load(cafeUtf8, 'text/plain'),
+    load([0xEF, 0xBB, 0xBF, ...cafeUtf8], 'text/plain;charset=windows-1252'),
+  ]).then(state.resolve);
+
+  await state.done((texts) => {
+    testing.expectEqual('caf\u00e9|caf\u00e9', texts[0]);
+    testing.expectEqual('caf\u00e9|caf\u00e9', texts[1]);
+    testing.expectEqual('caf\u00e9|caf\u00e9', texts[2]);
+    testing.expectEqual('caf\uFFFD|caf\uFFFD', texts[3]);
+    testing.expectEqual('caf\u00e9|caf\u00e9', texts[4]);
+    testing.expectEqual('caf\u00e9|caf\u00e9', texts[5]);
+  });
+</script>
