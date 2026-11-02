@@ -322,11 +322,6 @@ pub fn toBool(self: Value) bool {
     return v8.v8__Value__BooleanValue(self.handle, self.local.isolate.handle);
 }
 
-pub fn typeOf(self: Value) js.String {
-    const str_handle = v8.v8__Value__TypeOf(self.handle, self.local.isolate.handle).?;
-    return js.String{ .local = self.local, .handle = str_handle };
-}
-
 pub fn toF16(self: Value) !f16 {
     return @floatCast(try self.toF64());
 }

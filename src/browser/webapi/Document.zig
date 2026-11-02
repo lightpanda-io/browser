@@ -1650,7 +1650,7 @@ fn queryCommandValue(_: *const Document, _: []const u8) []const u8 {
     return "";
 }
 
-pub fn hasFocus(self: *Document) bool {
+fn hasFocus(self: *Document) bool {
     var top = self._frame orelse return false;
     while (top.parent) |parent| {
         top = parent;

@@ -59,7 +59,7 @@ _vary: union(enum) {
 
 /// Captures the algorithm parameters reported back via the `.algorithm`
 /// accessor. `hash` is only set for HMAC (and other hashed algorithms).
-pub const Algorithm = struct {
+const Algorithm = struct {
     name: []const u8,
     hash: ?[]const u8 = null,
     named_curve: ?[]const u8 = null,
@@ -75,9 +75,6 @@ pub const Pair = struct {
     privateKey: *CryptoKey,
     publicKey: *CryptoKey,
 };
-
-/// Key-creating functions expect this format.
-pub const KeyOrPair = union(enum) { key: *CryptoKey, pair: Pair };
 
 pub const Type = enum(u8) { hmac, rsa, x25519, aes, derive, ec, ed25519 };
 
@@ -269,7 +266,7 @@ pub fn getType(self: *const CryptoKey) Kind {
     return self._kind;
 }
 
-pub fn getExtractable(self: *const CryptoKey) bool {
+fn getExtractable(self: *const CryptoKey) bool {
     return self._extractable;
 }
 
@@ -290,7 +287,7 @@ const AlgorithmReport = union(enum) {
     named: struct { name: []const u8 },
 };
 
-pub fn getAlgorithm(self: *const CryptoKey) AlgorithmReport {
+fn getAlgorithm(self: *const CryptoKey) AlgorithmReport {
     return switch (self._type) {
         // AES keys are 16, 24 or 32 bytes.
         .aes => .{ .keyed = .{ .name = self._algorithm.name, .length = @intCast(self._key.len * 8) } },

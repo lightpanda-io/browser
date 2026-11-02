@@ -719,7 +719,7 @@ pub const Listener = struct {
 
     // Reports a listener exception to the relevant global (firing
     // window.onerror / an "error" event) without stopping the dispatch.
-    pub fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
+    fn reportException(try_catch: *js.TryCatch, local: *const js.Local) void {
         const exc = try_catch.exceptionValue() orelse return;
         reportExceptionValue(local, exc);
     }

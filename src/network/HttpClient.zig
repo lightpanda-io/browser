@@ -2844,7 +2844,7 @@ pub const Transfer = struct {
         cors,
     };
 
-    pub const ResponsePause = union(enum) {
+    const ResponsePause = union(enum) {
         // A final response, delivered to the consumer on continue.
         final,
         // A response served from the HTTP cache (a hit, or the stored copy a
@@ -2856,7 +2856,7 @@ pub const Transfer = struct {
         // have been without the pause.
         failed: Failure,
 
-        pub const Failure = struct {
+        const Failure = struct {
             err: anyerror,
             // The consumer asked for the header before a body error
             // (Request.header_before_body_error) and the header arrived:
@@ -4545,7 +4545,7 @@ pub const Transfer = struct {
 
     // First value of a response header. `name` must be lowercase. Same
     // materialization caveat as responseHeaders.
-    pub fn responseHeader(self: *const Transfer, name: []const u8) ?[]const u8 {
+    fn responseHeader(self: *const Transfer, name: []const u8) ?[]const u8 {
         return findHeader(self.res.headers, name);
     }
 

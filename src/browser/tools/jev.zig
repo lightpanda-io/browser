@@ -141,7 +141,7 @@ pub fn presetQuestions(
 /// is sized against it.
 const max_state_bytes = 8192;
 
-pub const StateOpts = struct {
+const StateOpts = struct {
     /// Where each link goes. Worth the room it takes within
     /// `max_state_bytes` only for a question that can turn on it.
     link_urls: bool = true,
@@ -154,7 +154,7 @@ pub const StateOpts = struct {
 /// `node` as text. The tree keeps what markdown drops and the questions turn
 /// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
 /// without node ids, is about as long.
-pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !Content {
+fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !Content {
     const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = opts.ids, .link_urls = opts.link_urls }) catch return error.InternalError;
     var aw: std.Io.Writer.Allocating = .init(arena);
     tree.textStringify(&aw.writer) catch return error.InternalError;
@@ -171,7 +171,7 @@ pub fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, regist
     return .{ .json = .{ .object = state } };
 }
 
-pub const AskedResponse = zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse);
+const AskedResponse = zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse);
 
 /// One Jev request about the current page: `.failed` carries what to tell the
 /// caller, so a key that is not set or an API that is down reads the same

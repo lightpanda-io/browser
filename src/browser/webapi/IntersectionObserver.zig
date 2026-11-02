@@ -194,27 +194,27 @@ fn serializeMargin(allocator: std.mem.Allocator, margins: [4]Margin) ![]const u8
     return out.written();
 }
 
-pub fn getRoot(self: *const IntersectionObserver) ?*Node {
+fn getRoot(self: *const IntersectionObserver) ?*Node {
     return self._root_node;
 }
 
-pub fn getRootMargin(self: *const IntersectionObserver) []const u8 {
+fn getRootMargin(self: *const IntersectionObserver) []const u8 {
     return self._root_margin;
 }
 
-pub fn getScrollMargin(self: *const IntersectionObserver) []const u8 {
+fn getScrollMargin(self: *const IntersectionObserver) []const u8 {
     return self._scroll_margin;
 }
 
-pub fn getThresholds(self: *const IntersectionObserver) []const f64 {
+fn getThresholds(self: *const IntersectionObserver) []const f64 {
     return self._threshold;
 }
 
-pub fn getDelay(self: *const IntersectionObserver) i32 {
+fn getDelay(self: *const IntersectionObserver) i32 {
     return self._delay;
 }
 
-pub fn getTrackVisibility(self: *const IntersectionObserver) bool {
+fn getTrackVisibility(self: *const IntersectionObserver) bool {
     return self._track_visibility;
 }
 

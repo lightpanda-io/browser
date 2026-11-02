@@ -534,7 +534,7 @@ var test_ws_server: ?TestWSServer = null;
 var test_ws_server_thread: ?std.Thread = null;
 
 /// The real port behind 9582, for clients that bypass libcurl's remap.
-pub fn testHttpPort() u16 {
+fn testHttpPort() u16 {
     return test_http_server.?.listener.?.socket.address.getPort();
 }
 

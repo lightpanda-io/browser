@@ -215,7 +215,7 @@ pub const Completion = struct {
         flags: []const Flag,
     };
 
-    pub const Positional = struct {
+    const Positional = struct {
         name: []const u8,
         values: Values,
         multiple: bool,

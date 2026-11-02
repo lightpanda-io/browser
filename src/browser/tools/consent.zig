@@ -82,7 +82,7 @@ pub fn questions(
 }
 
 /// Just the banner question, for the re-read that verifies a click.
-pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
+fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
     return jev.presetQuestions(arena, &.{.isConsentWall});
 }
 

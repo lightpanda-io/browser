@@ -54,7 +54,7 @@ _flags: ValidityFlags = .{},
 _validation_message: []const u8 = "",
 _validity: ?*ValidityState = null,
 
-pub const Submission = union(enum) {
+const Submission = union(enum) {
     none,
     string: []const u8,
     file: *File,

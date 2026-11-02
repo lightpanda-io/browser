@@ -32,7 +32,7 @@ const json = zenai.typesafe.json;
 /// `presets` adds every preset the questions do not already ask, so a caller
 /// deciding whether a page is worth reading skips a second round trip for its
 /// own questions.
-pub fn prepareQuestions(
+fn prepareQuestions(
     arena: std.mem.Allocator,
     questions: std.json.Value,
     presets: bool,

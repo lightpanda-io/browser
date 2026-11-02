@@ -173,7 +173,7 @@ fn pickOf(candidates: []const choose.Candidate, response: zenai.typesafe.types.A
 
 /// The page after the submit: did the sign-in wall go, and did an error take
 /// its place.
-pub fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
+fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
     return jev.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
 }
 
@@ -213,7 +213,7 @@ pub fn untrustedTarget(arena: std.mem.Allocator, frame: *Frame, field: *Element,
 /// it submits something else — a search box, a newsletter sign-up — however
 /// it is labelled. Both outside any form is the single-field page that posts
 /// with JavaScript, which is allowed.
-pub fn sameForm(field: *Element, control: *Element) bool {
+fn sameForm(field: *Element, control: *Element) bool {
     return Form.ownerOf(field) == Form.ownerOf(control);
 }
 

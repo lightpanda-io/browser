@@ -1312,7 +1312,7 @@ pub const BrowserContext = struct {
         return true;
     }
 
-    pub fn detachAllSessions(self: *BrowserContext) void {
+    fn detachAllSessions(self: *BrowserContext) void {
         for (self.attached_sessions.values()) |attached| {
             self.destroySession(attached);
         }

@@ -53,7 +53,7 @@ _table: *Wavetable,
 _custom: ?*PeriodicWave = null,
 _virtual_read_index: f64 = 0,
 
-pub const OscillatorType = enum {
+const OscillatorType = enum {
     sine,
     square,
     sawtooth,

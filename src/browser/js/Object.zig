@@ -140,14 +140,6 @@ pub fn getOwnPropertyNames(self: Object) !js.Array {
     };
 }
 
-pub fn getPropertyNames(self: Object) js.Array {
-    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle).?;
-    return .{
-        .local = self.local,
-        .handle = handle,
-    };
-}
-
 pub fn iterator(self: Object) !Iterator {
     const names = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle) orelse {
         // see getOwnPropertyNames above

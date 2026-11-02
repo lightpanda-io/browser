@@ -2144,7 +2144,7 @@ const SpaceCollapse = enum(u3) {
 };
 
 /// text-wrap-mode
-pub const WrapMode = enum(u2) {
+const WrapMode = enum(u2) {
     inherit,
     wrap,
     nowrap,

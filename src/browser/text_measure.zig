@@ -64,7 +64,7 @@ pub fn substringWidth(text: []const u8, charnum: u32, nchars: u32, font_size: f6
 }
 
 /// Line height for `line-height: normal`, in em.
-pub const LINE_HEIGHT = 1.2;
+const LINE_HEIGHT = 1.2;
 
 /// Glyph extents above and below the baseline, in em, as in a generic
 /// sans-serif face.

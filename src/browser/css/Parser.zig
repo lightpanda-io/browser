@@ -36,7 +36,7 @@ pub const AxisShorthand = struct {
 // The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
 // CSSOM object and the cascade store these expanded: setting one sets both
 // longhands, reading or serializing it recombines them.
-pub const axis_shorthands = [_]AxisShorthand{
+const axis_shorthands = [_]AxisShorthand{
     .{ .name = "overflow", .x = "overflow-x", .y = "overflow-y" },
     .{ .name = "overscroll-behavior", .x = "overscroll-behavior-x", .y = "overscroll-behavior-y" },
 };
@@ -570,7 +570,7 @@ fn consumeNestedRule(stream: *TokenStream, input: []const u8) ?StyleRule {
 /// whole parent, so `& &` nested N deep doubles the text N times: a hostile
 /// stylesheet would reach gigabytes well within MAX_AT_RULE_NESTING. A rule
 /// whose selector would outgrow this is dropped instead.
-pub const MAX_NESTED_SELECTOR_LEN: usize = 64 * 1024;
+const MAX_NESTED_SELECTOR_LEN: usize = 64 * 1024;
 
 /// Resolve the selector list of a style rule nested in `parent` (CSS Nesting
 /// §3): each `&` becomes `:is(<parent>)`, and a relative selector (one that
