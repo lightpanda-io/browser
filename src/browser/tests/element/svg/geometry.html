@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <svg id=root width="200" height="100">
@@ -215,7 +216,9 @@
 {
   const circle = document.querySelector('#transformed > g > circle');
   const m = circle.getCTM();
-  testing.expectEqual(true, m instanceof DOMMatrix);
+  testing.diverges('SVG 2 makes SVGMatrix an alias of DOMMatrix; Chrome keeps the legacy interface', () => {
+    testing.expectEqual(true, m instanceof DOMMatrix);
+  });
   testing.expectEqual(2, m.a);
   testing.expectEqual(0, m.b);
   testing.expectEqual(0, m.c);
@@ -233,6 +236,8 @@
   testing.expectEqual(rect.x + 10, s.e);
   testing.expectEqual(rect.y + 20, s.f);
 
-  testing.expectEqual(null, document.createElementNS('http://www.w3.org/2000/svg', 'rect').getCTM());
+  testing.diverges('Chrome answers a disconnected element with a matrix', () => {
+    testing.expectEqual(null, document.createElementNS('http://www.w3.org/2000/svg', 'rect').getCTM());
+  });
 }
 </script>

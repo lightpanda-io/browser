@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <meta charset=utf-8>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <svg>
@@ -52,27 +53,31 @@
   // Characters are UTF-16 code units, like DOM strings: the emoji counts as
   // two, and addressing either of its halves measures the full glyph.
   testing.expectEqual(7, text.getNumberOfChars());
-  testing.expectEqual(80, text.getComputedTextLength());
-  testing.expectEqual(60, text.getSubStringLength(0, 5));
-  testing.expectEqual(20, text.getSubStringLength(5, 1));
-  testing.expectEqual(20, text.getSubStringLength(6, 1));
-  testing.expectEqual(32, text.getSubStringLength(4, 99));
+  testing.diverges("Chrome has correct, font-aware, lengths", () => {
+    testing.expectEqual(80, text.getComputedTextLength());
+    testing.expectEqual(60, text.getSubStringLength(0, 5));
+    testing.expectEqual(20, text.getSubStringLength(5, 1));
+    testing.expectEqual(20, text.getSubStringLength(6, 1));
+    testing.expectEqual(32, text.getSubStringLength(4, 99));
+    testing.expectEqual(20, $('#tspan').getComputedTextLength());
+    testing.expectEqual(9.6, $('#invalidFont').getComputedTextLength());
+    // Chrome answers an absent textLength with the computed (shaped) text
+    // length; without shaping we default to 0.
+    testing.expectEqual(0, text.textLength.baseVal.value);
+  });
   testing.expectError('IndexSizeError', () => text.getSubStringLength(7, 1));
   testing.expectError('IndexSizeError', () => text.getSubStringLength(7, 0));
   testing.expectEqual(2, $('#tspan').getNumberOfChars());
-  testing.expectEqual(20, $('#tspan').getComputedTextLength());
-  testing.expectEqual(9.6, $('#invalidFont').getComputedTextLength());
 
-  // Chrome answers an absent textLength with the computed (shaped) text
-  // length; without shaping we default to 0.
-  testing.expectEqual(0, text.textLength.baseVal.value);
 
   // The box spans the advance, 0.8em above the baseline to 0.2em below.
   const box = text.getBBox();
   testing.expectEqual(0, box.x);
-  testing.expectEqual(-16, box.y);
-  testing.expectEqual(80, box.width);
-  testing.expectEqual(20, box.height);
+  testing.diverges("Chrome has real dimensions", () => {
+    testing.expectEqual(-16, box.y);
+    testing.expectEqual(80, box.width);
+    testing.expectEqual(20, box.height);
+  });
 }
 </script>
 

@@ -373,6 +373,16 @@ fn checkedUnit(value: u16) !Unit {
     };
 }
 
+// value and valueInSpecifiedUnits are WebIDL `float`. Storage stays f64 so
+// valueAsString serializes what was parsed, not its f32 rounding.
+fn jsGetValue(self: *Length, frame: *Frame) f32 {
+    return @floatCast(self.getValue(frame));
+}
+
+fn jsGetValueInSpecifiedUnits(self: *Length) f32 {
+    return @floatCast(self.getValueInSpecifiedUnits());
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Length);
 
@@ -394,8 +404,8 @@ pub const JsApi = struct {
     pub const SVG_LENGTHTYPE_PC = bridge.property(10, .{ .template = true });
 
     pub const unitType = bridge.accessor(Length.getUnitType, null, .{});
-    pub const value = bridge.accessor(Length.getValue, Length.setValue, .{});
-    pub const valueInSpecifiedUnits = bridge.accessor(Length.getValueInSpecifiedUnits, Length.setValueInSpecifiedUnits, .{});
+    pub const value = bridge.accessor(Length.jsGetValue, Length.setValue, .{});
+    pub const valueInSpecifiedUnits = bridge.accessor(Length.jsGetValueInSpecifiedUnits, Length.setValueInSpecifiedUnits, .{});
     pub const valueAsString = bridge.accessor(Length.getValueAsString, Length.setValueAsString, .{});
     pub const newValueSpecifiedUnits = bridge.function(Length.newValueSpecifiedUnits, .{});
     pub const convertToSpecifiedUnits = bridge.function(Length.convertToSpecifiedUnits, .{});

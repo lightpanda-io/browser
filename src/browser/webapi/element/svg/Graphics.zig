@@ -145,8 +145,10 @@ fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
         },
         .foreign_object => bounds = try self.subtype(ForeignObject).getBounds(frame),
         .text_content => bounds = self.subtype(TextContent).getBounds(frame),
-        .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
-        .defs, .symbol, .switch_element, .use, .image => {},
+        // A <symbol> isn't rendered, but its box is still its children's
+        // geometry, as in Chrome.
+        .g, .a, .svg, .symbol => try accumulateChildren(self, .{}, &bounds, frame),
+        .defs, .switch_element, .use, .image => {},
     }
     if (bounds.isEmpty()) {
         return DOMRect.create(.{}, frame._factory);
