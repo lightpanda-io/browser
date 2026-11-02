@@ -2018,6 +2018,157 @@ pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool 
     return true;
 }
 
+/// Replaces the selection in `host_el` with a line break and fires input.
+pub fn insertLineBreakAtSelection(frame: *Frame, host_el: *Element) !bool {
+    const host = host_el.asNode();
+    const selection = &frame.document._selection;
+    // Live, so it follows the edits below.
+    const live = selection._range orelse return false;
+    const range = live.asAbstractRange();
+    if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
+        return false;
+    }
+    const style_manager = &frame._style_manager;
+
+    if (!range.getCollapsed()) {
+        const common = range.getCommonAncestorContainer();
+        const start = range.getStartContainer();
+        const end = range.getEndContainer();
+        if (!onlyInlinesBetween(style_manager, common, start) or !onlyInlinesBetween(style_manager, common, end)) {
+            return false;
+        }
+        const root = blockRoot(style_manager, host, common);
+        try live.deleteContents(frame);
+        for ([_]*Node{ end, start }) |node| {
+            const cdata = node.is(Node.CData.Text) orelse continue;
+            if (cdata.asCData().getLength() == 0 and root.contains(node) and node != root) {
+                try removeEmpty(frame, root, node);
+            }
+        }
+    }
+
+    // Where the break goes, as a child index: a text node is split.
+    var parent: *Node = range.getStartContainer();
+    var index: u32 = range.getStartOffset();
+    if (parent.is(Node.CData)) |cdata| {
+        const node = parent;
+        parent = node.parentNode() orelse return false;
+        index = parent.getChildIndex(node).?;
+        if (node.is(Node.CData.Text)) |t| {
+            const offset = range.getStartOffset();
+            if (offset >= cdata.getLength()) {
+                index += 1;
+            } else if (offset > 0) {
+                _ = try t.splitText(offset, frame);
+                index += 1;
+            }
+        } else {
+            // a comment or processing instruction: after it
+            index += 1;
+        }
+    }
+
+    const use_br = blk: {
+        const el = parent.is(Element) orelse break :blk true;
+        var current: ?*Element = el;
+        while (current) |e| : (current = e.asNode().parentElement()) {
+            if (e.is(Element.Html.Pre) != null) {
+                break :blk true;
+            }
+        }
+        break :blk !style_manager.whiteSpace(el).newlines;
+    };
+
+    const root = blockRoot(style_manager, host, parent);
+    const paragraph_end = atParagraphEnd(style_manager, root, parent, index);
+
+    const doc = frame.document;
+    const line_break = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
+    _ = try parent.insertBefore(line_break, parent.getChildAt(index), frame);
+
+    if (paragraph_end) {
+        // the caret goes on the new line, before the second break
+        const extra = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
+        _ = try parent.insertBefore(extra, line_break.nextSibling(), frame);
+        try selection.collapse(parent, index + 1, frame);
+    } else {
+        const container, const offset = caretAfter(style_manager, root, parent, index + 1);
+        try selection.collapse(container, offset, frame);
+    }
+
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+        .data = null,
+        .inputType = "insertLineBreak",
+    }, frame);
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+    return true;
+}
+
+// Whether nothing follows child `index` of `parent` on its line in `root`:
+// no text, no <br>, no image or other inline content before a block or the
+// end of `root`.
+fn atParagraphEnd(style_manager: *StyleManager, root: *Node, start: *Node, index: u32) bool {
+    var parent = start;
+    var next = start.getChildAt(index);
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return true;
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return true;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text) != null and std.mem.trim(u8, cdata.getData().str(), " \t\n\r\x0c").len > 0) {
+                return false;
+            }
+            // comments, whitespace that collapses away
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return false;
+        if (isTextInline(style_manager, el)) {
+            parent = node;
+            next = node.firstChild();
+            continue;
+        }
+        return style_manager.isBlockLevel(el);
+    }
+}
+
+// Where Chrome leaves the caret after an inserted break: at the start of the
+// text that follows on the line, else right after the break.
+fn caretAfter(style_manager: *StyleManager, root: *Node, start: *Node, index: u32) struct { *Node, u32 } {
+    var parent = start;
+    var next = start.getChildAt(index);
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return .{ start, index };
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return .{ start, index };
+            continue;
+        };
+        if (node.is(Node.CData.Text)) |t| {
+            if (t.asCData().getLength() > 0) {
+                return .{ node, 0 };
+            }
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return .{ start, index };
+        if (!isTextInline(style_manager, el)) {
+            return .{ start, index };
+        }
+        parent = node;
+        next = node.firstChild();
+    }
+}
+
 // The innermost box holding `node` that text can't run out of: its nearest
 // ancestor that isn't a plain inline, or the host.
 fn blockRoot(style_manager: *StyleManager, host: *Node, node: *Node) *Node {
