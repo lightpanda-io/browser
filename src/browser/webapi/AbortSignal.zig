@@ -190,6 +190,14 @@ fn createAborted(reason_: ?js.Value, exec: *const Execution) !*AbortSignal {
     return signal;
 }
 
+// Request construction and cloning need their own signal identity while
+// following the input signal. Use any()'s flattened source graph so following
+// a signal that is itself dependent still receives aborts before events run.
+pub fn createDependent(source: ?*AbortSignal, exec: *const Execution) !*AbortSignal {
+    const signal = source orelse return createAny(&.{}, exec);
+    return createAny(&.{signal}, exec);
+}
+
 fn createAny(signals: []const *AbortSignal, exec: *const Execution) !*AbortSignal {
     const result = try init(exec);
     for (signals) |source| {

@@ -688,3 +688,64 @@
     testing.expectTrue(r.bodyUsed);
   });
 </script>
+
+<script id=dependent_signal>
+  for (const signal of [false, {}, 42]) {
+    testing.expectError('TypeError', () => new Request('https://example.com', { signal }));
+  }
+  {
+    const request = new Request('https://example.com');
+    testing.expectTrue(request.signal instanceof AbortSignal);
+    testing.expectEqual(request.signal, request.signal);
+    testing.expectFalse(request.signal.aborted);
+    testing.expectEqual(undefined, request.signal.reason);
+    const clone = request.clone();
+    testing.expectTrue(clone.signal instanceof AbortSignal);
+    testing.expectFalse(clone.signal === request.signal);
+  }
+  {
+    const controller = new AbortController();
+    const source = AbortSignal.any([controller.signal]);
+    const request = new Request('https://example.com', { signal: source });
+    const copied = new Request(request);
+    const cloned = request.clone();
+    const cleared = new Request(request, { signal: null });
+    const inherited = new Request(request, { signal: undefined });
+    const downstream = AbortSignal.any([cloned.signal]);
+    const signals = [request.signal, copied.signal, cloned.signal, downstream, inherited.signal];
+    testing.expectFalse(request.signal === source);
+    testing.expectFalse(copied.signal === request.signal);
+    testing.expectFalse(cloned.signal === request.signal);
+    testing.expectEqual(5, new Set(signals).size);
+
+    let events = 0;
+    for (const signal of signals) {
+      signal.addEventListener('abort', () => {
+        events++;
+        // Every dependent is marked before the first abort event is fired.
+        for (const other of signals) testing.expectTrue(other.aborted);
+      });
+    }
+    const reason = { message: 'cancel request' };
+    controller.abort(reason);
+    for (const signal of signals) {
+      testing.expectTrue(signal.aborted);
+      testing.expectEqual(reason, signal.reason);
+    }
+    testing.expectEqual(5, events);
+    testing.expectFalse(cleared.signal.aborted);
+    testing.expectTrue(cleared.signal instanceof AbortSignal);
+  }
+  {
+    const controller = new AbortController();
+    controller.abort();
+    const request = new Request('https://example.com', { signal: controller.signal });
+    const clone = request.clone();
+    testing.expectFalse(request.signal === controller.signal);
+    testing.expectFalse(clone.signal === request.signal);
+    testing.expectTrue(request.signal.aborted);
+    testing.expectTrue(clone.signal.aborted);
+    testing.expectEqual(controller.signal.reason, request.signal.reason);
+    testing.expectEqual(controller.signal.reason, clone.signal.reason);
+  }
+</script>

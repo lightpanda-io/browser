@@ -73,7 +73,9 @@ pub const InitOpts = struct {
     redirect: ?Redirect = null,
     referrer: ?[]const u8 = null,
     referrerPolicy: ?[]const u8 = null,
-    signal: ?*AbortSignal = null,
+    // Preserve explicit null: it clears an input Request's signal, whereas
+    // an absent (or undefined) member inherits it.
+    signal: ?js.Value = null,
 };
 
 const ReferrerValue = union(enum) {
@@ -208,12 +210,14 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         return exec.js.typeError("Request with GET/HEAD method cannot have body");
     }
 
-    const signal = if (opts.signal) |s|
-        s
+    const source_signal: ?*AbortSignal = if (opts.signal) |s|
+        if (s.isNull()) null else try s.toZig(*AbortSignal)
     else switch (input) {
         .url => null,
         .request => |r| r._signal,
     };
+
+    const signal = try AbortSignal.createDependent(source_signal, exec);
 
     const referrer_value: ReferrerValue = if (opts.referrer) |r| blk: {
         if (r.len == 0) break :blk .none;
@@ -506,7 +510,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
         ._redirect = self._redirect,
         ._mode = self._mode,
         ._body = if (body) |b| try arena.dupe(u8, b) else null,
-        ._signal = self._signal,
+        ._signal = try AbortSignal.createDependent(self._signal, exec),
         ._referrer = switch (self._referrer) {
             .url => |u| .{ .url = try arena.dupeSentinel(u8, u, 0) },
             else => self._referrer,
