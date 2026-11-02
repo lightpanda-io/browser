@@ -328,6 +328,7 @@ pub const ToolError = error{
     FrameNotLoaded,
     InvalidParams,
     NodeNotFound,
+    StaleNode,
     NavigationFailed,
     NavigationTimeout,
     Cancelled,
@@ -341,6 +342,7 @@ pub const ToolError = error{
 pub fn errorMessage(err: ToolError) []const u8 {
     return switch (err) {
         error.NodeNotFound => "NodeNotFound: the selector or backendNodeId matched nothing on the current page. Re-inspect the page (tree/interactiveElements) for fresh node ids, or omit backendNodeId to target the document root.",
+        error.StaleNode => "StaleNode: this backendNodeId points to an element no longer in the document — the page re-rendered since it was listed. Re-inspect with tree/interactiveElements for a fresh id, or act by CSS selector: selectors survive re-renders, ids don't.",
         error.FrameNotLoaded => "FrameNotLoaded: no page is loaded — call goto (or pass a url) first.",
         error.NavigationTimeout => "NavigationTimeout: no response arrived before the timeout, so the page is empty. Other sessions may be holding every connection (see --http-max-concurrent); retry goto or close idle sessions.",
         else => @errorName(err),
@@ -486,6 +488,7 @@ pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
         error.FrameNotLoaded => .frame_not_loaded,
         error.InvalidParams => .invalid_params,
         error.NodeNotFound => .node_not_found,
+        error.StaleNode => .stale_node,
         error.NavigationFailed => .navigation_failed,
         error.NavigationTimeout => .navigation_timeout,
         error.Cancelled => .cancelled,
@@ -1034,6 +1037,7 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const node = registry.lookup_by_id.get(args.backendNodeId) orelse
         return ToolError.NodeNotFound;
+    if (!node.dom.isConnected()) return ToolError.StaleNode;
     const st = lp.SemanticTree.init(arena, node.dom, registry, page, .{}) catch return ToolError.NodeNotFound;
     const details = st.nodeDetails() catch return ToolError.InternalError;
     return renderJson(arena, &details, .{});
@@ -1501,10 +1505,11 @@ fn resolveTarget(
 }
 
 /// Look up an optional DOM node by backendNodeId. Returns null when no id was
-/// supplied, errors when the id doesn't resolve.
+/// supplied, errors when the id doesn't resolve or its node left the document.
 fn resolveOptionalNode(registry: *NodeRegistry, backend_node_id: ?NodeRegistry.Id) ToolError!?*DOMNode {
     const id = backend_node_id orelse return null;
     const node = registry.lookup_by_id.get(id) orelse return ToolError.NodeNotFound;
+    if (!node.dom.isConnected()) return ToolError.StaleNode;
     return node.dom;
 }
 
@@ -2207,6 +2212,9 @@ fn performGoto(session: *lp.Session, registry: *NodeRegistry, url: [:0]const u8,
 fn resolveNodeAndPage(session: *lp.Session, registry: *NodeRegistry, node_id: NodeRegistry.Id) ToolError!NodeAndPage {
     const page = try requireFrame(session);
     const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
+    // A same-document re-render leaves the id registered while its node is
+    // detached: acting on it would silently miss the live page.
+    if (!node.dom.isConnected()) return ToolError.StaleNode;
     return .{ .node = node.dom, .page = page, .target = .{ .backend_node_id = node_id } };
 }
 

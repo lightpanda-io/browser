@@ -220,7 +220,7 @@ fn dispatchBrowserTool(
         }
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
-            error.NodeNotFound, error.InvalidParams => .InvalidParams,
+            error.NodeNotFound, error.StaleNode, error.InvalidParams => .InvalidParams,
             error.Cancelled => .Cancelled,
             error.Timeout, error.NavigationTimeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
@@ -1630,6 +1630,86 @@ test "MCP - stale backendNodeId surfaces recovery guidance" {
     const written = out.written();
     try testing.expect(std.mem.find(u8, written, "NodeNotFound") != null);
     try testing.expect(std.mem.find(u8, written, "omit backendNodeId") != null);
+}
+
+test "MCP - actions reject a stale backendNodeId pointing at a detached node" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
+
+    const frame = server.active_session.session.currentFrame().?;
+    const inp = frame.document.getElementById("inp").?.asNode();
+    const inp_id = (try server.active_session.registry.register(inp)).id;
+    var id_buf: [12]u8 = undefined;
+    const inp_id_str = std.mem.print(&id_buf, "{d}", .{inp_id}) catch unreachable;
+
+    // Sanity: the fresh id fills the live input.
+    const fill_by_id = try std.mem.concat(aa, u8, &.{
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"first\"}}}",
+    });
+    try router.handleMessage(server, aa, fill_by_id);
+    try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
+    out.clearRetainingCapacity();
+
+    // Simulate a re-render: replace the input with a fresh clone — same
+    // markup and selector, new node. The old id stays registered but now
+    // points at the detached element.
+    const rerender =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"const i = document.getElementById('inp'); i.replaceWith(i.cloneNode(false));"}}}
+    ;
+    try router.handleMessage(server, aa, rerender);
+    out.clearRetainingCapacity();
+
+    // The stale id must be rejected instead of silently filling the
+    // detached node; action failures surface as a JSON-RPC error.
+    try router.handleMessage(server, aa, fill_by_id);
+    const stale = out.written();
+    try testing.expect(std.mem.find(u8, stale, "StaleNode") != null);
+    try testing.expect(std.mem.find(u8, stale, "\"error\"") != null);
+    out.clearRetainingCapacity();
+
+    // The CSS selector re-resolves the fresh node and fills it.
+    const sel_fill =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fill","arguments":{"selector":"#inp","value":"second"}}}
+    ;
+    try router.handleMessage(server, aa, sel_fill);
+    try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
+}
+
+test "MCP - tree and nodeDetails reject a stale backendNodeId" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
+
+    const frame = server.active_session.session.currentFrame().?;
+    const btn = frame.document.getElementById("btn").?.asNode();
+    const btn_id = (try server.active_session.registry.register(btn)).id;
+    var id_buf: [12]u8 = undefined;
+    const btn_id_str = std.mem.print(&id_buf, "{d}", .{btn_id}) catch unreachable;
+
+    const detach =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"document.getElementById('btn').remove()"}}}
+    ;
+    try router.handleMessage(server, aa, detach);
+
+    const tree_msg = try std.mem.concat(aa, u8, &.{
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"tree\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}",
+    });
+    try router.handleMessage(server, aa, tree_msg);
+    try testing.expect(std.mem.find(u8, out.written(), "StaleNode") != null);
+    out.clearRetainingCapacity();
+
+    const details_msg = try std.mem.concat(aa, u8, &.{
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"nodeDetails\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}",
+    });
+    try router.handleMessage(server, aa, details_msg);
+    try testing.expect(std.mem.find(u8, out.written(), "StaleNode") != null);
 }
 
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
