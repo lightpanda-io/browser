@@ -338,6 +338,10 @@
     }
   };
   cookieStore.addEventListener('change', handler);
+  // In chrome, listeners are subscribed asynchronously, trigger a tick on the
+  // subscription channel so that we know the listener is in place.lace.
+  await cookieStore.get('ev-from-doc');
+
   // Chrome delivers document.cookie changes later than a setTimeout(0), so
   // wait for the event itself.
   const nextEvent = () => new Promise(r => { waiter = r; });
