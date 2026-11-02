@@ -1237,18 +1237,22 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
         break :blk @max(height, h);
     };
 
+    const frame = if (cmd.browser_context) |bc| bc.mainFrame() else null;
+    const scroll_x = if (frame) |f| f.window.getScrollX() else 0;
+    const scroll_y = if (frame) |f| f.window.getScrollY() else 0;
+
     return cmd.sendResult(.{
         .layoutViewport = .{
-            .pageX = 0,
-            .pageY = 0,
+            .pageX = scroll_x,
+            .pageY = scroll_y,
             .clientWidth = width,
             .clientHeight = height,
         },
         .visualViewport = .{
             .offsetX = 0,
             .offsetY = 0,
-            .pageX = 0,
-            .pageY = 0,
+            .pageX = scroll_x,
+            .pageY = scroll_y,
             .clientWidth = width,
             .clientHeight = height,
             .scale = 1,
@@ -1261,16 +1265,16 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
             .height = content_height,
         },
         .cssLayoutViewport = .{
-            .pageX = 0,
-            .pageY = 0,
+            .pageX = scroll_x,
+            .pageY = scroll_y,
             .clientWidth = width,
             .clientHeight = height,
         },
         .cssVisualViewport = .{
             .offsetX = 0,
             .offsetY = 0,
-            .pageX = 0,
-            .pageY = 0,
+            .pageX = scroll_x,
+            .pageY = scroll_y,
             .clientWidth = width,
             .clientHeight = height,
             .scale = 1,
@@ -3425,4 +3429,37 @@ fn expectNavigatedWithinDocument(ctx: *testing.TestContext, expected: []const []
         i += 1;
     }
     try testing.expectEqual(expected.len, i);
+}
+
+test "cdp.frame: getLayoutMetrics reports the current scroll offset" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .url = "hi.html" });
+    const frame = bc.mainFrame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\const spacer = document.createElement('div');
+        \\spacer.style.cssText = 'width:10000px;height:10000px';
+        \\document.body.append(spacer);
+        \\window.scrollTo(120, 240);
+    , null);
+    try testing.expectEqual(120, frame.window.getScrollX());
+    try testing.expectEqual(240, frame.window.getScrollY());
+    try ctx.processMessage(.{ .id = 1, .method = "Page.getLayoutMetrics" });
+    try ctx.expectSentResult(.{
+        .layoutViewport = .{ .pageX = 120, .pageY = 240 },
+        .visualViewport = .{ .pageX = 120, .pageY = 240, .offsetX = 0, .offsetY = 0 },
+        .cssLayoutViewport = .{ .pageX = 120, .pageY = 240 },
+        .cssVisualViewport = .{ .pageX = 120, .pageY = 240, .offsetX = 0, .offsetY = 0 },
+    }, .{ .id = 1 });
+    _ = try ls.local.exec("window.scrollTo(0, 0)", null);
+    try ctx.processMessage(.{ .id = 2, .method = "Page.getLayoutMetrics" });
+    try ctx.expectSentResult(.{
+        .layoutViewport = .{ .pageX = 0, .pageY = 0 },
+        .visualViewport = .{ .pageX = 0, .pageY = 0 },
+        .cssLayoutViewport = .{ .pageX = 0, .pageY = 0 },
+        .cssVisualViewport = .{ .pageX = 0, .pageY = 0 },
+    }, .{ .id = 2 });
 }
