@@ -642,15 +642,6 @@ pub const Script = struct {
     // for debugging a rare production issue
     header_callback_called: bool = false,
 
-    // for debugging a rare production issue
-    debug_transfer_id: u32 = 0,
-    debug_transfer_tries: u8 = 0,
-    debug_transfer_aborted: bool = false,
-    debug_transfer_bytes_received: usize = 0,
-    debug_transfer_notified_fail: bool = false,
-    debug_transfer_auth_challenge: bool = false,
-    debug_transfer_easy_id: usize = 0,
-
     // We have to run microtasks before we evaluate a script, but for a
     // <script> tag, the parser already ran it. So we can safely skip it
     // in that case. Miro-optimization, but it also helps to document the
@@ -787,37 +778,6 @@ pub const Script = struct {
                 .status = transfer.responseStatus(),
                 .content_type = transfer.contentType(),
             });
-        }
-
-        {
-            // temp debug, trying to figure out why the next assert sometimes
-            // fails. Is the buffer just corrupt or is headerCallback really
-            // being called twice?
-            lp.assert(self.header_callback_called == false, "ScriptManagerBase.Header recall", .{
-                .m = @tagName(std.meta.activeTag(self.extra)),
-                .a1 = self.debug_transfer_id,
-                .a2 = self.debug_transfer_tries,
-                .a3 = self.debug_transfer_aborted,
-                .a4 = self.debug_transfer_bytes_received,
-                .a5 = self.debug_transfer_notified_fail,
-                .a8 = self.debug_transfer_auth_challenge,
-                .a9 = self.debug_transfer_easy_id,
-                .b1 = transfer.id,
-                .b2 = transfer._tries,
-                .b3 = transfer.state == .aborted,
-                .b4 = transfer.res.bytes_received,
-                .b5 = transfer._notified_fail,
-                .b8 = transfer._auth_challenge != null,
-                .b9 = if (transfer._conn) |c| @intFromPtr(c._easy) else 0,
-            });
-            self.header_callback_called = true;
-            self.debug_transfer_id = transfer.id;
-            self.debug_transfer_tries = transfer._tries;
-            self.debug_transfer_aborted = transfer.state == .aborted;
-            self.debug_transfer_bytes_received = transfer.res.bytes_received;
-            self.debug_transfer_notified_fail = transfer._notified_fail;
-            self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
-            self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c._easy) else 0;
         }
 
         self.setContentType(transfer.contentType());
