@@ -24,7 +24,7 @@
 //! sessions run in parallel. Connection threads never touch a browser: they
 //! queue a `Job` on the session's worker and wait for it. Routing follows
 //! `Mcp-Session-Id`: an `initialize` without one mints a fresh session, an
-//! unknown id creates it, a known one joins it, a reaped one gets 404.
+//! unknown id creates it, a known one joins it, a closed or reaped one gets 404.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -256,14 +256,18 @@ pub fn listSessions(self: *HttpServer, arena: std.mem.Allocator) ![]SessionInfo 
 }
 
 /// Close session `id`: calls already queued still run, then its thread tears
-/// it down. Closing a reaped id frees it for reuse. False if there is no such
-/// session. The default lives as long as the process.
+/// it down. A closed id returns 404 until explicitly recreated; closing a
+/// tombstoned id again frees it for reuse. False if there is no such session.
+/// The default lives as long as the process.
 pub fn closeSession(self: *HttpServer, id: []const u8) bool {
     if (Server.isDefault(id)) return false;
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
     if (self.forgetReapedLocked(id)) return true;
     const worker = self.workers.get(id) orelse return false;
+    // Remember the id before removing the worker, while workers_mutex
+    // still guards routing, so a concurrent POST cannot respawn it.
+    if (!self.rememberReapedLocked(worker.id)) return false;
     self.removeLocked(worker);
     return true;
 }
@@ -313,6 +317,17 @@ fn forgetReapedLocked(self: *HttpServer, id: []const u8) bool {
     return true;
 }
 
+/// The workers and tombstones are both protected by workers_mutex. Keep an
+/// independent key because the worker frees its id on thread exit.
+fn rememberReapedLocked(self: *HttpServer, id: []const u8) bool {
+    const owned_id = self.allocator.dupe(u8, id) catch return false;
+    self.reaped.putNoClobber(self.allocator, owned_id, {}) catch {
+        self.allocator.free(owned_id);
+        return false;
+    };
+    return true;
+}
+
 /// False if a call was queued meanwhile, or the id couldn't be remembered.
 fn reap(self: *HttpServer, worker: *Worker) bool {
     self.workers_mutex.lockUncancelable(lp.io);
@@ -321,11 +336,7 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     if (!worker.queue.isEmpty()) return false;
     if (self.workers.get(worker.id) != worker) return true;
 
-    const id = self.allocator.dupe(u8, worker.id) catch return false;
-    self.reaped.putNoClobber(self.allocator, id, {}) catch {
-        self.allocator.free(id);
-        return false;
-    };
+    if (!self.rememberReapedLocked(worker.id)) return false;
     log.info(.mcp, "mcp session reaped", .{ .session = worker.id });
     self.removeLocked(worker);
     return true;
@@ -808,7 +819,17 @@ test "HttpServer - sessions run on their own threads" {
     defer testing.allocator.free(after);
     try testing.expect(std.mem.find(u8, after, "\\\"slow\\\"") == null);
 
-    // A call on a closed id starts a fresh session there, without the old page.
+    // A closed id cannot be reused by a stale caller. The session_new tool
+    // explicitly clears its tombstone so a new session may use the same name.
+    const call =
+        \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"session_list"}}
+    ;
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "slow", call, null));
+    const revive = try testPost(testing.allocator, port, "fast",
+        \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"slow"}}}
+    );
+    defer testing.allocator.free(revive);
+    try testing.expect(std.mem.find(u8, revive, "session slow") != null);
     const reopened = try testPost(testing.allocator, port, "slow",
         \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"session_list"}}
     );
@@ -816,11 +837,31 @@ test "HttpServer - sessions run on their own threads" {
     try testing.expect(std.mem.find(u8, reopened, "{\\\"id\\\":\\\"slow\\\"}") != null);
 
     try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "slow", null, null));
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "slow", call, null));
     const deleted = try testPost(testing.allocator, port, "fast",
         \\{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"session_list"}}
     );
     defer testing.allocator.free(deleted);
     try testing.expect(std.mem.find(u8, deleted, "\\\"slow\\\"") == null);
+}
+
+test "HttpServer - DELETE keeps a terminated session id from being reused" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+
+    const call =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_list"}}
+    ;
+    const port = server.port;
+    try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+
+    // An independent session still works, and a second DELETE explicitly
+    // clears the tombstone for reuse (the existing behavior for reaped ids).
+    try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "other", call, null));
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+    try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
 }
 
 test "HttpServer - idle sessions are reaped" {
