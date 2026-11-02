@@ -43,6 +43,7 @@ pub const Attribute = enum {
     sizes,
     sandbox,
     @"for",
+    blocking,
 
     fn name(self: Attribute) String {
         return switch (self) {
@@ -103,6 +104,7 @@ pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bo
             .link => &.{ "stylesheet", "preload", "modulepreload", "dns-prefetch", "preconnect", "prefetch" },
             else => &.{ "noopener", "noreferrer", "opener" },
         },
+        .blocking => &.{"render"},
         // no supported tokens defined
         .class, .part, .sizes, .@"for" => return error.TypeError,
     };

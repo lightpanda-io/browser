@@ -122,6 +122,10 @@
       return;
     }
 
+    if (diverging) {
+      _diverged('expected error but no error received');
+      return;
+    }
     console.error(`expected error but no error received\n`);
     throw new Error('no error');
   }
