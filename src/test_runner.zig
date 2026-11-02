@@ -24,6 +24,14 @@ const Allocator = std.mem.Allocator;
 
 const BORDER: [80]u8 = @splat('=');
 
+// Dependencies report through std.log, which would print between the progress
+// dots. Tests that exercise those error paths assert on the result instead.
+pub const std_options: std.Options = .{
+    .logFn = noLog,
+};
+
+fn noLog(comptime _: std.log.Level, comptime _: @EnumLiteral(), comptime _: []const u8, _: anytype) void {}
+
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 pub var v8_peak_memory: usize = 0;
