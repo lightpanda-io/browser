@@ -7,6 +7,16 @@
   window.domLoaded = false;
   document.addEventListener('DOMContentLoaded', () => window.domLoaded = true);
 
+  // Delayed scripts come from the other loopback name: Chrome allows 6
+  // connections per host, so on the page's own host the delayed requests
+  // can hold every socket and make the fast ones wait just as long.
+  function slow(name, ms = 200) {
+    const url = new URL(name, location.href);
+    url.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+    url.search = `delay_ms=${ms}`;
+    return url.href;
+  }
+
   function insertScript(src, async, onerror) {
     const s = document.createElement('script');
     s.src = src;
@@ -16,11 +26,18 @@
   }
 </script>
 
+<script>
+  window.inlineModuleList = '';
+  // A slow parser-inserted defer script, which async inline modules don't
+  // wait for. Shorter than the other delays: it holds DOMContentLoaded.
+  document.write(`<script defer src="${slow('dynamic_order_inline_defer.js', 100)}"><\/script>`);
+</script>
+
 <script id=insertion_order>
 {
   // The first script finishes downloading last, but still runs first.
   window.orderedList = '';
-  insertScript('dynamic_order1.js?delay_ms=200', false);
+  insertScript(slow('dynamic_order1.js'), false);
   insertScript('dynamic_order2.js', false);
   testing.onload(() => {
     testing.expectEqual('12', orderedList);
@@ -34,7 +51,7 @@
 {
   window.failedOrderedError = false;
   window.failureOrderedList = '';
-  insertScript('dynamic_order_missing.js?delay_ms=100', false, () => window.failedOrderedError = true);
+  insertScript(slow('dynamic_order_missing.js', 100), false, () => window.failedOrderedError = true);
   insertScript('dynamic_order3.js', false);
   testing.onload(() => {
     testing.expectEqual(true, failedOrderedError);
@@ -47,7 +64,7 @@
 {
   // A default (force-async) dynamic script doesn't wait for ordered ones.
   window.mixedList = '';
-  insertScript('dynamic_order_mixed_ordered.js?delay_ms=200', false);
+  insertScript(slow('dynamic_order_mixed_ordered.js'), false);
   insertScript('dynamic_order_mixed_async.js');
   testing.onload(() => {
     testing.expectEqual('async,ordered', mixedList);
@@ -60,7 +77,7 @@
   // defer has no effect on a dynamic script: it stays async, so it runs in
   // completion order and doesn't wait for parsing.
   window.deferIgnoredList = '';
-  for (const src of ['dynamic_order_defer1.js?delay_ms=200', 'dynamic_order_defer2.js']) {
+  for (const src of [slow('dynamic_order_defer1.js'), 'dynamic_order_defer2.js']) {
     const s = document.createElement('script');
     s.src = src;
     s.defer = true;
@@ -78,7 +95,7 @@
   // Adding the async attribute clears force-async, so once it's removed
   // again the script is ordered.
   window.attributeList = '';
-  for (const src of ['dynamic_order_attribute1.js?delay_ms=200', 'dynamic_order_attribute2.js']) {
+  for (const src of [slow('dynamic_order_attribute1.js'), 'dynamic_order_attribute2.js']) {
     const s = document.createElement('script');
     s.src = src;
     s.setAttribute('async', '');
@@ -95,7 +112,7 @@
 {
   // A dynamic module with async = false is ordered, not deferred.
   window.moduleOrderedList = '';
-  for (const src of ['dynamic_order_module1.js?delay_ms=200', 'dynamic_order_module2.js']) {
+  for (const src of [slow('dynamic_order_module1.js'), 'dynamic_order_module2.js']) {
     const s = document.createElement('script');
     s.type = 'module';
     s.src = src;
@@ -113,7 +130,7 @@
 {
   // A default dynamic module is async, not deferred.
   window.moduleAsyncList = '';
-  for (const src of ['dynamic_order_module_async1.js?delay_ms=200', 'dynamic_order_module_async2.js']) {
+  for (const src of [slow('dynamic_order_module_async1.js'), 'dynamic_order_module_async2.js']) {
     const s = document.createElement('script');
     s.type = 'module';
     s.src = src;
@@ -121,6 +138,48 @@
   }
   testing.onload(() => {
     testing.expectEqual('21', moduleAsyncList);
+  });
+}
+</script>
+
+<script id=inline_module_ordered>
+{
+  // A dynamic inline module with async = false waits behind an ordered
+  // remote script that's still downloading.
+  insertScript(slow('dynamic_order_inline_slow.js'), false);
+  const s = document.createElement('script');
+  s.type = 'module';
+  s.async = false;
+  s.textContent = "window.inlineModuleList += 'ordered,';";
+  document.head.appendChild(s);
+  // modules never run synchronously
+  testing.expectEqual('', inlineModuleList);
+}
+</script>
+
+<script>
+{
+  // A default dynamic inline module is async: it doesn't wait for the
+  // parser-inserted defer script.
+  const s = document.createElement('script');
+  s.type = 'module';
+  s.textContent = "window.inlineModuleList += 'dynamic,';";
+  document.head.appendChild(s);
+}
+</script>
+
+<script type=module async>
+  window.inlineModuleList += 'async,';
+</script>
+
+<script id=inline_module_async>
+{
+  testing.onload(() => {
+    const at = (name) => inlineModuleList.split(',').indexOf(name);
+    // async inline modules (parser or dynamic) don't wait for the defer script
+    testing.expectTrue(at('async') !== -1 && at('async') < at('defer'));
+    testing.expectTrue(at('dynamic') !== -1 && at('dynamic') < at('defer'));
+    testing.expectTrue(at('slow') !== -1 && at('slow') < at('ordered'));
   });
 }
 </script>

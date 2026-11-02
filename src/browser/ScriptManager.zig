@@ -496,7 +496,17 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
 
     script_element._executed = true;
 
-    const mode: Script.Extra.FrameExtra.Mode = if (kind == .module) .@"defer" else .normal;
+    const mode: Script.Extra.FrameExtra.Mode = blk: {
+        if (kind != .module) {
+            // classic inline scripts are always normal (ignore defer and async)
+            break :blk .normal;
+        }
+        // moduels are scheduled like remote scripts
+        if (script_element._force_async or script_element.asElement().getAttributeInterned("async") != null) {
+            break :blk .async;
+        }
+        break :blk if (from_parser) .@"defer" else .ordered;
+    };
     const script = try arena.create(Script);
     script.* = .{
         .node = .{},
@@ -518,15 +528,27 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
         .text_position = if (from_parser and std.mem.indexOf(u8, source, "sourceURL=") == null) script_element._text_position else .{},
     };
 
-    // An inline module found during parsing waits its turn in document order.
-    // Once parsing is done, the deferred batch has already drained and won't
-    // run again, so run it immediately instead.
-    if (mode == .@"defer" and self.base.static_scripts_done == false) {
-        self.base.scriptList(script).append(&script.node);
-        return;
+    switch (mode) {
+        .normal => self.evalNow(script),
+        .async => {
+            // Already complete, so no doneCallback will move it there.
+            self.base.ready_scripts.append(&script.node);
+            self.base.evaluate();
+        },
+        .ordered => {
+            self.base.ordered_scripts.append(&script.node);
+            self.base.evaluate();
+        },
+        .@"defer" => {
+            if (self.base.static_scripts_done) {
+                // parsing is complete, we don't process the deferred batch
+                // anymore, so run it now.
+                self.evalNow(script);
+            } else {
+                self.base.defer_scripts.append(&script.node);
+            }
+        },
     }
-
-    self.evalNow(script);
 }
 
 fn evalNow(self: *ScriptManager, script: *Script) void {
