@@ -115,7 +115,7 @@ fn writeComputedContent(writer: *std.Io.Writer, value: []const u8) !void {
     while (tokenizer.next()) |token| : (start = tokenizer.position) {
         switch (token) {
             .string => |raw| try escape.writeString(writer, raw),
-            .bad_string, .bad_url => return error.WriteFailed,
+            .bad_string, .bad_url => return error.Invalid,
             .white_space => try writer.writeByte(' '),
             .comment => {},
             else => try writer.writeAll(tokenizer.input[start..tokenizer.position]),
