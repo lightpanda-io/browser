@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta name=lp-mode content=test>
   <title>Test Page</title>
 </head>
 <body>
@@ -17,14 +18,14 @@
     testing.expectEqual(false, document.all === undefined);
     testing.expectEqual(true, !document.all);
     testing.expectEqual(false, !!document.all);
-
-    testing.expectEqual(10, document.all.length);
+    testing.expectEqual(11, document.all.length);
 
     testing.expectEqual('HTML', document.all[0].tagName);
     testing.expectEqual('HEAD', document.all[1].tagName);
-    testing.expectEqual('TITLE', document.all[2].tagName);
-    testing.expectEqual('BODY', document.all[3].tagName);
-    testing.expectEqual('DIV', document.all[4].tagName);
+    testing.expectEqual('META', document.all[2].tagName);
+    testing.expectEqual('TITLE', document.all[3].tagName);
+    testing.expectEqual('BODY', document.all[4].tagName);
+    testing.expectEqual('DIV', document.all[5].tagName);
 
     testing.expectEqual('DIV', document.all.first.tagName);
     testing.expectEqual('First', document.all.first.textContent);
@@ -36,7 +37,7 @@
     testing.expectEqual('A', document.all.link.tagName);
     testing.expectEqual(undefined, document.all.second);
 
-    testing.expectEqual('SPAN', document.all.item(5).tagName);
+    testing.expectEqual('SPAN', document.all.item(6).tagName);
     testing.expectEqual(null, document.all.item(999));
     testing.expectEqual(null, document.all.item(-1));
 
@@ -48,19 +49,19 @@
     // Test callable functionality: document.all(index) and document.all(name)
     testing.expectEqual('HTML', document.all(0).tagName);
     testing.expectEqual('HEAD', document.all(1).tagName);
-    testing.expectEqual('DIV', document.all(4).tagName);
+    testing.expectEqual('DIV', document.all(5).tagName);
     testing.expectEqual('DIV', document.all('first').tagName);
     testing.expectEqual('First', document.all('first').textContent);
-    testing.expectEqual(undefined, document.all('second'));
+    testing.expectEqual(null, document.all('second'));
     testing.expectEqual('P', document.all('third').tagName);
-    testing.expectEqual(undefined, document.all(999));
-    testing.expectEqual(undefined, document.all('nonexistent'));
+    testing.expectEqual(null, document.all(999));
+    testing.expectEqual(null, document.all('nonexistent'));
 
     let count = 0;
     for (const el of document.all) {
       count++;
     }
-    testing.expectEqual(10, count);
+    testing.expectEqual(11, count);
 
     const plainDoc = new Document();
     testing.expectEqual('undefined', typeof plainDoc.all);

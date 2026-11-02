@@ -75,7 +75,7 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
-_model_context: ModelContext = .init,
+_model_context: ?*ModelContext = null,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: *Performance,
@@ -268,8 +268,13 @@ fn getScheduler(self: *Window) *Scheduler {
     return &self._scheduler;
 }
 
-pub fn getModelContext(self: *Window) *ModelContext {
-    return &self._model_context;
+pub fn getModelContext(self: *Window) !*ModelContext {
+    if (self._model_context) |mc| {
+        return mc;
+    }
+    const mc = try ModelContext.init(self);
+    self._model_context = mc;
+    return mc;
 }
 
 fn getScreen(self: *Window) *Screen {
@@ -780,14 +785,26 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
-fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().width;
+fn getInnerWidth(self: *const Window, frame: *Frame) u32 {
+    return self.iframeViewport(.width) orelse frame.page.getViewport().width;
 }
 
 // Faux-layout viewport height, used to decide whether an element is already
 // within view (e.g. scrollIntoViewIfNeeded).
-pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().height;
+pub fn getInnerHeight(self: *const Window, frame: *Frame) u32 {
+    return self.iframeViewport(.height) orelse frame.page.getViewport().height;
+}
+
+// The viewport of a window inside an iframe is the iframe's box.
+fn iframeViewport(self: *const Window, comptime axis: Element.Axis) ?u32 {
+    const iframe = self._frame.iframe orelse return null;
+    const parent = self._frame.parent orelse return null;
+    const el = iframe.asElement();
+    if (!el.isVisible(parent)) {
+        return 0;
+    }
+    // lossyCast saturates: a `width=1e10` or `inf` attribute is out of u32 range
+    return std.math.lossyCast(u32, el.boxAxis(parent, axis));
 }
 
 fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {

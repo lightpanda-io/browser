@@ -188,9 +188,17 @@ pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js
 
 // Compile `src` into a context-bound Script
 pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Script {
-    const result = try self.compileWithCache(src, name, null);
+    const result = try self.compileWithCache(src, name, .{}, null);
     return result.script;
 }
+
+// Where a script's source starts in the resource `name`, e.g. an inline script
+// in its document. 0-based, the column in UTF-16 code units. V8 adds it to the
+// positions it reports, the column only on the source's first line.
+pub const SourcePosition = struct {
+    line: u32 = 0,
+    column: u32 = 0,
+};
 
 const CompileResult = struct {
     script: js.Script,
@@ -203,13 +211,25 @@ const CompileResult = struct {
 
 // Like compile, but takes an optional cached_data which is a previously
 // compiled and serialized script (see Script.Unbound.createCodeCache)
-pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
+pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, position: SourcePosition, cached_data: ?[]const u8) !CompileResult {
     const script_name = try self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = try self.isolate.initStringHandle(src);
 
     // Create ScriptOrigin
     var origin: v8.ScriptOrigin = undefined;
-    v8.v8__ScriptOrigin__CONSTRUCT(&origin, @ptrCast(script_name));
+    v8.v8__ScriptOrigin__CONSTRUCT2(
+        &origin,
+        script_name,
+        std.math.lossyCast(c_int, position.line),
+        std.math.lossyCast(c_int, position.column),
+        false, // resource_is_shared_cross_origin
+        -1, // script_id
+        null, // source_map_url
+        false, // resource_is_opaque
+        false, // is_wasm
+        false, // is_module
+        null, // host_defined_options
+    );
 
     // The Source takes ownership of the CachedData pointer (it holds it in a
     // unique_ptr), so we must not delete it ourselves — Source__DESTRUCT does.
@@ -553,7 +573,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
             },
             .slice => {
                 if (ptr.sentinel() == null and ptr.child != u8) {
-                    if (try jsValueToTypedArray(ptr.child, js_val)) |value| {
+                    if (try self.jsValueToTypedArray(ptr.child, js_val)) |value| {
                         return value;
                     }
                 }
@@ -719,7 +739,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         // zig fmt: on
         => {
             const ValueType = @typeInfo(@FieldType(T, "values")).pointer.child;
-            const arr = (try jsValueToTypedArray(ValueType, js_val)) orelse return null;
+            const arr = (try self.jsValueToTypedArray(ValueType, js_val)) orelse return null;
             return .{ .values = arr };
         },
         js.BufferSource => {
@@ -729,12 +749,16 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             if (js_val.isArrayBufferView() and !js_val.isBufferSource()) {
                 return error.TypeError;
             }
-            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
-            return .{ .bytes = bytes };
+            if (!js_val.isArrayBuffer() and !js_val.isArrayBufferView()) {
+                return null;
+            }
+            return .{ .value = js_val };
         },
         js.AllowSharedBufferSource => {
-            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
-            return .{ .bytes = bytes };
+            if (!js_val.isArrayBuffer() and !js_val.isArrayBufferView()) {
+                return null;
+            }
+            return .{ .value = js_val };
         },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
@@ -844,8 +868,15 @@ pub fn assertDictionaryFieldOrder(comptime T: type) void {
     }
 }
 
-fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
-    return jsValueToArrayBufferSlice(T, false, js_val);
+// A copy, as a WebIDL sequence is: page code that runs before the slice is
+// used (a later argument's getter or valueOf) can detach or shrink the buffer.
+fn jsValueToTypedArray(self: *const Local, comptime T: type, js_val: js.Value) !?[]T {
+    const values = (try jsValueToArrayBufferSlice(T, false, js_val)) orelse return null;
+    return try self.call_arena.dupe(T, values);
+}
+
+pub fn bufferSourceBytes(js_val: js.Value) []u8 {
+    return (jsValueToArrayBufferSlice(u8, true, js_val) catch unreachable).?;
 }
 
 // With `any_view`, every ArrayBufferView is accepted as a byte slice regardless

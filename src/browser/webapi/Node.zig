@@ -1646,9 +1646,7 @@ pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpt
     const notify = Frame.observers.hasMutationObservers(frame);
     const removed = try self.removeAllChildrenCollecting(notify, frame);
 
-    if (html.len > 0) {
-        try Frame.parse.fragment(frame, self, html, opts);
-    }
+    try Frame.parse.fragment(frame, self, html, opts);
 
     if (notify) {
         var added: std.ArrayList(*Node) = .empty;

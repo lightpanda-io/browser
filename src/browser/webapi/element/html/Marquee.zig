@@ -49,9 +49,9 @@ pub const JsApi = struct {
 
     const reflect = Element.Reflect(Marquee);
 
-    pub const behavior = reflect.enumerated("behavior", &.{ "scroll", "slide", "alternate" }, .{ .missing = "scroll" });
+    pub const behavior = reflect.string("behavior");
     pub const bgColor = reflect.string("bgcolor");
-    pub const direction = reflect.enumerated("direction", &.{ "up", "right", "down", "left" }, .{ .missing = "left" });
+    pub const direction = reflect.string("direction");
     pub const height = reflect.string("height");
     pub const hspace = reflect.unsignedLong("hspace", .{});
     pub const scrollAmount = reflect.unsignedLong("scrollamount", .{ .default = 6 });

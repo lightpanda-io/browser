@@ -12,9 +12,10 @@
   testing.expectEqual(true, rl.supports('MODULEPRELOAD'));
   testing.expectEqual(true, rl.supports('preload'));
   testing.expectEqual(true, rl.supports('stylesheet'));
-  testing.diverges("Chrome implements <link rel=prefetch>", () => {
-    testing.expectEqual(false, rl.supports('prefetch'));
-  });
+  testing.expectEqual(true, rl.supports('dns-prefetch'));
+  testing.expectEqual(true, rl.supports('preconnect'));
+  testing.expectEqual(true, rl.supports('prefetch'));
+  testing.expectEqual(false, rl.supports('nofollow'));
 }
 </script>
 

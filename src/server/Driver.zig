@@ -77,7 +77,7 @@ pub fn connectionScoped(self: *const Driver) bool {
 // server loop. The loop shuts the link's read side itself (Server.Worker
 // owns that pointer); this only stops the JS.
 pub fn shutdown(self: *const Driver) void {
-    self.browser.env.terminate();
+    self.browser.env.requestTerminate();
 }
 
 // server loop. Something was pushed to the inbox; wake the worker from its poll.

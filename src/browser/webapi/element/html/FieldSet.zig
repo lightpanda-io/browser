@@ -18,10 +18,12 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Frame = @import("../../../Frame.zig");
 const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const collections = @import("../../collections.zig");
 
 const HtmlElement = @import("../Html.zig");
 
@@ -39,6 +41,10 @@ pub fn asNode(self: *FieldSet) *Node {
     return self.asElement().asNode();
 }
 
+fn getElements(self: *FieldSet, frame: *Frame) collections.NodeLive(.listed) {
+    return collections.NodeLive(.listed).init(self.asNode(), {}, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(FieldSet);
 
@@ -52,6 +58,7 @@ pub const JsApi = struct {
     pub const disabled = reflect.boolean("disabled");
     pub const name = reflect.string("name");
     pub const @"type" = bridge.property("fieldset", .{ .template = false, .readonly = true });
+    pub const elements = bridge.accessor(FieldSet.getElements, null, .{});
 };
 
 const testing = @import("../../../../testing.zig");

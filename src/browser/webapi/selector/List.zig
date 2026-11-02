@@ -49,7 +49,7 @@ pub fn collect(
     allocator: std.mem.Allocator,
     root: *Node,
     selector: Selector.Selector,
-    nodes: *std.AutoArrayHashMapUnmanaged(*Node, void),
+    nodes: *std.ArrayList(*Node),
     nth: *NthCache,
     frame: *Frame,
 ) !void {
@@ -61,10 +61,40 @@ pub fn collect(
 
         while (tw.next()) |node| {
             if (matches(node, result.selector, root, nth, frame)) {
-                try nodes.put(allocator, node, {});
+                try nodes.append(allocator, node);
             }
         }
     }
+}
+
+// A selector list is matched in one walk so results come out in document
+// order. The #id shortcut narrows a single selector, so it isn't used here.
+pub fn collectAny(
+    allocator: std.mem.Allocator,
+    root: *Node,
+    selectors: []const Selector.Selector,
+    nodes: *std.ArrayList(*Node),
+    nth: *NthCache,
+    frame: *Frame,
+) !void {
+    var tw = TreeWalker.init(root, .{});
+    _ = tw.next(); // only descendants match
+    while (tw.next()) |node| {
+        if (matchesAny(node, selectors, root, nth, frame)) {
+            try nodes.append(allocator, node);
+        }
+    }
+}
+
+pub fn initOneAny(root: *Node, selectors: []const Selector.Selector, nth: *NthCache, frame: *Frame) ?*Node {
+    var tw = TreeWalker.init(root, .{});
+    _ = tw.next(); // only descendants match
+    while (tw.next()) |node| {
+        if (matchesAny(node, selectors, root, nth, frame)) {
+            return node;
+        }
+    }
+    return null;
 }
 
 // used internally to find the first match
@@ -463,7 +493,7 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
-        .pseudo_element => return false,
+        .pseudo_element, .never => return false,
     }
 }
 
@@ -601,6 +631,33 @@ fn isOptional(el: *Node.Element) bool {
     return isRequired(el) == false;
 }
 
+// Null when :in-range and :out-of-range both don't apply: not an input
+// candidate for constraint validation, or no range limitations.
+fn isInRange(el: *Node.Element) ?bool {
+    const input = el.is(Node.Element.Html.Input) orelse return null;
+    if (!input.getWillValidate()) {
+        return null;
+    }
+    return input.isInRange();
+}
+
+// https://html.spec.whatwg.org/multipage/semantics-other.html#selector-default
+fn isDefault(el: *Node.Element, frame: *Frame) bool {
+    if (el.is(Node.Element.Html.Option) != null) {
+        return el.hasAttributeInterned("selected");
+    }
+    if (el.is(Node.Element.Html.Input)) |input| {
+        if (input._input_type == .checkbox or input._input_type == .radio) {
+            return el.hasAttributeInterned("checked");
+        }
+    }
+    if (Node.Element.Html.Form.isSubmitButton(el) == false) {
+        return false;
+    }
+    const form = Node.Element.Html.Form.ownerOf(el) orelse return false;
+    return form.getDefaultButton(frame) == el;
+}
+
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
@@ -645,12 +702,12 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .required => return isRequired(el),
         .optional => return isOptional(el),
-        .in_range => return false,
-        .out_of_range => return false,
+        .in_range => return isInRange(el) == true,
+        .out_of_range => return isInRange(el) == false,
         .placeholder_shown => return false,
         .read_only => return !isReadWrite(el),
         .read_write => return isReadWrite(el),
-        .default => return false,
+        .default => return isDefault(el, frame),
 
         // User interaction
         .hover => return false,
@@ -691,7 +748,12 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return parent._type == .document;
         },
         .scope => {
-            // :scope matches the reference element (querySelector root)
+            // :scope matches the reference element (querySelector root);
+            // for a document that is its root element
+            if (scope._type == .document) {
+                const parent = node.parentNode() orelse return false;
+                return parent == scope;
+            }
             return node == scope;
         },
         .empty => {

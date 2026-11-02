@@ -7,4 +7,39 @@
     testing.expectEqual(document.getElementById('the_head'), document.head);
     testing.expectEqual(document.getElementById('the_body'), document.body);
   </script>
+
+  <script id=on_document_prototype>
+  {
+    // HTMLDocument adds nothing but the named getter; every HTML member is
+    // on Document.prototype.
+    for (const name of ['head', 'body', 'title', 'dir', 'currentScript', 'images', 'scripts',
+        'links', 'anchors', 'forms', 'embeds', 'plugins', 'applets', 'all', 'doctype',
+        'fgColor', 'linkColor', 'vlinkColor', 'alinkColor', 'bgColor']) {
+      testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(Document.prototype, name)?.get, name);
+      testing.expectEqual(false, Object.hasOwn(HTMLDocument.prototype, name), name);
+    }
+    testing.expectEqual(document.getElementById('on_document_prototype'), document.currentScript);
+  }
+  </script>
+
+  <script id=xml_document>
+  {
+    const doc = new DOMParser().parseFromString(
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title> a  b </title></head><body/></html>',
+      'application/xml');
+    testing.expectEqual(false, doc instanceof HTMLDocument);
+    testing.expectEqual('head', doc.head.localName);
+    testing.expectEqual('body', doc.body.localName);
+    testing.expectEqual(null, doc.currentScript);
+    testing.expectEqual(0, doc.forms.length);
+  }
+  </script>
+
+  <script id=doctype>
+  {
+    // this page has no doctype
+    testing.expectEqual(null, document.doctype);
+    testing.expectEqual('html', document.implementation.createHTMLDocument('x').doctype.name);
+  }
+  </script>
 </body>

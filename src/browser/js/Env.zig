@@ -102,11 +102,6 @@ disabled_api_names: DisabledApiNames,
 
 microtask_queues_are_running: bool,
 
-// Serializes V8 calls that race with TerminateExecution (which can fire from
-// the sighandler thread). Without this, a terminate landing between the
-// IsExecutionTerminating check and PerformCheckpoint trips a V8 debug assert.
-terminate_mutex: std.Io.Mutex = .init,
-
 // Set from network thread, saying termination should happen. Read from worker
 // thread making sure terminate hasn't been canceled.
 terminate_requested: std.atomic.Value(bool) = .init(false),
@@ -501,9 +496,6 @@ pub fn runMicrotasks(self: *Env) void {
     }
 
     if (self.microtask_queues_are_running == false) {
-        self.terminate_mutex.lockUncancelable(lp.io);
-        defer self.terminate_mutex.unlock(lp.io);
-
         const v8_isolate = self.isolate.handle;
 
         if (self.terminatePending()) {
@@ -713,20 +705,13 @@ pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel
     self.isolate.memoryPressureNotification(level);
 }
 
-// The single "must not run JS" predicate. We're the only ones who ever call
-// TerminateExecution (here and in terminateInterrupt) and both set this flag,
+// The single "must not run JS" predicate. TerminateExecution is only ever
+// called from terminateInterrupt, on the isolate's thread, after this flag,
 // so it's always at least as true as v8__Isolate__IsExecutionTerminating —
 // and it stays true after V8 consumes the terminate on the JSEntry unwind,
 // which is what stops a fresh eval from re-entering mid-teardown.
 pub fn terminatePending(self: *const Env) bool {
     return self.terminate_requested.load(.acquire);
-}
-
-pub fn terminate(self: *Env) void {
-    self.terminate_mutex.lockUncancelable(lp.io);
-    defer self.terminate_mutex.unlock(lp.io);
-    self.terminate_requested.store(true, .release);
-    v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
 /// We need a stable pointer for `*Env`, so can't be setup in `init`.
@@ -890,8 +875,6 @@ fn logHeapLimit(self: *Env) void {
 /// unconditionally; a no-op if termination wasn't pending. Also clears the
 /// requestTerminate gate so any still-pending interrupt becomes a no-op.
 pub fn cancelTerminate(self: *Env) void {
-    self.terminate_mutex.lockUncancelable(lp.io);
-    defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
     self.stall_report_requested_at.store(0, .release);
     self.heap_report_requested.store(false, .release);
@@ -900,11 +883,8 @@ pub fn cancelTerminate(self: *Env) void {
 
 /// Like `runMicrotasks`, but for the isolate-default queue used by contexts
 /// created outside `createContext` (the agent runtime's bare context), which
-/// aren't tracked in `contexts`. Guarded so a sighandler-thread terminate
-/// can't land mid-checkpoint.
+/// aren't tracked in `contexts`.
 pub fn performIsolateMicrotasks(self: *Env) void {
-    self.terminate_mutex.lockUncancelable(lp.io);
-    defer self.terminate_mutex.unlock(lp.io);
     if (self.terminatePending()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }

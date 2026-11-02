@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head><title>WebMCP page tools</title></head>
+<body>
+<script>
+  navigator.modelContext.registerTool({
+    name: 'greet',
+    title: 'Greet',
+    description: 'Greets someone',
+    inputSchema: { type: 'object', properties: { who: { type: 'string' } }, required: ['who'] },
+    annotations: { readOnlyHint: true },
+    execute: async (input) => ({ greeting: 'hello ' + input.who }),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'mcp_shaped',
+    description: 'Returns an MCP CallToolResult',
+    execute: () => ({
+      content: [{ type: 'text', text: 'first' }, { type: 'image', data: '' }, { type: 'text', text: 'second' }],
+      structuredContent: { n: 2 },
+    }),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'mcp_error',
+    description: 'Reports a tool-level error',
+    execute: async () => ({ content: [{ type: 'text', text: 'no such order' }], isError: true }),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'throws',
+    description: 'Throws synchronously',
+    execute: () => { throw new Error('boom'); },
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'rejects',
+    description: 'Rejects after a tick',
+    execute: () => new Promise((_, reject) => setTimeout(() => reject(new Error('later')), 0)),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'bad_result',
+    description: 'Returns a result whose content getter throws',
+    execute: () => ({ get content() { throw new Error('bad getter'); } }),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'bad_rejection',
+    description: 'Rejects with a value that cannot be stringified',
+    execute: () => Promise.reject({ toString() { throw new Error('bad toString'); } }),
+  });
+
+  navigator.modelContext.registerTool({
+    name: 'navigates',
+    description: 'Loads another page',
+    execute: () => { location.href = '../cdp/webmcp_fixture.html'; return 'leaving'; },
+  });
+</script>
+</body>
+</html>

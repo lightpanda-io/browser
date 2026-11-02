@@ -61,3 +61,13 @@
   testing.expectEqual(9, dest[0]);
 }
 </script>
+
+<script id=init_detached_data>
+{
+  // data is read before timestamp, whose getter detaches it: the chunk is
+  // then empty, rather than a copy of the freed backing store.
+  const data = new Uint8Array([1, 2, 3]);
+  const chunk = new EncodedVideoChunk({data, get timestamp() { data.buffer.transfer(0); return 0; }, type: 'key'});
+  testing.expectEqual(0, chunk.byteLength);
+}
+</script>

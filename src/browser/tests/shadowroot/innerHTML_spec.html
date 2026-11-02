@@ -83,3 +83,10 @@
     host.remove();
 }
 </script>
+
+<script id=prototype_placement>
+{
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'innerHTML').get);
+  testing.expectEqual(undefined, document.createDocumentFragment().innerHTML);
+}
+</script>

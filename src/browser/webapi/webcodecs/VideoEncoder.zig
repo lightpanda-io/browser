@@ -24,7 +24,6 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const codec = @import("codec.zig");
-const common = @import("common.zig");
 
 const EventTarget = @import("../EventTarget.zig");
 const VideoFrame = @import("VideoFrame.zig");

@@ -47,12 +47,12 @@ const Overlay = struct {
     /// `aria-modal` one, or an open popover.
     dialog: bool = false,
 
-    fn any(self: Overlay) bool {
+    pub fn any(self: Overlay) bool {
         return self.fixed or self.dialog;
     }
 };
 
-const InteractiveElement = struct {
+pub const InteractiveElement = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,

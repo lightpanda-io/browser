@@ -27,8 +27,6 @@ const SingleFlight = @import("SingleFlight.zig");
 const HttpClient = @import("HttpClient.zig");
 const Network = @import("Network.zig");
 
-const CorsStore = @import("CorsStore.zig");
-
 const log = lp.log;
 
 const CorsGate = @This();

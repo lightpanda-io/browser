@@ -682,7 +682,7 @@ fn bufferBytes(value: js.Value, local: *const js.Local) ![]const u8 {
     const buffer = local.jsValueToZig(js.BufferSource, value) catch |err| {
         return algorithm.conversionError(err, local, "expected an ArrayBuffer or ArrayBufferView");
     };
-    return buffer.bytes;
+    return buffer.bytes();
 }
 
 /// What `cryptBytes` is for, which decides the direction and the usage the key
@@ -856,7 +856,7 @@ pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.BufferSource, 
     const normalized = try std.ascii.allocUpperString(exec.local_arena, algo_name);
     const digest_type = crypto.findDigest(normalized) catch return error.NotSupported;
 
-    const bytes = data.bytes;
+    const bytes = data.bytes();
     var out: [crypto.EVP_MAX_MD_SIZE]u8 = undefined;
     var out_size: c_uint = 0;
     const result = crypto.EVP_Digest(bytes.ptr, bytes.len, &out, &out_size, digest_type, null);

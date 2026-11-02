@@ -114,6 +114,7 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
         .press => &.{ "selector", "key" },
         // Only the recorder reads this; the runtime marshals extract separately.
         .extract => &.{"schema"},
+        .classify => &.{"questions"},
         else => &.{},
     };
 }
@@ -124,7 +125,7 @@ pub fn takesPrompt(tool: BrowserTool) bool {
         .click, .fill, .hover, .selectOption, .setChecked, .extract, .evaluate => true,
         // A wait targets what is not on the page yet, so a prompt leaves the model nothing to pick from.
         .waitForSelector, .waitForScript, .waitForState => false,
-        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download => false,
+        .goto, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
     };
 }
 
@@ -192,8 +193,10 @@ pub fn isBarePositional(self: Schema, args: std.json.ObjectMap) bool {
     if (self.required.len != 1 or self.positional.len == 0) return false;
     if (!std.mem.eql(u8, self.required[0], self.positional[0])) return false;
     if (self.visibleArgCount(args) != 1) return false;
-    const v = args.get(self.required[0]) orelse return false;
-    return v == .string;
+    return switch (args.get(self.required[0]) orelse return false) {
+        .string, .object, .array => true,
+        else => false,
+    };
 }
 
 /// The field a single leading positional binds to: the lone required field,

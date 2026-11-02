@@ -32,7 +32,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
-const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
 const Link = @import("../Link.zig");
@@ -769,17 +768,7 @@ pub const BrowserContext = struct {
         // cross-frame queries produces names/visibility from the wrong document.
         const main_frame = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(main_frame) orelse return error.InvalidNodeId;
-        const label_index = try frame.call_arena.create(Label.LabelByForIndex);
-        label_index.* = .{};
-        return .{
-            .frame = frame,
-            .root = root,
-            .registry = &self.node_registry,
-            .label_index = label_index,
-            .temp_arena = temp_arena,
-            .filter = opts.filter,
-            .depth = opts.depth,
-        };
+        return .init(frame, root, &self.node_registry, temp_arena, opts);
     }
 
     // The root frame of this context's live Page.

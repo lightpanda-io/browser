@@ -53,6 +53,16 @@
 }
 </script>
 
+<script id=selectorList>
+  // document order, not selector order; each element once
+  assertList(['div1', 'span1'], document.querySelectorAll('span.test-class, div.test-class'));
+  assertList(['Heading 1', 'Heading 2'], document.querySelectorAll('h2, h1, h2'));
+  assertList(['Heading 1'], document.querySelectorAll('#nonexistent, h1'));
+  testing.expectEqual('div1', document.querySelector('span.test-class, div.test-class').textContent);
+  testing.expectEqual('Heading 1', document.querySelector('h2, .nope, h1').textContent);
+  testing.expectEqual(null, document.querySelector('.nope, #nonexistent'));
+</script>
+
 <script id=byClass>
   assertList([], document.querySelectorAll('.nope'));
   assertList(['div1', 'span1'], document.querySelectorAll('.test-class'));

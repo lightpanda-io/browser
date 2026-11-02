@@ -59,6 +59,14 @@
       testing.expectEqual('OK', req2.statusText);
       testing.expectEqual(true, req2.response instanceof Document);
       testing.expectEqual(true, req2.responseXML instanceof Document);
+
+      // a text/html response is parsed into an HTML document
+      const doc = req2.response;
+      testing.expectEqual(true, doc instanceof HTMLDocument);
+      testing.expectEqual('text/html', doc.contentType);
+      testing.expectEqual('http://127.0.0.1:9582/xhr', doc.URL);
+      testing.expectEqual('', doc.title);
+      testing.expectEqual('1234567890'.repeat(10), doc.body.textContent);
     });
   }
 </script>

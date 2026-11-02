@@ -124,3 +124,26 @@
     testing.expectEqual('false', s.getAttribute('draggable'));
   }
 </script>
+
+<div id="sc-off" spellcheck="false"><span id="sc-inherit">x</span></div>
+
+<script id="spellcheck">
+  {
+    const div = document.createElement('div');
+    testing.expectEqual(true, div.spellcheck);
+    testing.expectEqual(false, $('#sc-off').spellcheck);
+    testing.expectEqual(false, $('#sc-inherit').spellcheck);
+
+    div.setAttribute('spellcheck', 'FALSE');
+    testing.expectEqual(false, div.spellcheck);
+    div.setAttribute('spellcheck', '');
+    testing.expectEqual(true, div.spellcheck);
+    div.setAttribute('spellcheck', 'maybe');
+    testing.expectEqual(true, div.spellcheck);
+
+    div.spellcheck = false;
+    testing.expectEqual('false', div.getAttribute('spellcheck'));
+    div.spellcheck = true;
+    testing.expectEqual('true', div.getAttribute('spellcheck'));
+  }
+</script>

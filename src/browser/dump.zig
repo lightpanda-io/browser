@@ -95,7 +95,7 @@ fn rootUncapped(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: 
         }
 
         if (opts.with_base) {
-            const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
+            const parent = if (html_doc.asDocument().getHead()) |head| head.asNode() else doc.asNode();
             const base = try doc.createElement("base", null, frame);
             try base.setAttributeSafe(comptime .wrap("href"), .wrap(frame.base()), frame);
             _ = try parent.insertBefore(base.asNode(), parent.firstChild(), frame);
@@ -456,9 +456,7 @@ pub fn isVoidElement(el: *Node.Element) bool {
     }
 
     return switch (el.getTag()) {
-        .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track => true,
-        // <wbr> has no dedicated Tag, so it lands in Html.Unknown.
-        .unknown => el.as(Node.Element.Html.Unknown)._tag_name.eql(comptime .wrap("wbr")),
+        .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track, .wbr => true,
         else => false,
     };
 }

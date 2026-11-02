@@ -31,6 +31,7 @@ const Sanitizer = @import("browser/webapi/Sanitizer.zig");
 
 const Network = @import("network/Network.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
+const zenai = @import("zenai");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -50,6 +51,11 @@ app_dir_path: ?[]const u8,
 regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
+
+/// Clients for asking Jev, pooled so concurrent calls each get their own and
+/// keep its connection warm. It reads the API key from the environment on
+/// every ask. Usable from any thread: it touches no browser state.
+typesafe: zenai.typesafe.Pool,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
@@ -84,6 +90,12 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
         .default_sanitizer = undefined,
         .watchdog = .init(config.watchdogMs()),
+        // The calling session waits on an ask, so fail fast rather than
+        // honouring a Retry-After on the browser thread.
+        .typesafe = .init(lp.io, allocator, lp.environ, .{
+            .retry_policy = .disabled,
+            .request_timeout_ms = 10_000,
+        }),
     };
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
@@ -122,6 +134,8 @@ pub fn deinit(self: *App) void {
     self.default_sanitizer.deinitDefault();
     self.render_fonts.deinit(allocator);
     self.arena_pool.deinit();
+
+    self.typesafe.deinit();
 
     allocator.destroy(self);
 }

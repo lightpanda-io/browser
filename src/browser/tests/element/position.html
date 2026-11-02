@@ -234,6 +234,55 @@
 }
 </script>
 
+<script id="blocksStack">
+{
+  // A block-level box starts a line of its own at its parent's left edge,
+  // whatever comes before it. So a full-width block doesn't overhang its
+  // container, and the last item of a long list is still in the viewport.
+  const section = document.createElement('div');
+  section.innerHTML = '<h2>Title</h2><p>Text</p>';
+  const list = document.createElement('div');
+  for (let i = 0; i < 400; i++) {
+    list.appendChild(document.createElement('div'));
+  }
+  section.appendChild(list);
+  document.body.appendChild(section);
+
+  const first = list.firstElementChild;
+  const last = list.lastElementChild;
+  testing.expectEqual(section.offsetLeft, list.offsetLeft);
+  testing.expectEqual(first.offsetLeft, last.offsetLeft);
+  testing.expectEqual(section.getBoundingClientRect().right, list.getBoundingClientRect().right);
+  testing.expectTrue(last.getBoundingClientRect().left < window.innerWidth);
+  section.remove();
+
+  // Inline-level boxes share a line, which a block-level one ends
+  const line = document.createElement('div');
+  line.innerHTML = '<span>a</span><span>b</span><div></div><span>c</span>';
+  document.body.appendChild(line);
+  const [a, b, , c] = line.children;
+  testing.expectTrue(b.offsetLeft > a.offsetLeft);
+  testing.expectEqual(a.offsetLeft, c.offsetLeft);
+  line.remove();
+
+  // A grid stretches its items, so they stack too (a theme's single-column
+  // grid body); a flex row keeps them side by side
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display: grid; grid-template-columns: 100%';
+  grid.innerHTML = '<div></div><a href="#">link</a><div></div><main></main>';
+  document.body.appendChild(grid);
+  testing.expectEqual(grid.firstElementChild.offsetLeft, grid.lastElementChild.offsetLeft);
+  grid.remove();
+
+  const row = document.createElement('div');
+  row.style.display = 'flex';
+  row.innerHTML = '<div style="width: 100px"></div><div style="width: 100px"></div>';
+  document.body.appendChild(row);
+  testing.expectEqual(100, row.lastElementChild.offsetLeft - row.firstElementChild.offsetLeft);
+  row.remove();
+}
+</script>
+
 <script id="translateX">
 {
   const shell = document.createElement('div');
@@ -391,6 +440,113 @@
   custom.style.display = 'block';
   testing.expectEqual(700, custom.offsetWidth);
   section.remove();
+}
+</script>
+
+<script id="positionedBoxStretchesBetweenOffsets">
+{
+  // An absolutely positioned box with an auto width, pinned on both sides,
+  // spans its containing block less its offsets and margins. The
+  // containing block is the nearest positioned ancestor, else the viewport
+  // (Twitch's app shell: `position: absolute; inset: 0`).
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position: relative; width: 700px';
+  const inner = document.createElement('div');
+  inner.style.width = '300px';
+  const box = document.createElement('div');
+  const child = document.createElement('div');
+  child.style.width = '40px';
+  box.appendChild(child);
+  inner.appendChild(box);
+  outer.appendChild(inner);
+  document.body.appendChild(outer);
+
+  const width = (css) => { box.style.cssText = css; return box.offsetWidth; };
+  testing.expectEqual(700, width('position: absolute; inset: 0'));
+  testing.expectEqual(700, width('position: absolute; left: 0; right: 0'));
+  testing.expectEqual(700, width('position: absolute; inset-inline: 0'));
+  testing.expectEqual(700, width('position: absolute; inset: 0 0 0 0'));
+  testing.expectEqual(670, width('position: absolute; left: 10px; right: 20px'));
+  // A longhand after the shorthand wins
+  testing.expectEqual(690, width('position: absolute; inset: 0; left: 10px'));
+  testing.expectEqual(40, width('position: absolute; inset: 0; right: auto'));
+  testing.expectEqual(40, width('position: absolute; inset-inline: 0; inset-inline-end: auto'));
+  testing.expectEqual(660, width('position: absolute; left: 10px; right: 20px; margin: 0 5px'));
+  testing.expectEqual(560, width('position: absolute; left: 10%; right: 10%'));
+  testing.expectEqual(700, width('position: absolute; inset: 0; display: inline'));
+  // A percentage width resolves against the positioned ancestor too
+  testing.expectEqual(350, width('position: absolute; width: 50%'));
+  testing.expectEqual(100, width('position: absolute; inset: 0; width: 100px'));
+
+  // An auto side, or an auto-width table, shrinks to its content
+  testing.expectEqual(40, width('position: absolute; left: 0'));
+  testing.expectEqual(40, width('position: absolute; inset: 0 auto 0 0'));
+  testing.expectEqual(40, width('position: absolute; left: 0; right: auto'));
+  testing.expectEqual(40, width('position: absolute; inset: 0; display: table'));
+
+  // Offsets don't apply in flow
+  testing.expectEqual(300, width('left: 10px; right: 10px'));
+  testing.expectEqual(300, width('position: relative; left: 10px; right: 10px'));
+
+  // A fixed box, or one with no positioned ancestor, sizes off the viewport
+  testing.expectEqual(window.innerWidth, width('position: fixed; inset: 0'));
+  outer.style.position = 'static';
+  testing.expectEqual(window.innerWidth, width('position: absolute; inset: 0'));
+
+  // Its in-flow children fill it
+  outer.style.position = 'relative';
+  box.style.cssText = 'position: absolute; left: 50px; right: 50px';
+  child.style.width = '';
+  testing.expectEqual(600, child.offsetWidth);
+  outer.remove();
+}
+</script>
+
+<script id="outOfFlowBoxesDontSizeTheirParent">
+{
+  // An out-of-flow box doesn't size its parent. A slide holding an
+  // absolutely positioned image is as wide as its other content, so
+  // slides-per-page isn't 0 (and pages never Infinity).
+  const row = document.createElement('div');
+  row.style.cssText = 'display: flex; width: 1000px';
+  const slide = document.createElement('div');
+  const media = document.createElement('div');
+  media.style.position = 'relative';
+  const img = document.createElement('img');
+  img.width = 2000;
+  img.style.position = 'absolute';
+  media.appendChild(img);
+  const title = document.createElement('div');
+  title.style.width = '200px';
+  slide.append(media, title);
+  row.appendChild(slide);
+  document.body.appendChild(row);
+  testing.expectEqual(200, slide.offsetWidth);
+  testing.expectEqual(5, Math.floor(row.clientWidth / slide.offsetWidth));
+  row.remove();
+
+  for (const position of ['absolute', 'fixed']) {
+    const box = document.createElement('div');
+    box.style.display = 'inline-block';
+    const child = document.createElement('div');
+    child.style.width = '40px';
+    const positioned = document.createElement('div');
+    positioned.style.cssText = `position: ${position}; width: 500px`;
+    box.append(child, positioned);
+    document.body.appendChild(box);
+    testing.expectEqual(40, box.offsetWidth, position);
+    box.remove();
+  }
+
+  // It still extends its scroller's scrollable area
+  const scroller = document.createElement('div');
+  scroller.style.cssText = 'position: relative; overflow: auto; width: 300px';
+  const wide = document.createElement('div');
+  wide.style.cssText = 'position: absolute; width: 900px; height: 10px';
+  scroller.appendChild(wide);
+  document.body.appendChild(scroller);
+  testing.expectEqual(900, scroller.scrollWidth);
+  scroller.remove();
 }
 </script>
 

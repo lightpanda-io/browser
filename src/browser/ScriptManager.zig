@@ -91,7 +91,7 @@ fn tailHook(base: *ScriptManagerBase) void {
     // Page makes this safe to call multiple times.
     frame.documentIsLoaded();
 
-    if (base.async_scripts.first == null and self.frame_notified_of_completion == false) {
+    if (base.async_scripts.first == null and base.ordered_scripts.first == null and self.frame_notified_of_completion == false) {
         self.frame_notified_of_completion = true;
         frame.scriptsCompletedLoading();
     }
@@ -256,8 +256,15 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const base_url = frame.base();
 
     const src = element.getAttributeInterned("src") orelse {
-        return self.addInlineScript(script_element, kind);
+        return self.addInlineScript(script_element, from_parser, kind);
     };
+
+    // https://html.spec.whatwg.org/#prepare-the-script-element: an empty src
+    // fires error without a fetch. Like Chrome, whitespace counts as empty.
+    if (std.mem.trim(u8, src, "\t\n\x0c\r ").len == 0) {
+        script_element._executed = true;
+        return frame.queueElementEvent(script_element.asHtml(), .@"error");
+    }
 
     // The script is remote (even data: and blob: are synthesized via HttpClient)
 
@@ -278,21 +285,17 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             break :blk .async;
         }
 
-        // Check for defer or module (before checking dynamic script default)
-        if (kind == .module or element.getAttributeInterned("defer") != null) {
-            break :blk .@"defer";
+        if (comptime from_parser) {
+            // dynamic script ignores defre
+            if (kind == .module or element.getAttributeInterned("defer") != null) {
+                break :blk .@"defer";
+            }
+            break :blk .normal;
         }
 
-        // For dynamically-inserted scripts (not from parser), default to async
-        // unless async was explicitly set to false (which removes the attribute)
-        // and defer was set to true (checked above)
-        if (comptime !from_parser) {
-            // Script has src and no explicit async/defer attributes
-            // Per HTML spec, dynamically created scripts default to async
-            break :blk .async;
-        }
-
-        break :blk .normal;
+        // Dynamically-inserted: defer has no effect. Async by default, in
+        // insertion order once force-async is cleared.
+        break :blk if (script_element._force_async) .async else .ordered;
     };
 
     if (comptime lp.IS_DEBUG) {
@@ -360,8 +363,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     if (mode == .normal) {
         // Blocking: fetch synchronously and evaluate before the parser resumes.
 
-        // A consumed preload (waitForPreload below) is owned by us: its buffer
-        // is borrowed by `script`, so it must outlive eval.
+        // A consumed preload (waitForPreload below) is owned by us: its script
+        // cache is borrowed by `script`, so it must outlive eval.
         var consumed_preload: ?*Script = null;
         defer if (consumed_preload) |p| {
             p.deinit();
@@ -373,9 +376,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             defer self.base.endEvaluationWindow(was_evaluating);
 
             if (self.waitForPreload(remote_url)) |pre| {
-                // There was a preloaded script, we borrow it's source and status
+                // There was a preloaded script: take its source (both get
+                // deinit'd) and borrow its status and script cache.
                 consumed_preload = pre;
                 script.source = pre.source;
+                pre.source = .{ .remote = .empty };
                 script.encoding = pre.encoding;
                 script.script_cache = pre.script_cache;
                 script.status = pre.status;
@@ -399,8 +404,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
                 const response = try transfer.submitSync(.{});
 
-                // Take the body's arena rather than releasing it: `source`
-                // has to outlive this call, up to script.deinit().
+                // Take the body and its arena rather than releasing them:
+                // `source` has to outlive this call, up to script.deinit().
                 script.source_arena = response.arena;
                 script.source = .{ .remote = response.body };
                 script.setContentType(response.content_type);
@@ -421,8 +426,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         return self.evalNow(script);
     }
 
-    // async/defer: queue the script and fetch in the background; doneCallback
-    // routes it through the ready_scripts / defer_scripts draining.
+    // async/defer/ordered: queue the script and fetch in the background;
+    // doneCallback routes it through the ready_scripts / defer_scripts /
+    // ordered_scripts draining.
     self.base.scriptList(script).append(&script.node);
 
     const was_evaluating = self.base.is_evaluating;
@@ -466,7 +472,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
 // A <script> with no src. Runs synchronously right now, except an inline
 // module during parsing, which waits its turn in defer_scripts.
-fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, kind: Script.Extra.FrameExtra.Kind) !void {
+fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, from_parser: bool, kind: Script.Extra.FrameExtra.Kind) !void {
     const node = script_element.asElement().asNode();
 
     const source_len = node.childTextContentLen();
@@ -506,6 +512,10 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, k
             .script_element = script_element,
             .frame = frame,
         } },
+        .microtask_pre_execute = !from_parser, //parser already ran it
+        // The sourceURL opt-out is conservative: strings and ordinary comments
+        // containing the marker also keep script-relative positions.
+        .text_position = if (from_parser and std.mem.indexOf(u8, source, "sourceURL=") == null) script_element._text_position else .{},
     };
 
     // An inline module found during parsing waits its turn in document order.

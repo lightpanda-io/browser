@@ -89,7 +89,8 @@ fn init(init_: Init, exec: *const Execution) !*AudioData {
         return error.TypeError;
     }
     const total_size = @as(u64, frames) * channels * format.bytesPerSample();
-    if (init_.data.bytes.len < total_size) {
+    const data = init_.data.bytes();
+    if (data.len < total_size) {
         return error.TypeError;
     }
 
@@ -102,7 +103,7 @@ fn init(init_: Init, exec: *const Execution) !*AudioData {
         .number_of_frames = frames,
         .number_of_channels = channels,
         .timestamp = timestamp,
-    }, init_.data.bytes[0..@intCast(total_size)], exec.page);
+    }, data[0..@intCast(total_size)], exec.page);
     errdefer self.deinit(exec.page);
 
     try transfer.detach();
@@ -262,14 +263,15 @@ fn allocationSize(self: *const AudioData, options: CopyToOptions) !u32 {
 fn copyTo(self: *const AudioData, destination: js.AllowSharedBufferSource, options: CopyToOptions) !void {
     const copy = try self.computeCopy(options);
     const byte_length = copy.byteLength();
-    if (byte_length > destination.bytes.len) {
+    const destination_bytes = destination.bytes();
+    if (byte_length > destination_bytes.len) {
         return error.RangeError;
     }
 
     const source_format = self._format.?;
     const channels = self._number_of_channels;
     const frames = self._number_of_frames;
-    const dest = destination.bytes[0..@intCast(byte_length)];
+    const dest = destination_bytes[0..@intCast(byte_length)];
 
     // Same format, and the copied range is contiguous in the source.
     if (source_format == copy.format) {

@@ -393,6 +393,11 @@
   new DataView(buf).setUint32(0, 0x41424344);
   const view = await new Request('https://example.com', { method: 'POST', body: new DataView(buf, 1, 2) }).text();
 
+  // body is read before method, whose getter detaches it: the body is then
+  // empty, rather than a copy of the freed backing store.
+  const body = new Uint8Array([1, 2, 3]);
+  const detached = await new Request('https://example.com', { body, get method() { body.buffer.transfer(0); return 'POST'; } }).bytes();
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual(2, int8.length);
@@ -400,6 +405,7 @@
     testing.expectEqual(2, int8[1]);
     testing.expectEqual(4, float32.length);
     testing.expectEqual('BC', view);
+    testing.expectEqual(0, detached.length);
   });
 </script>
 

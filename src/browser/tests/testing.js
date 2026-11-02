@@ -351,7 +351,14 @@
     HOST: '127.0.0.1',
     ORIGIN: 'http://127.0.0.1:9582',
     BASE_URL: 'http://127.0.0.1:9582/src/browser/tests/',
+    skipAsync: skipAsync
   };
+
+  async function skipAsync() {
+    const state = await async();
+    state.resolve();
+    state.done(() => { expectTrue(true); });
+  }
 
   if (IS_TEST_RUNNER === false) {
     // The page is running in a different browser. Probably a developer making sure

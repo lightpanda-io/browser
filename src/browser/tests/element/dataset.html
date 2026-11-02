@@ -296,3 +296,14 @@
   testing.expectEqual(false, el.hasAttributes());
 }
 </script>
+
+<script id=prototype_placement>
+{
+  // airgap.js (transcend) reads these descriptors off the prototypes directly.
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'dataset').get);
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(SVGElement.prototype, 'dataset').get);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.dataset.a = 'b';
+  testing.expectEqual('b', svg.getAttribute('data-a'));
+}
+</script>

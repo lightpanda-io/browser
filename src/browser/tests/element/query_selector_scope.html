@@ -126,3 +126,13 @@
   testing.expectEqual($('#p1'), firstParent);
 }
 </script>
+
+<script id="scope_document">
+{
+  // On a document, :scope is the root element
+  testing.expectEqual(document.documentElement, document.querySelector(':scope'));
+  testing.expectEqual(1, document.querySelectorAll(':scope').length);
+  testing.expectEqual(document.body, document.querySelector(':scope > body'));
+  testing.expectEqual(0, document.createDocumentFragment().querySelectorAll(':scope').length);
+}
+</script>

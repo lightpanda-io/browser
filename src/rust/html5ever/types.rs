@@ -165,6 +165,14 @@ pub struct CAttributeIterator {
     pub pos: usize,
 }
 
+// 0-based, the column in UTF-16 code units: the unit of V8's script offsets.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TextPosition {
+    pub line: u32,
+    pub column: u32,
+}
+
 #[repr(C)]
 pub struct CNodeOrText {
     pub tag: u8, // 0 = node, 1 = text

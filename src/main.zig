@@ -379,7 +379,7 @@ const FetchTerminator = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
         const b = self.browser orelse return;
-        b.env.terminate();
+        b.env.requestTerminate();
         self.browser = null;
     }
 };

@@ -500,3 +500,56 @@
     testing.expectEqual(5, el.selectionEnd);
   }
 </script>
+
+
+<script id="scrollHeight_autosize_zero_height">
+  {
+    // Pin the box so Lightpanda and Chrome lay out the same one: 12px lines,
+    // no padding, no scrollbar. Chrome's glyphs overflow the last line by a
+    // pixel or two, so compare line counts rather than pixels.
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'font-family: monospace; font-size: 10px; line-height: 12px; padding: 0; overflow: hidden';
+    const lines = () => Math.round(ta.scrollHeight / 12);
+
+    // Autosize idiom: collapse the box, then read the text's height.
+    ta.textContent = 'Hello';
+    document.body.appendChild(ta);
+    ta.style.height = '0px';
+    testing.expectEqual(0, ta.clientHeight);
+    testing.expectEqual(1, lines());
+
+    // An empty value still takes one line.
+    ta.value = '';
+    testing.expectEqual(1, lines());
+
+    // Newlines are kept, and a trailing one opens an empty line.
+    ta.value = 'First line\nSecond line';
+    testing.expectEqual(2, lines());
+    ta.value = 'a\n\n';
+    testing.expectEqual(3, lines());
+
+    // Without a CSS width, lines wrap at cols (default 20).
+    ta.value = 'aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa';
+    testing.expectEqual(2, lines());
+    ta.cols = 80;
+    testing.expectEqual(1, lines());
+    ta.setAttribute('cols', '0');
+    testing.expectEqual(2, lines());
+
+    // A CSS width beats cols.
+    ta.style.width = '70px';
+    testing.expectEqual(4, lines());
+
+    // white-space: pre doesn't wrap.
+    ta.style.whiteSpace = 'pre';
+    testing.expectEqual(1, lines());
+
+    // The box's own height is the floor.
+    ta.style.height = '200px';
+    testing.expectEqual(200, ta.scrollHeight);
+
+    ta.style.display = 'none';
+    testing.expectEqual(0, ta.scrollHeight);
+    ta.remove();
+  }
+</script>

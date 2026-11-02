@@ -66,6 +66,11 @@ pub fn substringWidth(text: []const u8, charnum: u32, nchars: u32, font_size: f6
 /// Line height for `line-height: normal`, in em.
 pub const LINE_HEIGHT = 1.2;
 
+/// Glyph extents above and below the baseline, in em, as in a generic
+/// sans-serif face.
+pub const ASCENT = 0.8;
+pub const DESCENT = 0.2;
+
 pub const WhiteSpace = struct {
     wrap: bool = true, // Lines break between words to fit.
     collapse: bool = true, // run of spaces becomes one and is removed at edges

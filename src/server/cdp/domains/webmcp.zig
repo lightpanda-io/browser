@@ -27,16 +27,16 @@ const CDP = @import("../CDP.zig");
 const js = @import("../../../browser/js/js.zig");
 const Notification = @import("../../../Notification.zig");
 const ModelContext = @import("../../../browser/webapi/ModelContext.zig");
+const AbortSignal = @import("../../../browser/webapi/AbortSignal.zig");
 
 const log = lp.log;
-const ModelContextClient = ModelContext.ModelContextClient;
 
 pub const Invocation = struct {
     id: u32,
     bc: *CDP.BrowserContext,
-    frame_id: u32,
-    name: []const u8,
-    canceled: bool = false,
+    // The document the tool ran in, which owns the signal.
+    loader_id: u32,
+    signal: *AbortSignal,
 };
 
 pub fn processMessage(cmd: *CDP.Command) !void {
@@ -62,17 +62,11 @@ fn enable(cmd: *CDP.Command) !void {
     // Replay any tools registered before enable. We walk the current
     // frame only; subframes will be added when they register.
     if (bc.mainFrame()) |frame| {
-        const mc = frame.window.getModelContext();
-        const tools = mc.tools();
+        const tools = if (frame.window._model_context) |mc| mc.tools() else &.{};
         if (tools.len > 0) {
-            var ls: js.Local.Scope = undefined;
-            frame.js.localScope(&ls);
-            defer ls.deinit();
-
             const writer = ToolWriter{
                 .frame_id = id.toFrameId(frame._frame_id),
                 .tools = tools,
-                .local = &ls.local,
             };
             try bc.cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = bc.session_id });
         }
@@ -99,8 +93,9 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame_id = try id.parseFrameId(params.frameId);
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return error.FrameNotFound;
-    const mc = frame.window.getModelContext();
+    const mc = frame.window._model_context orelse return error.NotFound;
     const tool = mc.findTool(params.toolName) orelse return error.NotFound;
+    const exec = &frame.js.execution;
 
     // Stringify the input once. We send it back to the client via
     // `toolInvoked.input` and pass the parsed form into the JS callback.
@@ -113,8 +108,8 @@ fn invokeTool(cmd: *CDP.Command) !void {
     invocation.* = .{
         .id = inv_id,
         .bc = bc,
-        .frame_id = frame_id,
-        .name = try bc.arena.dupe(u8, tool.name),
+        .loader_id = frame._loader_id,
+        .signal = try AbortSignal.init(exec),
     };
     try bc.webmcp_invocations.put(bc.arena, inv_id, invocation);
 
@@ -134,16 +129,13 @@ fn invokeTool(cmd: *CDP.Command) !void {
     defer ls.deinit();
     const local = &ls.local;
 
-    const input_value = local.parseJSON(input_str) catch {
-        try respondError(cmd.cdp, bc, invocation, "failed to parse input JSON");
-        return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
-    };
-
-    const callback = local.toLocal(tool.execute);
-
     var caught: js.TryCatch.Caught = .{};
-    const result = callback.tryCall(js.Value, .{ input_value, ModelContextClient{} }, &caught) catch {
-        const msg = caught.exception orelse "tool threw";
+    const result = tool.invoke(exec, local, input_str, invocation.signal, &caught) catch |err| {
+        const msg = switch (err) {
+            error.InvalidInput => "failed to parse input JSON",
+            error.ToolThrew => caught.exception orelse "tool threw",
+            error.OutOfMemory => return error.OutOfMemory,
+        };
         try respondError(cmd.cdp, bc, invocation, msg);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
@@ -154,7 +146,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     }
 
-    const promise = js.Promise{ .local = local, .handle = @ptrCast(result.handle) };
+    const promise = result.toPromise();
     const on_fulfilled = local.newCallback(onPromiseFulfilled, invocation);
     const on_rejected = local.newCallback(onPromiseRejected, invocation);
     _ = promise.thenAndCatch(on_fulfilled, on_rejected) catch {
@@ -176,12 +168,18 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
 
     const inv_id = CDP.InvocationIdGen.parse(params.invocationId) catch return error.InvalidParams;
     const entry = bc.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
-    entry.value.canceled = true;
+    const invocation = entry.value;
 
     try cmd.cdp.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(inv_id),
         .status = "Canceled",
     }, .{ .session_id = bc.session_id });
+
+    if (bc.session.findFrameByLoaderId(invocation.loader_id)) |frame| {
+        invocation.signal.abort(null, &frame.js.execution) catch |err| {
+            log.debug(.cdp, "WebMCP cancel abort", .{ .err = err });
+        };
+    }
 
     return cmd.sendResult(null, .{});
 }
@@ -254,18 +252,9 @@ pub fn onToolAdded(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
-    const global = event.exec.js.global;
-
-    var ls: js.Local.Scope = undefined;
-    global.getJs().localScope(&ls);
-    defer ls.deinit();
-
-    const frame_id = global.frameId();
-
     const writer = ToolWriter{
-        .frame_id = id.toFrameId(frame_id),
+        .frame_id = id.toFrameId(event.exec.frameId()),
         .tools = &.{event.tool},
-        .local = &ls.local,
     };
     try bc.cdp.sendEvent("WebMCP.toolsAdded", .{
         .tools = writer,
@@ -314,7 +303,8 @@ test "cdp.WebMCP: enable replays existing tools" {
                 .annotations = .{
                     .readOnly = true,
                     .untrustedContent = false,
-                    .autosubmit = false,
+                    .consequential = false,
+                    .debugging = false,
                 },
             },
         },
@@ -397,6 +387,46 @@ test "cdp.WebMCP: invokeTool fires toolInvoked + toolResponded" {
     }, .{ .session_id = "SID-M" });
 }
 
+test "cdp.WebMCP: invokeTool passes the explainer-era client" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-M",
+        .session_id = "SID-M",
+        .target_id = "TID-000000000M".*,
+        .url = "cdp/webmcp_fixture.html",
+    });
+    const frame_id = id.toFrameId(bc.mainFrame().?._frame_id);
+
+    var ls: js.Local.Scope = undefined;
+    bc.mainFrame().?.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\document.modelContext.registerTool({
+        \\  name: 'legacy',
+        \\  description: 'asks the user first',
+        \\  execute: (input, client) => client.requestUserInteraction(() => 'confirmed'),
+        \\});
+    , "register-legacy");
+
+    try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "WebMCP.invokeTool",
+        .session_id = "SID-M",
+        .params = .{ .frameId = &frame_id, .toolName = "legacy", .input = .{} },
+    });
+    try ctx.expectSentResult(.{ .invocationId = "INV-0000000001" }, .{ .id = 2 });
+    try ctx.expectSentEvent("WebMCP.toolResponded", .{
+        .invocationId = "INV-0000000001",
+        .status = "Completed",
+        .output = "confirmed",
+    }, .{ .session_id = "SID-M" });
+}
+
 test "cdp.WebMCP: invokeTool unknown name" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -449,7 +479,9 @@ test "cdp.WebMCP: cancelInvocation" {
         \\navigator.modelContext.registerTool({
         \\  name: 'hang',
         \\  description: 'never settles',
-        \\  execute: () => new Promise(() => {}),
+        \\  execute: (input, { signal }) => new Promise(() => {
+        \\    signal.onabort = () => { globalThis.__hang_aborted = signal.reason.name; };
+        \\  }),
         \\});
     , "register-hang");
     try ctx.expectSentEvent("WebMCP.toolsAdded", .{
@@ -481,16 +513,16 @@ test "cdp.WebMCP: cancelInvocation" {
         .invocationId = "INV-0000000001",
         .status = "Canceled",
     }, .{ .session_id = "SID-M" });
+
+    const aborted = try ls.local.exec("globalThis.__hang_aborted", "check-abort");
+    try std.testing.expectEqualStrings("AbortError", try aborted.toStringSlice());
 }
 
 // Serializes a slice of `*const ModelContext.Tool` as the
-// `WebMCP.toolsAdded.params.tools` array. Each tool's `inputSchema` is
-// an arbitrary JS object — we round-trip it through `JSON.stringify` and
-// embed the raw JSON.
+// `WebMCP.toolsAdded.params.tools` array.
 const ToolWriter = struct {
     frame_id: [14]u8,
     tools: []const *const ModelContext.Tool,
-    local: *const js.Local,
 
     pub fn jsonStringify(self: *const ToolWriter, w: anytype) !void {
         try w.beginArray();
@@ -504,22 +536,24 @@ const ToolWriter = struct {
             try w.write(t.description);
 
             try w.objectField("inputSchema");
-            if (t.input_schema) |is| {
-                try w.write(is.local(self.local).toValue());
+            if (t.input_schema) |schema| {
+                try w.beginWriteRaw();
+                try w.writer.writeAll(schema);
+                w.endWriteRaw();
             } else {
                 try w.beginObject();
                 try w.endObject();
             }
 
-            try w.objectField("annotations");
-            try w.beginObject();
-            try w.objectField("readOnly");
-            try w.write(t.annotations.readOnlyHint);
-            try w.objectField("untrustedContent");
-            try w.write(t.annotations.untrustedContentHint);
-            try w.objectField("autosubmit");
-            try w.write(t.annotations.autoSubmitHint);
-            try w.endObject();
+            if (t.annotations) |a| {
+                try w.objectField("annotations");
+                try w.write(.{
+                    .readOnly = a.readOnlyHint,
+                    .untrustedContent = a.untrustedContentHint,
+                    .consequential = a.consequentialHint,
+                    .debugging = a.debugging,
+                });
+            }
 
             try w.objectField("frameId");
             try w.write(&self.frame_id);

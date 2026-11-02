@@ -166,9 +166,23 @@ pub fn fromHref(frame: *Frame, href: []const u8, filename_hint: []const u8) !voi
     // `transfer.deinit()` fires no callbacks, so this is still ours on error.
     errdefer frame._factory.destroy(download);
 
-    // Setup transfer.
-    const transfer = try frame.newRequest(.{
-        .ctx = download,
+    var req = request(frame, url, shutdownCallback);
+    req.ctx = download;
+    req.header_callback = headerCallback;
+    req.data_callback = dataCallback;
+    req.done_callback = doneCallback;
+    req.error_callback = errorCallback;
+    const transfer = try newTransfer(frame, req);
+
+    transfer.submit() catch |err| {
+        log.debug(.frame, "href download", .{ .err = err, .url = url });
+    };
+}
+
+/// A download is a navigation from `frame`'s page: no CORS, redirects
+/// followed, credentials included.
+pub fn request(frame: *Frame, url: [:0]const u8, shutdown_callback: HttpClient.Request.ShutdownCallback) HttpClient.Request {
+    return .{
         .url = url,
         .method = .GET,
         .origin = frame.origin,
@@ -177,20 +191,16 @@ pub fn fromHref(frame: *Frame, href: []const u8, filename_hint: []const u8) !voi
         .credentials_mode = .include,
         .resource_type = .download,
         .streaming = true,
-        .header_callback = headerCallback,
-        .data_callback = dataCallback,
-        .done_callback = doneCallback,
-        .error_callback = errorCallback,
-        .shutdown_callback = shutdownCallback,
-    });
+        .shutdown_callback = shutdown_callback,
+    };
+}
+
+pub fn newTransfer(frame: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
+    const transfer = try frame.newRequest(req);
     errdefer transfer.deinit();
     try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
-    // Set common headers.
     try frame.headersForRequest(transfer, .{});
-
-    transfer.submit() catch |err| {
-        log.debug(.frame, "href download", .{ .err = err, .url = url });
-    };
+    return transfer;
 }
 
 /// Feeds the operation with bytes by either writing to a file or streaming over CDP.
@@ -329,7 +339,7 @@ fn fromRaw(ptr: *anyopaque) struct { *Download, bool } {
 // Chrome downloads only 200-203; any other status is announced, then
 // canceled at once, and nothing is written. 206 is only valid for a range
 // request, which we never send.
-inline fn isSuccessStatus(status: u16) bool {
+pub inline fn isSuccessStatus(status: u16) bool {
     return status >= 200 and status <= 203;
 }
 

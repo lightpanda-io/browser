@@ -297,6 +297,23 @@
   }
 </script>
 
+<script id="worker_global_prototype" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./global-prototype-worker.js');
+    worker.onmessage = (e) => state.resolve(e.data);
+    worker.postMessage(null);
+
+    await state.done((r) => {
+      testing.expectEqual(true, r.proto_is_scope_proto);
+      testing.expectEqual(true, r.ctor_is_scope);
+      testing.expectEqual(true, r.no_own_ctor);
+      testing.expectEqual(true, r.is_worker_global);
+      worker.terminate();
+    });
+  }
+</script>
+
 <script id="worker_navigator" type=module>
   {
     const state = await testing.async();

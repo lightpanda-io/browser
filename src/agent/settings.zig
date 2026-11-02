@@ -79,7 +79,7 @@ pub const Credential = struct {
     }
 };
 
-/// Probe a keyless local provider (Ollama, llama.cpp): its env key is a
+/// Probe a keyless local provider (Ollama, llama.cpp, LLMD): its env key is a
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
 pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Candidate {
@@ -198,8 +198,11 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
         if (detectLocalProvider(allocator, .llama_cpp, opts.base_url)) |creds| {
             return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
         }
+        if (detectLocalProvider(allocator, .llmd, opts.base_url)) |creds| {
+            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
+        }
         std.debug.print(
-            \\No API key detected. Set {s}, or run a local Ollama or llama.cpp server with a loaded model.
+            \\No API key detected. Set {s}, or run a local Ollama, llama.cpp or LLMD server with a loaded model.
             \\To use the basic REPL (without LLM integration), pass the --no-llm option.
             \\
         , .{api_keys_hint});
@@ -268,7 +271,7 @@ pub const Remembered = struct {
     effort: ?Config.Effort = null,
     verbosity: ?Config.AgentVerbosity = null,
     stream: ?bool = null,
-    search_engine: ?lp.tools.SearchEngine = null,
+    search_engine: ?lp.tools.search.Engine = null,
 };
 
 /// The result's strings live in `arena`.
@@ -371,14 +374,14 @@ pub fn resolveStream(remembered: ?Remembered) bool {
 
 /// Precedence: `--search-engine` > remembered `.lp-agent.zon` value >
 /// default (auto). The REPL `/searchEngine` command also sets and persists it.
-pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
+pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.search.Engine {
     if (remembered) |r| if (r.search_engine) |e| return e;
     return .auto;
 }
 
 /// Validate `desired` against the provider's catalog, mirroring the interactive
 /// `/model` command. Empty list (unreachable server) leaves it unchecked; an
-/// explicit unlisted model is fatal. The local servers (Ollama, llama.cpp) have
+/// explicit unlisted model is fatal. The local servers (Ollama, llama.cpp, LLMD) have
 /// authoritative catalogs, so their default is substituted with the first served
 /// model when unloaded; cloud defaults are hardcoded real models, trusted as-is.
 pub fn reconcileModel(
@@ -399,7 +402,7 @@ pub fn reconcileModel(
 
     if (!explicit) {
         switch (credential.provider) {
-            .ollama, .llama_cpp => {},
+            .ollama, .llama_cpp, .llmd => {},
             else => return try allocator.dupe(u8, desired),
         }
         std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(credential.provider), desired, ids[0] });

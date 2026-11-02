@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=get_tools type=module>
+{
+  const state = await testing.async();
+  const mc = document.modelContext;
+  await mc.registerTool({ name: 'c', description: 'registered first', execute: () => {} });
+  await mc.registerTool({
+    name: 'b',
+    title: 'Bee',
+    description: 'registered second',
+    inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
+    annotations: { readOnlyHint: true },
+    execute: () => {},
+  });
+  await mc.registerTool({ name: 'a', description: 'registered last', annotations: {}, execute: () => {} });
+  // Other module scripts register tools concurrently.
+  const tools = (await mc.getTools()).filter((t) => ['a', 'b', 'c'].includes(t.name));
+  state.resolve(tools);
+  await state.done((tools) => {
+    testing.expectEqual(['a', 'b', 'c'], tools.map((t) => t.name));
+    const [a, b, c] = tools;
+    testing.expectEqual('Bee', b.title);
+    testing.expectEqual('', c.title);
+    testing.expectEqual('registered second', b.description);
+    testing.expectEqual(['q'], b.inputSchema.required);
+    testing.expectEqual(undefined, c.inputSchema);
+    testing.expectEqual(window, b.window);
+    testing.expectEqual(location.origin, b.origin);
+    testing.expectEqual(
+      { consequentialHint: false, debugging: false, readOnlyHint: true, untrustedContentHint: false },
+      b.annotations,
+    );
+    testing.expectEqual(
+      { consequentialHint: false, debugging: false, readOnlyHint: false, untrustedContentHint: false },
+      a.annotations,
+    );
+    testing.expectEqual(undefined, c.annotations);
+  });
+}
+</script>
+
+<script id=execute_results type=module>
+{
+  const state = await testing.async();
+  const mc = document.modelContext;
+  const received = [];
+  const register = (name, execute) => mc.registerTool({ name, description: 'd', execute });
+  await register('echo', (input) => { received.push(input); return input; });
+  await register('text', async () => 'plain text');
+  await register('number', () => 42);
+  await register('empty', () => '');
+  await register('null', () => null);
+  await register('undefined', () => {});
+  await register('throws', () => { throw new Error('boom'); });
+  await register('rejects', async () => { throw new TypeError('later'); });
+
+  const find = async (name) => (await mc.getTools()).find((t) => t.name === name);
+  const run = (name, ...args) => find(name).then((t) => mc.executeTool(t, ...args)).then(
+    (v) => v,
+    (e) => e.name + ': ' + e.message,
+  );
+
+  const results = [
+    await run('echo', { a: [1, 2] }),
+    await run('echo'),
+    await run('echo', [1, 2, 3]),
+    await run('text'),
+    await run('number'),
+    await run('empty'),
+    await run('null'),
+    await run('undefined'),
+    // Chrome's messages for these differ from ours, which carry the exception.
+    (await run('throws')).split(':')[0],
+    (await run('rejects')).split(':')[0],
+  ];
+  const circular = {};
+  circular.self = circular;
+  for (const bad of ['hello', 123, null, { toJSON: () => undefined }, circular]) {
+    results.push((await run('echo', bad)).split(':')[0]);
+  }
+  results.push(await mc.executeTool({ name: 'nope', description: 'd', window, origin: location.origin }).catch((e) => e.name));
+  results.push(await mc.executeTool({ name: 'echo', description: 'd', window }).catch((e) => e.name));
+
+  state.resolve({ results, received });
+  await state.done(({ results, received }) => {
+    testing.expectEqual([
+      '{"a":[1,2]}',
+      '{}',
+      '[1,2,3]',
+      'plain text',
+      '42',
+      'Operation succeeded',
+      'null',
+      'undefined',
+      'UnknownError',
+      'UnknownError',
+      'TypeError', 'TypeError', 'TypeError', 'TypeError', 'TypeError',
+      'UnknownError',
+      'TypeError',
+    ], results);
+    testing.expectEqual([{ a: [1, 2] }, {}, [1, 2, 3]], received);
+  });
+}
+</script>
+
+<script id=execute_signal type=module>
+{
+  const state = await testing.async();
+  const mc = document.modelContext;
+  const events = [];
+  mc.addEventListener('toolactivated', (e) => events.push('activated:' + e.toolName + ':' + (e instanceof ToolActivatedEvent)));
+  mc.ontoolcancel = (e) => events.push('cancel:' + e.toolName + ':' + (e instanceof ToolCancelEvent));
+
+  let toolSignal = null;
+  const signalAborted = new Promise((resolve) => {
+    mc.registerTool({
+      name: 'hangs',
+      description: 'never settles',
+      execute: (input, options) => new Promise(() => {
+        toolSignal = options.signal;
+        options.signal.onabort = () => { events.push('signal_aborted'); resolve(); };
+        events.push('started');
+      }),
+    });
+  });
+  const tool = (await mc.getTools()).find((t) => t.name === 'hangs');
+
+  const controller = new AbortController();
+  const execution = mc.executeTool(tool, {}, { signal: controller.signal });
+  events.push('returned');
+  const cancelled = new Promise((resolve) => mc.addEventListener('toolcancel', resolve, { once: true }));
+  await new Promise((resolve) => mc.addEventListener('toolactivated', resolve, { once: true }));
+  controller.abort('custom reason');
+  await Promise.all([
+    execution.catch((e) => events.push('rejected:' + e)),
+    signalAborted,
+    cancelled,
+  ]);
+  mc.ontoolcancel = null;
+
+  // An already-aborted signal rejects without running the tool.
+  let rejection = null;
+  mc.executeTool(tool, {}, { signal: AbortSignal.abort('already') }).catch((e) => rejection = e);
+  await Promise.resolve();
+
+  state.resolve({ events, reason: toolSignal.reason, rejection });
+  await state.done(({ events, reason, rejection }) => {
+    testing.expectEqual([
+      'returned', 'started', 'activated:hangs:true', 'rejected:custom reason', 'signal_aborted', 'cancel:hangs:true',
+    ], events);
+    testing.expectEqual('AbortError', reason.name);
+    testing.expectEqual('already', rejection);
+  });
+}
+</script>
+
+<script id=execute_unregister type=module>
+{
+  const state = await testing.async();
+  const mc = document.modelContext;
+  const controller = new AbortController();
+  let started = null;
+  const running = new Promise((resolve) => started = resolve);
+  let aborted = false;
+  await mc.registerTool({
+    name: 'unregistered',
+    description: 'd',
+    execute: (input, { signal }) => new Promise((resolve) => {
+      signal.onabort = () => aborted = true;
+      started(() => resolve('still resolved'));
+    }),
+  }, { signal: controller.signal });
+  const tool = (await mc.getTools()).find((t) => t.name === 'unregistered');
+  const execution = mc.executeTool(tool);
+  const finish = await running;
+  // Unregistering doesn't cancel a pending execution.
+  controller.abort();
+  finish();
+  state.resolve({ result: await execution, aborted });
+  await state.done(({ result, aborted }) => {
+    testing.expectEqual('still resolved', result);
+    testing.expectEqual(false, aborted);
+  });
+}
+</script>
+
+<script id=tool_events>
+{
+  const activated = new ToolActivatedEvent('toolactivated', { toolName: 'x' });
+  testing.expectEqual('x', activated.toolName);
+  testing.expectEqual(false, activated.isTrusted);
+  testing.expectEqual('', new ToolCancelEvent('toolcancel').toolName);
+  testing.expectEqual(null, document.modelContext.ontoolactivated);
+}
+</script>
+
+<script id=legacy_client>
+  testing.diverges('execute() also gets requestUserInteraction from the explainer-era client', () => {
+    testing.expectEqual('function', typeof ModelContextClient.prototype.requestUserInteraction);
+  });
+</script>

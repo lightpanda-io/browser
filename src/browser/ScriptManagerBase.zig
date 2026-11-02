@@ -28,7 +28,6 @@ const ImportMap = @import("ImportMap.zig");
 const h5e = @import("parser/html5ever.zig");
 
 const Element = @import("webapi/Element.zig");
-const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -58,6 +57,10 @@ async_scripts: std.DoublyLinkedList,
 // dom_loaded == true. Workers never populate this list.
 defer_scripts: std.DoublyLinkedList,
 
+// Dynamically-inserted scripts with script.async = false. These are executed
+// in order
+ordered_scripts: std.DoublyLinkedList,
+
 // When an async script is ready, it's queued here.
 ready_scripts: std.DoublyLinkedList,
 
@@ -82,6 +85,7 @@ pub fn init(allocator: Allocator, http_client: *HttpClient, owner: GlobalScope) 
         .owner = owner,
         .async_scripts = .{},
         .defer_scripts = .{},
+        .ordered_scripts = .{},
         .ready_scripts = .{},
         .importmap = .empty,
         .is_evaluating = false,
@@ -115,6 +119,7 @@ pub fn reset(self: *ScriptManagerBase) void {
     self.importmap = .empty;
 
     clearList(&self.defer_scripts);
+    clearList(&self.ordered_scripts);
     clearList(&self.async_scripts);
     clearList(&self.ready_scripts);
     self.static_scripts_done = false;
@@ -139,6 +144,7 @@ pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLi
         .frame => |fe| switch (fe.mode) {
             .normal => unreachable, // not added to a list, executed immediately
             .@"defer" => &self.defer_scripts,
+            .ordered => &self.ordered_scripts,
             .async => &self.async_scripts,
         },
     };
@@ -514,8 +520,8 @@ pub fn evaluate(self: *ScriptManagerBase) void {
             var script: *Script = @fieldParentPtr("node", n);
             switch (script.extra) {
                 .frame => {
-                    // Only .async mode reaches ready_scripts (defer stays in
-                    // defer_scripts, normal is sync and never queued).
+                    // Only .async mode reaches ready_scripts (defer and ordered
+                    // stay in their lists, normal is sync and never queued).
                     defer script.deinit();
                     script.eval();
                 },
@@ -527,13 +533,26 @@ pub fn evaluate(self: *ScriptManagerBase) void {
                         ia.callback(ia.data, .{
                             .shared = false,
                             .script = script,
-                            .buffer = script.source.remote,
+                            .buffer = script.source.content(),
                         });
                     }
                 },
                 .import => unreachable, // .import doesn't go through ready_scripts
                 .preload => unreachable, // .preload is buffered in the map, never queued
             }
+        }
+
+        // Ordered scripts don't wait for parsing, but they are executed in order
+        while (self.ordered_scripts.first) |n| {
+            var script: *Script = @fieldParentPtr("node", n);
+            if (script.complete == false) {
+                break;
+            }
+            defer {
+                _ = self.ordered_scripts.popFirst();
+                script.deinit();
+            }
+            script.eval();
         }
 
         if (self.static_scripts_done) {
@@ -598,16 +617,16 @@ pub const Script = struct {
     url: []const u8,
     arena: *lp.Arena,
 
-    // Where `source` lives, when it isn't `arena`. The double-arena lets us
-    // use a .small arena for the Script itself, and then a properly sized one
-    // for the body, when we know its size. This avoids eager-usage of our
-    // limited .large arena pool
+    // Where `script_cache` lives, when it isn't `arena`. The double-arena lets
+    // us use a .small arena for the Script itself, and then a properly sized
+    // one for the cache bytes, when we know their size. This avoids
+    // eager-usage of our limited .large arena pool.
     source_arena: ?*lp.Arena = null,
 
     // The encoding a remote script's Content-Type charset names.
     encoding: ?h5e.EncodingInfo = null,
 
-    // Set when the body is an http cache entry. Only classic scripts use it (for now).
+    // Set when the body is an http cache entry.
     script_cache: ?HttpClient.ScriptCache = null,
 
     extra: Extra,
@@ -632,13 +651,23 @@ pub const Script = struct {
     debug_transfer_auth_challenge: bool = false,
     debug_transfer_easy_id: usize = 0,
 
+    // We have to run microtasks before we evaluate a script, but for a
+    // <script> tag, the parser already ran it. So we can safely skip it
+    // in that case. Miro-optimization, but it also helps to document the
+    // pieces.
+    microtask_pre_execute: bool = true,
+
+    // Where a parser-inserted inline script is in its document.
+    text_position: js.Local.SourcePosition = .{},
+
     pub const Source = union(enum) {
         @"inline": []const u8,
-        remote: std.ArrayList(u8),
+        // Taken from the transfer (Transfer.takeBody), freed in deinit.
+        remote: HttpClient.Body,
 
-        pub fn content(self: Source) []const u8 {
-            return switch (self) {
-                .remote => |buf| buf.items,
+        pub fn content(self: *const Source) []const u8 {
+            return switch (self.*) {
+                .remote => |*body| body.items(),
                 .@"inline" => |c| c,
             };
         }
@@ -677,6 +706,9 @@ pub const Script = struct {
                 // <script defer> / <script type=module> — queued in
                 // defer_scripts, drained in document order.
                 @"defer",
+                // dynamic script with script.async = false. Drained in
+                // insertion order, but doesn't wait for parsing.
+                ordered,
                 // <script async> / dynamically-inserted scripts — queued in
                 // async_scripts; once HTTP completes, doneCallback moves to
                 // ready_scripts and evaluate drains them.
@@ -686,16 +718,22 @@ pub const Script = struct {
     };
 
     pub fn deinit(self: *Script) void {
+        if (self.source == .remote) {
+            self.source.remote.deinit();
+        }
         if (self.source_arena) |source_arena| {
             source_arena.release();
         }
         self.arena.release();
     }
 
-    // The allocator `source` grows from. Falls back to the control arena when
-    // no header callback ran to size a dedicated one.
-    fn sourceAllocator(self: *Script) Allocator {
-        return (self.source_arena orelse self.arena).allocator();
+    // For what lives as long as the source (script cache, decoded text).
+    // Acquired on first use, sized for that first use.
+    fn sourceAllocator(self: *Script, size_hint: usize) !Allocator {
+        if (self.source_arena == null) {
+            self.source_arena = try self.manager.acquireArena(size_hint, "SM.source");
+        }
+        return self.source_arena.?.allocator();
     }
 
     pub fn setContentType(self: *Script, content_type: ?[]const u8) void {
@@ -721,7 +759,7 @@ pub const Script = struct {
         if (encoding.isUtf8() and !std.mem.startsWith(u8, bytes, "\xFE\xFF") and !std.mem.startsWith(u8, bytes, "\xFF\xFE")) {
             return bytes;
         }
-        return h5e.decodeToUtf8(self.sourceAllocator(), encoding.handle.?, bytes);
+        return h5e.decodeToUtf8(try self.sourceAllocator(bytes.len), encoding.handle.?, bytes);
     }
 
     pub fn startCallback(transfer: *HttpClient.Transfer) !void {
@@ -784,20 +822,11 @@ pub const Script = struct {
 
         self.setContentType(transfer.contentType());
 
-        lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
-
-        const body_len = transfer.bodyLen();
-        if (self.source_arena == null) {
-            // A redirect re-runs this callback; keep the arena we already have.
-            self.source_arena = try self.manager.acquireArena(body_len, "SM.source");
-        }
-
-        var buffer: std.ArrayList(u8) = .empty;
-        try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), body_len);
-        self.source = .{ .remote = buffer };
+        lp.assert(self.source.remote.items().len == 0, "ScriptManagerBase.Header buffer", .{ .len = self.source.remote.items().len });
 
         if (transfer.script_cache) |sc| {
-            const allocator = self.sourceAllocator();
+            // A redirect re-runs this callback; it reuses the arena.
+            const allocator = try self.sourceAllocator(sc.key.len + if (sc.bytes) |b| b.len else 0);
             self.script_cache = .{
                 .key = try allocator.dupe(u8, sc.key),
                 .bytes = if (sc.bytes) |b| try allocator.dupe(u8, b) else null,
@@ -806,16 +835,9 @@ pub const Script = struct {
         return .proceed;
     }
 
-    pub fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    pub fn dataCallback(transfer: *HttpClient.Transfer, _: []const u8) !void {
         const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
-        self._dataCallback(transfer, data) catch |err| {
-            log.debug(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
-            return err;
-        };
-    }
-
-    fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
-        try self.source.remote.appendSlice(self.sourceAllocator(), data);
+        self.source.remote = transfer.takeBody();
     }
 
     pub fn doneCallback(ctx: *anyopaque) !void {
@@ -833,6 +855,7 @@ pub const Script = struct {
                     manager.ready_scripts.append(&self.node);
                 },
                 .@"defer" => {}, // stays in defer_scripts; drained in order
+                .ordered => {}, // stays in ordered_scripts; drained in order
                 .normal => unreachable, // syncRequest path doesn't go through callbacks
             },
             .import_async => {
@@ -843,7 +866,7 @@ pub const Script = struct {
                 manager.async_scripts.remove(&self.node);
                 const entry = manager.imported_modules.getPtr(self.url).?;
                 entry.state = .{ .done = self };
-                entry.buffer = self.source.remote;
+                entry.buffer = self.source.content();
             },
             .preload => unreachable, // preloads use ScriptManager.PreloadedScript.doneCallback
         }
@@ -965,7 +988,7 @@ pub const Script = struct {
         // checkpoint though (empty JS stack): a script executing because a
         // running script inserted it must not drain the queue mid-task -
         // e.g. its own insertion record must survive for takeRecords().
-        if (frame.js.call_depth == 0) {
+        if (frame.js.call_depth == 0 and self.microtask_pre_execute) {
             local.runMicrotasks();
         }
 
@@ -1004,7 +1027,7 @@ pub const Script = struct {
                 },
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    frame.main_js.module(false, local, self.source.content(), url, cacheable) catch break :blk false;
+                    frame.main_js.module(false, local, self.source.content(), url, self.text_position, cacheable, self.script_cache) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -1054,11 +1077,12 @@ pub const Script = struct {
         });
     }
 
-    // currently only classic scripts participate in script caching
     fn runClassic(self: *Script, local: *const js.Local, text: []const u8) !void {
         const sc = self.script_cache orelse {
             // wasn't in the cache and isn't cacheable
-            return local.eval(text, self.url);
+            const result = try local.compileWithCache(text, self.url, self.text_position, null);
+            _ = try result.script.run();
+            return;
         };
 
         if (text.ptr != self.source.content().ptr) {
@@ -1075,7 +1099,7 @@ pub const Script = struct {
             return local.eval(text, self.url);
         }
 
-        const result = try local.compileWithCache(text, self.url, sc.bytes);
+        const result = try local.compileWithCache(text, self.url, .{}, sc.bytes);
         _ = try result.script.run();
 
         if (sc.bytes != null) {
@@ -1089,10 +1113,14 @@ pub const Script = struct {
 
         // Created after the run so it includes the functions compiled lazily
         // while running.
-        const bytes = result.script.getUnboundScript().createCodeCache(self.sourceAllocator()) catch |err| {
+        // Only needed until it's stored. Not manager.allocator: a worker's
+        // is an arena.
+        const allocator = self.manager.client.allocator;
+        const bytes = result.script.getUnboundScript().createCodeCache(allocator) catch |err| {
             log.debug(.browser, "create script cache", .{ .url = self.url, .err = err });
             return;
         };
+        defer allocator.free(bytes);
         self.manager.client.cache.putScriptCache(sc.key, text, bytes) catch |err| {
             log.warn(.cache, "put script cache", .{ .url = self.url, .err = err });
         };
@@ -1152,7 +1180,8 @@ const ImportAsync = struct {
 pub const ModuleSource = struct {
     shared: bool,
     script: *Script,
-    buffer: std.ArrayList(u8),
+    // Owned by `script`.
+    buffer: []const u8,
 
     pub fn deinit(self: *ModuleSource) void {
         if (self.shared == false) {
@@ -1161,7 +1190,7 @@ pub const ModuleSource = struct {
     }
 
     pub fn src(self: *const ModuleSource) []const u8 {
-        return self.buffer.items;
+        return self.buffer;
     }
 };
 
@@ -1176,7 +1205,8 @@ const ImportedModule = struct {
     // HttpClient's gate.
     transfer_id: u32 = 0,
     state: State,
-    buffer: std.ArrayList(u8) = .empty,
+    // Owned by the .done script.
+    buffer: []const u8 = "",
 
     pub const State = union(enum) {
         err,
@@ -1339,8 +1369,7 @@ test "ScriptManagerBase: evaluate drops a ready async module when termination is
     // The sticky terminate is set but V8's own state was consumed by the
     // JSEntry unwind of whatever the terminate landed in.
     const env = frame.js.env;
-    env.terminate();
-    js.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
 
     sm.evaluate();
     env.cancelTerminate();

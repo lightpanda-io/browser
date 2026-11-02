@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
 const http = @import("network/http.zig");
 const sys_net = @import("sys/net.zig");
 const libcurl = @import("sys/libcurl.zig");
@@ -532,6 +533,48 @@ var test_http_server_thread: ?std.Thread = null;
 var test_ws_server: ?TestWSServer = null;
 var test_ws_server_thread: ?std.Thread = null;
 
+/// The real port behind 9582, for clients that bypass libcurl's remap.
+pub fn testHttpPort() u16 {
+    return test_http_server.?.listener.?.socket.address.getPort();
+}
+
+/// Point the TypeSafe client at the test server's `/v1/systemone` mock, so a
+/// tool that asks Jev runs its real path without reaching the real API. The
+/// base URL is needed because zenai talks `std.http`, which libcurl's test
+/// port remap does not reach.
+pub const MockJev = struct {
+    pub fn start(arena: std.mem.Allocator) !MockJev {
+        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
+        const base_url = try arena.printSentinel("http://127.0.0.1:{d}", .{testHttpPort()}, 0);
+        _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
+        return .{};
+    }
+
+    /// The decision is answered as usual and the verification re-read after
+    /// it fails: the API breaking once a tool has already acted.
+    pub fn startFailingVerification(arena: std.mem.Allocator) !MockJev {
+        const mock = try start(arena);
+        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast(test_routes.no_verify_key), 1);
+        return mock;
+    }
+
+    /// Answers after a delay, so a test can see whether the caller kept its
+    /// own page running while it waited.
+    pub fn startSlow(arena: std.mem.Allocator) !MockJev {
+        const mock = try start(arena);
+        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast(test_routes.slow_key), 1);
+        return mock;
+    }
+
+    pub fn stop(_: MockJev) void {
+        _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+        _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+    }
+};
+
+pub extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
+pub extern fn unsetenv(name: [*:0]u8) c_int;
+
 pub var test_config: Config = undefined;
 
 test "tests:beforeAll" {
@@ -589,7 +632,7 @@ test "tests:beforeAll" {
 /// binds ephemeral ones so that several can run at once.
 fn routeTestPorts() !void {
     const routes = [_]struct { u16, u16 }{
-        .{ 9582, test_http_server.?.listener.?.socket.address.getPort() },
+        .{ 9582, testHttpPort() },
         .{ 9584, test_ws_server.?.port },
     };
 

@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
-const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
@@ -991,6 +990,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/TaskController.zig"),
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
+    @import("../webapi/event/SecurityPolicyViolationEvent.zig"),
     @import("../webapi/CData.zig"),
     @import("../webapi/cdata/Comment.zig"),
     @import("../webapi/cdata/Text.zig"),
@@ -1224,6 +1224,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/Location.zig"),
     @import("../webapi/ModelContext.zig"),
+    @import("../webapi/event/ToolEvent.zig"),
     @import("../webapi/Navigator.zig"),
     @import("../webapi/NavigatorUAData.zig"),
     @import("../webapi/Notification.zig"),
@@ -1260,6 +1261,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/Performance.zig"),
     @import("../webapi/EventCounts.zig"),
     @import("../webapi/PluginArray.zig"),
+    @import("../webapi/MimeTypeArray.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
     @import("../webapi/geolocation/Geolocation.zig"),
@@ -1317,6 +1319,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/PeriodicWave.zig"),
     @import("../webapi/webaudio/BaseAudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioContext.zig"),
+    @import("../webapi/webaudio/AudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioCompletionEvent.zig"),
     @import("../webapi/webaudio/AudioNode.zig"),
     @import("../webapi/webaudio/AudioDestinationNode.zig"),
@@ -1325,6 +1328,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/ConstantSourceNode.zig"),
     @import("../webapi/webaudio/OscillatorNode.zig"),
     @import("../webapi/webaudio/GainNode.zig"),
+    @import("../webapi/webaudio/ConvolverNode.zig"),
     @import("../webapi/webaudio/DynamicsCompressorNode.zig"),
 });
 
@@ -1398,6 +1402,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/TaskController.zig"),
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
+    @import("../webapi/event/SecurityPolicyViolationEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),

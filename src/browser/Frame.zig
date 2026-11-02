@@ -143,6 +143,8 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
+_image_decodes: Element.Html.Image.Decodes = .{},
+
 _focus_fixup_pending: bool = false,
 
 _style_manager: StyleManager,
@@ -635,7 +637,7 @@ pub fn siteForCookies(self: *const Frame) Cookie.SiteForCookies {
 
 pub fn getTitle(self: *Frame) !?[]const u8 {
     if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
-        return try html_doc.getTitle(self);
+        return try html_doc.asDocument().getTitle(self);
     }
     return null;
 }
@@ -1535,7 +1537,7 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
         else => false,
     };
     if (parsing_html and (iframe.srcAttribute().len > 0 or iframe.hasSrcdoc())) {
-        self.queueElementEvent(Factory.protoOf(iframe), .load) catch |err| {
+        self.queueElementEvent(iframe.asHtml(), .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe.srcAttribute() });
         };
         if (delays_load) {
@@ -1630,9 +1632,9 @@ fn _documentIsComplete(self: *Frame) !void {
     try self.dispatchQueuedEvents();
     if (self.loadEventsAborted()) return;
 
-    // A close() from within our own load handler: the outer dispatch
-    // finishes the load steps.
-    if (self._load_event_in_progress) return;
+    // A close() from within our own load handler, or from the iframe
+    // element's (the tail of our load steps): no nested load (as in Chrome).
+    if (self._load_event_in_progress or self.document._iframe_load_in_progress) return;
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
@@ -2173,9 +2175,13 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     if (comptime from_parser) {
+        const script_node = script.asNode();
+        if (script_node.isConnected() == false) {
+            return;
+        }
         // parser-inserted scripts have force-async set to false, but only if
         // they have src or non-empty content
-        if (script._src.len > 0 or script.asNode().firstChild() != null) {
+        if (script._src != null or script_node.firstChild() != null) {
             script._force_async = false;
         }
     }
@@ -2433,6 +2439,12 @@ pub fn domChanged(self: *Frame) void {
 /// layout observers. Both are no-ops unless something they track changed.
 pub fn renderingChanged(self: *Frame) void {
     self.styleChanged();
+    self.layoutObserversChanged();
+}
+
+/// A change that can move a box without changing any selector match or
+/// cascaded value, like an inline transform: only the layout observers look.
+pub fn layoutObserversChanged(self: *Frame) void {
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
 }
@@ -2543,11 +2555,11 @@ pub fn queueElementEvent(self: *Frame, element: *Element.Html, kind: QueuedEvent
 }
 
 pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEvent.Kind) !void {
-    try self.queueEvent(.{ .element = Factory.protoOf(image), .kind = kind, .generation = image._generation });
+    try self.queueEvent(.{ .element = image.asHtml(), .kind = kind, .generation = image._generation });
 }
 
 fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind, generation: u32) !void {
-    try self.queueEvent(.{ .element = Factory.protoOf(link), .kind = kind, .generation = generation });
+    try self.queueEvent(.{ .element = link.asHtml(), .kind = kind, .generation = generation });
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
@@ -2642,7 +2654,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     if (session.load_resources.stylesheet == false) {
         self.page.status.noteSkipped(.stylesheet);
-        return self.queueLoad(Factory.protoOf(link));
+        return self.queueLoad(link.asHtml());
     }
 
     // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.
@@ -2714,9 +2726,9 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         return self.queueLinkEvent(link, .@"error", generation);
     }
 
-    if (response.body.items.len > MAX_STYLESHEET_BYTES) {
+    if (response.body.items().len > MAX_STYLESHEET_BYTES) {
         log.debug(.http, "external stylesheet too large", .{
-            .bytes = response.body.items.len,
+            .bytes = response.body.items().len,
             .max = MAX_STYLESHEET_BYTES,
             .url = resolved,
         });
@@ -2752,7 +2764,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     else
         null;
     const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
-    const text = try css_charset.decode(arena.allocator(), response.body.items, protocol_charset, self.charset);
+    const text = try css_charset.decode(arena.allocator(), response.body.items(), protocol_charset, self.charset);
     sheet.replaceSync(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.queueLinkEvent(link, .@"error", generation);
@@ -2797,6 +2809,8 @@ fn dispatchQueuedEvents(self: *Frame) !void {
             if (image._generation != queued.generation) {
                 continue;
             }
+            // Without a fetch, the image is pending until its event fires.
+            image._complete = true;
         }
 
         if (html_element.is(Element.Html.Link)) |link| {
@@ -2834,6 +2848,7 @@ fn dispatchQueuedEvents(self: *Frame) !void {
     }
 
     to_process.clearRetainingCapacity();
+    Element.Html.Image.settleDecodes(self);
 }
 
 pub fn scheduleCustomElementBackupDrain(self: *Frame) !void {
@@ -3675,7 +3690,7 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     }
 
     if (node.is(Element.Html.Script)) |script| {
-        if ((comptime from_parser == false) and script._src.len == 0) {
+        if ((comptime from_parser == false) and script._src == null) {
             // Script was added via JavaScript without a src attribute.
             // Only skip if it has no inline content either — scripts with
             // textContent/text should still execute per spec.
@@ -4623,8 +4638,7 @@ test "Frame: scriptAddedCallback does not run a module when termination is pendi
     // The sticky terminate is set but V8's own state was consumed by the
     // JSEntry unwind of whatever the terminate landed in.
     const env = frame.js.env;
-    env.terminate();
-    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
 
     try frame.scriptAddedCallback(false, element.as(HtmlElement.Script));
     env.cancelTerminate();
@@ -4649,8 +4663,7 @@ test "Frame: iframeAddedCallback does not create a frame when termination is pen
 
     const env = frame.js.env;
     const contexts_before = env.contexts.items.len;
-    env.terminate();
-    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
     defer env.cancelTerminate();
 
     try frame.iframeAddedCallback(iframe);

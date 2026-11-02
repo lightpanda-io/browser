@@ -9,6 +9,21 @@
   <text><textPath id=textPath href="#guide" startOffset="25%" method="stretch" spacing="auto">abc</textPath></text>
 </svg>
 
+<svg>
+  <text id=plain x=10 y=50>hello</text>
+  <text id=spaced x=10 y=50>
+      hello
+  </text>
+  <text id=middle x=100 y=50 text-anchor=middle>hello</text>
+  <g text-anchor=end><text id=end x=100 y=50>hello</text></g>
+  <text id=moved x="10 30" y=50 dx=5 dy="3 9">hello</text>
+  <text id=displayNone x=10 y=50 style="display:none">hello</text>
+  <text id=invisible x=10 y=50 style="visibility:hidden">hello</text>
+  <text id=blank x=10 y=50>   </text>
+  <text x=10 y=50>he<tspan id=span>llo</tspan></text>
+  <g id=group><text x=10 y=50 transform="translate(100,0)">hello</text></g>
+</svg>
+
 <script id=textIdentities>
 {
   const text = $('#text');
@@ -52,10 +67,59 @@
   // length; without shaping we default to 0.
   testing.expectEqual(0, text.textLength.baseVal.value);
 
-  // Browsers return the shaped text box here; our text geometry is
-  // unmeasured, so like the other unresolved elements getBBox answers an
-  // empty box rather than an error.
-  testing.expectEqual(0, text.getBBox().width);
+  // The box spans the advance, 0.8em above the baseline to 0.2em below.
+  const box = text.getBBox();
+  testing.expectEqual(0, box.x);
+  testing.expectEqual(-16, box.y);
+  testing.expectEqual(80, box.width);
+  testing.expectEqual(20, box.height);
+}
+</script>
+
+<script id=textBoxGeometry>
+{
+  const near = (a, b) => Math.abs(a - b) < 1;
+  const plain = $('#plain').getBBox();
+  testing.expectEqual(10, plain.x);
+  testing.expectEqual(true, plain.width > 0);
+  testing.expectEqual(true, plain.y < 50 && plain.y + plain.height > 50);
+
+  // Whitespace collapses as rendered.
+  const spaced = $('#spaced').getBBox();
+  testing.expectEqual(5, $('#spaced').getNumberOfChars());
+  testing.expectEqual(plain.width, spaced.width);
+  testing.expectEqual(plain.y, spaced.y);
+
+  // text-anchor, inherited or not, moves the run back from x.
+  const middle = $('#middle').getBBox();
+  testing.expectEqual(true, near(100, middle.x + middle.width / 2));
+  const end = $('#end').getBBox();
+  testing.expectEqual(true, near(100, end.x + end.width));
+
+  // The first x/y and dx/dy entries place the first glyph.
+  const moved = $('#moved').getBBox();
+  testing.expectEqual(15, moved.x);
+  testing.expectEqual(plain.y + 3, moved.y);
+
+  // display:none has no box; visibility:hidden still does.
+  testing.expectEqual(0, $('#displayNone').getBBox().width);
+  testing.expectEqual(plain.width, $('#invisible').getBBox().width);
+  testing.expectEqual(0, $('#blank').getBBox().width);
+
+  // A <tspan> without its own position continues its <text>.
+  const span = $('#span').getBBox();
+  testing.expectEqual(true, span.x > 10);
+  testing.expectEqual(true, near(plain.x + plain.width, span.x + span.width));
+
+  // The text's own transform is excluded from its box but included in its
+  // parent's.
+  const group = $('#group').getBBox();
+  testing.expectEqual(110, group.x);
+  testing.expectEqual(plain.y, group.y);
+
+  const detached = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  detached.textContent = 'hello';
+  testing.expectEqual(0, detached.getBBox().width);
 }
 </script>
 

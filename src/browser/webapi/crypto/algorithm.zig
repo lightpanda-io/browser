@@ -383,7 +383,7 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
                 const buffer = local.jsValueToZig(js.BufferSource, m) catch |err| {
                     return conversionError(err, local, "algorithm has a missing or invalid member");
                 };
-                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, buffer.bytes) };
+                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, buffer.bytes()) };
             }
         }
     }

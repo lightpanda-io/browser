@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in</title>
+  </head>
+  <body>
+    <form id="signin" action="/session" method="post">
+      <div id="step">
+        <label for="user">Username</label>
+        <input id="user" name="username" />
+        <button id="next" type="submit">Next</button>
+      </div>
+    </form>
+
+    <p id="status">waiting</p>
+    <script>
+      document.getElementById("signin").addEventListener("submit", function (event) {
+        event.preventDefault();
+        var status = document.getElementById("status");
+        if (document.getElementById("pass")) {
+          status.textContent = "submitted";
+          return;
+        }
+        document.getElementById("step").innerHTML =
+          '<label for="pass">Password</label>' +
+          '<input id="pass" name="password" type="password" />' +
+          '<button id="signin-submit" type="submit">Sign in</button>';
+        status.textContent = "password step";
+      });
+    </script>
+  </body>
+</html>

@@ -114,7 +114,7 @@ const DecodeOpts = struct {
 
 pub fn decode(self: *TextDecoder, input_: ?js.AllowSharedBufferSource, opts_: ?DecodeOpts, exec: *const js.Execution) ![]const u8 {
     const opts: DecodeOpts = opts_ orelse .{};
-    const input: []const u8 = if (input_) |i| i.bytes else "";
+    const input: []const u8 = if (input_) |i| i.bytes() else "";
 
     if (opts.stream) {
         // Streaming mode: create decoder if needed, keep it alive

@@ -187,3 +187,16 @@
     testing.expectEqual('', d.decode());
   }
 </script>
+
+<script id=buffer_source_input>
+{
+  // Any view is decoded as its raw bytes; a string isn't a BufferSource.
+  testing.expectEqual('AB', new TextDecoder().decode(new Uint16Array([0x4241])));
+  testing.expectError('TypeError', () => new TextDecoder().decode('abc'));
+
+  // The options are read after the input, and a getter that detaches it
+  // leaves it empty, rather than a read of the freed backing store.
+  const input = new TextEncoder().encode('hello');
+  testing.expectEqual('', new TextDecoder().decode(input, {get stream() { input.buffer.transfer(0); return false; }}));
+}
+</script>

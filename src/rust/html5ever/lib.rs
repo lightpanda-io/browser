@@ -29,7 +29,9 @@ use encoding_rs::Encoding;
 use html5ever::driver::parse_fragment_for_element;
 use html5ever::interface::tree_builder::QuirksMode;
 use html5ever::tendril::{StrTendril, TendrilSink};
-use html5ever::{ns, parse_document, LocalName, ParseOpts, Parser, QualName};
+use html5ever::tokenizer::{BufferQueue, Tokenizer};
+use html5ever::tree_builder::TreeBuilder;
+use html5ever::{ns, parse_document, LocalName, ParseOpts, Parser, QualName, TokenizerResult};
 
 #[no_mangle]
 pub extern "C" fn html5ever_parse_document(
@@ -79,12 +81,11 @@ pub extern "C" fn html5ever_parse_document(
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
+        input: None,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
-    parse_document(sink, Default::default())
-        .from_utf8()
-        .one(bytes);
+    parse_document_text(sink, &String::from_utf8_lossy(bytes));
 }
 
 /// Parse an HTML document with encoding conversion.
@@ -151,10 +152,41 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
+        input: None,
     };
 
-    // Parse directly from decoded string
-    parse_document(sink, Default::default()).one(StrTendril::from(decoded.as_ref()));
+    parse_document_text(sink, &decoded);
+}
+
+// parse_document(sink, Default::default()).one(text), with the sink knowing
+// where the tokenizer is in the input.
+fn parse_document_text(sink: sink::Sink, text: &str) {
+    // Like the tokenizer, the sink only reads this copy, so `text` doesn't
+    // have to survive the scripts the parse runs.
+    let input = StrTendril::from(text);
+    let queue = BufferQueue::default();
+    queue.push_back(input.clone());
+    let sink = sink::Sink {
+        input: Some(sink::DocumentInput::new(&input, &queue)),
+        ..sink
+    };
+    let tokenizer = Tokenizer::new(
+        TreeBuilder::new(sink, Default::default()),
+        Default::default(),
+    );
+    while !matches!(tokenizer.feed(&queue), TokenizerResult::Done) {}
+    tokenizer.end();
+}
+
+/// Where the text of the <script> created with `data` starts in its document,
+/// when a document parse created it.
+#[no_mangle]
+pub extern "C" fn html5ever_script_text_position(data: *const c_void) -> CNullable<TextPosition> {
+    let data = unsafe { &*(data as *const sink::ElementData) };
+    match data.text_position {
+        Some(position) => CNullable::some(position),
+        None => CNullable::none(),
+    }
 }
 
 // === Encoding API for TextDecoder ===
@@ -540,10 +572,6 @@ pub extern "C" fn html5ever_parse_fragment(
     attach_declarative_shadow_callback: AttachDeclarativeShadowCallback,
     allow_declarative_shadow: bool,
 ) -> () {
-    if html.is_null() || len == 0 {
-        return ();
-    }
-
     let arena = typed_arena::Arena::new();
 
     let sink = sink::Sink {
@@ -566,9 +594,16 @@ pub extern "C" fn html5ever_parse_fragment(
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
+        input: None,
     };
 
-    let bytes = unsafe { std::slice::from_raw_parts(html, len) };
+    // Empty input still goes through the parser: in an <html> context it
+    // creates <head> and <body>.
+    let bytes: &[u8] = if html.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(html, len) }
+    };
 
     // The initial state of the parser is dertmined by the context element.
     // E.g., parsing the content of a script tag behaves differently than
@@ -605,6 +640,7 @@ pub extern "C" fn html5ever_parse_fragment(
     let context_data = arena.alloc(sink::ElementData {
         qname: context_qname.clone(),
         mathml_annotation_xml_integration_point: false,
+        text_position: None,
     });
     let mut context_attrs = CAttributeIterator {
         vec: vec![],
@@ -714,6 +750,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
+        input: None,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing
@@ -843,6 +880,7 @@ pub extern "C" fn xml5ever_parse_document(
         append_based_on_parent_node_callback: append_based_on_parent_node_callback,
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
+        input: None,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(xml, len) };

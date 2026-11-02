@@ -855,13 +855,17 @@ test "cdp.input: dispatchMouseEvent mouseWheel chains once the container is satu
     const chained = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 100", null);
     try testing.expect(chained.isTrue());
 
+    // The viewport moved the leaf up. The container's content below its box
+    // isn't clipped from hit-testing, so aim at the leaf again.
+    const moved_y = try (try ls.local.compileAndRun("document.getElementById('innerleaf').getBoundingClientRect().y", null)).toF64();
+
     // overscroll-behavior keeps the latch on a container that can't move, so
     // nothing scrolls at all.
     _ = try ls.local.compileAndRun("document.getElementById('outerscroll').style.overscrollBehavior = 'contain'", null);
     try ctx.processMessage(.{
         .id = 3,
         .method = "Input.dispatchMouseEvent",
-        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = 100 },
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = moved_y, .deltaY = 100 },
     });
     const contained = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 100", null);
     try testing.expect(contained.isTrue());
@@ -872,7 +876,7 @@ test "cdp.input: dispatchMouseEvent mouseWheel chains once the container is satu
     try ctx.processMessage(.{
         .id = 4,
         .method = "Input.dispatchMouseEvent",
-        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = -500 },
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = moved_y, .deltaY = -500 },
     });
     const upward = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 0 && window.scrollY === 100", null);
     try testing.expect(upward.isTrue());

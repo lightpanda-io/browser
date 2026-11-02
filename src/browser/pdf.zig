@@ -33,8 +33,6 @@ const Frame = @import("Frame.zig");
 const screenshot = @import("screenshot.zig");
 const RenderTree = @import("RenderTree.zig");
 
-const Node = @import("webapi/Node.zig");
-
 const log = lp.log;
 const flate = std.compress.flate;
 const Allocator = std.mem.Allocator;

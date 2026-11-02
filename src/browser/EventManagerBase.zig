@@ -223,6 +223,23 @@ pub fn remove(self: *EventManagerBase, target: *EventTarget, typ: []const u8, ca
     }
 }
 
+// Live listeners across every target. Listeners removed mid-dispatch stay in
+// their list until the dispatch unwinds, flagged `removed`; they don't count.
+pub fn listenerCount(self: *const EventManagerBase) usize {
+    var count: usize = 0;
+    var it = self.lookup.valueIterator();
+    while (it.next()) |type_listeners| {
+        for (type_listeners.items) |tl| {
+            var node = tl.list.first;
+            while (node) |n| : (node = n.next) {
+                const listener: *const Listener = @alignCast(@fieldParentPtr("node", n));
+                if (!listener.removed) count += 1;
+            }
+        }
+    }
+    return count;
+}
+
 pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, listener: *Listener) void {
     // Already removed (or queued for removal). Avoids double-pushing the
     // same listener into deferred_removals — which would double-free at

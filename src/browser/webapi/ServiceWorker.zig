@@ -20,7 +20,6 @@
 // They are all just views into a single ServiceWorkerGlobalScope which holds
 // all the state. The ServiceWorker just holds its own event registration.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");

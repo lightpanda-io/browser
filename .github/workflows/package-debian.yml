@@ -26,11 +26,16 @@ jobs:
       OS: linux
 
     runs-on: ubuntu-22.04
-    container: debian:stable-slim
+    # Pinned by digest (the stable-slim index of 2026-10-19), so the
+    # package build runs the image that was reviewed, not whatever the
+    # tag points at next.
+    container: debian:stable-slim@sha256:eb593cf2c358cacef45ca0a424bbc7d30cfa3466265fc2662b9466a0ca6ba1c5
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Install packaging deps
         run: |

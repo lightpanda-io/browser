@@ -70,3 +70,34 @@
     testing.expectEqual(true, body.willValidate);
   }
 </script>
+
+<fieldset id="fs-elements">
+  <legend><input id="e-legend"></legend>
+  <input id="e-text">
+  <input id="e-image" type="image">
+  <div><button id="e-button"></button><select id="e-select"></select><textarea id="e-textarea"></textarea></div>
+  <fieldset id="e-fieldset"><output id="e-output"></output></fieldset>
+  <object id="e-object"></object>
+  <label>l</label><span>s</span><img alt="">
+</fieldset>
+
+<script id="elements">
+  {
+    const fs = $('#fs-elements');
+    const elements = fs.elements;
+    testing.expectEqual('HTMLCollection', elements.constructor.name);
+    testing.expectEqual(
+      ['e-legend', 'e-text', 'e-image', 'e-button', 'e-select', 'e-textarea', 'e-fieldset', 'e-output', 'e-object'],
+      Array.from(elements, (e) => e.id),
+    );
+    testing.expectEqual($('#e-button'), elements.namedItem('e-button'));
+
+    const input = document.createElement('input');
+    fs.appendChild(input);
+    testing.expectEqual(10, elements.length);
+    input.remove();
+    testing.expectEqual(9, elements.length);
+
+    testing.expectEqual(0, document.createElement('fieldset').elements.length);
+  }
+</script>

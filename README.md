@@ -83,7 +83,7 @@ Or pin it as an input in your own flake:
 }
 ```
 
-> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image: the current release binaries need glibc **2.35** (`x86_64`) or **2.38** (`arm64`), so `debian:bookworm-slim` (2.36) is fine on `x86_64` but too old for `arm64` — use `FROM ubuntu:24.04`, `FROM debian:trixie-slim`, or `FROM debian:forky-slim` there — or [build from sources](#build-from-sources).
 >
 > **Android / Termux:** there is no native Android build. The Linux aarch64 binary needs the glibc loader (`/lib/ld-linux-aarch64.so.1`), which Android's Bionic libc does not provide, so it fails with the same `cannot execute: required file not found` error.
 
@@ -205,7 +205,7 @@ model at runtime.
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
 Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
 and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
-`OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
+`OPENAI_BASE_URL`, and local models via Ollama, llama.cpp or [LLMD](https://zml.ai/llmd). You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
 reference.
@@ -263,6 +263,22 @@ longer clobber each other's page:
 - The `session_new`, `session_list` and `session_close` tools manage sessions
   explicitly. Sending `DELETE /mcp` with an `Mcp-Session-Id` closes that session.
 
+The `run` tool runs a [PandaScript](https://lightpanda.io/docs/usage/pandascript)
+in the caller's session, as `lightpanda run` does, and returns its console
+output and the value it returns. It takes the source as `script`, or the `path`
+of a file that `save` wrote. Pages the script opens are closed when it ends;
+cookies and storage stay, so a login carries over to the next `run`. An optional
+`timeout` in milliseconds (default 60000) stops a stuck script. A backend can
+drive Lightpanda with one POST:
+
+```bash
+curl -s http://127.0.0.1:9223/mcp -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "run", "arguments": { "script":
+    "const page = new Page();\nawait page.goto(\"https://example.com\");\nreturn page.extract({ title: \"title\", links: [\"a\"] });" } }
+}'
+```
+
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
@@ -315,7 +331,7 @@ For full details, see our [Web Platform Tests results](https://perf.lightpanda.i
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.17.0`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on

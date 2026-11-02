@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<iframe id=plain srcdoc="<p>plain</p>"></iframe>
+<iframe id=sized width=400 height=200 srcdoc="<p>sized</p>"></iframe>
+<iframe id=styled style="width: 250px" srcdoc="<p>styled</p>"></iframe>
+<iframe id=hidden style="display: none" srcdoc="<p>hidden</p>"></iframe>
+<iframe id=huge width=1e10 srcdoc="<p>huge</p>"></iframe>
+
+<script id=viewport>
+  testing.onload(() => {
+    // an iframe without a size is 300x150, and that is its window's viewport
+    const plain = document.getElementById('plain');
+    testing.expectEqual(300, plain.contentWindow.innerWidth);
+    testing.expectEqual(150, plain.contentWindow.innerHeight);
+
+    const sized = document.getElementById('sized').contentWindow;
+    testing.expectEqual(400, sized.innerWidth);
+    testing.expectEqual(200, sized.innerHeight);
+
+    const styled = document.getElementById('styled').contentWindow;
+    testing.expectEqual(250, styled.innerWidth);
+    testing.expectEqual(150, styled.innerHeight);
+
+    // a hidden iframe has no viewport
+    const hidden = document.getElementById('hidden').contentWindow;
+    testing.expectEqual(0, hidden.innerWidth);
+    testing.expectEqual(0, hidden.innerHeight);
+
+    // out-of-range sizes clamp instead of overflowing
+    const huge = document.getElementById('huge').contentWindow;
+    testing.expectEqual(true, huge.innerWidth > 0);
+
+    // the iframe's own box holds that viewport, so a point inside it hits the iframe
+    const r = plain.getBoundingClientRect();
+    testing.expectEqual(true, r.width >= 300 && r.height >= 150);
+    testing.expectEqual(plain, document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  });
+</script>

@@ -6,5 +6,12 @@
   <link rel="canonical" href="/products/blue-kettle">
   <script type="application/ld+json">{"@type":"Product","name":"Blue Kettle"}</script>
 </head>
-<body><p>A kettle.</p></body>
+<body>
+  <p>A kettle.</p>
+  <div itemscope itemtype="https://schema.org/Product" itemref="kettle-price">
+    <span itemprop="name">Blue Kettle</span>
+    <img itemprop="image" src="/img/kettle.jpg" alt="">
+  </div>
+  <p id="kettle-price" itemprop="price">25</p>
+</body>
 </html>

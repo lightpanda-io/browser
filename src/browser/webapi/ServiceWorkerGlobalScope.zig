@@ -22,11 +22,10 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
-const EventTarget = @import("EventTarget.zig");
-const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 
 const Worker = @import("Worker.zig");
+const EventTarget = @import("EventTarget.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const ServiceWorkerRegistration = @import("ServiceWorkerRegistration.zig");
@@ -295,7 +294,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
     const url = self._proto.url;
     var evaluated = true;
     if (self._proto._is_module) {
-        js_context.module(false, &ls.local, script, url, true) catch |err| {
+        js_context.module(false, &ls.local, script, url, .{}, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }

@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Factory = @import("../../../Factory.zig");
+const text_measure = @import("../../../text_measure.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -54,6 +55,9 @@ _selectionchange_pending: bool = false,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 
+pub fn asHtml(self: *TextArea) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *TextArea) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -202,7 +206,8 @@ fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 pub fn getWillValidate(self: *const TextArea) bool {
-    return !self.asConstElement().isDisabled();
+    const element = self.asConstElement();
+    return !element.isDisabled() and !element.hasAttributeInterned("readonly");
 }
 
 fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
@@ -268,6 +273,39 @@ pub fn suffersTooShort(self: *const TextArea) bool {
 
 pub fn getRequired(self: *const TextArea) bool {
     return self.asConstElement().getAttributeInterned("required") != null;
+}
+
+// The value is laid out as anonymous text, not child boxes, so measure it
+// directly. Auto-sizing components set height: 0 and read scrollHeight to get
+// this intrinsic height.
+pub fn getScrollHeight(self: *TextArea, frame: *Frame) f64 {
+    const el = self.asElement();
+    const height = el.getElementAxis(frame, .height).value;
+    const owner = el.ownerFrame(frame) orelse return height;
+    const style_manager = &owner._style_manager;
+
+    const font_size = style_manager.computedFontSize(el);
+    const width = el.getElementAxis(frame, .width);
+    // Without a CSS width, the cols attribute sets the line width.
+    const line_width = if (width.explicit) width.value else text_measure.width("0", font_size) * @as(f64, @floatFromInt(self.cols()));
+
+    const value = self.getValue();
+    const lines = text_measure.layout(value, font_size, line_width, style_manager.whiteSpace(el));
+    // A trailing newline opens an empty last line.
+    const trailing: u32 = @intFromBool(std.mem.endsWith(u8, value, "\n"));
+    const count = @max(1, lines.count + trailing);
+    const text_height = @ceil(@as(f64, @floatFromInt(count)) * font_size * text_measure.LINE_HEIGHT);
+    return @max(height, text_height);
+}
+
+// As the cols IDL attribute reflects it: positive, else 20.
+fn cols(self: *const TextArea) u32 {
+    const value = self.asConstElement().getAttributeSafe(comptime .wrap("cols")) orelse return 20;
+    const parsed = reflection.parseInteger(value) orelse return 20;
+    if (parsed <= 0 or parsed > std.math.maxInt(u32)) {
+        return 20;
+    }
+    return @intCast(parsed);
 }
 
 pub const JsApi = struct {
