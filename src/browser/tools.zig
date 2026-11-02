@@ -1362,10 +1362,7 @@ fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
     var runner = page._session.runner(.{});
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     while (promise.state() == .pending) {
-        // A caller-abandoned request (MCP notifications/cancelled, the
-        // agent's Ctrl-C) must not hold the session for the full
-        // promise timeout: the tick below doesn't poll the session's
-        // cancel hook, so check it here like the Runner wait* loops do.
+        // The tick doesn't poll the cancel hook; the Runner wait* loops check it too.
         if (page._session.isCancelled()) {
             return .{ .text = "promise: cancelled", .is_error = true };
         }
