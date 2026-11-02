@@ -349,7 +349,7 @@ fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registr
         const id = page.frame._frame_id;
         if (std.mem.findScalar(u32, before, id) == null) opened.append(arena, id) catch return;
     }
-    for (opened.items) |id| browser_tools.closePage(arena, session, registry, id);
+    for (opened.items) |id| browser_tools.closePage(session, registry, id);
 }
 
 /// The session tools need a transport that routes by session id (HTTP's
