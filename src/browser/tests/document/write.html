@@ -143,6 +143,52 @@
   }
 </script>
 
+<!-- JS run by inserting a written node can detach that node; the rest of
+     the write must still land in the script's parent, in order. -->
+<div id=dw_self_remove>
+  <script>
+    document.write('<script>document.currentScript.remove()<\/script><p id="dw_self_remove_p">after</p>');
+  </script>
+</div>
+<div id=dw_move_target></div>
+<div id=dw_self_move>
+  <script>
+    document.write('<script>document.getElementById("dw_move_target").appendChild(document.currentScript)<\/script><p id="dw_self_move_p">after</p>');
+  </script>
+</div>
+<div id=dw_wrapper_remove>
+  <script>
+    document.write('<div><script>document.currentScript.parentNode.remove()<\/script></div><p id="dw_wrapper_remove_p">after</p>');
+  </script>
+</div>
+
+<script id=verify_written_node_detached>
+  {
+    const self_remove = document.getElementById('dw_self_remove');
+    testing.expectEqual(self_remove, document.getElementById('dw_self_remove_p').parentNode);
+    testing.expectEqual('SCRIPT,P', [...self_remove.children].map(e => e.tagName).join());
+
+    const self_move = document.getElementById('dw_self_move');
+    testing.expectEqual(self_move, document.getElementById('dw_self_move_p').parentNode);
+    testing.expectEqual('SCRIPT,P', [...self_move.children].map(e => e.tagName).join());
+    testing.expectEqual('SCRIPT', document.getElementById('dw_move_target').firstElementChild.tagName);
+
+    const wrapper_remove = document.getElementById('dw_wrapper_remove');
+    testing.expectEqual(wrapper_remove, document.getElementById('dw_wrapper_remove_p').parentNode);
+    testing.expectEqual('SCRIPT,P', [...wrapper_remove.children].map(e => e.tagName).join());
+  }
+</script>
+
+<!-- A nested write lands where the written script is, before the rest of
+     the outer write. -->
+<div id=dw_nested_order><script>
+    document.write('<script>document.write("<b>nested</b>")<\/script><p>after</p>');
+  </script><i>tail</i></div>
+
+<script id=verify_nested_order>
+  testing.expectEqual('SCRIPT,SCRIPT,B,P,I', [...document.getElementById('dw_nested_order').children].map(e => e.tagName).join());
+</script>
+
 <!-- document.write processes declarative shadow roots, like the parser. -->
 <script id=write_declarative_shadow>
   document.write('<div id="dw_dsd"><template shadowrootmode="open"><p>written shadow</p></template></div>');
