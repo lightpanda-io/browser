@@ -934,6 +934,8 @@ fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag, style_manager: *StyleMan
 // e.g. display:block on a span, or display:inline on a div. Flex/grid items
 // are blockified, even when their own computed box remains inline-level.
 fn isInnerTextBlockBox(el: *Element, style_manager: *StyleManager) bool {
+    // display:contents has no box of its own, even inside flex/grid.
+    if (style_manager.hasDisplayContents(el)) return false;
     if (style_manager.isBlockLevel(el)) return true;
     if (style_manager.boxParent(el)) |parent| {
         return switch (style_manager.display(parent)) {
