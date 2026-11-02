@@ -34,7 +34,21 @@ const v8 = js.v8;
 const Identity = @This();
 
 // Maps Zig instance pointers to their v8::Global(Object) wrappers.
-identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+identity_map: std.HashMapUnmanaged(usize, v8.Global, PtrContext, std.hash_map.default_max_load_percentage) = .empty,
+
+// Keys are object addresses, so a multiply-xorshift is enough and cheaper than
+// the default Wyhash. The map takes the slot from the low bits and the
+// fingerprint from the top 7, so both need mixing.
+const PtrContext = struct {
+    pub fn hash(_: PtrContext, key: usize) u64 {
+        const h = @as(u64, key) *% 0x9e3779b97f4a7c15;
+        return h ^ (h >> 32);
+    }
+
+    pub fn eql(_: PtrContext, a: usize, b: usize) bool {
+        return a == b;
+    }
+};
 
 pub fn deinit(self: *Identity) void {
     var it = self.identity_map.valueIterator();

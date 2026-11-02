@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <head>
   <title>Test DataTransfer Web API</title>
+  <meta name=lp-mode content=test>
   <script src="./testing.js"></script>
 </head>
 
@@ -11,7 +12,7 @@
   testing.expectEqual(0, dt.items.length);
   testing.expectEqual(0, dt.files.length);
   testing.expectEqual("none", dt.dropEffect);
-  testing.expectEqual("uninitialized", dt.effectAllowed);
+  testing.expectEqual("none", dt.effectAllowed);
   testing.expectEqual(true, dt.items instanceof DataTransferItemList);
   testing.expectEqual(true, dt.files instanceof FileList);
 }
@@ -20,14 +21,16 @@
 <script id=effects>
 {
   const dt = new DataTransfer();
-  dt.dropEffect = "copy";
-  testing.expectEqual("copy", dt.dropEffect);
-  dt.dropEffect = "bogus"; // invalid ignored
-  testing.expectEqual("copy", dt.dropEffect);
-  dt.effectAllowed = "copyMove";
-  testing.expectEqual("copyMove", dt.effectAllowed);
-  dt.effectAllowed = "nope"; // invalid ignored
-  testing.expectEqual("copyMove", dt.effectAllowed);
+  testing.diverges("Chrome ignores both setters outside a drag", () => {
+    dt.dropEffect = "copy";
+    testing.expectEqual("copy", dt.dropEffect);
+    dt.dropEffect = "bogus"; // invalid ignored
+    testing.expectEqual("copy", dt.dropEffect);
+    dt.effectAllowed = "copyMove";
+    testing.expectEqual("copyMove", dt.effectAllowed);
+    dt.effectAllowed = "nope"; // invalid ignored
+    testing.expectEqual("copyMove", dt.effectAllowed);
+  });
 }
 </script>
 
@@ -80,14 +83,24 @@
 }
 </script>
 
-<script id=get_as_string>
-{
+<script id=get_as_string type=module>
+  const state = await testing.async();
   const dt = new DataTransfer();
   dt.setData("text/plain", "world");
   let got = null;
-  dt.items[0].getAsString(function (s) { got = s; });
-  testing.expectEqual("world", got);
-}
+  // The callback runs in a queued task, not before.
+  dt.items[0].getAsString((s) => {
+    got = s;
+    state.resolve();
+  });
+  const sync = got;
+  await Promise.resolve();
+  const afterMicrotask = got;
+  await state.done(() => {
+    testing.expectEqual(null, sync);
+    testing.expectEqual(null, afterMicrotask);
+    testing.expectEqual("world", got);
+  });
 </script>
 
 <script id=remove_and_clear>

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<!--
+  navigate_event_target.html doesn't exist on purpose: every navigation to it
+  is canceled, superseded or stopped. A 404 for it means one leaked.
+-->
+
+<a id=link href="navigate_event_target.html?a">link</a>
+<form id=post_form method=post action="navigate_event_target.html?f"><input name=x value=1><button id=post_submit>go</button></form>
+<form id=get_form method=get action="navigate_event_target.html"><input name=y value=2></form>
+
+<script>
+  // The module scripts below interleave at each await, but they all change the
+  // one document URL. Each takes a turn, and the next one starts after the
+  // previous one releases it.
+  // Resolves once the document is completely loaded: after the load event.
+  const loaded = new Promise((resolve) => window.addEventListener('load', () => setTimeout(resolve)));
+
+  // A task later, so the previous test's navigations are done.
+  function settled() {
+    return loaded.then(() => new Promise((resolve) => setTimeout(resolve)));
+  }
+
+  let turn = Promise.resolve();
+  function takeTurn() {
+    let release;
+    const mine = new Promise((resolve) => { release = resolve; });
+    const ready = turn.then(() => release);
+    turn = mine;
+    return ready;
+  }
+
+  // Records the navigate events fired while fn runs, cancelling them when
+  // `cancel` is set. Restores the URL afterwards, which aborts a same-document
+  // navigation still waiting for its navigatesuccess: `aborted` is each
+  // event's signal state before that.
+  function recordNavigations(fn, cancel) {
+    const original = location.href;
+    const events = [];
+    const errors = [];
+    const onnavigate = (e) => {
+      events.push(e);
+      if (cancel) {
+        e.preventDefault();
+      }
+    };
+    const onerror = (e) => errors.push(e);
+    navigation.addEventListener('navigate', onnavigate);
+    navigation.addEventListener('navigateerror', onerror);
+    let aborted;
+    try {
+      fn();
+    } finally {
+      aborted = events.map((e) => e.signal.aborted);
+      navigation.removeEventListener('navigate', onnavigate);
+      navigation.removeEventListener('navigateerror', onerror);
+      history.replaceState(null, '', original);
+    }
+    return {events, errors, aborted};
+  }
+
+  function relative(url) {
+    return url.replace(location.origin, '');
+  }
+
+  const PAGE = location.pathname;
+  const DIR = PAGE.replace(/[^/]*$/, '');
+</script>
+
+<script id=interfaces>
+  testing.expectEqual('function', typeof NavigateEvent);
+  testing.expectEqual('function', typeof NavigationDestination);
+  testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new NavigationDestination());
+  testing.withError((err) => testing.expectEqual('TypeError', err.name), () => new NavigateEvent('navigate'));
+
+  const {events} = recordNavigations(() => history.pushState(null, '', '?interfaces'));
+  const e = events[0];
+  testing.expectTrue(e instanceof NavigateEvent);
+  testing.expectTrue(e.destination instanceof NavigationDestination);
+  testing.expectEqual(e.destination, e.destination);
+
+  const signal = new AbortController().signal;
+  const constructed = new NavigateEvent('navigate', {destination: e.destination, signal: signal, navigationType: 'reload', info: 5});
+  testing.expectEqual('reload', constructed.navigationType);
+  testing.expectEqual(e.destination, constructed.destination);
+  testing.expectEqual(signal, constructed.signal);
+  testing.expectEqual(5, constructed.info);
+  testing.expectFalse(constructed.isTrusted);
+  testing.expectFalse(constructed.cancelable);
+</script>
+
+<script id=push_state>
+  {
+    const order = [];
+    const oncurrent = () => order.push('currententrychange');
+    const {events, aborted} = recordNavigations(() => {
+      navigation.addEventListener('currententrychange', oncurrent);
+      navigation.addEventListener('navigate', () => order.push('navigate:' + location.search), {once: true});
+      history.pushState({s: 1}, '', '?pushed');
+      navigation.removeEventListener('currententrychange', oncurrent);
+    });
+
+    testing.expectEqual(['navigate:', 'currententrychange'], order);
+    testing.expectEqual(1, events.length);
+    const e = events[0];
+    testing.expectEqual('navigate', e.type);
+    testing.expectEqual('push', e.navigationType);
+    testing.expectEqual(PAGE + '?pushed', relative(e.destination.url));
+    testing.expectEqual('', e.destination.key);
+    testing.expectEqual('', e.destination.id);
+    testing.expectEqual(-1, e.destination.index);
+    testing.expectTrue(e.destination.sameDocument);
+    testing.expectEqual(undefined, e.destination.getState());
+    testing.expectFalse(e.hashChange);
+    testing.expectFalse(e.userInitiated);
+    testing.expectTrue(e.cancelable);
+    testing.expectFalse(e.bubbles);
+    testing.expectTrue(e.isTrusted);
+    testing.expectEqual(null, e.formData);
+    testing.expectEqual(null, e.sourceElement);
+    testing.expectEqual(null, e.downloadRequest);
+    testing.expectEqual(undefined, e.info);
+    testing.expectFalse(e.hasUAVisualTransition);
+    testing.expectEqual([false], aborted);
+  }
+</script>
+
+<script id=replace_state>
+  {
+    const {events} = recordNavigations(() => history.replaceState(null, '', '?replaced'));
+    testing.expectEqual(1, events.length);
+    testing.expectEqual('replace', events[0].navigationType);
+    testing.expectTrue(events[0].destination.sameDocument);
+  }
+</script>
+
+<script id=history_fragment_not_hash_change>
+  {
+    // pushState/replaceState never report a hashChange, even for a fragment.
+    const {events} = recordNavigations(() => {
+      history.pushState(null, '', '#frag1');
+      history.replaceState({a: 1}, '', '#frag2');
+    });
+    testing.expectEqual(['push', 'replace'], events.map((e) => e.navigationType));
+    testing.expectEqual([false, false], events.map((e) => e.hashChange));
+  }
+</script>
+
+<script id=reload_keeps_state>
+  {
+    const before = navigation.currentEntry.getState();
+    navigation.updateCurrentEntry({state: {s: 7}});
+    let state;
+    recordNavigations(() => {
+      navigation.addEventListener('navigate', (e) => state = e.destination.getState(), {once: true});
+      navigation.reload().committed.catch(() => {});
+    }, true);
+    testing.expectEqual({s: 7}, state);
+    navigation.updateCurrentEntry({state: before});
+  }
+</script>
+
+<script id=cancel_push_state>
+  {
+    const before = location.href;
+    const length = history.length;
+    let url_in_listener;
+    const {events, errors} = recordNavigations(() => {
+      navigation.addEventListener('navigate', () => url_in_listener = location.href, {once: true});
+      history.pushState(null, '', '?canceled');
+      testing.expectEqual(before, location.href);
+    }, true);
+
+    testing.expectEqual(before, url_in_listener);
+    testing.expectEqual(length, history.length);
+    testing.expectEqual(1, events.length);
+    testing.expectTrue(events[0].signal.aborted);
+    testing.expectEqual(1, errors.length);
+    testing.expectTrue(errors[0] instanceof ErrorEvent);
+    testing.expectEqual('AbortError', errors[0].error.name);
+    testing.expectEqual('Navigation was aborted', errors[0].error.message);
+    testing.expectEqual(events[0].signal.reason, errors[0].error);
+  }
+</script>
+
+<script id=superseded>
+  {
+    // Nothing waits for the first one's navigatesuccess microtask before the
+    // second starts: the second aborts it.
+    const {events, errors, aborted} = recordNavigations(() => {
+      history.pushState(null, '', '?first');
+      history.pushState(null, '', '?second');
+    });
+    testing.expectEqual(2, events.length);
+    testing.expectEqual([true, false], aborted);
+    testing.expectEqual(1, errors.length);
+  }
+</script>
+
+<script id=navigate_success_async type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    const order = [];
+    const original = location.href;
+    navigation.addEventListener('navigatesuccess', () => order.push('navigatesuccess'), {once: true});
+    history.pushState(null, '', '?success');
+    order.push('sync');
+    setTimeout(() => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(order);
+    });
+    state.done((order) => testing.expectEqual(['sync', 'navigatesuccess'], order));
+  }
+</script>
+
+<script id=hash>
+  {
+    // Until the document is completely loaded, a Location navigation replaces
+    // its entry.
+    const length = history.length;
+    const {events} = recordNavigations(() => {
+      location.hash = '#h1';
+      // the same fragment doesn't navigate
+      location.hash = '#h1';
+      testing.expectEqual(length, history.length);
+    });
+    testing.expectEqual(1, events.length);
+    testing.expectEqual('replace', events[0].navigationType);
+    testing.expectTrue(events[0].hashChange);
+    testing.expectTrue(events[0].destination.sameDocument);
+  }
+</script>
+
+<script id=hash_after_load type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    await settled();
+    // A push creates an entry with a new key, a replace keeps the key. (Not
+    // history.length: Chrome caps it at 50.)
+    const key = navigation.currentEntry.key;
+    let pushed;
+    const {events} = recordNavigations(() => {
+      location.hash = '#loaded';
+      pushed = navigation.currentEntry.key !== key;
+    });
+    release();
+    state.resolve({events, pushed});
+    state.done(({events, pushed}) => {
+      testing.expectEqual(1, events.length);
+      testing.expectEqual('push', events[0].navigationType);
+      testing.expectTrue(pushed);
+    });
+  }
+</script>
+
+<script id=cancel_hash>
+  {
+    const length = history.length;
+    const {events} = recordNavigations(() => {
+      location.hash = '#canceled';
+      testing.expectEqual('', location.hash);
+    }, true);
+    testing.expectEqual(1, events.length);
+    testing.expectEqual(length, history.length);
+  }
+</script>
+
+<script id=navigation_navigate type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    const original = location.href;
+    const events = [];
+    const order = [];
+    const onnavigate = (e) => events.push(e);
+    const onsuccess = () => order.push('navigatesuccess');
+    navigation.addEventListener('navigate', onnavigate);
+    navigation.addEventListener('navigatesuccess', onsuccess);
+
+    const r = navigation.navigate('#n1', {info: 'I', state: {k: 1}});
+    let after;
+    Promise.all([
+      r.committed.then(() => order.push('committed')),
+      r.finished.then(() => order.push('finished')),
+    ]).then(() => {
+      after = [location.href, navigation.currentEntry.url];
+      navigation.removeEventListener('navigate', onnavigate);
+      navigation.removeEventListener('navigatesuccess', onsuccess);
+      history.replaceState(null, '', original);
+      release();
+      state.resolve();
+    });
+
+    state.done(() => {
+      testing.expectEqual(1, events.length);
+      const e = events[0];
+      testing.expectEqual('push', e.navigationType);
+      testing.expectEqual('I', e.info);
+      testing.expectEqual({k: 1}, e.destination.getState());
+      testing.expectTrue(e.hashChange);
+      testing.expectTrue(order.includes('navigatesuccess'));
+      testing.expectEqual(order.indexOf('navigatesuccess') < order.indexOf('finished'), true);
+      const expected = new URL('#n1', original).href;
+      testing.expectEqual([expected, expected], after);
+    });
+  }
+</script>
+
+<script id=cancel_navigation_navigate type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    const original = location.href;
+    let event;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      event = e;
+      e.preventDefault();
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#n2', {info: 'J'});
+    Promise.all([
+      r.committed.then(() => 'resolved', (err) => err),
+      r.finished.then(() => 'resolved', (err) => err),
+    ]).then((results) => {
+      release();
+      state.resolve(results);
+    });
+
+    state.done(([committed, finished]) => {
+      testing.expectEqual(original, location.href);
+      testing.expectEqual('J', event.info);
+      testing.expectEqual('AbortError', committed.name);
+      testing.expectEqual(committed, finished);
+      testing.expectEqual(committed, event.signal.reason);
+      testing.expectEqual(committed, error_event.error);
+    });
+  }
+</script>
+
+<script id=committed_before_currententrychange type=module>
+  {
+    // currententrychange fires after the committed promise resolved: a
+    // navigation its listener starts aborts only the finished promise.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    navigation.addEventListener('currententrychange', () => history.pushState(null, '', '#inner'), {once: true});
+    const r = navigation.navigate('#outer');
+    const results = await Promise.all([
+      r.committed.then(() => 'resolved', (e) => 'rejected ' + e.name),
+      r.finished.then(() => 'resolved', (e) => 'rejected ' + e.name),
+    ]);
+    history.replaceState(null, '', original);
+    release();
+    state.resolve(results);
+
+    state.done((results) => testing.expectEqual(['resolved', 'rejected AbortError'], results));
+  }
+</script>
+
+<script id=cross_document_cancel>
+  {
+    const before = location.href;
+    const {events} = recordNavigations(() => {
+      location.href = 'navigate_event_target.html?x';
+      location.replace('navigate_event_target.html?r');
+      location.reload();
+      document.getElementById('link').click();
+      location.href = 'javascript:void 0';
+    }, true);
+
+    testing.expectEqual(before, location.href);
+    testing.expectEqual(4, events.length);
+    const summary = events.map((e) => [e.navigationType, relative(e.destination.url), e.destination.sameDocument]);
+    // During the load, replace: see the hash test
+    testing.expectEqual([
+      ['replace', DIR + 'navigate_event_target.html?x', false],
+      ['replace', DIR + 'navigate_event_target.html?r', false],
+      ['reload', relative(before), false],
+      ['push', DIR + 'navigate_event_target.html?a', false],
+    ], summary);
+
+    testing.expectEqual(document.getElementById('link'), events[3].sourceElement);
+    testing.expectEqual(null, events[3].formData);
+
+    for (const e of events) {
+      testing.expectTrue(e.cancelable);
+      testing.expectFalse(e.hashChange);
+      testing.expectFalse(e.userInitiated);
+    }
+  }
+</script>
+
+<script id=form_submission type=module>
+  {
+    // Chrome fires a form's navigate event in a task, we fire it right away.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    function submitted(submit) {
+      return new Promise((resolve) => {
+        navigation.addEventListener('navigate', (e) => {
+          e.preventDefault();
+          resolve(e);
+        }, {once: true});
+        submit();
+      });
+    }
+    const post = await submitted(() => document.getElementById('post_submit').click());
+    const get = await submitted(() => document.getElementById('get_form').submit());
+    release();
+    state.resolve({post, get});
+
+    state.done(({post, get}) => {
+      testing.expectEqual('push', post.navigationType);
+      testing.expectEqual(DIR + 'navigate_event_target.html?f', relative(post.destination.url));
+      testing.expectFalse(post.destination.sameDocument);
+      // POST form: its entries and its submitter
+      testing.expectEqual(document.getElementById('post_submit'), post.sourceElement);
+      testing.expectEqual([['x', '1']], [...post.formData]);
+
+      testing.expectEqual(DIR + 'navigate_event_target.html?y=2', relative(get.destination.url));
+      // GET form, no submitter
+      testing.expectEqual(document.getElementById('get_form'), get.sourceElement);
+      testing.expectEqual(null, get.formData);
+    });
+  }
+</script>
+
+<script id=cross_document_superseded type=module>
+  {
+    // window.stop() while parsing would abort the document's load.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    await settled();
+
+    const before = location.href;
+    let first;
+    let first_aborted_before;
+    const {events, errors} = recordNavigations(() => {
+      // Not canceled: it stays ongoing until the next navigation aborts it.
+      navigation.addEventListener('navigate', (e) => first = e, {once: true});
+      location.href = 'navigate_event_target.html?s1';
+      first_aborted_before = first.signal.aborted;
+
+      navigation.addEventListener('navigate', (e) => e.preventDefault(), {once: true});
+      location.href = 'navigate_event_target.html?s2';
+
+      // Like Chrome, aborting the first one's event doesn't stop its load:
+      // stop it to stay on this page.
+      window.stop();
+    });
+    release();
+    state.resolve();
+
+    state.done(() => {
+      testing.expectEqual(before, location.href);
+      testing.expectEqual(2, events.length);
+      testing.expectEqual('push', events[0].navigationType);
+      testing.expectFalse(first_aborted_before);
+      testing.expectTrue(first.signal.aborted);
+      // the first one superseded, the second one canceled
+      testing.expectEqual(2, errors.length);
+    });
+  }
+</script>
+
+<script id=stop type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    await settled();
+
+    let event;
+    const {errors} = recordNavigations(() => {
+      navigation.addEventListener('navigate', (e) => event = e, {once: true});
+      location.href = 'navigate_event_target.html?stopped';
+      window.stop();
+    });
+    release();
+    state.resolve();
+
+    state.done(() => {
+      testing.expectTrue(event.signal.aborted);
+      testing.expectEqual(1, errors.length);
+    });
+  }
+</script>
+
+<script id=navigation_in_listener>
+  {
+    // A navigation started by a listener aborts the one being dispatched.
+    const {events, errors, aborted} = recordNavigations(() => {
+      navigation.addEventListener('navigate', (e) => {
+        history.pushState(null, '', '?inner');
+      }, {once: true});
+      location.href = 'navigate_event_target.html?outer';
+      testing.expectEqual('?inner', location.search);
+    });
+    testing.expectEqual(2, events.length);
+    testing.expectTrue(events[0].defaultPrevented);
+    testing.expectEqual([true, false], aborted);
+    testing.expectEqual(1, errors.length);
+  }
+</script>
+
+<script id=traverse type=module>
+  {
+    // Chrome traverses in a task, we do it right away.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+    await settled();
+
+    const original = location.href;
+    history.pushState({t: 1}, '', '?t1');
+    history.pushState({t: 2}, '', '?t2');
+    const target = navigation.entries()[navigation.currentEntry.index - 1];
+
+    const pops = [];
+    const onpop = () => pops.push(location.search);
+    window.addEventListener('popstate', onpop);
+    const nextTask = () => new Promise((resolve) => setTimeout(resolve));
+
+    const canceled = await new Promise((resolve) => {
+      navigation.addEventListener('navigate', (e) => {
+        e.preventDefault();
+        resolve(e);
+      }, {once: true});
+      history.back();
+    });
+    await nextTask();
+    const after_cancel = [location.search, pops.length];
+
+    // [destination's, target's] read together: Chrome prunes history at 50
+    // entries, which shifts indexes.
+    let index_in_dispatch;
+    const traversed = await new Promise((resolve) => {
+      navigation.addEventListener('navigate', (e) => {
+        index_in_dispatch = [e.destination.index, target.index];
+        resolve(e);
+      }, {once: true});
+      history.back();
+    });
+    await nextTask();
+    const after_traverse = [location.search, pops.slice()];
+
+    window.removeEventListener('popstate', onpop);
+    history.replaceState(null, '', original);
+    release();
+    state.resolve();
+
+    state.done(() => {
+      testing.expectEqual('traverse', canceled.navigationType);
+      testing.expectEqual(['?t2', 0], after_cancel);
+
+      testing.expectEqual(['?t1', ['?t1']], after_traverse);
+      testing.expectEqual('traverse', traversed.navigationType);
+      testing.expectEqual(target.key, traversed.destination.key);
+      testing.expectEqual(target.id, traversed.destination.id);
+      testing.expectEqual(index_in_dispatch[1], index_in_dispatch[0]);
+      testing.expectTrue(index_in_dispatch[0] >= 0);
+      // live: the replaceState above took the entry out of the history
+      testing.expectEqual(-1, traversed.destination.index);
+      // a pushState entry has no Navigation API state
+      testing.expectEqual(undefined, traversed.destination.getState());
+      testing.expectTrue(traversed.destination.sameDocument);
+      testing.expectTrue(traversed.cancelable);
+    });
+  }
+</script>
+
+<script id=onnavigate>
+  {
+    let count = 0;
+    recordNavigations(() => {
+      navigation.onnavigate = () => count += 1;
+      history.pushState(null, '', '?handler');
+      navigation.onnavigate = null;
+    });
+    testing.expectEqual(1, count);
+  }
+</script>
+
+<script id=intercept_not_supported>
+  {
+    // Chrome differs: canIntercept is true there. We don't support intercept().
+    let in_dispatch;
+    let scroll_in_dispatch;
+    const {events} = recordNavigations(() => {
+      navigation.addEventListener('navigate', (e) => {
+        try { e.intercept(); } catch (err) { in_dispatch = err; }
+        try { e.scroll(); } catch (err) { scroll_in_dispatch = err; }
+      }, {once: true});
+      history.pushState(null, '', '?intercept');
+    });
+    const e = events[0];
+    testing.expectFalse(e.canIntercept);
+    testing.expectEqual('SecurityError', in_dispatch.name);
+    testing.expectEqual('InvalidStateError', scroll_in_dispatch.name);
+    testing.expectEqual('intercept() must be called before scroll()', scroll_in_dispatch.message);
+
+    testing.withError((err) => {
+      testing.expectEqual('InvalidStateError', err.name);
+      testing.expectEqual('intercept() may only be called while the navigate event is being dispatched.', err.message);
+    }, () => e.intercept());
+  }
+</script>

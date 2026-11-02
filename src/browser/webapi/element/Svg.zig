@@ -24,6 +24,7 @@ const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
+const DOMStringMap = @import("DOMStringMap.zig");
 const Factory = @import("../../Factory.zig");
 const AnimatedString = @import("../svg/AnimatedString.zig");
 pub const Generic = @import("svg/Generic.zig");
@@ -184,6 +185,11 @@ pub const JsApi = struct {
     pub const className = bridge.accessor(_className, null, .{});
     fn _className(self: *Svg, frame: *Frame) !*AnimatedString {
         return AnimatedString.getOrCreate(self.asElement(), .class, frame);
+    }
+
+    pub const dataset = bridge.accessor(_dataset, null, .{});
+    fn _dataset(self: *Svg, frame: *Frame) !*DOMStringMap {
+        return self.asElement().getDataset(frame);
     }
 
     pub const ownerSVGElement = bridge.accessor(Svg.getOwnerSvgElement, null, .{});

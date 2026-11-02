@@ -29,7 +29,6 @@ const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
-const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
@@ -438,7 +437,7 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
 
 // Returns a ReadableStream<string> that decodes the body as UTF-8, ignoring
 // any Content-Type charset (Fetch's non-standard streaming text accessor).
-pub fn textStream(self: *Response, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *Response, exec: *const Execution) !*ReadableStream {
     const local = exec.js.local.?;
     try self.checkUnusable(local);
 
@@ -584,7 +583,7 @@ const StreamConsumer = struct {
             // A chunk that is not a Uint8Array is a TypeError.
             return self.finish(local, "Response body chunk is not a Uint8Array");
         }
-        const chunk_copy = try self.arena.dupe(u8, try local.jsValueToZig([]u8, value));
+        const chunk_copy = try self.arena.dupe(u8, (try local.jsValueToZig(js.AllowSharedBufferSource, value)).bytes());
         try self.chunks.append(self.arena, chunk_copy);
         self.total_len += chunk_copy.len;
         try self.pumpRead();

@@ -82,7 +82,7 @@ pub const Type = enum {
     }
 
     // https://html.spec.whatwg.org/multipage/input.html#dom-input-value
-    pub fn valueMode(self: Type) ValueMode {
+    fn valueMode(self: Type) ValueMode {
         return switch (self) {
             .hidden, .submit, .image, .reset, .button => .default,
             .checkbox, .radio => .default_on,
@@ -92,7 +92,7 @@ pub const Type = enum {
     }
 };
 
-pub const ValueMode = enum {
+const ValueMode = enum {
     // The IDL value is the current value (_value).
     value,
     // The IDL value is the value content attribute, or "".
@@ -123,7 +123,12 @@ _files: ?*FileList = null,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
+// A queued selectionchange not yet fired; later changes fold into it.
+_selectionchange_pending: bool = false,
 
+pub fn asHtml(self: *Input) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *Input) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -155,9 +160,11 @@ pub fn getValue(self: *const Input) []const u8 {
 // Spec-compliant `getValue` exposes the raw password to JS, FormData, CSS
 // `:invalid` checks, etc. — but LLM-facing dumps (semantic tree, form
 // detection, accessibility tree) must not echo what the agent just typed.
+// An empty password stays empty, so a client can tell it still needs input.
 pub fn getRedactedValue(self: *const Input) []const u8 {
-    if (self._input_type == .password) return "*****";
-    return self.getValue();
+    const value = self.getValue();
+    if (self._input_type == .password and value.len > 0) return "*****";
+    return value;
 }
 
 pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
@@ -252,11 +259,13 @@ fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
 pub fn getWillValidate(self: *const Input) bool {
     // An input element is barred from constraint validation if:
     // - type is hidden, button, or reset
-    // - element is disabled
+    // - element is disabled or readonly (Chrome and Firefox bar readonly on
+    //   every type, not only those the attribute applies to)
     // - element has a datalist ancestor
+    const element = self.asConstElement();
     return switch (self._input_type) {
         .hidden, .button, .reset => false,
-        else => !self.asConstElement().isDisabled() and !self.hasDatalistAncestor(),
+        else => !element.isDisabled() and !element.hasAttributeInterned("readonly") and !self.hasDatalistAncestor(),
     };
 }
 
@@ -408,12 +417,12 @@ pub fn suffersValueMissing(self: *Input) bool {
         .checkbox => !self._checked,
         .radio => !self.radioGroupHasChecked(),
         .file => if (self._files) |fl| fl._files.len == 0 else true,
-        .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week, .color => blk: {
+        .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week => blk: {
             const v = self._value orelse self._default_value orelse "";
             break :blk v.len == 0;
         },
-        // submit/reset/button/hidden/image/range never participate in valueMissing.
-        .submit, .reset, .button, .hidden, .image, .range => false,
+        // required doesn't apply to these (see requiredApplies).
+        .submit, .reset, .button, .hidden, .image, .range, .color => false,
     };
 }
 
@@ -421,7 +430,10 @@ pub fn suffersTypeMismatch(self: *const Input) bool {
     const value = self._value orelse return false;
     if (value.len == 0) return false;
     return switch (self._input_type) {
-        .email => !isValidEmail(value),
+        .email => if (self.asConstElement().getAttributeInterned("multiple") != null)
+            !isValidEmailList(value)
+        else
+            !isValidEmail(value),
         .url => !isValidAbsoluteURL(value),
         else => false,
     };
@@ -483,18 +495,51 @@ pub fn suffersRangeOverflow(self: *const Input) bool {
     return numericRangeBreach(self, .overflow);
 }
 
+pub fn suffersStepMismatch(self: *const Input) bool {
+    const typ = self._input_type;
+    if (!hasNumericValue(typ)) return false;
+    const step = self.allowedValueStep() orelse return false;
+    const value = valueToNumber(typ, self.getValue()) orelse return false;
+    return offStep(value, self.stepBase(), step);
+}
+
+/// Whether value is off the ladder of steps from base. The tolerance grows with the
+/// magnitudes, so float error in a large value with a fractional step is not a mismatch.
+fn offStep(value: f64, base: f64, step: f64) bool {
+    const rungs = (value - base) / step;
+    const tolerance = @max(1e-9, 4 * std.math.floatEps(f64) * (@abs(value) + @abs(base)) / step);
+    return @abs(rungs - @round(rungs)) > tolerance;
+}
+
 fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overflow }) bool {
     const typ = self._input_type;
     if (!hasNumericValue(typ)) return false;
     const value = valueToNumber(typ, self.getValue()) orelse return false;
-    const bound = valueToNumber(typ, switch (kind) {
-        .underflow => self.getMin(),
-        .overflow => self.getMax(),
-    }) orelse return false;
-    return switch (kind) {
-        .underflow => value < bound,
-        .overflow => value > bound,
+    const min = valueToNumber(typ, self.getMin());
+    const max = valueToNumber(typ, self.getMax());
+
+    // A time range with min after max wraps past midnight: only a value in
+    // the gap breaches it, and then it underflows and overflows at once.
+    if (typ == .time) if (min) |lo| if (max) |hi| if (lo > hi) {
+        return value < lo and value > hi;
     };
+
+    return switch (kind) {
+        .underflow => if (min) |lo| value < lo else false,
+        .overflow => if (max) |hi| value > hi else false,
+    };
+}
+
+/// For :in-range and :out-of-range: whether the value is within the range
+/// limitations, or null when the input has none (no valid min or max, except
+/// type=range, which always has defaults).
+pub fn isInRange(self: *const Input) ?bool {
+    const typ = self._input_type;
+    if (!hasNumericValue(typ)) return null;
+    if (typ != .range and valueToNumber(typ, self.getMin()) == null and valueToNumber(typ, self.getMax()) == null) {
+        return null;
+    }
+    return !self.suffersRangeUnderflow() and !self.suffersRangeOverflow();
 }
 
 fn radioGroupHasChecked(self: *Input) bool {
@@ -562,18 +607,48 @@ fn sameFormOwner(self_form: ?*Form, other: *Input) bool {
     return false;
 }
 
-/// Liberal email validation: ASCII local part + "@" + dotted ASCII host. Mirrors
-/// the WHATWG "valid e-mail address" production loosely — sufficient for most
-/// constraint-validation tests; HTML browsers themselves are permissive here.
+/// With the multiple attribute, the value is the comma-separated addresses with
+/// the whitespace around each one removed.
+fn sanitizeEmailList(value: []const u8, frame: *Frame) ![]const u8 {
+    var result = try frame.page_arena.alloc(u8, value.len);
+    var len: usize = 0;
+    var addresses = std.mem.splitScalar(u8, value, ',');
+    var first = true;
+    while (addresses.next()) |address| {
+        if (!first) {
+            result[len] = ',';
+            len += 1;
+        }
+        first = false;
+        const trimmed = std.mem.trim(u8, address, &std.ascii.whitespace);
+        @memcpy(result[len..][0..trimmed.len], trimmed);
+        len += trimmed.len;
+    }
+    return result[0..len];
+}
+
+/// HTML "valid e-mail address": local part, "@", then one or more dot-separated
+/// labels of up to 63 letters, digits and hyphens that start and end with a letter
+/// or digit. A dot is not required (a@localhost is valid).
 fn isValidEmail(value: []const u8) bool {
     const at = std.mem.findScalar(u8, value, '@') orelse return false;
     if (at == 0 or at == value.len - 1) return false;
-    const local = value[0..at];
-    const host = value[at + 1 ..];
-    for (local) |c| if (!isEmailLocalChar(c)) return false;
-    if (std.mem.findScalar(u8, host, '.') == null) return false;
-    for (host) |c| if (!isEmailHostChar(c)) return false;
-    if (host[0] == '.' or host[host.len - 1] == '.') return false;
+    for (value[0..at]) |c| if (!isEmailLocalChar(c)) return false;
+    var labels = std.mem.splitScalar(u8, value[at + 1 ..], '.');
+    while (labels.next()) |label| {
+        if (label.len == 0 or label.len > 63) return false;
+        if (!std.ascii.isAlphanumeric(label[0]) or !std.ascii.isAlphanumeric(label[label.len - 1])) return false;
+        for (label) |c| if (!std.ascii.isAlphanumeric(c) and c != '-') return false;
+    }
+    return true;
+}
+
+/// With the multiple attribute, every comma-separated address must be valid.
+fn isValidEmailList(value: []const u8) bool {
+    var addresses = std.mem.splitScalar(u8, value, ',');
+    while (addresses.next()) |address| {
+        if (!isValidEmail(address)) return false;
+    }
     return true;
 }
 
@@ -583,10 +658,6 @@ fn isEmailLocalChar(c: u8) bool {
         '.', '!', '#', '$', '%', '&', '\'', '*', '+', '/', '=', '?', '^', '_', '`', '{', '|', '}', '~', '-' => true,
         else => false,
     };
-}
-
-fn isEmailHostChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '-' or c == '.';
 }
 
 /// Absolute URL check per the WHATWG URL parser: must include a scheme followed
@@ -661,6 +732,13 @@ pub fn readonlyApplies(self: *const Input) bool {
         .text, .password, .email, .url, .tel, .search, .number => true,
         .date, .time, .@"datetime-local", .month, .week => true,
         else => false,
+    };
+}
+
+pub fn requiredApplies(self: *const Input) bool {
+    return switch (self._input_type) {
+        .hidden, .range, .color, .submit, .reset, .button, .image => false,
+        else => true,
     };
 }
 
@@ -841,6 +919,9 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
                 break :blk result[0..i];
             };
 
+            if (self._input_type == .email and self.asConstElement().getAttributeInterned("multiple") != null) {
+                return sanitizeEmailList(sanitized, frame);
+            }
             return switch (self._input_type) {
                 .url, .email => std.mem.trim(u8, sanitized, &std.ascii.whitespace),
                 else => sanitized,
@@ -950,7 +1031,7 @@ fn stepBy(self: *Input, n: i32, frame: *Frame) !void {
     const base = self.stepBase();
     const rungs = (before - base) / step;
     const steps: f64 = @floatFromInt(n);
-    var value = if (@abs(rungs - @round(rungs)) > 1e-9)
+    var value = if (offStep(before, base, step))
         // Off the ladder: the snap to the next rung counts as the first step
         // (what browsers do; the spec text ignores n here).
         base + (if (n < 0) @floor(rungs) + steps + 1 else @ceil(rungs) + steps - 1) * step

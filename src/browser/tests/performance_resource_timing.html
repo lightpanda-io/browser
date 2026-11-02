@@ -17,7 +17,8 @@
   testing.expectEqual(e.decodedBodySize, e.encodedBodySize);
   testing.expectEqual(true, e.transferSize > e.encodedBodySize);
   testing.expectEqual(1, performance.getEntriesByType('resource').length);
-  testing.expectEqual(e, performance.getEntries()[0]);
+  // [0] is the navigation entry
+  testing.expectEqual(e, performance.getEntries()[1]);
 </script>
 
 <script id=fetch_entry type=module>

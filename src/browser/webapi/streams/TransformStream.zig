@@ -34,22 +34,21 @@ pub const DefaultController = TransformStreamDefaultController;
 /// The transformers implemented in Zig.
 pub const ZigTransformer = union(enum) {
     text_encoder,
-    text_decoder: struct { ignore_bom: bool },
+    text_decoder: *TextDecoderStream.Decoder,
     compressor: *compress.Compressor,
     decompressor: *compress.Decompressor,
 
     fn transform(self: ZigTransformer, controller: *TransformStreamDefaultController, chunk: js.Value) !void {
         return switch (self) {
             .text_encoder => TextEncoderStream.encodeTransform(controller, chunk),
-            .text_decoder => |opts| TextDecoderStream.decodeTransform(controller, chunk, opts.ignore_bom),
-            inline .compressor, .decompressor => |t| t.transform(controller, chunk),
+            inline .text_decoder, .compressor, .decompressor => |t| t.transform(controller, chunk),
         };
     }
 
     fn flush(self: ZigTransformer, controller: *TransformStreamDefaultController) !void {
         return switch (self) {
-            .text_encoder, .text_decoder => {},
-            inline .compressor, .decompressor => |t| t.flush(controller),
+            .text_encoder => {},
+            inline .text_decoder, .compressor, .decompressor => |t| t.flush(controller),
         };
     }
 };
@@ -206,7 +205,7 @@ pub const TransformStreamDefaultController = struct {
     }
 
     /// Enqueue a raw JS value, preserving its type. Used by the JS-facing API.
-    pub fn enqueueValue(self: *TransformStreamDefaultController, value: js.Value) !void {
+    fn enqueueValue(self: *TransformStreamDefaultController, value: js.Value) !void {
         try self._stream._readable._controller.enqueueValue(value);
     }
 

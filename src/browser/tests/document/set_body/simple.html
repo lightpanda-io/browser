@@ -1,5 +1,7 @@
 <html>
 <body id=orig><div>original</div></body>
 <script>
-  document.body = '<p>replaced</p>';
+  const body = document.createElement('body');
+  body.innerHTML = '<p>replaced</p>';
+  document.body = body;
 </script>

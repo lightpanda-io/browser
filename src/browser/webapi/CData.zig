@@ -392,7 +392,7 @@ fn deleteData(self: *CData, offset: usize, count: usize, frame: *Frame) !void {
     self.dataChanged(old_data, frame);
 }
 
-fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) !void {
+pub fn insertData(self: *CData, offset: usize, data: []const u8, frame: *Frame) !void {
     const byte_offset = try utf16OffsetToUtf8(self._data.str(), offset);
 
     // Update live ranges per DOM spec replaceData steps (insertData = replaceData with count=0)

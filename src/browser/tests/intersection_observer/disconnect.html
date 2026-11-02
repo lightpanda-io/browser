@@ -1,8 +1,10 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 100px;">Target Element</div>
 
-<script id="disconnect">
+<script id="disconnect" type=module>
+    const state = await testing.async();
     const target = document.getElementById('target');
     let callCount = 0;
 
@@ -11,20 +13,21 @@
     });
 
     observer.observe(target);
+    await testing.nextFrame();
+    const afterFirst = callCount;
 
-    testing.onload(() => {
+    observer.disconnect();
+
+    // Create a new observer to trigger another check
+    // If disconnect worked, the old observer won't fire
+    const observer2 = new IntersectionObserver(() => {});
+    observer2.observe(target);
+    await testing.nextFrame();
+    observer2.disconnect();
+
+    state.resolve();
+    await state.done(() => {
+        testing.expectEqual(1, afterFirst);
         testing.expectEqual(1, callCount);
-
-        observer.disconnect();
-
-        // Create a new observer to trigger another check
-        // If disconnect worked, the old observer won't fire
-        const observer2 = new IntersectionObserver(() => {});
-        observer2.observe(target);
-
-        testing.onload(() => {
-            observer2.disconnect();
-            testing.expectEqual(1, callCount);
-        });
     });
 </script>

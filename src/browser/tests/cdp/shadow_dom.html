@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <x-coupon id="coupon"><span id="slotted">slotted-text</span><span id="unslotted" slot="nope">unslotted-text</span></x-coupon>
+    <div id="closed-host"></div>
+    <script>
+        customElements.define('x-coupon', class extends HTMLElement {
+            connectedCallback() {
+                this.attachShadow({ mode: 'open' }).innerHTML =
+                    '<label>Coupon code <input id="code"></label><button id="apply">Apply</button><slot></slot>';
+            }
+        });
+        document.getElementById("closed-host").attachShadow({ mode: "closed" }).innerHTML =
+            '<button id="in-closed">in-closed</button>';
+    </script>
+</body>
+</html>

@@ -19,7 +19,6 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Frame = @import("../../../Frame.zig");
 const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
@@ -40,14 +39,6 @@ pub fn asNode(self: *OL) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getType(self: *OL) []const u8 {
-    return self.asElement().getAttributeInterned("type") orelse "1";
-}
-
-fn setType(self: *OL, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OL);
 
@@ -61,7 +52,7 @@ pub const JsApi = struct {
 
     pub const start = reflect.long("start", 1);
     pub const reversed = reflect.boolean("reversed");
-    pub const @"type" = bridge.accessor(OL.getType, OL.setType, .{ .ce_reactions = true });
+    pub const @"type" = reflect.string("type");
 };
 
 const testing = @import("../../../../testing.zig");

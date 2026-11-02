@@ -32,7 +32,6 @@ const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
-const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
@@ -77,7 +76,7 @@ pub const InitOpts = struct {
     signal: ?*AbortSignal = null,
 };
 
-pub const ReferrerValue = union(enum) {
+const ReferrerValue = union(enum) {
     client,
     none,
     url: [:0]const u8,
@@ -204,6 +203,10 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
             break :blk if (r._body) |b| try arena.dupe(u8, b) else null;
         },
     };
+
+    if ((body != null or body_stream != null) and (method == .GET or method == .HEAD)) {
+        return exec.js.typeError("Request with GET/HEAD method cannot have body");
+    }
 
     const signal = if (opts.signal) |s|
         s
@@ -415,7 +418,7 @@ pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
 }
 
 // Returns a ReadableStream that decodes the body as UTF-8.
-pub fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
     const local = exec.js.local.?;
     try self.checkUnusable(local);
 
@@ -514,7 +517,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
     return request;
 }
 
-pub fn getReferrer(self: *Request) []const u8 {
+fn getReferrer(self: *Request) []const u8 {
     return switch (self._referrer) {
         .client => "about:client",
         .none => "",
@@ -522,7 +525,7 @@ pub fn getReferrer(self: *Request) []const u8 {
     };
 }
 
-pub fn getReferrerPolicy(self: *Request) []const u8 {
+fn getReferrerPolicy(self: *Request) []const u8 {
     const policy = self._referrer_policy orelse return "";
     return switch (policy) {
         .no_referrer => "no-referrer",

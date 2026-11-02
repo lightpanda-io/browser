@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- TextArea elements -->
@@ -302,8 +303,10 @@
   }
 </script>
 
-<script id="select_event">
+<script id="select_event" type=module>
   {
+    // select is queued: it isn't ordered against the load event, so wait for it.
+    const state = await testing.async();
     const textarea = document.createElement('textarea');
     textarea.value = 'Hello World';
     document.body.appendChild(textarea);
@@ -320,15 +323,18 @@
     textarea.onselect = () => { onselectFired = true; };
 
     let bubbledToBody = false;
-    document.body.addEventListener('select', () => {
-      bubbledToBody = true;
+    document.body.addEventListener('select', (e) => {
+      if (e.target === textarea) {
+        bubbledToBody = true;
+        state.resolve();
+      }
     });
 
     testing.expectEqual(0, eventCount);
 
     textarea.select();
 
-    testing.onload(() => {
+    await state.done(() => {
       testing.expectEqual(1, eventCount);
       testing.expectEqual('select', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
@@ -340,35 +346,43 @@
   }
 </script>
 
-<script id="selectionchange_event">
+<script id="selectionchange_event" type=module>
   {
+    // Fires asynchronously, not ordered against the load event, and changes
+    // before it fires fold into one event.
+    const state = await testing.async();
     const textarea = document.createElement('textarea');
     textarea.value = 'Hello World';
     document.body.appendChild(textarea);
-    
+
     let eventCount = 0;
     let lastEvent = null;
-    
+
     textarea.addEventListener('selectionchange', (e) => {
       eventCount++;
       lastEvent = e;
     });
-    
+
     testing.expectEqual(0, eventCount);
-    
+
     textarea.setSelectionRange(0, 5);
     textarea.select();
     textarea.selectionStart = 3;
     textarea.selectionEnd = 8;
-    
+
     let bubbledToBody = false;
-    document.body.addEventListener('selectionchange', () => {
-      bubbledToBody = true;
+    document.body.addEventListener('selectionchange', (e) => {
+      if (e.target === textarea) {
+        bubbledToBody = true;
+        state.resolve();
+      }
     });
     textarea.setSelectionRange(1, 4);
-    
-    testing.onload(() => {
-      testing.expectEqual(5, eventCount);
+
+    testing.expectEqual(0, eventCount);
+
+    await state.done(() => {
+      testing.expectEqual(1, eventCount);
       testing.expectEqual('selectionchange', lastEvent.type);
       testing.expectEqual(textarea, lastEvent.target);
       testing.expectEqual(true, lastEvent.bubbles);
@@ -394,7 +408,10 @@
     textarea.value = 'hello';
     testing.expectEqual(5, textarea.selectionStart);
     testing.expectEqual(5, textarea.selectionEnd);
-    testing.expectEqual('none', textarea.selectionDirection);
+    // Platforms without a "none" direction report "forward" (Chrome on Linux).
+    const probe = document.createElement('textarea');
+    probe.setSelectionRange(0, 0, 'none');
+    testing.expectEqual(probe.selectionDirection, textarea.selectionDirection);
 
     // Re-assigning the same value leaves the selection alone
     // (WPT textfieldselection/selection-after-content-change.html).
@@ -459,5 +476,80 @@
     el.setRangeText('X');
     testing.expectEqual('\néXa', el.value);
     testing.expectEqual(2, el.selectionStart);
+  }
+</script>
+
+<script id="selection_setters_keep_order">
+  {
+    // Setting one end past the other drags the other along (start <= end).
+    const el = document.createElement('textarea');
+    el.value = 'hello';
+    el.setSelectionRange(1, 2, 'backward');
+    el.selectionStart = 4;
+    testing.expectEqual(4, el.selectionStart);
+    testing.expectEqual(4, el.selectionEnd);
+    testing.expectEqual('backward', el.selectionDirection);
+
+    el.setSelectionRange(3, 4);
+    el.selectionEnd = 1;
+    testing.expectEqual(1, el.selectionStart);
+    testing.expectEqual(1, el.selectionEnd);
+
+    el.selectionStart = 10;
+    testing.expectEqual(5, el.selectionStart);
+    testing.expectEqual(5, el.selectionEnd);
+  }
+</script>
+
+
+<script id="scrollHeight_autosize_zero_height">
+  {
+    // Pin the box so Lightpanda and Chrome lay out the same one: 12px lines,
+    // no padding, no scrollbar. Chrome's glyphs overflow the last line by a
+    // pixel or two, so compare line counts rather than pixels.
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'font-family: monospace; font-size: 10px; line-height: 12px; padding: 0; overflow: hidden';
+    const lines = () => Math.round(ta.scrollHeight / 12);
+
+    // Autosize idiom: collapse the box, then read the text's height.
+    ta.textContent = 'Hello';
+    document.body.appendChild(ta);
+    ta.style.height = '0px';
+    testing.expectEqual(0, ta.clientHeight);
+    testing.expectEqual(1, lines());
+
+    // An empty value still takes one line.
+    ta.value = '';
+    testing.expectEqual(1, lines());
+
+    // Newlines are kept, and a trailing one opens an empty line.
+    ta.value = 'First line\nSecond line';
+    testing.expectEqual(2, lines());
+    ta.value = 'a\n\n';
+    testing.expectEqual(3, lines());
+
+    // Without a CSS width, lines wrap at cols (default 20).
+    ta.value = 'aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa';
+    testing.expectEqual(2, lines());
+    ta.cols = 80;
+    testing.expectEqual(1, lines());
+    ta.setAttribute('cols', '0');
+    testing.expectEqual(2, lines());
+
+    // A CSS width beats cols.
+    ta.style.width = '70px';
+    testing.expectEqual(4, lines());
+
+    // white-space: pre doesn't wrap.
+    ta.style.whiteSpace = 'pre';
+    testing.expectEqual(1, lines());
+
+    // The box's own height is the floor.
+    ta.style.height = '200px';
+    testing.expectEqual(200, ta.scrollHeight);
+
+    ta.style.display = 'none';
+    testing.expectEqual(0, ta.scrollHeight);
+    ta.remove();
   }
 </script>

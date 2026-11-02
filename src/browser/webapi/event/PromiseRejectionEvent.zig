@@ -59,22 +59,13 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEve
     return event;
 }
 
-pub fn deinit(self: *PromiseRejectionEvent, page: *Page) void {
+pub fn deinit(self: *PromiseRejectionEvent, _: *Page) void {
     if (self._reason) |r| {
         r.release();
     }
     if (self._promise) |p| {
         p.release();
     }
-    self._proto.deinit(page);
-}
-
-pub fn releaseRef(self: *PromiseRejectionEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
-}
-
-pub fn acquireRef(self: *PromiseRejectionEvent) void {
-    self._proto.acquireRef();
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {

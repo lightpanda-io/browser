@@ -64,7 +64,14 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
         try arena.dupeSentinel(u8, target.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
-    _ = try session.navigationFor(target).pushEntry(url, .{ .source = .history, .value = json }, target, true);
+
+    const navigation = session.navigationFor(target);
+    const result = try navigation.fireNavigateEvent(.{ .navigation_type = .push, .url = url, .same_document = true, .classic_history = true }, target);
+    if (result == .canceled) {
+        return;
+    }
+
+    _ = try navigation.pushEntry(url, .{ .source = .history, .value = json }, target, true);
 
     target.url = url;
     // setHref == reinitializing.
@@ -77,6 +84,10 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
         .frame_id = target._frame_id,
         .navigation_type = .historyApi,
     });
+
+    if (result == .fired) {
+        try navigation.commitSameDocument(result.fired, target);
+    }
 }
 
 fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8) !void {
@@ -90,7 +101,14 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
         try arena.dupeSentinel(u8, target.url, 0);
 
     const json = state.toJson(arena.allocator()) catch return error.DataClone;
-    _ = try session.navigationFor(target).replaceEntry(url, .{ .source = .history, .value = json }, target, true);
+
+    const navigation = session.navigationFor(target);
+    const result = try navigation.fireNavigateEvent(.{ .navigation_type = .replace, .url = url, .same_document = true, .classic_history = true }, target);
+    if (result == .canceled) {
+        return;
+    }
+
+    _ = try navigation.replaceEntry(url, .{ .source = .history, .value = json }, target, true);
 
     target.url = url;
     // setHref == reinitializing.
@@ -103,6 +121,10 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
         .frame_id = target._frame_id,
         .navigation_type = .historyApi,
     });
+
+    if (result == .fired) {
+        try navigation.commitSameDocument(result.fired, target);
+    }
 }
 
 fn goInner(delta: i32, frame: *Frame) !void {
@@ -115,15 +137,23 @@ fn goInner(delta: i32, frame: *Frame) !void {
         return;
     }
 
-    const index = @as(usize, @intCast(index_s));
+    try traverse(@intCast(index_s), frame);
+}
+
+// Traverses the session history to the entry at `index`. An entry of this
+// document is restored in place, firing popstate; any other loads its
+// document. Needs an entered JS context (navigateInner creates promises).
+pub fn traverse(index: usize, frame: *Frame) !void {
+    const navigation = frame._session.navigationFor(frame);
     const entry = navigation._entries.items[index];
     // popstate fires on the document that stays; a traversal to another
     // document replaces this one instead.
     const same_document = entry.sameDocument(frame);
 
-    _ = try navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
+    _ = try navigation.navigateInner(entry._url, .{ .traverse = index }, .{ .api_method = false }, frame);
 
-    if (same_document) {
+    // The index doesn't move when the navigate event was canceled.
+    if (same_document and navigation._index == index) {
         try firePopState(frame, entry._state.value);
         // hashchange is queued by navigateInner.
     }

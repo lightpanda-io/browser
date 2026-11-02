@@ -100,6 +100,16 @@ pub extern "c" fn html5ever_parse_fragment(
     allow_declarative_shadow: bool,
 ) void;
 
+// 0-based, the column in UTF-16 code units.
+pub const TextPosition = extern struct {
+    line: u32,
+    column: u32,
+};
+
+// Where the text of a <script> from html5ever_parse_document(_with_encoding)
+// starts, given its ParsedNode.data.
+pub extern "c" fn html5ever_script_text_position(data: *anyopaque) Nullable(TextPosition);
+
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
 pub extern "c" fn html5ever_attribute_iterator_count(ctx: *anyopaque) usize;
 
@@ -349,6 +359,13 @@ pub extern "c" fn encoding_decoder_decode(
 ) DecodeResult;
 
 pub extern "c" fn encoding_decoder_free(decoder: *anyopaque) void;
+
+pub extern "c" fn encoding_decoder_max_utf8_buffer_length(decoder: *anyopaque, input_len: usize) usize;
+
+// A decoder in caller-owned memory, never freed (see lib.rs).
+pub extern "c" fn encoding_decoder_size() usize;
+pub extern "c" fn encoding_decoder_align() usize;
+pub extern "c" fn encoding_decoder_init(handle: *anyopaque, out: *anyopaque) u8;
 
 // Encoding API (UTF-8 to legacy encoding with NCR fallback)
 const EncodeResult = extern struct {

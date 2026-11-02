@@ -60,8 +60,14 @@ fn getDisabled(self: *const CSSStyleSheet) bool {
     return self._disabled;
 }
 
-fn setDisabled(self: *CSSStyleSheet, disabled: bool) void {
+pub fn setDisabled(self: *CSSStyleSheet, disabled: bool, frame: *Frame) void {
+    if (self._disabled == disabled) {
+        return;
+    }
     self._disabled = disabled;
+    if (self.ownerStyleManager(frame)) |style_manager| {
+        style_manager.sheetModified();
+    }
 }
 
 fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <form name="form1" id="f1">
@@ -20,7 +21,20 @@
   testing.expectEqual(form, document['form1']);
   testing.expectEqual('hello', document.form1.field.value);
   testing.expectTrue('form1' in document);
-  testing.expectFalse(Object.keys(document).includes('form1'));
+}
+</script>
+
+<script id=enumerable>
+{
+  // Document named properties are enumerable (no [LegacyUnenumerableNamedProperties]),
+  // and location is an own property ([LegacyUnforgeable]). An img/object
+  // contributes its id before its name, duplicates are dropped.
+  testing.expectEqual(
+    ['location', 'form1', 'dup', 'dup2', 'img_by_id', 'pic', 'obj_by_id', 'getElementById', 'frame1'],
+    Object.keys(document)
+  );
+  testing.expectTrue(Object.getOwnPropertyDescriptor(document, 'form1').enumerable);
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(Document.prototype, 'location'));
 }
 </script>
 
@@ -39,7 +53,9 @@
 </script>
 
 <script id=builtins>
-  testing.expectEqual('function', typeof document.getElementById);
+  testing.diverges('Chrome correctly allows elements to clobber document functions [LegacyOverrideBuiltIns]', () => {
+    testing.expectEqual('function', typeof document.getElementById);
+  });
 </script>
 
 <script id=multiple>

@@ -91,15 +91,11 @@ fn getDocument(cmd: *CDP.Command) !void {
     };
     const params = try cmd.params(Params) orelse Params{};
 
-    if (params.pierce) {
-        log.debug(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
-    }
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try bc.node_registry.register(frame.window._document.asNode());
-    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .root = try bc.nodeWriter(node, .{ .depth = params.depth, .pierce = params.pierce }) }, .{});
 }
 
 // Closed set of XPath 1.0 named axes. Matched literally before `::` so
@@ -235,7 +231,7 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
 
         try cmd.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
-            .nodes = .{bc.nodeWriter(node, .{})},
+            .nodes = .{try bc.nodeWriter(node, .{})},
         }, .{
             .session_id = session_id,
         });
@@ -293,7 +289,11 @@ fn querySelector(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
-    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse return error.NodeNotFoundForGivenId;
+    // As in Chrome, no match is a nodeId of 0, not an error: clients
+    // (chromedp's ByQuery, for one) read 0 as "not found yet" and poll.
+    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse {
+        return cmd.sendResult(.{ .nodeId = 0 }, .{});
+    };
     const dom_node = element.asNode();
     const registered_node = try bc.node_registry.register(dom_node);
 
@@ -359,7 +359,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         findContext(bc, root, context_id) orelse return error.ContextNotFound
     else
         // orelse root is safe here since there's no frame-specific state being used
-        (node.dom.ownerFrame(root) orelse root).js;
+        (node.dom.ownerFrame(root) orelse root).main_js;
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -404,8 +404,8 @@ fn findContext(bc: *CDP.BrowserContext, root: *Frame, context_id: u32) ?*js.Cont
 }
 
 fn findMainWorldContext(frame: *Frame, context_id: u32) ?*js.Context {
-    if (contextIdOf(frame.js) == context_id) {
-        return frame.js;
+    if (contextIdOf(frame.main_js) == context_id) {
+        return frame.main_js;
     }
     for (frame.child_frames.items) |child| {
         if (findMainWorldContext(child, context_id)) |js_context| {
@@ -431,14 +431,11 @@ fn describeNode(cmd: *CDP.Command) !void {
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.pierce) {
-        log.debug(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
-    }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .node = try bc.nodeWriter(node, .{ .depth = params.depth, .pierce = params.pierce }) }, .{});
 }
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
@@ -606,7 +603,7 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
 
     try cmd.sendEvent("DOM.setChildNodes", .{
         .parentId = node.id,
-        .nodes = bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
+        .nodes = try bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true, .pierce = params.pierce }),
     }, .{
         .session_id = session_id,
     });
@@ -1320,7 +1317,7 @@ test "cdp.dom: querySelector Node not found" {
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 1, .selector = "a" },
     });
-    try ctx.expectSentError(-31998, "NodeNotFoundForGivenId", .{ .id = 4 });
+    try ctx.expectSentResult(.{ .nodeId = 0 }, .{ .id = 4 });
 
     try ctx.processMessage(.{
         .id = 5,

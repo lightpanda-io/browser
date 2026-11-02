@@ -567,7 +567,7 @@ pub fn isDefaultNamespace(self: *Node, namespace_arg: ?[]const u8, frame: *Frame
     return false;
 }
 
-pub fn isEqualNode(self: *Node, other: *Node) bool {
+pub fn isEqualNode(self: *Node, other: *Node, frame: *Frame) bool {
     if (self == other) {
         return true;
     }
@@ -577,17 +577,16 @@ pub fn isEqualNode(self: *Node, other: *Node) bool {
         return false;
     }
 
-    // TODO: Compare `localName` and prefix.
     return switch (self._type) {
-        .element => self.as(Element).isEqualNode(other.as(Element)),
+        .element => self.as(Element).isEqualNode(other.as(Element), frame),
         .attribute => self.as(Element.Attribute).isEqualNode(other.as(Element.Attribute)),
         .cdata => self.as(CData).isEqualNode(other.as(CData)),
         .document_type => self.as(DocumentType).isEqualNode(other.as(DocumentType)),
-        .document_fragment, .document => self.isEqualChildren(other),
+        .document_fragment, .document => self.isEqualChildren(other, frame),
     };
 }
 
-pub fn isEqualChildren(a: *Node, b: *Node) bool {
+pub fn isEqualChildren(a: *Node, b: *Node, frame: *Frame) bool {
     var a_count: usize = 0;
     var a_iter = a.childrenIterator();
 
@@ -597,7 +596,7 @@ pub fn isEqualChildren(a: *Node, b: *Node) bool {
     while (a_iter.next()) |a_node| : (a_count += 1) {
         const b_node = b_iter.next() orelse return false;
         b_count += 1;
-        if (a_node.isEqualNode(b_node)) {
+        if (a_node.isEqualNode(b_node, frame)) {
             continue;
         }
 
@@ -1167,6 +1166,7 @@ const CloneError = error{
     JsException,
     ExecutionTerminated,
     QuotaExceeded,
+    InvalidStringLength,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
     return self.cloneNodeInto(deep_ orelse false, self.getDocument(frame), frame);
@@ -1646,9 +1646,7 @@ pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpt
     const notify = Frame.observers.hasMutationObservers(frame);
     const removed = try self.removeAllChildrenCollecting(notify, frame);
 
-    if (html.len > 0) {
-        try Frame.parse.fragment(frame, self, html, opts);
-    }
+    try Frame.parse.fragment(frame, self, html, opts);
 
     if (notify) {
         var added: std.ArrayList(*Node) = .empty;
@@ -1795,6 +1793,18 @@ pub fn flatTreeParent(self: *Node, frame: *const Frame) ?*Node {
     return self._parent;
 }
 
+/// A shadow host's child that no slot takes, or the fallback content that isn't
+// used. flatTreeParent returns the parent for these, so we can't use that.
+pub fn isOutsideFlatTree(self: *const Node) bool {
+    const parent = self._parent orelse return false;
+    const el = parent.is(Element) orelse return false;
+    if (el._flags.shadow_host) {
+        return self._flags.assigned_slot == false;
+    }
+    const slot = parent.is(Element.Html.Slot) orelse return false;
+    return slot._assigned.items.len > 0;
+}
+
 /// The flat-tree parent element: shadow content inherits from its host, a
 /// slotted node from its slot.
 pub fn flatTreeParentElement(self: *Node, frame: *const Frame) ?*Element {
@@ -1816,6 +1826,34 @@ pub fn flatParent(self: *Node, frame: *const Frame) ?*Node {
         return shadow._host.asNode();
     }
     return parent;
+}
+
+/// The first child in the flat tree: a host's first shadow child, an assigned
+/// slot's first slottable, else the DOM first child.
+pub fn flatFirstChild(self: *Node, frame: *const Frame) ?*Node {
+    if (self.is(Element)) |el| {
+        if (el.hostedShadowRoot(frame)) |shadow| {
+            return shadow.asNode().firstChild();
+        }
+    }
+    if (self.is(Element.Html.Slot)) |slot| {
+        // empty while the slot isn't in a shadow tree
+        if (slot._assigned.items.len > 0) {
+            return slot._assigned.items[0];
+        }
+    }
+    return self.firstChild();
+}
+
+/// The next sibling in the flat tree: a slotted node's next slottable, else
+/// the DOM next sibling.
+pub fn flatNextSibling(self: *Node, frame: *const Frame) ?*Node {
+    if (self.assignedSlot(frame)) |slot| {
+        const assigned = slot._assigned.items;
+        const i = std.mem.indexOfScalar(*Node, assigned, self) orelse return null;
+        return if (i + 1 < assigned.len) assigned[i + 1] else null;
+    }
+    return self.nextSibling();
 }
 
 pub const JsApi = struct {
@@ -1911,8 +1949,8 @@ pub const JsApi = struct {
         return self.getRootNode(opts orelse .{});
     }
     pub const isEqualNode = bridge.function(_isEqualNode, .{});
-    fn _isEqualNode(self: *Node, other: js.Nullable(*Node)) bool {
-        return self.isEqualNode(other.value orelse return false);
+    fn _isEqualNode(self: *Node, other: js.Nullable(*Node), frame: *Frame) bool {
+        return self.isEqualNode(other.value orelse return false, frame);
     }
     pub const lookupNamespaceURI = bridge.function(_lookupNamespaceURI, .{});
     fn _lookupNamespaceURI(self: *Node, prefix: js.Nullable([]const u8), frame: *Frame) ?[]const u8 {

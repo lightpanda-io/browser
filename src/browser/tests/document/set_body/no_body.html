@@ -4,6 +4,8 @@
 <body><!-- this body is removed before setBody runs --></body>
 <script>
   document.body.remove();
-  document.body = '<p>appended</p>';
+  const body = document.createElement('body');
+  body.innerHTML = '<p>appended</p>';
+  document.body = body;
 </script>
 </html>

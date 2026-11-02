@@ -62,15 +62,17 @@ impl PrescanSink {
     }
 
     fn scan_script(&self, tag: &Tag) {
-        // Mirrors ScriptManager.addFromElement: nomodule scripts are skipped,
-        // and only classic javascript and module types are fetched.
+        // Mirrors ScriptManager.addFromElement: nomodule scripts and a blank
+        // src are skipped, and only classic javascript and module types are
+        // fetched.
         if Self::attr(tag, &local_name!("nomodule")).is_some() {
             return;
         }
         let Some(src) = Self::attr(tag, &local_name!("src")) else {
             return;
         };
-        if src.value.is_empty() {
+        let html_space = |c: char| matches!(c, '\t' | '\n' | '\x0c' | '\r' | ' ');
+        if src.value.chars().all(html_space) {
             return;
         }
         let kind = match Self::attr(tag, &local_name!("type")) {

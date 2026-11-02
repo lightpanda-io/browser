@@ -55,8 +55,9 @@ pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Pro
         return local.typeError("Writer has been released");
     };
 
+    // Unlike write(), an errored stream rejects with a new TypeError.
     if (stream._state != .writable) {
-        return rejectNotWritable(stream, local);
+        return local.typeError("Stream is not writable");
     }
 
     stream.closeStream(exec) catch |err| switch (err) {

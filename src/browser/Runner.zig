@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("js/js.zig");
 const Frame = @import("Frame.zig");
+const URL = @import("URL.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -485,6 +486,9 @@ fn hasRunnablePage(session: *Session) bool {
             // An image or raw document has a JS context too: its timers and
             // animation frames run like an HTML document's.
             .html, .complete, .raw_done => return true,
+            .pre => {
+                if (page.frame.document._ready_state == .complete and URL.isAboutBlank(page.frame.url)) return true;
+            },
             else => {},
         }
     }
@@ -729,4 +733,40 @@ test "Runner: networkidle waits out activity after the frame latched idle" {
     const again_start = lp.datetime.milliTimestamp(.boot);
     try again.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
     try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - again_start < 250);
+}
+
+test "Runner: fresh initial about blank advances timers and promise continuations" {
+    const page = try testing.test_session.createPage();
+    defer page.close();
+    const frame = page.frame().?;
+    try testing.expectEqual("about:blank", frame.url);
+    try testing.expectEqual(true, frame._parse_state == .pre);
+    try testing.expectEqual(true, frame._load_state == .waiting);
+    try testing.expectEqual(true, frame.document._ready_state == .complete);
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        try ls.local.eval(
+            \\globalThis.initialPageEvents = [];
+            \\setTimeout(() => {
+            \\  initialPageEvents.push('timer');
+            \\  Promise.resolve().then(() => initialPageEvents.push('promise'));
+            \\}, 0);
+        , null);
+    }
+    var runner = page.session.runner(.{});
+    var conditions: [0]WaitCondition = .{};
+    _ = try runner.tick(0, &conditions);
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const events = try ls.local.exec("initialPageEvents.join(',')", null);
+        try testing.expectEqual("timer,promise", try events.toStringSlice());
+    }
+    try testing.expectEqual(true, frame._parse_state == .pre);
+    try testing.expectEqual(true, frame._load_state == .waiting);
+    try testing.expectEqual(true, frame.document._ready_state == .complete);
 }

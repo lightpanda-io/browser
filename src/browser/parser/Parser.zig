@@ -113,6 +113,8 @@ context: ?*Element = null,
 fragment: bool = false,
 
 xml_error: bool = false,
+// An XML entity that xml5ever doesn't know is only an error without a DTD.
+seen_doctype: bool = false,
 terminated: bool = false,
 appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
 inserted_since_checkpoint: u16 = 0,
@@ -484,26 +486,29 @@ fn parseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
 // xml5ever xml error callback indicating a well-formedness violating.
 fn xmlParseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    if (isWellFormednessError(err.slice())) {
+    // Without a DTD to declare it, an unknown entity breaks the "Entity
+    // Declared" well-formedness constraint.
+    if (isWellFormednessError(err.slice(), self.seen_doctype == false)) {
         self.xml_error = true;
     }
 }
 
 fn validateErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
     const has_error: *bool = @ptrCast(@alignCast(ctx));
-    if (isWellFormednessError(err.slice())) {
+    // Lenient: a page that fails this goes through the HTML parser instead.
+    if (isWellFormednessError(err.slice(), false)) {
         has_error.* = true;
     }
 }
 
-fn isWellFormednessError(msg: []const u8) bool {
+fn isWellFormednessError(msg: []const u8, unknown_entity_is_error: bool) bool {
     if (std.mem.startsWith(u8, msg, "Bad character") and msg.len > "Bad character".len) {
         // discouraged by legal code point
         return false;
     }
     if (std.mem.startsWith(u8, msg, "Invalid character reference")) {
-        // xml5ever doesn't know about this entity, but it could be valid
-        return false;
+        // xml5ever doesn't know about this entity, but a DTD could declare it
+        return unknown_entity_is_error;
     }
     return true;
 }
@@ -515,15 +520,27 @@ fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
     }
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
-    self._popCallback(getNode(node_ref)) catch |err| {
+    self._popCallback(getParsed(node_ref)) catch |err| {
         self.err = .{ .err = err, .source = .pop };
     };
 }
 
-fn _popCallback(self: *Parser, node: *Node) !void {
+fn _popCallback(self: *Parser, pn: *ParsedNode) !void {
+    const node = pn.node;
     // Flush before any nodeComplete so Build.complete (and any custom-element
     // callbacks reachable from it) observe the final text data.
     try self.flushPendingText();
+    if (node.is(Element.Html.Script)) |script| {
+        // Not at creation: settleDocument may have rebuilt the element since.
+        if (pn.data) |data| {
+            if (h5e.html5ever_script_text_position(data).unwrap()) |position| {
+                script._text_position = .{ .line = position.line, .column = position.column };
+            }
+        }
+        // https://html.spec.whatwg.org/#scriptEndTag: a MutationObserver sees
+        // the script, and can stop it from running, before it's prepared.
+        self.checkpoint();
+    }
     try self.frame.nodeComplete(node);
 }
 
@@ -647,6 +664,7 @@ fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5
     if (self.terminated) {
         return;
     }
+    self.seen_doctype = true;
     const cp = self.frame._ce_reactions.push();
     defer self.frame._ce_reactions.popAndInvoke(cp, self.frame);
     self._appendDoctypeToDocument(name.slice(), public_id.slice(), system_id.slice()) catch |err| {
@@ -1038,7 +1056,10 @@ fn maybeCheckpoint(self: *Parser) void {
     if (self.inserted_since_checkpoint < CHECKPOINT_INTERVAL) {
         return;
     }
+    self.checkpoint();
+}
 
+fn checkpoint(self: *Parser) void {
     // only the navigation parse, and only at an empty JS stack: a fragment
     // parse, document.write or a parse run by a script must not drain the
     // queue mid-task.
@@ -1075,6 +1096,7 @@ fn pollTerminate(self: *Parser) bool {
 }
 
 const testing = @import("../../testing.zig");
+const TreeWalker = @import("../webapi/TreeWalker.zig");
 test "Parser: isWellFormedXML" {
     try testing.expectEqual(true, isWellFormedXML("<?xml version=\"1.0\"?><a><b/>&nbsp;&amp;</a>"));
     try testing.expectEqual(true, isWellFormedXML("<!DOCTYPE svg [ <!ENTITY x \"y\"> ]><svg/>"));
@@ -1082,4 +1104,32 @@ test "Parser: isWellFormedXML" {
     try testing.expectEqual(false, isWellFormedXML("<a>unclosed"));
     try testing.expectEqual(false, isWellFormedXML("<a x=1/>"));
     try testing.expectEqual(false, isWellFormedXML("<?xml version=\"2.0\"?><a/>"));
+}
+
+test "Parser: where a document's scripts have their text" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const html = "\u{FEFF}<script>a</script><script>b</script>\r\n" ++
+        "<p>lone\rcr</p><script>c</script>\n" ++
+        "<p>é😀</p><script>d</script><script\n" ++
+        " data-x>e</script>\n" ++
+        "<template><b>t</b></template><script>f</script>";
+    const doc = try Frame.parse.htmlDocument(frame, html, .{});
+
+    var positions: std.ArrayList(js.Local.SourcePosition) = .empty;
+    var it = TreeWalker.Full.ElementsOf(Element.Html.Script).init(doc.asNode(), .{});
+    while (it.next()) |script| {
+        try positions.append(testing.arena_allocator, script._text_position);
+    }
+    // 0-based, the columns in UTF-16 code units. As in Chrome, a BOM takes no
+    // column and a lone \r doesn't end a line.
+    try testing.expectEqualSlices(js.Local.SourcePosition, &.{
+        .{ .line = 0, .column = 8 },
+        .{ .line = 0, .column = 26 },
+        .{ .line = 1, .column = 22 },
+        .{ .line = 2, .column = 18 },
+        .{ .line = 3, .column = 8 },
+        .{ .line = 4, .column = 37 },
+    }, positions.items);
 }

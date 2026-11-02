@@ -143,3 +143,40 @@
   testing.expectError('InvalidStateError', () => new VideoFrame(new OffscreenCanvas(32767, 32767), {timestamp: 1}));
 }
 </script>
+
+<script id=copy_to_detached_destination type=module>
+  const state = await testing.async();
+  const frame = new VideoFrame(new Uint8Array([1, 2, 3, 4]), {format: 'RGBA', timestamp: 0, codedWidth: 1, codedHeight: 1});
+  const outcome = (promise) => promise.then(() => 'resolved', (e) => e.name);
+
+  // The destination is converted before the options: an invalid one rejects
+  // without reading them.
+  let called = false;
+  const invalid = await outcome(frame.copyTo(232, {get rect() { called = true; return undefined; }}));
+
+  // An options getter that detaches the destination leaves it empty, rather
+  // than a write into the freed backing store.
+  const dest = new Uint8Array(4);
+  const detached = await outcome(frame.copyTo(dest, {get rect() { dest.buffer.transfer(0); return undefined; }}));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('TypeError', invalid);
+    testing.expectEqual(false, called);
+    testing.expectEqual('TypeError', detached);
+    testing.expectEqual(0, dest.byteLength);
+  });
+</script>
+
+<script id=init_detached_data>
+{
+  // The buffer is read once the init is: a getter that detaches it leaves it
+  // empty, too small for the frame.
+  const data = new Uint8Array(4);
+  testing.expectError('TypeError', () => new VideoFrame(data, {
+    codedHeight: 1, codedWidth: 1,
+    get format() { data.buffer.transfer(0); return 'RGBA'; },
+    timestamp: 0,
+  }));
+}
+</script>

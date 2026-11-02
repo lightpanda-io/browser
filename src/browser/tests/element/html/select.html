@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <select id="select1" autocomplete="off">
@@ -326,15 +327,16 @@
     testing.expectEqual(3, opts.length)
     testing.expectEqual(['', '', 'c'], Array.from(opts, (o) => o.value))
 
-    // in range replaces in place, including inside an optgroup (Firefox;
-    // Chrome removes it and add()s the new one before the next option)
+    // in range replaces in place, including inside an optgroup
     opts[0] = make('a')
     testing.expectEqual(['a', '', 'c'], Array.from(opts, (o) => o.value))
     const group = document.createElement('optgroup')
     group.appendChild(opts[1])
     sel.appendChild(group)
     opts[2] = make('b')
-    testing.expectEqual(group, opts[2].parentNode)
+    testing.diverges('Chrome: removes the old option and add()s the new one before the next option', () => {
+      testing.expectEqual(group, opts[2].parentNode)
+    })
     testing.expectEqual(['a', 'c', 'b'], Array.from(opts, (o) => o.value))
 
     // null removes; null past the end is a no-op
@@ -637,8 +639,10 @@
   testing.expectEqual(false, Object.hasOwn(opts, 'nonExistent'));
 
   // [LegacyUnenumerableNamedProperties]
-  testing.expectEqual(false, Object.keys(opts).includes('opt_first'));
-  testing.expectEqual(false, Object.getOwnPropertyDescriptor(opts, 'opt_first').enumerable);
+  testing.diverges('Chrome: redeclared named getter loses [LegacyUnenumerableNamedProperties]', () => {
+    testing.expectEqual(false, Object.keys(opts).includes('opt_first'));
+    testing.expectEqual(false, Object.getOwnPropertyDescriptor(opts, 'opt_first').enumerable);
+  });
 }
 </script>
 

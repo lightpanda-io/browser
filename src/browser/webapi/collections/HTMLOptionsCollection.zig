@@ -68,7 +68,7 @@ pub fn getByName(self: *HTMLOptionsCollection, name: []const u8) ?*Element {
 }
 
 // Forward selectedIndex to the owning select element
-pub fn getSelectedIndex(self: *const HTMLOptionsCollection) i32 {
+fn getSelectedIndex(self: *const HTMLOptionsCollection) i32 {
     return self._select.getSelectedIndex();
 }
 

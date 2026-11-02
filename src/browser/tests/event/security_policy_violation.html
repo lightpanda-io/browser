@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=defaults>
+{
+  const e = new SecurityPolicyViolationEvent('securitypolicyviolation');
+  testing.expectEqual(true, e instanceof Event);
+  testing.expectEqual('securitypolicyviolation', e.type);
+  testing.expectEqual(false, e.isTrusted);
+  // Chrome fixes these whatever the init says (Firefox follows the init)
+  testing.expectEqual(true, e.bubbles);
+  testing.expectEqual(false, e.cancelable);
+  testing.expectEqual(true, e.composed);
+  testing.expectEqual('', e.documentURI);
+  testing.expectEqual('', e.referrer);
+  testing.expectEqual('', e.blockedURI);
+  testing.expectEqual('', e.violatedDirective);
+  testing.expectEqual('', e.effectiveDirective);
+  testing.expectEqual('', e.originalPolicy);
+  testing.expectEqual('', e.sourceFile);
+  testing.expectEqual('', e.sample);
+  testing.expectEqual('enforce', e.disposition);
+  testing.expectEqual(0, e.statusCode);
+  testing.expectEqual(0, e.lineNumber);
+  testing.expectEqual(0, e.columnNumber);
+
+  // what transcend's airgap.js does on load
+  const d = Object.getOwnPropertyDescriptor(new SecurityPolicyViolationEvent(''), 'isTrusted');
+  testing.expectEqual('function', typeof d.get);
+}
+</script>
+
+<script id=init>
+{
+  const e = new SecurityPolicyViolationEvent('x', {
+    bubbles: false,
+    cancelable: true,
+    composed: false,
+    violatedDirective: 'script-src',
+    documentURI: 'https://a.test/',
+    referrer: 'https://b.test/',
+    blockedURI: 'inline',
+    effectiveDirective: 'script-src-elem',
+    originalPolicy: "script-src 'self'",
+    sourceFile: 'https://a.test/app.js',
+    sample: 'alert(1)',
+    disposition: 'report',
+    statusCode: 200,
+    lineNumber: 12,
+    columnNumber: 34,
+  });
+  testing.expectEqual(true, e.bubbles);
+  testing.expectEqual(false, e.cancelable);
+  testing.expectEqual(true, e.composed);
+  testing.expectEqual('https://a.test/', e.documentURI);
+  testing.expectEqual('https://b.test/', e.referrer);
+  testing.expectEqual('inline', e.blockedURI);
+  testing.expectEqual('script-src', e.violatedDirective);
+  testing.expectEqual('script-src-elem', e.effectiveDirective);
+  testing.expectEqual("script-src 'self'", e.originalPolicy);
+  testing.expectEqual('https://a.test/app.js', e.sourceFile);
+  testing.expectEqual('alert(1)', e.sample);
+  testing.expectEqual('report', e.disposition);
+  testing.expectEqual(200, e.statusCode);
+  testing.expectEqual(12, e.lineNumber);
+  testing.expectEqual(34, e.columnNumber);
+
+  testing.expectError('TypeError', () => new SecurityPolicyViolationEvent('x', { disposition: 'nope' }));
+}
+</script>

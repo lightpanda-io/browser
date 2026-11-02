@@ -32,6 +32,7 @@ const render = @import("render.zig");
 const AudioParam = @import("AudioParam.zig");
 const BaseAudioContext = @import("BaseAudioContext.zig");
 const GainNode = @import("GainNode.zig");
+const ConvolverNode = @import("ConvolverNode.zig");
 const AudioDestinationNode = @import("AudioDestinationNode.zig");
 const DynamicsCompressorNode = @import("DynamicsCompressorNode.zig");
 const AudioScheduledSourceNode = @import("AudioScheduledSourceNode.zig");
@@ -62,6 +63,7 @@ _rendered: u64 = 0,
 _pulling: bool = false,
 
 pub const Type = enum(u8) {
+    convolver,
     destination,
     dynamics_compressor,
     gain,
@@ -70,6 +72,7 @@ pub const Type = enum(u8) {
 
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
+        .convolver => ConvolverNode,
         .destination => AudioDestinationNode,
         .dynamics_compressor => DynamicsCompressorNode,
         .gain => GainNode,
@@ -209,8 +212,12 @@ fn getChannelCount(self: *const AudioNode) u32 {
 }
 
 fn setChannelCount(self: *AudioNode, count: u32) !void {
-    if (count == 0 or count > self._rules.max_channel_count) {
+    if (count == 0) {
         return error.NotSupported;
+    }
+    if (count > self._rules.max_channel_count) {
+        // past a destination's maxChannelCount
+        return if (self._type == .destination) error.IndexSizeError else error.NotSupported;
     }
     self._channel_count = count;
 }
@@ -369,6 +376,7 @@ pub fn pull(self: *AudioNode, r: *render.Quantum) anyerror!*const Bus {
     const input = if (self._inputs > 0) try self.pullInput(r) else null;
     switch (self._type) {
         .destination => {},
+        .convolver => try self.subtype(ConvolverNode).process(r, input.?, &self._output),
         .gain => try self.subtype(GainNode).process(r, input.?, &self._output),
         .dynamics_compressor => try self.subtype(DynamicsCompressorNode).process(r, input.?, &self._output),
         .scheduled_source => try self.subtype(AudioScheduledSourceNode).process(r, &self._output),

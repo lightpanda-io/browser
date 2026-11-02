@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
 <script id=constructor-basic>
@@ -101,7 +102,9 @@
     // height is derived when omitted
     const derived = new ImageData(arr, 3);
     testing.expectEqual(2, derived.height);
-    testing.expectEqual(2, new ImageData(arr, 3, undefined, { colorSpace: "srgb" }).height);
+    testing.diverges("Chrome converts an explicit undefined height to 0 when settings follow", () => {
+      testing.expectEqual(2, new ImageData(arr, 3, undefined, { colorSpace: "srgb" }).height);
+    });
 
     testing.expectEqual(2, ImageData.length);
   }
@@ -117,7 +120,8 @@
     expectError('IndexSizeError', () => new ImageData(arr, 0));
     expectError('InvalidStateError', () => new ImageData(new Uint8ClampedArray(0), 1));
     expectError('InvalidStateError', () => new ImageData(new Uint8ClampedArray(5), 1));
-    expectError('TypeError', () => new ImageData(new Uint8Array(4), 1));
+    // not an ImageDataArray: the (sw, sh) overload, with sw = 0
+    expectError('IndexSizeError', () => new ImageData(new Uint8Array(4), 1));
     expectError('TypeError', () => new ImageData(arr, 3, 2, { colorSpace: "nope" }));
     expectError('TypeError', () => new ImageData(10));
   }

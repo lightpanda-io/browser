@@ -66,8 +66,7 @@ pub fn TextEntry(comptime T: type) type {
             }
             const len: u32 = @intCast(self.getValue().len);
             try applySelectionRange(self, 0, len, .none, frame);
-            const event = try Event.init("select", .{ .bubbles = true }, frame.page);
-            try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+            try frame.queueElementEvent(self.asHtml(), .select);
         }
 
         pub fn innerInsert(self: *T, str: []const u8, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
@@ -96,7 +95,7 @@ pub fn TextEntry(comptime T: type) type {
                 self._selection_start = new_pos;
                 self._selection_end = new_pos;
                 self._selection_direction = .none;
-                try dispatchSelectionChangeEvent(self, frame);
+                try scheduleSelectionChange(self, frame);
             }
             try dispatchInputEvent(self, data, input_type, frame);
         }
@@ -151,7 +150,7 @@ pub fn TextEntry(comptime T: type) type {
             self._selection_start = start;
             self._selection_end = start;
             self._selection_direction = .none;
-            try dispatchSelectionChangeEvent(self, frame);
+            try scheduleSelectionChange(self, frame);
             try dispatchInputEvent(self, null, input_type, frame);
         }
 
@@ -239,7 +238,7 @@ pub fn TextEntry(comptime T: type) type {
             self._selection_start = new_start;
             self._selection_end = new_end;
             self._selection_direction = new_direction;
-            try dispatchSelectionChangeEvent(self, frame);
+            try scheduleSelectionChange(self, frame);
         }
 
         // Byte offset the caret lands on when moved from `pos`. Steps over
@@ -290,16 +289,16 @@ pub fn TextEntry(comptime T: type) type {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
-            self._selection_start = selectionOffsetFromJs(self, value);
-            try dispatchSelectionChangeEvent(self, frame);
+            // Spec: the end is raised to the new start, then set-range runs.
+            const start = selectionOffsetFromJs(self, value);
+            return applySelectionRange(self, start, @max(start, self._selection_end), self._selection_direction, frame);
         }
 
         pub fn setSelectionEnd(self: *T, value: u32, frame: *Frame) !void {
             if (self.selectionAvailable() == false) {
                 return error.InvalidStateError;
             }
-            self._selection_end = selectionOffsetFromJs(self, value);
-            try dispatchSelectionChangeEvent(self, frame);
+            return applySelectionRange(self, self._selection_start, selectionOffsetFromJs(self, value), self._selection_direction, frame);
         }
 
         pub fn setSelectionRange(
@@ -427,11 +426,14 @@ pub fn TextEntry(comptime T: type) type {
                 start = end;
             }
 
+            if (start == self._selection_start and end == self._selection_end and direction == self._selection_direction) {
+                return;
+            }
             self._selection_direction = direction;
             self._selection_start = start;
             self._selection_end = end;
 
-            try dispatchSelectionChangeEvent(self, frame);
+            try scheduleSelectionChange(self, frame);
         }
 
         const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
@@ -453,9 +455,13 @@ pub fn TextEntry(comptime T: type) type {
             return .{ .partial = .{ start, end } };
         }
 
-        fn dispatchSelectionChangeEvent(self: *T, frame: *Frame) !void {
-            const event = try Event.init("selectionchange", .{ .bubbles = true }, frame.page);
-            try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+        // https://w3c.github.io/selection-api/#scheduling-selectionchange-event
+        fn scheduleSelectionChange(self: *T, frame: *Frame) !void {
+            if (self._selectionchange_pending) {
+                return;
+            }
+            try frame.queueElementEvent(self.asHtml(), .selectionchange);
+            self._selectionchange_pending = true;
         }
 
         fn dispatchInputEvent(self: *T, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {

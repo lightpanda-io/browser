@@ -161,7 +161,7 @@ pub fn disconnect(self: *PerformanceObserver) void {
 
 /// Returns the current list of PerformanceEntry objects
 /// stored in the performance observer, emptying it out.
-pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
+fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
     // Use the long-lived arena instead of call_arena because this slice is
     // wrapped in EntryList and may be accessed later.
     const records = try self._arena.dupe(*Performance.Entry, self._entries.items);
@@ -170,7 +170,7 @@ pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
 }
 
 fn getSupportedEntryTypes() []const []const u8 {
-    return &.{ "mark", "measure", "resource" };
+    return &.{ "mark", "measure", "navigation", "resource" };
 }
 
 /// Returns true if observer interested with given entry.

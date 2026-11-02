@@ -574,3 +574,17 @@
     testing.expectTrue(new Response(body).body !== null);
   }
 </script>
+
+<script id=body_detached_by_init type=module>
+  const state = await testing.async();
+
+  // The body is read once the init is: a getter that detaches it leaves it
+  // empty, rather than a copy of the freed backing store.
+  const body = new Uint8Array([1, 2, 3]);
+  const bytes = await new Response(body, { get status() { body.buffer.transfer(0); return 200; } }).bytes();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, bytes.length);
+  });
+</script>

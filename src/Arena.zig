@@ -26,9 +26,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const ArenaPool = @import("ArenaPool.zig");
+const ArenaAllocator = @import("ArenaAllocator.zig");
 
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Arena = @This();
 

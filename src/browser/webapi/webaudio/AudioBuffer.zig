@@ -142,7 +142,7 @@ fn copyFromChannel(self: *const AudioBuffer, destination: js.Value, channel: u32
     if (channel >= self._channels.len) {
         return error.IndexSizeError;
     }
-    const into = try destination.toZig([]f32);
+    const into = (js.ArrayBufferRef(.float32){ .local = local, .handle = destination.handle }).slice();
     const from = self.channelData(channel, local);
     const offset = buffer_offset_ orelse 0;
     if (offset >= from.len) {
@@ -160,7 +160,7 @@ fn copyToChannel(self: *const AudioBuffer, source: js.Value, channel: u32, buffe
     if (channel >= self._channels.len) {
         return error.IndexSizeError;
     }
-    const from = try source.toZig([]f32);
+    const from = (js.ArrayBufferRef(.float32){ .local = local, .handle = source.handle }).slice();
     const into = self.channelData(channel, local);
     const offset = buffer_offset_ orelse 0;
     if (offset >= into.len) {

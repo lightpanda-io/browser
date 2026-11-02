@@ -1076,9 +1076,7 @@ pub fn setAndFilterHTML(target: *Node, context: *Element, html: []const u8, opti
     // Parsed into a detached fragment, so that nothing is connected (no fetch,
     // no custom element reaction) until it's been sanitized.
     const fragment = (try Node.DocumentFragment.init(target.getDocument(frame), frame)).asNode();
-    if (html.len > 0) {
-        try Frame.parse.fragment(frame, fragment, html, .{ .context = context, .allow_declarative_shadow = true });
-    }
+    try Frame.parse.fragment(frame, fragment, html, .{ .context = context, .allow_declarative_shadow = true });
     if (resolved) |r| {
         try r.sanitizer.sanitize(fragment, safe, frame);
     }

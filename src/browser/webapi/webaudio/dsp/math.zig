@@ -37,7 +37,7 @@ fn powf(x: f32, y: f32) f32 {
     return @floatCast(pow(x, y));
 }
 
-pub fn log10f(x: f32) f32 {
+fn log10f(x: f32) f32 {
     return @floatCast(log10(x));
 }
 

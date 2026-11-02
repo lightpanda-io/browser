@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
-const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
@@ -720,10 +719,6 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 
     const local = &caller.local;
 
-    var hs: js.HandleScope = undefined;
-    hs.init(local.isolate);
-    defer hs.deinit();
-
     const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
         return js.Intercepted.no;
     };
@@ -995,6 +990,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/TaskController.zig"),
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
+    @import("../webapi/event/SecurityPolicyViolationEvent.zig"),
     @import("../webapi/CData.zig"),
     @import("../webapi/cdata/Comment.zig"),
     @import("../webapi/cdata/Text.zig"),
@@ -1182,6 +1178,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/MessageEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
     @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
+    @import("../webapi/event/NavigateEvent.zig"),
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
     @import("../webapi/event/HashChangeEvent.zig"),
@@ -1227,6 +1224,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/EventTarget.zig"),
     @import("../webapi/Location.zig"),
     @import("../webapi/ModelContext.zig"),
+    @import("../webapi/event/ToolEvent.zig"),
     @import("../webapi/Navigator.zig"),
     @import("../webapi/NavigatorUAData.zig"),
     @import("../webapi/Notification.zig"),
@@ -1263,12 +1261,17 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/Performance.zig"),
     @import("../webapi/EventCounts.zig"),
     @import("../webapi/PluginArray.zig"),
+    @import("../webapi/MimeTypeArray.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
     @import("../webapi/geolocation/Geolocation.zig"),
     @import("../webapi/geolocation/GeolocationPosition.zig"),
     @import("../webapi/geolocation/GeolocationCoordinates.zig"),
     @import("../webapi/geolocation/GeolocationPositionError.zig"),
+    @import("../webapi/payment/PaymentRequest.zig"),
+    @import("../webapi/payment/PaymentResponse.zig"),
+    @import("../webapi/payment/PaymentRequestUpdateEvent.zig"),
+    @import("../webapi/payment/PaymentMethodChangeEvent.zig"),
     @import("../webapi/CustomElementRegistry.zig"),
     @import("../webapi/ResizeObserver.zig"),
     @import("../webapi/IdleDeadline.zig"),
@@ -1283,6 +1286,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/navigation/Navigation.zig"),
     @import("../webapi/navigation/NavigationHistoryEntry.zig"),
     @import("../webapi/navigation/NavigationActivation.zig"),
+    @import("../webapi/navigation/NavigationDestination.zig"),
     @import("../webapi/canvas/CanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
@@ -1290,6 +1294,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/canvas/TextMetrics.zig"),
     @import("../webapi/canvas/CanvasGradient.zig"),
     @import("../webapi/canvas/CanvasPattern.zig"),
+    @import("../webapi/canvas/Path2D.zig"),
     @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/CryptoKey.zig"),
     @import("../webapi/Selection.zig"),
@@ -1314,6 +1319,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/PeriodicWave.zig"),
     @import("../webapi/webaudio/BaseAudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioContext.zig"),
+    @import("../webapi/webaudio/AudioContext.zig"),
     @import("../webapi/webaudio/OfflineAudioCompletionEvent.zig"),
     @import("../webapi/webaudio/AudioNode.zig"),
     @import("../webapi/webaudio/AudioDestinationNode.zig"),
@@ -1322,6 +1328,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/webaudio/ConstantSourceNode.zig"),
     @import("../webapi/webaudio/OscillatorNode.zig"),
     @import("../webapi/webaudio/GainNode.zig"),
+    @import("../webapi/webaudio/ConvolverNode.zig"),
     @import("../webapi/webaudio/DynamicsCompressorNode.zig"),
 });
 
@@ -1395,6 +1402,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/TaskController.zig"),
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
+    @import("../webapi/event/SecurityPolicyViolationEvent.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
@@ -1402,6 +1410,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/canvas/TextMetrics.zig"),
     @import("../webapi/canvas/CanvasGradient.zig"),
     @import("../webapi/canvas/CanvasPattern.zig"),
+    @import("../webapi/canvas/Path2D.zig"),
     @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),

@@ -141,6 +141,9 @@ pub const DownloadBehavior = enum {
     // The CDP `default` behavior is mapped to `deny`: we don't write downloads
     // to disk unless the driver explicitly opts in with `allow`/`allowAndName`.
     deny,
+    /// LP extension to `DownloadBehavior`; instead of writing files to disk,
+    /// they are streamed over CDP.
+    stream,
 };
 
 const CancelHook = struct {
@@ -586,6 +589,17 @@ pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {
     }
     for (self.pages.items) |page| {
         if (page.findFrameByFrameId(frame_id)) |frame| {
+            return frame;
+        }
+    }
+    return null;
+}
+
+/// The frame showing the document with this loader id, which a navigation
+/// replaces even though the frame keeps its id.
+pub fn findFrameByLoaderId(self: *Session, loader_id: u32) ?*Frame {
+    for (self.pages.items) |page| {
+        if (page.findFrameByLoaderId(loader_id)) |frame| {
             return frame;
         }
     }

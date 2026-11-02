@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <body></body>
 
@@ -80,5 +81,12 @@
     testing.expectEqual(true, html.indexOf('<span>') >= 0);
 
     host.remove();
+}
+</script>
+
+<script id=prototype_placement>
+{
+  testing.expectEqual('function', typeof Object.getOwnPropertyDescriptor(ShadowRoot.prototype, 'innerHTML').get);
+  testing.expectEqual(undefined, document.createDocumentFragment().innerHTML);
 }
 </script>
