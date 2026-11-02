@@ -194,3 +194,39 @@
     testing.expectEqual(true, loadFired);
   });
 </script>
+
+<script id=reentrant_read_suppresses_loadend type=module>
+  const state = await testing.async();
+  const results = [];
+  for (const restartFrom of ["load", "abort"]) {
+    const reader = new FileReader();
+    const events = [];
+    let restarted = false;
+    await new Promise(resolve => {
+      reader.onloadstart = () => {
+        events.push("loadstart");
+        if (restartFrom === "abort" && !restarted) reader.abort();
+      };
+      const restart = () => {
+        restarted = true;
+        reader.readAsText(new Blob(["second"]));
+      };
+      reader.onabort = () => { events.push("abort"); restart(); };
+      reader.onload = () => {
+        events.push("load:" + reader.result);
+        if (!restarted) restart();
+      };
+      reader.onloadend = () => {
+        events.push("loadend:" + reader.readyState);
+        if (reader.result === "second" && reader.readyState === FileReader.DONE) resolve();
+      };
+      reader.readAsText(new Blob(["first"]));
+    });
+    results.push([restartFrom, events]);
+  }
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(["loadstart", "load:first", "loadstart", "load:second", "loadend:2"], results[0][1]);
+    testing.expectEqual(["loadstart", "abort", "loadstart", "load:second", "loadend:2"], results[1][1]);
+  });
+</script>

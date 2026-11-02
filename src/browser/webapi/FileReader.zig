@@ -179,7 +179,11 @@ fn complete(self: *FileReader, task: *const ReadTask) !void {
     const exec = self._exec;
     const size = data.len;
     try self.dispatch(.load, .{ .loaded = size, .total = size }, exec);
-    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, exec);
+    // A load handler can start another read. The first read must not emit
+    // loadend while that new read is loading.
+    if (self._ready_state != .loading) {
+        try self.dispatch(.load_end, .{ .loaded = size, .total = size }, exec);
+    }
 }
 
 const ReadTask = struct {
@@ -303,7 +307,10 @@ pub fn abort(self: *FileReader) !void {
 
     const exec = self._exec;
     try self.dispatch(.abort, null, exec);
-    try self.dispatch(.load_end, null, exec);
+    // As with load, an abort handler can start the next read.
+    if (self._ready_state != .loading) {
+        try self.dispatch(.load_end, null, exec);
+    }
 }
 
 fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, exec: *Execution) !void {
