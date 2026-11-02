@@ -1177,21 +1177,30 @@ fn execPageTools(arena: std.mem.Allocator, session: *lp.Session) ToolError![]con
         readOnlyHint: ?bool = null,
         untrustedContentHint: ?bool = null,
     };
+    const RawJson = struct {
+        json: []const u8,
+
+        pub fn jsonStringify(self: @This(), w: *std.json.Stringify) !void {
+            try w.beginWriteRaw();
+            try w.writer.writeAll(self.json);
+            w.endWriteRaw();
+        }
+    };
     const Entry = struct {
         name: []const u8,
         title: ?[]const u8,
         description: []const u8,
-        inputSchema: ?std.json.Value,
+        inputSchema: ?RawJson,
         annotations: ?Hints,
     };
     const entries = arena.alloc(Entry, tools.len) catch return ToolError.OutOfMemory;
     for (tools, entries) |t, *e| {
-        const a = t.annotations orelse ModelContext.Annotations{};
+        const a: ModelContext.Annotations = t.annotations orelse .{};
         e.* = .{
             .name = t.name,
             .title = t.title,
             .description = t.description,
-            .inputSchema = if (t.input_schema) |s| std.json.parseFromSliceLeaky(std.json.Value, arena, s, .{}) catch return ToolError.InternalError else null,
+            .inputSchema = if (t.input_schema) |s| .{ .json = s } else null,
             .annotations = if (a.readOnlyHint or a.untrustedContentHint) .{
                 .readOnlyHint = if (a.readOnlyHint) true else null,
                 .untrustedContentHint = if (a.untrustedContentHint) true else null,
@@ -1249,17 +1258,14 @@ fn runPageTool(arena: std.mem.Allocator, session: *lp.Session, page: *lp.Frame, 
     };
     if (value.isPromise()) {
         const promise = value.toPromise();
-        const frame_id = page._frame_id;
         const loader_id = page._loader_id;
         if (waitForPromise(page, promise)) |failed| {
-            // Nothing will read the result, so let the tool stop. A
+            // Nothing will read the result, so let the tool stop, unless a
             // navigation took the signal with the old document.
-            if (session.findFrameByFrameId(frame_id)) |frame| {
-                if (frame._loader_id == loader_id) {
-                    signal.abort(null, &frame.js.execution) catch |err| {
-                        log.debug(.browser, "page tool abort", .{ .err = err });
-                    };
-                }
+            if (session.findFrameByLoaderId(loader_id)) |frame| {
+                signal.abort(null, &frame.js.execution) catch |err| {
+                    log.debug(.browser, "page tool abort", .{ .err = err });
+                };
             }
             return failed;
         }

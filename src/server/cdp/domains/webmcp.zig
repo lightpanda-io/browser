@@ -34,14 +34,9 @@ const log = lp.log;
 pub const Invocation = struct {
     id: u32,
     bc: *CDP.BrowserContext,
-    frame_id: u32,
-    // The document the tool ran in: the frame keeps its id across a
-    // navigation, but the signal dies with the document.
+    // The document the tool ran in, which owns the signal.
     loader_id: u32,
-    name: []const u8,
-    // The signal passed to the tool, aborted by cancelInvocation.
     signal: *AbortSignal,
-    canceled: bool = false,
 };
 
 pub fn processMessage(cmd: *CDP.Command) !void {
@@ -113,9 +108,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     invocation.* = .{
         .id = inv_id,
         .bc = bc,
-        .frame_id = frame_id,
         .loader_id = frame._loader_id,
-        .name = try bc.arena.dupe(u8, tool.name),
         .signal = try AbortSignal.init(exec),
     };
     try bc.webmcp_invocations.put(bc.arena, inv_id, invocation);
@@ -176,19 +169,16 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
     const inv_id = CDP.InvocationIdGen.parse(params.invocationId) catch return error.InvalidParams;
     const entry = bc.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
     const invocation = entry.value;
-    invocation.canceled = true;
 
     try cmd.cdp.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(inv_id),
         .status = "Canceled",
     }, .{ .session_id = bc.session_id });
 
-    if (bc.session.findFrameByFrameId(invocation.frame_id)) |frame| {
-        if (frame._loader_id == invocation.loader_id) {
-            invocation.signal.abort(null, &frame.js.execution) catch |err| {
-                log.debug(.cdp, "WebMCP cancel abort", .{ .err = err });
-            };
-        }
+    if (bc.session.findFrameByLoaderId(invocation.loader_id)) |frame| {
+        invocation.signal.abort(null, &frame.js.execution) catch |err| {
+            log.debug(.cdp, "WebMCP cancel abort", .{ .err = err });
+        };
     }
 
     return cmd.sendResult(null, .{});

@@ -195,7 +195,7 @@ pub fn registerTool(
     const resolver = local.createPromiseResolver();
     const promise = resolver.promise();
 
-    const options = options_ orelse SignalOptions{};
+    const options: SignalOptions = options_ orelse .{};
     if (options.signal) |signal| {
         if (signal._aborted) {
             AbortSignal.rejectWithReason(resolver, "ModelContext.registerTool", signal._reason);
@@ -274,7 +274,6 @@ fn dispatchToolChange(self: *ModelContext) !void {
     try exec.dispatch(target, event, .{ .context = "ModelContext.toolchange" });
 }
 
-/// Fires `toolactivated` or `toolcancel`.
 fn dispatchToolEvent(self: *ModelContext, comptime E: type, tool_name: []const u8) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
@@ -297,7 +296,6 @@ pub fn getTools(self: *ModelContext, exec: *const Execution) !js.Promise {
     return local.resolvePromise(array);
 }
 
-// The members of a RegisteredTool that identify it.
 const ToolRef = struct {
     name: []const u8,
     origin: []const u8,
@@ -318,7 +316,7 @@ pub fn executeTool(
     const resolver = local.createPromiseResolver();
     const promise = resolver.promise();
 
-    const options = options_ orelse SignalOptions{};
+    const options: SignalOptions = options_ orelse .{};
     if (options.signal) |signal| {
         if (signal._aborted) {
             AbortSignal.rejectWithReason(resolver, "ModelContext.executeTool", signal._reason);
@@ -358,22 +356,21 @@ pub fn executeTool(
 }
 
 fn toolNotFound(allocator: std.mem.Allocator, name: []const u8) !DOMException {
-    return executionFailed(try std.fmt.allocPrint(allocator, "Tool not found: {s}", .{name}));
+    return executionFailed(try allocator.print("Tool not found: {s}", .{name}));
 }
 
-// An executeTool call waiting on its tool.
 pub const ToolCall = struct {
     ctx: *ModelContext,
     name: []const u8,
     // Read once, when the tool runs.
     input_arena: *lp.Arena,
     input_json: []const u8,
-    resolver: js.PromiseResolver.Global,
+    // Until the call settles.
+    resolver: ?js.PromiseResolver.Global,
     caller_signal: ?*AbortSignal,
     // The signal passed to the tool, aborted when the caller cancels.
     signal: *AbortSignal,
     started: bool = false,
-    settled: bool = false,
 
     fn run(ctx: *anyopaque) anyerror!?u32 {
         const self: *ToolCall = @ptrCast(@alignCast(ctx));
@@ -417,9 +414,14 @@ pub const ToolCall = struct {
     fn dropped(ctx: *anyopaque) void {
         const self: *ToolCall = @ptrCast(@alignCast(ctx));
         self.input_arena.release();
-        if (self.settled) return;
-        self.settled = true;
-        self.resolver.release();
+        if (self.takeResolver()) |resolver| {
+            resolver.release();
+        }
+    }
+
+    fn takeResolver(self: *ToolCall) ?js.PromiseResolver.Global {
+        defer self.resolver = null;
+        return self.resolver;
     }
 
     fn onFulfilled(self: *ToolCall, value: js.Value) void {
@@ -432,7 +434,7 @@ pub const ToolCall = struct {
     }
 
     fn succeed(self: *ToolCall, local: *const js.Local, value: js.Value) void {
-        if (self.settled) return;
+        if (self.resolver == null) return;
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(local);
@@ -447,37 +449,35 @@ pub const ToolCall = struct {
             return self.fail(local, executionFailed(message));
         };
 
-        const resolver = self.settle(local) orelse return;
-        defer self.resolver.release();
-        resolver.resolve("ModelContext.executeTool", text);
+        const resolver = self.settle() orelse return;
+        defer resolver.release();
+        resolver.local(local).resolve("ModelContext.executeTool", text);
     }
 
     fn fail(self: *ToolCall, local: *const js.Local, err: DOMException) void {
-        const resolver = self.settle(local) orelse return;
-        defer self.resolver.release();
-        resolver.reject("ModelContext.executeTool", err);
+        const resolver = self.settle() orelse return;
+        defer resolver.release();
+        resolver.local(local).reject("ModelContext.executeTool", err);
     }
 
-    fn settle(self: *ToolCall, local: *const js.Local) ?js.PromiseResolver {
-        if (self.settled) return null;
-        self.settled = true;
+    fn settle(self: *ToolCall) ?js.PromiseResolver.Global {
+        const resolver = self.takeResolver() orelse return null;
         if (self.caller_signal) |signal| {
             signal.removeDependent(.{ .model_context_call = self });
         }
-        return self.resolver.local(local);
+        return resolver;
     }
 
     /// The caller aborted: reject right away, and cancel the tool in a later
     /// task, the way Chrome forwards the cancellation to the tool's frame.
     pub fn onAbort(self: *ToolCall, reason: AbortSignal.Reason, exec: *const Execution) void {
-        if (self.settled) return;
-        self.settled = true;
+        const resolver = self.takeResolver() orelse return;
+        defer resolver.release();
 
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
         defer ls.deinit();
-        AbortSignal.rejectWithReason(self.resolver.local(&ls.local), "ModelContext.executeTool", reason);
-        self.resolver.release();
+        AbortSignal.rejectWithReason(resolver.local(&ls.local), "ModelContext.executeTool", reason);
 
         exec.js.scheduler.add(self, cancel, 0, .{
             .name = "ModelContext.toolcancel",
@@ -528,13 +528,10 @@ fn definedValue(value: ?js.Value) ?js.Value {
     return if (v.isUndefined()) null else v;
 }
 
-/// Snapshot of currently-registered tools.
-/// Used by the CDP `WebMCP.enable` replay and the native MCP forwarder.
 pub fn tools(self: *ModelContext) []const *Tool {
     return self._tools.items;
 }
 
-/// Look up a tool by name. Used by CDP `WebMCP.invokeTool`.
 pub fn findTool(self: *ModelContext, name: []const u8) ?*Tool {
     for (self._tools.items) |t| {
         if (std.mem.eql(u8, t.name, name)) return t;
@@ -547,10 +544,7 @@ fn validateName(name: []const u8) !void {
         return error.InvalidStateError;
     }
     for (name) |c| {
-        const ok = (c >= 'a' and c <= 'z') or
-            (c >= 'A' and c <= 'Z') or
-            (c >= '0' and c <= '9') or
-            c == '_' or c == '-' or c == '.';
+        const ok = std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == '.';
         if (!ok) return error.InvalidStateError;
     }
 }

@@ -857,10 +857,10 @@ fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     return fonts;
 }
 
-// Null for a document without a browsing context, like one from DOMParser.
+/// Null for a document without a browsing context, like one from DOMParser.
 fn getModelContext(self: *const Document) !?*ModelContext {
     const frame = self._frame orelse return null;
-    return try frame.window.getModelContext();
+    return frame.window.getModelContext();
 }
 
 fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
