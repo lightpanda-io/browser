@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Attribute = @import("../element/Attribute.zig");
+const escape = @import("../../css/escape.zig");
 
 const Selector = @import("Selector.zig");
 
@@ -1027,9 +1028,7 @@ fn consumeEscapedIdentTail(self: *Parser, arena: Allocator, prefix_len: usize, e
                 else => {},
             };
             j += 1;
-            const escape_result = try parseEscape(input[j..], arena);
-            try result.appendSlice(arena, escape_result.bytes);
-            j += escape_result.consumed;
+            j += try appendEscape(&result, arena, input[j..]);
             continue;
         }
 
@@ -1332,9 +1331,7 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
                     i += 2;
                     continue;
                 }
-                const escape = try parseEscape(input[i + 1 ..], arena);
-                try result.appendSlice(arena, escape.bytes);
-                i += 1 + escape.consumed;
+                i += 1 + try appendEscape(&result, arena, input[i + 1 ..]);
                 continue;
             }
             if (b == '\n') {
@@ -1366,72 +1363,14 @@ fn asUint(comptime string: anytype) @Int(
     return @bitCast(@as(*const [byteLength]u8, string).*);
 }
 
-const EscapeResult = struct {
-    bytes: []const u8,
-    consumed: usize, // how many bytes from input were consumed
-};
-
-// Parse CSS escape sequence starting after the backslash
-// Input should point to the character after '\'
-// Returns the UTF-8 bytes for the escaped character and how many input bytes were consumed
-fn parseEscape(input: []const u8, arena: Allocator) !EscapeResult {
-    if (input.len == 0) {
-        // EOF after backslash -> replacement character
-        return .{ .bytes = "\u{FFFD}", .consumed = 0 };
-    }
-
-    const first = input[0];
-
-    // Check if it's a hex escape (1-6 hex digits)
-    if (std.ascii.isHex(first)) {
-        var hex_value: u32 = 0;
-        var i: usize = 0;
-
-        // Parse up to 6 hex digits
-        while (i < 6 and i < input.len) : (i += 1) {
-            const c = input[i];
-            if (!std.ascii.isHex(c)) break;
-
-            const digit = if (c >= '0' and c <= '9')
-                c - '0'
-            else if (c >= 'a' and c <= 'f')
-                c - 'a' + 10
-            else if (c >= 'A' and c <= 'F')
-                c - 'A' + 10
-            else
-                unreachable;
-
-            hex_value = hex_value * 16 + digit;
-        }
-
-        var consumed = i;
-
-        // Consume one optional whitespace character (space, tab, CR, LF, FF)
-        if (i < input.len) {
-            const next = input[i];
-            if (next == ' ' or next == '\t' or next == '\r' or next == '\n' or next == '\x0C') {
-                consumed += 1;
-            }
-        }
-
-        // Validate the code point and convert to UTF-8
-        // Invalid: 0, > 0x10FFFF, or surrogate range 0xD800-0xDFFF
-        if (hex_value == 0 or hex_value > 0x10FFFF or (hex_value >= 0xD800 and hex_value <= 0xDFFF)) {
-            return .{ .bytes = "\u{FFFD}", .consumed = consumed };
-        }
-
-        // Encode as UTF-8
-        var buf = try arena.alloc(u8, 4);
-        const len = std.unicode.utf8Encode(@intCast(hex_value), buf) catch {
-            return .{ .bytes = "\u{FFFD}", .consumed = consumed };
-        };
-        return .{ .bytes = buf[0..len], .consumed = consumed };
-    }
-
-    // Simple escape - just the character itself
-    var buf = try arena.alloc(u8, 1);
-    buf[0] = first;
-    return .{ .bytes = buf, .consumed = 1 };
+// Appends the code point of the escape `input` starts with, right after its
+// backslash. Returns how many bytes of `input` the escape spans.
+fn appendEscape(result: *std.ArrayList(u8), arena: Allocator, input: []const u8) !usize {
+    const decoded = escape.decode(input);
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(decoded.codepoint, &buf) catch unreachable;
+    try result.appendSlice(arena, buf[0..len]);
+    return decoded.len;
 }
 
 const testing = @import("../../../testing.zig");
