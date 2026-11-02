@@ -591,7 +591,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
 
 // window.open(url?, target?, features?) — v1 scope:
 //   * Always creates a new popup Frame on the Page (sibling to the root).
-//   * Honors `noopener` / `noreferrer` tokens in `features` (opener=null,
+//   * Honors the `noopener` / `noreferrer` features (opener=null,
 //     return value=null). Geometry (width, height, ...) ignored.
 //   * `target` values `_self` / `_parent` / `_top` navigate the current frame.
 //     Any other value is treated as a popup name; reusing a live name
@@ -602,7 +602,7 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
     const target = target_ orelse "";
     const features = features_ orelse "";
 
-    const no_opener = hasFeatureToken(features, "noopener") or hasFeatureToken(features, "noreferrer");
+    const no_opener = hasBooleanFeature(features, "noopener") or hasBooleanFeature(features, "noreferrer");
 
     if (raw_url.len > 0) {
         // Per spec, we should validate the url
@@ -1028,18 +1028,66 @@ const PostMessageCallback = struct {
     }
 };
 
-// Checks whether a window.open features string contains a token, matched
-// case-insensitively on whole-token boundaries (comma or whitespace separated).
-// The features syntax is legacy and loose; the only tokens we interpret are
-// noopener and noreferrer.
-fn hasFeatureToken(features: []const u8, token: []const u8) bool {
-    var it = std.mem.tokenizeAny(u8, features, " \t\r\n,");
-    while (it.next()) |raw| {
-        // Trim a trailing =value if present — we only need the key.
-        const key = if (std.mem.findScalarPos(u8, raw, 0, '=')) |eq| raw[0..eq] else raw;
-        if (std.ascii.eqlIgnoreCase(key, token)) return true;
+// Whether a window.open features string turns the boolean feature `name`
+// (lowercase) on. The string is tokenized as the HTML spec does, the last
+// occurrence of a name wins, and its value is parsed as a boolean feature:
+// "", "yes" and "true" are on, anything else is on only when it parses as a
+// non-zero integer, so "noopener=0" and "noopener=no" leave it off.
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#concept-window-open-features-tokenize
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#concept-window-open-features-parse-boolean
+fn hasBooleanFeature(features: []const u8, name: []const u8) bool {
+    var found: ?[]const u8 = null;
+
+    var pos: usize = 0;
+    while (pos < features.len) {
+        while (pos < features.len and isFeatureSeparator(features[pos])) pos += 1;
+
+        const name_start = pos;
+        while (pos < features.len and !isFeatureSeparator(features[pos])) pos += 1;
+        const key = features[name_start..pos];
+
+        while (pos < features.len and features[pos] != '=') {
+            if (features[pos] == ',' or !isFeatureSeparator(features[pos])) break;
+            pos += 1;
+        }
+
+        var feature_value: []const u8 = "";
+        if (pos < features.len and isFeatureSeparator(features[pos])) {
+            while (pos < features.len and isFeatureSeparator(features[pos])) {
+                if (features[pos] == ',') break;
+                pos += 1;
+            }
+            const value_start = pos;
+            while (pos < features.len and !isFeatureSeparator(features[pos])) pos += 1;
+            feature_value = features[value_start..pos];
+        }
+
+        if (std.ascii.eqlIgnoreCase(key, name)) {
+            found = feature_value;
+        }
+    }
+
+    const value = found orelse return false;
+    if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "yes") or std.ascii.eqlIgnoreCase(value, "true")) {
+        return true;
+    }
+
+    // The rules for parsing integers: an optional sign, then at least one
+    // digit; anything after the digits is ignored. Not an integer means 0.
+    var digits = value;
+    if (digits[0] == '-' or digits[0] == '+') digits = digits[1..];
+    for (digits) |c| {
+        if (!std.ascii.isDigit(c)) break;
+        if (c != '0') return true;
     }
     return false;
+}
+
+fn isFeatureSeparator(c: u8) bool {
+    return switch (c) {
+        '\t', '\n', 0x0C, '\r', ' ', '=', ',' => true,
+        else => false,
+    };
 }
 
 pub const JsApi = struct {

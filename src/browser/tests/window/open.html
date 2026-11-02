@@ -53,6 +53,30 @@
 }
 </script>
 
+<script id=noopener_values>
+{
+  // Boolean features: "", "yes", "true" and non-zero integers turn them on;
+  // anything else, "0" and "no" included, leaves them off.
+  const opened = (features) => {
+    const w = window.open('about:blank', '_blank', features);
+    if (w == null) return false;
+    w.close();
+    return true;
+  };
+  testing.expectEqual(false, opened('noopener=1'));
+  testing.expectEqual(false, opened('noopener=yes'));
+  testing.expectEqual(false, opened('NOOPENER=TRUE'));
+  testing.expectEqual(false, opened('noopener = 2'));
+  testing.expectEqual(false, opened('width=100,noopener'));
+  testing.expectEqual(false, opened('noreferrer=1'));
+  testing.expectEqual(true, opened('noopener=0'));
+  testing.expectEqual(true, opened('noopener=no'));
+  testing.expectEqual(true, opened('noopener=false'));
+  testing.expectEqual(true, opened('noreferrer=0'));
+  testing.expectEqual(true, opened('noopener=1,noopener=0'));
+}
+</script>
+
 <script id=named_reuse>
 {
   // Second open with the same name reuses the popup — same Window identity.
