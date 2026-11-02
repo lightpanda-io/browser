@@ -97,6 +97,16 @@ pub const Entry = struct {
 };
 
 pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormData {
+    if (form_) |form| {
+        if (submitter) |element| {
+            if (!Form.isSubmitButton(element)) {
+                return error.TypeError;
+            }
+            if (Form.ownerOf(element) != form) {
+                return error.NotFound;
+            }
+        }
+    }
     return initWithCharset(form_, submitter, "UTF-8", exec);
 }
 

@@ -1007,3 +1007,37 @@
   testing.expectEqual(v, fd.get('avatar'));
 }
 </script>
+
+<script id=submitter_validation>
+{
+  const form = document.createElement("form");
+  form.id = "formdata-submitter-owner";
+  form.innerHTML = '<input name="field" value="value"><button name="submit" value="yes">Submit</button><button type="button">Other</button><input type="text">';
+  document.body.append(form);
+  const submit = form.querySelector("button");
+  const invalid = [document.createElement("div"), form.querySelector('button[type="button"]'), form.querySelector('input[type="text"]')];
+  const errors = [];
+  let formdataEvents = 0;
+  form.addEventListener("formdata", () => formdataEvents++);
+  for (const element of invalid) {
+    try { new FormData(form, element); errors.push("no error"); }
+    catch (error) { errors.push(error.name); }
+  }
+  const foreign = document.createElement("button");
+  try { new FormData(form, foreign); errors.push("no error"); }
+  catch (error) { errors.push(error.name); }
+  testing.expectEqual(["TypeError", "TypeError", "TypeError", "NotFoundError"], errors);
+  testing.expectEqual(0, formdataEvents);
+  testing.expectEqual([["field", "value"], ["submit", "yes"]], Array.from(new FormData(form, submit)));
+  const external = document.createElement("input");
+  external.type = "submit";
+  external.name = "external";
+  external.value = "accepted";
+  external.setAttribute("form", form.id);
+  document.body.append(external);
+  testing.expectEqual("accepted", new FormData(form, external).get("external"));
+  testing.expectEqual(2, formdataEvents);
+  external.remove();
+  form.remove();
+}
+</script>
