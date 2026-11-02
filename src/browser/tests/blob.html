@@ -277,3 +277,25 @@
     testing.expectEqual("honied", sliceMidText);
   });
 </script>
+
+<script id=native_endings_across_vector_boundaries type=module>
+  const state = await testing.async();
+  const results = [];
+  // Cover every alignment for 8, 16, 32 and 64-byte vectors, including
+  // vector-to-vector and vector-to-scalar transitions.
+  for (let n = 0; n < 128; n++) {
+    const prefix = "x".repeat(n);
+    for (const suffix of ["\r\nz", "\r\n", "\rz"]) {
+      const input = prefix + suffix;
+      const blob = new Blob([input], { endings: "native" });
+      results.push([prefix + suffix.replace(/\r\n?/g, "\n"), await blob.text()]);
+    }
+  }
+  // Separate string parts are normalized independently.
+  const separate = await new Blob(["x\r", "\ny"], { endings: "native" }).text();
+  state.resolve();
+  await state.done(() => {
+    for (const [expected, actual] of results) testing.expectEqual(expected, actual);
+    testing.expectEqual("x\n\ny", separate);
+  });
+</script>

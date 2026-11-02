@@ -268,7 +268,7 @@ fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Wri
     inline for (vector_sizes) |vector_len| {
         const Vec = @Vector(vector_len, u8);
 
-        while (end + vector_len <= part.len) : (end += vector_len) {
+        while (end + vector_len <= part.len) {
             const cr: Vec = @splat('\r');
             // Load chunk as vectors.
             const data = part[end..][0..vector_len];
@@ -294,6 +294,12 @@ fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Wri
             }
 
             _ = try writer.writeVec(&.{data[relative_start..]});
+            end += vector_len;
+            // A CR at the vector's last byte already emitted the native LF.
+            // Consume its paired LF even when it lies outside this vector.
+            if (end < part.len and part[end - 1] == '\r' and part[end] == '\n') {
+                end += 1;
+            }
         }
     }
 
