@@ -1651,6 +1651,15 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
+    // An iframe without a size is 300x150, like any replaced element without
+    // an intrinsic size. Its content is hit-tested inside this box.
+    if (tag == .iframe) {
+        return .{ .value = switch (axis) {
+            .width => 300.0,
+            .height => 150.0,
+        }, .explicit = true };
+    }
+
     return .{ .value = 5.0 };
 }
 
