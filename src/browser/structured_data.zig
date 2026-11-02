@@ -53,8 +53,10 @@ const LinkRel = struct {
 const MicrodataItem = struct {
     types: []const []const u8,
     id: ?[]const u8,
-    // null when the item was already expanded earlier in the output
+    // null for a repeat past MicrodataItems.max_output_items
     properties: ?std.StringArrayHashMapUnmanaged(std.ArrayList(MicrodataValue)),
+    // items in its JSON, itself included
+    size: usize,
 
     pub fn jsonStringify(self: *const MicrodataItem, jw: anytype) !void {
         try jw.beginObject();
@@ -242,14 +244,14 @@ pub fn collectStructuredData(
         }
     }
 
-    var microdata_states: MicrodataStates = .empty;
+    var microdata_items: MicrodataItems = .{};
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
 
         // Top-level items; the ones with itemprop are values of another item.
         if (isItem(el) and !el.hasAttributeSafe(comptime .wrap("itemprop"))) {
-            try microdata.append(arena, try collectMicrodataItem(el, arena, frame, &microdata_states));
+            try microdata.append(arena, try collectMicrodataItem(el, arena, frame, &microdata_items));
         }
 
         switch (el.getTag()) {
@@ -426,20 +428,38 @@ fn isItem(el: *Element) bool {
     return el._namespace == .html and el.hasAttributeSafe(comptime .wrap("itemscope"));
 }
 
-/// Every item element seen so far: null while it is being expanded, so
-/// reaching it again is a cycle, then the expanded item.
-const MicrodataStates = std.AutoHashMapUnmanaged(*Element, ?*const MicrodataItem);
+/// A page's microdata items, each collected once: a later reference reuses it.
+const MicrodataItems = struct {
+    // null while the item is being collected, so reaching it again is a cycle
+    by_element: std.AutoHashMapUnmanaged(*Element, ?*const MicrodataItem) = .empty,
+    output_items: usize = 0,
 
-/// Each item is expanded once per page. The spec expands an item again at
-/// every reference, which items shared through itemref make exponential;
-/// later references here get only its type and id.
+    // Like the spec, a shared item is printed in full at every reference, but
+    // sharing can nest (A and B both itemref C and D, which both itemref ...)
+    // and grow the output exponentially. Past this many items in the output,
+    // a repeat gets only its type and id.
+    const max_output_items = 10_000;
+
+    fn repeat(self: *MicrodataItems, arena: Allocator, item: *const MicrodataItem) !*const MicrodataItem {
+        if (self.output_items + item.size <= max_output_items) {
+            self.output_items += item.size;
+            return item;
+        }
+        self.output_items += 1;
+        const stub = try arena.create(MicrodataItem);
+        stub.* = .{ .types = item.types, .id = item.id, .properties = null, .size = 1 };
+        return stub;
+    }
+};
+
 fn collectMicrodataItem(
     el: *Element,
     arena: Allocator,
     frame: *Frame,
-    states: *MicrodataStates,
+    items: *MicrodataItems,
 ) Allocator.Error!*const MicrodataItem {
-    try states.put(arena, el, null);
+    try items.by_element.put(arena, el, null);
+    items.output_items += 1;
 
     var types: std.ArrayList([]const u8) = .empty;
     if (el.getAttributeSafe(comptime .wrap("itemtype"))) |itemtype| {
@@ -456,10 +476,11 @@ fn collectMicrodataItem(
     }
 
     var properties: std.StringArrayHashMapUnmanaged(std.ArrayList(MicrodataValue)) = .empty;
+    var size: usize = 1;
     var element_names: std.ArrayList([]const u8) = .empty;
     for (try crawlMicrodataProperties(el, arena)) |prop_el| {
-        const value: MicrodataValue = if (isItem(prop_el))
-            try microdataItemValue(prop_el, arena, frame, states)
+        var value: MicrodataValue = if (isItem(prop_el))
+            try microdataItemValue(prop_el, arena, frame, items)
         else
             .{ .text = try microdataPropertyValue(prop_el, arena, frame) };
 
@@ -471,25 +492,28 @@ fn collectMicrodataItem(
                 if (std.mem.eql(u8, seen, name)) break true;
             } else false;
             if (repeated) continue;
+            // under a second name, an item is printed again
+            if (element_names.items.len > 0) if (value == .item) {
+                value = .{ .item = try items.repeat(arena, value.item) };
+            };
             try element_names.append(arena, name);
             const entry = try properties.getOrPutValue(arena, name, .empty);
             try entry.value_ptr.append(arena, value);
+            if (value == .item) size += value.item.size;
         }
     }
 
     const item = try arena.create(MicrodataItem);
-    item.* = .{ .types = types.items, .id = id, .properties = properties };
-    try states.put(arena, el, item);
+    item.* = .{ .types = types.items, .id = id, .properties = properties, .size = size };
+    try items.by_element.put(arena, el, item);
     return item;
 }
 
-fn microdataItemValue(el: *Element, arena: Allocator, frame: *Frame, states: *MicrodataStates) !MicrodataValue {
-    const state = states.get(el) orelse return .{ .item = try collectMicrodataItem(el, arena, frame, states) };
-    // still being expanded: the item contains itself, for which the spec has "ERROR"
-    const expanded = state orelse return .{ .text = "ERROR" };
-    const stub = try arena.create(MicrodataItem);
-    stub.* = .{ .types = expanded.types, .id = expanded.id, .properties = null };
-    return .{ .item = stub };
+fn microdataItemValue(el: *Element, arena: Allocator, frame: *Frame, items: *MicrodataItems) !MicrodataValue {
+    const state = items.by_element.get(el) orelse return .{ .item = try collectMicrodataItem(el, arena, frame, items) };
+    // still being collected: the item contains itself, for which the spec has "ERROR"
+    const collected = state orelse return .{ .text = "ERROR" };
+    return .{ .item = try items.repeat(arena, collected) };
 }
 
 /// The elements carrying the item's properties, in tree order: its
@@ -779,20 +803,40 @@ test "structured_data: microdata cycle" {
     , data);
 }
 
-test "structured_data: microdata shared items expand once" {
+test "structured_data: microdata shared items" {
     const data = try testStructuredData(
-        \\<div itemscope itemref="a b"></div>
-        \\<div itemscope id="a" itemprop="p" itemref="c"></div>
-        \\<div itemscope id="b" itemprop="p" itemref="c"></div>
-        \\<div itemscope id="c" itemprop="q" itemtype="https://schema.org/Thing"><span itemprop="name">x</span></div>
+        \\<div itemscope itemtype="https://schema.org/Event" itemref="loc"><span itemprop="name">A</span></div>
+        \\<div itemscope itemtype="https://schema.org/Event" itemref="loc"><span itemprop="name">B</span></div>
+        \\<div itemscope id="loc" itemprop="location" itemtype="https://schema.org/Place"><span itemprop="name">Hall</span></div>
     );
     defer testing.test_session.closeAllPages();
 
     try expectMicrodata(
-        \\[{"properties":{"p":[{"properties":{"q":[{"type":["https://schema.org/Thing"],"properties":{"name":["x"]}}]}},
+        \\[{"type":["https://schema.org/Event"],"properties":{"name":["A"],"location":[{"type":["https://schema.org/Place"],"properties":{"name":["Hall"]}}]}},
     ++
-        \\{"properties":{"q":[{"type":["https://schema.org/Thing"]}]}}]}}]
+        \\{"type":["https://schema.org/Event"],"properties":{"name":["B"],"location":[{"type":["https://schema.org/Place"],"properties":{"name":["Hall"]}}]}}]
     , data);
+}
+
+test "structured_data: microdata nested sharing is bounded" {
+    // Each level's two items both itemref the next level's two: 2^16 copies
+    // of the last level if every reference were printed in full.
+    var html: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try html.writer.writeAll("<div itemscope itemref=\"a0 b0\"></div>");
+    for (0..16) |i| {
+        for ("ab") |p| {
+            try html.writer.print("<div itemscope id=\"{c}{d}\" itemprop=\"p\" itemref=\"a{d} b{d}\"></div>", .{ p, i, i + 1, i + 1 });
+        }
+    }
+    const data = try testStructuredData(html.written());
+    defer testing.test_session.closeAllPages();
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, data.microdata, .{});
+    defer testing.allocator.free(json);
+    // Past the limit, repeats keep only their type and id: one stub per
+    // reference in the page, so the output stays linear in its size.
+    try testing.expect(std.mem.count(u8, json, "{\"properties\"") <= MicrodataItems.max_output_items);
+    try testing.expect(std.mem.find(u8, json, "{}") != null);
 }
 
 test "structured_data: no microdata key without items" {
