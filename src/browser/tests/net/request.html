@@ -688,3 +688,20 @@
     testing.expectTrue(r.bodyUsed);
   });
 </script>
+
+<script id=url_credentials>
+  for (const url of [
+    'https://user:password@example.com/api',
+    'https://user@example.com/api',
+    'https://:password@example.com/api',
+    'https://%75ser@example.com/api',
+    '//user@example.com/api',
+  ]) {
+    testing.expectError('TypeError', () => new Request(url));
+    testing.expectError('TypeError', () => new Request(url, { credentials: 'omit' }));
+  }
+  // The URL parser removes empty credentials; @ in a path or query is data.
+  testing.expectEqual('https://example.com/', new Request('https://@example.com').url);
+  testing.expectEqual('https://example.com/@user', new Request('https://example.com/@user').url);
+  testing.expectEqual('https://example.com/?user=@name', new Request('https://example.com/?user=@name').url);
+</script>

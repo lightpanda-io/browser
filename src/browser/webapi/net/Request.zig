@@ -26,7 +26,7 @@ const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
 const referrer = @import("../../referrer.zig");
 
-const URL = @import("../URL.zig");
+const URL = @import("../../URL.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
@@ -124,6 +124,10 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .url => |u| try URL.resolve(arena.allocator(), exec.base(), u, .{ .encoding = exec.charset.* }),
         .request => |r| try arena.dupeSentinel(u8, r._url, 0),
     };
+
+    if (URL.getUsername(url).len > 0 or URL.getPassword(url).len > 0) {
+        return exec.js.typeError("Request URL cannot include credentials");
+    }
 
     const opts = opts_ orelse InitOpts{};
     if (opts.priority) |p| {
