@@ -41,6 +41,7 @@ const Command = enum {
     delete,
     forwardDelete,
     selectAll,
+    insertLineBreak,
 
     // Command names are ASCII case-insensitive.
     fn parse(name: []const u8) ?Command {
@@ -71,6 +72,7 @@ pub fn exec(doc: *Document, name: []const u8, value: []const u8) !bool {
         .delete => delete(frame, false),
         .forwardDelete => delete(frame, true),
         .selectAll => selectAll(frame),
+        .insertLineBreak => insertLineBreak(frame),
     };
 }
 
@@ -84,7 +86,7 @@ pub fn isEnabled(doc: *Document, name: []const u8) bool {
     }
     const command = Command.parse(name) orelse return false;
     return switch (command) {
-        .insertText, .delete, .forwardDelete => editTarget(doc) != null,
+        .insertText, .delete, .forwardDelete, .insertLineBreak => editTarget(doc) != null,
         .selectAll => true,
     };
 }
@@ -199,6 +201,30 @@ fn delete(frame: *Frame, forward: bool) !bool {
             if (try user_input.deleteAtSelection(frame, host, forward) == false) {
                 // Chrome merges blocks, deletes a <br>, an image, ...
                 log.info(.not_implemented, "execCommand.delete", .{ .forward = forward });
+                return false;
+            }
+        },
+    }
+    return true;
+}
+
+// Like Shift+Enter, with no beforeinput: just the edit and input.
+fn insertLineBreak(frame: *Frame) !bool {
+    const target = editTarget(frame.document) orelse return false;
+    switch (target) {
+        // a single-line control has nowhere to put it, yet it succeeds
+        .input => {},
+        .textarea => |textarea| {
+            try textarea.rememberValueBeforeEdit(frame);
+            try textarea.innerInsert("\n", null, "insertLineBreak", frame);
+        },
+        .host => |host| {
+            if (selectionInSelect(frame.document)) {
+                return false;
+            }
+            if (try user_input.insertLineBreakAtSelection(frame, host) == false) {
+                // Chrome merges blocks for a selection across them
+                log.info(.not_implemented, "execCommand.insertLineBreak", .{});
                 return false;
             }
         },

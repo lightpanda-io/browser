@@ -653,6 +653,167 @@
 }
 </script>
 
+<script>
+  function lineBreak() {
+    events = [];
+    return document.execCommand('insertLineBreak');
+  }
+</script>
+
+<script id="line_break_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().removeAllRanges();
+  testing.expectEqual(true, document.queryCommandSupported('insertLineBreak'));
+  testing.expectEqual(false, document.queryCommandEnabled('insertLineBreak'));
+  testing.expectEqual(false, lineBreak());
+  getSelection().selectAllChildren($('#plain'));
+  testing.expectEqual(false, lineBreak());
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_textarea">
+{
+  const area = $('#area');
+  area.value = 'abc';
+  area.focus();
+  area.setSelectionRange(2, 2);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('ab\nc', area.value);
+  testing.expectEqual([3, 3], [area.selectionStart, area.selectionEnd]);
+  testing.expectEqual(['input:area:insertLineBreak:null'], events);
+
+  area.setSelectionRange(0, 2);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('\n\nc', area.value);
+  testing.expectEqual(1, area.selectionStart);
+
+  area.readOnly = true;
+  testing.expectEqual(false, lineBreak());
+  testing.expectEqual('\n\nc', area.value);
+  testing.expectEqual([], events);
+  area.readOnly = false;
+}
+</script>
+
+<script id="line_break_input">
+{
+  // nowhere to put it in one line: succeeds, no edit, no event
+  const input = $('#text');
+  input.value = 'hello';
+  input.focus();
+  input.setSelectionRange(1, 3);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('hello', input.value);
+  testing.expectEqual([1, 3], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="line_break_contenteditable">
+{
+  const host = $('#host');
+  function run(html, setup, style) {
+    host.innerHTML = html;
+    host.style.whiteSpace = style ?? '';
+    host.focus();
+    setup(host);
+    const result = lineBreak();
+    return [result, host.innerHTML, caret()];
+  }
+  const at = (node, offset) => getSelection().collapse(node, offset);
+  const sel = (a, ao, f, fo) => getSelection().setBaseAndExtent(a, ao, f, fo);
+
+  testing.expectEqual([true, 'ab<br>c', '#c@0'], run('abc', h => at(h.firstChild, 2)));
+  testing.expectEqual(['input:host:insertLineBreak:null'], events);
+  testing.expectEqual([true, '<br>abc', '#abc@0'], run('abc', h => at(h.firstChild, 0)));
+  testing.expectEqual([true, '<p>ab<br>c</p>', '#c@0'], run('<p>abc</p>', h => at(h.firstChild.firstChild, 2)));
+  testing.expectEqual([true, 'a<b>b<br>c</b>d', '#c@0'], run('a<b>bc</b>d', h => at(h.childNodes[1].firstChild, 1)));
+  testing.expectEqual([true, 'a<img><br>b', '#b@0'], run('a<img>b', h => at(h, 2)));
+
+  // at the end of a paragraph, a second <br> gives the new line its height
+  testing.expectEqual([true, 'abc<br><br>', 'DIV@2'], run('abc', h => at(h.firstChild, 3)));
+  testing.expectEqual([true, '<p>abc<br><br></p>', 'P@2'], run('<p>abc</p>', h => at(h.firstChild.firstChild, 3)));
+  testing.expectEqual([true, '<ul><li>abc<br><br></li></ul>', 'LI@2'], run('<ul><li>abc</li></ul>', h => at(h.firstChild.firstChild.firstChild, 3)));
+  // not when text or a <br> follows
+  testing.expectEqual([true, '<p>a<b>bc<br></b>d</p>', '#d@0'], run('<p>a<b>bc</b>d</p>', h => at(h.firstChild.childNodes[1].firstChild, 2)));
+  testing.expectEqual([true, 'abc<br><br>def', 'DIV@2'], run('abc<br>def', h => at(h.firstChild, 3)));
+
+  // replaces the selection
+  testing.expectEqual([true, 'a<br>c', '#c@0'], run('abc', h => sel(h.firstChild, 1, h.firstChild, 2)));
+  testing.expectEqual([true, '<br><br>', 'DIV@1'], run('abc', h => sel(h.firstChild, 0, h.firstChild, 3)));
+
+  // "\n" where white-space keeps it, but never in a <pre>
+  testing.expectEqual([true, 'ab\nc', '#c@0'], run('abc', h => at(h.firstChild, 2), 'pre-wrap'));
+  testing.expectEqual([true, 'ab\nc', '#c@0'], run('abc', h => at(h.firstChild, 2), 'pre-line'));
+  testing.expectEqual([true, '<pre>ab<br>c</pre>', '#c@0'], run('<pre>abc</pre>', h => at(h.firstChild.firstChild, 2)));
+
+  // a caret in a non-editable island
+  testing.expectEqual([false, 'a<span contenteditable="false">xy</span>b', '#xy@1'],
+    run('a<span contenteditable=false>xy</span>b', h => at(h.childNodes[1].firstChild, 1)));
+  testing.expectEqual([], events);
+
+  host.style.whiteSpace = '';
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_unfocused_host">
+{
+  // the selection is enough
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p>';
+  document.activeElement.blur();
+  getSelection().collapse(host.firstChild.firstChild, 1);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('<p>a<br>bc</p>', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_nested">
+{
+  const area = $('#area');
+  area.value = 'ab';
+  area.focus();
+  area.setSelectionRange(1, 1);
+  let nested = null;
+  area.addEventListener('input', () => { nested = document.execCommand('insertLineBreak'); }, {once: true});
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual(false, nested);
+  testing.expectEqual('a\nb', area.value);
+}
+</script>
+
+<script id="line_break_not_yet_supported">
+{
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p><p>def</p>';
+  host.focus();
+  getSelection().setBaseAndExtent(host.firstChild.firstChild, 1, host.lastChild.firstChild, 2);
+  // Chrome: <p>a<br>f</p>
+  testing.diverges('no block merging', () => {
+    testing.expectEqual(false, lineBreak());
+    testing.expectEqual('<p>abc</p><p>def</p>', host.innerHTML);
+  });
+
+  // Chrome: true, value unchanged, no event
+  const area = $('#area');
+  area.value = 'abc';
+  area.maxLength = 3;
+  area.focus();
+  area.setSelectionRange(1, 1);
+  testing.diverges('maxlength not enforced', () => {
+    lineBreak();
+    testing.expectEqual('a\nbc', area.value);
+  });
+  area.removeAttribute('maxlength');
+  getSelection().removeAllRanges();
+}
+</script>
+
 <script id="command_required">
 {
   testing.expectError('TypeError', () => document.execCommand());
