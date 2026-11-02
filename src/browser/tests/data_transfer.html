@@ -139,3 +139,39 @@
   testing.expectEqual("text/a,text/b", kinds.join(","));
 }
 </script>
+
+<!--
+A structured-cloned FileList holds a ref on each of its Files: a File must
+outlive its JS wrapper while the list can still reach it.
+-->
+<script id=files_clone_holds_files type=module>
+  const state = await testing.async();
+
+  const dt = new DataTransfer();
+  for (let i = 0; i < 4; i++) {
+    dt.items.add(new File(['x'], 'kept' + i + '.txt'));
+  }
+  const fl = structuredClone(dt.files);
+  // wrap each File once, without keeping the wrapper
+  for (const file of fl) {
+    file.name;
+  }
+
+  // Fill the young generation a few times over so the File wrappers are
+  // collected, then make Blobs, which reuse the arena of any File that the
+  // collection freed.
+  for (let round = 0; round < 4; round++) {
+    const junk = [];
+    for (let i = 0; i < 200000; i++) {
+      junk.push({ a: i, b: [i, i] });
+    }
+  }
+  for (let i = 0; i < 64; i++) {
+    new Blob(['y'.repeat(100)]);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['kept0.txt', 'kept1.txt', 'kept2.txt', 'kept3.txt'], Array.from(fl, (f) => f.name));
+  });
+</script>

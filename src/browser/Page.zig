@@ -29,6 +29,7 @@ const EventManagerBase = @import("EventManagerBase.zig");
 const PageStatus = @import("PageStatus.zig");
 
 const Blob = @import("webapi/Blob.zig");
+const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -156,6 +157,8 @@ origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
 
 // Blob URL store for URL.createObjectURL.
 blob_urls: Blob.UrlMap = .empty,
+
+_file_lists: std.ArrayList(*FileList) = .empty,
 
 // Identity tracking for the main world. All main-world contexts in this Page
 // share this, ensuring object identity works across same-origin frames.
@@ -360,6 +363,13 @@ pub fn deinit(self: *Page) void {
         self.blob_urls = .empty;
     }
 
+    for (self._file_lists.items) |file_list| {
+        for (file_list._files) |file| {
+            file._proto.releaseRef(self);
+        }
+    }
+    self._file_lists = .empty;
+
     const session = self.session;
     lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
     session.browser.reportJsHeap();
@@ -443,6 +453,10 @@ pub fn createBlobUrl(self: *Page, blob: *Blob, origin: ?[]const u8, creator_fram
     try self.blob_urls.put(self.arena, url, .{ .blob = blob, .creator = creator_frame_id });
     blob.acquireRef();
     return url;
+}
+
+pub inline fn trackFileList(self: *Page, file_list: *FileList) !void {
+    try self._file_lists.append(self.arena, file_list);
 }
 
 pub fn revokeBlobUrl(self: *Page, url: []const u8) void {
