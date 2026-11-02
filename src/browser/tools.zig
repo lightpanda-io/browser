@@ -1215,7 +1215,7 @@ fn execCallPageTool(arena: std.mem.Allocator, session: *lp.Session, registry: *N
         break :blk std.json.Stringify.valueAlloc(arena, a, .{}) catch return ToolError.OutOfMemory;
     } else "{}";
 
-    const result = try runPageTool(arena, page, tool, input_json);
+    const result = try runPageTool(arena, session, page, tool, input_json);
     return settleScriptNavigation(arena, session, registry, page, result);
 }
 
@@ -1226,7 +1226,7 @@ fn noPageTool(arena: std.mem.Allocator, name: []const u8) ToolError!ToolResult {
     };
 }
 
-fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelContext.Tool, input_json: []const u8) ToolError!ToolResult {
+fn runPageTool(arena: std.mem.Allocator, session: *lp.Session, page: *lp.Frame, tool: *const ModelContext.Tool, input_json: []const u8) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -1249,7 +1249,20 @@ fn runPageTool(arena: std.mem.Allocator, page: *lp.Frame, tool: *const ModelCont
     };
     if (value.isPromise()) {
         const promise = value.toPromise();
-        if (waitForPromise(page, promise)) |failed| return failed;
+        const frame_id = page._frame_id;
+        const loader_id = page._loader_id;
+        if (waitForPromise(page, promise)) |failed| {
+            // Nothing will read the result, so let the tool stop. A
+            // navigation took the signal with the old document.
+            if (session.findFrameByFrameId(frame_id)) |frame| {
+                if (frame._loader_id == loader_id) {
+                    signal.abort(null, &frame.js.execution) catch |err| {
+                        log.debug(.browser, "page tool abort", .{ .err = err });
+                    };
+                }
+            }
+            return failed;
+        }
         value = promise.result();
         if (promise.state() == .rejected) return .{
             .text = value.toStringSliceWithAlloc(arena) catch |err| switch (err) {
