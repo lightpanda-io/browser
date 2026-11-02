@@ -26,7 +26,6 @@ const URL = @import("../URL.zig");
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
-const log = lp.log;
 const String = lp.String;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -169,10 +168,7 @@ pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !
     var i: usize = 0;
     while (i < self._params._entries.items.len) : (i += 1) {
         const entry = self._params._entries.items[i];
-        cb.call(void, .{ entry.value.str(), entry.name.str(), self }) catch |err| {
-            // this is a non-JS error
-            log.debug(.js, "URLSearchParams.forEach", .{ .err = err });
-        };
+        try cb.callRethrow(void, .{ entry.value.str(), entry.name.str(), self });
     }
 }
 

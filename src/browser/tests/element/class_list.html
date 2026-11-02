@@ -891,3 +891,28 @@
   testing.expectEqual(0, div.classList.remove.length);
 }
 </script>
+
+<script id=foreach_exception_identity>
+{
+  const element = document.createElement("div"); element.className = "a b"; const list = element.classList;
+  for (const marker of [{ unique: true }, null, undefined, 42]) {
+    let calls = 0;
+    let caught;
+    let threw = false;
+    try {
+      list.forEach(() => { calls++; throw marker; });
+    } catch (error) { caught = error; threw = true; }
+    testing.expectEqual(true, threw);
+    testing.expectEqual(true, caught === marker);
+    testing.expectEqual(1, calls);
+  }
+  // The exception does not leave a pending error or poison the next iteration.
+  const receiver = { calls: 0 };
+  list.forEach(function(value, key, collection) {
+    testing.expectEqual(true, this === receiver);
+    testing.expectEqual(true, collection === list);
+    this.calls++;
+  }, receiver);
+  testing.expectEqual(2, receiver.calls);
+}
+</script>

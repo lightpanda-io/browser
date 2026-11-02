@@ -24,7 +24,6 @@ const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const GenericIterator = @import("iterator.zig").Entry;
 
-const log = lp.log;
 const String = lp.String;
 
 pub const DOMTokenList = @This();
@@ -284,12 +283,7 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
             return;
         }
 
-        var caught: js.TryCatch.Caught = .{};
-        cb.tryCall(void, .{ token, i, self }, &caught) catch |err| {
-            frame.page.recordJsError(err);
-            log.debug(.js, "forEach callback", .{ .caught = caught, .source = "DOMTokenList" });
-            return;
-        };
+        try cb.callRethrow(void, .{ token, i, self });
         i += 1;
 
         const new_value = self.getValue();

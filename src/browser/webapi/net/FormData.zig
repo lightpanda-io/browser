@@ -31,7 +31,6 @@ const File = @import("../File.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 const header_parser = @import("../../../network/header_parser.zig");
 
-const log = lp.log;
 const String = lp.String;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -348,10 +347,7 @@ pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object, exec: *c
     while (i < self._entries.items.len) : (i += 1) {
         const entry = &self._entries.items[i];
         const value = try entry.read(exec);
-        cb.call(void, .{ value, entry.name.str(), self }) catch |err| {
-            // this is a non-JS error
-            log.debug(.js, "FormData.forEach", .{ .err = err });
-        };
+        try cb.callRethrow(void, .{ value, entry.name.str(), self });
     }
 }
 

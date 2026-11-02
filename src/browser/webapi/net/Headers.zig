@@ -7,7 +7,6 @@ const Mime = @import("../../Mime.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 const Attribute = @import("../element/Attribute.zig");
 
-const log = lp.log;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
@@ -297,10 +296,7 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object, exec: *co
 
     var it = Iterator{ .headers = self };
     while (try it.next(exec)) |entry| {
-        var caught: js.TryCatch.Caught = .{};
-        cb.tryCall(void, .{ entry.@"1", entry.@"0", self }, &caught) catch {
-            log.debug(.js, "forEach callback", .{ .caught = caught, .source = "headers" });
-        };
+        try cb.callRethrow(void, .{ entry.@"1", entry.@"0", self });
     }
 }
 
