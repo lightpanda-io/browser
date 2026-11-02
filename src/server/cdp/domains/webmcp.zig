@@ -35,6 +35,9 @@ pub const Invocation = struct {
     id: u32,
     bc: *CDP.BrowserContext,
     frame_id: u32,
+    // The document the tool ran in: the frame keeps its id across a
+    // navigation, but the signal dies with the document.
+    loader_id: u32,
     name: []const u8,
     // The signal passed to the tool, aborted by cancelInvocation.
     signal: *AbortSignal,
@@ -111,6 +114,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
         .id = inv_id,
         .bc = bc,
         .frame_id = frame_id,
+        .loader_id = frame._loader_id,
         .name = try bc.arena.dupe(u8, tool.name),
         .signal = try AbortSignal.init(exec),
     };
@@ -180,9 +184,11 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
     }, .{ .session_id = bc.session_id });
 
     if (bc.session.findFrameByFrameId(invocation.frame_id)) |frame| {
-        invocation.signal.abort(null, &frame.js.execution) catch |err| {
-            log.debug(.cdp, "WebMCP cancel abort", .{ .err = err });
-        };
+        if (frame._loader_id == invocation.loader_id) {
+            invocation.signal.abort(null, &frame.js.execution) catch |err| {
+                log.debug(.cdp, "WebMCP cancel abort", .{ .err = err });
+            };
+        }
     }
 
     return cmd.sendResult(null, .{});
