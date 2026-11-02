@@ -79,7 +79,9 @@ fn read(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Invalid stream handle", .{});
     };
     const start = @min(params.offset orelse stream.position, stream.data.len);
-    const end = @min(start + (params.size orelse DEFAULT_CHUNK), stream.data.len);
+    // Clamp the size before adding: a caller can request more than usize
+    // can represent when added to a nonzero offset.
+    const end = start + @min(params.size orelse DEFAULT_CHUNK, stream.data.len - start);
     stream.position = end;
 
     const chunk = stream.data[start..end];
@@ -129,4 +131,23 @@ test "cdp.io: unknown handles" {
 
     try ctx.processMessage(.{ .id = 2, .method = "IO.close", .params = .{ .handle = "nope" } });
     try ctx.expectSentError(-32000, "Invalid stream handle", .{ .id = 2 });
+}
+
+test "cdp.io: an oversized read is clamped without overflowing" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const streams = &ctx.cdp().streams;
+    const handle = try streams.add(try streams.allocator.dupe(u8, "abcdef"));
+    const handle_text = try testing.arena_allocator.print("{d}", .{handle});
+    try ctx.processMessage(.{ .id = 1, .method = "IO.read", .params = .{
+        .handle = handle_text,
+        .offset = 2,
+        .size = std.math.maxInt(usize),
+    } });
+    try ctx.expectSentResult(.{ .data = "Y2RlZg==", .base64Encoded = true, .eof = true }, .{ .id = 1 });
+
+    // A sequential read after the clamped read stays at EOF.
+    try ctx.processMessage(.{ .id = 2, .method = "IO.read", .params = .{ .handle = handle_text } });
+    try ctx.expectSentResult(.{ .data = "", .base64Encoded = true, .eof = true }, .{ .id = 2 });
 }
