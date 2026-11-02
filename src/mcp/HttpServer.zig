@@ -663,7 +663,7 @@ const SlowCall = struct {
 
     fn run(self: *SlowCall) void {
         self.response = testPost(testing.allocator, self.port, "slow",
-            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=1500"}}}
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?held=1"}}}
         ) catch null;
         self.done.store(true, .release);
     }
@@ -703,7 +703,9 @@ test "HttpServer - sessions run on their own threads" {
     defer server.stop();
     const port = server.port;
 
-    // A page that takes 1.5s to load in one session...
+    // A page held mid-load in one session...
+    testing.hold_loads.store(true, .release);
+    defer testing.hold_loads.store(false, .release);
     var slow: SlowCall = .{ .port = port };
     const slow_thread = try std.Thread.spawn(.{}, SlowCall.run, .{&slow});
     var slow_joined = false;
@@ -718,6 +720,7 @@ test "HttpServer - sessions run on their own threads" {
     try testing.expect(std.mem.find(u8, fast, "Navigated") != null);
     try testing.expect(!slow.done.load(.acquire));
 
+    testing.hold_loads.store(false, .release);
     slow_thread.join();
     slow_joined = true;
     defer if (slow.response) |r| testing.allocator.free(r);
@@ -731,7 +734,7 @@ test "HttpServer - sessions run on their own threads" {
     // JSON nested in the tool-result text, so its quotes are escaped.
     try testing.expect(std.mem.find(u8, list, "\\\"default\\\"") != null);
     try testing.expect(std.mem.find(u8, list, "\\\"slow\\\"") != null);
-    try testing.expect(std.mem.find(u8, list, "delay_ms=1500") != null);
+    try testing.expect(std.mem.find(u8, list, "held=1") != null);
     // Neither load reached the default session.
     try testing.expect(std.mem.find(u8, list, "{\\\"id\\\":\\\"default\\\"}") != null);
 
@@ -775,13 +778,13 @@ test "HttpServer - sessions run on their own threads" {
 }
 
 test "HttpServer - idle sessions are reaped" {
-    var server: TestServer = try .start(500);
+    var server: TestServer = try .start(150);
     defer server.stop();
     const port = server.port;
 
     // Time spent in a call isn't idle time: this load outlives the timeout.
     const busy = try testPost(testing.allocator, port, "busy",
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=800"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=300"}}}
     );
     defer testing.allocator.free(busy);
     try testing.expect(std.mem.find(u8, busy, "Navigated") != null);
@@ -792,8 +795,8 @@ test "HttpServer - idle sessions are reaped" {
     try testing.expect(std.mem.find(u8, listed, "\\\"busy\\\"") != null);
 
     var reaped = false;
-    for (0..100) |_| {
-        lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+    for (0..500) |_| {
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
         server.http.workers_mutex.lockUncancelable(lp.io);
         defer server.http.workers_mutex.unlock(lp.io);
         reaped = server.http.reaped.contains("busy");

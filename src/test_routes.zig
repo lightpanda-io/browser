@@ -33,6 +33,10 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
+/// A `/src/browser/tests/` load with `held=1` in its query waits while this is
+/// set, so a test can keep a load in flight exactly as long as it needs.
+pub var hold_loads = std.atomic.Value(bool).init(false);
+
 // /serve-count/ counters; only ever touched from the test HTTP server thread.
 var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "defer" },
@@ -1089,6 +1093,13 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
+        if (std.mem.find(u8, path, "held=1") != null) {
+            // Capped, so a test that fails before releasing can't hang the suite.
+            var waited: usize = 0;
+            while (hold_loads.load(.acquire) and waited < 10_000) : (waited += 5) {
+                lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
+            }
+        }
         if (std.mem.find(u8, path, "delay_ms=")) |pos| {
             const digits_start = pos + "delay_ms=".len;
             var end = digits_start;
