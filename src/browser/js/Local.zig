@@ -278,12 +278,9 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .@"struct" => {
-            // Struct, has to be placed on the heap. The instance must live on
-            // the identity arena, not the context arena: the identity map
-            // entry, its strong v8.Global and the wrapper's tag are all
-            // identity-scoped and can be exercised after this context is gone
-            // (e.g. a popup re-navigated in place, or an exception
-            // deserialized in a re-navigated frame).
+            // Struct, has to be placed on the heap. It lives as long as its identity map
+            // entry and strong v8.Global, which can outlive this context (e.g. an iframe
+            // or popup re-navigated in place).
             const heap = try self.ctx.identity_arena.create(T);
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_handle, heap);
