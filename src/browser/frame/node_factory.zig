@@ -593,6 +593,13 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                         attribute_iterator,
                         .{},
                     ),
+                    asUint("frame") => return createHtmlElementT(
+                        document,
+                        Element.Html.FrameElement,
+                        namespace,
+                        attribute_iterator,
+                        .{},
+                    ),
                     asUint("embed") => return createHtmlElementT(
                         document,
                         Element.Html.Embed,
