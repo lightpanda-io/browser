@@ -153,9 +153,17 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
             // Fragments are not allowed in WebSocket URLs.
             return error.SyntaxError;
         }
-        for (protocols) |protocol| {
+        for (protocols, 0..) |protocol, i| {
             if (!isValidProtocol(protocol)) {
                 return error.SyntaxError;
+            }
+            // The WebSocket constructor rejects a list where a value occurs
+            // more than once, so `new WebSocket(url, ['a', 'a'])` throws
+            // instead of sending a duplicated Sec-WebSocket-Protocol entry.
+            for (protocols[0..i]) |seen| {
+                if (std.mem.eql(u8, seen, protocol)) {
+                    return error.SyntaxError;
+                }
             }
         }
     }
