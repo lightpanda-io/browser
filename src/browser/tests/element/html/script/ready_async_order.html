@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<script>
+  window.readyAsyncOrder = [];
+</script>
+
+<link rel="preload" as="script" href="ready_async_dynamic.js">
+
+<!--
+  Every script is fetched before parsing starts: the ones below finish while
+  the parser waits for this one, so they're ready when their element is
+  prepared. They still run after the markup that follows them.
+-->
+<script src="empty.js?delay_ms=200"></script>
+
+<script async src="ready_async_classic.js"></script>
+<script>readyAsyncOrder.push('after classic');</script>
+
+<script type=module async src="ready_async_module.js"></script>
+<script>readyAsyncOrder.push('after module');</script>
+
+<script type=module async>readyAsyncOrder.push('inline module');</script>
+<script>readyAsyncOrder.push('after inline module');</script>
+
+<script>
+{
+  const s = document.createElement('script');
+  s.src = 'ready_async_dynamic.js';
+  document.head.appendChild(s);
+
+  const m = document.createElement('script');
+  m.type = 'module';
+  m.textContent = "readyAsyncOrder.push('dynamic inline module');";
+  document.head.appendChild(m);
+}
+</script>
+<script>readyAsyncOrder.push('after insert');</script>
+
+<script id=ready_async_runs_later>
+  testing.onload(() => {
+    const at = (name) => readyAsyncOrder.indexOf(name);
+    testing.expectEqual(9, readyAsyncOrder.length);
+    testing.expectTrue(at('classic') > at('after classic'));
+    testing.expectTrue(at('module') > at('after module'));
+    testing.expectTrue(at('inline module') > at('after inline module'));
+    testing.expectTrue(at('dynamic') > at('after insert'));
+    testing.expectTrue(at('dynamic inline module') > at('after insert'));
+  });
+</script>
