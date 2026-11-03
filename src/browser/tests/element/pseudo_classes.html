@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="container">
@@ -176,7 +177,9 @@
     testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 of.y)'));
     testing.expectEqual('3', texts('#nth_of_list li:nth-child(2 of:not(.y))'));
     testing.expectEqual('4', texts('#nth_of_list li:nth-last-child(2 of .y)'));
-    testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 OF .y)'));
+    testing.diverges('Chrome rejects an uppercase "OF"; CSS keywords are case-insensitive (Firefox accepts it)', () => {
+      testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 OF .y)'));
+    });
     testing.expectEqual('3', texts('#nth_of_list li:nth-child(2 of :not(.y))'));
     testing.expectEqual('2,4', texts('#nth_of_list li:nth-child(-n+2 of .y, :last-child)'));
     testing.expectEqual('1,2,3,4,5', texts('#nth_of_list li:nth-child(n of li)'));
@@ -192,8 +195,10 @@
     testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y,)'));
     testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2of .y)'));
     testing.expectError("SyntaxError", () => document.querySelector(':nth-of-type(2 of .y)'));
-    testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of ::before)'));
-    testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y, ::before)'));
+    testing.diverges('Chrome accepts a pseudo-element in "of S"; spec takes a <complex-real-selector-list>', () => {
+      testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of ::before)'));
+      testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y, ::before)'));
+    });
 }
 </script>
 

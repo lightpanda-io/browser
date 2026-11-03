@@ -829,21 +829,25 @@ pub fn isDisabled(self: *const Element) bool {
         return true;
     }
 
-    // <option> takes a different inheritance path: per HTML
-    // "concept-option-disabled" an option is disabled when its parent is an
-    // <optgroup disabled>. It does NOT inherit from <select disabled> or
-    // an ancestor <fieldset disabled>.
-    if (self.getTag() == .option) {
-        if (self.asConstNode()._parent) |parent_node| {
-            if (parent_node.is(Element)) |parent_el| {
-                if (parent_el.getTag() == .optgroup and
-                    parent_el.getAttributeInterned("disabled") != null)
-                {
+    // <option> and <optgroup> inherit from their owner <select> (itself
+    // disabled by an ancestor <fieldset>), and an option also from its
+    // <optgroup>. whatwg/html#12205.
+    const tag = self.getTag();
+    if (tag == .option or tag == .optgroup) {
+        const parent = self.asConstNode()._parent orelse return false;
+        if (tag == .option) {
+            var node: ?*Node = parent;
+            while (node) |n| : (node = n._parent) {
+                if (n.is(Html.Select) != null) break;
+                const optgroup = n.is(Html.OptGroup) orelse continue;
+                if (optgroup.asElement().getAttributeInterned("disabled") != null) {
                     return true;
                 }
+                break;
             }
         }
-        return false;
+        const pos = Html.Select.listPosition(parent) orelse return false;
+        return pos.select.asElement().isDisabled();
     }
 
     const element_node = self.asConstNode();
@@ -2749,11 +2753,9 @@ pub const Tag = enum {
             .param,
             .rp,
             .script,
-            .source,
             .style,
             .template,
             .title,
-            .track,
             => true,
             else => false,
         };
