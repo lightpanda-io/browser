@@ -35,7 +35,7 @@ const TaggedOpaque = @import("TaggedOpaque.zig");
 const v8 = js.v8;
 const log = lp.log;
 const CALL_ARENA_RETAIN = 1024 * 16;
-const LOCAL_ARENA_RETAIN = 1024 * 16;
+pub const LOCAL_ARENA_RETAIN = 1024 * 16;
 
 const Caller = @This();
 

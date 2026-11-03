@@ -297,7 +297,7 @@ test "cdp.accessibility: getRootAXNode returns the document node" {
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
 
     try ctx.processMessage(.{ .id = 1, .method = "Accessibility.getRootAXNode" });
-    const node = (try sentResult(&ctx, 1)).get("node").?.object;
+    const node = (try testing.sentResult(&ctx, 1)).get("node").?.object;
     try testing.expectEqual("RootWebArea", axRole(node));
     try testing.expectEqual("AX Tree Fixture", node.get("name").?.object.get("value").?.string);
     try testing.expect(node.get("childIds").?.array.items.len > 0);
@@ -323,7 +323,7 @@ test "cdp.accessibility: getAXNodeAndAncestors returns the node then its ancesto
         .method = "Accessibility.getAXNodeAndAncestors",
         .params = .{ .objectId = object_id },
     });
-    const nodes = (try sentResult(&ctx, 2)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     // p, main, body, html, document
     try testing.expectEqual(5, nodes.len);
     try testing.expectEqual("paragraph", axRole(nodes[0].object));
@@ -343,12 +343,12 @@ test "cdp.accessibility: getChildAXNodes follows ignored children" {
     // <html> and <body> are ignored, so the root's children run down to
     // <main>, as in Chrome, though the root only lists <html>.
     try ctx.processMessage(.{ .id = 1, .method = "Accessibility.getRootAXNode" });
-    const root = (try sentResult(&ctx, 1)).get("node").?.object;
+    const root = (try testing.sentResult(&ctx, 1)).get("node").?.object;
     const root_id = root.get("nodeId").?.string;
     try testing.expectEqual(1, root.get("childIds").?.array.items.len);
 
     try ctx.processMessage(.{ .id = 2, .method = "Accessibility.getChildAXNodes", .params = .{ .id = root_id } });
-    const top = (try sentResult(&ctx, 2)).get("nodes").?.array.items;
+    const top = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     try testing.expectEqual(3, top.len);
     try testing.expectEqual(true, top[0].object.get("ignored").?.bool);
     try testing.expectEqual(true, top[1].object.get("ignored").?.bool);
@@ -366,12 +366,12 @@ test "cdp.accessibility: getChildAXNodes follows ignored children" {
         .objectId = object_id,
         .fetchRelatives = false,
     } });
-    const main = (try sentResult(&ctx, 4)).get("nodes").?.array.items[0].object;
+    const main = (try testing.sentResult(&ctx, 4)).get("nodes").?.array.items[0].object;
     const main_id = main.get("nodeId").?.string;
     const child_ids = main.get("childIds").?.array.items;
 
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getChildAXNodes", .params = .{ .id = main_id } });
-    const nodes = (try sentResult(&ctx, 5)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items;
     // Every childId, in order, with nodes from under ignored children in
     // between: the link inside the visibility:hidden <div>.
     var listed: usize = 0;
@@ -409,7 +409,7 @@ test "cdp.accessibility: getPartialAXTree fetchRelatives" {
         .objectId = object_id,
         .fetchRelatives = false,
     } });
-    const alone = (try sentResult(&ctx, 2)).get("nodes").?.array.items;
+    const alone = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     try testing.expectEqual(1, alone.len);
     const label_id = alone[0].object.get("nodeId").?.string;
 
@@ -418,7 +418,7 @@ test "cdp.accessibility: getPartialAXTree fetchRelatives" {
     try ctx.processMessage(.{ .id = 3, .method = "Accessibility.getPartialAXTree", .params = .{
         .objectId = object_id,
     } });
-    const nodes = (try sentResult(&ctx, 3)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 3)).get("nodes").?.array.items;
     try testing.expectEqual(label_id, nodes[0].object.get("nodeId").?.string);
     const main_at = for (nodes, 0..) |n, i| {
         if (std.mem.eql(u8, axRole(n.object), "main")) break i;
@@ -442,7 +442,7 @@ test "cdp.accessibility: getPartialAXTree fetchRelatives" {
     } });
     const body = try evaluatedObjectId(&ctx, 4);
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = body } });
-    const body_nodes = (try sentResult(&ctx, 5)).get("nodes").?.array.items;
+    const body_nodes = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items;
     try testing.expectEqual(3, body_nodes.len);
     try testing.expectEqual(true, body_nodes[0].object.get("ignored").?.bool);
     try testing.expectEqual("RootWebArea", axRole(body_nodes[2].object));
@@ -457,7 +457,7 @@ test "cdp.accessibility: getChildAXNodes lists an li's ListMarker first" {
     const li_id = try axNodeIdOf(&ctx, 1, "document.getElementById('item')");
 
     try ctx.processMessage(.{ .id = 3, .method = "Accessibility.getChildAXNodes", .params = .{ .id = li_id } });
-    const nodes = (try sentResult(&ctx, 3)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 3)).get("nodes").?.array.items;
     try testing.expectEqual(2, nodes.len);
     const marker = nodes[0].object;
     try testing.expectEqual("ListMarker", axRole(marker));
@@ -468,12 +468,12 @@ test "cdp.accessibility: getChildAXNodes lists an li's ListMarker first" {
 
     // The li lists the marker, and its id doesn't change.
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .nodeId = try std.fmt.parseInt(u32, li_id, 10) } });
-    const li = (try sentResult(&ctx, 5)).get("nodes").?.array.items[0].object;
+    const li = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items[0].object;
     try testing.expectEqual(marker_id, li.get("childIds").?.array.items[0].string);
 
     // A marker has no children.
     try ctx.processMessage(.{ .id = 6, .method = "Accessibility.getChildAXNodes", .params = .{ .id = marker_id } });
-    try testing.expectEqual(0, (try sentResult(&ctx, 6)).get("nodes").?.array.items.len);
+    try testing.expectEqual(0, (try testing.sentResult(&ctx, 6)).get("nodes").?.array.items.len);
 
     // It belongs to its <li>'s frame, not the iframe's.
     try ctx.processMessage(.{ .id = 7, .method = "Accessibility.getChildAXNodes", .params = .{
@@ -486,7 +486,7 @@ test "cdp.accessibility: getChildAXNodes lists an li's ListMarker first" {
     try ctx.processMessage(.{ .id = 8, .method = "Runtime.evaluate", .params = .{
         .expression = "document.body.append(document.getElementById('item'))",
     } });
-    _ = try sentResult(&ctx, 8);
+    _ = try testing.sentResult(&ctx, 8);
     try ctx.processMessage(.{ .id = 9, .method = "Accessibility.getChildAXNodes", .params = .{ .id = marker_id } });
     try ctx.expectSentError(-31998, "NodeNotFound", .{ .id = 9 });
 
@@ -507,7 +507,7 @@ test "cdp.accessibility: getFullAXTree depth cuts off an li's ListMarker" {
     // document, html, body, ol, li (depth 4), then its marker and text.
     try ctx.processMessage(.{ .id = 1, .method = "Accessibility.getFullAXTree", .params = .{ .depth = 4 } });
     var saw_li = false;
-    for ((try sentResult(&ctx, 1)).get("nodes").?.array.items) |n| {
+    for ((try testing.sentResult(&ctx, 1)).get("nodes").?.array.items) |n| {
         const role = axRole(n.object);
         try testing.expect(!std.mem.eql(u8, role, "ListMarker"));
         if (std.mem.eql(u8, role, "listitem")) saw_li = true;
@@ -518,7 +518,7 @@ test "cdp.accessibility: getFullAXTree depth cuts off an li's ListMarker" {
     inline for (.{ 5, -1 }, 2..) |depth, msg_id| {
         try ctx.processMessage(.{ .id = msg_id, .method = "Accessibility.getFullAXTree", .params = .{ .depth = depth } });
         var saw_marker = false;
-        for ((try sentResult(&ctx, msg_id)).get("nodes").?.array.items) |n| {
+        for ((try testing.sentResult(&ctx, msg_id)).get("nodes").?.array.items) |n| {
             if (std.mem.eql(u8, axRole(n.object), "ListMarker")) saw_marker = true;
         }
         try testing.expect(saw_marker);
@@ -537,7 +537,7 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
     } });
     const gone = try evaluatedObjectId(&ctx, 1);
     try ctx.processMessage(.{ .id = 2, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .objectId = gone } });
-    const chain = (try sentResult(&ctx, 2)).get("nodes").?.array.items;
+    const chain = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     try testing.expectEqual(4, chain.len);
     try expectNotRendered(chain[0].object);
     try expectChain(chain);
@@ -548,7 +548,7 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
         .objectId = gone,
         .fetchRelatives = false,
     } });
-    const alone = (try sentResult(&ctx, 3)).get("nodes").?.array.items;
+    const alone = (try testing.sentResult(&ctx, 3)).get("nodes").?.array.items;
     try testing.expectEqual(1, alone.len);
     try testing.expectEqual(body_id, alone[0].object.get("parentId").?.string);
 
@@ -558,14 +558,14 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
     } });
     const title = try evaluatedObjectId(&ctx, 4);
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = title } });
-    const nodes = (try sentResult(&ctx, 5)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items;
     try expectNotRendered(nodes[0].object);
     try expectChain(nodes);
 
     try ctx.processMessage(.{ .id = 6, .method = "Accessibility.getChildAXNodes", .params = .{
         .id = nodes[0].object.get("nodeId").?.string,
     } });
-    try testing.expectEqual(0, (try sentResult(&ctx, 6)).get("nodes").?.array.items.len);
+    try testing.expectEqual(0, (try testing.sentResult(&ctx, 6)).get("nodes").?.array.items.len);
 }
 
 test "cdp.accessibility: a node under inert or aria-hidden" {
@@ -581,7 +581,7 @@ test "cdp.accessibility: a node under inert or aria-hidden" {
         } });
         const object_id = try evaluatedObjectId(&ctx, 2 * i + 1);
         try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = object_id } });
-        const nodes = (try sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items;
+        const nodes = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items;
         try testing.expectEqual(5, nodes.len);
         try expectNotRendered(nodes[0].object);
         try testing.expectEqual("main", axRole(nodes[1].object));
@@ -603,14 +603,14 @@ test "cdp.accessibility: ancestors with names computed from content" {
     // b, a, h2, body, html, document: the link's long name is computed
     // while the ancestors are written.
     try ctx.processMessage(.{ .id = 2, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .objectId = deep } });
-    const nodes = (try sentResult(&ctx, 2)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     try testing.expectEqual(6, nodes.len);
     try testing.expectEqual("link", axRole(nodes[1].object));
     try testing.expectEqual("heading", axRole(nodes[2].object));
     try expectChain(nodes);
 
     try ctx.processMessage(.{ .id = 3, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = deep } });
-    const relatives = (try sentResult(&ctx, 3)).get("nodes").?.array.items;
+    const relatives = (try testing.sentResult(&ctx, 3)).get("nodes").?.array.items;
     try testing.expectEqual("RootWebArea", axRole(relatives[relatives.len - 1].object));
 }
 
@@ -622,7 +622,7 @@ test "cdp.accessibility: an svg is listed in its parent's childIds" {
 
     const svg_id = try axNodeIdOf(&ctx, 1, "document.getElementById('pic')");
     try ctx.processMessage(.{ .id = 3, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .nodeId = try std.fmt.parseInt(u32, svg_id, 10) } });
-    const nodes = (try sentResult(&ctx, 3)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 3)).get("nodes").?.array.items;
     try testing.expectEqual(svg_id, nodes[0].object.get("nodeId").?.string);
     const body = nodes[1].object;
     try testing.expectEqual(body.get("nodeId").?.string, nodes[0].object.get("parentId").?.string);
@@ -648,7 +648,7 @@ test "cdp.accessibility: an iframe's tree is its own" {
     // The ancestors stop at the iframe's document, the root of its frame's
     // tree, as getFullAXTree for that frame has it.
     try ctx.processMessage(.{ .id = 2, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .objectId = object_id } });
-    const nodes = (try sentResult(&ctx, 2)).get("nodes").?.array.items;
+    const nodes = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     // button, body, html, document
     try testing.expectEqual(4, nodes.len);
     try testing.expectEqual("button", axRole(nodes[0].object));
@@ -668,7 +668,7 @@ test "cdp.accessibility: an iframe's tree is its own" {
     // And the <iframe> has no AX children in its parent's tree: every
     // childId getFullAXTree lists is in its response.
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getFullAXTree" });
-    const tree = (try sentResult(&ctx, 5)).get("nodes").?.array.items;
+    const tree = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items;
     var ids: std.StringHashMapUnmanaged(void) = .empty;
     defer ids.deinit(testing.allocator);
     for (tree) |n| {
@@ -707,34 +707,16 @@ fn axNodeIdOf(ctx: *testing.TestContext, msg_id: i64, expression: []const u8) ![
         .objectId = object_id,
         .fetchRelatives = false,
     } });
-    return (try sentResult(ctx, msg_id + 1)).get("nodes").?.array.items[0].object.get("nodeId").?.string;
+    return (try testing.sentResult(ctx, msg_id + 1)).get("nodes").?.array.items[0].object.get("nodeId").?.string;
 }
 
 fn axRole(node: std.json.ObjectMap) []const u8 {
     return node.get("role").?.object.get("value").?.string;
 }
 
-// The result of the response to `msg_id`.
-fn sentResult(ctx: *testing.TestContext, msg_id: i64) !std.json.ObjectMap {
-    var i: usize = 0;
-    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
-        const obj = switch (msg) {
-            .object => |o| o,
-            else => continue,
-        };
-        const id_value = obj.get("id") orelse continue;
-        if (id_value != .integer or id_value.integer != msg_id) {
-            continue;
-        }
-        const result = obj.get("result") orelse return error.NoResult;
-        return result.object;
-    }
-    return error.MessageNotFound;
-}
-
 // The result.result.objectId of the Runtime.evaluate response to `msg_id`.
 fn evaluatedObjectId(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
-    const remote = (try sentResult(ctx, msg_id)).get("result") orelse return error.NoRemoteObject;
+    const remote = (try testing.sentResult(ctx, msg_id)).get("result") orelse return error.NoRemoteObject;
     const object_id = remote.object.get("objectId") orelse return error.NoObjectId;
     return object_id.string;
 }

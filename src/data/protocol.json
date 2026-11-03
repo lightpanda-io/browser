@@ -146,7 +146,8 @@
     {"name":"styleSheetRemoved","description":"Fired whenever an active document stylesheet is removed.","parameters":[{"name":"styleSheetId","description":"Identifier of the removed stylesheet.","$ref":"DOM.StyleSheetId"}]},
     {"name":"computedStyleUpdated","experimental":true,"parameters":[{"name":"nodeId","description":"The node id that has updated computed styles.","$ref":"DOM.NodeId"}]}
   ],"commands":[
-    {"name":"enable","description":"Enables the CSS agent for the given page. Clients should not assume that the CSS agent has been\nenabled until the result of this command is received."}
+    {"name":"enable","description":"Enables the CSS agent for the given page. Clients should not assume that the CSS agent has been\nenabled until the result of this command is received."},
+    {"name":"getComputedStyleForNode","description":"Returns the computed style for a DOM node identified by `nodeId`.","parameters":[{"name":"nodeId","$ref":"DOM.NodeId"}],"returns":[{"name":"computedStyle","description":"Computed style for the specified DOM node.","type":"array","items":{"$ref":"CSSComputedStyleProperty"}},{"name":"extraFields","description":"A list of non-standard \"extra fields\" which blink stores alongside each\ncomputed style.","experimental":true,"$ref":"ComputedStyleExtraFields"}]}
   ]},
   {"domain":"Page","description":"Actions and events related to the inspected page belong to the page domain.","dependencies":["Debugger","DOM","IO","Network","Runtime"],"types":[
     {"id":"FrameId","description":"Unique frame identifier.","type":"string"},
