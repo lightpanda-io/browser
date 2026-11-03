@@ -576,6 +576,12 @@ pub fn deinit(self: *Frame) void {
     self._local_arena.release();
 }
 
+// Frees what local_arena holds. For Zig code that runs outside a JS call
+// (CDP, fetch), where no Caller resets it.
+pub fn resetLocalArena(self: *Frame) void {
+    self._local_arena.reset(if (comptime lp.IS_DEBUG) 0 else JS.Caller.LOCAL_ARENA_RETAIN);
+}
+
 pub fn viewportChanged(self: *Frame) void {
     var i: usize = 0;
     while (i < self._media_query_lists.items.len) : (i += 1) {

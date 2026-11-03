@@ -21,6 +21,7 @@ const CDP = @import("../CDP.zig");
 const NodeRegistry = @import("../../../NodeRegistry.zig");
 const DOMNode = @import("../../../browser/webapi/Node.zig");
 const properties = @import("../../../browser/css/properties.zig");
+const CSSStyleDeclaration = @import("../../../browser/webapi/css/CSSStyleDeclaration.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -54,16 +55,20 @@ fn getComputedStyleForNode(cmd: *CDP.Command) !void {
     const element = node.dom.is(DOMNode.Element) orelse node.dom.parentElement() orelse return error.NodeIsNotAnElement;
     const frame = element.ownerFrame(main_frame) orelse main_frame;
 
-    const style = try frame.window.getComputedStyle(element, null, frame);
-    const decl = style.asCSSStyleDeclaration();
+    const decl = CSSStyleDeclaration{
+        ._element = element,
+        ._is_computed = true,
+    };
 
-    // Values computed on the fly live in frame.local_arena, which is only
-    // reset between JS calls, so they stay valid until sendResult below.
+    // decl.getPropertyValue uses frame.local_arena, which is only reset
+    // between JS calls. So we reset it manually here.
+    defer frame.resetLocalArena();
+
     const computed = try cmd.arena.alloc(ComputedProperty, properties.computed_names.len);
     for (computed, properties.computed_names) |*prop, name| {
         prop.* = .{
             .name = name,
-            .value = decl.getPropertyValue(name, frame),
+            .value = try cmd.arena.dupe(u8, decl.getPropertyValue(name, frame)),
         };
     }
 
