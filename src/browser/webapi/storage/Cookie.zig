@@ -127,7 +127,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.InvalidNameValue;
     };
 
-    if (cookie_name.len == 0 and hasHiddenPrefix(cookie_value)) {
+    if (cookie_name.len == 0 and (cookie_value.len == 0 or hasHiddenPrefix(cookie_value))) {
         return error.InvalidNameValue;
     }
 
@@ -1833,6 +1833,10 @@ test "Cookie: parse key=value" {
     try expectError(error.InvalidByteSequence, null, "a\nb=c");
     try expectError(error.InvalidByteSequence, null, "a\rb=c");
     try expectError(error.InvalidByteSequence, null, &.{ 'a', '=', 'b', 0 });
+
+    // Neither a name nor a value: RFC 6265bis ignores the cookie.
+    try expectError(error.InvalidNameValue, null, "=");
+    try expectError(error.InvalidNameValue, null, " = ; Path=/");
 
     // Nameless cookies whose value begins with a prefix (case-insensitive,
     // after leading whitespace) are rejected so they can't impersonate

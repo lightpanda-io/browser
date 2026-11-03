@@ -234,6 +234,18 @@
   document.cookie = 'teststandalone; Max-Age=0';
 </script>
 
+<script id=cookie_empty_name_and_value>
+{
+  // Ignored: stored, it would read as an empty entry before the others.
+  document.cookie = 'testpair=1';
+  const before = document.cookie;
+  document.cookie = '=';
+  document.cookie = ' = ; Path=/';
+  testing.expectEqual(before, document.cookie);
+  document.cookie = 'testpair=; Max-Age=0';
+}
+</script>
+
 <script id=cookie_whitespace>
   // Names and values should be trimmed
   document.cookie = '  testtrim  =  trimmed_value  ';
