@@ -3010,6 +3010,9 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
     Element.Html.Select.childRemoved(parent, child);
     Element.Html.Picture.childRemoved(parent, child, next_sibling, self);
+    if (parent.is(Element.Html.Style)) |style| {
+        style.childrenChanged(self);
+    }
 
     // Update live ranges for removal (DOM spec remove steps 4-7)
     if (child_index_for_ranges) |idx| {
@@ -3306,6 +3309,12 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     };
 
     Element.Html.Select.childInserted(parent, child);
+    // The parser's text lands before the style's own ready work parses it.
+    if (comptime from_parser == false) {
+        if (parent.is(Element.Html.Style)) |style| {
+            style.childrenChanged(self);
+        }
+    }
     if (child.is(Element.Html.Image)) |img| {
         // noop if it didn't actually change
         try img.sourceChanged(self);

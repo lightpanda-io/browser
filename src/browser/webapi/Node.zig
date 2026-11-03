@@ -1647,6 +1647,10 @@ pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpt
     const removed = try self.removeAllChildrenCollecting(notify, frame);
 
     try Frame.parse.fragment(frame, self, html, opts);
+    // Fragment parsing skips the per-child insertion hook.
+    if (self.is(Element.Html.Style)) |style| {
+        style.childrenChanged(frame);
+    }
 
     if (notify) {
         var added: std.ArrayList(*Node) = .empty;

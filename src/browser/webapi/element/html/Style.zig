@@ -116,6 +116,20 @@ pub fn getType(self: *const Style) []const u8 {
     return self.asConstElement().getAttributeInterned("type") orelse "";
 }
 
+// The element's text changed. Spec says we should create a new sheet. For now
+// we keep the existing one..avoids over-allocation on consecutive writes.
+pub fn childrenChanged(self: *Style, frame: *Frame) void {
+    const node = self.asNode();
+    if (node.isConnected() == false) {
+        return;
+    }
+    if (self._sheet) |sheet| {
+        sheet._css_rules = null;
+    }
+    const owner = node.ownerFrame(frame) orelse return;
+    owner._style_manager.sheetModified();
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Style);
 

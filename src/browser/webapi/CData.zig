@@ -24,6 +24,7 @@ const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 
 const Node = @import("Node.zig");
+const Element = @import("Element.zig");
 pub const Text = @import("cdata/Text.zig");
 pub const Comment = @import("cdata/Comment.zig");
 pub const CDATASection = @import("cdata/CDATASection.zig");
@@ -358,6 +359,11 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
 /// stamp moves.
 fn dataChanged(self: *CData, old: String, frame: *Frame) void {
     frame.styleChanged();
+    if (self.asNode()._parent) |parent| {
+        if (parent.is(Element.Html.Style)) |style| {
+            style.childrenChanged(frame);
+        }
+    }
     Frame.observers.notifyCharacterDataChange(frame, self.asNode(), old);
 }
 

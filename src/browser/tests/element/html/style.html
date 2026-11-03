@@ -174,3 +174,45 @@
   testing.expectEqual('5px', sheet.cssRules[0].style.padding);
 }
 </script>
+
+<div id="text-change-target" class="text-change">x</div>
+<script id="text-change-updates-cascade">
+{
+  const target = document.getElementById('text-change-target');
+  const style = document.createElement('style');
+  style.textContent = '.text-change { display: none; }';
+  document.head.appendChild(style);
+  testing.expectEqual(false, target.checkVisibility());
+
+  // textContent replaces the children
+  style.textContent = '.text-change { display: block; }';
+  testing.expectEqual(true, target.checkVisibility());
+
+  // a materialized cssRules is rebuilt from the new text, not kept
+  testing.expectEqual('block', style.sheet.cssRules[0].style.display);
+  style.textContent = '.text-change { display: none; }';
+  testing.expectEqual(false, target.checkVisibility());
+  testing.expectEqual(1, style.sheet.cssRules.length);
+  testing.expectEqual('none', style.sheet.cssRules[0].style.display);
+
+  // text child's data
+  style.firstChild.data = '.text-change { color: red; }';
+  testing.expectEqual(true, target.checkVisibility());
+
+  // appended text node
+  style.appendChild(document.createTextNode('#text-change-target { display: none; }'));
+  testing.expectEqual(false, target.checkVisibility());
+  testing.expectEqual(2, style.sheet.cssRules.length);
+
+  // removed text node
+  style.removeChild(style.lastChild);
+  testing.expectEqual(true, target.checkVisibility());
+
+  // innerHTML
+  style.innerHTML = '.text-change { display: none; }';
+  testing.expectEqual(false, target.checkVisibility());
+
+  style.remove();
+  testing.expectEqual(true, target.checkVisibility());
+}
+</script>
