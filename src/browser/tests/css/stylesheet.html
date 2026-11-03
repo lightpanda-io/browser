@@ -82,7 +82,8 @@
     testing.expectEqual('red', style.getPropertyValue('color'));
     testing.expectEqual('blue', style.getPropertyValue('background'));
     testing.expectEqual('10px', style.getPropertyValue('margin'));
-    testing.expectEqual(3, style.length);
+    // margin counts as its four longhands (Chrome also expands background: 14)
+    testing.expectEqual(6, style.length);
 }
 </script>
 
@@ -174,7 +175,7 @@
     testing.expectEqual('', style.getPropertyValue('color'));
     testing.expectEqual('', style.getPropertyValue('background'));
     testing.expectEqual('10px', style.getPropertyValue('margin'));
-    testing.expectEqual(1, style.length);
+    testing.expectEqual(4, style.length);
 }
 </script>
 

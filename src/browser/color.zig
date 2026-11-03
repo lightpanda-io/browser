@@ -500,8 +500,8 @@ const Stream = struct {
 };
 
 // var() and friends substitute at computed-value time; the value can't be
-// checked before then.
-fn usesSubstitution(input: []const u8) bool {
+// checked or split before then.
+pub fn usesSubstitution(input: []const u8) bool {
     var tokenizer: Tokenizer = .{ .input = input };
     while (tokenizer.next()) |token| {
         const raw = switch (token) {
@@ -1108,6 +1108,14 @@ test "color: parse and serialize" {
     try expectSerialized("hwb(320deg 30% 40%)", null, "rgb(153, 77, 128)");
     try expectSerialized("hwb(0 70% 60%)", null, "rgb(137, 137, 137)");
     try expectSerialized("hwb(none none none / none)", null, "hwb(none none none / none)");
+}
+
+test "color: usesSubstitution" {
+    try std.testing.expect(usesSubstitution("var(--x)"));
+    try std.testing.expect(usesSubstitution("1px VAR(--x)"));
+    try std.testing.expect(usesSubstitution("calc(env(safe-area-inset-top) + 1px)"));
+    try std.testing.expect(!usesSubstitution("1px 2px"));
+    try std.testing.expect(!usesSubstitution("--var"));
 }
 
 test "color: invalid and unsupported" {
