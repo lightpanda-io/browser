@@ -217,6 +217,17 @@
 }
 </script>
 
+<script id=serializeEscapesNamespace>
+{
+  const serializer = new XMLSerializer();
+  const ns = '"><x y="';
+  const escaped = '&quot;&gt;&lt;x y=&quot;';
+
+  testing.expectEqual(`<div xmlns="${escaped}"/>`, serializer.serializeToString(document.createElementNS(ns, 'div')));
+  testing.expectEqual(`<p:div xmlns:p="${escaped}"/>`, serializer.serializeToString(document.createElementNS(ns, 'p:div')));
+}
+</script>
+
 <script id=serializeNotTrimmed>
 {
   const serializer = new XMLSerializer();

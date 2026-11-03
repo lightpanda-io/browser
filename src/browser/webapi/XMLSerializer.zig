@@ -121,11 +121,15 @@ const Walk = struct {
         var default_ns = inherited_ns;
         if (prefixOf(el)) |prefix| {
             if (ns != null and !self.prefixDeclared(prefix, ns) and !hasAttribute(el, "xmlns:", prefix)) {
-                try writer.print(" xmlns:{s}=\"{s}\"", .{ prefix, ns.? });
+                try writer.print(" xmlns:{s}=\"", .{prefix});
+                try writeEscaped(ns.?, true, writer);
+                try writer.writeByte('"');
             }
         } else {
             if (!eqlNamespace(ns, inherited_ns) and !hasAttribute(el, "xmlns", "")) {
-                try writer.print(" xmlns=\"{s}\"", .{ns orelse ""});
+                try writer.writeAll(" xmlns=\"");
+                try writeEscaped(ns orelse "", true, writer);
+                try writer.writeByte('"');
             }
             default_ns = ns;
         }
