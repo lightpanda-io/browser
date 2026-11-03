@@ -29,6 +29,13 @@
   .unset { content: UNSET; }
   .revert { content: revert; }
   .inherit { content: inherit; }
+
+  .adjacent { content: "a"counter(x); }
+  .none { content: none; }
+  .none-upper { content: NONE; }
+  .spaced-fn { content: COUNTER( item ); }
+  .commas { content: counters(a,"."); }
+  .quote { content: OPEN-QUOTE; }
 </style>
 
 <div id=plain></div>
@@ -52,6 +59,12 @@
   <span id=inherit-inline style="content: inherit"></span>
 </div>
 <div><span id=inherit-nothing class=inherit></span></div>
+<div id=adjacent class=adjacent></div>
+<div id=none class=none></div>
+<div id=none-upper class=none-upper></div>
+<div id=spaced-fn class=spaced-fn></div>
+<div id=commas class=commas></div>
+<div id=quote class=quote></div>
 
 <script id=cascade>
 {
@@ -76,6 +89,20 @@
   testing.expectEqual('normal', content('hover'));
 
   testing.expectEqual('normal', content('child'));
+}
+</script>
+
+<script id=serialization>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('"a" counter(x)', content('adjacent'));
+  // On an element, none computes to normal.
+  testing.expectEqual('normal', content('none'));
+  testing.expectEqual('normal', content('none-upper'));
+  testing.expectEqual('counter(item)', content('spaced-fn'));
+  testing.expectEqual('counters(a, ".")', content('commas'));
+  testing.expectEqual('open-quote', content('quote'));
 }
 </script>
 

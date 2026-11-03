@@ -101,8 +101,9 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     return value;
 }
 
-// Each string serialized in double quotes, as Chrome computes `content`, and
-// the rest as declared.
+/// `content` serialized as Chrome computes it: strings in double quotes, one
+/// space between components and none inside parentheses, keywords and
+/// function names in lowercase.
 fn computedContent(value: []const u8, frame: *Frame) []const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     writeComputedContent(&buf.writer, value) catch return value;
@@ -110,16 +111,54 @@ fn computedContent(value: []const u8, frame: *Frame) []const u8 {
 }
 
 fn writeComputedContent(writer: *std.Io.Writer, value: []const u8) !void {
-    var tokenizer: Tokenizer = .{ .input = std.mem.trim(u8, value, &std.ascii.whitespace) };
+    var tokenizer: Tokenizer = .{ .input = value };
     var start: usize = 0;
+    var depth: usize = 0;
+    var spaced = false;
     while (tokenizer.next()) |token| : (start = tokenizer.position) {
         switch (token) {
-            .string => |raw| try escape.writeString(writer, raw),
+            .white_space, .comment => continue,
             .bad_string, .bad_url => return error.Invalid,
-            .white_space => try writer.writeByte(' '),
-            .comment => {},
+            .close_parenthesis => {
+                depth -|= 1;
+                try writer.writeByte(')');
+                spaced = true;
+                continue;
+            },
+            .comma => {
+                try writer.writeByte(',');
+                spaced = true;
+                continue;
+            },
+            else => {},
+        }
+        if (spaced) {
+            try writer.writeByte(' ');
+        }
+        spaced = true;
+        switch (token) {
+            .string => |raw| try escape.writeString(writer, raw),
+            .function => |name| {
+                try writeLowercase(writer, name);
+                try writer.writeByte('(');
+                depth += 1;
+                spaced = false;
+            },
+            .parenthesis_block => {
+                try writer.writeByte('(');
+                depth += 1;
+                spaced = false;
+            },
+            // A counter's name keeps its case.
+            .ident => |name| if (depth == 0) try writeLowercase(writer, name) else try writer.writeAll(name),
             else => try writer.writeAll(tokenizer.input[start..tokenizer.position]),
         }
+    }
+}
+
+fn writeLowercase(writer: *std.Io.Writer, text: []const u8) !void {
+    for (text) |c| {
+        try writer.writeByte(std.ascii.toLower(c));
     }
 }
 
@@ -251,6 +290,10 @@ fn cascadedContent(style_manager: *StyleManager, element: *Element, owner: *Fram
     var current = element;
     while (true) {
         const value = style_manager.contentValue(current) orelse return "normal";
+        // On an element, `none` computes to `normal`.
+        if (std.ascii.eqlIgnoreCase(value, "none")) {
+            return "normal";
+        }
         const keyword = CssWideKeyword.parse(value) orelse return computedContent(value, frame);
         switch (keyword) {
             .initial, .unset, .revert => return "normal",
