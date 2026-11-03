@@ -566,7 +566,7 @@ fn evaluateSoon(self: *ScriptManager) void {
     if (self.evaluate_scheduled) {
         return;
     }
-    self.frame.js.scheduler.add(self, struct {
+    self.frame.main_js.scheduler.add(self, struct {
         fn run(ctx: *anyopaque) !?u32 {
             const sm: *ScriptManager = @ptrCast(@alignCast(ctx));
             sm.evaluate_scheduled = false;
