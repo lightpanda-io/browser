@@ -512,6 +512,7 @@ test "Runner: waitForSelector timeout" {
 
 test "Runner: waitForSelector" {
     const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
     var runner = page.session.runner(.{});
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
