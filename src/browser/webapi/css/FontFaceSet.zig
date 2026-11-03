@@ -22,7 +22,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
-const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 const FontFace = @import("FontFace.zig");
@@ -74,26 +73,14 @@ pub fn check(_: *const FontFaceSet, font: []const u8) bool {
     return true;
 }
 
-// load(font, text?) - resolves immediately with an empty array.
-pub fn load(self: *FontFaceSet, font: []const u8, frame: *Frame) !js.Promise {
-    // TODO parse font to check if the font has been added before dispatching
-    // events.
+// load(font, text?) - the set holds no font faces, so none match: resolves
+// with an empty array. Nothing starts loading, so no loading or loadingdone
+// event fires.
+// https://drafts.csswg.org/css-font-loading/#dom-fontfaceset-load
+pub fn load(_: *FontFaceSet, font: []const u8, frame: *Frame) !js.Promise {
     _ = font;
-
-    // Dispatch loading event
-    const target = self.asEventTarget();
-    if (frame._event_manager.hasDirectListeners(target, "loading")) {
-        const event = try Event.initTrusted(comptime .wrap("loading"), .{}, frame.page);
-        try frame._event_manager.dispatchDirect(target, event, .{ .context = "load font face set" });
-    }
-
-    // Dispatch loadingdone event
-    if (frame._event_manager.hasDirectListeners(target, "loadingdone")) {
-        const event = try Event.initTrusted(comptime .wrap("loadingdone"), .{}, frame.page);
-        try frame._event_manager.dispatchDirect(target, event, .{ .context = "load font face set" });
-    }
-
-    return frame.js.local.?.resolvePromise({});
+    const local = frame.js.local.?;
+    return local.resolvePromise(local.newArray(0));
 }
 
 // add(fontFace) - no-op; headless browser does not track loaded fonts.

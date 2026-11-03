@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id="document_fonts_exists">
@@ -57,24 +58,25 @@
 }
 </script>
 
-<script id="document_fonts_addEventListener">
+<script id="document_fonts_load">
 {
-    let loading = false;
-    document.fonts.addEventListener('loading', function() {
-        loading = true;
+    // No font face in the set matches, so nothing loads and neither event
+    // fires.
+    const events = [];
+    document.fonts.addEventListener('loading', () => events.push('loading'));
+    document.fonts.addEventListener('loadingdone', () => {
+        events.push('loadingdone');
+        document.fonts.load("16px Roboto");
     });
 
-    let loadingdone = false;
-    document.fonts.addEventListener('loadingdone', function() {
-        loadingdone = true;
-    });
-
-    document.fonts.load("italic bold 16px Roboto");
+    let loaded = null;
+    document.fonts.load("italic bold 16px Roboto").then((fonts) => loaded = fonts);
+    testing.expectEqual(0, events.length);
 
     testing.onload(() => {
-      testing.expectEqual(true, loading);
-      testing.expectEqual(true, loadingdone);
+      testing.expectEqual(0, events.length);
+      testing.expectEqual(true, Array.isArray(loaded));
+      testing.expectEqual(0, loaded.length);
     });
-    testing.expectEqual(true, true);
 }
 </script>
