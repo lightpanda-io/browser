@@ -71,9 +71,7 @@
           '';
 
           buildDeps =
-            pkgs:
-            with pkgs;
-            [
+            pkgs: with pkgs; [
               gcc
               gcc.cc.lib
               crtFiles
@@ -91,17 +89,17 @@
 
           # This build pipeline (V8 mainly) is very unhappy without an FHS-compliant env.
           fhs = pkgs.buildFHSEnv {
-            name = "fhs-shell";
+            name = "lightpanda-devShell";
             multiArch = true;
+            multiPkgs = pkgs: (v8BuildDeps pkgs);
             targetPkgs =
               pkgs:
               (buildDeps pkgs)
-              ++ (v8BuildDeps pkgs)
-              ++ (with pkgs; [
-                zig
-                zls
+              ++ [
+                pkgs.zig
+                pkgs.zls
                 rustToolchain
-              ]);
+              ];
           };
 
           lightpanda = pkgs.callPackage ./nix/package.nix {
