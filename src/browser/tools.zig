@@ -2247,6 +2247,25 @@ test "call: an argument diagnosis is in-band but counts as invalid_params" {
     try std.testing.expectEqual(.invalid_params, telemetryOutcome(bad_enum));
 }
 
+test "waitForState: a state the page never reaches times out" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    // A 5s timer keeps the page from reaching done, long after it reaches load.
+    var page = try testing.pageTest("runner/late_fetch.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const load = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"state\":\"load\",\"timeout\":2000}", .{});
+    const loaded = try call(aa, page.session, &registry, "waitForState", load, .{ .source = .user });
+    try std.testing.expectEqualStrings("Page reached load.", loaded.text);
+
+    const done = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"state\":\"done\",\"timeout\":200}", .{});
+    const timed_out = call(aa, page.session, &registry, "waitForState", done, .{ .source = .user });
+    try std.testing.expectError(error.Timeout, timed_out);
+    try std.testing.expectEqual(.timeout, telemetryOutcome(timed_out));
+}
+
 test "tree and nodeDetails read the node's own frame" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
