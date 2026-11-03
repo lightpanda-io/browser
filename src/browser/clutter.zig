@@ -984,7 +984,9 @@ test "clutter: the HTML dump leaves out what the markdown dump does" {
     // Inside the selection too: the walk records what it skips.
     try testing.expectEqual(null, std.mem.find(u8, out, "INNER_SCRIPT"));
     try testing.expectEqual(null, std.mem.find(u8, out, "INNER_HIDDEN"));
-    try testing.expectEqual(null, std.mem.find(u8, out, "INNER_ARIA"));
+    // aria-hidden is an accessibility hint, not a rendering property: the
+    // rendered dumps keep it, so the HTML dump doesn't drop it either.
+    try testing.expectEqual(true, std.mem.find(u8, out, "INNER_ARIA") != null);
     try testing.expectEqual(null, std.mem.find(u8, out, "INNER_TEMPLATE"));
 }
 

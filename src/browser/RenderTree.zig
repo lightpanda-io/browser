@@ -204,9 +204,10 @@ fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     if (d == .none) {
         return null;
     }
-    if (el.getAttributeInterned("aria-hidden")) |v| {
-        if (std.ascii.eqlIgnoreCase(v, "true")) return null;
-    }
+    // No `aria-hidden` cut: it's an accessibility-tree hint, orthogonal to
+    // rendering. The page still paints (and innerText still includes)
+    // aria-hidden content, so the rendered dumps keep it; the accessibility
+    // domain applies the attribute where it belongs, in AXNode.
     return d;
 }
 

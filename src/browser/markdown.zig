@@ -1021,7 +1021,7 @@ test "browser.markdown: anchor without href is plain text" {
     , "");
 }
 
-test "browser.markdown: hidden elements are skipped" {
+test "browser.markdown: hidden elements are skipped, aria-hidden content kept" {
     try testMarkdownHTML(
         \\<p>before</p>
         \\<p style="display:none">inline</p>
@@ -1033,6 +1033,9 @@ test "browser.markdown: hidden elements are skipped" {
     ,
         \\
         \\before
+        \\
+        \\aria
+        \\aria caps 
         \\
         \\aria false
         \\Summary
