@@ -201,31 +201,105 @@ pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bo
     }
 
     const len = class_name.len;
-    if (len == 0 or class_attr.len < len) {
+    const n = class_attr.len;
+    if (len == 0 or n < len) {
         return false;
     }
 
-    // Scan for the name's first byte and verify the token boundaries around it,
-    // rather than splitting class_attr into tokens: most bytes then cost a
-    // single compare, and a token whose first byte differs is rejected without
-    // any boundary or length work.
-    //
-    // Deliberately not std.mem.findScalarPos: its vector setup costs more
-    // than it saves at class-attribute lengths. Measured against it on both the
-    // benchmark shape (~12 bytes) and tailwind-style values (~105 bytes), this
-    // loop wins on every case but one.
-    const last = class_attr.len - len;
-    const first = class_name[0];
-    var at: usize = 0;
-    while (at <= last) : (at += 1) {
-        if (class_attr[at] != first) {
-            continue;
+    // 16 bytes at a time, a candidate is a position holding the name's first
+    // byte right after a separator (or at 0), with the name's last byte at
+    // +len-1. Only candidates get the full compare. The per-byte loop this
+    // replaced mispredicts on every first-byte hit; this has no per-byte
+    // branch. Measured on Zig 0.17, x86_64 baseline, against that loop,
+    // findScalarPos and findPos: faster on every shape, from 1.4x on one class
+    // to 3x on tailwind-length values. Wider vectors (AVX-512) were slower.
+    // Harness: demo/selector-bench.
+    const last = n - len;
+    const first: Block = @splat(class_name[0]);
+
+    if (n <= 16) {
+        const block = loadShort(class_attr);
+        const starts = (separatorMask(block) << 1) | 1;
+        const m = @as(u16, @bitCast(block == first)) & starts & maskUpTo(last);
+        return verifyCandidates(class_attr, class_name, 0, m);
+    }
+
+    const final: Block = @splat(class_name[len - 1]);
+    var carry: u16 = 1; // position 0 starts a token
+    var i: usize = 0;
+    while (i + 16 <= n and i <= last) : (i += 16) {
+        const block: Block = class_attr[i..][0..16].*;
+        const seps = separatorMask(block);
+        var m = @as(u16, @bitCast(block == first)) & ((seps << 1) | carry);
+        carry = seps >> 15;
+        if (i + len - 1 + 16 <= n) {
+            const tail: Block = class_attr[i + len - 1 ..][0..16].*;
+            m &= @bitCast(tail == final);
         }
-        const end = at + len;
-        if ((at == 0 or isClassSeparator(class_attr[at - 1])) and
-            (end == class_attr.len or isClassSeparator(class_attr[end])) and
-            std.mem.eql(u8, class_attr[at..end], class_name))
-        {
+        if (last - i < 15) {
+            m &= maskUpTo(last - i);
+        }
+        if (verifyCandidates(class_attr, class_name, i, m)) {
+            return true;
+        }
+    }
+    if (i > last) {
+        return false;
+    }
+
+    // One overlapping block ending at n instead of a per-byte tail, minus the
+    // positions the loop already covered (< i).
+    const base = n - 16;
+    const block: Block = class_attr[base..][0..16].*;
+    const starts = (separatorMask(block) << 1) | @intFromBool(isClassSeparator(class_attr[base - 1]));
+    var m = @as(u16, @bitCast(block == first)) & starts;
+    m &= ~maskUpTo(i - base - 1) & maskUpTo(last - base);
+    return verifyCandidates(class_attr, class_name, base, m);
+}
+
+const Block = @Vector(16, u8);
+
+// Bit i set when block[i] is a class separator.
+inline fn separatorMask(block: Block) u16 {
+    const space = block == @as(Block, @splat(' '));
+    // \t \n \f \r, i.e. 0x09..0x0D except 0x0B
+    const control = (block >= @as(Block, @splat('\t'))) & (block <= @as(Block, @splat('\r'))) & (block != @as(Block, @splat(0x0B)));
+    return @bitCast(space | control);
+}
+
+// Bits 0..k set, k <= 15.
+inline fn maskUpTo(k: usize) u16 {
+    return @truncate((@as(u32, 2) << @intCast(k)) -% 1);
+}
+
+// The 1..16 bytes of `bytes`, zero padded, built from overlapping in-bounds
+// loads so nothing reads past the slice.
+inline fn loadShort(bytes: []const u8) Block {
+    const n = bytes.len;
+    var lo: u64 = 0;
+    var hi: u64 = 0;
+    if (n >= 8) {
+        lo = std.mem.readInt(u64, bytes[0..8], .little);
+        if (n > 8) {
+            hi = std.mem.readInt(u64, bytes[n - 8 ..][0..8], .little) >> @intCast((16 - n) * 8);
+        }
+    } else if (n >= 4) {
+        const a: u64 = std.mem.readInt(u32, bytes[0..4], .little);
+        const b: u64 = std.mem.readInt(u32, bytes[n - 4 ..][0..4], .little);
+        lo = a | (b << @intCast((n - 4) * 8));
+    } else {
+        lo = @as(u64, bytes[0]) | (@as(u64, bytes[n / 2]) << @intCast((n / 2) * 8)) | (@as(u64, bytes[n - 1]) << @intCast((n - 1) * 8));
+    }
+    return @bitCast([2]u64{ lo, hi });
+}
+
+// Bit k of `mask` is a token start at base+k holding the name's first byte.
+inline fn verifyCandidates(class_attr: []const u8, class_name: []const u8, base: usize, mask: u16) bool {
+    var m = mask;
+    while (m != 0) : (m &= m - 1) {
+        const at = base + @ctz(m);
+        const end = at + class_name.len;
+        if ((end == class_attr.len or isClassSeparator(class_attr[end])) and std.mem.eql(u8, class_attr[at..end], class_name)) {
             return true;
         }
     }
@@ -535,4 +609,39 @@ test "Selector: classAttributeContains" {
     try testing.expectEqual(false, classAttributeContains("ROW", "row"));
     try testing.expectEqual(true, classAttributeContainsCase("ROW", "row", true));
     try testing.expectEqual(false, classAttributeContainsCase("ROWS", "row", true));
+
+    // around the 16-byte block edges, the name at the very start and end
+    try testing.expectEqual(true, classAttributeContains("aaaaaaaaaaaaaaa row", "row"));
+    try testing.expectEqual(true, classAttributeContains("aaaaaaaaaaaaaa row", "row"));
+    try testing.expectEqual(true, classAttributeContains("aaaaaaaaaaaaaaaaaaaaaaaaaaaa row", "row"));
+    try testing.expectEqual(true, classAttributeContains("row aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "row"));
+    try testing.expectEqual(false, classAttributeContains("aaaaaaaaaaaaaaaaaaaaaaaaaaaa arow", "row"));
+    try testing.expectEqual(false, classAttributeContains("aaaaaaaaaaaaaaaaaaaaaaaaaaaa rows", "row"));
+    try testing.expectEqual(false, classAttributeContains("aaaaaaaaaaaaaaa\x0brow", "row"));
+}
+
+test "Selector: classAttributeContains matches a token split" {
+    // Small alphabet so partial matches and separators are frequent.
+    const alphabet = [_]u8{ 'a', 'b', 'a', 'b', ' ', '\t', 0x0B, '\n', 'c' };
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const random = prng.random();
+
+    var attr_buf: [80]u8 = undefined;
+    var name_buf: [6]u8 = undefined;
+    for (0..10_000) |_| {
+        const attr = attr_buf[0..random.uintAtMost(usize, attr_buf.len)];
+        for (attr) |*c| c.* = alphabet[random.uintLessThan(usize, alphabet.len)];
+        const name = name_buf[0..random.intRangeAtMost(usize, 1, name_buf.len)];
+        for (name) |*c| c.* = "abc"[random.uintLessThan(usize, 3)];
+
+        var expected = false;
+        var it = std.mem.tokenizeAny(u8, attr, &.{ '\t', '\n', 0x0C, '\r', ' ' });
+        while (it.next()) |token| {
+            if (std.mem.eql(u8, token, name)) {
+                expected = true;
+                break;
+            }
+        }
+        try testing.expectEqual(expected, classAttributeContains(attr, name));
+    }
 }
