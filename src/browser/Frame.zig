@@ -235,6 +235,7 @@ _last_navigate_error: ?anyerror = null,
 
 _notified_network_idle: IdleNotification = .init,
 _notified_network_almost_idle: IdleNotification = .init,
+_notified_settled: bool = false,
 
 // A navigation event that happens from a script gets scheduled to run on the
 // next tick.
@@ -2910,12 +2911,34 @@ pub fn checkIdleNotifications(self: *Frame, total_http_activity: usize) void {
             if (self._notified_network_idle.check(total_http_activity == 0)) {
                 self.notifyNetworkIdle();
             }
+            if (self.checkSettled()) {
+                self.notifySettled();
+            }
         },
         else => {},
     }
     for (self.child_frames.items) |child| {
         child.checkIdleNotifications(total_http_activity);
     }
+}
+
+// True the first time it is loaded with none of the page's tracked work pending.
+// Doesn't fire again, whether someone was listening the first time or not.
+pub fn checkSettled(self: *Frame) bool {
+    if (self._notified_settled or self._load_state != .complete or self.page.settle.pending != 0) {
+        return false;
+    }
+    self._notified_settled = true;
+    return true;
+}
+
+pub fn notifySettled(self: *Frame) void {
+    self._session.notification.dispatch(.frame_settled, &.{
+        .req_id = self._req_id,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .timestamp = lp.datetime.timestamp(.boot),
+    });
 }
 
 pub fn notifyNetworkIdle(self: *Frame) void {
