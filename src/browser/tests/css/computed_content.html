@@ -12,6 +12,8 @@
 -->
 
 <style>
+  @layer base, top;
+
   .probe { content: "a|b:1;c|d:2"; }
   .single { content: 'it\'s "quoted"'; }
   .escaped { content: "\2014 x\"y\\z"; }
@@ -34,12 +36,26 @@
   .revert { content: revert; }
   .inherit { content: inherit; }
 
+  .imp-first { content: "first" !important; }
+  .imp-first { content: "later"; }
+  .imp-low.imp-low { content: "specific"; }
+  .imp-low { content: "important" !important; }
+  .imp-sheet { content: "sheet" !important; }
+
   .adjacent { content: "a"counter(x); }
   .none { content: none; }
   .none-upper { content: NONE; }
   .spaced-fn { content: COUNTER( item ); }
   .commas { content: counters(a,"."); }
   .quote { content: OPEN-QUOTE; }
+
+  @layer base { .rl-layer, .rl-unlayered, .rl-important { content: "base"; } }
+  @layer top { .rl-layer { content: revert-layer; } }
+  .rl-unlayered { content: revert-layer; }
+  .rl-inline { content: "unlayered"; }
+  @layer top { .rl-nothing { content: REVERT-LAYER; } }
+  @layer top { .rl-important { content: revert-layer !important; } }
+  .rl-important { content: "unlayered"; }
 </style>
 
 <div id=plain></div>
@@ -67,12 +83,21 @@
   <span id=inherit-inline style="content: inherit"></span>
 </div>
 <div><span id=inherit-nothing class=inherit></span></div>
+<div id=imp-first class=imp-first></div>
+<div id=imp-low class=imp-low></div>
+<div id=imp-sheet class=imp-sheet style="content: 'inline'"></div>
+<div id=imp-inline class=imp-sheet style="content: 'inline' !important"></div>
 <div id=adjacent class=adjacent></div>
 <div id=none class=none></div>
 <div id=none-upper class=none-upper></div>
 <div id=spaced-fn class=spaced-fn></div>
 <div id=commas class=commas></div>
 <div id=quote class=quote></div>
+<div id=rl-layer class=rl-layer></div>
+<div id=rl-unlayered class=rl-unlayered></div>
+<div id=rl-inline class=rl-inline style="content: revert-layer"></div>
+<div id=rl-nothing class=rl-nothing></div>
+<div id=rl-important class=rl-important></div>
 
 <script id=cascade>
 {
@@ -102,6 +127,18 @@
   testing.expectEqual('"escaped colon"', content('escaped-colon'));
 
   testing.expectEqual('normal', content('child'));
+}
+</script>
+
+<script id=importance>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('"first"', content('imp-first'));
+  testing.expectEqual('"important"', content('imp-low'));
+  // An important rule beats a normal inline declaration, not an important one.
+  testing.expectEqual('"sheet"', content('imp-sheet'));
+  testing.expectEqual('"inline"', content('imp-inline'));
 }
 </script>
 
@@ -135,6 +172,21 @@
     testing.expectEqual('"a|b:1;c|d:2"', content('inherit-inline'));
   });
   testing.expectEqual('normal', content('inherit-nothing'));
+}
+</script>
+
+<script id=revertLayer>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  // The cascade without the winner's layer, nor the ones after it.
+  testing.expectEqual('"base"', content('rl-layer'));
+  testing.expectEqual('"base"', content('rl-unlayered'));
+  // The style attribute comes after the unlayered rules.
+  testing.expectEqual('"unlayered"', content('rl-inline'));
+  testing.expectEqual('normal', content('rl-nothing'));
+  // An important one drops the later layers' normal declarations too.
+  testing.expectEqual('"base"', content('rl-important'));
 }
 </script>
 

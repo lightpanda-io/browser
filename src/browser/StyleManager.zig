@@ -550,15 +550,16 @@ fn addSelectorRules(
 
     if (lazy.isEmpty() == false) {
         const priority = try self.nextPriority(layer);
+        const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
         for (lazy.customs) |custom| {
             const gop = try self.custom_rules.getOrPut(arena, custom.name);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = .{};
             }
-            try gop.value_ptr.append(arena, selector_text, custom.value, priority);
+            try gop.value_ptr.append(arena, selector_text, custom.value, if (custom.important) important_priority else priority);
         }
         if (lazy.content) |content| {
-            try self.content_rules.append(arena, selector_text, content.value, priority);
+            try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
         }
     }
 
@@ -3209,8 +3210,8 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
 
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        if (self.lazyValue(elem, property_name, rules)) |value| {
-            return value;
+        if (self.lazyWinner(elem, property_name, rules, null)) |winner| {
+            return winner.value;
         }
     }
 
@@ -3227,27 +3228,69 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
         log.err(.browser, "StyleManager content", .{ .err = err });
         break :blk &.{};
     };
-    return self.lazyValue(el, comptime .wrap("content"), rules);
+    var before: ?u16 = null;
+    while (self.lazyWinner(el, comptime .wrap("content"), rules, before)) |winner| {
+        if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
+            return winner.value;
+        }
+        // Back to the layers before the winner's. Chrome and Firefox drop the
+        // later layers' declarations too, even under an important one.
+        before = winner.layer;
+    }
+    return null;
 }
 
-/// The inline declaration of a lazy property on `el`, or else the value of
-/// the highest priority rule matching it.
-fn lazyValue(self: *StyleManager, el: *Element, property_name: String, rules: []const ParsedRule) ?[]const u8 {
-    if (self.inlineStyleValue(el, property_name)) |value| {
-        return value;
-    }
+const LazyWinner = struct {
+    value: []const u8,
+    // Where it is in the layer order; see layerOrder.
+    layer: u16,
+};
 
-    var winner: ?[]const u8 = null;
+/// The style attribute cascades after every layer, unlayered rules included.
+const INLINE_LAYER: u16 = UNLAYERED_RANK + 1;
+
+/// The layer a packed priority's rule is in: its rank, which an important
+/// declaration packs reversed.
+fn layerOrder(priority: u64) u16 {
+    const rank: u16 = @intCast((priority & RANK_MASK) >> RANK_SHIFT);
+    if (priority & IMPORTANT_BIT != 0) {
+        return @intCast(UNLAYERED_RANK - rank);
+    }
+    return rank;
+}
+
+/// The declaration of a lazy property that wins on `el`, from the matching
+/// rules and its inline style. With `before`, only those from earlier layers.
+fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
+    const limit = before orelse std.math.maxInt(u16);
+
+    var winner: ?LazyWinner = null;
     var priority: u64 = 0;
     for (rules) |rule| {
         if (rule.priority <= priority) {
             continue;
         }
+        const layer = layerOrder(rule.priority);
+        if (layer >= limit) {
+            continue;
+        }
         if (matchesSelector(el, rule.selector, self.frame) == false) {
             continue;
         }
-        winner = rule.value;
+        winner = .{ .value = rule.value, .layer = layer };
         priority = rule.priority;
+    }
+
+    if (limit > INLINE_LAYER) {
+        if (el.inlineStyle(self.frame)) |style| {
+            const declaration = style.asCSSStyleDeclaration();
+            if (declaration.declaredValue(property_name, self.frame)) |value| {
+                const inline_priority = if (declaration.declaredImportant(property_name)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
+                if (inline_priority > priority) {
+                    winner = .{ .value = value, .layer = INLINE_LAYER };
+                }
+            }
+        }
     }
     return winner;
 }
