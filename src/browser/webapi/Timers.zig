@@ -38,8 +38,9 @@ const BLOCKING_NESTING = 10;
 
 // Every pending timeout, interval, animation frame and idle callback. Past
 // the cap setTimeout throws, which no browser does; keep it a backstop for
-// runaway pages, not a budget (a paginated storefront listing holds ~2.7k).
-const MAX_CALLBACKS = 8192;
+// runaway pages, not a budget (a paginated storefront listing holds ~2.7k, an
+// event bus that relays through setTimeout(fn, 0) ~8.4k from one task).
+const MAX_CALLBACKS = 65536;
 
 // lower limit for repeating timers since they never clean up
 // (unless clearInterval is called)
