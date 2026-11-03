@@ -6,6 +6,13 @@
   setTimeout(() => {}, 5000);
   setInterval(() => fetch('/xhr/slow'), 50);
 
+  // A polling loop: a short timeout that re-arms itself. Past the nesting
+  // limit it's no longer tracked, nor is the fetch it starts every few rounds.
+  (function poll(n) {
+    if (n % 20 === 19) fetch('/xhr/slow');
+    setTimeout(() => poll(n + 1), 10);
+  })(0);
+
   // Load work: fetch, yield, fetch again, then render.
   window.addEventListener('load', () => {
     fetch('/xhr/slow')

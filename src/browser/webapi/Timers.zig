@@ -34,6 +34,8 @@ const CLAMP_NESTING = 5;
 // Once we hit this depth, tasks are scheduled with blocks_done = false. This
 // prevents, for example, a setTimeout that sets itself, from blocking the Runner
 // from considering the page "done" forever (more commonly seen with requestAnimationFrame)
+// It's also where a timer chain stops being tracked for `settled`: polling loops
+// re-arm with short delays forever.
 const BLOCKING_NESTING = 10;
 
 // Every pending timeout, interval, animation frame and idle callback. Past
@@ -144,7 +146,7 @@ pub fn schedule(
         .repeat_ms = if (opts.repeat) if (delay == 0) 1 else delay else null,
         .delay_ms = delay,
         .parent_task = parent_task,
-        .hold = if (opts.repeat == false and opts.mode == .normal and delay < js.Attribution.short_timeout_ms)
+        .hold = if (opts.repeat == false and opts.mode == .normal and delay < js.Attribution.short_timeout_ms and nesting <= BLOCKING_NESTING)
             exec.page.settle.hold(parent_task)
         else
             .{},
@@ -292,7 +294,12 @@ const ScheduleCallback = struct {
             .animation_frame => .animation_frame,
             .normal => if (self.repeat_ms == null) .timeout else .interval,
         };
-        const task = attribution.begin(kind, .{ .label = self.name, .delay_ms = self.delay_ms, .parent = self.parent_task });
+        const task = attribution.begin(kind, .{
+            .label = self.name,
+            .delay_ms = self.delay_ms,
+            .parent = self.parent_task,
+            .cut = self.nesting > BLOCKING_NESTING,
+        });
         const task_scope = attribution.enter(task);
         defer task_scope.exit();
 

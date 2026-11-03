@@ -743,7 +743,7 @@ test "Runner: networkidle waits out activity after the frame latched idle" {
     try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - again_start < 250);
 }
 
-test "Runner: settled waits for load work, not for intervals or long timeouts" {
+test "Runner: settled waits for load work, not for intervals, long timeouts or polling loops" {
     const page = try testing.pageTest("runner/settled.html", .{ .wait_until_done = false });
     defer page.close();
 
