@@ -44,6 +44,8 @@ frame: *Frame,
 // "load" event).
 frame_notified_of_completion: bool,
 
+evaluate_scheduled: bool = false,
+
 // Scripts loaded based on a <link rel=preload as=script href=...> found during
 // parsing, keyed by resolved URL.
 preloaded_scripts: std.StringHashMapUnmanaged(PreloadedScript),
@@ -70,6 +72,7 @@ pub fn reset(self: *ScriptManager) void {
     self.preloaded_scripts.clearRetainingCapacity();
     self.base.reset();
     self.frame_notified_of_completion = false;
+    self.evaluate_scheduled = false;
 }
 
 // Frees every preloaded Script
@@ -343,7 +346,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             }
             if (pre.complete) {
                 // ...and no doneCallback will trigger evaluation.
-                self.base.evaluate();
+                if (mode == .@"defer") {
+                    self.base.evaluate();
+                } else {
+                    self.evaluateSoon();
+                }
             }
             return;
         }
@@ -533,11 +540,11 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
         .async => {
             // Already complete, so no doneCallback will move it there.
             self.base.ready_scripts.append(&script.node);
-            self.base.evaluate();
+            self.evaluateSoon();
         },
         .ordered => {
             self.base.ordered_scripts.append(&script.node);
-            self.base.evaluate();
+            self.evaluateSoon();
         },
         .@"defer" => {
             if (self.base.static_scripts_done) {
@@ -549,6 +556,27 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
             }
         },
     }
+}
+
+// An async or in-order script that is already fetched when its element is
+// prepared still runs from a task, like one fetched later, so the markup and
+// script after its element go first.
+// https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
+fn evaluateSoon(self: *ScriptManager) void {
+    if (self.evaluate_scheduled) {
+        return;
+    }
+    self.frame.main_js.scheduler.add(self, struct {
+        fn run(ctx: *anyopaque) !?u32 {
+            const sm: *ScriptManager = @ptrCast(@alignCast(ctx));
+            sm.evaluate_scheduled = false;
+            sm.base.evaluate();
+            return null;
+        }
+    }.run, 0, .{ .name = "ScriptManager.evaluate" }) catch {
+        return self.base.evaluate();
+    };
+    self.evaluate_scheduled = true;
 }
 
 fn evalNow(self: *ScriptManager, script: *Script) void {
