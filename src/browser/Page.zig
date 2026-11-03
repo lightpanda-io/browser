@@ -455,7 +455,7 @@ pub fn createBlobUrl(self: *Page, blob: *Blob, origin: ?[]const u8, creator_fram
     return url;
 }
 
-pub inline fn trackFileList(self: *Page, file_list: *FileList) !void {
+pub fn trackFileList(self: *Page, file_list: *FileList) !void {
     try self._file_lists.append(self.arena, file_list);
 }
 
