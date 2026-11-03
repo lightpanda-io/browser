@@ -349,3 +349,21 @@ pub fn waitForPage(bc: *CDP.BrowserContext) !void {
     var runner = bc.session.runner(.{});
     try runner.waitForFrame(bc.page_handle.?.frame_id, 2000, .{ .until = .done });
 }
+
+// The result of the response to `msg_id`.
+pub fn sentResult(ctx: *TestContext, msg_id: i64) !std.json.ObjectMap {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = switch (msg) {
+            .object => |o| o,
+            else => continue,
+        };
+        const id_value = obj.get("id") orelse continue;
+        if (id_value != .integer or id_value.integer != msg_id) {
+            continue;
+        }
+        const result = obj.get("result") orelse return error.NoResult;
+        return result.object;
+    }
+    return error.MessageNotFound;
+}

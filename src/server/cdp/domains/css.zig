@@ -90,11 +90,11 @@ test "cdp.css: getComputedStyleForNode" {
     try ctx.processMessage(.{ .id = 2, .method = "DOM.querySelector", .params = .{ .nodeId = 1, .selector = "#styled" } });
     try ctx.processMessage(.{ .id = 3, .method = "DOM.querySelector", .params = .{ .nodeId = 1, .selector = "#hidden" } });
 
-    const styled = try sentResult(&ctx, 2);
-    const hidden = try sentResult(&ctx, 3);
+    const styled = try testing.sentResult(&ctx, 2);
+    const hidden = try testing.sentResult(&ctx, 3);
 
-    try ctx.processMessage(.{ .id = 4, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = styled.object.get("nodeId").?.integer } });
-    const styled_style = (try sentResult(&ctx, 4)).object.get("computedStyle").?.array.items;
+    try ctx.processMessage(.{ .id = 4, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = styled.get("nodeId").?.integer } });
+    const styled_style = (try testing.sentResult(&ctx, 4)).get("computedStyle").?.array.items;
 
     try std.testing.expectEqual(properties.computed_names.len, styled_style.len);
 
@@ -106,37 +106,21 @@ test "cdp.css: getComputedStyleForNode" {
     try std.testing.expectEqual(null, findValue(styled_style, "margin"));
     try std.testing.expectEqual(null, findValue(styled_style, "word-wrap"));
 
-    try ctx.processMessage(.{ .id = 5, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = hidden.object.get("nodeId").?.integer } });
-    const hidden_style = (try sentResult(&ctx, 5)).object.get("computedStyle").?.array.items;
+    try ctx.processMessage(.{ .id = 5, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = hidden.get("nodeId").?.integer } });
+    const hidden_style = (try testing.sentResult(&ctx, 5)).get("computedStyle").?.array.items;
     try expectValue(hidden_style, "display", "none");
 
     // A text node gets its parent's style.
-    try ctx.processMessage(.{ .id = 6, .method = "DOM.requestChildNodes", .params = .{ .nodeId = styled.object.get("nodeId").?.integer } });
-    try ctx.processMessage(.{ .id = 7, .method = "DOM.describeNode", .params = .{ .nodeId = styled.object.get("nodeId").?.integer, .depth = 1 } });
-    const described = try sentResult(&ctx, 7);
-    const text_id = described.object.get("node").?.object.get("children").?.array.items[0].object.get("nodeId").?.integer;
+    try ctx.processMessage(.{ .id = 6, .method = "DOM.requestChildNodes", .params = .{ .nodeId = styled.get("nodeId").?.integer } });
+    try ctx.processMessage(.{ .id = 7, .method = "DOM.describeNode", .params = .{ .nodeId = styled.get("nodeId").?.integer, .depth = 1 } });
+    const described = try testing.sentResult(&ctx, 7);
+    const text_id = described.get("node").?.object.get("children").?.array.items[0].object.get("nodeId").?.integer;
     try ctx.processMessage(.{ .id = 8, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = text_id } });
-    const text_style = (try sentResult(&ctx, 8)).object.get("computedStyle").?.array.items;
+    const text_style = (try testing.sentResult(&ctx, 8)).get("computedStyle").?.array.items;
     try expectValue(text_style, "color", "rgb(255, 0, 0)");
 
     try ctx.processMessage(.{ .id = 9, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = 99999 } });
     try ctx.expectSentError(-31998, "NodeNotFound", .{ .id = 9 });
-}
-
-fn sentResult(ctx: *testing.TestContext, msg_id: i64) !std.json.Value {
-    var i: usize = 0;
-    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
-        const obj = switch (msg) {
-            .object => |o| o,
-            else => continue,
-        };
-        const id_value = obj.get("id") orelse continue;
-        if (id_value != .integer or id_value.integer != msg_id) {
-            continue;
-        }
-        return obj.get("result") orelse error.NoResult;
-    }
-    return error.NoMessage;
 }
 
 fn findValue(style: []const std.json.Value, name: []const u8) ?[]const u8 {
