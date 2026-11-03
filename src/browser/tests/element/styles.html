@@ -444,9 +444,10 @@
   testing.expectEqual('red', d.style.borderRightColor);
   testing.expectEqual('rgb(1, 2, 3) red', d.style.borderColor);
 
-  d.style.margin = 'calc(1px + 1em) 3px';
+  // calc() terms in Chrome's order (em before px), so it serializes as written
+  d.style.margin = 'calc(1em + 1px) 3px';
   testing.expectEqual('3px', d.style.marginLeft);
-  testing.expectEqual(true, d.style.marginBottom.startsWith('calc('));
+  testing.expectEqual('calc(1em + 1px)', d.style.marginBottom);
 }
 </script>
 
@@ -489,5 +490,47 @@
 
   d.style.cssText = 'padding: var(--y)';
   testing.expectEqual('var(--y)', d.style.padding);
+}
+</script>
+
+<script id=boxShorthandSubstitutionThenSide>
+{
+  // A side set after a var() shorthand: the shorthand no longer reads back.
+  const d = document.createElement('div');
+  d.style.margin = 'var(--x)';
+  d.style.marginTop = '1px';
+  testing.expectEqual('', d.style.margin);
+  testing.expectEqual('', d.style.getPropertyPriority('margin'));
+
+  // All four sides override it.
+  d.style.marginRight = '1px';
+  d.style.marginBottom = '1px';
+  d.style.marginLeft = '1px';
+  testing.expectEqual('1px', d.style.margin);
+  testing.expectEqual('margin: 1px;', d.style.cssText);
+
+  // env() isn't split either.
+  d.style.padding = 'env(safe-area-inset-top) 2px';
+  testing.expectEqual('env(safe-area-inset-top) 2px', d.style.padding);
+  testing.expectEqual('', d.style.paddingTop);
+}
+</script>
+
+<script id=boxShorthandImportantPrecedence>
+{
+  // In a declaration block, a later normal declaration doesn't override an
+  // earlier !important one.
+  const d = document.createElement('div');
+  d.style.cssText = 'margin: 1px !important; margin: var(--x)';
+  testing.expectEqual('1px', d.style.margin);
+  testing.expectEqual('important', d.style.getPropertyPriority('margin'));
+
+  d.style.cssText = 'margin: var(--x) !important; margin: 1px';
+  testing.expectEqual('var(--x)', d.style.margin);
+  testing.expectEqual('important', d.style.getPropertyPriority('margin'));
+
+  d.style.cssText = 'margin-top: 5px !important; margin: 1px 2px';
+  testing.expectEqual('5px', d.style.marginTop);
+  testing.expectEqual('2px', d.style.marginLeft);
 }
 </script>

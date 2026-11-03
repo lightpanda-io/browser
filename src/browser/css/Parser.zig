@@ -161,18 +161,6 @@ pub fn splitBoxSides(value: []const u8) ?[4][]const u8 {
     };
 }
 
-/// Whether a value uses var(): its parts aren't known until it is substituted.
-pub fn containsVar(value: []const u8) bool {
-    var tokenizer: Tokenizer = .{ .input = value };
-    while (tokenizer.next()) |token| {
-        switch (token) {
-            .function => |name| if (std.ascii.eqlIgnoreCase(name, "var")) return true,
-            else => {},
-        }
-    }
-    return false;
-}
-
 const TokenSpan = struct {
     token: Tokenizer.Token,
     start: usize,
@@ -780,14 +768,6 @@ test "splitBoxSides" {
     try expectSides(.{ "calc(1px + (2px * 3))", "0", "calc(1px + (2px * 3))", "0" }, "calc(1px + (2px * 3)) 0");
     try std.testing.expect(splitBoxSides("1px 2px 3px 4px 5px") == null);
     try std.testing.expect(splitBoxSides("  ") == null);
-}
-
-test "containsVar" {
-    try std.testing.expect(containsVar("var(--x)"));
-    try std.testing.expect(containsVar("1px VAR(--x)"));
-    try std.testing.expect(containsVar("calc(var(--x) + 1px)"));
-    try std.testing.expect(!containsVar("1px 2px"));
-    try std.testing.expect(!containsVar("--var"));
 }
 
 test "RulesIterator: single rule" {
