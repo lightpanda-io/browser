@@ -24,6 +24,10 @@
   @media (min-width: 1px) { .media { content: "media"; } }
   .upper { CONTENT: "upper"; }
   .pseudo::before, .pseudo::after { content: "pseudo"; }
+  .legacy:before { content: "legacy"; }
+  .mixed::before, .mixed { content: "mixed"; }
+  [data-x="::before"] { content: "attribute"; }
+  .a\:before { content: "escaped colon"; }
   .hover:hover { content: "hover"; }
   .initial { content: initial; }
   .unset { content: UNSET; }
@@ -49,6 +53,10 @@
 <div id=media class=media></div>
 <div id=upper class=upper></div>
 <div id=pseudo class=pseudo></div>
+<div id=legacy class=legacy></div>
+<div id=mixed class=mixed></div>
+<div id=attribute data-x="::before"></div>
+<div id=escaped-colon class="a:before"></div>
 <div id=hover class=hover></div>
 <div id=inline class=probe style="content: 'inline'"></div>
 <div id=initial class="probe initial"></div>
@@ -86,7 +94,12 @@
 
   // Rules for a pseudo-element or an interaction state don't reach the element.
   testing.expectEqual('normal', content('pseudo'));
+  testing.expectEqual('normal', content('legacy'));
   testing.expectEqual('normal', content('hover'));
+  // A selector list's other selectors still do.
+  testing.expectEqual('"mixed"', content('mixed'));
+  testing.expectEqual('"attribute"', content('attribute'));
+  testing.expectEqual('"escaped colon"', content('escaped-colon'));
 
   testing.expectEqual('normal', content('child'));
 }

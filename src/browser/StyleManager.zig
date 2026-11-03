@@ -523,16 +523,23 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
 // Custom properties (keyed by name) and `content` are lazy rules instead: they
-// parse the selector on first lookup. Returns whether the rule set a tracked or a custom property:
-// nothing memoizes `content`.
+// parse the selector on first lookup. Returns whether the rule set a tracked or
+// a custom property: nothing memoizes `content`.
 fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
     props: Declarations,
     important: Declarations,
-    lazy: LazyDeclarations,
+    declared: LazyDeclarations,
     layer: u16,
 ) !bool {
+    var lazy = declared;
+    if (lazy.content != null and selectsOnlyPseudoElements(selector_text)) {
+        // Icon fonts declare it on hundreds of `::before` rules, and no element
+        // matches one.
+        lazy.content = null;
+    }
+
     const relevant = props.isRelevant() or important.isRelevant();
     if (relevant == false and lazy.isEmpty()) {
         return false;
@@ -678,6 +685,62 @@ fn nextPriority(self: *StyleManager, layer: u16) !u64 {
 
 fn isCustomProperty(name: []const u8) bool {
     return std.mem.startsWith(u8, name, "--");
+}
+
+/// Whether every selector of a list ends in a pseudo-element. A scan rather
+/// than a parse: anything it can't tell reads as false, and parsedRules skips
+/// those selectors anyway.
+fn selectsOnlyPseudoElements(text: []const u8) bool {
+    var depth: usize = 0;
+    var pseudo = false;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            '\\' => i += 1,
+            '"', '\'' => |quote| {
+                i += 1;
+                while (i < text.len and text[i] != quote) : (i += 1) {
+                    if (text[i] == '\\') {
+                        i += 1;
+                    }
+                }
+            },
+            '(', '[' => depth += 1,
+            ')', ']' => depth -|= 1,
+            ',' => if (depth == 0) {
+                if (pseudo == false) {
+                    return false;
+                }
+                pseudo = false;
+            },
+            ':' => if (depth == 0 and startsPseudoElement(text[i + 1 ..])) {
+                pseudo = true;
+            },
+            else => {},
+        }
+    }
+    return pseudo;
+}
+
+// `::name`, or one of the pseudo-elements CSS2 wrote with a single colon.
+fn startsPseudoElement(after_colon: []const u8) bool {
+    if (after_colon.len > 0 and after_colon[0] == ':') {
+        return true;
+    }
+    for ([_][]const u8{ "before", "after", "first-line", "first-letter" }) |name| {
+        if (std.ascii.startsWithIgnoreCase(after_colon, name) == false) {
+            continue;
+        }
+        const rest = after_colon[name.len..];
+        if (rest.len == 0) {
+            return true;
+        }
+        switch (rest[0]) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '\\', 0x80...0xFF => {},
+            else => return true,
+        }
+    }
+    return false;
 }
 
 pub fn sheetModified(self: *StyleManager) void {
@@ -3957,6 +4020,40 @@ test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
     _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
     try testing.expectEqual(true, sm.dirty);
     try testing.expectEqual(false, sm.isHidden(c, .{}));
+}
+
+test "StyleManager: selectsOnlyPseudoElements" {
+    for ([_][]const u8{ ".a::before", ".a:before", ".a:AFTER", ".a::before, .b:first-line", "a > b::marker", ".a:hover::after" }) |text| {
+        try testing.expectEqual(true, selectsOnlyPseudoElements(text));
+    }
+    for ([_][]const u8{ ".a", ".a::before, .b", ".a, .b::before", ".a\\:before", "[data-x=\"::before\"]", ":is(.a, .b)::before, .c", ".a:beforeish", ".a:not(.b)" }) |text| {
+        try testing.expectEqual(false, selectsOnlyPseudoElements(text));
+    }
+}
+
+test "StyleManager: content rules no element matches aren't kept" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.icon-a:before { content: "\f000" }
+        \\.icon-b::before, .icon-c::after { content: "\f001" }
+        \\.probe { content: "probe" }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    try testing.expectString("\"probe\"", sm.contentValue(probe).?);
+    try testing.expectEqual(1, sm.content_rules.rules.items.len);
 }
 
 test "StyleManager: ruleInserted: a content rule keeps the memos" {
