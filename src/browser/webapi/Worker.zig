@@ -353,7 +353,9 @@ pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessageP
         .worker = self,
         .message = message,
         .arena = message_arena,
+        .hold = frame.page.settle.hold(message.task),
     };
+    errdefer callback.hold.release();
 
     try frame.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "Worker.receiveMessage",
@@ -365,9 +367,11 @@ const ReceiveMessageCallback = struct {
     message: MessagePort.Message,
     arena: *lp.Arena,
     worker: *Worker,
+    hold: js.Attribution.Hold,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
+        self.hold.release();
         self.message.release();
         self.deinit();
     }
@@ -381,9 +385,14 @@ const ReceiveMessageCallback = struct {
         defer self.deinit();
         defer self.message.releasePorts();
 
+        self.hold.release();
+
         const worker = self.worker;
         const frame = worker._frame;
         const target = worker.asEventTarget();
+
+        const task_scope = frame.js.attribution.enterNew(.message, .{ .parent = self.message.task, .label = "Worker" });
+        defer task_scope.exit();
 
         // If data is null, deserialization failed - fire messageerror
         const data = self.message.data orelse {

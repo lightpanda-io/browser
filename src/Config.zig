@@ -1051,6 +1051,7 @@ pub const WaitUntil = enum {
     domcontentloaded,
     networkalmostidle,
     networkidle,
+    settled,
     done,
 };
 

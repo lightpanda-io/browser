@@ -143,6 +143,9 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
+// Held while a dispatch of queued events is pending.
+_queued_events_hold: JS.Attribution.Hold = .{},
+
 _image_decodes: Element.Html.Image.Decodes = .{},
 
 _focus_fixup_pending: bool = false,
@@ -2561,6 +2564,7 @@ pub const QueuedEvent = struct {
     kind: Kind,
     element: *Element.Html,
     generation: u32 = 0, // Image/Link request generation
+    task: ?JS.Attribution.Tag = null,
 
     pub const Kind = enum { load, @"error", select, selectionchange, close };
 };
@@ -2585,7 +2589,9 @@ fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
-    try self._queued_events.append(self.page_arena, event);
+    var queued = event;
+    queued.task = self.js.attribution.current();
+    try self._queued_events.append(self.page_arena, queued);
     if (self._queued_events.items.len == 1) {
         try self.js.scheduler.add(self, struct {
             fn cleanup(ctx: *anyopaque) !?u32 {
@@ -2593,7 +2599,15 @@ fn queueEvent(self: *Frame, event: QueuedEvent) !void {
                 try f.dispatchQueuedEvents();
                 return null;
             }
-        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
+        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents", .finalizer = struct {
+            fn dropped(ctx: *anyopaque) void {
+                const f: *Frame = @ptrCast(@alignCast(ctx));
+                f._queued_events_hold.release();
+            }
+        }.dropped });
+    }
+    if (self._queued_events_hold.settle == null) {
+        self._queued_events_hold = self.page.settle.hold(queued.task);
     }
 }
 
@@ -2818,6 +2832,9 @@ fn fireElementEvent(self: *Frame, el: *Element, name: String, opts: Event.Option
 fn dispatchQueuedEvents(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
+    // Events queued during this dispatch take a new hold for the next one.
+    self._queued_events_hold.release();
+
     // Swap buffers - new additions during dispatch go to the other buffer
     const to_process = self._queued_events;
     self._queued_events = if (self._queued_events == &self._queued_events_1)
@@ -2840,6 +2857,9 @@ fn dispatchQueuedEvents(self: *Frame) !void {
                 continue;
             }
         }
+
+        const task_scope = self.js.attribution.enterNew(.event, .{ .parent = queued.task, .label = @tagName(queued.kind) });
+        defer task_scope.exit();
 
         const element = html_element.asElement();
         switch (queued.kind) {

@@ -355,6 +355,9 @@ pub fn dispatchDirect(
     event.acquireRef();
     defer _ = event.releaseRef(page);
 
+    const task_scope = ctx.attribution.enterIfUntagged(.event, event._type_string.str());
+    defer if (task_scope) |ts| ts.exit();
+
     if (comptime opts.inject_target) {
         event._target = target;
         event._dispatch_target = target;

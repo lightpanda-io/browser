@@ -4,11 +4,11 @@
     .fingerprint = 0xda130f3af836cea0, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
-        .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/ad0afb5728ce8f507c77ab27701dcb056e12c48a.tar.gz",
-            .hash = "v8-0.0.0-xddH6_VbAwAOGdY39xG3r74B0kL5bLZo9FC-jRgz_D3z",
-        },
-        // .v8 = .{ .path = "../zig-v8-fork" },
+        // .v8 = .{
+        //     .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/ad0afb5728ce8f507c77ab27701dcb056e12c48a.tar.gz",
+        //     .hash = "v8-0.0.0-xddH6_VbAwAOGdY39xG3r74B0kL5bLZo9FC-jRgz_D3z",
+        // },
+        .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
             // v1.2.1
             .url = "https://github.com/google/brotli/archive/db24a98aed38a16de78cc05ca15cdd8dc2a0d92d.tar.gz",

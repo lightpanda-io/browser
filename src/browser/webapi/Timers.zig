@@ -129,6 +129,7 @@ pub fn schedule(
     }
     errdefer _ = self._callbacks.remove(timer_id);
 
+    const parent_task = exec.js.attribution.current();
     const callback = try arena.create(ScheduleCallback);
     callback.* = .{
         .cb = cb,
@@ -141,7 +142,14 @@ pub fn schedule(
         .timer_id = timer_id,
         .params = persisted_params,
         .repeat_ms = if (opts.repeat) if (delay == 0) 1 else delay else null,
+        .delay_ms = delay,
+        .parent_task = parent_task,
+        .hold = if (opts.repeat == false and opts.mode == .normal and delay < js.Attribution.short_timeout_ms)
+            exec.page.settle.hold(parent_task)
+        else
+            .{},
     };
+    errdefer callback.hold.release();
     gop.value_ptr.* = callback;
 
     try exec.js.scheduler.add(callback, ScheduleCallback.run, delay, .{
@@ -205,6 +213,14 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, removed after first invocation.
     repeat_ms: ?u32,
 
+    delay_ms: u32,
+
+    // The task that scheduled this one.
+    parent_task: ?js.Attribution.Tag,
+
+    // Noop for timers that don't hold the settle
+    hold: js.Attribution.Hold,
+
     // The nesting of this task. When it executes, this nesting will become
     // the Timer's _nesting_level so that any new timers will become nesting + 1
     nesting: u8,
@@ -220,6 +236,7 @@ const ScheduleCallback = struct {
 
     fn cancelled(ptr: *anyopaque) void {
         var self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
+        self.hold.release();
         self.deinit();
     }
 
@@ -257,6 +274,9 @@ const ScheduleCallback = struct {
 
     fn run(ptr: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
+        // Settled is only checked between tasks, and work this run starts
+        // takes its own holds.
+        self.hold.release();
         if (self.removed) {
             self.deinit();
             return null;
@@ -265,6 +285,16 @@ const ScheduleCallback = struct {
         var ls: js.Local.Scope = undefined;
         self.exec.js.localScope(&ls);
         defer ls.deinit();
+
+        const attribution = self.exec.js.attribution;
+        const kind: js.Attribution.Kind = switch (self.mode) {
+            .idle => .idle,
+            .animation_frame => .animation_frame,
+            .normal => if (self.repeat_ms == null) .timeout else .interval,
+        };
+        const task = attribution.begin(kind, .{ .label = self.name, .delay_ms = self.delay_ms, .parent = self.parent_task });
+        const task_scope = attribution.enter(task);
+        defer task_scope.exit();
 
         const timers = self.timers;
         const prev_nesting = timers._nesting_level;

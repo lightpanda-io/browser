@@ -31,6 +31,7 @@ const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const Cookie = @import("../browser/webapi/storage/Cookie.zig");
 const Performance = @import("../browser/webapi/Performance.zig");
 const GlobalScope = @import("../browser/global_scope.zig").GlobalScope;
+const Attribution = @import("../browser/js/Attribution.zig");
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
@@ -773,6 +774,13 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
     if (owner) |o| {
         o.addTransfer(transfer);
         transfer.owner = o;
+        const task = o.scope.beginRequestTask(transfer.req.url, transfer.req.resource_type);
+        transfer._task = task;
+
+        switch (transfer.req.resource_type) {
+            .eventsource, .download => {}, // Open-ended: they'd hold settled forever.
+            else => transfer._settle_hold = o.scope.settle().hold(task),
+        }
     }
 
     return transfer;
@@ -2602,6 +2610,7 @@ pub const Owner = struct {
     }
 
     fn removeTransfer(self: *Owner, t: *Transfer) void {
+        t._settle_hold.release();
         self.transfers.remove(&t.owner_node);
     }
 
@@ -2700,6 +2709,12 @@ pub const Transfer = struct {
     // Response came from the http cache; drives the served-from-cache
     // notification at delivery.
     _from_cache: bool = false,
+
+    // Work started by the callback of this request are attributed to it
+    _task: ?Attribution.Tag = null,
+
+    // The hold to release for settling the load
+    _settle_hold: Attribution.Hold = .{},
 
     // What the cache wants from this transfer's response.
     _cache_intent: CacheIntent = .none,
@@ -3017,6 +3032,11 @@ pub const Transfer = struct {
     }
 
     pub fn deinit(self: *Transfer) void {
+        if (comptime lp.IS_DEBUG) {
+            if (self._task) |task| {
+                log.debug(.attribution, "request done", .{ .id = task });
+            }
+        }
         if (self._retired) {
             // transfer.deinit should be called once. But _retired and the graveyard
             // are a safety net born out of UAFs.
@@ -3111,6 +3131,13 @@ pub const Transfer = struct {
     fn logScope(self: *const Transfer) log.PageScope {
         const owner = self.owner orelse return log.enterPage(null);
         return owner.logScope();
+    }
+
+    fn taskScope(self: *const Transfer) ?GlobalScope.TaskScope {
+        // Only set when newRequest had an owner (unit tests fake owner.scope).
+        const task = self._task orelse return null;
+        const owner = self.owner orelse return null;
+        return owner.scope.enterTask(task);
     }
 
     // Fail this transfer with `err`. Fires error_callback once (latched
@@ -3349,6 +3376,9 @@ pub const Transfer = struct {
         }
 
         self._outcome_delivered = true;
+
+        const task_scope = self.taskScope();
+        defer if (task_scope) |ts| ts.exit();
         self.req.error_callback(self.req.ctx, err);
     }
 
@@ -4595,6 +4625,9 @@ pub const Transfer = struct {
     fn deliver(transfer: *Transfer) void {
         const page_scope = transfer.logScope();
         defer page_scope.exit();
+
+        const task_scope = transfer.taskScope();
+        defer if (task_scope) |ts| ts.exit();
 
         // A streaming batch is delivered while the conn is still inflight;
         // that state is restored after the batch unless it turned terminal.

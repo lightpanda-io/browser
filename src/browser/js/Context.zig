@@ -29,6 +29,7 @@ const js = @import("js.zig");
 const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
+const Attribution = @import("Attribution.zig");
 const Execution = @import("Execution.zig");
 const WasmStreaming = @import("WasmStreaming.zig");
 
@@ -137,6 +138,9 @@ rejected_promises: std.ArrayList(js.Promise.Global) = .empty,
 // Execution context for worker-compatible APIs. This provides a common
 // interface that works in both Page and Worker contexts.
 execution: Execution,
+
+// borrowed from Env
+attribution: *Attribution,
 
 unknown_properties: (if (lp.IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (lp.IS_DEBUG) .{} else {},
 

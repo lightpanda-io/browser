@@ -197,6 +197,10 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
     ctx.call_depth = call_depth + 1;
     defer ctx.call_depth = call_depth;
 
+    // Event dispatch and timers enter their own task; this catches the rest.
+    const task_scope = if (call_depth == 0) ctx.attribution.enterIfUntagged(.callback, "") else null;
+    defer if (task_scope) |ts| ts.exit();
+
     const js_this = blk: {
         if (@TypeOf(this) == js.Object) {
             break :blk this;

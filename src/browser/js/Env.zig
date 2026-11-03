@@ -26,6 +26,7 @@ const WasmStreaming = @import("WasmStreaming.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
+const Attribution = @import("Attribution.zig");
 
 const App = @import("../../App.zig");
 const string = @import("../../string.zig");
@@ -101,6 +102,9 @@ private_symbols: PrivateSymbols,
 disabled_api_names: DisabledApiNames,
 
 microtask_queues_are_running: bool,
+
+// Task ids and the running task's tag (see Attribution.zig).
+attribution: Attribution,
 
 // Set from network thread, saying termination should happen. Read from worker
 // thread making sure terminate hasn't been canceled.
@@ -228,6 +232,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .allocator = allocator,
         .contexts = .empty,
         .isolate = isolate,
+        .attribution = .{ .isolate = isolate },
         .platform = &app.platform,
         .templates = templates,
         .isolate_params = params,
@@ -374,6 +379,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .identity = params.identity,
         .identity_arena = params.identity_arena,
         .execution = undefined,
+        .attribution = &self.attribution,
     };
 
     context.execution = .{
@@ -504,6 +510,10 @@ pub fn runMicrotasks(self: *Env) void {
 
         self.microtask_queues_are_running = true;
         defer self.microtask_queues_are_running = false;
+
+        // V8 clears the task tag after each microtask rather than restoring it.
+        const task_scope = self.attribution.enter(self.attribution.current());
+        defer task_scope.exit();
 
         // Re-read len/items each iteration: a checkpoint can run JS that creates
         // a new context (e.g. an iframe), appending to (and reallocating) the list.
