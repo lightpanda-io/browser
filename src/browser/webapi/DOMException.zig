@@ -172,7 +172,8 @@ pub fn structuredSerialize(self: *const DOMException, writer: *js.StructuredWrit
 }
 
 pub fn structuredDeserialize(reader: *js.StructuredReader, _: *Page) !DOMException {
-    const arena = reader.local.ctx.arena.allocator();
+    // Owned by a by-value instance, see Context.identity_arena.
+    const arena = reader.local.ctx.identity_arena;
     const name = try arena.dupe(u8, try reader.readBytes());
     const message = try arena.dupe(u8, try reader.readBytes());
     return init(message, name);

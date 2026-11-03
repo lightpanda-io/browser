@@ -728,8 +728,7 @@ const CloneDelegate = struct {
         const msg: ?[]const u8 = blk: {
             const handle = message orelse break :blk null;
             const str = js.String{ .local = local, .handle = handle };
-            // the exception can outlive this call; dupe onto the context arena
-            break :blk str.toSliceWithAlloc(local.ctx.arena.allocator()) catch null;
+            break :blk str.toSliceWithAlloc(local.ctx.identity_arena) catch null;
         };
         throwDataCloneException(local, msg);
     }

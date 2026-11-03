@@ -275,14 +275,13 @@ pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, 
 //  5 - Update our identity_map (so that, if we return this same instance again,
 //      we can just grab it from the identity_map)
 pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !js.Object {
-    const ctx = self.ctx;
-    const context_arena = ctx.arena;
-
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .@"struct" => {
-            // Struct, has to be placed on the heap
-            const heap = try context_arena.create(T);
+            // Struct, has to be placed on the heap. It lives as long as its identity map
+            // entry and strong v8.Global, which can outlive this context (e.g. an iframe
+            // or popup re-navigated in place).
+            const heap = try self.ctx.identity_arena.create(T);
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_handle, heap);
         },
