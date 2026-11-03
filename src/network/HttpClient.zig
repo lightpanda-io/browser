@@ -3756,6 +3756,7 @@ pub const Transfer = struct {
 
         self.setResponseHead(status, content_type);
         self.setResponseHeaders(headers);
+        try self.applySetCookies(headers);
         // It may replace a cached response paused at the response stage.
         self._from_cache = false;
         self.script_cache = null;

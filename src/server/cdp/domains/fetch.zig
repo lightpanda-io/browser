@@ -748,6 +748,7 @@ pub const InterceptState = struct {
 };
 
 const testing = @import("../testing.zig");
+const js = @import("../../../browser/js/js.zig");
 const repeat = @import("../../../string.zig").repeat;
 test "cdp.Fetch: interception events belong to the enabling session" {
     var ctx = try testing.context();
@@ -1139,6 +1140,49 @@ test "cdp.Fetch: response stage fulfillRequest replaces the response" {
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, "fulfilled", probe.body.items);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: fulfillRequest stores the response's cookies" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FC", .session_id = "SID-FC", .target_id = "TID-FC-0000000".*, .url = "hi.html" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?fulfilled'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000001" }, .{});
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Fetch.fulfillRequest",
+        .params = .{
+            .requestId = "INT-0000000001",
+            .responseCode = 200,
+            .responseHeaders = &[_]http.Header{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Set-Cookie", .value = "a=1; Path=/" },
+                .{ .name = "Set-Cookie", .value = "b=2; Path=/; HttpOnly" },
+            },
+            // <script>window.atParse = document.cookie</script>
+            .body = "PHNjcmlwdD53aW5kb3cuYXRQYXJzZSA9IGRvY3VtZW50LmNvb2tpZTwvc2NyaXB0Pg==",
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.waitForPage(bc);
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const at_parse = try ls.local.exec("window.atParse", null);
+    try testing.expectEqual("a=1", try at_parse.toStringSlice());
+    try testing.expectEqual(2, bc.session.cookie_jar.len);
 }
 
 test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact" {
