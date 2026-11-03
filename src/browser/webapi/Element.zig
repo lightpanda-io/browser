@@ -2453,79 +2453,25 @@ pub fn getTag(self: *const Element) Tag {
     return switch (self._type) {
         .html => blk: {
             const he = self.subtype(Html);
+            // Single-tag types share the tag's value (see Html.Type)
+            const raw = @backingInt(he._type);
+            if (raw < tag_count) {
+                break :blk @fromBackingInt(@intCast(raw));
+            }
             break :blk switch (he._type) {
-                .anchor => .a,
-                .area => .area,
-                .base => .base,
-                .div => .div,
-                .dl => .dl,
-                .embed => .embed,
-                .form => .form,
-                .p => .p,
-                .custom => .custom,
-                .data => .data,
-                .datalist => .datalist,
-                .details => .details,
-                .dialog => .dialog,
-                .directory => .dir,
-                .iframe => .iframe,
-                .img => .img,
-                .br => .br,
-                .button => .button,
-                .canvas => .canvas,
-                .fieldset => .fieldset,
-                .font => .font,
-                .frameset => .frameset,
-                .heading => he.subtype(Html.Heading)._tag,
-                .label => .label,
-                .legend => .legend,
-                .li => .li,
-                .map => .map,
-                .marquee => .marquee,
-                .ul => .ul,
-                .ol => .ol,
-                .object => .object,
-                .optgroup => .optgroup,
-                .output => .output,
-                .picture => .picture,
-                .param => .param,
-                .pre => .pre,
                 .generic => he.subtype(Html.Generic)._tag,
+                .heading => he.subtype(Html.Heading)._tag,
                 .media => switch (he.subtype(Html.Media)._type) {
                     .audio => .audio,
                     .video => .video,
                     .generic => .media,
                 },
-                .meter => .meter,
                 .mod => he.subtype(Html.Mod)._tag,
-                .progress => .progress,
                 .quote => he.subtype(Html.Quote)._tag,
-                .script => .script,
-                .select => .select,
-                .slot => .slot,
-                .source => .source,
-                .span => .span,
-                .option => .option,
-                .table => .table,
-                .table_caption => .caption,
                 .table_cell => he.subtype(Html.TableCell)._tag,
                 .table_col => he.subtype(Html.TableCol)._tag,
-                .table_row => .tr,
                 .table_section => he.subtype(Html.TableSection)._tag,
-                .template => .template,
-                .textarea => .textarea,
-                .time => .time,
-                .track => .track,
-                .input => .input,
-                .link => .link,
-                .meta => .meta,
-                .hr => .hr,
-                .style => .style,
-                .title => .title,
-                .body => .body,
-                .html => .html,
-                .head => .head,
-                .unknown => .unknown,
+                else => unreachable,
             };
         },
         .svg => self.subtype(Svg).getTag(),
@@ -2535,6 +2481,8 @@ pub fn getTag(self: *const Element) Tag {
 pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
     return self.asConstNode().ownerFrame(frame);
 }
+
+pub const tag_count = @typeInfo(Tag).@"enum".field_names.len;
 
 pub const Tag = enum {
     a,
@@ -3079,6 +3027,28 @@ test "Element: scroll extent" {
     // offset stays unbounded.
     try text.setScrollTop(9999, frame);
     try testing.expectEqual(9999, text.getScrollTop(frame));
+}
+
+test "Element: getTag for every tag name" {
+    // getTag casts Html.Type to Tag, so the two enums must stay aligned. Names
+    // that aren't HTML elements (svg tags, internal ones) create an unknown
+    // element.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var matched: usize = 0;
+    inline for (@typeInfo(Tag).@"enum".field_names) |name| {
+        const el = try frame.window._document.createElement(name, null, frame);
+        const tag = el.getTag();
+        if (tag == @field(Tag, name)) {
+            matched += 1;
+        } else if (tag != .unknown) {
+            std.debug.print("createElement(\"{s}\") has tag {t}\n", .{ name, tag });
+            return error.TagMismatch;
+        }
+    }
+    // Most names are HTML elements, so the check above isn't vacuous
+    try testing.expect(matched > 100);
 }
 
 test "Element: div chain slot size" {
