@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <head></head>
 <body>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <!--
@@ -91,7 +92,9 @@ releases its arena (see Context.identity_arena).
   state.resolve();
   await state.done(() => {
     testing.expectEqual('DataCloneError', e.name);
-    testing.expectEqual('function notCloneable() {} could not be cloned.', e.message);
+    // Chrome prefixes the message with "Failed to execute 'structuredClone' on
+    // 'Window': ".
+    testing.expectEqual(true, e.message.endsWith('function notCloneable() {} could not be cloned.'));
   });
 </script>
 
