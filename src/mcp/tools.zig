@@ -220,7 +220,7 @@ fn dispatchBrowserTool(
         }
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
-            error.NodeNotFound, error.StaleNode, error.InvalidParams => .InvalidParams,
+            error.NodeNotFound, error.InvalidParams => .InvalidParams,
             error.Cancelled => .Cancelled,
             error.Timeout, error.NavigationTimeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
@@ -1664,10 +1664,11 @@ test "MCP - actions reject a stale backendNodeId pointing at a detached node" {
     out.clearRetainingCapacity();
 
     // The stale id must be rejected instead of silently filling the
-    // detached node; action failures surface as a JSON-RPC error.
+    // detached node: it resolves but is no longer connected, so it comes
+    // back as NodeNotFound with the recovery guidance.
     try router.handleMessage(server, aa, fill_by_id);
     const stale = out.written();
-    try testing.expect(std.mem.find(u8, stale, "StaleNode") != null);
+    try testing.expect(std.mem.find(u8, stale, "NodeNotFound") != null);
     try testing.expect(std.mem.find(u8, stale, "\"error\"") != null);
     out.clearRetainingCapacity();
 
@@ -1679,7 +1680,7 @@ test "MCP - actions reject a stale backendNodeId pointing at a detached node" {
     try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
 }
 
-test "MCP - tree and nodeDetails reject a stale backendNodeId" {
+test "MCP - tree and nodeDetails still read a detached backendNodeId" {
     const aa = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -1698,18 +1699,22 @@ test "MCP - tree and nodeDetails reject a stale backendNodeId" {
     ;
     try router.handleMessage(server, aa, detach);
 
+    // A disconnected node stays a legitimate read target — it can be out of
+    // the document yet still matter (e.g. a tab panel kept for re-attachment),
+    // so only actions reject detached ids.
     const tree_msg = try std.mem.concat(aa, u8, &.{
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"tree\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}",
     });
     try router.handleMessage(server, aa, tree_msg);
-    try testing.expect(std.mem.find(u8, out.written(), "StaleNode") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"error\"") == null);
     out.clearRetainingCapacity();
 
     const details_msg = try std.mem.concat(aa, u8, &.{
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"nodeDetails\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}",
     });
     try router.handleMessage(server, aa, details_msg);
-    try testing.expect(std.mem.find(u8, out.written(), "StaleNode") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "\"error\"") == null);
 }
 
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
