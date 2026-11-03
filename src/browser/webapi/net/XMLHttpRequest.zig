@@ -368,7 +368,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return;
     }
 
-    const cross_origin = transfer._cors_cross_origin;
     const allow_wildcard = !transfer.req.credentialsAllowed();
 
     var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
@@ -404,7 +403,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             break;
         }
     }
-    try self.applyResponseHeaders(resp.headers, cross_origin, allow_wildcard);
+    try self.applyResponseHeaders(resp.headers, resp.cross_origin, allow_wildcard);
 
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items());
 
