@@ -1672,6 +1672,13 @@ test "MCP - actions reject a stale backendNodeId pointing at a detached node" {
     try testing.expect(std.mem.find(u8, stale, "\"error\"") != null);
     out.clearRetainingCapacity();
 
+    const press_by_id = try std.mem.concat(aa, u8, &.{
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", inp_id_str, "}}}",
+    });
+    try router.handleMessage(server, aa, press_by_id);
+    try testing.expect(std.mem.find(u8, out.written(), "NodeNotFound") != null);
+    out.clearRetainingCapacity();
+
     // The CSS selector re-resolves the fresh node and fills it.
     const sel_fill =
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fill","arguments":{"selector":"#inp","value":"second"}}}
@@ -1680,7 +1687,7 @@ test "MCP - actions reject a stale backendNodeId pointing at a detached node" {
     try testing.expect(std.mem.find(u8, out.written(), "Filled element") != null);
 }
 
-test "MCP - tree and nodeDetails still read a detached backendNodeId" {
+test "MCP - reads still accept a detached backendNodeId" {
     const aa = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -1715,6 +1722,17 @@ test "MCP - tree and nodeDetails still read a detached backendNodeId" {
     });
     try router.handleMessage(server, aa, details_msg);
     try testing.expect(std.mem.find(u8, out.written(), "\"error\"") == null);
+    out.clearRetainingCapacity();
+
+    for ([_][]const u8{ "markdown", "html" }) |tool| {
+        const msg = try std.mem.concat(aa, u8, &.{
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"", tool, "\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}",
+        });
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.find(u8, out.written(), "Click Me") != null);
+        try testing.expect(std.mem.find(u8, out.written(), "\"error\"") == null);
+        out.clearRetainingCapacity();
+    }
 }
 
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
