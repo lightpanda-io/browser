@@ -3607,6 +3607,8 @@ test "cdp.input: a missed release preserves held buttons and mouse suppression" 
 const EditingHostInput = union(enum) {
     key: []const u8,
     insert_text: []const u8,
+    // a keyDown with no text, like Backspace or Ctrl+A
+    raw_key: struct { key: []const u8, code: []const u8, modifiers: u4 = 0 },
 };
 
 // Loads a page, runs `setup` (which builds an editing host and a selection),
@@ -3636,7 +3638,7 @@ fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: 
 
     _ = try ls.local.compileAndRun(
         \\window.seen = [];
-        \\for (const t of ['keypress', 'beforeinput', 'textInput', 'input']) {
+        \\for (const t of ['keypress', 'beforeinput', 'textInput', 'input', 'selectstart']) {
         \\  document.addEventListener(t, (e) => window.seen.push(
         \\    `${t}:${e.target.id}:${e.inputType || e.key}:${e.data}:${e.cancelable}:${e.composed}:${e.bubbles}:${e.isTrusted}`));
         \\}
@@ -3654,6 +3656,11 @@ fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: 
             .id = 1,
             .method = "Input.insertText",
             .params = .{ .text = text },
+        }),
+        .raw_key => |k| try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = k.key, .code = k.code, .modifiers = k.modifiers },
         }),
     }
 
@@ -3892,6 +3899,177 @@ test "cdp.input: text for an editing host stays out of a contenteditable=false i
     , .{ .insert_text = "X" },
         \\document.getElementById('island').textContent === 'lock' &&
         \\host.textContent === 'Xlocktail' && host.firstChild.data === 'X'
+    );
+}
+
+const backspace: EditingHostInput = .{ .raw_key = .{ .key = "Backspace", .code = "Backspace" } };
+const delete: EditingHostInput = .{ .raw_key = .{ .key = "Delete", .code = "Delete" } };
+const ctrl_a: EditingHostInput = .{ .raw_key = .{ .key = "a", .code = "KeyA", .modifiers = 2 } };
+
+test "cdp.input: Backspace in an editing host deletes before the caret" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , backspace,
+        \\host.innerHTML === 'b<b>cd</b>ef' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'beforeinput:host:deleteContentBackward:null:true:true:true:true',
+        \\  'input:host:deleteContentBackward:null:false:true:true:true',
+        \\]) &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 0
+    );
+}
+
+test "cdp.input: Delete in an editing host deletes after the caret" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , delete,
+        \\host.innerHTML === 'a<b>cd</b>ef' &&
+        \\window.types() === 'beforeinput:host,input:host' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: Backspace in an editing host deletes the selection" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().setBaseAndExtent(host.firstChild, 1, host.lastChild, 1);
+    , backspace,
+        \\host.innerHTML === 'af' && window.types() === 'beforeinput:host,input:host'
+    );
+}
+
+test "cdp.input: Backspace at the start of an editing host fires only beforeinput" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 0);
+    , backspace,
+        \\host.innerHTML === 'ab' && window.types() === 'beforeinput:host'
+    );
+}
+
+test "cdp.input: a cancelled beforeinput keeps Backspace from editing a host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', (e) => e.preventDefault());
+    , backspace,
+        \\host.innerHTML === 'ab' && window.types() === 'beforeinput:host'
+    );
+}
+
+test "cdp.input: a cancelled keydown keeps Backspace from editing a host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('keydown', (e) => e.preventDefault());
+    , backspace,
+        \\host.innerHTML === 'ab' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Backspace that would merge blocks leaves an editing host unchanged" {
+    // Chrome merges the paragraphs; we fire beforeinput and stop
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>one</p><p id="p">two</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 0);
+    , backspace,
+        \\host.innerHTML === '<p>one</p><p id="p">two</p>' && window.types() === 'beforeinput:host'
+    );
+}
+
+test "cdp.input: Ctrl+Backspace in an editing host does nothing" {
+    // Chrome deletes a word (deleteWordBackward)
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab cd</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 5);
+    , .{ .raw_key = .{ .key = "Backspace", .code = "Backspace", .modifiers = 2 } },
+        \\host.innerHTML === 'ab cd' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Backspace on a non-editable focused element deletes nothing" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" tabindex="0">ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , backspace,
+        \\host.innerHTML === 'ab' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Ctrl+A in an editing host selects its contents" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<p>before</p><div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , ctrl_a,
+        \\getSelection().toString() === 'abcdef' &&
+        \\JSON.stringify(window.seen) === JSON.stringify(['selectstart:host:undefined:undefined:true:false:true:true'])
+    );
+}
+
+test "cdp.input: Ctrl+A with nothing focused selects the body" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\document.activeElement.blur();
+        \\getSelection().removeAllRanges();
+    , ctrl_a,
+        \\window.types() === 'selectstart:' && document.activeElement === document.body &&
+        \\getSelection().containsNode(document.getElementById('host'), true) &&
+        \\getSelection().anchorNode === document.body
+    );
+}
+
+test "cdp.input: Ctrl+A on a focused checkbox selects the body" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<input id="cb" type="checkbox"><div id="host" contenteditable>ab</div>');
+        \\document.getElementById('cb').focus();
+    , ctrl_a,
+        \\window.types() === 'selectstart:' && getSelection().anchorNode === document.body
+    );
+}
+
+test "cdp.input: Ctrl+A in a text input fires selectstart" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<input id="field" value="hello">');
+        \\const field = document.getElementById('field');
+        \\field.focus();
+        \\field.setSelectionRange(2, 2);
+    , ctrl_a,
+        \\window.types() === 'selectstart:field' && field.selectionStart === 0 && field.selectionEnd === 5
+    );
+}
+
+test "cdp.input: a cancelled selectstart keeps Ctrl+A from selecting" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\document.addEventListener('selectstart', (e) => e.preventDefault());
+    , ctrl_a,
+        \\window.types() === 'selectstart:host' && getSelection().isCollapsed &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 1
     );
 }
 

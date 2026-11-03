@@ -1762,6 +1762,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         }
     }
 
+    if (isSelectAll(keyboard_event, key)) {
+        return selectAll(frame);
+    }
+
     if (target.is(Element.Html.Input)) |input| {
         if (!input.acceptsTextEntry()) {
             return;
@@ -1772,15 +1776,22 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     if (target.is(Element.Html.TextArea)) |textarea| {
         return editKey(frame, keyboard_event, textarea, key);
     }
+
+    if (key == .Backspace or key == .Delete) {
+        if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
+            // TODO: delete word/line with the right modifier
+            return;
+        }
+        const element = target.is(Element) orelse return;
+        if (element.isEditable()) {
+            return deleteInEditingHost(frame, element, key == .Delete);
+        }
+    }
 }
 
 // edit keys other than text insertion (typeChar's) are handled by Input and
 // TextArea the same
 fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
-    if (isSelectAll(keyboard_event, key)) {
-        return ctl.select(frame);
-    }
-
     if (caretMove(key, ctl)) |move| {
         // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
         if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
@@ -1855,6 +1866,82 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
     }
     try insertAtSelection(frame, host_el, text);
     return true;
+}
+
+/// Backspace (or Delete when `forward`) in editable content:
+fn deleteInEditingHost(frame: *Frame, target: *Element, forward: bool) !void {
+    const host_el = outermostEditingHost(target) orelse return;
+    const input_type = if (forward) "deleteContentForward" else "deleteContentBackward";
+    if (!try allowEdit(frame, host_el, null, null, input_type)) {
+        return;
+    }
+
+    // a beforeinput listener can make it non-editable or remove it
+    if (!host_el.isEditable() or !host_el.asNode().isConnected()) {
+        return;
+    }
+
+    if (!try deleteAtSelection(frame, host_el, forward)) {
+        // Chrome merges blocks, deletes a <br>, an image, ...
+        log.info(.not_implemented, "contenteditable delete", .{ .forward = forward });
+    }
+}
+
+/// Ctrl+A and execCommand("selectAll"). The focused text control selects its
+/// value; otherwise the selection spans the editing host holding it, or the
+/// body. A canceled selectstart leaves the selection alone.
+pub fn selectAll(frame: *Frame) !void {
+    const doc = frame.document;
+    const target: union(enum) {
+        root: *Element,
+        input: *Element.Html.Input,
+        textarea: *Element.Html.TextArea,
+    } = blk: {
+        if (doc._active_element) |el| {
+            if (el.is(Element.Html.Input)) |input| {
+                if (input.tracksSelection()) {
+                    break :blk .{ .input = input };
+                }
+            }
+            if (el.is(Element.Html.TextArea)) |textarea| {
+                break :blk .{ .textarea = textarea };
+            }
+        }
+
+        if (doc._selection._range) |range| {
+            const anchor = doc._selection.getAnchorNode() orelse range.asAbstractRange().getStartContainer();
+            const host = editingHostOf(anchor) orelse editingHostOf(range.asAbstractRange().getStartContainer());
+            if (host) |h| {
+                break :blk .{ .root = h };
+            }
+        }
+        if (doc.getBody()) |body| {
+            break :blk .{ .root = body.asElement() };
+        }
+        break :blk .{ .root = doc.getDocumentElement() orelse return };
+    };
+
+    const event_target = switch (target) {
+        inline .input, .textarea => |ctl| ctl.asElement().asEventTarget(),
+        .root => |el| el.asEventTarget(),
+    };
+    const event = try Event.initTrusted(comptime .wrap("selectstart"), .{ .bubbles = true, .cancelable = true }, frame.page);
+    if (try frame._event_manager.dispatchCancelable(event_target, event)) {
+        return;
+    }
+
+    switch (target) {
+        inline .input, .textarea => |ctl| try ctl.select(frame),
+        .root => |el| try doc._selection.selectAllChildren(el.asNode(), frame),
+    }
+}
+
+fn editingHostOf(node: *Node) ?*Element {
+    const el = node.is(Element) orelse node.parentElement() orelse return null;
+    if (el.isEditable() == false) {
+        return null;
+    }
+    return outermostEditingHost(el);
 }
 
 /// The edit part of insertIntoEditingHost, without the events that can cancel
@@ -2418,13 +2505,13 @@ fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
     };
 }
 
-// Ctrl+A alone, as in Chrome on Linux
+// Ctrl+A
 fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
     if (!keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey() or keyboard_event.getShiftKey()) {
         return false;
     }
     return switch (key) {
-        .standard => |s| std.ascii.eqlIgnoreCase(s, "a"),
+        .standard => |s| return s.len == 1 and (s[0] == 'a' or s[0] == 'A'),
         else => false,
     };
 }
