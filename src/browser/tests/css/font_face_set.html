@@ -60,8 +60,7 @@
 
 <script id="document_fonts_load">
 {
-    // No font face in the set matches, so nothing loads and neither event
-    // fires.
+    // Nothing starts loading, so neither event fires.
     const events = [];
     document.fonts.addEventListener('loading', () => events.push('loading'));
     document.fonts.addEventListener('loadingdone', () => {
@@ -71,12 +70,31 @@
 
     let loaded = null;
     document.fonts.load("italic bold 16px Roboto").then((fonts) => loaded = fonts);
+    let generic = null;
+    document.fonts.load("16px sans-serif").then((fonts) => generic = fonts);
     testing.expectEqual(0, events.length);
 
     testing.onload(() => {
       testing.expectEqual(0, events.length);
       testing.expectEqual(true, Array.isArray(loaded));
-      testing.expectEqual(0, loaded.length);
+      // A generic family never matches a font face.
+      testing.expectEqual(0, generic.length);
+      testing.diverges('Chrome resolves an undeclared family with []; we resolve with a loaded stand-in face', () => {
+        testing.expectEqual(1, loaded.length);
+        testing.expectEqual('Roboto', loaded[0]?.family);
+      });
     });
+}
+</script>
+
+<script id="document_fonts_add_size">
+{
+    const before = document.fonts.size;
+    const face = new FontFace("SizeFont", "url(size.woff)");
+    document.fonts.add(face);
+    testing.expectEqual(before + 1, document.fonts.size);
+    // Adding the same face again doesn't grow the set.
+    document.fonts.add(face);
+    testing.expectEqual(before + 1, document.fonts.size);
 }
 </script>
