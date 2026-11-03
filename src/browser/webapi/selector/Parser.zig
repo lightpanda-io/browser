@@ -1325,10 +1325,10 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
                     // surface it as a missing closing quote.
                     return error.InvalidAttributeSelector;
                 }
-                const after = input[i + 1];
-                if (after == '\n') {
+                const newline = escape.newlineLen(input[i + 1 ..]);
+                if (newline > 0) {
                     // Escaped newline inside a string is a line continuation: drop both.
-                    i += 2;
+                    i += 1 + newline;
                     continue;
                 }
                 i += 1 + try appendEscape(&result, arena, input[i + 1 ..]);
@@ -1363,8 +1363,8 @@ fn asUint(comptime string: anytype) @Int(
     return @bitCast(@as(*const [byteLength]u8, string).*);
 }
 
-// Appends the code point of the escape `input` starts with, right after its
-// backslash. Returns how many bytes of `input` the escape spans.
+/// Appends the code point of the escape `input` starts with, right after its
+/// backslash. Returns how many bytes of `input` the escape spans.
 fn appendEscape(result: *std.ArrayList(u8), arena: Allocator, input: []const u8) !usize {
     const decoded = escape.decode(input);
     var buf: [4]u8 = undefined;
@@ -1864,8 +1864,8 @@ test "Selector: Parser.attributeValue" {
     }
 
     // Escaped newline inside a string is a line continuation (drops the newline).
-    {
-        var parser = Parser{ .input = "\"foo\\\nbar\"]" };
+    for ([_][]const u8{ "\"foo\\\nbar\"]", "\"foo\\\x0Cbar\"]", "\"foo\\\rbar\"]", "\"foo\\\r\nbar\"]" }) |input| {
+        var parser = Parser{ .input = input };
         try testing.expectEqual("foobar", try parser.attributeValue(arena));
         try testing.expectEqual("]", parser.input);
     }

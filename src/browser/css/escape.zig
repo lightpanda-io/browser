@@ -120,7 +120,7 @@ fn writeStringCodepoint(writer: *std.Io.Writer, codepoint: u21) std.Io.Writer.Er
 }
 
 /// The length of the newline `s` starts with, CRLF counting as one, or 0.
-fn newlineLen(s: []const u8) usize {
+pub fn newlineLen(s: []const u8) usize {
     return switch (s[0]) {
         '\r' => if (s.len > 1 and s[1] == '\n') 2 else 1,
         '\n', '\x0C' => 1,
