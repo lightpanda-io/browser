@@ -38,15 +38,20 @@
   }
 </script>
 
-<script id=zero-delay-burst>
+<script id=zero-delay-burst type=module>
 {
   // An event bus that relays each event through setTimeout(fn, 0) queues
-  // thousands from a single task, all pending at once.
+  // thousands from a single task, all pending at once. Wait for the last
+  // callback, not load: load doesn't wait for pending timers.
+  const state = await testing.async();
   let ran = 0;
   for (let i = 0; i < 10000; i++) {
-    window.setTimeout(() => ran++, 0);
+    window.setTimeout(() => {
+      ran++;
+      if (ran === 10000) state.resolve();
+    }, 0);
   }
-  testing.onload(() => testing.expectEqual(10000, ran));
+  await state.done(() => testing.expectEqual(10000, ran));
 }
 </script>
 :
