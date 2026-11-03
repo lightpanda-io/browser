@@ -6,8 +6,10 @@
   // A module script that throws while it evaluates is reported like a classic
   // script's exception: an "error" event, not an "unhandledrejection".
   const reported = [];
+  const reported_errors = [];
   window.addEventListener('error', (e) => {
     reported.push('error:' + e.error.message);
+    reported_errors.push(e.error);
     e.preventDefault();
   });
   window.addEventListener('unhandledrejection', (e) => {
@@ -20,8 +22,14 @@
   throw new Error('module-throw');
 </script>
 
+<script type=module>
+  // The error of a statically imported module that throws is reported too.
+  // dynamic_import_static_errored imports it again.
+  import './modules/throws-type-error.js?static';
+</script>
+
 <script id=module_throw>
-  testing.onload(() => testing.expectEqual(['error:module-throw'], reported));
+  testing.onload(() => testing.expectEqual(['error:module-throw', 'error:boom'], reported));
 </script>
 
 <script id=dynamic_import_throw type=module>
@@ -37,6 +45,66 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual('rejected', outcome);
-    testing.expectEqual(['error:module-throw'], reported);
+    testing.expectEqual(['error:module-throw', 'error:boom'], reported);
+  });
+</script>
+
+<script id=dynamic_import_throw_reason type=module>
+  // import() rejects with exactly what the module, or a dependency, threw. The
+  // module map keeps the error: importing the module again rejects with it too.
+  const state = await testing.async();
+  const error = await import('./modules/throws-type-error.js').then(() => 'resolved', (e) => e);
+  const again = await import('./modules/throws-type-error.js').then(() => 'resolved', (e) => e);
+  const value = await import('./modules/throws-value.js').then(() => 'resolved', (e) => e);
+  const dependency = await import('./modules/imports-throws.js').then(() => 'resolved', (e) => e);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, error instanceof TypeError);
+    testing.expectEqual('boom', error.message);
+    testing.expectEqual(true, again === error);
+    testing.expectEqual(42, value);
+    testing.expectEqual(true, dependency instanceof TypeError);
+    testing.expectEqual('boom', dependency.message);
+  });
+</script>
+
+<script id=dynamic_import_tla_reject type=module>
+  // import() rejects with exactly what a module's top-level await, or a
+  // dependency's, rejected with, and with the same value when imported again.
+  const state = await testing.async();
+  const error = await import('./modules/tla-reject.js').then(() => 'resolved', (e) => e);
+  const again = await import('./modules/tla-reject.js').then(() => 'resolved', (e) => e);
+  const value = await import('./modules/tla-reject-value.js').then(() => 'resolved', (e) => e);
+  const dependency = await import('./modules/imports-tla-reject.js').then(() => 'resolved', (e) => e);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, error instanceof TypeError);
+    testing.expectEqual('tla-boom', error.message);
+    testing.expectEqual(true, again === error);
+    testing.expectEqual('s', value);
+    testing.expectEqual(true, dependency instanceof TypeError);
+    testing.expectEqual('tla-boom', dependency.message);
+  });
+</script>
+
+<script id=dynamic_import_static_errored type=module>
+  // A module whose static import already threw: import() rejects with the
+  // error that was reported.
+  const state = await testing.async();
+  const error = await import('./modules/throws-type-error.js?static').then(() => 'resolved', (e) => e);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, error instanceof TypeError);
+    testing.expectEqual(true, reported_errors.includes(error));
+  });
+</script>
+
+<script id=dynamic_import_syntax_error type=module>
+  // A module that fails to parse rejects import() with the SyntaxError.
+  const state = await testing.async();
+  const error = await import('./modules/syntax-error.js?dynamic').then(() => 'resolved', (e) => e);
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, error instanceof SyntaxError);
   });
 </script>
