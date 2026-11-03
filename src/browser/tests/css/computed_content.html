@@ -89,9 +89,11 @@
   testing.expectEqual('normal', content('revert'));
 
   // Only an explicit inherit reads the parent's.
-  testing.expectEqual('"a|b:1;c|d:2"', content('inherit'));
-  testing.expectEqual('"a|b:1;c|d:2"', content('inherit-twice'));
-  testing.expectEqual('"a|b:1;c|d:2"', content('inherit-inline'));
+  testing.diverges("Chrome ignores content: inherit, where Firefox takes the parent's", () => {
+    testing.expectEqual('"a|b:1;c|d:2"', content('inherit'));
+    testing.expectEqual('"a|b:1;c|d:2"', content('inherit-twice'));
+    testing.expectEqual('"a|b:1;c|d:2"', content('inherit-inline'));
+  });
   testing.expectEqual('normal', content('inherit-nothing'));
 }
 </script>
