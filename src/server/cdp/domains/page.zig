@@ -2734,7 +2734,7 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
     testing.silenceLog(&.{.frame});
 
     // A root navigation that fails before commit (here: connection refused —
-    // nothing listens on port 1) must still answer the Page.navigate command.
+    // nothing listens on port 65534) must still answer the Page.navigate command.
     // Chrome resolves it with an errorText field ("present if and only if
     // navigation has failed"); leaving the command id unanswered forever
     // deadlocks clients that await the response.
@@ -2746,7 +2746,7 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
     try ctx.processMessage(.{
         .id = 52,
         .method = "Page.navigate",
-        .params = .{ .url = "http://127.0.0.1:1/unreachable" },
+        .params = .{ .url = "http://127.0.0.1:65534/unreachable" },
     });
     try testing.waitForPage(bc);
 
@@ -2758,9 +2758,9 @@ test "cdp.frame: navigate answers with errorText when the navigation fails" {
 
     // As in Chrome, an error document replaces the active one, and committing
     // it doesn't answer the command a second time.
-    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:1/unreachable", .loaderId = "LID-0000000002" } }, .{});
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:65534/unreachable", .loaderId = "LID-0000000002" } }, .{});
     const frame = bc.mainFrame() orelse unreachable;
-    try testing.expectEqualSlices(u8, "http://127.0.0.1:1/unreachable", frame.url);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:65534/unreachable", frame.url);
 
     // The error document's frameNavigated precedes the answer: a client that
     // navigates again on the answer must not take it for its own navigation.
@@ -2799,12 +2799,12 @@ test "cdp.frame: a failed script navigation commits an error document" {
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
-        _ = try ls.local.exec("location.assign('http://127.0.0.1:1/unreachable')", null);
+        _ = try ls.local.exec("location.assign('http://127.0.0.1:65534/unreachable')", null);
     }
     // Outside the scope: the navigation destroys the page it's entered on.
     try testing.waitForPage(bc);
 
-    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:1/unreachable", .loaderId = "LID-0000000002" } }, .{ .session_id = "SID-SNF" });
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = "http://127.0.0.1:65534/unreachable", .loaderId = "LID-0000000002" } }, .{ .session_id = "SID-SNF" });
     try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .loaderId = "LID-0000000002" }, .{ .session_id = "SID-SNF" });
     try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .loaderId = "LID-0000000002" }, .{ .session_id = "SID-SNF" });
 
@@ -2812,7 +2812,7 @@ test "cdp.frame: a failed script navigation commits an error document" {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
-    const v = try ls.local.exec("document.readyState === 'complete' && document.querySelector('h1')?.textContent === 'Navigation failed' && location.href === 'http://127.0.0.1:1/unreachable'", null);
+    const v = try ls.local.exec("document.readyState === 'complete' && document.querySelector('h1')?.textContent === 'Navigation failed' && location.href === 'http://127.0.0.1:65534/unreachable'", null);
     try testing.expect(v.toBool());
 }
 

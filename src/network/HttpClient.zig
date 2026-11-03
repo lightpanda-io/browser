@@ -443,6 +443,22 @@ fn isUrlBlocked(self: *const Client, transfer: *const Transfer) bool {
     return if (self.network.adblocker) |*blocker| blocker.isBlocked(transfer) else false;
 }
 
+/// The Fetch standard forbids a request to one of the "bad ports" (22, 25,
+/// 110, 143, ...): they are the services a page has no business speaking to,
+/// so reaching them from script turns the browser into a port scanner. The
+/// list lives in `http.isBadPort`; WebSocket already consulted it, but every
+/// other caller — fetch, XHR, subresources, navigation, redirect targets —
+/// went straight to the network. Checked in the pipeline so a redirect hop is
+/// covered too.
+fn isBadPortUrl(url: []const u8) bool {
+    const port = URL.getPort(url);
+    if (port.len == 0) {
+        // No explicit port: the scheme's default is never a bad port.
+        return false;
+    }
+    return http.isBadPort(std.fmt.parseInt(u16, port, 10) catch return false);
+}
+
 fn adblockSourceUrl(transfer: *const Transfer) ?[]const u8 {
     var owner: *const Owner = transfer.owner orelse return null;
     if (transfer.req.resource_type == .document) {
@@ -1116,6 +1132,13 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             if (self.isUrlBlocked(transfer)) {
                 log.info(.http, "blocked url", .{ .url = transfer.req.url });
                 return transfer.failAsync(error.UrlBlocked);
+            }
+
+            // Internal transfers (robots.txt, the CORS preflight fetch) are
+            // browser bookkeeping, not a page-chosen destination.
+            if (transfer.req.internal == false and isBadPortUrl(transfer.req.url)) {
+                log.info(.http, "blocked unsafe port", .{ .url = transfer.req.url });
+                return transfer.failAsync(error.UnsafePort);
             }
 
             if (transfer.req.internal == false) {
@@ -5174,6 +5197,25 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     // one assign it to `client.network` after this returns.
     test_network.adblocker = null;
     client.network = &test_network;
+}
+
+test "HttpClient: isBadPortUrl rejects the Fetch bad ports" {
+    // Ports from https://fetch.spec.whatwg.org/#bad-port
+    try testing.expect(isBadPortUrl("http://example.com:22/"));
+    try testing.expect(isBadPortUrl("https://example.com:25/x"));
+    try testing.expect(isBadPortUrl("http://127.0.0.1:110/"));
+    try testing.expect(isBadPortUrl("http://example.com:143/"));
+    try testing.expect(isBadPortUrl("ws://example.com:5060/"));
+
+    // Ordinary ports and the scheme defaults are fine.
+    try testing.expect(!isBadPortUrl("http://example.com/"));
+    try testing.expect(!isBadPortUrl("https://example.com:443/"));
+    try testing.expect(!isBadPortUrl("http://127.0.0.1:9582/xhr"));
+    try testing.expect(!isBadPortUrl("ws://127.0.0.1:9584/"));
+
+    // An unparsable or out-of-range port is left to the transport to reject.
+    try testing.expect(!isBadPortUrl("http://example.com:abc/"));
+    try testing.expect(!isBadPortUrl("http://example.com:99999/"));
 }
 
 test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {

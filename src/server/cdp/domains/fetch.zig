@@ -1352,13 +1352,13 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
 
     var probe: ResponseStageProbe = .{};
     defer probe.deinit();
-    // Nothing listens on port 1: the connection is refused.
-    try probe.start(bc, "http://127.0.0.1:1/");
+    // Nothing listens on port 65534: the connection is refused.
+    try probe.start(bc, "http://127.0.0.1:65534/");
     try ResponseStageProbe.tickUntilPaused(bc, 1);
 
     try ctx.expectSentEvent("Fetch.requestPaused", .{
         .requestId = "INT-0000000001",
-        .request = .{ .url = "http://127.0.0.1:1/" },
+        .request = .{ .url = "http://127.0.0.1:65534/" },
         .responseErrorReason = "ConnectionFailed",
     }, .{ .session_id = "SID-RS" });
     const paused = try sentPausedParams(&ctx, "INT-0000000001");

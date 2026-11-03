@@ -1412,7 +1412,7 @@ test "agent script runtime: a failed navigation rejects the goto promise" {
     try runTestScript(runtime,
         \\let caught = "";
         \\try {
-        \\  await new Page().goto("http://localhost:1/", { timeout: 2000 });
+        \\  await new Page().goto("http://localhost:65534/", { timeout: 2000 });
         \\} catch (e) {
         \\  caught = String(e);
         \\}

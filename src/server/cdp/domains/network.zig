@@ -64,6 +64,7 @@ pub const ErrorReason = enum {
     AddressUnreachable,
     BlockedByClient,
     BlockedByResponse,
+    UnsafePort,
 
     const Failure = error{
         Failed,
@@ -78,6 +79,7 @@ pub const ErrorReason = enum {
         AddressUnreachable,
         BlockedByClient,
         BlockedByResponse,
+        UnsafePort,
     };
 
     pub fn toError(self: ErrorReason) anyerror {
@@ -104,6 +106,7 @@ pub const ErrorReason = enum {
             .AddressUnreachable => "net::ERR_ADDRESS_UNREACHABLE",
             .BlockedByClient => "net::ERR_BLOCKED_BY_CLIENT",
             .BlockedByResponse => "net::ERR_BLOCKED_BY_RESPONSE",
+            .UnsafePort => "net::ERR_UNSAFE_PORT",
         };
     }
 };
@@ -827,6 +830,8 @@ test "cdp.network: errorText" {
     try testing.expectEqualSlices(u8, "net::ERR_FAILED", errorText(ErrorReason.Failed.toError()));
     try testing.expectEqualSlices(u8, "net::ERR_NAME_NOT_RESOLVED", errorText(ErrorReason.NameNotResolved.toError()));
     try testing.expectEqualSlices(u8, "CouldntConnect", errorText(error.CouldntConnect));
+    // A destination on the Fetch bad-port list, like Chrome's ERR_UNSAFE_PORT.
+    try testing.expectEqualSlices(u8, "net::ERR_UNSAFE_PORT", errorText(error.UnsafePort));
 }
 
 test "cdp.network emulateNetworkConditions and setBypassServiceWorker" {
