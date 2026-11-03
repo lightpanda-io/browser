@@ -352,6 +352,7 @@ const DeliverCallback = struct {
     // `cancelled` are mutually exclusive, so the temp is released exactly once.
     fn cancelled(ctx: *anyopaque) void {
         const self: *DeliverCallback = @ptrCast(@alignCast(ctx));
+        self.hold.release();
         if (self.message) |message| {
             self.port._in_flight.remove(&self.node);
             message.release();

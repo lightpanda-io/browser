@@ -768,6 +768,26 @@ test "Runner: settled is load when load starts nothing" {
     try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start < 50);
 }
 
+test "Runner: settled releases a port delivery its frame dropped" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Posted from tracked work, so the delivery holds settled until it runs.
+    const attribution = frame.js.attribution;
+    const task_scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+    _ = try ls.local.exec("const ch = new MessageChannel(); ch.port1.onmessage = () => {}; ch.port2.postMessage(1);", null);
+    task_scope.exit();
+    try testing.expectEqual(1, frame.page.settle.pending);
+
+    // Dropping the scheduler finalizes the delivery without running it.
+    frame.js.scheduler.reset();
+    try testing.expectEqual(0, frame.page.settle.pending);
+}
+
 test "Runner: fresh initial about blank advances timers and promise continuations" {
     const page = try testing.test_session.createPage();
     defer page.close();
