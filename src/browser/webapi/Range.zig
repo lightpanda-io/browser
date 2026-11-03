@@ -906,16 +906,28 @@ fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
 
 // The rect of cdata's text between two UTF-16 offsets; a null end is its end.
 fn appendTextRect(rects: *std.ArrayList(*DOMRect), cdata: *Node.CData, start: u32, end: ?u32, frame: *Frame) !void {
+    const rect = textRangeRect(cdata, start, end, frame) orelse return;
+    try rects.append(frame.local_arena, try DOMRect.create(rect, frame._factory));
+}
+
+// The rect of a whole text node, in the viewport of its own frame.
+// null when the text has no box: a comment or PI, a hidden parent, only
+// whitespace.
+pub fn textRect(cdata: *Node.CData, frame: *Frame) ?DOMRect.Data {
+    return textRangeRect(cdata, 0, null, frame);
+}
+
+fn textRangeRect(cdata: *Node.CData, start: u32, end: ?u32, frame: *Frame) ?DOMRect.Data {
     if (isCommentOrPI(cdata)) {
-        return;
+        return null;
     }
-    const parent = cdata.asNode().parentNode() orelse return;
-    const element = layoutElement(parent) orelse return;
+    // The element whose box holds the text: its parent, or the shadow host.
+    const parent = cdata.asNode().parentNode() orelse return null;
+    const element = layoutElement(parent) orelse return null;
     const data = cdata.getData().str();
     const s = byteOffset(data, start);
     const e = if (end) |offset| byteOffset(data, offset) else data.len;
-    const rect = measureText(element, data[s..e], frame) orelse return;
-    try rects.append(frame.local_arena, try DOMRect.create(rect, frame._factory));
+    return measureText(element, data[s..e], frame);
 }
 
 // null when nothing in the range has a box
