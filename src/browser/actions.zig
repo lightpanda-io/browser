@@ -245,7 +245,10 @@ pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, frame_id: u32, sessi
     return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, timer));
 }
 
+/// Fails with `error.Timeout` when the page doesn't reach `state` in time.
 pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, frame_id: u32, session: *Session) !void {
     var runner = session.runner(.{});
-    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = state });
+    if (try runner.waitForFrameResult(frame_id, timeout_ms, .{ .until = state }) == .timeout) {
+        return error.Timeout;
+    }
 }

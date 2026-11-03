@@ -65,10 +65,16 @@ const WaitForFrameOpts = struct {
     until: lp.Config.WaitUntil = .done,
 };
 pub fn waitForFrame(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !void {
+    _ = try self.waitForFrameResult(frame_id, timeout_ms, opts);
+}
+
+/// `waitForFrame`, telling a met condition from a timeout.
+pub fn waitForFrameResult(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !WaitResult {
     const condition = WaitCondition{ .frame_id = frame_id, .until = opts.until };
     var conditions = [_]WaitCondition{condition};
-    _ = try self._wait(false, timeout_ms, &conditions);
+    const result = try self._wait(false, timeout_ms, &conditions);
     try firstConditionError(&conditions);
+    return result;
 }
 
 pub fn waitForFrameCDP(self: *Runner, frame_id: u32, timeout_ms: u32, until: lp.Config.WaitUntil) !void {
