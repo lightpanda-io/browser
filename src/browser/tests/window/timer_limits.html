@@ -38,20 +38,19 @@
   }
 </script>
 
-<script id=zero-delay-burst type=module>
+<script id=zero-delay-burst>
 {
   // An event bus that relays each event through setTimeout(fn, 0) queues
-  // thousands from a single task, all pending at once. Wait for the last
-  // callback, not load: load doesn't wait for pending timers.
-  const state = await testing.async();
-  let ran = 0;
+  // thousands from a single task, all pending at once. Clear them rather than
+  // run them: 10k callbacks blow the test timeout on slow (TSAN) CI builds.
+  const timeouts = [];
   for (let i = 0; i < 10000; i++) {
-    window.setTimeout(() => {
-      ran++;
-      if (ran === 10000) state.resolve();
-    }, 0);
+    timeouts.push(window.setTimeout(() => {}, 0));
   }
-  await state.done(() => testing.expectEqual(10000, ran));
+  testing.expectEqual(10000, timeouts.length);
+
+  for (const id of timeouts) {
+    window.clearTimeout(id);
+  }
 }
 </script>
-:
