@@ -204,19 +204,32 @@ fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     if (d == .none) {
         return null;
     }
-    // `aria-hidden` is an accessibility-tree hint, not a rendering property:
-    // the page paints the content and innerText includes it. Block-level
-    // containers stamped with it stay in the dumps (app roots behind a modal,
-    // carousel slide copies), but inline-level ones are decorative in
-    // practice — icon-font ligatures, sr-only twins — and only add noise for
-    // the reader, so they are cut. AXNode applies the attribute in full for
-    // the accessibility tree.
+    // Browsers render aria-hidden content, so this diverges from innerText on
+    // purpose: inline text under it is decorative in practice (icon ligatures,
+    // the visual twin of sr-only text). Anything holding a block is real
+    // content, like an app root hidden behind a modal, which is often an
+    // unstyled custom element and so inline itself.
     if (el.getAttributeInterned("aria-hidden")) |v| {
-        if (std.ascii.eqlIgnoreCase(v, "true") and owner._style_manager.isInlineLevel(el)) {
+        if (std.ascii.eqlIgnoreCase(v, "true") and owner._style_manager.isInlineLevel(el) and !holdsBlock(el, owner)) {
             return null;
         }
     }
     return d;
+}
+
+fn holdsBlock(el: *Element, frame: *Frame) bool {
+    const style_manager = &frame._style_manager;
+    var tw = TreeWalker.FlatExcludeSelf.init(el.asNode(), .{ .frame = frame });
+    while (tw.next()) |node| {
+        const child = node.is(Element) orelse continue;
+        const tag = child.getTag();
+        if (tag.isMetadata() or tag == .svg or style_manager.display(child) == .none) {
+            tw.skipChildren();
+        } else if (style_manager.isBlockLevel(child)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn isVisibleElement(el: *Element, frame: *Frame) bool {
