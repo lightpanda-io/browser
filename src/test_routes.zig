@@ -325,6 +325,27 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    // The way back from /redirect-cross-origin/: to the same path on 127.0.0.1.
+    if (std.mem.startsWith(u8, path, "/redirect-127/")) {
+        var location_buf: [1024]u8 = undefined;
+        const location = try std.mem.print(&location_buf, "http://127.0.0.1:9582/{s}", .{path["/redirect-127/".len..]});
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = location },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/set-cookie-lax")) {
+        return req.respond("<p>lax", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Set-Cookie", .value = "xsite_redirect_lax=1; SameSite=Lax" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/echo-x-hop")) {
         var it = req.iterateHeaders();
         var value: []const u8 = "NONE";

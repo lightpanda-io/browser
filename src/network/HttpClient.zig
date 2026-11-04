@@ -3712,10 +3712,15 @@ pub const Transfer = struct {
             return;
         }
         const jar = self.cookie_jar orelse return;
+        var same_site: ?bool = null;
         for (headers) |hdr| {
-            if (std.mem.eql(u8, hdr.name, "set-cookie")) {
-                try jar.populateFromResponse(self.req.url, hdr.value);
+            if (!std.mem.eql(u8, hdr.name, "set-cookie")) {
+                continue;
             }
+            if (same_site == null) {
+                same_site = self.requestKind() != .subresource or Cookie.areSameSite(self.cookie_origin, URL.getHostname(self.req.url));
+            }
+            try jar.populateFromResponseInContext(self.req.url, hdr.value, same_site.?);
         }
     }
 
@@ -5592,6 +5597,62 @@ test "HttpClient: Fetch header overrides restore after one hop" {
     // idempotent once restored
     transfer.restoreInterceptHeaders();
     try testing.expectEqual(2, transfer.req_headers.items.len);
+}
+
+test "HttpClient: only a same-site request or a top-level navigation sets SameSite cookies" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    const set_cookies = [_]http.Header{
+        .{ .name = "set-cookie", .value = "strict=1; SameSite=Strict" },
+        .{ .name = "set-cookie", .value = "lax=1; SameSite=Lax" },
+        .{ .name = "set-cookie", .value = "default=1" },
+        .{ .name = "set-cookie", .value = "none=1; SameSite=None; Secure" },
+    };
+
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top = testOwner(&top_url, null);
+    var frame_url: [:0]const u8 = "https://victim.example/frame";
+    var frame = testOwner(&frame_url, &top);
+
+    const Case = struct { owner: *Owner, resource_type: Request.ResourceType, method: Method = .GET, top: [:0]const u8, stored: []const u8 };
+    const cases = [_]Case{
+        // A cross-site iframe's document and a cross-site fetch.
+        .{ .owner = &frame, .resource_type = .document, .top = "https://attacker.example/", .stored = "none" },
+        .{ .owner = &top, .resource_type = .xhr, .top = "https://attacker.example/", .stored = "none" },
+        // A top-level navigation, whoever started it.
+        .{ .owner = &top, .resource_type = .document, .top = "https://attacker.example/", .stored = "strict lax default none" },
+        .{ .owner = &top, .resource_type = .document, .method = .POST, .top = "https://attacker.example/", .stored = "strict lax default none" },
+        // Same-site: an iframe and a fetch.
+        .{ .owner = &frame, .resource_type = .document, .top = "https://www.victim.example/", .stored = "strict lax default none" },
+        .{ .owner = &top, .resource_type = .xhr, .top = "https://www.victim.example/", .stored = "strict lax default none" },
+    };
+
+    for (cases) |case| {
+        top_url = case.top;
+        const arena = try pool.acquire(.small, "test");
+        defer arena.release();
+        var jar = CookieJar.init(testing.allocator, null);
+        defer jar.deinit();
+
+        var transfer = testTransfer(arena);
+        transfer.req.url = "https://victim.example/";
+        transfer.req.credentials_mode = .include;
+        transfer.req.resource_type = case.resource_type;
+        transfer.req.method = case.method;
+        transfer.owner = case.owner;
+        transfer.cookie_origin = case.owner.siteForCookies();
+        transfer.cookie_jar = &jar;
+        try transfer.applySetCookies(&set_cookies);
+
+        var names: std.ArrayList(u8) = .empty;
+        defer names.deinit(testing.allocator);
+        for (jar.siteCookies("victim.example")) |c| {
+            if (names.items.len > 0) try names.append(testing.allocator, ' ');
+            try names.appendSlice(testing.allocator, c.name);
+        }
+        try testing.expectEqual(case.stored, names.items);
+    }
 }
 
 test "HttpClient: Owner.siteForCookies" {
