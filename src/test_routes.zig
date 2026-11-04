@@ -990,6 +990,32 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/cors_expose_headers_listed")) {
+        // Cross-origin response listing X-Secret in Access-Control-Expose-Headers
+        // (it must stay visible), alongside X-Hidden, which isn't listed
+        // (it must stay hidden even though the response is otherwise allowed).
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+                .{ .name = "Access-Control-Expose-Headers", .value = "X-Secret" },
+                .{ .name = "X-Secret", .value = "s3cr3t" },
+                .{ .name = "X-Hidden", .value = "shh" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors_expose_headers_unlisted")) {
+        // Same custom header, but not listed in Access-Control-Expose-Headers:
+        // it must be hidden from a cross-origin caller, even though the
+        // response allows the origin.
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+                .{ .name = "X-Secret", .value = "s3cr3t" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/set_cookie")) {
         return req.respond("", .{
             .extra_headers = &.{
@@ -1016,6 +1042,36 @@ pub fn handle(req: *std.http.Server.Request) !void {
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Location", .value = "http://localhost:9582/echo_headers" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_a_b_a")) {
+        // 302 to the localhost alias, which itself 302s back to 127.0.0.1 —
+        // an A -> B -> A chain. Even though the final URL is back on the
+        // requesting origin, the hop through B must leave the response
+        // permanently CORS-tainted (response.type === 'cors' in fetch,
+        // cross-origin header stripping in XHR), not reset to "basic".
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://localhost:9582/redirect_b_a" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_b_a")) {
+        // Second hop of the A -> B -> A chain: back to the original origin,
+        // landing on an endpoint that exposes one header and withholds
+        // another. If the chain were wrongly reset to "basic" on return to
+        // A, the hidden header would wrongly become visible. Once
+        // cross-origin-tainted, every response in the chain — including this
+        // redirect itself — must pass the CORS check, so it needs ACAO.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Access-Control-Allow-Origin", .value = origin(req) orelse "*" },
+                .{ .name = "Location", .value = "http://127.0.0.1:9582/cors_expose_headers_listed" },
             },
         });
     }
