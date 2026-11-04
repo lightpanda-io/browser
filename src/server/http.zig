@@ -502,7 +502,6 @@ const session_busy_response = errorResponse(429, "Session is releasing its previ
 const method_not_allowed_response = errorResponse(405, "Method not allowed");
 const service_unavailable_response = errorResponse(503, "Too many connections");
 const internal_error_response = errorResponse(500, "Internal server error");
-const empty_json_list_response = staticResponse(.{ .status = "200 OK", .body = "[]", .content_type = "application/json; charset=UTF-8" });
 // WebDriver's discovery endpoint; `ready` is whether a new session can be
 // created, which the bootstrap never refuses.
 const status_response = staticResponse(.{ .status = "200 OK", .body = "{\"value\":{\"ready\":true,\"message\":\"\"}}", .content_type = "application/json; charset=UTF-8" });
@@ -562,6 +561,8 @@ const SESSION_PREFIX = "/session/";
 
 const SESSION_ID_LEN = 36;
 
+const DEVTOOLS_PREFIX = "/devtools/";
+
 fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     var path = req.path;
     if (path.len > 1 and path[path.len - 1] == '/') {
@@ -581,6 +582,9 @@ fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Serv
             return dispatch(server, &session_routes, conn, req, tail);
         }
         return serveSessionCommand(server, conn, req, tail);
+    }
+    if (std.mem.startsWith(u8, path, DEVTOOLS_PREFIX) and server.protocols.cdp) {
+        return upgradeDevTools(server, conn, req, path[DEVTOOLS_PREFIX.len..]);
     }
     return dispatch(server, &routes, conn, req, path);
 }
@@ -718,14 +722,54 @@ fn upgradeCDP(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     return upgradeSpawn(server, conn, req, .cdp);
 }
 
+// GET /devtools/browser/{id} and /devtools/page/{id} (cdp): join a running
+// browser, the way Chrome's endpoints of the same name do. `rest` is the path
+// after /devtools/.
+fn upgradeDevTools(server: *Server, conn: *Connection, req: *Connection.Request, rest: []const u8) !Served {
+    if (req.method != .GET) {
+        return serveMethodNotAllowed(server, conn, req);
+    }
+    const join: Join = blk: {
+        if (std.mem.startsWith(u8, rest, "browser/")) {
+            const worker = server.findBrowser(rest["browser/".len..]) orelse {
+                return serveNotFound(server, conn, req);
+            };
+            break :blk .{ .worker = worker, .target_id = null };
+        }
+        if (std.mem.startsWith(u8, rest, "page/")) {
+            const target_id = rest["page/".len..];
+            const worker = (if (target_id.len == 14) server.findPage(target_id) else null) orelse {
+                // Chrome's answer for a page it doesn't have
+                return serveHTTPResponse(server, conn, req, .{ .static = internal_error_response });
+            };
+            break :blk .{ .worker = worker, .target_id = target_id[0..14].* };
+        }
+        return serveNotFound(server, conn, req);
+    };
+    if (server.guestsFull()) {
+        lp.metrics.serve_connection_limit.incr();
+        return serveHTTPResponse(server, conn, req, .{ .static = service_unavailable_response });
+    }
+    return upgrade(server, conn, req, .{ .guest = join });
+}
+
 // GET /json/version (cdp)
 fn serveJSONVersion(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     return serveHTTPResponse(server, conn, req, .{ .static = server.json_version_response });
 }
 
-// GET /json/list or GET /json (cdp)
+// GET /json/list or GET /json (cdp): the pages of every browser a connection
+// can join, each with the /devtools/page/{id} url that does.
 fn serveJSONList(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
-    return serveHTTPResponse(server, conn, req, .{ .static = empty_json_list_response });
+    const writer = try beginBody(server);
+    var stringify: std.json.Stringify = .{ .writer = writer };
+    try stringify.beginArray();
+    var it = server.joinableBrowsers();
+    while (it.next()) |worker| {
+        try worker.pages.writeJSON(&stringify, server.devtools_url);
+    }
+    try stringify.endArray();
+    return serveDynamicHTTPResponse(server, conn, req, .ok, JSON_CONTENT_TYPE);
 }
 
 // GET /json/protocol (cdp)
@@ -1064,6 +1108,14 @@ pub fn buildJSONVersionResponse(app: *const App, ws_url: []const u8) ![]const u8
 const Upgrade = union(enum) {
     spawn: Driver.Protocol,
     attach: *Server.Worker,
+    // a CDP connection joining a running browser
+    guest: Join,
+};
+
+const Join = struct {
+    worker: *Server.Worker,
+    // joining one page (/devtools/page/{id}) rather than the whole browser
+    target_id: ?[14]u8,
 };
 
 // Shared upgrade path: validate the WebSocket headers, write the 101, and
@@ -1100,6 +1152,7 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     switch (target) {
         .spawn => |protocol| server.upgradeConnection(conn, protocol),
         .attach => |worker| server.attachConnection(worker, conn),
+        .guest => |join| server.attachGuest(join.worker, conn, join.target_id),
     }
     return .upgraded;
 }

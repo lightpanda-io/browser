@@ -1492,7 +1492,7 @@ test "cdp.dom: remote object ids belong to the session that minted them" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RO", .url = "cdp/dom1.html", .target_id = "FID-000000000R".*, .session_id = "SID-PRIMARY" });
     const target = try testing.firstTarget(bc);
-    _ = try bc.attachSession(target, "SID-AUX", null);
+    _ = try bc.attachSession(target, "SID-AUX", null, bc.cdp.currentClient());
 
     const root = target.mainFrame() orelse unreachable;
     const html = root.document.getDocumentElement() orelse unreachable;

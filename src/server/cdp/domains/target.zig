@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const Pages = @import("../../Pages.zig");
 
 const URL = @import("../../../browser/URL.zig");
 const js = @import("../../../browser/js/js.zig");
@@ -91,12 +92,42 @@ fn targetInfo(target: *const CDP.Target) ?TargetInfo {
 
 /// Clients such as Browser Use track a tab's URL and title only through this
 /// event, as Chrome sends it whenever either changes.
+/// Also updates the page's entry for the server loop (see publishPages).
 pub fn sendTargetInfoChanged(target: *const CDP.Target, frame_id: u32) !void {
-    if (!target.cdp.target_discover) return;
     const main = target.mainFrame() orelse return;
     if (main._frame_id != frame_id) return;
-    const info = targetInfo(target) orelse return;
-    try target.cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+
+    // the title lookup walks the DOM: only when someone needs it
+    var info: ?TargetInfo = null;
+    if (target.cdp.pages) |pages| {
+        info = targetInfo(target) orelse return;
+        pages.update(pageOf(info.?)) catch |err| log.err(.cdp, "publish pages", .{ .err = err });
+    }
+    for (target.cdp.clients.items) |client| {
+        if (client.target_discover == false) continue;
+        if (info == null) info = targetInfo(target) orelse return;
+        try CDP.sendEventTo(client, "Target.targetInfoChanged", .{ .targetInfo = info.? });
+    }
+}
+
+/// serve: tells the server loop which pages this browser has, for /json/list
+/// and /devtools/page/{id}. Called when a target gets its id or closes;
+/// sendTargetInfoChanged updates a page's URL and title.
+pub fn publishPages(cdp: *CDP) void {
+    const pages = cdp.pages orelse return;
+    var list: std.ArrayList(Pages.Page) = .empty;
+    defer list.deinit(cdp.allocator);
+    if (cdp.browser_context) |*bc| {
+        for (bc.targets.items) |target| {
+            const info = targetInfo(target) orelse continue;
+            list.append(cdp.allocator, pageOf(info)) catch |err| return log.err(.cdp, "publish pages", .{ .err = err });
+        }
+    }
+    pages.publish(list.items) catch |err| log.err(.cdp, "publish pages", .{ .err = err });
+}
+
+fn pageOf(info: TargetInfo) Pages.Page {
+    return .{ .id = info.targetId[0..14].*, .url = info.url, .title = info.title };
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -210,6 +241,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     // the target_id == the frame_id of the "root" frame
     target.target_id = id.toFrameId(page.frame_id);
     const target_id = &target.target_id.?;
+    publishPages(cmd.cdp);
     {
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
@@ -245,7 +277,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     }, .{});
 
     // attach to the target only if auto attach is set.
-    if (cmd.cdp.target_auto_attach) {
+    if (cmd.cdp.currentClient().target_auto_attach) {
         try doAttachtoTarget(cmd, target);
     }
 
@@ -305,7 +337,7 @@ fn attachToTarget(cmd: *CDP.Command) !void {
         cmd.cdp.resolveSessionId(session_id) orelse return error.UnknownSessionId
     else
         null;
-    const session = try bc.attachSession(target, cmd.cdp.session_id_gen.next(), parent_id);
+    const session = try bc.attachSession(target, cmd.cdp.session_id_gen.next(), parent_id, cmd.cdp.currentClient());
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session.id,
@@ -317,9 +349,10 @@ fn attachToTarget(cmd: *CDP.Command) !void {
 
 fn attachToBrowserTarget(cmd: *CDP.Command) !void {
     const cdp = cmd.cdp;
+    const client = cdp.currentClient();
     // Browser-target sessions are independent from page-target sessions and
     // can be created before a browser context exists.
-    const session_id = cdp.browser_session_id orelse cdp.browser_session_id_gen.next();
+    const session_id = client.browser_session_id orelse cdp.browser_session_id_gen.next();
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
@@ -333,7 +366,7 @@ fn attachToBrowserTarget(cmd: *CDP.Command) !void {
         },
     }, .{});
 
-    cdp.browser_session_id = session_id;
+    client.browser_session_id = session_id;
 
     return cmd.sendResult(.{ .sessionId = session_id }, .{});
 }
@@ -362,9 +395,20 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
         return cmd.sendResult(.{ .targetInfo = targetInfo(target).? }, .{});
     }
 
+    if (cmd.routing_session_id) |session_id| {
+        // sent through a page session (or a /devtools/page/{id} connection):
+        // its target is the page, as in Chrome
+        if (cmd.browser_context) |bc| {
+            if (bc.attached_sessions.get(session_id)) |attached| {
+                return cmd.sendResult(.{ .targetInfo = targetInfo(attached.target) orelse return error.TargetNotLoaded }, .{});
+            }
+        }
+    }
+
     return cmd.sendResult(.{
         .targetInfo = TargetInfo{
-            .targetId = "TID-STARTUP",
+            // what /devtools/browser/{id} joins this browser by
+            .targetId = if (cmd.cdp.browser_id) |browser_id| browser_id else "TID-STARTUP",
             .type = "browser",
             .title = "",
             .url = "about:blank",
@@ -450,7 +494,7 @@ fn setDiscoverTargets(cmd: *CDP.Command) !void {
         filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
-    cmd.cdp.target_discover = params.discover and filterIncludesPage(params.filter);
+    cmd.cdp.currentClient().target_discover = params.discover and filterIncludesPage(params.filter);
     return cmd.sendResult(null, .{});
 }
 
@@ -494,13 +538,17 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     }
 
     // set a flag to send Target.attachedToTarget events
-    cmd.cdp.target_auto_attach = params.autoAttach;
+    const client = cmd.cdp.currentClient();
+    client.target_auto_attach = params.autoAttach;
 
-    if (cmd.cdp.target_auto_attach == false) {
-        // detach from all currently attached targets.
+    if (client.target_auto_attach == false) {
+        // detach from all currently attached targets (this client's: a guest
+        // can't take the primary session away from its owner).
         if (cmd.browser_context) |bc| {
             for (bc.targets.items) |target| {
                 const session_id = target.session_id orelse continue;
+                const attached = bc.attached_sessions.get(session_id) orelse continue;
+                if (attached.client != client) continue;
                 target.fetchDisableForSession(session_id);
                 try cmd.sendEvent("Target.detachedFromTarget", .{
                     .sessionId = session_id,
@@ -524,6 +572,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
                 try doAttachtoTarget(cmd, target);
             }
         }
+        publishPages(cmd.cdp);
         try cmd.sendResult(null, .{});
         return;
     }
@@ -1129,7 +1178,7 @@ test "cdp.target: detachFromTarget releases the auxiliary session's inspector se
         .session_id = "SID-PRIMARY",
         .target_id = "TID-000000000B".*,
     });
-    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null, bc.cdp.currentClient());
 
     try ctx.processMessage(.{ .id = 10, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 2 } }, .{ .id = 10, .session_id = "SID-AUX" });
@@ -1157,7 +1206,7 @@ test "cdp.target: detachFromTarget drops the auxiliary session's pending respons
         .session_id = "SID-PRIMARY",
         .target_id = "TID-000000000B".*,
     });
-    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null, bc.cdp.currentClient());
 
     try ctx.processMessage(.{ .id = 10, .method = "Runtime.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 10, .session_id = "SID-AUX" });
@@ -1489,7 +1538,7 @@ test "cdp.target: setAutoAttach on a page session doesn't attach new pages" {
 
     try ctx.processMessage(.{ .id = 3, .method = "Target.setAutoAttach", .sessionId = first_session_id, .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false, .flatten = true } });
     try ctx.expectSentResult(null, .{ .id = 3, .session_id = first_session_id });
-    try testing.expectEqual(false, ctx.cdp().target_auto_attach);
+    try testing.expectEqual(false, ctx.cdp().primary.target_auto_attach);
 
     try ctx.processMessage(.{ .id = 4, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
     const second = bc.targets.items[1];

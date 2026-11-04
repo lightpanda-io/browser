@@ -26,6 +26,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const WS = @import("../WS.zig");
 const CDP = @import("CDP.zig");
 const Node = @import("Node.zig");
 const AXNode = @import("AXNode.zig");
@@ -244,6 +245,16 @@ pub fn close(self: *Target) !void {
     const cdp = self.cdp;
     const bc = self.bc;
     defer {
+        for (bc.attached_sessions.values()) |session| {
+            if (session.target == self and session.page_socket) {
+                // a /devtools/page/{id} connection closes with its page, as in
+                // Chrome; it leaves on its close reply
+                session.client.page_session = null;
+                session.client.link.send(&WS.CLOSE_GOING_AWAY) catch |err| {
+                    log.debug(.cdp, "page guest close", .{ .err = err });
+                };
+            }
+        }
         bc.detachTargetSessions(self);
         if (self.pageHandle()) |handle| {
             handle.close();
@@ -601,7 +612,7 @@ pub fn webmcpDisable(self: *Target) void {
 /// The first session attached to the target.
 pub fn attachPrimarySession(self: *Target, session_id: []const u8) !*BrowserContext.AttachedSession {
     lp.assert(self.session_id == null, "CDP.Target.attachPrimarySession already attached", .{});
-    const attached = try self.bc.attachSession(self, session_id, null);
+    const attached = try self.bc.attachSession(self, session_id, null, self.cdp.currentClient());
     self.session_id = attached.id;
     return attached;
 }

@@ -758,7 +758,7 @@ test "cdp.Fetch: interception events belong to the enabling session" {
         .target_id = "TID-000000000B".*,
     });
     const target = try testing.firstTarget(bc);
-    _ = try bc.attachSession(target, "SID-AUX", null);
+    _ = try bc.attachSession(target, "SID-AUX", null, bc.cdp.currentClient());
 
     try ctx.processMessage(.{
         .id = 1,

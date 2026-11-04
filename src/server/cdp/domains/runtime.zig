@@ -260,7 +260,7 @@ test "cdp.runtime: inspector responses go to the session that sent the command" 
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT2", .url = "hi.html", .target_id = "FID-0000000RT2".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null, bc.cdp.currentClient());
 
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 2, .description = "2" } }, .{ .id = 60, .session_id = "SID-AUX" });
@@ -307,7 +307,7 @@ test "cdp.runtime: inspector events go to the session that enabled them" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT3", .url = "hi.html", .target_id = "FID-0000000RT3".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null, bc.cdp.currentClient());
 
     try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 70, .session_id = "SID-AUX" });
