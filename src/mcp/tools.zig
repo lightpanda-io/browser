@@ -220,7 +220,12 @@ fn dispatchBrowserTool(
         }
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
-            error.NodeNotFound, error.InvalidParams => .InvalidParams,
+            error.NodeNotFound,
+            error.InvalidParams,
+            error.InvalidSelector,
+            error.InvalidNodeType,
+            error.ActionFailed,
+        => .InvalidParams,
             error.Cancelled => .Cancelled,
             error.Timeout, error.NavigationTimeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
