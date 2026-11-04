@@ -216,7 +216,7 @@ fn dispatchBrowserTool(
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
-            return sendToolResultText(server, id, @errorName(err), true);
+            return sendToolResultText(server, id, browser_tools.errorMessage(err), true);
         }
         const code: protocol.ErrorCode = switch (err) {
             error.FrameNotLoaded => .FrameNotLoaded,
@@ -637,6 +637,49 @@ test "MCP - missing required argument is named in the error" {
     try testing.expectJson(.{ .id = 6, .result = .{
         .isError = true,
         .content = &.{.{ .text = "missing required argument 'script'" }},
+    } }, out.written());
+}
+
+test "MCP - a wrong-typed argument is named instead of bare InvalidParams" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // A string where the schema says integer used to die in parseValue with a
+    // bare InvalidParams; the diagnosis names the field and what arrived.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#btn","timeout":"60"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "argument 'timeout' must be an integer, got string \"60\"" }},
+    } }, out.written());
+}
+
+test "MCP - a non-CSS selector and a wrong element type name the fix" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    // A playwright-style text= selector: the error says selectors are
+    // CSS-only and names findElement for role/text lookup.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"click","arguments":{"selector":"text=S-Pankki"}}}
+    );
+    try testing.expectJson(.{ .id = 1, .@"error" = .{
+        .code = -32602,
+        .message = browser_tools.errorMessage(error.InvalidSelector),
+    } }, out.written());
+    try testing.expect(std.mem.find(u8, out.written(), "findElement(role, name)") != null);
+    out.clearRetainingCapacity();
+
+    // fill on a div: the element type doesn't fit the action.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fill","arguments":{"selector":"#plain","value":"x"}}}
+    );
+    try testing.expectJson(.{ .id = 2, .@"error" = .{
+        .code = -32602,
+        .message = browser_tools.errorMessage(error.InvalidNodeType),
     } }, out.written());
 }
 
@@ -2171,7 +2214,7 @@ test "MCP - findElement" {
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"findElement","arguments":{}}}
     );
-    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32602, .message = "InvalidParams" } }, out.written());
+    try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32602, .message = browser_tools.errorMessage(error.InvalidParams) } }, out.written());
     out.clearRetainingCapacity();
 
     try router.handleMessage(server, aa,
