@@ -289,6 +289,15 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/redirect-bad-port")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://127.0.0.1:22/" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-cross-origin-x-hop")) {
         return req.respond("", .{
             .status = .found,

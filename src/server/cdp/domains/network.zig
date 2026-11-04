@@ -64,7 +64,6 @@ pub const ErrorReason = enum {
     AddressUnreachable,
     BlockedByClient,
     BlockedByResponse,
-    UnsafePort,
 
     const Failure = error{
         Failed,
@@ -79,7 +78,6 @@ pub const ErrorReason = enum {
         AddressUnreachable,
         BlockedByClient,
         BlockedByResponse,
-        UnsafePort,
     };
 
     pub fn toError(self: ErrorReason) anyerror {
@@ -106,13 +104,16 @@ pub const ErrorReason = enum {
             .AddressUnreachable => "net::ERR_ADDRESS_UNREACHABLE",
             .BlockedByClient => "net::ERR_BLOCKED_BY_CLIENT",
             .BlockedByResponse => "net::ERR_BLOCKED_BY_RESPONSE",
-            .UnsafePort => "net::ERR_UNSAFE_PORT",
         };
     }
 };
 
 // Chrome's net error for an ErrorReason's error, else the error's name.
 pub fn errorText(err: anyerror) []const u8 {
+    if (err == error.UnsafePort) {
+        // Not a Fetch.failRequest reason, so not in ErrorReason.
+        return "net::ERR_UNSAFE_PORT";
+    }
     inline for (comptime std.enums.values(ErrorReason)) |reason| {
         if (err == reason.toError()) {
             return reason.netError();
@@ -1389,6 +1390,63 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .blockedReason = "inspector",
     }, .{ .session_id = "SID-BLOCK" });
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+}
+
+test "cdp.Network: a bad port fails before connecting, redirect hop included" {
+    testing.silenceLog(&.{.http});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-PORT",
+        .session_id = "SID-PORT",
+    });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+    });
+
+    const ErrorContext = struct {
+        err: ?anyerror = null,
+
+        fn callback(raw: *anyopaque, err: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.err = err;
+        }
+    };
+
+    // Nothing listens on 22 in tests either: UnsafePort, not CouldntConnect,
+    // shows the pipeline refused it.
+    for ([_][:0]const u8{ "http://127.0.0.1:22/", "http://127.0.0.1:9582/redirect-bad-port" }) |url| {
+        var error_context: ErrorContext = .{};
+        var request_id: [14]u8 = undefined;
+        _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+
+        try client.request(.{
+            .frame_id = page.frame_id,
+            .loader_id = 1,
+            .method = .GET,
+            .url = url,
+            .origin = bc.security_origin,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .fetch,
+            .notification = bc.session.notification,
+            .ctx = &error_context,
+            .error_callback = ErrorContext.callback,
+            .shutdown_callback = HttpClient.noopShutdown,
+        }, null);
+
+        try ctx.expectSentEvent("Network.loadingFailed", .{
+            .requestId = &request_id,
+            .errorText = "net::ERR_UNSAFE_PORT",
+        }, .{ .session_id = "SID-PORT" });
+        try testing.expectEqual(error.UnsafePort, error_context.err.?);
+    }
 }
 
 test "cdp.Network: loadingFinished reports the bytes received, not the decoded body" {

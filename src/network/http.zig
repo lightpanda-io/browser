@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const URL = @import("../browser/URL.zig");
 const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
 const libcurl = @import("../sys/libcurl.zig");
@@ -887,8 +888,19 @@ pub fn statusCategory(status: u16) StatusCategory {
     };
 }
 
+// A url whose explicit port is one of the Fetch "bad ports". No port means
+// the scheme's default, which never is. An unparsable or out-of-range port is
+// left to the transport to reject.
+pub fn isBadPortUrl(url: []const u8) bool {
+    const port = URL.getPort(url);
+    if (port.len == 0) {
+        return false;
+    }
+    return isBadPort(std.fmt.parseInt(u16, port, 10) catch return false);
+}
+
 // https://fetch.spec.whatwg.org/#bad-port
-pub fn isBadPort(port: u16) bool {
+fn isBadPort(port: u16) bool {
     return switch (port) {
         1, // tcpmux
         7, // echo
@@ -1016,8 +1028,6 @@ pub fn errorReason(err: anyerror) ErrorReason {
         => .aborted,
         error.RobotsBlocked => .robots_blocked,
         error.BotChallenge => .bot_challenge,
-        // A destination the Fetch standard forbids before any connection.
-        error.UnsafePort => .other,
         else => .other,
     };
 }
@@ -1061,6 +1071,20 @@ test "isBadPort" {
     for ([_]u16{ 0, 80, 443, 8000, 8080, 9584, 65535 }) |port| {
         try testing.expect(!isBadPort(port));
     }
+}
+
+test "isBadPortUrl" {
+    try testing.expect(isBadPortUrl("http://example.com:22/"));
+    try testing.expect(isBadPortUrl("https://example.com:25/x"));
+    try testing.expect(isBadPortUrl("ws://example.com:5060/"));
+    try testing.expect(isBadPortUrl("http://[::1]:110/"));
+
+    try testing.expect(!isBadPortUrl("http://example.com/"));
+    try testing.expect(!isBadPortUrl("https://example.com:443/"));
+    try testing.expect(!isBadPortUrl("ws://127.0.0.1:9584/"));
+    try testing.expect(!isBadPortUrl("http://[::1]/"));
+    try testing.expect(!isBadPortUrl("http://example.com:abc/"));
+    try testing.expect(!isBadPortUrl("http://example.com:99999/"));
 }
 
 test "Header.parse" {
