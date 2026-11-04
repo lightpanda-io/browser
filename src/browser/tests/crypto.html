@@ -3078,19 +3078,17 @@
       pairAlgorithmsDiffer: true,
       pairUsagesDiffer: true,
     }, results);
-    testing.diverges("Chrome builds a new algorithm/usages object on every read", () => {
-      testing.expectEqual({
-        algorithmSame: true,
-        usagesSame: true,
-        algorithmSeen: "HMAC/1",
-        usagesSeen: "encrypt,decrypt,sign",
-        publicAlgorithmSame: true,
-        privateUsagesSame: true,
-        hmacHashSame: true,
-        rsaHashSame: true,
-        rsaExponentSame: true,
-      }, cached);
-    });
+    testing.expectEqual({
+      algorithmSame: true,
+      usagesSame: true,
+      algorithmSeen: "HMAC/1",
+      usagesSeen: "encrypt,decrypt,sign",
+      publicAlgorithmSame: true,
+      privateUsagesSame: true,
+      hmacHashSame: true,
+      rsaHashSame: true,
+      rsaExponentSame: true,
+    }, cached);
   });
 </script>
 
