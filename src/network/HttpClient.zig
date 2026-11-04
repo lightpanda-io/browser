@@ -1481,6 +1481,7 @@ fn storeResponse(cache: *Cache, transfer: *Transfer, rh: *http.ResponseHead) !bo
         .content_type = rh.contentType(),
         .headers = transfer.res.headers,
         .request_headers = try transfer.cacheRequestHeaders(),
+        .authorized = transfer.findRequestHeader("Authorization") != null,
     }, transfer.res.buffer.items());
 }
 
@@ -4024,12 +4025,7 @@ pub const Transfer = struct {
             return error.TooManyRedirects;
         }
 
-        if (transfer._cache_intent == .revalidate) {
-            transfer._cache_intent.revalidate.data.deinit(transfer.client.allocator);
-            transfer.removeHeader("If-None-Match");
-            transfer.removeHeader("If-Modified-Since");
-        }
-        transfer._cache_intent = .none;
+        transfer.dropCacheIntent();
 
         // resolve the redirect target.
         const url: [:0]const u8 = blk: {
@@ -4134,6 +4130,21 @@ pub const Transfer = struct {
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
         self.req.basic_auth_credentials = userpwd;
+        // The retry carries credentials and skips the lookup: in a shared
+        // cache, its response neither goes in under the plain URL nor renews
+        // the entry.
+        if (self.client.cache.shared) self.dropCacheIntent();
+    }
+
+    // The response is no longer the cache's business: a revalidation gives
+    // up the stale entry and the conditional headers cacheLookup put on.
+    fn dropCacheIntent(self: *Transfer) void {
+        if (self._cache_intent == .revalidate) {
+            self._cache_intent.revalidate.data.deinit(self.client.allocator);
+            self.removeHeader("If-None-Match");
+            self.removeHeader("If-Modified-Since");
+        }
+        self._cache_intent = .none;
     }
 
     const RequestHeader = struct {
@@ -6852,4 +6863,47 @@ test "HttpClient: Vary sees the jar's cookies" {
     try testing.expectEqual("text/html", headers[0].value);
     try testing.expectEqual("cookie", headers[1].name);
     try testing.expectEqual("who=a", headers[1].value);
+}
+
+test "HttpClient: a shared cache skips Authorization responses and auth retries" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    for ([_]bool{ true, false }) |shared| {
+        var cache: Cache = .{
+            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) },
+            .shared = shared,
+        };
+        defer cache.deinit();
+        client.cache = &cache;
+
+        const arena = try pool.acquire(.small, "test");
+        defer arena.release();
+        var transfer = testTransfer(arena);
+        transfer.client = &client;
+        transfer._cache_key = transfer.req.url;
+
+        // max-age alone does not let a shared cache store it
+        try transfer.setHeader("Authorization", "Bearer t", .{});
+        transfer.setResponseHeaders(&.{.{ .name = "cache-control", .value = "max-age=300" }});
+        var rh: http.ResponseHead = .{ .status = 200, .url = transfer.req.url, .redirect_count = 0 };
+        try testing.expectEqual(!shared, try storeResponse(&cache, &transfer, &rh));
+
+        // a retry with credentials gives up the revalidation and its validator
+        try transfer.setHeader("If-None-Match", "\"v1\"", .{});
+        transfer._cache_intent = .{ .revalidate = .{
+            .status = 200,
+            .content_type = "text/plain",
+            .etag = "\"v1\"",
+            .last_modified = null,
+            .headers = &.{},
+            .data = .{ .buffer = try testing.allocator.dupe(u8, "old") },
+        } };
+        transfer.updateCredentials("u:p");
+        try testing.expectEqual(shared, transfer._cache_intent == .none);
+        try testing.expectEqual(shared, transfer.findRequestHeader("If-None-Match") == null);
+        if (!shared) transfer._cache_intent.revalidate.data.deinit(testing.allocator);
+    }
 }

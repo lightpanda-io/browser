@@ -487,6 +487,9 @@
     \\                           have different lifetimes and are shared
     \\                           differently, so a cached response without its
     \\                           Set-Cookie can make later requests fail.
+    \\                           It also lifts the shared-cache rules: 401 and
+    \\                           407 responses, and responses to requests with
+    \\                           Authorization, can be stored.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to stylesheet for mcp and agent, and to none of them
