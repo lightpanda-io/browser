@@ -42,6 +42,8 @@ pub const Kind = enum {
 };
 
 // Lives in V8's continuation-preserved embedder data as a Smi, hence u30.
+// The `id` is just for logging. `tracked` is what actually matters. It lets
+// "begin" inherit `tracked` from its caller.
 pub const Tag = packed struct(u30) {
     tracked: bool,
     id: u29,
@@ -144,10 +146,11 @@ pub fn current(self: *const Attribution) ?Tag {
 pub const Scope = struct {
     prev: ?Tag,
     attribution: *Attribution,
+    tag: if (IS_DEBUG) ?Tag else void, // only for debug log
 
     pub fn exit(self: Scope) void {
         if (comptime IS_DEBUG) {
-            log.debug(.attribution, "exit", .{});
+            log.debug(.attribution, "exit", .{ .id = self.tag, .restore = self.prev });
         }
         self.attribution.set(self.prev);
     }
@@ -157,10 +160,20 @@ pub const Scope = struct {
 pub fn enter(self: *Attribution, tag: ?Tag) Scope {
     const prev = self.current();
     if (comptime IS_DEBUG) {
-        log.debug(.attribution, "enter", .{ .id = tag });
+        log.debug(.attribution, "enter", .{ .id = tag, .prev = prev });
     }
     self.set(tag);
-    return .{ .attribution = self, .prev = prev };
+    return .{ .attribution = self, .prev = prev, .tag = if (comptime IS_DEBUG) tag else {} };
+}
+
+// Restores the current tag on exit(), for the microtask checkpoint: V8 clears
+// the tag after each microtask rather than restoring it.
+pub fn preserve(self: *Attribution) Scope {
+    const prev = self.current();
+    if (comptime IS_DEBUG) {
+        log.debug(.attribution, "preserve", .{ .id = prev });
+    }
+    return .{ .attribution = self, .prev = prev, .tag = if (comptime IS_DEBUG) prev else {} };
 }
 
 // begin + enter.

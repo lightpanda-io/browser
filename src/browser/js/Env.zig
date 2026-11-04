@@ -511,8 +511,7 @@ pub fn runMicrotasks(self: *Env) void {
         self.microtask_queues_are_running = true;
         defer self.microtask_queues_are_running = false;
 
-        // V8 clears the task tag after each microtask rather than restoring it.
-        const task_scope = self.attribution.enter(self.attribution.current());
+        const task_scope = self.attribution.preserve();
         defer task_scope.exit();
 
         // Re-read len/items each iteration: a checkpoint can run JS that creates

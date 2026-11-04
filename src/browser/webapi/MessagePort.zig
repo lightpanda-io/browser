@@ -367,7 +367,9 @@ const DeliverCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *DeliverCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
-        defer self.hold.release();
+
+        self.hold.release();
+
         const port = self.port;
         const exec = port._exec;
 
