@@ -116,32 +116,11 @@ COMPREPLY=("stale candidate")
 invoke_completion
 assert_candidates "run-path preserves two filename boundaries" script.js "script with space.js"
 
-# Exercise every path-valued shared flag branch for each command that emits it.
-common_path_flags=(
-    --http-cache-dir
-    --render-font
-    --web-bot-auth-key-file
-    --adblock-lists
-    --cookie
-    --cookie-jar
-    --ca-cert
-    --ca-path
-)
-common_path_commands=(serve fetch mcp agent run)
-for command in "${common_path_commands[@]}"; do
-    for flag in "${common_path_flags[@]}"; do
-        assert_path_branch "$command $flag path completion" "$command" "$flag" branch
-    done
-done
-
-assert_path_branch "serve --unix-socket path completion" serve --unix-socket branch
-assert_path_branch "fetch --wait-script-file path completion" fetch --wait-script-file branch
-assert_path_branch "fetch --inject-script-file path completion" fetch --inject-script-file branch
-assert_path_branch "agent --trace path completion" agent --trace branch
-assert_path_branch "agent --save path completion" agent --save branch
-assert_path_branch "agent --attach path completion" agent --attach branch
+# Which flags get path completion is checked against the CLI table by the
+# "completion: bash path arms" unit test; here one long flag, one short flag
+# and one positional exercise the helper itself.
+assert_path_branch "fetch --cookie path completion" fetch --cookie branch
 assert_path_branch "agent -a path completion" agent -a branch
-assert_path_branch "agent positional path completion" agent agent branch
 assert_path_branch "run positional path completion" run run branch
 
 # Tabs, quotes, backslashes and glob characters stay inside their filename.
@@ -212,6 +191,7 @@ run_interactive_completion() {
     local shadow=${1:-baseline}
     local rcfile="$tmpdir/readline.rc"
     local captured="$tmpdir/readline.lines"
+    local ready="$tmpdir/readline.ready"
     local transcript="$tmpdir/readline.transcript"
     local bash_command line
 
@@ -226,20 +206,40 @@ lightpanda() {
     # Bash 3.2 leaves READLINE_LINE unset, so the mock records parsed arguments.
     printf '%s:%s:%s:%s\n' "$#" "$1" "$2" "$3" >> "$LIGHTPANDA_CAPTURE_FILE"
 }
+: >"$LIGHTPANDA_READY_FILE"
 EOF
     : >"$captured"
+    rm -f "$ready"
 
+    # Polls for up to 10s; on timeout the line count check below reports it.
+    wait_for() {
+        local tries=0
+        until eval "$1"; do
+            tries=$((tries + 1))
+            [ "$tries" -lt 200 ] || return 0
+            sleep 0.05
+        done
+    }
+
+    # Each line goes in once the previous one has run, so no fixed delay has
+    # to outlast a slow runner.
     feed_interactive_input() {
-        sleep 1
-        printf 'lightpanda run insert'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda run "insert with'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda run nest'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda run "nested directory/child'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda ru'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda completion ba'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda fetch --load-resources image,if'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
-        printf 'lightpanda ru'; sleep 0.2; printf '\t'; sleep 0.2; printf ' --help\n'; sleep 0.5
-        printf 'lightpanda run bran'; sleep 0.2; printf '\t'; sleep 0.2; printf '\n'; sleep 0.5
+        local sent=0 input
+        wait_for '[ -e "$ready" ]'
+        for input in \
+            'lightpanda run insert\t\n' \
+            'lightpanda run "insert with\t\n' \
+            'lightpanda run nest\t\n' \
+            'lightpanda run "nested directory/child\t\n' \
+            'lightpanda ru\t\n' \
+            'lightpanda completion ba\t\n' \
+            'lightpanda fetch --load-resources image,if\t\n' \
+            'lightpanda ru\t --help\n' \
+            'lightpanda run bran\t\n'; do
+            printf "$input"
+            sent=$((sent + 1))
+            wait_for '[ "$(wc -l <"$captured")" -ge "$sent" ]'
+        done
         printf 'exit\n'
     }
 
@@ -250,6 +250,7 @@ EOF
             LIGHTPANDA_COMPOPT_SHADOW="$shadow" \
             LIGHTPANDA_COMPLETION_SCRIPT="$completion_script" \
             LIGHTPANDA_CAPTURE_FILE="$captured" \
+            LIGHTPANDA_READY_FILE="$ready" \
             script -q "$transcript" "$completion_bash" --noprofile --rcfile "$rcfile" -i >/dev/null
     else
         printf -v bash_command '%q --noprofile --rcfile %q -i' "$completion_bash" "$rcfile"
@@ -259,6 +260,7 @@ EOF
             LIGHTPANDA_COMPOPT_SHADOW="$shadow" \
             LIGHTPANDA_COMPLETION_SCRIPT="$completion_script" \
             LIGHTPANDA_CAPTURE_FILE="$captured" \
+            LIGHTPANDA_READY_FILE="$ready" \
             script -q -c "$bash_command" "$transcript" >/dev/null
     fi
 

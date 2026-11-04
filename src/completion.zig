@@ -540,19 +540,50 @@ test "completion: bash and zsh" {
         const script = out.written();
         try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda()") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, "--load-resources") != null);
-        if (shell == .bash) {
-            try std.testing.expect(std.mem.indexOf(u8, script, "local cur prev cmd i") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda_path() {") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "COMPREPLY=()") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "while IFS= read -r candidate; do COMPREPLY+=(\"$candidate\"); done < <(compgen -f -- \"$cur\")") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "builtin compopt -o filenames 2>/dev/null || :") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "builtin compgen -f -- /dev/null/ >/dev/null || :") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "complete -F _light_panda light-panda") != null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "complete -o filenames") == null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "if type compopt") == null);
-            try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda_path; ") != null);
-        }
     }
+}
+
+test "completion: bash path arms" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try write(&out.writer, .bash, "light-panda");
+    const script = out.written();
+
+    // A command-wide `-o filenames` would also post-process subcommand and
+    // enum candidates, e.g. `ru<TAB>` → `run/` next to a `run` directory.
+    try std.testing.expect(std.mem.indexOf(u8, script, "\ncomplete -F _light_panda light-panda\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "complete -o") == null);
+
+    var arm_buf: [128]u8 = undefined;
+    var path_arms: usize = 0;
+    for (commands) |command| {
+        const header = try std.mem.print(&arm_buf, "\n        {s})\n", .{command.name});
+        const start = std.mem.indexOf(u8, script, header) orelse return error.MissingCommand;
+        const end = std.mem.indexOfPos(u8, script, start, "\n            ;;\n") orelse return error.MissingCommand;
+        const section = script[start..end];
+
+        for (command.flags) |flag| {
+            if (flag.values != .path) continue;
+            path_arms += 1;
+            const arm = if (flag.short) |short|
+                try std.mem.print(&arm_buf, " {s}|-{c}) _light_panda_path; return ;;\n", .{ flag.name, short })
+            else
+                try std.mem.print(&arm_buf, " {s}) _light_panda_path; return ;;\n", .{flag.name});
+            if (std.mem.indexOf(u8, section, arm) == null) {
+                std.debug.print("{s}: missing path arm:{s}", .{ command.name, arm });
+                return error.MissingPathArm;
+            }
+        }
+        if (command.positional) |positional| if (positional.values == .path) {
+            path_arms += 1;
+            if (std.mem.indexOf(u8, section, "else\n                _light_panda_path; ") == null) {
+                std.debug.print("{s}: missing positional path completion\n", .{command.name});
+                return error.MissingPathArm;
+            }
+        };
+    }
+    try std.testing.expect(path_arms > 0);
+    try std.testing.expectEqual(path_arms, std.mem.count(u8, script, "_light_panda_path; "));
 }
 
 test "completion: zsh value descriptions" {
