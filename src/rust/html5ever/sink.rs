@@ -160,6 +160,7 @@ pub struct Sink<'arena> {
     // Only for the parse of a document from its source, not of a fragment
     // or of document.write() input.
     pub input: Option<DocumentInput<'arena>>,
+    pub xml: Option<&'arena crate::xml::XmlState>,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -219,6 +220,10 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn create_element(&self, name: QualName, attrs: Vec<Attribute>, flags: ElementFlags) -> Ref {
+        let attrs = match self.xml {
+            Some(xml) => xml.restore_namespaces(attrs),
+            None => attrs,
+        };
         // Browsers compile an inline script with the document position of its
         // text, which starts right after the start tag the tokenizer just read.
         let text_position = match &self.input {
@@ -244,12 +249,16 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn create_comment(&self, txt: StrTendril) -> Ref {
+        let callback = match self.xml {
+            Some(xml) if xml.creating_cdata.get() => xml.create_cdata.unwrap(),
+            _ => self.create_comment_callback,
+        };
         let str = StringSlice {
             ptr: txt.as_ptr(),
             len: txt.len(),
         };
         unsafe {
-            return (self.create_comment_callback)(self.ctx, str);
+            return callback(self.ctx, str);
         }
     }
 

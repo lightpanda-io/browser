@@ -231,6 +231,7 @@ pub extern "c" fn xml5ever_parse_document(
     parseErrorCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) void,
     popCallback: *const fn (ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void,
     createCommentCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) ?*anyopaque,
+    createCDATASectionCallback: *const fn (ctx: *anyopaque, StringSlice) callconv(.c) ?*anyopaque,
     createProcessingInstruction: *const fn (ctx: *anyopaque, StringSlice, StringSlice) callconv(.c) ?*anyopaque,
     appendDoctypeToDocument: *const fn (ctx: *anyopaque, StringSlice, StringSlice, StringSlice) callconv(.c) void,
     addAttrsIfMissingCallback: *const fn (ctx: *anyopaque, target_ref: *anyopaque, AttributeIterator) callconv(.c) void,
