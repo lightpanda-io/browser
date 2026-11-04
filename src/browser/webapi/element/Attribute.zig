@@ -226,8 +226,7 @@ pub const List = struct {
         return self._put(.{ .entry = entry, .normalized = name }, value, element, frame, .dom);
     }
 
-    // A style attribute whose change no selector or cascaded value can see
-    // (StyleManager.inlineWriteAffectsCascade), so the cascade's memos stay.
+    // A style attribute whose change no selector can see.
     pub fn putInertStyle(self: *List, value: String, element: *Element, frame: *Frame) !void {
         const name = comptime String.wrap("style");
         const entry = self.getEntryWithNormalizedName(name);

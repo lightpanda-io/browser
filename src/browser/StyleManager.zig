@@ -63,6 +63,9 @@ flow: Group(Flow) = .{},
 
 widths: WidthMemo = .{},
 
+// Inline writes of a property the layout memos read.
+layout_bumps: usize = 0,
+
 // Keyed by property name, pruning to what is (hopefully) one or few rules
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
 
@@ -624,41 +627,87 @@ fn compoundReadsStyleAttribute(compound: Selector.Compound) bool {
     return false;
 }
 
-/// Whether an inline style write of `name` can change what the style manager
-/// computes: a property it cascades, font-size (text wraps at it) or a custom
-/// property, or any property once a selector reads the style attribute. A
-/// transform or a z-index on its own changes none of it.
-pub fn inlineWriteAffectsCascade(self: *StyleManager, name: []const u8) bool {
-    if (self.dirty) return true;
-    return self.reads_style_attribute or cascadesProperty(name);
+/// The memos an inline write can invalidate on its own, one per Group. Plus
+/// the layout memos comes from several groups.
+const Memo = enum { visibility, geometry, touch_action, text, flow, layout };
+const Memos = std.EnumSet(Memo);
+
+comptime {
+    for (group_fields) |field| {
+        _ = @field(Memo, field);
+    }
 }
 
-const tracked_properties = blk: {
-    const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
-    var kvs: [names.len]struct { []const u8 } = undefined;
-    for (names, &kvs) |name, *kv| {
-        kv.* = .{name};
-    }
-    break :blk std.StaticStringMap(void).initComptime(kvs);
-};
-
-fn cascadesProperty(name: []const u8) bool {
-    if (isCustomProperty(name)) {
-        return true;
-    }
-    // A shorthand is shorter than its longhands, so nothing longer is tracked
-    var buf: [tracked_properties.max_len]u8 = undefined;
-    if (name.len > buf.len) {
+/// Invalidates the memos an inline style write of `name` can change. This
+/// returns false when an individual memo cannot be cleared. The caller must
+/// report a full style change.
+pub fn inlineStyleWritten(self: *StyleManager, name: []const u8) bool {
+    if (self.dirty or self.reads_style_attribute) {
         return false;
     }
-    return cascadesLowerProperty(std.ascii.lowerString(&buf, name));
+
+    var it = propertyReach(name).iterator();
+    while (it.next()) |memo| {
+        switch (memo) {
+            .layout => self.layout_bumps += 1,
+            inline else => |group| @field(self, @tagName(group)).bumps += 1,
+        }
+    }
+    return true;
 }
 
-fn cascadesLowerProperty(name: []const u8) bool {
-    if (CssParser.axisShorthand(name)) |shorthand| {
-        return cascadesLowerProperty(shorthand.x) or cascadesLowerProperty(shorthand.y);
+/// The version the layout memos are valid for.
+pub fn layoutVersion(self: *const StyleManager) usize {
+    return self.frame.page.style_version + self.layout_bumps;
+}
+
+/// Lowercase property name -> the memos that read it. A name not in here
+/// reaches nothing. transform/z-index/custom properties...no memo reads them.
+/// Nothing substitutes var() (yet).
+const property_reach = blk: {
+    // layout reads everything, except what we explicitly ignore (safer option)
+    const layout_ignores = [_][]const u8{ "visibility", "opacity", "pointer-events", "touch-action", "overscroll-behavior-x", "overscroll-behavior-y" };
+
+    // font-size isn't cascaded by any group, but text wraps at it
+    const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
+    @setEvalBranchQuota(names.len * names.len * 100);
+
+    var kvs: [names.len]struct { []const u8, Memos } = undefined;
+    for (names, &kvs) |name, *kv| {
+        var memos: Memos = .empty;
+        for (group_fields) |field| {
+            const Spec = @FieldType(Declarations, field);
+            for (Spec.names) |declared| {
+                if (std.mem.eql(u8, name, declared)) {
+                    memos.insert(@field(Memo, field));
+                }
+            }
+        }
+        for (layout_ignores) |ignored| {
+            if (std.mem.eql(u8, name, ignored)) {
+                break;
+            }
+        } else {
+            memos.insert(.layout);
+        }
+        kv.* = .{ name, memos };
     }
-    return tracked_properties.has(name);
+    break :blk std.StaticStringMap(Memos).initComptime(kvs);
+};
+
+fn propertyReach(name: []const u8) Memos {
+    // A shorthand is shorter than its longhands, so nothing longer is read
+    var buf: [property_reach.max_len]u8 = undefined;
+    if (name.len > buf.len) {
+        return .empty;
+    }
+    const lower = std.ascii.lowerString(&buf, name);
+    if (CssParser.axisShorthand(lower)) |shorthand| {
+        const x_prop: Memos = property_reach.get(shorthand.x) orelse .empty;
+        const y_prop: Memos = property_reach.get(shorthand.y) orelse .empty;
+        return x_prop.unionWith(y_prop);
+    }
+    return property_reach.get(lower) orelse .empty;
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer
@@ -1242,7 +1291,7 @@ pub fn cacheWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind, w
 fn freshWidthMemo(self: *StyleManager) ?*WidthMemo {
     self.rebuildIfDirty() catch return null;
     const memo = &self.widths;
-    const version = self.frame.page.style_version;
+    const version = self.layoutVersion();
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
         memo.map.clearRetainingCapacity();
@@ -1428,9 +1477,12 @@ fn Group(comptime Spec: type) type {
         // skip the cascade on the many pages without one.
         has_important: bool = false,
 
-        // Valid while Page.style_version == memo_version.
+        // Valid while Page.style_version + bumps == memo_version.
         memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
         memo_version: usize = 0,
+
+        // Inline writes of a property this group declares (invalidate).
+        bumps: usize = 0,
 
         // inheritedProps' scratch, kept so each walk doesn't reallocate
         path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
@@ -1533,7 +1585,8 @@ fn Group(comptime Spec: type) type {
         }
 
         fn freshMemo(self: *Self, frame: *Frame) *std.AutoHashMapUnmanaged(*Element, Computed) {
-            const version = frame.page.style_version;
+            // Both terms only grow, so the sum moves whenever either does
+            const version = frame.page.style_version + self.bumps;
             if (self.memo_version != version) {
                 self.memo.clearRetainingCapacity();
                 self.memo_version = version;
@@ -3665,13 +3718,6 @@ test "StyleManager: memo: an inline write it doesn't cascade keeps it" {
     try testing.expectEqual(version, frame.page.style_version);
     try testing.expectString("z-index: 2;", div.getAttributeSafe(comptime .wrap("style")).?);
 
-    // A property it computes, a shorthand of one or a custom property does
-    for ([_][2][]const u8{ .{ "margin-left", "4px" }, .{ "overflow", "hidden" }, .{ "--offset", "4px" } }) |write| {
-        const before = frame.page.style_version;
-        try style.setProperty(write[0], write[1], null, frame);
-        try testing.expect(frame.page.style_version != before);
-    }
-
     // Once a selector reads the style attribute, any write can change a match
     const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
     try style_el.asNode().setTextContent("[style*=rotate] { display: none }", frame);
@@ -3679,6 +3725,54 @@ test "StyleManager: memo: an inline write it doesn't cascade keeps it" {
     try testing.expectEqual(false, sm.hasDisplayNone(div));
     try style.setProperty("transform", "rotate(5deg)", null, frame);
     try testing.expectEqual(true, sm.hasDisplayNone(div));
+}
+
+test "StyleManager: memo: an inline write drops only the memos that read it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p></p></div>");
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const version = frame.page.style_version;
+
+    // A fading slide: its visibility, inherited below it, but no width
+    sm.cacheWidth(div, .box, 100);
+    try testing.expectEqual(false, sm.isHidden(p, .{ .check_opacity = true }));
+    try style.setProperty("opacity", "0", null, frame);
+    try testing.expectEqual(true, sm.isHidden(p, .{ .check_opacity = true }));
+    try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
+    try testing.expectEqual(0, sm.geometry.bumps);
+
+    // display reaches both
+    try style.setProperty("display", "none", null, frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(div));
+    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+
+    // A shorthand reaches what its longhands do: overflow-x clips the width
+    sm.cacheWidth(div, .box, 100);
+    const visibility_bumps = sm.visibility.bumps;
+    try testing.expectEqual(false, sm.clipsOverflowX(div));
+    try style.setProperty("overflow", "hidden", null, frame);
+    try testing.expectEqual(true, sm.clipsOverflowX(div));
+    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+    try testing.expectEqual(visibility_bumps, sm.visibility.bumps);
+
+    // No memo reads a custom property
+    sm.cacheWidth(div, .box, 100);
+    try style.setProperty("--offset", "4px", null, frame);
+    try testing.expectString("4px", sm.customPropertyValue(p, comptime .wrap("--offset")).?);
+    try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
+
+    // None of it touched another frame's memos
+    try testing.expectEqual(version, frame.page.style_version);
 }
 
 test "StyleManager: memo: inherited values, any query order" {
