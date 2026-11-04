@@ -240,6 +240,10 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
         return;
     }
 
+    if (element._flags.builtin_undefined) {
+        return upgradeBuiltIn(element, frame);
+    }
+
     // Customized built-in element - check if it actually has a definition first
     if (frame.getCustomizedBuiltInDefinition(element) == null) {
         return;
@@ -432,26 +436,35 @@ fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const 
     }
 }
 
-// Check if element has "is" attribute and attach customized built-in definition
-pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
+pub fn initBuiltIn(element: *Element, frame: *Frame) !void {
     const is_value = element.getAttributeSafe(comptime .wrap("is")) orelse return;
+    try frame._undefined_builtins.put(frame.page_arena, element, try frame.dupeString(is_value));
+    element._flags.builtin_undefined = true;
+    try upgradeBuiltIn(element, frame);
+}
 
-    const custom_elements = frame.window.getCustomElements();
-    const definition = custom_elements._definitions.get(is_value) orelse return;
+pub fn upgradeBuiltIns(name: []const u8, frame: *Frame) !void {
+    var candidates: std.ArrayList(*Element) = .empty;
+    for (frame._undefined_builtins.keys(), frame._undefined_builtins.values()) |element, is_value| {
+        if (std.mem.eql(u8, is_value, name) and element.asNode().isConnected()) {
+            try candidates.append(frame.local_arena, element);
+        }
+    }
+    for (candidates.items) |element| {
+        try upgradeBuiltIn(element, frame);
+    }
+}
 
-    const extends_tag = definition.extends orelse return;
-    if (extends_tag != element.getTag()) {
+/// https://html.spec.whatwg.org/#concept-upgrade-an-element
+pub fn upgradeBuiltIn(element: *Element, frame: *Frame) error{OutOfMemory}!void {
+    const is_value = frame._undefined_builtins.get(element) orelse return;
+    const definition = frame.window.getCustomElements()._definitions.get(is_value) orelse return;
+    if (definition.extends != element.getTag()) {
         return;
     }
+    // A failed upgrade is never retried.
+    _ = frame._undefined_builtins.swapRemove(element);
 
-    // Attach the definition
-    try frame.setCustomizedBuiltInDefinition(element, definition);
-
-    // Reset callback flags since this is a fresh upgrade
-    _ = frame._customized_builtin_connected_callback_invoked.remove(element);
-    _ = frame._customized_builtin_disconnected_callback_invoked.remove(element);
-
-    // Invoke constructor
     const prev_upgrading = frame._upgrading_element;
     const prev_consumed = frame._upgrading_consumed;
     const node = element.asNode();
@@ -483,9 +496,25 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
 
     var caught: js.TryCatch.Caught = .{};
     _ = local.toLocal(definition.constructor).newInstance(&caught) catch |err| {
-        log.debug(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
+        log.debug(.js, "custom builtin ctor", .{ .name = definition.name, .err = err, .caught = caught });
         return;
     };
+
+    element._flags.builtin_undefined = false;
+    try frame.setCustomizedBuiltInDefinition(element, definition);
+    _ = frame._customized_builtin_connected_callback_invoked.remove(element);
+    _ = frame._customized_builtin_disconnected_callback_invoked.remove(element);
+    frame.styleChanged(); // the element now matches :defined
+
+    for (element.attributeEntries()) |*attr| {
+        const name = lp.String.wrap(attr.name());
+        if (definition.isAttributeObserved(name)) {
+            enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
+        }
+    }
+    if (node.isConnected()) {
+        try enqueueConnectedCallbackOnElement(false, element, frame);
+    }
 }
 
 fn invokeCallback(self: *Custom, comptime callback_name: [:0]const u8, args: anytype, frame: *Frame) void {

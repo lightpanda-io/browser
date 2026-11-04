@@ -158,7 +158,10 @@ pub const Flags = packed struct(u8) {
     // and the attribute scan for the many elements that have neither.
     has_inline_style: bool = false,
 
-    _unused: u4 = 0,
+    // Created with an "is" value and not upgraded (yet, or ever): not :defined.
+    builtin_undefined: bool = false,
+
+    _unused: u3 = 0,
 };
 
 _type: Type,

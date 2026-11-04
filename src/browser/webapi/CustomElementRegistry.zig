@@ -129,6 +129,10 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         _ = frame._undefined_custom_elements.swapRemove(idx);
     }
 
+    if (definition.isCustomizedBuiltIn()) {
+        try Custom.upgradeBuiltIns(owned_name, frame);
+    }
+
     if (self._when_defined.fetchRemove(name)) |entry| {
         frame.js.toLocal(entry.value).resolve("whenDefined", constructor);
     }
@@ -191,7 +195,7 @@ fn upgradeNode(self: *CustomElementRegistry, node: *Node, frame: *Frame) !void {
 
 fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame) !void {
     const custom = element.is(Custom) orelse {
-        return Custom.checkAndAttachBuiltIn(element, frame);
+        return Custom.upgradeBuiltIn(element, frame);
     };
 
     if (custom._definition != null or custom._upgrade_failed) {

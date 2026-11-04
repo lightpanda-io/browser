@@ -791,6 +791,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // Custom elements
         // https://dom.spec.whatwg.org/#concept-element-defined
         .defined => {
+            if (el._flags.builtin_undefined) return false;
             const custom = el.is(Node.Element.Html.Custom) orelse return true;
             if (custom._definition != null) return !custom._upgrade_in_progress;
             return !CustomElementRegistry.isValidName(custom._tag_name.str());
