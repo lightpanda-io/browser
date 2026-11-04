@@ -103,7 +103,8 @@ pub const driver_guidance =
     \\- NEVER pass backendNodeId to click/fill/hover/selectOption/setChecked.
     \\  Always use a CSS selector. This is load-bearing: backendNodeId calls
     \\  cannot be recorded as reusable JavaScript calls, so any session that
-    \\  uses them is not replayable. Use `findElement` to locate candidates by role/name,
+    \\  uses them is not replayable, and a backendNodeId goes stale once the
+    \\  page re-renders. Use `findElement` to locate candidates by role/name,
     \\  then `nodeDetails` and use the `selector` it returns.
     \\- Make selectors uniquely identifying — include value/name/position to
     \\  disambiguate. Example: `input[type="submit"][value="login"]`, not
