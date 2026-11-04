@@ -84,8 +84,9 @@ session_id: []const u8,
 directory: ?*HttpServer = null,
 transport: Transport,
 
-/// Guards the cancellation state below: the stdio reader thread records
-/// cancellations while the dispatch thread runs tool calls.
+/// Guards the cancellation state below: the stdio reader or an HTTP
+/// connection thread records cancellations while the dispatch thread runs
+/// tool calls.
 cancel_mutex: std.Io.Mutex = .init,
 /// Ids from `notifications/cancelled`, owned. A ring rather than one slot:
 /// calls queued behind a long wait time out together, so several can land
@@ -231,8 +232,9 @@ pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
     return tools.handleCall(self, arena, req);
 }
 
-/// Record a `notifications/cancelled`. Runs on the stdio reader thread, so
-/// it only touches the state the session's cancel hook reads.
+/// Record a `notifications/cancelled`. Runs off the dispatch thread (on the
+/// stdio reader or an HTTP connection), so it only touches the state the
+/// session's cancel hook reads.
 pub fn handleCancelledRequest(self: *Self, value: std.json.Value) void {
     var cancelled = RequestId.from(value) orelse return;
     if (cancelled == .string) {
