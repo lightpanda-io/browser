@@ -92,11 +92,19 @@ fn pageTargetInfo(bc: *const CDP.BrowserContext) ?TargetInfo {
 /// Clients such as Browser Use track a tab's URL and title only through this
 /// event, as Chrome sends it whenever either changes.
 pub fn sendTargetInfoChanged(bc: *const CDP.BrowserContext, frame_id: u32) !void {
-    if (!bc.cdp.target_discover) return;
+    const clients = bc.cdp.clients.items;
+    for (clients) |client| {
+        if (client.target_discover) break;
+    } else return; // nobody listens; skip the title lookup
+
     const main = bc.mainFrame() orelse return;
     if (main._frame_id != frame_id) return;
     const info = pageTargetInfo(bc) orelse return;
-    try bc.cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+    for (clients) |client| {
+        if (client.target_discover) {
+            try CDP.sendEventTo(client, "Target.targetInfoChanged", .{ .targetInfo = info });
+        }
+    }
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -237,7 +245,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     }, .{});
 
     // attach to the target only if auto attach is set.
-    if (cmd.cdp.target_auto_attach) {
+    if (cmd.cdp.currentClient().target_auto_attach) {
         try doAttachtoTarget(cmd, target_id);
     }
 
@@ -297,9 +305,10 @@ fn attachToTarget(cmd: *CDP.Command) !void {
 
 fn attachToBrowserTarget(cmd: *CDP.Command) !void {
     const cdp = cmd.cdp;
+    const client = cdp.currentClient();
     // Browser-target sessions are independent from page-target sessions and
     // can be created before a browser context exists.
-    const session_id = cdp.browser_session_id orelse cdp.browser_session_id_gen.next();
+    const session_id = client.browser_session_id orelse cdp.browser_session_id_gen.next();
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
@@ -313,7 +322,7 @@ fn attachToBrowserTarget(cmd: *CDP.Command) !void {
         },
     }, .{});
 
-    cdp.browser_session_id = session_id;
+    client.browser_session_id = session_id;
 
     return cmd.sendResult(.{ .sessionId = session_id }, .{});
 }
@@ -424,7 +433,7 @@ fn setDiscoverTargets(cmd: *CDP.Command) !void {
         filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
-    cmd.cdp.target_discover = params.discover and filterIncludesPage(params.filter);
+    cmd.cdp.currentClient().target_discover = params.discover and filterIncludesPage(params.filter);
     return cmd.sendResult(null, .{});
 }
 
@@ -456,17 +465,22 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     // set a flag to send Target.attachedToTarget events
-    cmd.cdp.target_auto_attach = params.autoAttach;
+    const client = cmd.cdp.currentClient();
+    client.target_auto_attach = params.autoAttach;
 
-    if (cmd.cdp.target_auto_attach == false) {
-        // detach from all currently attached targets.
+    if (client.target_auto_attach == false) {
+        // detach from all currently attached targets (this client's: a guest
+        // can't take the primary session away from its owner).
         if (cmd.browser_context) |bc| {
-            if (bc.session_id) |session_id| {
-                bc.fetchDisableForSession(session_id);
-                try cmd.sendEvent("Target.detachedFromTarget", .{
-                    .sessionId = session_id,
-                }, .{});
-                _ = bc.detachSession(session_id);
+            if (bc.primarySession()) |primary| {
+                if (primary.client == client) {
+                    const session_id = primary.id;
+                    bc.fetchDisableForSession(session_id);
+                    try cmd.sendEvent("Target.detachedFromTarget", .{
+                        .sessionId = session_id,
+                    }, .{});
+                    _ = bc.detachSession(session_id);
+                }
             }
         }
         try cmd.sendResult(null, .{});
