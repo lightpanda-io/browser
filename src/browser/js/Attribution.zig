@@ -71,7 +71,7 @@ pub const BeginOpts = struct {
     parent: ??Tag = null, // can be explicitly nulled
 };
 
-// / Hands out the next task id and logs it.
+// Hands out the next task id and logs it.
 pub fn begin(self: *Attribution, kind: Kind, opts: BeginOpts) Tag {
     const id = if (self.last_id >= max_id) 1 else self.last_id + 1;
     self.last_id = id;
