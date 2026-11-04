@@ -4399,7 +4399,7 @@ test "Frame: a failed navigation commits an error document over the superseded o
     defer page.close();
     const frame = page.frame().?;
 
-    try testing.expectEqualSlices(u8, "http://127.0.0.1:1/unreachable", frame.url);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:65534/unreachable", frame.url);
     try testing.expectEqual(.complete, frame._load_state);
 
     var ls: JS.Local.Scope = undefined;

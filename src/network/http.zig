@@ -1016,6 +1016,8 @@ pub fn errorReason(err: anyerror) ErrorReason {
         => .aborted,
         error.RobotsBlocked => .robots_blocked,
         error.BotChallenge => .bot_challenge,
+        // A destination the Fetch standard forbids before any connection.
+        error.UnsafePort => .other,
         else => .other,
     };
 }

@@ -723,3 +723,24 @@
     });
   }
 </script>
+
+<script id=bad_port type=module>
+  {
+    const state = await testing.async();
+
+    // 110 (pop3) is on the Fetch bad-port list: the request is refused before
+    // any connection, so fetch() rejects like any other network error. The
+    // assertion is about the refusal, not about a listener being absent.
+    let error = null;
+    try {
+      await fetch('http://127.0.0.1:110/');
+    } catch (e) {
+      error = e instanceof TypeError;
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(true, error);
+    });
+  }
+</script>

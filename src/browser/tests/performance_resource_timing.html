@@ -184,8 +184,8 @@
 <script id=failed_fetch type=module>
   {
     const state = await testing.async();
-    // Nothing listens on port 1: the fetch fails without a response.
-    const url = 'http://127.0.0.1:1/nope';
+    // Nothing listens on port 65534: the fetch fails without a response.
+    const url = 'http://127.0.0.1:65534/nope';
     let failed = false;
     try {
       await fetch(url);

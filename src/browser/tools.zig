@@ -2775,7 +2775,7 @@ test "markdown: a same-url page whose navigation failed is navigated again" {
 
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"url":"http://localhost:1/"}
+        \\{"url":"http://localhost:65534/"}
     , .{});
     try std.testing.expect((try call(aa, session, &registry, "goto", args, .{ .source = .user })).is_error);
     try std.testing.expect((try call(aa, session, &registry, "markdown", args, .{ .source = .user })).is_error);

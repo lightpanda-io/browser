@@ -692,8 +692,8 @@ handler runs, abort() cancels the re-send and no load is delivered.
       }, 0);
     };
 
-    // Nothing listens on port 1: a network error, not an HTTP one.
-    req.open('GET', 'http://127.0.0.1:1/');
+    // Nothing listens on port 65534: a network error, not an HTTP one.
+    req.open('GET', 'http://127.0.0.1:65534/');
     req.send();
 
     await state.done(() => {
