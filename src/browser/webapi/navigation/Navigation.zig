@@ -556,50 +556,36 @@ pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
     }
 }
 
-// The spec runs every handler registered by intercept(), then waits for all
-// of their results (a non-promise return counts as an already-fulfilled
-// one) before settling: the first rejection in handler-registration order
-// wins, otherwise it's a success.
+// The spec's "wait for all" settles as soon as any handler's result
+// rejects -- it doesn't wait for the rest to settle -- and only settles as
+// a success once every handler has fulfilled (a non-promise return counts
+// as an already-fulfilled one).
 const WaitAllHandlers = struct {
     navigation: *Navigation,
     signal: *AbortSignal,
     frame: *Frame,
     pending: usize,
-    // Indexed like `handlers`, so the first non-null wins in registration order.
-    reasons: []?js.Value.Global,
+    done: bool,
 
     fn settleOne(ctx: *WaitAllHandlers, index: usize, reason: ?js.Value) void {
-        if (reason) |r| {
-            ctx.reasons[index] = r.persist() catch null;
+        _ = index;
+        if (ctx.done) {
+            return;
         }
+
+        if (reason) |r| {
+            ctx.done = true;
+            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = r });
+            return;
+        }
+
         ctx.pending -= 1;
         if (ctx.pending > 0) {
             return;
         }
 
-        var ls: js.Local.Scope = undefined;
-        ctx.frame.js.localScope(&ls);
-        defer ls.deinit();
-        const local = &ls.local;
-
-        // The first rejection in registration order wins; the rest are
-        // still released so their globals don't leak.
-        var winner: ?js.Value.Global = null;
-        for (ctx.reasons) |maybe_reason| {
-            const global = maybe_reason orelse continue;
-            if (winner == null) {
-                winner = global;
-            } else {
-                global.release();
-            }
-        }
-
-        if (winner) |global| {
-            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = global.local(local) });
-            global.release();
-        } else {
-            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
-        }
+        ctx.done = true;
+        ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
     }
 };
 
@@ -614,9 +600,7 @@ fn runInterceptHandlers(
     defer ls.deinit();
     const local = &ls.local;
 
-    const reasons = frame.page_arena.alloc(?js.Value.Global, handlers.len) catch null;
-    const maybe_ctx = if (reasons != null) frame.page_arena.create(WaitAllHandlers) catch null else null;
-    const ctx = maybe_ctx orelse {
+    const ctx = frame.page_arena.create(WaitAllHandlers) catch {
         for (handlers) |handler| {
             handler.release();
         }
@@ -628,9 +612,8 @@ fn runInterceptHandlers(
         .signal = signal,
         .frame = frame,
         .pending = handlers.len,
-        .reasons = reasons.?,
+        .done = false,
     };
-    @memset(ctx.reasons, null);
 
     for (handlers, 0..) |handler, i| {
         defer handler.release();
