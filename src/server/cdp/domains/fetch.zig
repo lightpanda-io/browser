@@ -1577,6 +1577,57 @@ test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry d
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
+// Answers the challenge on `url` with u:p and expects the redirect target to
+// see `expected` as its Authorization header.
+fn expectAuthThenRedirect(url: [:0]const u8, source: []const u8, expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    // Only the challenged URL: the redirect hop goes straight to the network.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .params = .{ .patterns = .{.{ .urlPattern = "http://127.0.0.1:9582/auth/*" }}, .handleAuthRequests = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, url);
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{
+        .requestId = "INT-0000000002",
+        .authChallenge = .{ .source = source },
+    }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "ProvideCredentials", .username = "u", .password = "p" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(200, probe.status);
+    try testing.expectEqualSlices(u8, expected, probe.body.items);
+}
+
+test "cdp.Fetch: continueWithAuth proxy credentials never reach a server" {
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/proxy/same", "Proxy", "NONE");
+}
+
+test "cdp.Fetch: continueWithAuth server credentials follow a same-origin redirect only" {
+    // "dTpw" = base64("u:p"). Credentials are scoped to the origin; Chrome
+    // narrows Basic to the challenged directory and wouldn't send them to
+    // /echo-authorization up front.
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/server/same", "Server", "Basic dTpw");
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/server/cross", "Server", "NONE");
+}
+
 test "cdp.Fetch: continueWithAuth on a request-stage pause is rejected and keeps the pause" {
     var ctx = try testing.context();
     defer ctx.deinit();

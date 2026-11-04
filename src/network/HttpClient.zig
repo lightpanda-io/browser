@@ -716,10 +716,6 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         };
         owned.cookie_origin = null;
 
-        if (req.basic_auth_credentials) |c| {
-            owned.basic_auth_credentials = try arena.dupeSentinel(u8, c, 0);
-        }
-
         const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.scope.origin() else null;
         owned.origin = if (raw_origin) |origin| try arena.dupe(u8, origin) else null;
         if (req.initiator_origin) |origin| {
@@ -2190,7 +2186,6 @@ pub const Request = struct {
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
-    basic_auth_credentials: ?[:0]const u8 = null,
     credentials_mode: CredentialsMode,
     request_mode: RequestMode,
     timeout_ms: u32 = 0,
@@ -2648,6 +2643,11 @@ pub const Transfer = struct {
     _outcome_delivered: bool = false,
 
     _auth_challenge: ?http.AuthChallenge = null,
+
+    // "user:password" from Fetch.continueWithAuth. Proxy credentials must
+    // never reach a server. Server ones are dropped on a cross-origin redirect
+    _server_credentials: ?[:0]const u8 = null,
+    _proxy_credentials: ?[:0]const u8 = null,
 
     // What declining _auth_challenge fails with (a refused CONNECT), instead
     // of delivering the response. Set when the challenge is offered to CDP.
@@ -3893,21 +3893,19 @@ pub const Transfer = struct {
             try conn.setTimeout(0);
         }
 
-        // add credentials
-        if (req.basic_auth_credentials) |creds| {
-            if (self._auth_challenge != null and self._auth_challenge.?.source == .proxy) {
-                try conn.setProxyCredentials(creds);
-            } else {
-                try conn.setCredentials(creds);
-            }
+        if (self._proxy_credentials) |creds| {
+            try conn.setProxyCredentials(creds);
+        }
+        if (self._server_credentials) |creds| {
+            try conn.setCredentials(creds);
         }
     }
 
     pub fn reset(self: *Transfer) void {
         // Note: do NOT reset _auth_challenge or _redirect_count here. They
-        // span retries — _auth_challenge tells makeRequest whether to use
-        // setProxyCredentials vs setCredentials; _redirect_count caps the
-        // total hops. The rest of the response state is per-attempt.
+        // span retries: _auth_challenge tells updateCredentials which slot
+        // the answer goes in; _redirect_count caps the total hops. The rest
+        // of the response state is per-attempt.
         self._notified_fail = false;
         self._tries += 1;
         self.res.buffer.clearRetainingCapacity();
@@ -4037,11 +4035,12 @@ pub const Transfer = struct {
         }
 
         // When the redirect target is not same-origin with the current URL,
-        // the Authorization header must not follow the request to the new
-        // origin.
+        // the server's credentials (header or continueWithAuth) must not
+        // follow the request to the new origin.
         // _auth_challenge is always cleared thanks to detectAuthChallenge.
         if (!URL.isSameOrigin(url, req.url)) {
             transfer.removeHeader("Authorization");
+            transfer._server_credentials = null;
         }
 
         transfer.redirectTaint(url);
@@ -4106,7 +4105,16 @@ pub const Transfer = struct {
     }
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
-        self.req.basic_auth_credentials = userpwd;
+        // Only an auth-stage pause takes credentials, and it always has a
+        // challenge. Without one there's no telling which slot is safe, so
+        // keep nothing.
+        std.debug.assert(self._auth_challenge != null);
+        const challenge = self._auth_challenge orelse return;
+        if (challenge.source == .proxy) {
+            self._proxy_credentials = userpwd;
+        } else {
+            self._server_credentials = userpwd;
+        }
     }
 
     const RequestHeader = struct {
