@@ -120,8 +120,10 @@ jobs:
           # https://github.com/actions/runner-images?tab=readme-ov-file
           - arch: aarch64
             runner: macos-14
+            cpu_flag: ''
           - arch: x86_64
             runner: macos-14-large
+            cpu_flag: -Dcpu=x86_64
 
     env:
       ARCH: ${{ matrix.arch }}
@@ -145,7 +147,7 @@ jobs:
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
 
       - name: zig build
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast ${{ env.VERSION_FLAG }}
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast ${{ matrix.cpu_flag }} ${{ env.VERSION_FLAG }}
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
