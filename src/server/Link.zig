@@ -320,6 +320,7 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     errdefer arena.release();
 
     const raw = try arena.dupe(u8, bytes);
+    CDP.replaceLoneSurrogates(raw);
     const input = std.json.parseFromSliceLeaky(
         CDP.InputMessage,
         arena.allocator(),

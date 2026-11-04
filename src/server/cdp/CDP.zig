@@ -186,10 +186,12 @@ pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
 // `target_session_id` routes a page command that has no sessionId of its own
 // (Target.sendMessageToTarget wraps one).
 pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, target_session_id: ?[]const u8) !void {
-    const input = json.parseFromSliceLeaky(InputMessage, arena, str, .{
+    const raw = try arena.dupe(u8, str);
+    replaceLoneSurrogates(raw);
+    const input = json.parseFromSliceLeaky(InputMessage, arena, raw, .{
         .ignore_unknown_fields = true,
     }) catch return error.InvalidJSON;
-    return self.dispatchParsed(arena, sender, str, input, target_session_id);
+    return self.dispatchParsed(arena, sender, raw, input, target_session_id);
 }
 
 // Dispatch a pre-parsed CDP message. The caller is responsible for
@@ -1102,6 +1104,52 @@ pub const Command = struct {
     };
 };
 
+// Rewrites each \u escape of an unpaired UTF-16 surrogate in a JSON
+// message to \ufffd, in place (both are 6 bytes). Such escapes are valid
+// JSON, and clients send them: JSON.stringify keeps a lone surrogate, as
+// in a string cut in the middle of an emoji, as an escape. std.json can't
+// decode them to UTF-8 and rejects the whole message, which would close
+// the connection. A lone surrogate has no UTF-8 encoding, so it becomes
+// U+FFFD, as TextEncoder does.
+pub fn replaceLoneSurrogates(buf: []u8) void {
+    var i: usize = 0;
+    while (i + 1 < buf.len) {
+        if (buf[i] != '\\') {
+            i += 1;
+            continue;
+        }
+        const unit = surrogateEscape(buf[i..]) orelse {
+            // Any other escape, including an escaped backslash: skip
+            // the escaped character too.
+            i += 2;
+            continue;
+        };
+        if (unit < 0xDC00) {
+            if (surrogateEscape(buf[i + 6 ..])) |next| {
+                if (next >= 0xDC00) {
+                    // A valid pair.
+                    i += 12;
+                    continue;
+                }
+            }
+        }
+        @memcpy(buf[i..][0..6], "\\ufffd");
+        i += 6;
+    }
+}
+
+// The code unit of a \uXXXX escape at the start of buf, if it is a surrogate.
+fn surrogateEscape(buf: []const u8) ?u16 {
+    if (buf.len < 6 or buf[0] != '\\' or buf[1] != 'u') {
+        return null;
+    }
+    const unit = std.fmt.parseInt(u16, buf[2..6], 16) catch return null;
+    if (unit < 0xD800 or unit > 0xDFFF) {
+        return null;
+    }
+    return unit;
+}
+
 // When we parse a JSON message from the client, this is the structure
 // we always expect. Parsed on the Network thread inside
 // Link.handleMessage; the slices reference the raw JSON bytes
@@ -1166,6 +1214,33 @@ test "cdp: invalid json" {
     try ctx.processMessage(.{
         .method = "Target.over9000",
     });
+    try ctx.expectSentError(-32601, "'Target.over9000' wasn't found", .{});
+}
+
+test "cdp: replaceLoneSurrogates" {
+    const cases = [_][2][]const u8{
+        .{ "\"\\ud800\"", "\"\\ufffd\"" },
+        .{ "\"\\udc00x\"", "\"\\ufffdx\"" },
+        .{ "\"\\uD800\\uD800\"", "\"\\ufffd\\ufffd\"" },
+        .{ "\"\\ud83d\\ude00\"", "\"\\ud83d\\ude00\"" },
+        .{ "\"\\udc00\\ud800\"", "\"\\ufffd\\ufffd\"" },
+        .{ "\"\\\\ud800\"", "\"\\\\ud800\"" },
+        .{ "\"\\u00e9\\n\"", "\"\\u00e9\\n\"" },
+        .{ "\"\\ud80", "\"\\ud80" },
+    };
+    for (cases) |c| {
+        const buf = try testing.allocator.dupe(u8, c[0]);
+        defer testing.allocator.free(buf);
+        replaceLoneSurrogates(buf);
+        try testing.base.expectString(c[1], buf);
+    }
+}
+
+test "cdp: message with a lone surrogate escape" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage("{\"id\":1,\"method\":\"Target.over9000\",\"params\":{\"text\":\"\\ud800\"}}");
     try ctx.expectSentError(-32601, "'Target.over9000' wasn't found", .{});
 }
 
