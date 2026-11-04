@@ -204,10 +204,18 @@ fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     if (d == .none) {
         return null;
     }
-    // No `aria-hidden` cut: it's an accessibility-tree hint, orthogonal to
-    // rendering. The page still paints (and innerText still includes)
-    // aria-hidden content, so the rendered dumps keep it; the accessibility
-    // domain applies the attribute where it belongs, in AXNode.
+    // `aria-hidden` is an accessibility-tree hint, not a rendering property:
+    // the page paints the content and innerText includes it. Block-level
+    // containers stamped with it stay in the dumps (app roots behind a modal,
+    // carousel slide copies), but inline-level ones are decorative in
+    // practice — icon-font ligatures, sr-only twins — and only add noise for
+    // the reader, so they are cut. AXNode applies the attribute in full for
+    // the accessibility tree.
+    if (el.getAttributeInterned("aria-hidden")) |v| {
+        if (std.ascii.eqlIgnoreCase(v, "true") and owner._style_manager.isInlineLevel(el)) {
+            return null;
+        }
+    }
     return d;
 }
 

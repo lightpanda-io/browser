@@ -527,12 +527,9 @@ fn visitNode(
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Not just the element's own display: a slotted element inherits
-        // from its slot, which this light-tree walk never visits. This also
-        // covers the `hidden` attribute through the cascade: the UA
-        // stylesheet's `[hidden] { display: none }` fallback loses to any
-        // author rule for `display`, so a hidden element the page styles
-        // back to `display: grid` renders — and stays in the tree. Cutting
-        // on the raw attribute here would drop that rendered content.
+        // from its slot, which this light-tree walk never visits. The
+        // cascade applies the UA `[hidden]` fallback, so an author
+        // `display` rule wins over the attribute.
         switch (self.frame._style_manager.rendering(el)) {
             .none => return,
             .invisible => invisible = true,

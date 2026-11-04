@@ -1021,13 +1021,15 @@ test "browser.markdown: anchor without href is plain text" {
     , "");
 }
 
-test "browser.markdown: hidden elements are skipped, aria-hidden content kept" {
+test "browser.markdown: inline aria-hidden is cut, block containers kept" {
     try testMarkdownHTML(
         \\<p>before</p>
         \\<p style="display:none">inline</p>
         \\<div hidden><p>attribute</p></div>
         \\<p aria-hidden="true">aria</p>
         \\<span aria-hidden="TRUE">aria caps</span>
+        \\<span style="display:inline-block" aria-hidden="true">icon lig</span>
+        \\<div aria-hidden="true"><span>kept child</span></div>
         \\<p aria-hidden="false">aria false</p>
         \\<details><summary>Summary</summary><p>collapsed</p></details><dialog><p>closed dialog</p></dialog><p>after</p>
     ,
@@ -1035,7 +1037,7 @@ test "browser.markdown: hidden elements are skipped, aria-hidden content kept" {
         \\before
         \\
         \\aria
-        \\aria caps 
+        \\kept child
         \\
         \\aria false
         \\Summary
