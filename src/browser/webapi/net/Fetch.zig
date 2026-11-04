@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const URL = @import("../../URL.zig");
 const HttpClient = @import("../../../network/HttpClient.zig");
 
 const AbortSignal = @import("../AbortSignal.zig");
@@ -258,27 +257,10 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .proceed;
     }
 
-    // Determine response type based on origin comparison
     const exec = self._exec;
-    const requesting_origin = URL.getOrigin(arena.allocator(), exec.url.*) catch null;
-    const response_origin = URL.getOrigin(arena.allocator(), res._url) catch null;
-
     if (transfer.client.obey_cors) {
-        if (requesting_origin) |fo| {
-            if (response_origin) |ro| {
-                if (std.mem.eql(u8, fo, ro)) {
-                    res._type = .basic;
-                } else {
-                    res._type = .cors;
-                }
-            } else {
-                res._type = .basic;
-            }
-        } else {
-            res._type = .basic;
-        }
+        res._type = if (transfer._cors_cross_origin) .cors else .basic;
     } else {
-        // CORS disabled: don't filter/mark responses as cross-origin cors,
         res._type = .basic;
     }
 
