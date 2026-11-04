@@ -510,7 +510,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .pageTools => .{
-            .description = "List the tools the current page registers for agents through WebMCP (`navigator.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Many pages register their tools after `load`: if the list is empty on a page you expect to have tools, call `waitForState` with `networkidle` and list again.",
+            .description = "List the tools the current page registers for agents through WebMCP (`navigator.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Other tool results already show the page's tools, with their schemas, whenever the set changes; call this to list them again. Many pages register their tools after `load`: on a page you expect to have tools, `waitForState` with `networkidle` gives them time.",
             .summary = "List the page's WebMCP tools",
             .input_schema = minify(
                 \\{ "type": "object", "properties": {} }

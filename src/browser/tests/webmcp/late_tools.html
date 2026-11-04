@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><title>WebMCP late tools</title></head>
+<body>
+<script>
+  let controller = null;
+  function addTool() {
+    controller = new AbortController();
+    navigator.modelContext.registerTool({
+      name: 'late',
+      description: 'Registered after load',
+      inputSchema: { type: 'object', properties: {} },
+      execute: () => 'ok',
+    }, { signal: controller.signal });
+    return 'added';
+  }
+  function dropTool() {
+    controller.abort();
+    return 'dropped';
+  }
+</script>
+</body>
+</html>

@@ -441,7 +441,35 @@ pub const CallOpts = struct {
     record: bool = false,
     /// Scripts parse the text, so only model-facing callers set it.
     nav_note: bool = false,
+    /// Set by model-facing callers so results report the page's WebMCP
+    /// tools whenever the set changes.
+    page_tools_seen: ?*PageToolsSeen = null,
     source: TelemetryTool.Source,
+};
+
+/// What a model last saw of the page's WebMCP tools. In the result rather
+/// than spliced into the tool list, which would break the provider's prompt
+/// cache, let a bad page schema fail the whole request, and lift page text
+/// out of the untrusted position.
+pub const PageToolsSeen = struct {
+    frame_id: ?u32 = null,
+    generation: u32 = 0,
+    any: bool = false,
+
+    /// The frame's tools, if they changed since the last call; null when
+    /// the set is the one last returned or has stayed empty.
+    fn take(self: *PageToolsSeen, frame: *const lp.Frame) ?[]const *ModelContext.Tool {
+        const mc = frame.window._model_context;
+        const generation = if (mc) |m| m._generation else 0;
+        const same_frame = self.frame_id == frame._frame_id;
+        if (same_frame and self.generation == generation) return null;
+
+        const tools: []const *ModelContext.Tool = if (mc) |m| m.tools() else &.{};
+        const had_any = same_frame and self.any;
+        self.* = .{ .frame_id = frame._frame_id, .generation = generation, .any = tools.len > 0 };
+        if (!had_any and tools.len == 0) return null;
+        return tools;
+    }
 };
 
 /// Told about every call once it returns, failures included.
@@ -546,7 +574,6 @@ fn callInner(
         if (session.currentFrame()) |frame| {
             if (result.navigated) {
                 if (try weaknessNote(arena, frame)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
-                if (try pageToolsNote(arena, frame)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
             }
             const note = if (result.navigated)
                 try navErrorNote(arena, frame)
@@ -555,6 +582,15 @@ fn callInner(
             else
                 null;
             if (note) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+        }
+    }
+    if (opts.page_tools_seen) |seen| {
+        if (session.currentFrame()) |frame| {
+            // pageTools has just listed them.
+            const changed = seen.take(frame);
+            if (tool != .pageTools) {
+                if (try pageToolsNote(arena, changed)) |n| result.text = try arena.print("{s}\n\n{s}", .{ n, result.text });
+            }
         }
     }
     if (tool.reportsPageState()) {
@@ -752,15 +788,10 @@ fn movedNote(arena: std.mem.Allocator, arguments: ?std.json.Value, frame: *const
     return try arena.print("The page is at {s}, not {s}: a redirect or an in-page navigation moved it, and this reads it as it is. Use goto to reload {s}.", .{ frame.url, url, url });
 }
 
-/// Names the page's WebMCP tools: an agent won't call `pageTools` on every
-/// page just in case.
-fn pageToolsNote(arena: std.mem.Allocator, frame: *const lp.Frame) !?[]const u8 {
-    const mc = frame.window._model_context orelse return null;
-    const tools = mc.tools();
-    if (tools.len == 0) return null;
-    const tool_names = try arena.alloc([]const u8, tools.len);
-    for (tools, tool_names) |t, *n| n.* = t.name;
-    return try arena.print("The page registers WebMCP tools ({s}): pageTools describes them, callPageTool runs one.", .{try std.mem.join(arena, ", ", tool_names)});
+fn pageToolsNote(arena: std.mem.Allocator, changed: ?[]const *ModelContext.Tool) ToolError!?[]const u8 {
+    const tools = changed orelse return null;
+    if (tools.len == 0) return "The page no longer registers WebMCP tools.";
+    return try arena.print("The page registers WebMCP tools; callPageTool runs one:\n{s}", .{try pageToolsJson(arena, tools)});
 }
 
 /// What a full browser would have shown that this page's reads will lack.
@@ -1172,7 +1203,10 @@ fn execPageTools(arena: std.mem.Allocator, session: *lp.Session) ToolError![]con
     const page = try requireFrame(session);
     const tools = if (page.window._model_context) |mc| mc.tools() else &.{};
     if (tools.len == 0) return "This page registers no WebMCP tools.";
+    return pageToolsJson(arena, tools);
+}
 
+fn pageToolsJson(arena: std.mem.Allocator, tools: []const *const ModelContext.Tool) ToolError![]const u8 {
     const Hints = struct {
         readOnlyHint: ?bool = null,
         untrustedContentHint: ?bool = null,
@@ -2452,8 +2486,11 @@ test "tools: goto names the page's WebMCP tools and pageTools lists them" {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"url":"http://localhost:9582/src/browser/tests/webmcp/page_tools.html"}
     , .{});
-    const nav = try call(aa, session, &registry, "goto", args, .{ .nav_note = true, .source = .user });
-    try std.testing.expectEqualStrings("The page registers WebMCP tools (greet, mcp_shaped, mcp_error, throws, rejects, bad_result, bad_rejection, navigates): pageTools describes them, callPageTool runs one.\n\nNavigated. HTTP 200 OK.", nav.text);
+    var seen: PageToolsSeen = .{};
+    const nav = try call(aa, session, &registry, "goto", args, .{ .page_tools_seen = &seen, .source = .user });
+    const prefix = "The page registers WebMCP tools; callPageTool runs one:\n[{\"name\":\"greet\",\"title\":\"Greet\",\"description\":\"Greets someone\",";
+    try std.testing.expect(std.mem.startsWith(u8, nav.text, prefix));
+    try std.testing.expect(std.mem.endsWith(u8, nav.text, "}]\n\nNavigated. HTTP 200 OK."));
 
     const list = try call(aa, session, &registry, "pageTools", null, .{ .source = .user });
     try std.testing.expect(!list.is_error);
@@ -2468,6 +2505,51 @@ test "tools: goto names the page's WebMCP tools and pageTools lists them" {
     try std.testing.expect(shaped.get("title") == null);
     try std.testing.expect(shaped.get("inputSchema") == null);
     try std.testing.expect(shaped.get("annotations") == null);
+}
+
+test "tools: results report WebMCP tools registered after load, once per change" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    var seen: PageToolsSeen = .{};
+    const opts: CallOpts = .{ .page_tools_seen = &seen, .source = .user };
+    const nav = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/webmcp/late_tools.html"}
+    , .{}), opts);
+    try std.testing.expectEqualStrings("Navigated. HTTP 200 OK.", nav.text);
+
+    const add = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"addTool()"}
+    , .{});
+    const drop = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"dropTool()"}
+    , .{});
+    const noop = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"1"}
+    , .{});
+    const note = "The page registers WebMCP tools; callPageTool runs one:\n[{\"name\":\"late\",\"description\":\"Registered after load\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]\n\n";
+
+    const added = try call(aa, session, &registry, "evaluate", add, opts);
+    try std.testing.expectEqualStrings(note ++ "added", added.text);
+    const again = try call(aa, session, &registry, "evaluate", noop, opts);
+    try std.testing.expectEqualStrings("1", again.text);
+
+    const dropped = try call(aa, session, &registry, "evaluate", drop, opts);
+    try std.testing.expectEqualStrings("The page no longer registers WebMCP tools.\n\ndropped", dropped.text);
+    const quiet = try call(aa, session, &registry, "evaluate", noop, opts);
+    try std.testing.expectEqualStrings("1", quiet.text);
+
+    // A script caller doesn't see the note, and pageTools then shows the set,
+    // so the next result doesn't repeat it.
+    const scripted = try call(aa, session, &registry, "evaluate", add, .{ .source = .user });
+    try std.testing.expectEqualStrings("added", scripted.text);
+    _ = try call(aa, session, &registry, "pageTools", null, opts);
+    const listed = try call(aa, session, &registry, "evaluate", noop, opts);
+    try std.testing.expectEqualStrings("1", listed.text);
 }
 
 test "tools: callPageTool runs the page's WebMCP tools" {

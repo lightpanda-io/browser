@@ -49,6 +49,9 @@ _proto: *EventTarget,
 _window: *Window,
 _exec: *Execution,
 _tools: std.ArrayList(*Tool) = .empty,
+// Bumped on every register and unregister, so an observer can tell the set
+// changed without keeping a copy of it.
+_generation: u32 = 0,
 
 pub fn init(window: *Window) !*ModelContext {
     const frame = window._frame;
@@ -219,6 +222,7 @@ pub fn registerTool(
         try signal._dependents.append(arena, .{ .model_context_tool = entry });
     }
     try self._tools.append(arena, entry);
+    self._generation +%= 1;
 
     // Fire `model_context_tool_added` so observers (CDP `WebMCP` domain,
     // native MCP forwarder) can surface the new tool.
@@ -237,6 +241,7 @@ pub fn registerTool(
 fn unregister(self: *ModelContext, tool: *Tool, reason: AbortSignal.Reason, exec: *const Execution) !void {
     const index = std.mem.indexOfScalar(*Tool, self._tools.items, tool) orelse return;
     _ = self._tools.orderedRemove(index);
+    self._generation +%= 1;
 
     const event: Notification.ModelContextToolEvent = .{ .exec = exec, .tool = tool };
     exec.session.notification.dispatch(.model_context_tool_removed, &event);

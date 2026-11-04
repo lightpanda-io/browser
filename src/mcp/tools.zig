@@ -212,7 +212,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .page_tools_seen = &active.page_tools_seen, .source = .mcp }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -722,6 +722,12 @@ test "MCP - callPageTool returns the WebMCP tool's text content" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/webmcp/page_tools.html", &out.writer);
     defer server.deinit();
+
+    // Shows the tools, so the call's result doesn't open with them.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"pageTools"}}
+    );
+    out.clearRetainingCapacity();
 
     const msg =
         \\{
