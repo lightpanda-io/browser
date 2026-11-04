@@ -147,12 +147,32 @@ fn handleClient(client: posix.socket_t) void {
     var accept_key: [28]u8 = undefined;
     _ = std.base64.standard.Encoder.encode(&accept_key, &hash);
 
-    // Send upgrade response
-    var resp_buf: [256]u8 = undefined;
-    const resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "Connection: Upgrade\r\n" ++
-        "Sec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key}) catch return;
+    // Send upgrade response. A test can pin the subprotocol the server
+    // selects with `?protocol=<name>`, or force a second, duplicate
+    // Sec-WebSocket-Protocol header with `?multiple-protocols`.
+    var resp_buf: [512]u8 = undefined;
+    var resp: []const u8 = undefined;
+    if (std.mem.find(u8, request, "?multiple-protocols") != null) {
+        resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n" ++
+            "Sec-WebSocket-Accept: {s}\r\n" ++
+            "Sec-WebSocket-Protocol: proto1\r\n" ++
+            "Sec-WebSocket-Protocol: proto2\r\n\r\n", .{accept_key}) catch return;
+    } else if (std.mem.find(u8, request, "?protocol=")) |query_start| {
+        const remaining = request[query_start + "?protocol=".len ..];
+        const val_end = std.mem.findAny(u8, remaining, " \r\n&") orelse remaining.len;
+        resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n" ++
+            "Sec-WebSocket-Accept: {s}\r\n" ++
+            "Sec-WebSocket-Protocol: {s}\r\n\r\n", .{ accept_key, remaining[0..val_end] }) catch return;
+    } else {
+        resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n" ++
+            "Sec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key}) catch return;
+    }
     _ = sys_net.write(client, resp) catch return;
 
     // Message loop with larger buffer for big messages

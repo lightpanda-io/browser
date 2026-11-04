@@ -95,6 +95,9 @@ _close_reason: []const u8 = "",
 // negotiated protocol
 _protocol: []const u8 = "",
 
+// subprotocols offered by the client at construction (RFC 6455 §4.1)
+_requested_protocols: []const []const u8 = &.{},
+
 _task: js.Attribution.Tag,
 
 const ReadyState = enum(u8) {
@@ -267,6 +270,11 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
         try conn.addHeader(allocator, hdr.name, hdr.value);
     }
     if (protocols.len > 0) {
+        const req_protocols = try arena.allocator().alloc([]const u8, protocols.len);
+        for (protocols, 0..) |p, i| {
+            req_protocols[i] = try arena.dupe(u8, p);
+        }
+        self._requested_protocols = req_protocols;
         try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
     }
 
@@ -930,7 +938,25 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             self._got_upgrade = true;
         }
     } else if (std.ascii.eqlIgnoreCase(header_name, "sec-websocket-protocol")) {
-        // TODO, we should validate this against our sent list.
+        // RFC 6455 §4.1 / WHATWG WebSocket: The server's selected protocol must
+        // match one of the subprotocols offered by the client, and the server
+        // MUST NOT send multiple subprotocol headers or select an unrequested
+        // protocol.
+        if (self._protocol.len != 0) {
+            log.warn(.websocket, "server sent multiple Sec-WebSocket-Protocol headers", .{ .protocol = value });
+            return 0;
+        }
+        var matched = false;
+        for (self._requested_protocols) |p| {
+            if (std.mem.eql(u8, p, value)) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            log.warn(.websocket, "server selected unrequested subprotocol", .{ .protocol = value });
+            return 0;
+        }
         self._protocol = self._arena.dupe(u8, value) catch |err| {
             log.err(.websocket, "dupe protocol", .{ .err = err });
             return 0;
