@@ -1709,6 +1709,18 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
                 driver.onHttp(command);
                 break :blk false;
             },
+            .guest => |link| blk: {
+                driver.onGuest(link);
+                break :blk false;
+            },
+            .guest_ping => |ping| blk: {
+                driver.onGuestPing(ping);
+                break :blk false;
+            },
+            .guest_gone => |gone| blk: {
+                driver.onGuestGone(gone);
+                break :blk false;
+            },
             .quit => blk: {
                 driver.onQuit();
                 break :blk true; // quit always shutsdown
@@ -1737,8 +1749,10 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 // eval frame above us will dereference.
 fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .ping, .close, .disconnect, .quit, .link => true,
+        .ping, .close, .disconnect, .quit, .link, .guest, .guest_ping => true,
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
+        // detaches the guest's sessions, which JS on the stack may be using
+        .guest_gone => false,
         // BiDi has no request interception yet, so nothing it can send is
         // safe to dispatch from inside a JS callback.
         .bidi, .bidi_http => false,
@@ -1748,7 +1762,7 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
 fn isTerminal(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .cdp, .bidi, .link, .bidi_http => false,
+        .ping, .cdp, .bidi, .link, .bidi_http, .guest, .guest_ping, .guest_gone => false,
     };
 }
 
@@ -1768,7 +1782,7 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
 fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .link, .bidi_http => false,
+        .ping, .link, .bidi_http, .guest, .guest_ping, .guest_gone => false,
         .cdp => |c| isTeardownMethod(c.input.method),
         // Frames aren't parsed on the Network thread for BiDi, so we
         // can't spot a teardown command without re-parsing here.

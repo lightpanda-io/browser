@@ -61,21 +61,22 @@ link: Link,
 browser: Browser,
 allocator: Allocator,
 
-// when true, any target creation must be attached.
-target_auto_attach: bool = false,
+// The connection the browser was started for. It owns the browser: when it
+// goes, the worker ends.
+primary: Client,
 
-// Target.setDiscoverTargets: when true, page target changes are reported
-// via Target.targetInfoChanged.
-target_discover: bool = false,
+// Every connection on this browser: the primary first, then the guests that
+// joined it (serve --cdp-shared-browser). Each has its own sessions and
+// target settings; see Client.
+clients: std.ArrayList(*Client) = .empty,
+
+// The client whose message is being dispatched. Responses go back to it, as
+// do events that carry no sessionId. null outside a dispatch.
+current: ?*Client = null,
 
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
-
-// Session from Target.attachToBrowserTarget. Distinct from the page
-// session (BrowserContext.session_id) as it targets the browser itself and
-// outlives any browser context.
-browser_session_id: ?[]const u8 = null,
 
 browser_context: ?BrowserContext,
 disable_set_cache_disabled: bool = false,
@@ -105,6 +106,7 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
         self.* = .{
             .app = app,
             .link = undefined,
+            .primary = .{ .link = &self.link },
             .browser = undefined,
             .allocator = allocator,
             .browser_context = null,
@@ -119,6 +121,9 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
     try self.link.init(app, socket, .cdp, inbox);
     errdefer self.link.deinit();
 
+    try self.clients.append(allocator, &self.primary);
+    errdefer self.clients.deinit(allocator);
+
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
 }
 
@@ -131,8 +136,127 @@ pub fn deinit(self: *CDP) void {
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
     self.streams.deinit();
+    for (self.clients.items[1..]) |guest| {
+        // the browser they joined is gone
+        guest.link.send(&WS.CLOSE_GOING_AWAY) catch {};
+        guest.link.destroy();
+        self.allocator.destroy(guest);
+    }
+    self.clients.deinit(self.allocator);
     self.link.deinit();
 }
+
+// One CDP connection. The primary client and any guests share the browser,
+// its context and its page; what a client turns on for itself lives here, so
+// that one client can't change it for another.
+pub const Client = struct {
+    link: *Link,
+
+    // when true, any target creation must be attached.
+    target_auto_attach: bool = false,
+
+    // Target.setDiscoverTargets: when true, page target changes are reported
+    // via Target.targetInfoChanged.
+    target_discover: bool = false,
+
+    // Session from Target.attachToBrowserTarget. Distinct from the page
+    // session (BrowserContext.session_id) as it targets the browser itself and
+    // outlives any browser context.
+    browser_session_id: ?[]const u8 = null,
+};
+
+// The client a command or an event without a sessionId belongs to.
+pub fn currentClient(self: *CDP) *Client {
+    return self.current orelse &self.primary;
+}
+
+// The client a message came in on; null (internal messages) is the primary.
+fn findClient(self: *CDP, link: ?*Link) *Client {
+    const l = link orelse return &self.primary;
+    for (self.clients.items) |client| {
+        if (client.link == l) {
+            return client;
+        }
+    }
+    return &self.primary;
+}
+
+fn clientForBrowserSession(self: *const CDP, session_id: []const u8) ?*Client {
+    for (self.clients.items) |client| {
+        const browser_session_id = client.browser_session_id orelse continue;
+        if (std.mem.eql(u8, browser_session_id, session_id)) {
+            return client;
+        }
+    }
+    return null;
+}
+
+// Worker thread. A connection joined the running browser.
+pub fn addGuest(self: *CDP, link: *Link) !void {
+    const guest = self.allocator.create(Client) catch |err| {
+        link.destroy();
+        return err;
+    };
+    guest.* = .{ .link = link };
+    self.clients.append(self.allocator, guest) catch |err| {
+        self.allocator.destroy(guest);
+        link.destroy();
+        return err;
+    };
+    log.info(.cdp, "guest connected", .{ .guests = self.clients.items.len - 1 });
+}
+
+// Worker thread. A guest's connection is gone (or going: `reply_close` when
+// it sent a close frame we owe an answer to). Its sessions are detached and
+// the link destroyed; the browser and the other clients carry on.
+pub fn removeGuest(self: *CDP, link: *Link, reply_close: bool) void {
+    const index = for (self.clients.items[1..], 1..) |guest, i| {
+        if (guest.link == link) break i;
+    } else {
+        // never adopted: the loop dropped it before we saw it
+        return;
+    };
+    const guest = self.clients.orderedRemove(index);
+
+    if (self.browser_context) |*bc| {
+        var i: usize = bc.attached_sessions.count();
+        while (i > 0) {
+            i -= 1;
+            const attached = bc.attached_sessions.values()[i];
+            if (attached.client == guest) {
+                attached.target.fetchDisableForSession(attached.id);
+                _ = bc.detachSession(attached.id);
+            }
+        }
+    }
+
+    if (reply_close) {
+        link.send(&WS.CLOSE_NORMAL) catch |err| {
+            log.debug(.cdp, "guest close reply", .{ .err = err });
+        };
+    }
+    link.destroy();
+    self.allocator.destroy(guest);
+    log.info(.cdp, "guest disconnected", .{ .guests = self.clients.items.len - 1 });
+}
+
+// The link a message with this sessionId goes out on: the client that owns
+// the session, else the current client.
+fn linkFor(self: *CDP, session_id: ?[]const u8) *Link {
+    const id = session_id orelse return self.currentClient().link;
+    if (self.clients.items.len == 1) {
+        // the common case: one client
+        return self.primary.link;
+    }
+    if (self.browser_context) |*bc| {
+        if (bc.attached_sessions.get(id)) |attached| {
+            return attached.client.link;
+        }
+    }
+    const client = self.clientForBrowserSession(id) orelse self.currentClient();
+    return client.link;
+}
+
 // Called by the Server run loop when readable bytes arrive on the CDP
 // socket. Feeds them through the WS framer and pushes each parsed frame
 // into the worker's inbox. Returns false if a close frame was seen (or a
@@ -151,9 +275,13 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
         return;
     }
 
+    const client = self.findClient(c.link);
+    self.current = client;
+    defer self.current = null;
+
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
-    return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input, null);
+    return self.dispatchParsed(arena.allocator(), .{ .link = client.link }, c.raw, c.input, null);
 }
 
 // Parse + dispatch a raw JSON CDP message. Used by tests (which
@@ -162,14 +290,20 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
 pub fn processMessage(self: *CDP, msg: []const u8) !void {
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
-    return self.dispatch(arena.allocator(), .{ .cdp = self }, msg, null);
+    return self.dispatch(arena.allocator(), .{ .link = self.primary.link }, msg, null);
 }
 
 pub const SendJSONOpts = struct {
     size_hint: usize = 0,
 };
+// Goes to the client owning the message's sessionId (see linkFor).
 pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
-    try self.link.sendJSON(message, .{
+    const session_id: ?[]const u8 = if (comptime @hasField(@TypeOf(message), "sessionId")) message.sessionId else null;
+    return sendJSONTo(self.linkFor(session_id), message, opts);
+}
+
+fn sendJSONTo(link: *Link, message: anytype, opts: SendJSONOpts) !void {
+    try link.sendJSON(message, .{
         .size_hint = opts.size_hint,
         .stringify = .{ .emit_null_optional_fields = false },
     });
@@ -342,10 +476,8 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
 }
 
 pub fn resolveSessionId(self: *const CDP, input_session_id: []const u8) ?[]const u8 {
-    if (self.browser_session_id) |browser_session_id| {
-        if (std.mem.eql(u8, browser_session_id, input_session_id)) {
-            return browser_session_id;
-        }
+    if (self.clientForBrowserSession(input_session_id)) |client| {
+        return client.browser_session_id;
     }
     const browser_context = if (self.browser_context) |*bc| bc else return null;
     return browser_context.attached_sessions.getKey(input_session_id);
@@ -387,6 +519,11 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
     }, .{});
 }
 
+// A browser-level event (no sessionId) for one particular client.
+pub fn sendEventTo(client: *Client, method: []const u8, p: anytype) !void {
+    return sendJSONTo(client.link, .{ .method = method, .params = p }, .{});
+}
+
 pub const BrowserContext = struct {
     // A CDP session attached to a page target. Each owns a V8 inspector
     // session; V8 keeps `Runtime.enable` state and remote object ids per
@@ -396,12 +533,14 @@ pub const BrowserContext = struct {
         id: []const u8,
         parent_id: ?[]const u8,
         target: *Target,
+        // the connection that attached it, where its messages go
+        client: *Client,
         inspector_session: js.Inspector.Session,
 
         /// V8 -> this session. Stamp OUR id on responses and events.
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
             const self: *AttachedSession = @ptrCast(@alignCast(ctx));
-            self.target.bc.sendInspectorMessage(msg, self.id) catch |err| {
+            sendInspectorMessage(self.client.link, msg, self.id) catch |err| {
                 log.debug(.cdp, "send inspector response", .{ .err = err });
             };
         }
@@ -419,7 +558,7 @@ pub const BrowserContext = struct {
                 log.debug(.cdp, "inspector event", .{ .method = method, .session_id = self.id });
             }
 
-            self.target.bc.sendInspectorMessage(msg, self.id) catch |err| {
+            sendInspectorMessage(self.client.link, msg, self.id) catch |err| {
                 log.debug(.cdp, "send inspector event", .{ .err = err });
             };
         }
@@ -759,6 +898,7 @@ pub const BrowserContext = struct {
             .id = try self.arena.dupe(u8, session_id),
             .parent_id = parent_id,
             .target = target,
+            .client = self.cdp.currentClient(),
             .inspector_session = undefined,
         };
         attached.inspector_session.init(self.inspector(), target.group_id, attached);
@@ -826,10 +966,9 @@ pub const BrowserContext = struct {
     // This is hacky x 2. First, we create the JSON payload by gluing the
     // session_id onto it. Second, we're much more client/websocket aware than
     // we should be.
-    fn sendInspectorMessage(self: *BrowserContext, msg: []const u8, session_id: []const u8) !void {
-        const cdp = self.cdp;
-        const allocator = cdp.link.acquireSendArena();
-        defer cdp.link.releaseSendArena();
+    fn sendInspectorMessage(link: *Link, msg: []const u8, session_id: []const u8) !void {
+        const allocator = link.acquireSendArena();
+        defer link.releaseSendArena();
 
         const field = ",\"sessionId\":\"";
 
@@ -855,7 +994,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.link.sendJSONRaw(buf);
+        try link.sendJSONRaw(buf);
     }
 };
 
@@ -1007,19 +1146,19 @@ pub const Command = struct {
     // The command input (the id, optional session_id, params, ...)
     input: Input,
 
-    // In most cases, Sender is going to be cdp itself. We'll call
-    // sender.sendJSON() and CDP will send it to the client. But some
+    // In most cases, Sender is the link of the client that sent the
+    // command: a response goes back where the command came from. But some
     // commands are dispatched internally, in which cases the Sender will
     // be code to capture the data that we were "sending".
     sender: Sender,
 
     const Sender = union(enum) {
-        cdp: *CDP,
+        link: *Link,
         capture: *std.Io.Writer,
 
         pub fn sendJSON(self: Sender, message: anytype, opts: SendJSONOpts) !void {
             switch (self) {
-                .cdp => |cdp| return cdp.sendJSON(message, opts),
+                .link => |link| return sendJSONTo(link, message, opts),
                 .capture => |writer| {
                     return std.json.Stringify.value(message, .{
                         .emit_null_optional_fields = false,
