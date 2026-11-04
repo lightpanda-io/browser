@@ -4295,6 +4295,7 @@ test "WebApi: Frames" {
 }
 
 test "WebApi: Frames with iframe loading off" {
+    testing.silenceLog(&.{.frame, .disabled});
     try testing.htmlRunner("frames/loading_off", .{ .load_resources = .{ .worker = true, .iframe = false } });
 }
 
