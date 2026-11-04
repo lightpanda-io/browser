@@ -399,9 +399,10 @@
       testing.expectTrue(e.cancelable);
       testing.expectFalse(e.hashChange);
       testing.expectFalse(e.userInitiated);
-      // Cross-document: canIntercept is always false. These were all
-      // canceled, so intercept() throws for that reason first.
-      testing.expectFalse(e.canIntercept);
+      // Same-origin, so interceptable even though it's cross-document. These
+      // were all canceled before intercept() could run, though, so it still
+      // throws, just for the "already canceled" reason instead.
+      testing.expectTrue(e.canIntercept);
       testing.withError((err) => testing.expectEqual('InvalidStateError', err.name), () => e.intercept());
     }
   }
@@ -603,9 +604,9 @@
 
 <script id=intercept_errors>
   {
-    // Only same-document, same-origin navigations can be intercepted: a
-    // cross-document navigation (so a plain cross-document check lives in
-    // cross_document_cancel below) has canIntercept false and throws.
+    // Same-origin navigations can be intercepted whether or not they're
+    // same-document (cross_document_cancel below covers the cross-document
+    // case); intercept() throws for other reasons tested here.
     let scroll_before_intercept;
     let handler_type_error;
     let scroll_after_failed_handler;

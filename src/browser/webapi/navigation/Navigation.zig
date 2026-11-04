@@ -390,7 +390,10 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         std.mem.eql(u8, frame.url, params.url) == false;
 
     const signal = try AbortSignal.init(&frame.js.execution);
-    const can_intercept = params.same_document and frame.isSameOrigin(params.url);
+    // Same-origin navigations are interceptable whether or not they're
+    // same-document — that's what lets a listener turn a cross-document
+    // link click into client-side routing.
+    const can_intercept = frame.isSameOrigin(params.url);
     const event = try NavigateEvent.initTrusted(.{
         // A traversal to another document can't be canceled.
         .cancelable = params.navigation_type != .traverse or params.same_document,
@@ -579,13 +582,24 @@ const WaitAllHandlers = struct {
         defer ls.deinit();
         const local = &ls.local;
 
+        // The first rejection in registration order wins; the rest are
+        // still released so their globals don't leak.
+        var winner: ?js.Value.Global = null;
         for (ctx.reasons) |maybe_reason| {
             const global = maybe_reason orelse continue;
+            if (winner == null) {
+                winner = global;
+            } else {
+                global.release();
+            }
+        }
+
+        if (winner) |global| {
             ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = global.local(local) });
             global.release();
-            return;
+        } else {
+            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
         }
-        ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
     }
 };
 
