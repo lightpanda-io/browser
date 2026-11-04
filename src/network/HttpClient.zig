@@ -1508,6 +1508,7 @@ const SyncContext = struct {
     headers: std.ArrayList(http.Header) = .empty,
     content_type: ?[]const u8 = null,
     script_cache: ?ScriptCache = null,
+    cross_origin: bool = false,
 
     // Holds everything but the body (content type, headers, script cache).
     // Acquired on first use. Ownership moves to the SyncResponse.
@@ -1518,6 +1519,7 @@ const SyncContext = struct {
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         self.status_text = transfer.res.status_text;
+        self.cross_origin = transfer._cors_cross_origin;
 
         // A streamed body's length is 0 here, but its content type is still wanted.
         const body_len = transfer.bodyLen();
@@ -2318,6 +2320,7 @@ const SyncResponse = struct {
     content_type: ?[]const u8, // always captured (most callers need it)
     script_cache: ?ScriptCache, // see Transfer.script_cache
     arena: ?*lp.Arena, // see SyncContext.arena
+    cross_origin: bool, // snapshot of Transfer._cors_cross_origin, captured before the transfer may be freed
 
     pub fn deinit(self: *SyncResponse) void {
         self.body.deinit();
@@ -3023,6 +3026,7 @@ pub const Transfer = struct {
                 .content_type = sync_ctx.content_type,
                 .script_cache = sync_ctx.script_cache,
                 .arena = sync_ctx.arena,
+                .cross_origin = sync_ctx.cross_origin,
             },
             .err => |e| return e,
         }

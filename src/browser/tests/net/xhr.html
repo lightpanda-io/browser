@@ -170,6 +170,55 @@
   }
 </script>
 
+<script id=xhr_redirect_a_b_a type=module>
+  {
+    // A -> B -> A: the chain leaves and returns to the requesting origin, but
+    // the cross-origin hop through B must leave the response permanently
+    // CORS-tainted, so non-safelisted/non-exposed response headers (e.g.
+    // Access-Control-Allow-Origin itself, and X-Hidden) stay stripped even
+    // though the final URL matches the requesting origin, while a header
+    // listed in Access-Control-Expose-Headers (X-Secret) stays visible.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/redirect_a_b_a');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('http://127.0.0.1:9582/cors_expose_headers_listed', req.responseURL);
+      testing.expectEqual('s3cr3t', req.getResponseHeader('X-Secret'));
+      testing.expectEqual(null, req.getResponseHeader('X-Hidden'));
+      testing.expectEqual(null, req.getResponseHeader('Access-Control-Allow-Origin'));
+      testing.expectEqual(false, req.getAllResponseHeaders().toLowerCase().includes('access-control-allow-origin'));
+    });
+  }
+</script>
+
+<script id=xhr_cors_expose_headers type=module>
+  {
+    // Cross-origin response headers are hidden unless CORS-safelisted or
+    // listed in Access-Control-Expose-Headers.
+    const state = await testing.async();
+    const listed = new XMLHttpRequest();
+    const unlisted = new XMLHttpRequest();
+    let pending = 2;
+    const onload = () => { if (--pending === 0) state.resolve() };
+    listed.onload = onload;
+    unlisted.onload = onload;
+    listed.open('GET', 'http://localhost:9582/cors_expose_headers_listed');
+    unlisted.open('GET', 'http://localhost:9582/cors_expose_headers_unlisted');
+    listed.send();
+    unlisted.send();
+
+    await state.done(() => {
+      testing.expectEqual('s3cr3t', listed.getResponseHeader('X-Secret'));
+      testing.expectEqual(null, listed.getResponseHeader('Access-Control-Allow-Origin'));
+      testing.expectEqual(null, unlisted.getResponseHeader('X-Secret'));
+    });
+  }
+</script>
+
 <script id=xhr_404 type=module>
   {
     const state = await testing.async();
