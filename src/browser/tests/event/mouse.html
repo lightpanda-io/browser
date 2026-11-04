@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=default>
   let event = new MouseEvent('click');
@@ -92,7 +93,8 @@
   {
     let evt = new MouseEvent('click', {altKey: true, ctrlKey: true, shiftKey: true, metaKey: true});
     testing.expectEqual(true, evt.getModifierState('Alt'));
-    testing.expectEqual(true, evt.getModifierState('AltGraph'));
+    // altKey doesn't set AltGraph.
+    testing.expectEqual(false, evt.getModifierState('AltGraph'));
     testing.expectEqual(true, evt.getModifierState('Control'));
     testing.expectEqual(true, evt.getModifierState('Shift'));
     testing.expectEqual(true, evt.getModifierState('Meta'));

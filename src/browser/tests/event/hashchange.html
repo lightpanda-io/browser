@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script>
   // The module scripts below interleave at each await, but they all change the
@@ -109,8 +110,11 @@
   const release = await my_turn;
 
   const events = [];
+  // back() is async: a forward() right behind it finds no forward entry yet
+  // (Chrome drops it), so go forward once back has landed.
   window.onhashchange = (e) => {
     events.push([e.oldURL, e.newURL]);
+    if (events.length === 1) history.forward();
     if (events.length === 2) state.resolve();
   };
 
@@ -121,7 +125,6 @@
   history.pushState(null, '', '#section');  // entry .../#section; no hashchange
   const after = location.href;
   history.back();                           // traverse: after -> before
-  history.forward();                        // traverse: before -> after
 
   await state.done(() => {
     testing.expectEqual([

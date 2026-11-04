@@ -30,21 +30,20 @@ pub const Proto = Event;
 
 _proto: *Event,
 _reason: ?js.Value.Global = null,
-_promise: ?js.Promise.Global = null,
+_promise: js.Promise.Global,
 
 const PromiseRejectionEventOptions = struct {
-    promise: ?js.Promise.Global = null,
+    promise: js.Promise.Global,
     reason: ?js.Value.Global = null,
 };
 
 const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEvent {
+pub fn init(typ: []const u8, opts: Options, page: *Page) !*PromiseRejectionEvent {
     const arena = try page.getArena(.tiny, "PromiseRejectionEvent");
     errdefer arena.release();
     const type_string = try String.init(arena.allocator(), typ, .{});
 
-    const opts = opts_ orelse Options{};
     const event = try page.factory.event(
         arena,
         type_string,
@@ -63,9 +62,7 @@ pub fn deinit(self: *PromiseRejectionEvent, _: *Page) void {
     if (self._reason) |r| {
         r.release();
     }
-    if (self._promise) |p| {
-        p.release();
-    }
+    self._promise.release();
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {
@@ -76,7 +73,7 @@ fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Global {
     return self._reason;
 }
 
-fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Global {
+fn getPromise(self: *const PromiseRejectionEvent) js.Promise.Global {
     return self._promise;
 }
 
