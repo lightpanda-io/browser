@@ -94,7 +94,7 @@ _exec_command_settings: exec_command.Settings = .{},
 _design_mode: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
-// extent() cache, keyed on style version and viewport.
+// extent() cache, keyed on layout version and viewport.
 _extent: ?struct {
     version: usize,
     viewport_width: u32,
@@ -498,7 +498,7 @@ pub const Extent = struct { width: f64, height: f64 };
 /// size.
 pub fn extent(self: *Document) Extent {
     const frame = self._frame orelse return .{ .width = 0, .height = 0 };
-    const version = frame.page.style_version;
+    const version = frame._style_manager.layoutVersion();
     const viewport = frame.page.getViewport();
     if (self._extent) |cached| {
         if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
