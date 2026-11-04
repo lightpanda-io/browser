@@ -241,7 +241,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     }
 
     if (element._flags.builtin_undefined) {
-        return upgradeBuiltIn(element, frame);
+        return tryUpgradeBuiltIn(element, frame);
     }
 
     // Customized built-in element - check if it actually has a definition first
@@ -438,32 +438,42 @@ fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const 
 
 pub fn initBuiltIn(element: *Element, frame: *Frame) !void {
     const is_value = element.getAttributeSafe(comptime .wrap("is")) orelse return;
-    try frame._undefined_builtins.put(frame.page_arena, element, try frame.dupeString(is_value));
     element._flags.builtin_undefined = true;
-    try upgradeBuiltIn(element, frame);
+    if (frame.window.getCustomElements()._definitions.get(is_value)) |definition| {
+        return upgradeBuiltIn(element, definition, frame);
+    }
+    const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
+    if (CustomElementRegistry.isValidName(is_value)) {
+        try frame._undefined_builtins.put(frame.page_arena, element, try frame.dupeString(is_value));
+    }
 }
 
-pub fn upgradeBuiltIns(name: []const u8, frame: *Frame) !void {
+pub fn upgradeBuiltIns(definition: *CustomElementDefinition, frame: *Frame) !void {
     var candidates: std.ArrayList(*Element) = .empty;
     for (frame._undefined_builtins.keys(), frame._undefined_builtins.values()) |element, is_value| {
-        if (std.mem.eql(u8, is_value, name) and element.asNode().isConnected()) {
+        if (std.mem.eql(u8, is_value, definition.name) and element.asNode().isConnected()) {
             try candidates.append(frame.local_arena, element);
         }
     }
     for (candidates.items) |element| {
-        try upgradeBuiltIn(element, frame);
+        _ = frame._undefined_builtins.swapRemove(element);
+        try upgradeBuiltIn(element, definition, frame);
     }
 }
 
-/// https://html.spec.whatwg.org/#concept-upgrade-an-element
-pub fn upgradeBuiltIn(element: *Element, frame: *Frame) error{OutOfMemory}!void {
+pub fn tryUpgradeBuiltIn(element: *Element, frame: *Frame) error{OutOfMemory}!void {
     const is_value = frame._undefined_builtins.get(element) orelse return;
     const definition = frame.window.getCustomElements()._definitions.get(is_value) orelse return;
+    _ = frame._undefined_builtins.swapRemove(element);
+    return upgradeBuiltIn(element, definition, frame);
+}
+
+/// https://html.spec.whatwg.org/#concept-upgrade-an-element
+/// Attempted once: a failed upgrade is never retried.
+fn upgradeBuiltIn(element: *Element, definition: *CustomElementDefinition, frame: *Frame) error{OutOfMemory}!void {
     if (definition.extends != element.getTag()) {
         return;
     }
-    // A failed upgrade is never retried.
-    _ = frame._undefined_builtins.swapRemove(element);
 
     const prev_upgrading = frame._upgrading_element;
     const prev_consumed = frame._upgrading_consumed;
@@ -502,17 +512,19 @@ pub fn upgradeBuiltIn(element: *Element, frame: *Frame) error{OutOfMemory}!void 
 
     element._flags.builtin_undefined = false;
     try frame.setCustomizedBuiltInDefinition(element, definition);
-    _ = frame._customized_builtin_connected_callback_invoked.remove(element);
-    _ = frame._customized_builtin_disconnected_callback_invoked.remove(element);
     frame.styleChanged(); // the element now matches :defined
+    try enqueueUpgradeReactions(element, definition, frame);
+}
 
+/// The reactions an upgrade queues for an element's existing state.
+pub fn enqueueUpgradeReactions(element: *Element, definition: *CustomElementDefinition, frame: *Frame) error{OutOfMemory}!void {
     for (element.attributeEntries()) |*attr| {
         const name = lp.String.wrap(attr.name());
         if (definition.isAttributeObserved(name)) {
             enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
         }
     }
-    if (node.isConnected()) {
+    if (element.asNode().isConnected()) {
         try enqueueConnectedCallbackOnElement(false, element, frame);
     }
 }

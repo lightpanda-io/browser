@@ -105,7 +105,6 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
-    frame.styleChanged();
 
     // Upgrade any undefined custom elements with this name
     var idx: usize = 0;
@@ -130,7 +129,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
 
     if (definition.isCustomizedBuiltIn()) {
-        try Custom.upgradeBuiltIns(owned_name, frame);
+        try Custom.upgradeBuiltIns(definition, frame);
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
@@ -195,7 +194,7 @@ fn upgradeNode(self: *CustomElementRegistry, node: *Node, frame: *Frame) !void {
 
 fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame) !void {
     const custom = element.is(Custom) orelse {
-        return Custom.upgradeBuiltIn(element, frame);
+        return Custom.tryUpgradeBuiltIn(element, frame);
     };
 
     if (custom._definition != null or custom._upgrade_failed) {
@@ -216,16 +215,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     custom._disconnected_callback_invoked = false;
 
     const node = custom.asNode();
-    const element = custom.asElement();
-    for (element.attributeEntries()) |*attr| {
-        const name = lp.String.wrap(attr.name());
-        if (definition.isAttributeObserved(name)) {
-            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
-        }
-    }
-    if (node.isConnected()) {
-        try Custom.enqueueConnectedCallbackOnElement(false, element, frame);
-    }
+    try Custom.enqueueUpgradeReactions(custom.asElement(), definition, frame);
 
     // During construction the element is precustomized, not yet custom.
     custom._upgrade_in_progress = true;
