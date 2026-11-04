@@ -18,10 +18,10 @@
 
 //! XPath 1.0 expression parser.
 //!
-//! Recursive descent over a fully-tokenized stream, producing an
-//! `ast.Expr` tree allocated on the caller's arena. The AST borrows
-//! string/name slices from `input` and is valid for as long as the
-//! arena and input outlive it.
+//! Recursive descent over tokens pulled on demand (one token of
+//! lookahead), producing an `ast.Expr` tree allocated on the caller's
+//! arena. The AST borrows string/name slices from `input` and is valid
+//! for as long as the arena and input outlive it.
 
 const std = @import("std");
 
@@ -47,26 +47,21 @@ pub const Error = error{
 const max_depth: u16 = 64;
 
 arena: Allocator,
-tokens: []const Token,
-pos: usize = 0,
+tokenizer: Tokenizer,
+current: Token,
+next: Token,
 depth: u16 = 0,
 
 pub fn parse(arena: Allocator, input: []const u8) Error!*ast.Expr {
-    var token_list: std.ArrayList(Token) = .empty;
-    // Token count is bounded by input length; ¼-byte-per-token is
-    // generous for typical XPath and skips ArrayList regrowth.
-    try token_list.ensureTotalCapacity(arena, @max(8, input.len / 4));
-    var tokenizer = Tokenizer{ .input = input };
-    while (true) {
-        const tok = tokenizer.next();
-        try token_list.append(arena, tok);
-        if (tok == .eof) break;
-    }
-
     var parser = Parser{
         .arena = arena,
-        .tokens = token_list.items,
+        .tokenizer = .{ .input = input },
+        .current = undefined,
+        .next = undefined,
     };
+    parser.current = parser.tokenizer.next();
+    parser.next = parser.tokenizer.next();
+
     const expr = try parser.parseExpr();
     if (parser.peek() != .eof) return error.UnexpectedToken;
     return expr;
@@ -75,19 +70,18 @@ pub fn parse(arena: Allocator, input: []const u8) Error!*ast.Expr {
 // --- token cursor helpers ---
 
 fn peek(self: *const Parser) Token {
-    return self.tokens[self.pos];
+    return self.current;
 }
 
-fn lookahead(self: *const Parser, offset: usize) Token {
-    const idx = self.pos + offset;
-    if (idx >= self.tokens.len) return .eof;
-    return self.tokens[idx];
+fn peekNext(self: *const Parser) Token {
+    return self.next;
 }
 
 fn advance(self: *Parser) Token {
-    const tok = self.tokens[self.pos];
-    self.pos += 1;
-    return tok;
+    const current = self.current;
+    self.current = self.next;
+    self.next = self.tokenizer.next();
+    return current;
 }
 
 fn at(self: *const Parser, tag: std.meta.Tag(Token)) bool {
@@ -231,7 +225,7 @@ fn parsePathExpr(self: *Parser) Error!*ast.Expr {
     // name is *not* a node-type test (`node`/`text`/`comment`/`processing-instruction`).
     const is_filter = switch (t) {
         .lparen, .string, .number, .dollar => true,
-        .name => |name| self.lookahead(1) == .lparen and !isNodeTypeName(name),
+        .name => |name| self.peekNext() == .lparen and !isNodeTypeName(name),
         else => false,
     };
 
@@ -309,7 +303,7 @@ fn parseStep(self: *Parser) Error!ast.Step {
     var axis: ast.Axis = .child;
     if (self.match(.at)) {
         axis = .attribute;
-    } else if (self.peek() == .name and self.lookahead(1) == .double_colon) {
+    } else if (self.peek() == .name and self.peekNext() == .double_colon) {
         const axis_name = self.advance().name;
         _ = self.advance(); // `::`
         axis = parseAxisName(axis_name);
@@ -333,7 +327,7 @@ fn parseNodeTest(self: *Parser) Error!ast.NodeTest {
 
     const name = self.peek().name;
     if (typeTestKind(name)) |type_test| {
-        if (self.lookahead(1) == .lparen) {
+        if (self.peekNext() == .lparen) {
             _ = self.advance(); // name
             _ = self.advance(); // `(`
             // `processing-instruction("target")` consumes the literal but ignores it (decision #3 stub).
