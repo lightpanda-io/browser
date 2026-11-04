@@ -16,7 +16,7 @@
   div.textContent = 'Hello World';
 
   const result = serializer.serializeToString(div);
-  testing.expectEqual('<div>Hello World</div>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml">Hello World</div>', result);
 }
 </script>
 
@@ -29,7 +29,7 @@
   div.textContent = 'Content';
 
   const result = serializer.serializeToString(div);
-  testing.expectEqual('<div id="test" class="foo bar">Content</div>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml" id="test" class="foo bar">Content</div>', result);
 }
 </script>
 
@@ -44,7 +44,7 @@
   div.appendChild(p);
 
   const result = serializer.serializeToString(div);
-  testing.expectEqual('<div><p><span>Nested</span></p></div>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml"><p><span>Nested</span></p></div>', result);
 }
 </script>
 
@@ -54,7 +54,7 @@
   const div = document.createElement('div');
 
   const result = serializer.serializeToString(div);
-  testing.expectEqual('<div></div>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml"></div>', result);
 }
 </script>
 
@@ -66,10 +66,10 @@
   img.src = 'test.png';
 
   const brResult = serializer.serializeToString(br);
-  testing.expectEqual('<br>', brResult);
+  testing.expectEqual('<br xmlns="http://www.w3.org/1999/xhtml" />', brResult);
 
   const imgResult = serializer.serializeToString(img);
-  testing.expectEqual('<img src="test.png">', imgResult);
+  testing.expectEqual('<img xmlns="http://www.w3.org/1999/xhtml" src="test.png" />', imgResult);
 }
 </script>
 
@@ -85,7 +85,7 @@
   container.appendChild(span2);
 
   const result = serializer.serializeToString(container);
-  testing.expectEqual('<div><span>First</span><span>Second</span></div>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml"><span>First</span><span>Second</span></div>', result);
 }
 </script>
 
@@ -101,7 +101,7 @@
   fragment.appendChild(span);
 
   const result = serializer.serializeToString(fragment);
-  testing.expectEqual('<div>In fragment</div><span>Also in fragment</span>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml">In fragment</div><span xmlns="http://www.w3.org/1999/xhtml">Also in fragment</span>', result);
 }
 </script>
 
@@ -113,20 +113,18 @@
   testDiv.innerHTML = '<p class="test">Hello <strong>World</strong></p>';
 
   const result = serializer.serializeToString(testDiv);
-  testing.expectEqual('<div id="serialize-test"><p class="test">Hello <strong>World</strong></p></div>', result);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml" id="serialize-test"><p class="test">Hello <strong>World</strong></p></div>', result);
 }
 </script>
 
 <script id=roundtripWithInnerHTML>
 {
   const serializer = new XMLSerializer();
-  const original = '<div class="container"><p>Text</p><span id="x">More</span></div>';
-
   const div = document.createElement('div');
-  div.innerHTML = original;
+  div.innerHTML = '<div class="container"><p>Text</p><span id="x">More</span></div>';
 
   const serialized = serializer.serializeToString(div.firstChild);
-  testing.expectEqual(original, serialized);
+  testing.expectEqual('<div xmlns="http://www.w3.org/1999/xhtml" class="container"><p>Text</p><span id="x">More</span></div>', serialized);
 }
 </script>
 
@@ -138,5 +136,111 @@
   const serializer = new XMLSerializer();
   const serialized = serializer.serializeToString(div.getAttributeNode('over'));
   testing.expectEqual('', serialized);
+}
+</script>
+
+<script id=serializeSvg>
+{
+  const serializer = new XMLSerializer();
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 1 1');
+  svg.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'rect'));
+
+  testing.expectEqual('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect/></svg>', serializer.serializeToString(svg));
+}
+</script>
+
+<script id=serializeExistingXmlns>
+{
+  const serializer = new XMLSerializer();
+  const div = document.createElement('div');
+  div.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>';
+
+  testing.expectEqual('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>', serializer.serializeToString(div.firstChild));
+}
+</script>
+
+<script id=serializeNamespaceChanges>
+{
+  const serializer = new XMLSerializer();
+  const doc = document.implementation.createDocument(null, null);
+  const r = doc.createElementNS('urn:r', 'r');
+  const c = doc.createElementNS('urn:c', 'c');
+  r.appendChild(c);
+  c.appendChild(doc.createElementNS(null, 'n'));
+  c.appendChild(doc.createElementNS('urn:c', 'm'));
+
+  testing.expectEqual('<r xmlns="urn:r"><c xmlns="urn:c"><n xmlns=""/><m/></c></r>', serializer.serializeToString(r));
+}
+</script>
+
+<script id=serializePrefixed>
+{
+  const serializer = new XMLSerializer();
+  const doc = document.implementation.createDocument(null, null);
+  const r = doc.createElementNS(null, 'r');
+  const a = doc.createElementNS('urn:p', 'p:a');
+  r.appendChild(a);
+  a.appendChild(doc.createElementNS('urn:p', 'p:b'));
+
+  testing.expectEqual('<r><p:a xmlns:p="urn:p"><p:b/></p:a></r>', serializer.serializeToString(r));
+}
+</script>
+
+<script id=serializeXmlDocument>
+{
+  const serializer = new XMLSerializer();
+  const doc = new DOMParser().parseFromString('<root a="1"><item/><x>t &amp; u</x><?pi data?><!-- k --></root>', 'application/xml');
+  doc.documentElement.appendChild(doc.createCDATASection('c<d'));
+
+  testing.expectEqual('<root a="1"><item/><x>t &amp; u</x><?pi data?><!-- k --><![CDATA[c<d]]></root>', serializer.serializeToString(doc));
+}
+</script>
+
+<script id=serializeHtmlDocument>
+{
+  const serializer = new XMLSerializer();
+  const doc = new DOMParser().parseFromString('<!DOCTYPE html><title>x</title><p>y</p>', 'text/html');
+
+  testing.expectEqual('<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>y</p></body></html>', serializer.serializeToString(doc));
+}
+</script>
+
+<script id=serializeEscaping>
+{
+  const serializer = new XMLSerializer();
+  const span = document.createElement('span');
+  span.setAttribute('a', '"<&>\n');
+  span.textContent = '<&>"\u00a0';
+
+  testing.expectEqual('<span xmlns="http://www.w3.org/1999/xhtml" a="&quot;&lt;&amp;&gt;&#10;">&lt;&amp;&gt;"\u00a0</span>', serializer.serializeToString(span));
+}
+</script>
+
+<script id=serializeEscapesNamespace>
+{
+  const serializer = new XMLSerializer();
+  const ns = '"><x y="';
+  const escaped = '&quot;&gt;&lt;x y=&quot;';
+
+  testing.expectEqual(`<div xmlns="${escaped}"/>`, serializer.serializeToString(document.createElementNS(ns, 'div')));
+  testing.expectEqual(`<p:div xmlns:p="${escaped}"/>`, serializer.serializeToString(document.createElementNS(ns, 'p:div')));
+}
+</script>
+
+<script id=serializeNotTrimmed>
+{
+  const serializer = new XMLSerializer();
+  testing.expectEqual(' x ', serializer.serializeToString(document.createTextNode(' x ')));
+}
+</script>
+
+<script id=serializeTemplate>
+{
+  const serializer = new XMLSerializer();
+  const div = document.createElement('div');
+  div.innerHTML = '<template><br></template>';
+
+  testing.expectEqual('<template xmlns="http://www.w3.org/1999/xhtml"><br /></template>', serializer.serializeToString(div.firstChild));
 }
 </script>
