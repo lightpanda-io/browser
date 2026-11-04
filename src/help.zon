@@ -472,6 +472,12 @@
     \\  --cors-store-entry-limit <INT>
     \\          Maximum number of entries kept in the CorsStore. 0 means no limit.
     \\          Defaults to 1000.
+    \\  --cors-wildcard-authorization
+    \\          Let "Access-Control-Allow-Headers: *" also allow the Authorization
+    \\          request header, as Chromium does (it only logs a deprecation
+    \\          warning). The Fetch standard requires Authorization to be listed
+    \\          explicitly; some sites rely on Chromium's behavior.
+    \\          Defaults to false.
     \\  --disable-features <FEATURE>
     \\          Disable a feature that is on by default. Can be passed multiple times.
     \\          Defaults to none disabled.
