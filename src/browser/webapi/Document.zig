@@ -2053,8 +2053,8 @@ pub const JsApi = struct {
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});
     pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});
-    pub const createElement = bridge.function(Document.createElement, .{});
-    pub const createElementNS = bridge.function(Document.createElementNS, .{});
+    pub const createElement = bridge.function(Document.createElement, .{ .ce_reactions = true });
+    pub const createElementNS = bridge.function(Document.createElementNS, .{ .ce_reactions = true });
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
