@@ -142,6 +142,29 @@
   testing.expectEqual('1234567.9', cents.value);
   cents.stepDown(2);
   testing.expectEqual('1234567.88', cents.value);
+  cents.value = '1234567.885';
+  cents.stepUp();
+  testing.expectEqual('1234567.89', cents.value);
+  cents.min = '0';
+  cents.max = '1234567.89';
+  cents.value = '1234567.80';
+  cents.stepUp(100);
+  testing.expectEqual('1234567.89', cents.value);
+
+  // Results are decimal, without binary float noise.
+  const tenths = document.createElement('input');
+  tenths.type = 'number';
+  tenths.step = '0.1';
+  tenths.value = '0.2';
+  tenths.stepUp();
+  testing.expectEqual('0.3', tenths.value);
+  tenths.value = '0.7';
+  tenths.stepUp(2);
+  testing.expectEqual('0.9', tenths.value);
+  tenths.min = '0';
+  tenths.value = '0.3';
+  tenths.stepDown(2);
+  testing.expectEqual('0.1', tenths.value);
 
   // No min: the value attribute is the step base.
   const date = $('#date');
