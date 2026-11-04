@@ -113,6 +113,21 @@ fn writeFish(w: *Writer, exec_name: []const u8) !void {
 
 fn writeBash(w: *Writer, exec_name: []const u8) !void {
     const ident: Ident = .{ .name = exec_name };
+    // Bash 3.2 lacks `compopt`; running `compgen -f` here enables Readline's filename quoting for this completion.
+    try w.print(
+        \\_{f}_path() {{
+        \\    local candidate
+        \\    if (( BASH_VERSINFO[0] >= 4 )); then
+        \\        builtin compopt -o filenames 2>/dev/null || :
+        \\    else
+        \\        builtin compgen -f -- /dev/null/ >/dev/null || :
+        \\    fi
+        \\    COMPREPLY=()
+        \\    while IFS= read -r candidate; do COMPREPLY+=("$candidate"); done < <(compgen -f -- "$cur")
+        \\    return 0
+        \\}}
+        \\
+    , .{ident});
     // Candidates for a comma-separated list: the items not chosen yet, after
     // what's typed up to the last comma. Reads the caller's `cur`.
     try w.print(
@@ -179,7 +194,7 @@ fn writeBash(w: *Writer, exec_name: []const u8) !void {
 fn writeBashAction(w: *Writer, values: Values, ident: Ident) !void {
     switch (values) {
         .none, .any => {},
-        .path => try w.writeAll("compopt -o filenames 2>/dev/null; mapfile -t COMPREPLY < <(compgen -f -- \"$cur\"); "),
+        .path => try w.print("_{f}_path; ", .{ident}),
         .one_of => |one_of| {
             try w.writeAll("COMPREPLY=($(compgen -W \"");
             try writeJoined(w, one_of);
@@ -525,6 +540,18 @@ test "completion: bash and zsh" {
         const script = out.written();
         try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda()") != null);
         try std.testing.expect(std.mem.indexOf(u8, script, "--load-resources") != null);
+        if (shell == .bash) {
+            try std.testing.expect(std.mem.indexOf(u8, script, "local cur prev cmd i") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda_path() {") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "COMPREPLY=()") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "while IFS= read -r candidate; do COMPREPLY+=(\"$candidate\"); done < <(compgen -f -- \"$cur\")") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "builtin compopt -o filenames 2>/dev/null || :") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "builtin compgen -f -- /dev/null/ >/dev/null || :") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "complete -F _light_panda light-panda") != null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "complete -o filenames") == null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "if type compopt") == null);
+            try std.testing.expect(std.mem.indexOf(u8, script, "_light_panda_path; ") != null);
+        }
     }
 }
 

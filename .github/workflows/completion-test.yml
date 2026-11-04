@@ -1,0 +1,79 @@
+name: completion-test
+
+env:
+  LIGHTPANDA_DISABLE_TELEMETRY: true
+
+# The generated script comes from the CLI tables, so only run when they,
+# the generator or the harness change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/completion-test.yml"
+      - "src/completion.zig"
+      - "src/cli.zig"
+      - "src/Config.zig"
+      - "src/help.zon"
+      - "tests/completion-bash.sh"
+      - "Makefile"
+
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/completion-test.yml"
+      - "src/completion.zig"
+      - "src/cli.zig"
+      - "src/Config.zig"
+      - "src/help.zon"
+      - "tests/completion-bash.sh"
+      - "Makefile"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bash-completion-linux:
+    name: Bash completion (modern Bash)
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/install
+
+      - name: Test Bash completion
+        run: make test-completion-bash COMPLETION_BASH=/bin/bash ZIGFLAGS=-Dprebuilt_v8_path=v8/libc_v8.a
+
+  bash-completion-macos:
+    name: Bash completion (Bash 3.2)
+
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/install
+        with:
+          os: macos
+          arch: aarch64
+
+      - name: Verify system Bash is 3.2
+        run: |
+          /bin/bash --version
+          /bin/bash -c 'test "${BASH_VERSINFO[0]}" -eq 3'
+
+      - name: Test Bash completion
+        run: make test-completion-bash COMPLETION_BASH=/bin/bash ZIGFLAGS=-Dprebuilt_v8_path=v8/libc_v8.a
