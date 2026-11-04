@@ -716,7 +716,7 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?
     const target_frame = self._frame;
     const incumbent = target_frame.js.getIncumbent();
     const source_window = incumbent.window;
-    const target_origin = try parseTargetOrigin(target_origin_arg, incumbent, frame);
+    const target_origin = try parseTargetOrigin(target_origin_arg, incumbent, target_frame, frame);
 
     const ports = try MessagePort.transferList(transfer_arg);
 
@@ -754,26 +754,51 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?
 
 // The origin a postMessage is for: "*" is any, "/" the sender's own,
 // anything else the origin of that absolute URL (SyntaxError if it isn't
-// one). A null origin is opaque and matches no window.
+// one, or if its origin is opaque, as in Chrome). A null origin matches no
+// window.
 // https://html.spec.whatwg.org/multipage/web-messaging.html#window-post-message-steps
 const TargetOrigin = union(enum) {
     any,
     origin: ?[]const u8,
 };
 
-fn parseTargetOrigin(value: ?js.Value, incumbent: *const Frame, frame: *Frame) !TargetOrigin {
+fn parseTargetOrigin(value: ?js.Value, incumbent: *const Frame, target: *const Frame, frame: *Frame) !TargetOrigin {
     const target_origin = if (value) |v| try v.toStringSlice() else "/";
     if (std.mem.eql(u8, target_origin, "*")) {
         return .any;
     }
     if (std.mem.eql(u8, target_origin, "/")) {
+        if (incumbent.origin == null and incumbent == target) {
+            // An opaque origin is only same-origin with itself. We represent
+            // every opaque origin as null (can't tell them apart), so the only
+            // window it can match is the sender's own.
+            return .any;
+        }
         return .{ .origin = incumbent.origin };
     }
-    const url = URL.resolve(frame.call_arena, "", target_origin, .{}) catch |err| switch (err) {
+    var url = try parseTargetOriginURL(frame.call_arena, target_origin);
+    if (std.mem.eql(u8, URL.getProtocol(url), "blob:")) {
+        // A blob: URL's origin is its inner URL's.
+        url = try parseTargetOriginURL(frame.call_arena, url["blob:".len..]);
+    }
+
+    // Schemes whose URLs have a tuple origin. getOrigin only knows http(s),
+    // so the others never match a window, but they aren't an error.
+    const tuple_schemes = [_][]const u8{ "http:", "https:", "ws:", "wss:", "ftp:", "file:" };
+    const protocol = URL.getProtocol(url);
+    for (tuple_schemes) |scheme| {
+        if (std.mem.eql(u8, protocol, scheme)) {
+            return .{ .origin = try URL.getOrigin(frame.call_arena, url) };
+        }
+    }
+    return error.SyntaxError;
+}
+
+fn parseTargetOriginURL(arena: std.mem.Allocator, raw: []const u8) ![:0]const u8 {
+    return URL.resolve(arena, "", raw, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.SyntaxError,
     };
-    return .{ .origin = try URL.getOrigin(frame.call_arena, url) };
 }
 
 const base64 = @import("encoding/base64.zig");
@@ -1042,8 +1067,9 @@ const PostMessageCallback = struct {
 
         const event_target = window.asEventTarget();
 
-        // Checked on delivery: the target may have navigated to another
-        // origin since the message was posted.
+        // Checked on delivery, as in the spec. A navigation away cancels this
+        // task (Frame.neuter resets the scheduler), so frame.origin is the
+        // origin the target had when the message was posted.
         switch (self.target_origin) {
             .any => {},
             .origin => |expected| {
