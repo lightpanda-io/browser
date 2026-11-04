@@ -110,11 +110,14 @@
     const f = document.createElement('iframe');
     document.body.appendChild(f);
     const w = f.contentWindow;
+    // Resolve on the event, not a parent timer: a parent timer that comes due
+    // in the same macrotask pass runs before the iframe's queued hashchange.
     let hashchanges = 0;
-    w.addEventListener('hashchange', () => { hashchanges += 1; });
+    w.addEventListener('hashchange', () => {
+      hashchanges += 1;
+      state.resolve();
+    });
     w.location.hash = 'x';
-    await window.settle();
-    state.resolve();
     await state.done(() => {
       testing.expectEqual('#x', w.location.hash);
       testing.expectEqual('about:blank#x', w.location.href);
