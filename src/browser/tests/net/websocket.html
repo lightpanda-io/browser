@@ -883,5 +883,11 @@
   testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', ['ok', 'a b']));
   testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', new Set(['a b'])));
   testing.expectEqual(1, WebSocket.length);
+
+  // A value that occurs more than once throws, including when the copies are
+  // not adjacent. Distinct values still construct.
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', ['dup', 'dup']));
+  testing.expectError('SyntaxError', () => new WebSocket('ws://127.0.0.1:9584/', ['a', 'b', 'a']));
+  new WebSocket('ws://127.0.0.1:9584/', ['a', 'b']).close();
 }
 </script>
