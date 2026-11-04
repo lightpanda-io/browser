@@ -147,6 +147,9 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }
 
+    const task_scope = self.frame.js.attribution.enterIfUntagged(.event, event._type_string.str());
+    defer if (task_scope) |ts| ts.exit();
+
     switch (target._type) {
         .node => try self.dispatchNode(target.subtype(Node), event),
         else => try self.dispatchDirect(target, event, .{ .context = "dispatch" }),

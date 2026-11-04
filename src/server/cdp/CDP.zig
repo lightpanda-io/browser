@@ -933,12 +933,14 @@ pub const BrowserContext = struct {
         self.page_life_cycle_events = true;
         try self.notification.register(.frame_network_idle, self, onFrameNetworkIdle);
         try self.notification.register(.frame_network_almost_idle, self, onFrameNetworkAlmostIdle);
+        try self.notification.register(.frame_settled, self, onFrameSettled);
     }
 
     pub fn lifecycleEventsDisable(self: *BrowserContext) void {
         self.page_life_cycle_events = false;
         self.notification.unregister(.frame_network_idle, self);
         self.notification.unregister(.frame_network_almost_idle, self);
+        self.notification.unregister(.frame_settled, self);
     }
 
     pub fn consoleEnable(self: *BrowserContext) !void {
@@ -1082,6 +1084,11 @@ pub const BrowserContext = struct {
     fn onFrameChildFrameDetached(ctx: *anyopaque, msg: *const Notification.FrameChildFrameDetached) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameDetached(self, msg);
+    }
+
+    fn onFrameSettled(ctx: *anyopaque, msg: *const Notification.FrameSettled) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").frameSettled(self, msg);
     }
 
     fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {

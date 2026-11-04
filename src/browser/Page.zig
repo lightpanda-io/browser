@@ -85,6 +85,9 @@ broadcast_sequence: u64 = 0,
 // Health signals for this Page
 status: PageStatus = .{},
 
+// Tracked work still pending (--wait-until settled)
+settle: js.Attribution.Settle = .{},
+
 // Entered (logScope) around any work done on this Page's behalf.
 log_context: log.PageContext,
 

@@ -13,6 +13,7 @@
     {"name":"fillNode"},
     {"name":"scrollNode"},
     {"name":"waitForSelector"},
+    {"name":"waitUntil","description":"Blocks until the main frame reaches the condition, the --wait-until values. settled is load, then the requests and short timers that page-load work started, ignoring intervals, long timeouts, idle callbacks and WebSocket traffic; it is also announced as a Page.lifecycleEvent named settled. Drivers map their own waitUntil onto a fixed list of lifecycle names, so settled is awaited through this method. Errors with Timeout when timeout runs out first.","parameters":[{"name":"until","type":"string","enum":["load","domcontentloaded","networkalmostidle","networkidle","settled","done"]},{"name":"timeout","description":"Milliseconds. Defaults to the page wait timeout.","optional":true,"type":"integer"}]},
     {"name":"handleJavaScriptDialog"},
     {"name":"configureCDP"},
     {"name":"configureLoading"},

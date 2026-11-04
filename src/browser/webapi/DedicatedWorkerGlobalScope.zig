@@ -134,7 +134,9 @@ fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: MessagePort.M
         .data = cloned_data,
         .worker_scope = self,
         .arena = message_arena,
+        .hold = wgs.page.settle.hold(cloned_data.task),
     };
+    errdefer callback.hold.release();
 
     try wgs.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "WorkerGlobalScope.receiveMessage",
@@ -160,9 +162,11 @@ const ReceiveMessageCallback = struct {
     data: MessagePort.Message,
     arena: *lp.Arena,
     worker_scope: *DedicatedWorkerGlobalScope,
+    hold: js.Attribution.Hold,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
+        self.hold.release();
         self.data.release();
         self.deinit();
     }
@@ -176,9 +180,14 @@ const ReceiveMessageCallback = struct {
         defer self.deinit();
         defer self.data.releasePorts();
 
+        self.hold.release();
+
         const worker_scope = self.worker_scope;
         const wsg = worker_scope._proto;
         const target = wsg.asEventTarget();
+
+        const task_scope = wsg.js.attribution.enterNew(.message, .{ .parent = self.data.task, .label = "DedicatedWorkerGlobalScope" });
+        defer task_scope.exit();
 
         // If data is null, deserialization failed - fire messageerror
         const data = self.data.data orelse {

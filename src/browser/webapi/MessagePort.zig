@@ -116,6 +116,8 @@ pub const Message = struct {
     ports: []const *MessagePort,
     // Owns `ports`; null when there are none.
     ports_arena: ?*lp.Arena = null,
+    // The sender's Attribution task
+    task: ?js.Attribution.Tag = null,
 
     // For a message that's dropped.
     pub fn release(self: Message) void {
@@ -169,6 +171,8 @@ pub fn cloneMessage(message: js.Value, transfer: []const *MessagePort, target: *
         moved.* = try port.transferTo(target);
     }
 
+    const task = target.js.attribution.current();
+
     var ls: js.Local.Scope = undefined;
     target.js.localScope(&ls);
     defer ls.deinit();
@@ -178,9 +182,9 @@ pub fn cloneMessage(message: js.Value, transfer: []const *MessagePort, target: *
     defer try_catch.deinit();
 
     const value = js.Value.deserializeTransfer(&ls.local, serialized.bytes(), ports) catch {
-        return .{ .data = null, .ports = ports, .ports_arena = ports_arena };
+        return .{ .data = null, .ports = ports, .ports_arena = ports_arena, .task = task };
     };
-    return .{ .data = try value.persist(), .ports = ports, .ports_arena = ports_arena };
+    return .{ .data = try value.persist(), .ports = ports, .ports_arena = ports_arena, .task = task };
 }
 
 // The `transfer` argument of postMessage: a sequence of transferables, or a
@@ -273,10 +277,12 @@ fn moveMessage(message: Message, from: *Execution, to: *Execution) ?Message {
     from.js.localScope(&ls);
     defer ls.deinit();
 
-    return cloneMessage(data.local(&ls.local), message.ports, to) catch |err| {
+    var moved = cloneMessage(data.local(&ls.local), message.ports, to) catch |err| {
         log.debug(.dom, "MessagePort transfer", .{ .err = err });
         return null;
     };
+    moved.task = message.task;
+    return moved;
 }
 
 pub fn start(self: *MessagePort) void {
@@ -320,8 +326,10 @@ fn scheduleDelivery(self: *MessagePort, message: Message) !void {
     const callback = try exec._factory.create(DeliverCallback{
         .port = self,
         .message = message,
+        .hold = exec.page.settle.hold(message.task),
     });
     errdefer exec._factory.destroy(callback);
+    errdefer callback.hold.release();
 
     self._in_flight.append(&callback.node);
     errdefer self._in_flight.remove(&callback.node);
@@ -337,12 +345,14 @@ const DeliverCallback = struct {
     // null once a transfer has taken it to the port's new incarnation (and
     // unlinked this callback from _in_flight).
     message: ?Message,
+    hold: js.Attribution.Hold,
     node: std.DoublyLinkedList.Node = .{},
 
     // Called by the scheduler if the task is dropped before it runs. `run` and
     // `cancelled` are mutually exclusive, so the temp is released exactly once.
     fn cancelled(ctx: *anyopaque) void {
         const self: *DeliverCallback = @ptrCast(@alignCast(ctx));
+        self.hold.release();
         if (self.message) |message| {
             self.port._in_flight.remove(&self.node);
             message.release();
@@ -357,12 +367,18 @@ const DeliverCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *DeliverCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+
+        self.hold.release();
+
         const port = self.port;
         const exec = port._exec;
 
         const message = self.message orelse return null;
         port._in_flight.remove(&self.node);
         defer message.releasePorts();
+
+        const task_scope = exec.js.attribution.enterNew(.message, .{ .parent = message.task, .label = "MessagePort" });
+        defer task_scope.exit();
 
         // The MessageEvent takes ownership of the cloned temp and releases it on
         // teardown; on any path where we don't hand it over, release it here so

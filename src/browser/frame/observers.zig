@@ -24,6 +24,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const js = @import("../js/js.zig");
 
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
@@ -296,6 +297,10 @@ pub fn deliverResizes(frame: *Frame) void {
         observer.releaseRef(frame.page);
     };
 
+    const attribution = frame.js.attribution;
+    const task_scope = attribution.enterNew(.observer, .{ .label = "ResizeObserver" });
+    defer task_scope.exit();
+
     for (observers) |observer| {
         observer.deliverEntries(frame) catch |err| {
             log.debug(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
@@ -388,6 +393,13 @@ pub fn deliverIntersections(frame: *Frame) void {
     defer for (observers) |observer| {
         observer.releaseRef(frame.page);
     };
+
+    const attribution = frame.js.attribution;
+    const task_scope = attribution.enterNew(.observer, .{
+        .label = "IntersectionObserver",
+        .cut = true, // This is the cause of many endless loops
+    });
+    defer task_scope.exit();
 
     for (observers) |observer| {
         observer.deliverEntries(frame) catch |err| {
