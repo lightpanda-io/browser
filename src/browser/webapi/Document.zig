@@ -660,11 +660,6 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
             break :blk (try KeyboardEvent.init("", null, frame)).asEvent();
         }
 
-        if (std.mem.eql(u8, normalized, "inputevent")) {
-            const InputEvent = @import("event/InputEvent.zig");
-            break :blk (try InputEvent.init("", null, frame)).asEvent();
-        }
-
         if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
             const MouseEvent = @import("event/MouseEvent.zig");
             break :blk (try MouseEvent.init("", null, frame)).asEvent();

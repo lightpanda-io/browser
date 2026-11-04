@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=constructorDefaults>
 
@@ -56,11 +57,9 @@
 <script id=createEvent>
 
   {
-    // document.createEvent leaves the flags unset until initEvent runs.
-    let evt = document.createEvent('InputEvent');
-    testing.expectEqual(true, evt instanceof InputEvent);
-    testing.expectEqual(false, evt.bubbles);
-    testing.expectEqual(false, evt.cancelable);
+    // InputEvent isn't in createEvent's interface table (it has no init
+    // method to set it up anyway).
+    testing.expectError('NotSupportedError', () => document.createEvent('InputEvent'));
   }
 
 </script>
