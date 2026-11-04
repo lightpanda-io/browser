@@ -696,18 +696,29 @@ pub fn stop(self: *Window) void {
 
 // postMessage(message, targetOrigin, transfer) or postMessage(message, options).
 pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
-    // For now, we ignore targetOrigin checking and just dispatch the message
-    // In a full implementation, we would validate the origin
+    // postMessage(message, targetOrigin, transfer) or
+    // postMessage(message, { targetOrigin, transfer }), where an absent
+    // targetOrigin is "/".
     var transfer_arg = transfer;
+    var target_origin_arg: ?js.Value = null;
     if (target_origin_or_options) |arg| {
         if (arg.isObject()) {
             transfer_arg = arg;
+            const value = try arg.toObject().get("targetOrigin");
+            if (!value.isUndefined()) {
+                target_origin_arg = value;
+            }
+        } else if (!arg.isNullOrUndefined()) {
+            target_origin_arg = arg;
         }
     }
-    const ports = try MessagePort.transferList(transfer_arg);
 
     const target_frame = self._frame;
-    const source_window = target_frame.js.getIncumbent().window;
+    const incumbent = target_frame.js.getIncumbent();
+    const source_window = incumbent.window;
+    const target_origin = try parseTargetOrigin(target_origin_arg, incumbent, frame);
+
+    const ports = try MessagePort.transferList(transfer_arg);
 
     const arena = try target_frame.getArena(.medium, "Window.postMessage");
     errdefer arena.release();
@@ -727,12 +738,40 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?
         .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
+        .target_origin = switch (target_origin) {
+            .any => .any,
+            .origin => |o| .{ .origin = if (o) |v| try arena.dupe(u8, v) else null },
+        },
     };
 
     try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .finalizer = PostMessageCallback.cancelled,
     });
+}
+
+// The origin a postMessage is for: "*" is any, "/" the sender's own,
+// anything else the origin of that absolute URL (SyntaxError if it isn't
+// one). A null origin is opaque and matches no window.
+// https://html.spec.whatwg.org/multipage/web-messaging.html#window-post-message-steps
+const TargetOrigin = union(enum) {
+    any,
+    origin: ?[]const u8,
+};
+
+fn parseTargetOrigin(value: ?js.Value, incumbent: *const Frame, frame: *Frame) !TargetOrigin {
+    const target_origin = if (value) |v| try v.toStringSlice() else "/";
+    if (std.mem.eql(u8, target_origin, "*")) {
+        return .any;
+    }
+    if (std.mem.eql(u8, target_origin, "/")) {
+        return .{ .origin = incumbent.origin };
+    }
+    const url = URL.resolve(frame.call_arena, "", target_origin, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.SyntaxError,
+    };
+    return .{ .origin = try URL.getOrigin(frame.call_arena, url) };
 }
 
 const base64 = @import("encoding/base64.zig");
@@ -969,6 +1008,7 @@ const PostMessageCallback = struct {
     source: *Window,
     arena: *lp.Arena,
     origin: []const u8,
+    target_origin: TargetOrigin,
     message: MessagePort.Message,
 
     fn deinit(self: *PostMessageCallback) void {
@@ -992,6 +1032,21 @@ const PostMessageCallback = struct {
         const window = frame.window;
 
         const event_target = window.asEventTarget();
+
+        // Checked on delivery: the target may have navigated to another
+        // origin since the message was posted.
+        switch (self.target_origin) {
+            .any => {},
+            .origin => |expected| {
+                const actual = frame.origin;
+                if (expected == null or actual == null or !std.mem.eql(u8, expected.?, actual.?)) {
+                    if (self.message.data) |data| {
+                        data.release();
+                    }
+                    return null;
+                }
+            },
+        }
 
         const data = self.message.data orelse {
             if (frame._event_manager.hasDirectListeners(event_target, "messageerror")) {

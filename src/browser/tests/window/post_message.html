@@ -40,3 +40,40 @@
     testing.expectEqual(true, threw);
 }
 </script>
+
+<script id=postMessageTargetOrigin type=module>
+// A message is only delivered when the target window's origin matches
+// targetOrigin: "*" is any, "/" (and the options default) the sender's own.
+{
+    const state = await testing.async();
+    const received = [];
+    window.addEventListener('message', (e) => {
+        // Skip messages other blocks on this page post.
+        if (typeof e.data !== 'string') return;
+        received.push(e.data);
+        if (e.data === 'done') state.resolve();
+    });
+
+    window.postMessage('other-host', 'http://example.com');
+    window.postMessage('other-port', location.protocol + '//' + location.hostname + ':' + (Number(location.port) + 1));
+    window.postMessage('opaque', 'data:text/plain,x');
+    window.postMessage('options-other', { targetOrigin: 'http://example.com' });
+    window.postMessage('own-origin', location.origin);
+    window.postMessage('own-url', location.href);
+    window.postMessage('slash', '/');
+    window.postMessage('options-default', {});
+    window.postMessage('no-target-origin');
+    window.postMessage('done', '*');
+
+    await state.done(() => {
+        testing.expectEqual('own-origin,own-url,slash,options-default,no-target-origin,done', received.join());
+    });
+}
+</script>
+
+<script id=postMessageInvalidTargetOrigin>
+{
+    testing.expectError('SyntaxError', () => window.postMessage('x', 'not a url'));
+    testing.expectError('SyntaxError', () => window.postMessage('x', { targetOrigin: 'example.com' }));
+}
+</script>
