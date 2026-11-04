@@ -513,6 +513,67 @@
 }
 </script>
 
+<script id=xml-namespace-declarations>
+{
+  const p = new DOMParser();
+  const ns = 'http://www.w3.org/2000/xmlns/';
+  const doc = p.parseFromString('<r id="a" xmlns="urn:a" x="b" xmlns:b="urn:b"><b:c/><child xmlns="" xmlns:b="urn:other"><b:c/></child></r>', 'application/xml');
+  const original = p.parseFromString('<r xmlns="urn:a" xmlns:b="urn:b"><b:c/><![CDATA[x<y]]></r>', 'text/xml').documentElement;
+  testing.expectEqual(['xmlns', 'xmlns:b'], Array.from(original.attributes, a => a.name));
+  testing.expectEqual(4, original.lastChild.nodeType);
+  const root = doc.documentElement;
+  testing.expectEqual(['id', 'x', 'xmlns', 'xmlns:b'], Array.from(root.attributes, a => a.name).sort());
+  testing.expectEqual('urn:a', root.getAttribute('xmlns'));
+  testing.expectEqual('urn:b', root.getAttributeNS(ns, 'b'));
+  testing.expectEqual('urn:b', root.firstChild.namespaceURI);
+  const child = root.lastChild;
+  testing.expectEqual('', child.getAttribute('xmlns'));
+  testing.expectEqual('urn:other', child.getAttributeNS(ns, 'b'));
+  testing.expectEqual(null, child.namespaceURI);
+  testing.expectEqual('urn:other', child.firstChild.namespaceURI);
+  const restored = p.parseFromString(new XMLSerializer().serializeToString(doc), 'application/xml');
+  testing.expectEqual('urn:b', restored.documentElement.getAttributeNS(ns, 'b'));
+  testing.expectEqual('urn:other', restored.documentElement.lastChild.firstChild.namespaceURI);
+}
+</script>
+
+<script id=xml-cdata-nodes>
+{
+  const p = new DOMParser();
+  for (const mime of ['text/xml', 'application/xml', 'application/xhtml+xml', 'image/svg+xml']) {
+    const doc = p.parseFromString('<r>before<![CDATA[x<y &amp; ?>]]><![CDATA[]]><![CDATA[z]]>after</r>', mime);
+    const children = Array.from(doc.documentElement.childNodes);
+    testing.expectEqual([3, 4, 4, 4, 3], children.map(n => n.nodeType));
+    testing.expectEqual(['before', 'x<y &amp; ?>', '', 'z', 'after'], children.map(n => n.nodeValue));
+    testing.expectEqual(true, children[1] instanceof CDATASection);
+    testing.expectEqual('#cdata-section', children[1].nodeName);
+    testing.expectEqual(doc, children[1].ownerDocument);
+    testing.expectEqual('beforex<y &amp; ?>zafter', doc.documentElement.textContent);
+    testing.expectEqual('<r>before<![CDATA[x<y &amp; ?>]]><![CDATA[]]><![CDATA[z]]>after</r>', new XMLSerializer().serializeToString(doc));
+  }
+}
+</script>
+
+<script id=xml-cdata-tokenization>
+{
+  const p = new DOMParser();
+  const doc = p.parseFromString('<r><!-- <![CDATA[comment]]> --><?pi <![CDATA[instruction]]> ?><child><![CDATA[a\r\nb\rc\n😀]]]><![CDATA[<nested>]]></child>tail</r>', 'text/xml');
+  const root = doc.documentElement;
+  testing.expectEqual([8, 7, 1, 3], Array.from(root.childNodes, n => n.nodeType));
+  testing.expectEqual(' <![CDATA[comment]]> ', root.firstChild.data);
+  testing.expectEqual('<![CDATA[instruction]]> ', root.childNodes[1].data);
+  testing.expectEqual([4, 4], Array.from(root.children[0].childNodes, n => n.nodeType));
+  testing.expectEqual('a\nb\nc\n😀]', root.children[0].firstChild.data);
+  testing.expectEqual('<nested>', root.children[0].lastChild.data);
+  const bom = p.parseFromString('\uFEFF<r><![CDATA[\uFEFFinside]]>\uFEFFafter</r>', 'text/xml').documentElement;
+  testing.expectEqual('\uFEFFinside', bom.firstChild.data);
+  testing.expectEqual('\uFEFFafter', bom.lastChild.data);
+  for (const bad of ['<![CDATA[]]><r/>', '<r/><![CDATA[ ]]>', '<r><![CDATA[unclosed</r>']) {
+    testing.expectEqual(1, p.parseFromString(bad, 'text/xml').getElementsByTagName('parsererror').length);
+  }
+}
+</script>
+
 <script id=xml-parsererror>
 {
   const p = new DOMParser();

@@ -28,6 +28,7 @@ pub type CreateElementCallback = unsafe extern "C" fn(
 ) -> Ref;
 
 pub type CreateCommentCallback = unsafe extern "C" fn(ctx: Ref, str: StringSlice) -> Ref;
+pub type CreateCDATASectionCallback = unsafe extern "C" fn(ctx: Ref, str: StringSlice) -> Ref;
 
 pub type AppendDoctypeToDocumentCallback = unsafe extern "C" fn(
     ctx: Ref,
