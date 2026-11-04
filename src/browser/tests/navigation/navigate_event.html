@@ -710,3 +710,64 @@
     });
   }
 </script>
+
+<script id=intercept_rejects_while_one_never_settles type=module>
+  {
+    // A handler that never settles must not block another handler's
+    // rejection: finished rejects as soon as any handler rejects, it
+    // doesn't wait for every handler to settle first.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({handler: () => new Promise(() => {})});
+      e.intercept({handler: () => new Promise((_, reject) => setTimeout(() => reject(new Error('h2 boom')), 10))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#intercept-never-settles');
+    r.finished.then(() => 'resolved', (err) => err).then((finished) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(finished);
+    });
+
+    state.done((finished) => {
+      testing.expectEqual('h2 boom', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
+  }
+</script>
+
+<script id=intercept_fastest_rejection_wins type=module>
+  {
+    // Registration order doesn't matter: whichever handler rejects first
+    // in time wins, even though it was registered second.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({handler: () => new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 100))});
+      e.intercept({handler: () => new Promise((_, reject) => setTimeout(() => reject(new Error('fast')), 10))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#intercept-fastest-rejection');
+    r.finished.then(() => 'resolved', (err) => err).then((finished) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(finished);
+    });
+
+    state.done((finished) => {
+      testing.expectEqual('fast', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
+  }
+</script>
