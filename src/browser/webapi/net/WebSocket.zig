@@ -238,8 +238,8 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     const resolved_url = self._url;
     const http_client = self._http_client;
 
-    if (isBlockedPort(resolved_url)) {
-        return error.BlockedPort;
+    if (http.isBadPortUrl(resolved_url)) {
+        return error.UnsafePort;
     }
 
     const conn = http_client.network.newConnection() orelse {
@@ -296,15 +296,6 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     try http_client.trackConn(conn);
 
     self._conn = conn;
-}
-
-fn isBlockedPort(url: [:0]const u8) bool {
-    const port = URL.getPort(url);
-    if (port.len == 0) {
-        // the default port for ws/wss is never blocked
-        return false;
-    }
-    return http.isBadPort(std.fmt.parseInt(u16, port, 10) catch return false);
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
