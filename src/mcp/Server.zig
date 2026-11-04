@@ -93,6 +93,12 @@ cancel_mutex: std.Io.Mutex = .init,
 /// before the dispatcher sees any. When full the oldest is dropped.
 cancelled_ids: [cancelled_capacity]?RequestId = @splat(null),
 cancelled_next: usize = 0,
+
+/// From `logging/setLevel`; `notifications/message` below it is dropped.
+log_level: protocol.LogLevel = .debug,
+/// The `_meta.progressToken` of the call in flight, borrowing its arena.
+progress_token: ?std.json.Value = null,
+progress: u32 = 0,
 /// The tool call being dispatched; borrows its request arena.
 in_flight_id: ?RequestId = null,
 
@@ -197,6 +203,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
     try self.sendResult(id, protocol.InitializeResult{
         .protocolVersion = @tagName(protocol.Version.negotiate(req.params)),
         .capabilities = .{
+            .logging = .{},
             .resources = .{},
             .tools = .{},
         },
@@ -225,11 +232,55 @@ pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
     }
     defer self.endRequest();
 
+    self.progress_token = progressToken(req.params);
+    self.progress = 0;
+    defer self.progress_token = null;
+
     // Dispatch runs page JS, so enter the target isolate around it.
     const entry = self.active_session;
     entry.enterIsolate();
     defer entry.exitIsolate();
     return tools.handleCall(self, arena, req);
+}
+
+pub fn handleSetLogLevel(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    const id = req.id orelse return;
+    const params = lp.tools.parseArgs(struct { level: protocol.LogLevel }, arena, req.params) catch
+        return self.sendError(id, .InvalidParams, "expected { level: string }");
+    self.log_level = params.level;
+    try self.sendResult(id, struct {}{});
+}
+
+/// Report a console line from the call in flight: as progress when the
+/// caller asked for it with a `progressToken`, otherwise as a log message.
+pub fn reportConsoleLine(self: *Self, level: protocol.LogLevel, line: []const u8) void {
+    if (self.progress_token) |token| {
+        self.progress += 1;
+        self.transport.sendNotification("notifications/progress", .{
+            .progressToken = token,
+            .progress = self.progress,
+            .message = line,
+        }) catch {};
+        return;
+    }
+    if (@backingInt(level) < @backingInt(self.log_level)) return;
+    self.transport.sendNotification("notifications/message", .{
+        .level = level,
+        .logger = "console",
+        .data = line,
+    }) catch {};
+}
+
+fn progressToken(params: ?std.json.Value) ?std.json.Value {
+    const p = params orelse return null;
+    if (p != .object) return null;
+    const meta = p.object.get("_meta") orelse return null;
+    if (meta != .object) return null;
+    const token = meta.object.get("progressToken") orelse return null;
+    return switch (token) {
+        .string, .integer => token,
+        else => null,
+    };
 }
 
 /// Record a `notifications/cancelled`. Runs off the dispatch thread (on the
