@@ -40,7 +40,7 @@ fields: []const FieldEntry,
 hints: []const HintSlot,
 parameters: std.json.Value,
 
-const FieldType = enum { string, integer, number, boolean, other };
+pub const FieldType = enum { string, integer, number, boolean, other };
 
 pub const FieldEntry = struct {
     name: []const u8,

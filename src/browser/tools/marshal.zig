@@ -73,6 +73,89 @@ pub fn diagnoseArgs(arena: std.mem.Allocator, arguments: ?std.json.Value) ?[]con
     return null;
 }
 
+/// Compare each argument's JSON type against the type the tool's schema
+/// declares for it, so a wrong-typed value (`timeout: "60000"`) is named
+/// before `parseValue` collapses it into a bare `InvalidParams`. Unknown keys
+/// and fields the schema doesn't type (`.other`) pass through — `parseValue`
+/// with `ignore_unknown_fields` stays the authority there. Enum membership is
+/// not checked here; `diagnoseArgs` covers the one enum field. Runs on
+/// normalized arguments (canonical keys, nulls already dropped).
+pub fn diagnoseArgTypes(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ?[]const u8 {
+    const args = arguments orelse return null;
+    if (args != .object) return null;
+
+    const schemas = lp.Schema.all();
+    const tool_idx = @backingInt(tool);
+    if (tool_idx >= schemas.len) return null;
+    const schema = schemas[tool_idx];
+
+    var it = args.object.iterator();
+    while (it.next()) |entry| {
+        const field = schema.findField(entry.key_ptr.*) orelse continue;
+        if (typeMismatch(arena, entry.value_ptr.*, field.field_type)) |got| {
+            return arena.print("argument '{s}' must be {s}, got {s}", .{
+                field.name, expectedTypeName(field.field_type), got,
+            }) catch null;
+        }
+    }
+    return null;
+}
+
+/// A description of `v`'s type when it doesn't fit `ft`, null when it does.
+fn typeMismatch(arena: std.mem.Allocator, v: std.json.Value, ft: lp.Schema.FieldType) ?[]const u8 {
+    const fits = switch (ft) {
+        // The schema doesn't type the field; parseValue decides.
+        .other => return null,
+        .string => v == .string,
+        .integer => v == .integer,
+        // JSON has one number kind; an integer literal is a valid number.
+        .number => switch (v) {
+            .integer, .float, .number_string => true,
+            else => false,
+        },
+        .boolean => v == .bool,
+    };
+    if (fits) return null;
+    return valueSummary(arena, v);
+}
+
+fn expectedTypeName(ft: lp.Schema.FieldType) []const u8 {
+    return switch (ft) {
+        .string => "a string",
+        .integer => "an integer",
+        .number => "a number",
+        .boolean => "a boolean",
+        .other => unreachable,
+    };
+}
+
+/// What the argument actually was, for the error text. Objects and arrays
+/// keep just their kind — the value the schema wanted is named by the
+/// message; the bad one only needs to be recognizable.
+fn valueSummary(arena: std.mem.Allocator, v: std.json.Value) ?[]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    switch (v) {
+        .string => |s| {
+            aw.writer.writeAll("string \"") catch return null;
+            // Truncated but still recognizable.
+            if (s.len > 40) {
+                aw.writer.print("{s}…", .{s[0..40]}) catch return null;
+            } else {
+                aw.writer.print("{s}", .{s}) catch return null;
+            }
+            aw.writer.writeAll("\"") catch return null;
+        },
+        .integer => |i| aw.writer.print("integer {d}", .{i}) catch return null,
+        .float => |f| aw.writer.print("number {d}", .{f}) catch return null,
+        .number_string => |s| aw.writer.print("number {s}", .{s}) catch return null,
+        .bool => |b| aw.writer.print("boolean {}", .{b}) catch return null,
+        .object => aw.writer.writeAll("an object") catch return null,
+        .array => aw.writer.writeAll("an array") catch return null,
+        .null => aw.writer.writeAll("null") catch return null,
+    }
+    return aw.written();
+}
+
 fn formatEnumError(arena: std.mem.Allocator, field: []const u8, got: []const u8, comptime E: type) ?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
     aw.writer.print("invalid {s} '{s}'. Expected one of: ", .{ field, got }) catch return null;
@@ -357,6 +440,58 @@ test "normalizeArgs: a null field takes its default" {
     const parsed = try parseValue(Params, aa, (try normalizeArgs(aa, .setChecked, args)).?);
     try std.testing.expectEqualStrings("#x", parsed.selector);
     try std.testing.expect(parsed.checked);
+}
+
+test "diagnoseArgTypes: names a wrong-typed argument" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const raw = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"Selector":"#a","timeout":"60"}
+    , .{});
+    const normalized = (try normalizeArgs(aa, .waitForSelector, raw)).?;
+    const msg = diagnoseArgTypes(aa, .waitForSelector, normalized).?;
+    try std.testing.expect(std.mem.indexOf(u8, msg, "argument 'timeout' must be an integer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "got string \"60\"") != null);
+}
+
+test "diagnoseArgTypes: typed, unknown, and untyped fields pass" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // Correct types and unknown keys (parseValue's ignore_unknown_fields
+    // territory) produce no diagnosis.
+    const ok = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#a","timeout":5000,"what":"ever"}
+    , .{});
+    try std.testing.expect(diagnoseArgTypes(aa, .waitForSelector, ok) == null);
+
+    const checked = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#x","checked":true}
+    , .{});
+    try std.testing.expect(diagnoseArgTypes(aa, .setChecked, checked) == null);
+
+    // An object where the schema says string.
+    const obj_for_string = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#a","value":{"x":1}}
+    , .{});
+    const msg = diagnoseArgTypes(aa, .fill, obj_for_string).?;
+    try std.testing.expect(std.mem.indexOf(u8, msg, "argument 'value' must be a string, got an object") != null);
+}
+
+test "diagnoseArgTypes: a long bad string is truncated but recognizable" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const raw = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#a","timeout":"012345678901234567890123456789012345678901234567890123456789"}
+    , .{});
+    const msg = diagnoseArgTypes(aa, .waitForSelector, raw).?;
+    try std.testing.expect(std.mem.indexOf(u8, msg, "0123456789012345678901234567890123456789…") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "01234567890123456789012345678901234567890123456789") == null);
 }
 
 test "substituteEnvVars resolves LP_* vars" {

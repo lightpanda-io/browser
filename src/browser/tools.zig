@@ -47,6 +47,7 @@ pub const reverseSubstituteEnvVars = marshal.reverseSubstituteEnvVars;
 pub const parseArgsOrDefault = marshal.parseArgsOrDefault;
 const substituteStringArgs = marshal.substituteStringArgs;
 const diagnoseArgs = marshal.diagnoseArgs;
+const diagnoseArgTypes = marshal.diagnoseArgTypes;
 const diagnoseMissingRequired = marshal.diagnoseMissingRequired;
 const lookupLpEnv = marshal.lookupLpEnv;
 pub const search = @import("tools/search.zig");
@@ -520,6 +521,10 @@ fn callInner(
     };
     // After normalizeArgs so a PascalCase `Script` or a `null` isn't missed.
     if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
+        return .invalidParams(msg);
+    // Same normalized shape: a wrong-typed value is named before parseValue
+    // buries it in a bare InvalidParams.
+    if (diagnoseArgTypes(arena, tool, normalized)) |msg|
         return .invalidParams(msg);
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
