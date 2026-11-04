@@ -55,6 +55,7 @@ const Command = enum {
     forwardDelete,
     selectAll,
     insertLineBreak,
+    insertParagraph,
 
     // Command names are ASCII case-insensitive.
     fn parse(name: []const u8) ?Command {
@@ -107,6 +108,7 @@ pub fn exec(doc: *Document, name: []const u8, value: []const u8) !bool {
             return true;
         },
         .insertLineBreak => insertLineBreak(frame),
+        .insertParagraph => insertParagraph(frame),
     };
 }
 
@@ -120,7 +122,14 @@ pub fn isEnabled(doc: *Document, name: []const u8) bool {
     }
     const command = Command.parse(name) orelse return false;
     return switch (command) {
-        .insertText, .delete, .forwardDelete, .insertLineBreak => editTarget(doc) != null,
+        .insertText, .delete, .forwardDelete => editTarget(doc) != null,
+        .insertLineBreak, .insertParagraph => {
+            const target = editTarget(doc) orelse return false;
+            return switch (target) {
+                .host => |host| user_input.selectionEditableIn(host, doc),
+                .input, .textarea => true,
+            };
+        },
         .selectAll, .styleWithCSS, .useCSS, .defaultParagraphSeparator => true,
     };
 }
@@ -278,9 +287,31 @@ fn insertLineBreak(frame: *Frame) !bool {
             if (selectionInSelect(frame.document)) {
                 return false;
             }
-            if (try user_input.insertLineBreakAtSelection(frame, host) == false) {
+            if (try user_input.insertLineBreakAtSelection(frame, host, "insertLineBreak") == false) {
                 // Chrome merges blocks for a selection across them
                 log.info(.not_implemented, "execCommand.insertLineBreak", .{});
+                return false;
+            }
+        },
+    }
+    return true;
+}
+
+// Like Enter. No `beforeinput`, just edit the input
+fn insertParagraph(frame: *Frame) !bool {
+    const target = editTarget(frame.document) orelse return false;
+    switch (target) {
+        .input => {}, // does nothing except succeeds
+        .textarea => |textarea| {
+            try textarea.rememberValueBeforeEdit(frame);
+            try textarea.innerInsert("\n", null, "insertParagraph", frame);
+        },
+        .host => |host| {
+            if (selectionInSelect(frame.document)) {
+                return false;
+            }
+            if (try user_input.insertParagraphAtSelection(frame, host) == false) {
+                log.info(.not_implemented, "execCommand.insertParagraph", .{});
                 return false;
             }
         },

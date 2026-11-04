@@ -887,6 +887,347 @@
 }
 </script>
 
+<script>
+  function paragraph() {
+    events = [];
+    return document.execCommand('insertParagraph');
+  }
+  // [result, host's html, caret] for insertParagraph with the caret at
+  // `at` (child indexes from the host, then the offset) or the selection to `to`
+  function splitIn(html, at, to, opts) {
+    const host = opts?.host ?? $('#host');
+    host.innerHTML = html;
+    host.style.whiteSpace = opts?.style ?? '';
+    host.focus();
+    const nodeAt = path => path.slice(0, -1).reduce((n, i) => n.childNodes[i], host);
+    if (to) {
+      getSelection().setBaseAndExtent(nodeAt(at), at.at(-1), nodeAt(to), to.at(-1));
+    } else {
+      getSelection().collapse(nodeAt(at), at.at(-1));
+    }
+    const result = paragraph();
+    return [result, host.innerHTML, caret()];
+  }
+  const split = (html, ...at) => splitIn(html, at);
+</script>
+
+<script id="paragraph_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().removeAllRanges();
+  testing.expectEqual(true, document.queryCommandSupported('insertParagraph'));
+  testing.expectEqual(false, document.queryCommandEnabled('insertParagraph'));
+  testing.expectEqual(false, document.queryCommandState('insertParagraph'));
+  testing.expectEqual('', document.queryCommandValue('insertParagraph'));
+  testing.expectEqual(false, paragraph());
+  // a focused host with no selection
+  $('#host').innerHTML = '<p>abc</p>';
+  $('#host').focus();
+  getSelection().removeAllRanges();
+  testing.expectEqual(false, paragraph());
+  testing.expectEqual('<p>abc</p>', $('#host').innerHTML);
+  testing.expectEqual(false, document.implementation.createHTMLDocument('').queryCommandSupported('insertParagraph'));
+}
+</script>
+
+<script id="paragraph_controls">
+{
+  const area = $('#area');
+  area.value = 'abc';
+  area.focus();
+  area.setSelectionRange(1, 1);
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('a\nbc', area.value);
+  testing.expectEqual([2, 2], [area.selectionStart, area.selectionEnd]);
+  testing.expectEqual(['input:area:insertParagraph:null'], events);
+  area.setSelectionRange(2, 3);
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('a\n\nc', area.value);
+
+  area.readOnly = true;
+  testing.expectEqual(false, paragraph());
+  testing.expectEqual([], events);
+  area.readOnly = false;
+
+  // nowhere to put it in one line: succeeds, no edit, no event
+  const input = $('#text');
+  input.value = 'hello';
+  input.focus();
+  input.setSelectionRange(1, 3);
+  testing.expectEqual(true, document.queryCommandEnabled('insertParagraph'));
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('hello', input.value);
+  testing.expectEqual([1, 3], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="paragraph_split">
+{
+  testing.expectEqual([true, '<p>a</p><p>bc</p>', '#bc@0'], split('<p>abc</p>', 0, 0, 1));
+  testing.expectEqual(['input:host:insertParagraph:null'], events);
+  testing.expectEqual(true, document.queryCommandEnabled('insertParagraph'));
+
+  // the block is cloned, attributes and all
+  testing.expectEqual([true, '<p id="x" class="y">a</p><p id="x" class="y">bc</p>', '#bc@0'], split('<p id=x class=y>abc</p>', 0, 0, 1));
+  testing.expectEqual([true, '<div>a</div><div>bc</div>', '#bc@0'], split('<div>abc</div>', 0, 0, 1));
+  testing.expectEqual([true, '<h1>a</h1><h1>bc</h1>', '#bc@0'], split('<h1>abc</h1>', 0, 0, 1));
+  testing.expectEqual([true, '<ul><li>a</li><li>bc</li></ul>', '#bc@0'], split('<ul><li>abc</li></ul>', 0, 0, 0, 1));
+  testing.expectEqual([true, '<blockquote>a</blockquote><blockquote>bc</blockquote>', '#bc@0'], split('<blockquote>abc</blockquote>', 0, 0, 1));
+  testing.expectEqual([true, '<blockquote><p>a</p><p>bc</p></blockquote>', '#bc@0'], split('<blockquote><p>abc</p></blockquote>', 0, 0, 0, 1));
+  testing.expectEqual([true, '<span style="display:block">a</span><span style="display:block">bc</span>', '#bc@0'],
+    split('<span style="display:block">abc</span>', 0, 0, 1));
+  testing.expectEqual([true, '<table><tbody><tr><td><p>a</p><p>bc</p></td></tr></tbody></table>', '#bc@0'],
+    split('<table><tbody><tr><td><p>abc</p></td></tr></tbody></table>', 0, 0, 0, 0, 0, 0, 1));
+
+  // everything after the caret goes, blocks and line breaks included
+  testing.expectEqual([true, '<div>a</div><div>b<p>cd</p></div>', '#b@0'], split('<div>ab<p>cd</p></div>', 0, 0, 1));
+  testing.expectEqual([true, '<p>ab<br>c</p><p>d</p>', '#d@0'], split('<p>ab<br>cd</p>', 0, 2, 1));
+  testing.expectEqual([true, '<p>ab</p><p><br>cd</p>', 'P@0'], split('<p>ab<br>cd</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>a<img></p><p>b</p>', '#b@0'], split('<p>a<img>b</p>', 0, 2));
+
+  // a line that would be left with nothing gets a <br>
+  testing.expectEqual([true, '<p>ab<br><br></p><p>cd</p>', '#cd@0'], split('<p>ab<br>cd</p>', 0, 2, 0));
+  testing.expectEqual([true, '<div>ab</div><div><br><p>cd</p></div>', 'DIV@0'], split('<div>ab<p>cd</p></div>', 0, 0, 2));
+  testing.expectEqual([true, '<ul><li>abc</li><li><br><ul><li>x</li></ul></li></ul>', 'LI@0'],
+    split('<ul><li>abc<ul><li>x</li></ul></li></ul>', 0, 0, 0, 3));
+
+  // whitespace around the block stays
+  testing.expectEqual([true, '\n<p>a</p><p>bc</p>\n', '#bc@0'], split('\n<p>abc</p>\n', 1, 0, 1));
+}
+</script>
+
+<script id="paragraph_inline">
+{
+  // the inline elements around the caret are split too, empty halves dropped
+  testing.expectEqual([true, '<p>a<b>b</b></p><p><b>c</b>d</p>', '#c@0'], split('<p>a<b>bc</b>d</p>', 0, 1, 0, 1));
+  testing.expectEqual([true, '<p>a<b>b<i>c</i></b></p><p><b><i>d</i>e</b>f</p>', '#d@0'], split('<p>a<b>b<i>cd</i>e</b>f</p>', 0, 1, 1, 0, 1));
+  testing.expectEqual([true, '<p>a<b>bc</b></p><p>d</p>', '#d@0'], split('<p>a<b>bc</b>d</p>', 0, 1, 0, 2));
+  testing.expectEqual([true, '<p>a</p><p><b>bc</b>d</p>', '#bc@0'], split('<p>a<b>bc</b>d</p>', 0, 1));
+
+  // the new empty line keeps the formatting
+  testing.expectEqual([true, '<p>a<b>bc</b></p><p><b><br></b></p>', 'B@0'], split('<p>a<b>bc</b></p>', 0, 1, 0, 2));
+  testing.expectEqual([true, '<p>a<b>bc</b></p><p><b><br></b></p>', 'B@0'], split('<p>a<b>bc</b></p>', 0, 2));
+  testing.expectEqual([true, '<p><b><br></b></p><p><b>bc</b>d</p>', '#bc@0'], split('<p><b>bc</b>d</p>', 0, 0, 0, 0));
+  testing.expectEqual([true, '<p><b><br></b></p><p><b>bc</b>d</p>', '#bc@0'], split('<p><b>bc</b>d</p>', 0, 0));
+  testing.expectEqual([true, '<h1><b>abc</b></h1><div><b><br></b></div>', 'B@0'], split('<h1><b>abc</b></h1>', 0, 0, 0, 3));
+  testing.expectEqual([true, '<ul><li><b>abc</b></li><li><b><br></b></li></ul>', 'B@0'], split('<ul><li><b>abc</b></li></ul>', 0, 0, 0, 0, 3));
+}
+</script>
+
+<script id="paragraph_edges">
+{
+  // at the end: a new empty block, the caret in it
+  testing.expectEqual([true, '<p>abc</p><p><br></p>', 'P@0'], split('<p>abc</p>', 0, 0, 3));
+  testing.expectEqual([true, '<div>abc</div><div><br></div>', 'DIV@0'], split('<div>abc</div>', 0, 0, 3));
+  testing.expectEqual([true, '<ul><li>abc</li><li><br></li></ul>', 'LI@0'], split('<ul><li>abc</li></ul>', 0, 0, 0, 3));
+  testing.expectEqual([true, '<blockquote>abc</blockquote><blockquote><br></blockquote>', 'BLOCKQUOTE@0'], split('<blockquote>abc</blockquote>', 0, 0, 3));
+  testing.expectEqual([true, '<p><br></p><p><br></p>', 'P@0'], split('<p><br></p>', 0, 0));
+  // a caret in a <br> is before it
+  testing.expectEqual([true, '<div><br></div><div><br></div>', 'DIV@0'], split('<div><br></div>', 0, 0, 0));
+  testing.expectEqual([true, '<h1><br></h1><div><br></div>', 'DIV@0'], split('<h1><br></h1>', 0, 0, 0));
+  testing.expectEqual([true, '<p>ab<br></p><p><br></p>', 'P@0'], split('<p>ab<br></p>', 0, 1, 0));
+  testing.expectEqual([true, '\n<p>abc</p><p><br></p>\n', 'P@0'], split('\n<p>abc</p>\n', 1, 0, 3));
+  // a <br> ending the block only holds its line open
+  testing.expectEqual([true, '<p>ab<br></p><p><br></p>', 'P@0'], split('<p>ab<br></p>', 0, 0, 2));
+  // a heading continues with the separator element
+  testing.expectEqual([true, '<h1>abc</h1><div><br></div>', 'DIV@0'], split('<h1>abc</h1>', 0, 0, 3));
+
+  // at the start: a new empty block before, the caret stays
+  testing.expectEqual([true, '<p><br></p><p>abc</p>', '#abc@0'], split('<p>abc</p>', 0, 0, 0));
+  testing.expectEqual([true, '<h1><br></h1><h1>abc</h1>', '#abc@0'], split('<h1>abc</h1>', 0, 0, 0));
+  testing.expectEqual([true, '<ul><li><br></li><li>abc</li></ul>', '#abc@0'], split('<ul><li>abc</li></ul>', 0, 0, 0, 0));
+
+  // a caret between blocks goes into one
+  testing.expectEqual([true, '<p><br></p><p>a</p><p>b</p>', '#a@0'], split('<p>a</p><p>b</p>', 0));
+  testing.expectEqual([true, '<p>a</p><p><br></p><p>b</p>', '#b@0'], split('<p>a</p><p>b</p>', 1));
+  testing.expectEqual([true, '<p>a</p><p>b</p><p><br></p>', 'P@0'], split('<p>a</p><p>b</p>', 2));
+}
+</script>
+
+<script id="paragraph_host_text">
+{
+  // text right in the host: the rest of it goes in the separator element
+  testing.expectEqual([true, 'a<div>bc</div>', '#bc@0'], split('abc', 0, 1));
+  testing.expectEqual([true, 'a<div>b<br>cd</div>', '#b@0'], split('ab<br>cd', 0, 1));
+  testing.expectEqual([true, 'ab<br>c<div>d</div>', '#d@0'], split('ab<br>cd', 2, 1));
+  testing.expectEqual([true, 'ab<div><br>cd</div>', 'DIV@0'], split('ab<br>cd', 0, 2));
+  testing.expectEqual([true, 'ab<br><br><div>cd</div>', '#cd@0'], split('ab<br>cd', 2, 0));
+  testing.expectEqual([true, 'a<div>bc<p>def</p></div>', '#bc@0'], split('abc<p>def</p>', 0, 1));
+  testing.expectEqual([true, 'abc<div><br><p>def</p></div>', 'DIV@0'], split('abc<p>def</p>', 0, 3));
+  testing.expectEqual([true, 'abc<div><br><p>def</p></div>', 'DIV@0'], split('abc<p>def</p>', 1));
+  testing.expectEqual([true, '<p>abc</p>d<div>ef</div>', '#ef@0'], split('<p>abc</p>def', 1, 1));
+  testing.expectEqual([true, 'a<b>b</b><div><b>c</b>d</div>', '#c@0'], split('a<b>bc</b>d', 1, 0, 1));
+  testing.expectEqual([true, '<b>bc</b><div>d</div>', '#d@0'], split('<b>bc</b>d', 0, 0, 2));
+  testing.expectEqual([true, '<span>a</span><div><span>bc</span></div>', '#bc@0'], split('<span>abc</span>', 0, 0, 1));
+  testing.expectEqual([true, 'a<div>bc</div>', '#bc@0'], splitIn('abc', [0, 1], null, {style: 'pre-wrap'}));
+
+  // at the end and the start
+  testing.expectEqual([true, 'abc<div><br></div>', 'DIV@0'], split('abc', 0, 3));
+  testing.expectEqual([true, 'abc\n<div><br></div>', 'DIV@0'], split('abc\n', 0, 3));
+  testing.expectEqual([true, 'ab<br><div><br></div>', 'DIV@0'], split('ab<br>', 0, 2));
+  testing.expectEqual([true, '<br><div><br></div>', 'DIV@0'], split('<br>', 0));
+  testing.expectEqual([true, 'a<b>bc</b><div><b><br></b></div>', 'B@0'], split('a<b>bc</b>', 1, 0, 2));
+  testing.expectEqual([true, '<div><br></div>abc', '#abc@0'], split('abc', 0, 0));
+  testing.expectEqual([true, '<p>abc</p><div><br></div>def', '#def@0'], split('<p>abc</p>def', 1, 0));
+  testing.expectEqual([true, '<div><b><br></b></div><b>bc</b>d', '#bc@0'], split('<b>bc</b>d', 0, 0, 0));
+  // an empty host gets two lines
+  testing.expectEqual([true, '<div><br></div><div><br></div>', 'DIV@0'], split('', 0));
+}
+</script>
+
+<script id="paragraph_separator">
+{
+  document.execCommand('defaultParagraphSeparator', false, 'p');
+  testing.expectEqual([true, 'a<p>bc</p>', '#bc@0'], split('abc', 0, 1));
+  testing.expectEqual([true, '<h2>abc</h2><p><br></p>', 'P@0'], split('<h2>abc</h2>', 0, 0, 3));
+  // a clone otherwise
+  testing.expectEqual([true, '<div>abc</div><div><br></div>', 'DIV@0'], split('<div>abc</div>', 0, 0, 3));
+  testing.expectEqual([true, '<ul><li>a</li></ul><p><br></p>', 'P@0'], split('<ul><li>a</li><li><br></li></ul>', 0, 1, 0));
+  document.execCommand('defaultParagraphSeparator', false, 'div');
+}
+</script>
+
+<script id="paragraph_spaces">
+{
+  // a space at the split would collapse away
+  testing.expectEqual([true, '<p>ab&nbsp;</p><p>cd</p>', '#cd@0'], split('<p>ab cd</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab</p><p>&nbsp;cd</p>', '# cd@0'], split('<p>ab cd</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>ab&nbsp;</p><p>&nbsp;cd</p>', '# cd@0'], split('<p>ab  cd</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab&nbsp;</p><p><b>cd</b></p>', '#cd@0'], split('<p>ab <b>cd</b></p>', 0, 1, 0, 0));
+  // not where white-space keeps it
+  testing.expectEqual([true, '<p style="white-space:pre-wrap">ab </p><p style="white-space:pre-wrap">cd</p>', '#cd@0'],
+    split('<p style="white-space:pre-wrap">ab cd</p>', 0, 0, 3));
+}
+</script>
+
+<script id="paragraph_list">
+{
+  // an empty item leaves the list
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div>', 'DIV@0'], split('<ul><li>a</li><li><br></li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div>', 'DIV@0'], split('<ul><li>a</li><li></li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<ol><li>a</li></ol><div><br></div>', 'DIV@0'], split('<ol><li>a</li><li><br></li></ol>', 0, 1, 0));
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div><ul><li>b</li></ul>', 'DIV@0'],
+    split('<ul><li>a</li><li><br></li><li>b</li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<div><br></div><ul><li>b</li></ul>', 'DIV@0'], split('<ul><li><br></li><li>b</li></ul>', 0, 0, 0));
+  testing.expectEqual([true, '<div><br></div>', 'DIV@0'], split('<ul><li><br></li></ul>', 0, 0, 0));
+}
+</script>
+
+<script id="paragraph_list_item_blocks">
+{
+  // a block in a list item goes on in a new item, the rest of the item stays
+  testing.expectEqual([true, '<ul><li><p>a</p></li><li><p>bc</p></li></ul>', '#bc@0'], split('<ul><li><p>abc</p></li></ul>', 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li><p>a</p>x</li><li><p>bc</p></li></ul>', '#bc@0'], split('<ul><li><p>abc</p>x</li></ul>', 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li><p>a</p><p>def</p></li><li><p>bc</p></li></ul>', '#bc@0'],
+    split('<ul><li><p>abc</p><p>def</p></li></ul>', 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li>x<p>a</p></li><li><p>bc</p></li></ul>', '#bc@0'], split('<ul><li>x<p>abc</p></li></ul>', 0, 0, 1, 0, 1));
+  testing.expectEqual([true, '<ul><li><div><p>a</p></div></li><li><p>bc</p></li></ul>', '#bc@0'],
+    split('<ul><li><div><p>abc</p></div></li></ul>', 0, 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li><p>abc</p></li><li><p><br></p></li></ul>', 'P@0'], split('<ul><li><p>abc</p></li></ul>', 0, 0, 0, 0, 3));
+  testing.expectEqual([true, '<ul><li><p><br></p></li><li><p>abc</p></li></ul>', '#abc@0'], split('<ul><li><p>abc</p></li></ul>', 0, 0, 0, 0, 0));
+  // an item with only an empty block leaves the list
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div>', 'DIV@0'], split('<ul><li>a</li><li><p><br></p></li></ul>', 0, 1, 0, 0));
+  // not in a blockquote
+  testing.expectEqual([true, '<blockquote><p>a</p><p>bc</p><p>d</p></blockquote>', '#bc@0'], split('<blockquote><p>abc</p><p>d</p></blockquote>', 0, 0, 0, 1));
+}
+</script>
+
+<script id="paragraph_line_break">
+{
+  // a <pre>, a table cell, an inline host: a line break, as insertLineBreak
+  testing.expectEqual([true, '<pre>a<br>bc</pre>', '#bc@0'], split('<pre>abc</pre>', 0, 0, 1));
+  testing.expectEqual(['input:host:insertParagraph:null'], events);
+  testing.expectEqual([true, '<pre>abc<br><br></pre>', 'PRE@2'], split('<pre>abc</pre>', 0, 0, 3));
+  testing.expectEqual([true, '<table><tbody><tr><td>a<br>bc</td></tr></tbody></table>', '#bc@0'],
+    split('<table><tbody><tr><td>abc</td></tr></tbody></table>', 0, 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<table><tbody><tr><td>abc<br><br></td></tr></tbody></table>', 'TD@2'],
+    split('<table><tbody><tr><td>abc</td></tr></tbody></table>', 0, 0, 0, 0, 0, 3));
+  testing.expectEqual([true, '<table><tbody><tr><td>ab<br><br></td><td>cd</td></tr></tbody></table>', 'TD@2'],
+    split('<table><tbody><tr><td>ab</td><td>cd</td></tr></tbody></table>', 0, 0, 0, 0, 0, 2));
+  testing.expectEqual([true, '<table><tbody><tr><td>ab<b>c<br><br></b></td></tr></tbody></table>', 'B@2'],
+    split('<table><tbody><tr><td>ab<b>c</b></td></tr></tbody></table>', 0, 0, 0, 0, 1, 0, 1));
+
+  const span = document.createElement('span');
+  span.id = 'shost';
+  span.contentEditable = true;
+  document.body.appendChild(span);
+  testing.expectEqual([true, 'a<br>bc', '#bc@0'], splitIn('abc', [0, 1], null, {host: span}));
+  testing.expectEqual(['input:shost:insertParagraph:null'], events);
+  testing.expectEqual([true, 'abc<br><br>', 'SPAN@2'], splitIn('abc', [0, 3], null, {host: span}));
+  span.remove();
+}
+</script>
+
+<script id="paragraph_selection">
+{
+  // replaced, on one line
+  testing.expectEqual([true, '<p>a</p><p>d</p>', '#d@0'], splitIn('<p>abcd</p>', [0, 0, 1], [0, 0, 3]));
+  testing.expectEqual([true, '<p><br></p><p><br></p>', 'P@0'], splitIn('<p>abcd</p>', [0, 0, 0], [0, 0, 4]));
+  testing.expectEqual([true, '<p><b><br></b></p><p><b>c</b>d</p>', '#c@0'], splitIn('<p>a<b>bc</b>d</p>', [0, 0, 0], [0, 1, 0, 1]));
+  testing.expectEqual([true, '<p>a<b>b</b></p><p><b><br></b></p>', 'B@0'], splitIn('<p>a<b>bc</b>d</p>', [0, 1, 0, 1], [0, 2, 1]));
+
+  // across blocks: the blocks merge, then split
+  testing.expectEqual([true, '<p>a</p><p>f</p>', '#f@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p>a</p><p>f</p>', '#f@0'], splitIn('<p>abc</p><p>x</p><p>def</p>', [0, 0, 1], [2, 0, 2]));
+  testing.expectEqual([true, '<h1>a</h1><h1>f</h1>', '#f@0'], splitIn('<h1>abc</h1><p>def</p>', [0, 0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p>a<b>b</b></p><p><i>e</i>f</p>', '#e@0'], splitIn('<p>a<b>bc</b></p><p><i>de</i>f</p>', [0, 1, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual([true, '<ul><li>a</li><li>f</li></ul>', '#f@0'], splitIn('<ul><li>abc</li><li>def</li></ul>', [0, 0, 0, 1], [0, 1, 0, 2]));
+  testing.expectEqual([true, 'a<div>f</div>', '#f@0'], splitIn('abc<p>def</p>', [0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p><br></p><p>f</p>', '#f@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 0], [1, 0, 2]));
+  testing.expectEqual([true, '<p><br></p><p><br></p>', 'P@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 0], [1, 0, 3]));
+  testing.expectEqual([true, '<p>a</p><p><br></p>', 'P@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 1], [1, 0, 3]));
+}
+</script>
+
+<script id="paragraph_refused">
+{
+  // a caret in a non-editable island
+  testing.expectEqual([false, 'a<span contenteditable="false">xy</span>b', '#xy@1'],
+    split('a<span contenteditable=false>xy</span>b', 1, 0, 1));
+  testing.expectEqual([], events);
+  testing.expectEqual(false, document.queryCommandEnabled('insertParagraph'));
+}
+</script>
+
+<script id="paragraph_unfocused_host">
+{
+  // the selection is enough
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p>';
+  document.activeElement.blur();
+  getSelection().collapse(host.firstChild.firstChild, 1);
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('<p>a</p><p>bc</p>', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="paragraph_nested">
+{
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p>';
+  host.focus();
+  getSelection().collapse(host.firstChild.firstChild, 1);
+  let nested = null;
+  host.addEventListener('input', () => { nested = document.execCommand('insertParagraph'); }, {once: true});
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual(false, nested);
+  testing.expectEqual('<p>a</p><p>bc</p>', host.innerHTML);
+}
+</script>
+
+<script id="paragraph_not_yet_supported">
+{
+  // Chrome: <ul><li>a</li><li><br></li></ul>, the item outdented
+  testing.diverges('no outdenting', () => {
+    testing.expectEqual([false, '<ul><li>a<ul><li><br></li></ul></li></ul>', 'LI@0'],
+      split('<ul><li>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  });
+  getSelection().removeAllRanges();
+}
+</script>
+
 <script id="command_required">
 {
   testing.expectError('TypeError', () => document.execCommand());
