@@ -928,9 +928,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .throttle = self.parent == null,
         .origin = self.origin,
         .initiator_origin = opts.initiator_origin,
-        // Our own url is already the destination, so the owner's site for
-        // cookies would say "same-site" for any top-level navigation.
-        .cookie_origin = opts.initiator_url,
+        // Our own url is already the destination, so our owner's site for
+        // cookies would judge the request against itself.
+        .cookie_origin = if (self.parent) |parent| parent._http_owner.siteForCookies() else opts.initiator_url,
         .resource_type = .document,
         .request_mode = .navigate,
         .credentials_mode = .include,
