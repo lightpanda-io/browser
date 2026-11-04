@@ -640,7 +640,7 @@ fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?[]const u8, frame: *
         // Carousels write a transform or an opacity on every slide each
         // frame: one doesn't need every cached style and width recomputed.
         const style_manager = &(element.ownerFrame(frame) orelse frame)._style_manager;
-        if (style_manager.inlineStyleWritten(name)) {
+        if (style_manager.inlineStyleWritten(element, name)) {
             return element._attributes.putInertStyle(.wrap(css_text), element, frame);
         }
     }

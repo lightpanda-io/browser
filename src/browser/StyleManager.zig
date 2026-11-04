@@ -638,10 +638,11 @@ comptime {
     }
 }
 
-/// Invalidates the memos an inline style write of `name` can change. This
-/// returns false when an individual memo cannot be cleared. The caller must
-/// report a full style change.
-pub fn inlineStyleWritten(self: *StyleManager, name: []const u8) bool {
+/// Invalidates the memos an inline style write of `name` on `el` can change.
+/// This returns false when an individual memo cannot be cleared. The caller
+/// must report a full style change.
+pub fn inlineStyleWritten(self: *StyleManager, el: *Element, name: []const u8) bool {
+    self.assertOwns(el);
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
@@ -650,6 +651,13 @@ pub fn inlineStyleWritten(self: *StyleManager, name: []const u8) bool {
     while (it.next()) |memo| {
         switch (memo) {
             .layout => self.layout_bumps += 1,
+            .geometry => _ = {
+                // geometry properties aren't inherited. el1.style.width = '100px'
+                // might change the bounding rect of its parent or children,
+                // but they don't change their actual styles. We don't need
+                // to invalidate the entire geometry group for any of them.
+                _ = self.geometry.memo.remove(el);
+            },
             inline else => |group| @field(self, @tagName(group)).bumps += 1,
         }
     }
@@ -3760,10 +3768,14 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     sm.cacheWidth(div, .box, 100);
     const visibility_bumps = sm.visibility.bumps;
     try testing.expectEqual(false, sm.clipsOverflowX(div));
+    try testing.expectEqual(false, sm.clipsOverflowX(p));
     try style.setProperty("overflow", "hidden", null, frame);
     try testing.expectEqual(true, sm.clipsOverflowX(div));
     try testing.expectEqual(null, sm.cachedWidth(div, .box));
     try testing.expectEqual(visibility_bumps, sm.visibility.bumps);
+    // geometry isn't inherited: only the written element's entry goes
+    try testing.expect(sm.geometry.memo.contains(p));
+    try testing.expectEqual(false, sm.clipsOverflowX(p));
 
     // No memo reads a custom property
     sm.cacheWidth(div, .box, 100);
