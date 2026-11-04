@@ -3609,6 +3609,8 @@ const EditingHostInput = union(enum) {
     insert_text: []const u8,
     // a keyDown with no text, like Backspace or Ctrl+A
     raw_key: struct { key: []const u8, code: []const u8, modifiers: u4 = 0 },
+    // Enter, with its "\r" text, and these modifiers
+    enter: u4,
 };
 
 // Loads a page, runs `setup` (which builds an editing host and a selection),
@@ -3661,6 +3663,11 @@ fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: 
             .id = 1,
             .method = "Input.dispatchKeyEvent",
             .params = .{ .type = "keyDown", .key = k.key, .code = k.code, .modifiers = k.modifiers },
+        }),
+        .enter => |modifiers| try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter", .text = "\r", .modifiers = modifiers },
         }),
     }
 
@@ -4013,6 +4020,78 @@ test "cdp.input: Backspace on a non-editable focused element deletes nothing" {
         \\getSelection().collapse(host.firstChild, 1);
     , backspace,
         \\host.innerHTML === 'ab' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Enter in an editing host splits the paragraph" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>a<b>bc</b>d</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.querySelector('b').firstChild, 1);
+    , .{ .enter = 0 },
+        \\host.innerHTML === '<p>a<b>b</b></p><p><b>c</b>d</p>' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'keypress:host:Enter:undefined:true:true:true:true',
+        \\  'beforeinput:host:insertParagraph:null:true:true:true:true',
+        \\  'textInput:host:undefined:\n:true:false:true:true',
+        \\  'input:host:insertParagraph:null:false:true:true:true',
+        \\]) &&
+        \\getSelection().anchorNode === host.lastChild.firstChild.firstChild && getSelection().anchorOffset === 0
+    );
+}
+
+test "cdp.input: Shift+Enter in an editing host inserts a line break" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>abc</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild.firstChild, 1);
+    , .{ .enter = 8 },
+        \\host.innerHTML === '<p>a<br>bc</p>' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'keypress:host:Enter:undefined:true:true:true:true',
+        \\  'beforeinput:host:insertLineBreak:null:true:true:true:true',
+        \\  'textInput:host:undefined:\n:true:false:true:true',
+        \\  'input:host:insertLineBreak:null:false:true:true:true',
+        \\])
+    );
+}
+
+test "cdp.input: Enter in an inline editing host inserts a <br>" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<span id="host" contenteditable>abc</span>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , .{ .enter = 0 },
+        \\host.innerHTML === 'a<br>bc' &&
+        \\window.types() === 'keypress:host,beforeinput:host,textInput:host,input:host' &&
+        \\window.seen[3].startsWith('input:host:insertParagraph:')
+    );
+}
+
+test "cdp.input: Enter in an editing host without a selection does nothing" {
+    // no beforeinput either, as in Chrome (WPT no-beforeinput-when-no-selection)
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>abc</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().removeAllRanges();
+    , .{ .enter = 0 },
+        \\host.innerHTML === '<p>abc</p>' && window.types() === 'keypress:host'
+    );
+}
+
+test "cdp.input: a cancelled beforeinput keeps Enter from editing a host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>abc</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild.firstChild, 1);
+        \\host.addEventListener('beforeinput', (e) => e.preventDefault());
+    , .{ .enter = 0 },
+        \\host.innerHTML === '<p>abc</p>' && window.types() === 'keypress:host,beforeinput:host'
     );
 }
 
