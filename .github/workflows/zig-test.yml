@@ -13,8 +13,6 @@ on:
     paths:
       - ".github/**"
       - "src/**"
-      - "Makefile"
-      - "tests/completion-bash.sh"
       - "build.zig"
       - "build.zig.zon"
 
@@ -29,8 +27,6 @@ on:
     paths:
       - ".github/**"
       - "src/**"
-      - "Makefile"
-      - "tests/completion-bash.sh"
       - "build.zig"
       - "build.zig.zon"
 
@@ -115,52 +111,6 @@ jobs:
             bench.json
             commit.txt
           retention-days: 10
-
-  bash-completion-linux:
-    name: Bash completion (modern Bash)
-    needs: zig-fmt
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    if: github.event.pull_request.draft == false
-
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/install
-
-      - name: Test Bash completion
-        run: make test-completion-bash COMPLETION_BASH=/bin/bash ZIGFLAGS=-Dprebuilt_v8_path=v8/libc_v8.a
-
-  bash-completion-macos:
-    name: Bash completion (Bash 3.2)
-    needs: zig-fmt
-
-    runs-on: macos-15
-    timeout-minutes: 30
-
-    if: github.event.pull_request.draft == false
-
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/install
-        with:
-          os: macos
-          arch: aarch64
-
-      - name: Verify system Bash is 3.2
-        run: |
-          /bin/bash --version
-          /bin/bash -c 'test "${BASH_VERSINFO[0]}" -eq 3'
-
-      - name: Test Bash completion
-        run: make test-completion-bash COMPLETION_BASH=/bin/bash ZIGFLAGS=-Dprebuilt_v8_path=v8/libc_v8.a
 
   chrome-test:
     name: html tests in chrome
