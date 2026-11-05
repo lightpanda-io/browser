@@ -677,14 +677,21 @@ test "MCP - a wrong-typed argument is named instead of bare InvalidParams" {
     try testing.expectJson(.{ .id = 1, .result = .{ .isError = false } }, out.written());
     out.clearRetainingCapacity();
 
-    // A value that really can't parse: the diagnosis names the field and
-    // what arrived, instead of parseValue's bare InvalidParams.
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#btn","timeout":"many"}}}
     );
     try testing.expectJson(.{ .id = 2, .result = .{
         .isError = true,
         .content = &.{.{ .text = "argument 'timeout' must be an integer, got string \"many\"" }},
+    } }, out.written());
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#btn","timeout":-1}}}
+    );
+    try testing.expectJson(.{ .id = 3, .result = .{
+        .isError = true,
+        .content = &.{.{ .text = "argument 'timeout' must be an integer from 0 to 4294967295, got integer -1" }},
     } }, out.written());
 }
 
@@ -693,8 +700,6 @@ test "MCP - a non-CSS selector and a wrong element type name the fix" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    // A playwright-style text= selector: the error says selectors are
-    // CSS-only and names findElement for role/text lookup.
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"click","arguments":{"selector":"text=S-Pankki"}}}
     );
@@ -705,7 +710,6 @@ test "MCP - a non-CSS selector and a wrong element type name the fix" {
     try testing.expect(std.mem.find(u8, out.written(), "findElement(role, name)") != null);
     out.clearRetainingCapacity();
 
-    // fill on a div: the element type doesn't fit the action.
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fill","arguments":{"selector":"#plain","value":"x"}}}
     );

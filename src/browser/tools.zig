@@ -569,10 +569,6 @@ fn callInner(
     // After normalizeArgs so a PascalCase `Script` or a `null` isn't missed.
     if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
         return .invalidParams(msg);
-    // Same normalized shape: a wrong-typed value is named before parseValue
-    // buries it in a bare InvalidParams.
-    if (diagnoseArgTypes(arena, tool, normalized)) |msg|
-        return .invalidParams(msg);
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
     // Before dispatch, because a navigation takes the node with it. Gated on
@@ -589,6 +585,10 @@ fn callInner(
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
                 return .{ .text = text, .is_error = true };
+        }
+        if (err == error.InvalidParams) {
+            if (diagnoseArgTypes(arena, tool, normalized)) |msg|
+                return .invalidParams(msg);
         }
         return err;
     };
@@ -1568,9 +1568,7 @@ fn resolveOptionalNode(registry: *NodeRegistry, backend_node_id: ?NodeRegistry.I
 }
 
 pub fn mapActionError(err: anytype) ToolError {
-    // Both are page-side facts the caller can act on, not internal failures:
-    // the element is the wrong type for the action, or it can't be interacted
-    // with (hidden/disabled/unfocused). errorMessage explains the recovery.
+    // Page-side facts the caller can act on, not internal failures.
     if (err == error.InvalidNodeType) return ToolError.InvalidNodeType;
     if (err == error.ActionFailed) return ToolError.ActionFailed;
     log.debug(.browser, "action error", .{ .err = @errorName(err) });
@@ -2410,13 +2408,7 @@ test "call: an argument diagnosis is in-band but counts as invalid_params" {
 }
 
 test "errorMessage: every error says more than its name" {
-    const members = [_]ToolError{
-        error.FrameNotLoaded,    error.InvalidParams, error.InvalidSelector, error.InvalidNodeType,
-        error.ScriptError,       error.ActionFailed,  error.NodeNotFound,    error.NavigationFailed,
-        error.NavigationTimeout, error.Cancelled,     error.Timeout,         error.InternalError,
-        error.OutOfMemory,
-    };
-    for (members) |m| {
+    for (std.meta.tags(ToolError)) |m| {
         try std.testing.expect(!std.mem.eql(u8, errorMessage(m), @errorName(m)));
     }
 }
@@ -2472,8 +2464,6 @@ test "fill: a disabled or read-only control is an ActionFailed, not an InvalidNo
     defer page.close();
 
     const aa = testing.arena_allocator;
-    // The control type fits fill; the page refuses the edit, so this is a
-    // page-side fact (ActionFailed), not a bad argument (InvalidNodeType).
     for ([_][]const u8{
         "{\"selector\":\"#fillRo\",\"value\":\"x\"}",
         "{\"selector\":\"#fillDisabled\",\"value\":\"x\"}",
