@@ -810,7 +810,7 @@ fn callTool(
     const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{ .source = .script }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
-        else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },
+        else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), browser_tools.errorMessage(err) }) catch return error.OutOfMemory },
     };
 
     if (result.is_error) return .{ .fail = result.text };

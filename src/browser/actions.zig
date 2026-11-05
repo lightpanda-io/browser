@@ -61,7 +61,7 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
     const target: *Element = if (node) |n|
         (n.is(Element) orelse return error.InvalidNodeType)
     else
-        Frame.user_input.focusedElement(frame) orelse return error.ActionFailed;
+        Frame.user_input.focusedElement(frame) orelse return error.ActionRefused;
     const info = keyboard.named(alias(key));
 
     for ([_]keyboard.Direction{ .down, .up }) |direction| {
@@ -121,7 +121,7 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
     }
     if (input._input_type == .radio and !checked) {
         // A click can never uncheck a radio.
-        return error.InvalidNodeType;
+        return error.ActionRefused;
     }
 
     // The click's activation behavior (EventManager.ActivationState) toggles
@@ -132,7 +132,7 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
 
     if (input.getChecked() != checked) {
         lp.log.debug(.app, "setChecked click prevented", .{});
-        return error.ActionFailed;
+        return error.ActionRefused;
     }
 }
 
@@ -159,9 +159,8 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
 /// its picker would. `change` fires right away: nothing commits it on blur.
 fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
     const el = ctl.asElement();
-    if (!ctl.acceptsTextEntry() or !Frame.user_input.acceptsEdit(el)) {
-        return error.InvalidNodeType;
-    }
+    if (!ctl.acceptsTextEntry()) return error.InvalidNodeType;
+    if (!Frame.user_input.acceptsEdit(el)) return error.ActionRefused;
 
     if (ctl.tracksSelection()) {
         try ctl.select(frame);
@@ -170,7 +169,7 @@ fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
             return error.ActionFailed;
         };
         if (!edited) {
-            return error.ActionFailed;
+            return error.ActionRefused;
         }
         return ctl.dispatchChangeIfEdited(frame);
     }

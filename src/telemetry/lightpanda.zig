@@ -344,6 +344,7 @@ const EventRow = struct {
                     .is_error => "E",
                     .frame_not_loaded => "F",
                     .invalid_params => "P",
+                    .action_refused => "R",
                     .node_not_found => "N",
                     .navigation_failed => "V",
                     .navigation_timeout => "T",

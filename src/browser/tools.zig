@@ -47,6 +47,7 @@ pub const reverseSubstituteEnvVars = marshal.reverseSubstituteEnvVars;
 pub const parseArgsOrDefault = marshal.parseArgsOrDefault;
 const substituteStringArgs = marshal.substituteStringArgs;
 const diagnoseArgs = marshal.diagnoseArgs;
+const diagnoseArgTypes = marshal.diagnoseArgTypes;
 const diagnoseMissingRequired = marshal.diagnoseMissingRequired;
 const lookupLpEnv = marshal.lookupLpEnv;
 pub const search = @import("tools/search.zig");
@@ -329,6 +330,10 @@ pub const names: [@typeInfo(Tool).@"enum".field_names.len][]const u8 = blk: {
 pub const ToolError = error{
     FrameNotLoaded,
     InvalidParams,
+    InvalidSelector,
+    InvalidNodeType,
+    ScriptError,
+    ActionRefused,
     NodeNotFound,
     NavigationFailed,
     NavigationTimeout,
@@ -345,7 +350,16 @@ pub fn errorMessage(err: ToolError) []const u8 {
         error.NodeNotFound => "NodeNotFound: the selector or backendNodeId matched nothing on the current page. Re-inspect the page (tree/interactiveElements) for fresh node ids, or omit backendNodeId to target the document root.",
         error.FrameNotLoaded => "FrameNotLoaded: no page is loaded — call goto (or pass a url) first.",
         error.NavigationTimeout => "NavigationTimeout: no response arrived before the timeout, so the page is empty. Other sessions may be holding every connection (see --http-max-concurrent); retry goto or close idle sessions.",
-        else => @errorName(err),
+        error.InvalidParams => "InvalidParams: the arguments don't fit this tool. Check names and types against the tool's input schema; `selector` parameters take plain CSS only.",
+        error.InvalidSelector => "InvalidSelector: the selector argument is not a valid CSS selector. Only plain CSS is supported — playwright-style prefixes (text=, role=, xpath=) are not. Use findElement(role, name) for text/role lookup, or read tree/markdown to find a usable id/class.",
+        error.InvalidNodeType => "InvalidNodeType: the matched element's type doesn't fit this action — fill needs an input, textarea or <select>, selectOption needs a <select>, setChecked needs a checkbox or radio, click/hover/press need an Element. Check the tag with nodeDetails.",
+        error.ScriptError => "ScriptError: the script didn't run — it has a syntax error or threw. waitForScript takes a JS expression with a truthy result (`window.ready === true`), not a function body: a top-level `return` is a syntax error here, though evaluate accepts one. Run the expression with evaluate to see what it throws.",
+        error.ActionRefused => "ActionRefused: the element refused the action — it's disabled or read-only, there's no focused element for a press without a target, the page cancelled the edit (a beforeinput handler calling preventDefault), or the action is impossible here (a click can't uncheck a radio — check another radio in the group). Re-inspect with tree/interactiveElements.",
+        error.Timeout => "Timeout: the waited-for condition never held within the timeout. Retry with a larger `timeout`, or check the page state first (tree/evaluate) — the condition may never become true.",
+        error.NavigationFailed => "NavigationFailed: the page didn't settle after the navigation. Check the current URL with getUrl and retry.",
+        error.Cancelled => "Cancelled: the call was aborted — the session was closed or another request interrupted it.",
+        error.InternalError => "InternalError: an unexpected failure inside the browser, not an argument problem. Retry once; if it persists, it's a bug worth reporting.",
+        error.OutOfMemory => "OutOfMemory: the browser ran out of memory. Close idle sessions or pages.",
     };
 }
 
@@ -517,7 +531,8 @@ fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
 pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
     return switch (err) {
         error.FrameNotLoaded => .frame_not_loaded,
-        error.InvalidParams => .invalid_params,
+        error.InvalidParams, error.InvalidSelector, error.InvalidNodeType, error.ScriptError => .invalid_params,
+        error.ActionRefused => .action_refused,
         error.NodeNotFound => .node_not_found,
         error.NavigationFailed => .navigation_failed,
         error.NavigationTimeout => .navigation_timeout,
@@ -570,6 +585,10 @@ fn callInner(
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
                 return .{ .text = text, .is_error = true };
+        }
+        if (err == error.InvalidParams) {
+            if (diagnoseArgTypes(arena, tool, normalized)) |msg|
+                return .invalidParams(msg);
         }
         return err;
     };
@@ -1549,7 +1568,9 @@ fn resolveOptionalNode(registry: *NodeRegistry, backend_node_id: ?NodeRegistry.I
 }
 
 pub fn mapActionError(err: anytype) ToolError {
-    if (err == error.InvalidNodeType) return ToolError.InvalidParams;
+    // Page-side facts the caller can act on, not internal failures.
+    if (err == error.InvalidNodeType) return ToolError.InvalidNodeType;
+    if (err == error.ActionRefused) return ToolError.ActionRefused;
     log.debug(.browser, "action error", .{ .err = @errorName(err) });
     return ToolError.InternalError;
 }
@@ -1794,7 +1815,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
     const timeout_ms = args.timeout orelse defaultWaitTimeout(frame);
 
     const node = lp.actions.waitForSelector(args.selector, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
-        error.InvalidSelector => return ToolError.InvalidParams,
+        error.InvalidSelector => return ToolError.InvalidSelector,
         error.Cancelled => return ToolError.Cancelled,
         // Timeout w/o a match: same outcome as `/hover selector=…` on a missing
         // node — surface `NodeNotFound` so the LLM sees a consistent signal.
@@ -1823,7 +1844,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
     lp.actions.waitForScript(args.script, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
         error.Timeout => return ToolError.Timeout,
-        error.ScriptError => return ToolError.InvalidParams,
+        error.ScriptError => return ToolError.ScriptError,
         else => {
             log.debug(.browser, "waitForScript error", .{ .err = @errorName(err) });
             return ToolError.InternalError;
@@ -2353,7 +2374,7 @@ pub fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!N
     const page = try requireFrame(session);
     const element = Selector.querySelector(page.document.asNode(), selector, page) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.InternalError,
-        else => return ToolError.InvalidParams,
+        else => return ToolError.InvalidSelector,
     };
     const node = (element orelse return ToolError.NodeNotFound).asNode();
     return .{ .node = node, .page = page, .target = .{ .selector = selector } };
@@ -2384,6 +2405,111 @@ test "call: an argument diagnosis is in-band but counts as invalid_params" {
     const bad_enum = call(arena.allocator(), testing.test_session, &registry, "waitForState", args, .{ .source = .user });
     try std.testing.expect((try bad_enum).is_error);
     try std.testing.expectEqual(.invalid_params, telemetryOutcome(bad_enum));
+}
+
+test "mapActionError: a failure inside an action is internal, not the element's fault" {
+    try std.testing.expectEqual(ToolError.InternalError, mapActionError(error.ActionFailed));
+    try std.testing.expectEqual(ToolError.ActionRefused, mapActionError(error.ActionRefused));
+    try std.testing.expectEqual(ToolError.InvalidNodeType, mapActionError(error.InvalidNodeType));
+}
+
+test "errorMessage: every error says more than its name" {
+    for (std.meta.tags(ToolError)) |m| {
+        try std.testing.expect(!std.mem.eql(u8, errorMessage(m), @errorName(m)));
+    }
+}
+
+test "click: a playwright-style selector is an InvalidSelector, not bare InvalidParams" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"text=S-Pankki\"}", .{});
+    const r = call(aa, page.session, &registry, "click", args, .{ .source = .user });
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(r));
+    try std.testing.expectError(error.InvalidSelector, r);
+    try std.testing.expect(std.mem.find(u8, errorMessage(error.InvalidSelector), "findElement") != null);
+}
+
+test "fill: the wrong element type names the constraint" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#plain\",\"value\":\"x\"}", .{});
+    const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
+    try std.testing.expectEqual(.invalid_params, telemetryOutcome(r));
+    try std.testing.expectError(error.InvalidNodeType, r);
+}
+
+test "fill: a page that cancels the edit is an ActionRefused, not an InternalError" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#fillCancel\",\"value\":\"x\"}", .{});
+    const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
+    try std.testing.expectEqual(.action_refused, telemetryOutcome(r));
+    try std.testing.expectError(error.ActionRefused, r);
+}
+
+test "fill: a disabled or read-only control is an ActionRefused, not an InvalidNodeType" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    for ([_][]const u8{
+        "{\"selector\":\"#fillRo\",\"value\":\"x\"}",
+        "{\"selector\":\"#fillDisabled\",\"value\":\"x\"}",
+    }) |json| {
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, json, .{});
+        const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
+        try std.testing.expectError(error.ActionRefused, r);
+        try std.testing.expectEqual(.action_refused, telemetryOutcome(r));
+    }
+}
+
+test "setChecked: a radio can't be unchecked, and the error says so" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const check = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#rad\",\"checked\":true}", .{});
+    _ = try call(aa, page.session, &registry, "setChecked", check, .{ .source = .user });
+
+    const uncheck = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#rad\",\"checked\":false}", .{});
+    const r = call(aa, page.session, &registry, "setChecked", uncheck, .{ .source = .user });
+    try std.testing.expectError(error.ActionRefused, r);
+    try std.testing.expectEqual(.action_refused, telemetryOutcome(r));
+}
+
+test "waitForScript: a script that doesn't compile is a ScriptError, not bare InvalidParams" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"script\":\"return (\"}", .{});
+    const r = call(aa, page.session, &registry, "waitForScript", args, .{ .source = .user });
+    try std.testing.expectError(error.ScriptError, r);
+    try std.testing.expect(std.mem.find(u8, errorMessage(error.ScriptError), "evaluate") != null);
 }
 
 test "waitForState: a state the page never reaches times out" {

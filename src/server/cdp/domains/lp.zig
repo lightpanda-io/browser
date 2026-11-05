@@ -375,12 +375,16 @@ fn clickNode(cmd: anytype) !void {
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.click(node.dom, frame) catch |err| {
-        if (err == error.InvalidNodeType) return error.InvalidParam;
-        return error.InternalError;
-    };
+    lp.actions.click(node.dom, frame) catch |err| return mapActionError(err);
 
     return cmd.sendResult(.{}, .{});
+}
+
+fn mapActionError(err: anyerror) error{ InvalidParam, InternalError } {
+    return switch (err) {
+        error.InvalidNodeType, error.ActionRefused => error.InvalidParam,
+        else => error.InternalError,
+    };
 }
 
 fn fillNode(cmd: anytype) !void {
@@ -397,10 +401,7 @@ fn fillNode(cmd: anytype) !void {
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.fill(node.dom, params.text, frame) catch |err| {
-        if (err == error.InvalidNodeType) return error.InvalidParam;
-        return error.InternalError;
-    };
+    lp.actions.fill(node.dom, params.text, frame) catch |err| return mapActionError(err);
 
     return cmd.sendResult(.{}, .{});
 }
@@ -423,10 +424,7 @@ fn scrollNode(cmd: anytype) !void {
     else
         null;
 
-    const result = lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| {
-        if (err == error.InvalidNodeType) return error.InvalidParam;
-        return error.InternalError;
-    };
+    const result = lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| return mapActionError(err);
 
     const target_id: ?NodeRegistry.Id = switch (result.target) {
         .window => null,
@@ -925,6 +923,28 @@ test "cdp.lp: action tools" {
     const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && document.getElementById('outerscroll').scrollTop === 30 && document.getElementById('innerleaf').scrollTop === 0 && window.scrollY === 0", null);
 
     try testing.expect(result.isTrue());
+}
+
+test "cdp.lp: fillNode on a control that refuses the edit is an InvalidParam" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    const disabled = frame.document.getElementById("fillDisabled").?.asNode();
+    const disabled_id = (try bc.node_registry.register(disabled)).id;
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.fillNode",
+        .params = .{ .backendNodeId = disabled_id, .text = "x" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParam", .{ .id = 1 });
 }
 
 test "cdp.lp: waitForSelector" {
