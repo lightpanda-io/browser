@@ -942,7 +942,7 @@ test "cdp.lp: fillNode on a control that refuses the edit is an InvalidParam" {
     try testing.waitForPage(bc);
 
     const disabled = frame.document.getElementById("fillDisabled").?.asNode();
-    const disabled_id = (try bc.node_registry.register(disabled)).id;
+    const disabled_id = (try (try testing.firstTarget(bc)).node_registry.register(disabled)).id;
     try ctx.processMessage(.{
         .id = 1,
         .method = "LP.fillNode",
