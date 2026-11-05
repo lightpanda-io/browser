@@ -513,8 +513,8 @@ fn handleJavaScriptDialog(cmd: anytype) !void {
     const target = try cmd.target();
     const arena = target.arena.allocator();
 
-    // Duplicate promptText into the BrowserContext arena so it outlives the
-    // CDP command's own message arena (the dialog may fire on a later command).
+    // Duplicate promptText into the target's arena so it outlives the CDP
+    // command's own message arena (the dialog may fire on a later command).
     const prompt_text: ?[]const u8 = if (params.promptText) |t|
         try arena.dupe(u8, t)
     else
