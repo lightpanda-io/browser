@@ -1312,6 +1312,7 @@ test "Session: permission and coordinate overrides belong to their session" {
 }
 
 test "Session: pages share permission overrides only within their session" {
+    const js = @import("js/js.zig");
     const browser = testing.test_session.browser;
     const first_notification = try Notification.init(testing.allocator);
     defer first_notification.deinit();
