@@ -236,8 +236,15 @@
   testing.expectEqual(rect.x + 10, s.e);
   testing.expectEqual(rect.y + 20, s.f);
 
-  testing.diverges('Chrome answers a disconnected element with a matrix', () => {
-    testing.expectEqual(null, document.createElementNS('http://www.w3.org/2000/svg', 'rect').getCTM());
-  });
+  // A disconnected element gets the identity, whatever its transforms
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  const g = svg.appendChild(document.createElementNS(NS, 'g'));
+  g.setAttribute('transform', 'translate(100, 0)');
+  const detached = g.appendChild(document.createElementNS(NS, 'rect'));
+  detached.setAttribute('transform', 'translate(5, 6) scale(2)');
+  for (const d of [detached.getCTM(), detached.getScreenCTM(), document.createElementNS(NS, 'rect').getCTM()]) {
+    testing.expectEqual([1, 0, 0, 1, 0, 0], [d.a, d.b, d.c, d.d, d.e, d.f]);
+  }
 }
 </script>
