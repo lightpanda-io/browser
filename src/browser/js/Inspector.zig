@@ -47,11 +47,6 @@ client: *v8.InspectorClientImpl,
 allocator: Allocator,
 default_contexts: std.AutoHashMapUnmanaged(GroupId, v8.Global) = .empty,
 
-// The group of the Session whose message is being dispatched. V8 asks for the
-// group's default context (ensureDefaultContextInGroup) without our binding
-// passing the group id on, so Session.send records it here.
-active_group: GroupId = 0,
-
 pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     const self = try allocator.create(Inspector);
     errdefer allocator.destroy(self);
@@ -252,12 +247,7 @@ pub const Session = struct {
     fn dropNotification(_: *anyopaque, _: []const u8) void {}
 
     pub fn send(self: *const Session, msg: []const u8) void {
-        const inspector = self.inspector;
-        const previous_group = inspector.active_group;
-        inspector.active_group = self.group_id;
-        defer inspector.active_group = previous_group;
-
-        const isolate = inspector.isolate;
+        const isolate = self.inspector.isolate;
         var hs: v8.HandleScope = undefined;
         v8.v8__HandleScope__CONSTRUCT(&hs, isolate);
         defer v8.v8__HandleScope__DESTRUCT(&hs);
@@ -442,9 +432,10 @@ pub export fn v8_inspector__Client__IMPL__consoleAPIMessage(
 pub export fn v8_inspector__Client__IMPL__ensureDefaultContextInGroup(
     _: *v8.InspectorClientImpl,
     data: *anyopaque,
+    group_id: c_int,
 ) callconv(.c) ?*const v8.Context {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
-    const global_handle = inspector.default_contexts.getPtr(inspector.active_group) orelse return null;
+    const global_handle = inspector.default_contexts.getPtr(group_id) orelse return null;
     return v8.v8__Global__Get(global_handle, inspector.isolate);
 }
 
