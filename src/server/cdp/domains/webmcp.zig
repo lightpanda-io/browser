@@ -333,7 +333,7 @@ test "cdp.WebMCP: register fires toolsAdded after enable" {
 
     // Register a fresh tool from JS, expect a new toolsAdded event.
     var ls: js.Local.Scope = undefined;
-    bc.firstTarget().?.mainFrame().?.js.localScope(&ls);
+    (try testing.firstTarget(bc)).mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\navigator.modelContext.registerTool({
@@ -358,7 +358,7 @@ test "cdp.WebMCP: invokeTool fires toolInvoked + toolResponded" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId((try testing.firstTarget(bc)).mainFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -398,10 +398,10 @@ test "cdp.WebMCP: invokeTool passes the explainer-era client" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId((try testing.firstTarget(bc)).mainFrame().?._frame_id);
 
     var ls: js.Local.Scope = undefined;
-    bc.firstTarget().?.mainFrame().?.js.localScope(&ls);
+    (try testing.firstTarget(bc)).mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
         \\document.modelContext.registerTool({
@@ -438,7 +438,7 @@ test "cdp.WebMCP: invokeTool unknown name" {
         .target_id = "TID-000000000M".*,
         .url = "cdp/webmcp_fixture.html",
     });
-    const frame_id = id.toFrameId(bc.firstTarget().?.mainFrame().?._frame_id);
+    const frame_id = id.toFrameId((try testing.firstTarget(bc)).mainFrame().?._frame_id);
 
     try ctx.processMessage(.{ .id = 1, .method = "WebMCP.enable", .session_id = "SID-M" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -474,7 +474,7 @@ test "cdp.WebMCP: cancelInvocation" {
 
     // Register a never-settling tool so we have an invocation to cancel.
     var ls: js.Local.Scope = undefined;
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     target.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(

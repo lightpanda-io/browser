@@ -757,7 +757,7 @@ test "cdp.Fetch: interception events belong to the enabling session" {
         .session_id = "SID-PRIMARY",
         .target_id = "TID-000000000B".*,
     });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     _ = try bc.attachSession(target, "SID-AUX", null);
 
     try ctx.processMessage(.{
@@ -891,7 +891,7 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
         .sessionId = "SID-P",
     });
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-P" });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     try testing.expectEqual(2, target.intercept_state.patterns.len);
     try testing.expect(target.intercept_state.matches(.Request, "http://h/json/a", .fetch));
     try testing.expect(target.intercept_state.matches(.Request, "http://h/json/a", .xhr));
@@ -957,7 +957,7 @@ const ResponseStageProbe = struct {
             .loader_id = 7,
             .method = .GET,
             .url = url,
-            .origin = bc.firstTarget().?.security_origin,
+            .origin = (try testing.firstTarget(bc)).security_origin,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .script,
@@ -1153,7 +1153,7 @@ test "cdp.Fetch: fulfillRequest stores the response's cookies" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     {
-        const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+        const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
@@ -1178,7 +1178,7 @@ test "cdp.Fetch: fulfillRequest stores the response's cookies" {
     try ctx.expectSentResult(null, .{ .id = 2 });
     try testing.waitForPage(bc);
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

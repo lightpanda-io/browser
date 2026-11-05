@@ -381,7 +381,7 @@ test "cdp.log: entries go to the sessions that enabled the domain" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-LOG", .target_id = "FID-0000000LOG".*, .session_id = "SID-LOG" });
-    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
     try ctx.processMessage(.{ .id = 1, .method = "Log.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
 

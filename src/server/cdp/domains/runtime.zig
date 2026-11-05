@@ -260,7 +260,7 @@ test "cdp.runtime: inspector responses go to the session that sent the command" 
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT2", .url = "hi.html", .target_id = "FID-0000000RT2".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
 
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
     try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 2, .description = "2" } }, .{ .id = 60, .session_id = "SID-AUX" });
@@ -307,7 +307,7 @@ test "cdp.runtime: inspector events go to the session that enabled them" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT3", .url = "hi.html", .target_id = "FID-0000000RT3".*, .session_id = "SID-PRIMARY" });
-    _ = try bc.attachSession(bc.firstTarget().?, "SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
 
     try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 70, .session_id = "SID-AUX" });
@@ -328,10 +328,10 @@ test "cdp.runtime: an uncaught exception emits Runtime.exceptionThrown" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC", .url = "hi.html", .target_id = "FID-0000000EXC".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC", .url = "hi.html", .target_id = "FID-0000000EXC".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -356,10 +356,10 @@ test "cdp.runtime: Runtime.exceptionThrown locates an Error where it was created
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC3", .url = "hi.html", .target_id = "FID-000000EXC3".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC3", .url = "hi.html", .target_id = "FID-000000EXC3".* });
     try ctx.processMessage(.{ .id = 62, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -380,10 +380,10 @@ test "cdp.runtime: an exception whose error event is cancelled is not reported" 
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC2", .url = "hi.html", .target_id = "FID-000000EXC2".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC2", .url = "hi.html", .target_id = "FID-000000EXC2".* });
     try ctx.processMessage(.{ .id = 61, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -412,7 +412,7 @@ test "cdp.runtime: an unhandled rejection emits Runtime.exceptionThrown once" {
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ1", .url = "hi.html", .target_id = "FID-000000REJ1".* });
     try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -443,10 +443,10 @@ test "cdp.runtime: a rejection handled before the checkpoint ends is not reporte
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ2", .url = "hi.html", .target_id = "FID-000000REJ2".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ2", .url = "hi.html", .target_id = "FID-000000REJ2".* });
     try ctx.processMessage(.{ .id = 71, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -474,10 +474,10 @@ test "cdp.runtime: a rejection whose unhandledrejection event is cancelled is no
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ3", .url = "hi.html", .target_id = "FID-000000REJ3".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-REJ3", .url = "hi.html", .target_id = "FID-000000REJ3".* });
     try ctx.processMessage(.{ .id = 72, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -510,7 +510,7 @@ test "cdp.runtime: an exception carries the id of the context it was thrown in" 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-EXC4", .url = "cdp/input_iframe.html", .target_id = "FID-000000EXC4".* });
     try ctx.processMessage(.{ .id = 63, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     const child = frame.child_frames.items[0];
 
     var page_ls: js.Local.Scope = undefined;
@@ -542,7 +542,7 @@ test "cdp.runtime: consoleAPICalled carries the id of the context it was logged 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-CON2", .url = "cdp/input_iframe.html", .target_id = "FID-0000000CO2".* });
     try ctx.processMessage(.{ .id = 64, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     const child = frame.child_frames.items[0];
 
     var page_ls: js.Local.Scope = undefined;
@@ -572,10 +572,10 @@ test "cdp.runtime: consoleAPICalled type matches the console method" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -594,10 +594,10 @@ test "cdp.runtime: consoleAPICalled only carries values for primitives" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -660,11 +660,11 @@ test "cdp.runtime: console notifications run no page JS" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CONS", .url = "hi.html", .target_id = "FID-0000000CON".* });
     try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable" });
     try ctx.processMessage(.{ .id = 61, .method = "Console.enable" });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

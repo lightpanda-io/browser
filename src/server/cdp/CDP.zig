@@ -568,10 +568,6 @@ pub const BrowserContext = struct {
         target.deinit();
     }
 
-    pub fn firstTarget(self: *const BrowserContext) ?*Target {
-        return if (self.targets.items.len == 0) null else self.targets.items[0];
-    }
-
     // The target the client knows by `target_id`.
     pub fn findTarget(self: *const BrowserContext, target_id: []const u8) ?*Target {
         for (self.targets.items) |target| {

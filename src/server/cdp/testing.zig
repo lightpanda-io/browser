@@ -254,7 +254,7 @@ pub const TestContext = struct {
         if (self.cdp_.browser_context) |*bc| {
             if (bc.session.hasPage()) {
                 var runner = bc.session.runner(.{});
-                switch (try runner.tickForFrame(bc.firstTarget().?.frame_id.?, 20, .{ .until = .done })) {
+                switch (try runner.tickForFrame((try firstTarget(bc)).frame_id.?, 20, .{ .until = .done })) {
                     .ok => return,
                     .done => {},
                 }
@@ -351,9 +351,14 @@ pub fn context() !TestContext {
     };
 }
 
+// The oldest target of `bc`.
+pub fn firstTarget(bc: *const CDP.BrowserContext) !*CDP.Target {
+    return if (bc.targets.items.len > 0) bc.targets.items[0] else error.TargetNotLoaded;
+}
+
 pub fn waitForPage(bc: *CDP.BrowserContext) !void {
     var runner = bc.session.runner(.{});
-    try runner.waitForFrame(bc.firstTarget().?.frame_id.?, 2000, .{ .until = .done });
+    try runner.waitForFrame((try firstTarget(bc)).frame_id.?, 2000, .{ .until = .done });
 }
 
 // The result of the response to `msg_id`.

@@ -871,8 +871,8 @@ test "cdp.network setExtraHTTPHeaders" {
         .params = .{ .headers = .{ .food = "bars" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 1);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
@@ -892,7 +892,7 @@ test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
         } },
     });
 
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     try testing.expectEqual(target.extra_headers.items.len, 1);
     try testing.expectEqual("x-custom", target.extra_headers.items[0].name);
     try testing.expectEqual("hi", target.extra_headers.items[0].value);
@@ -912,8 +912,8 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
         .params = .{ .headers = .{ .@"User-Agent" = "Mozilla/5.0" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 0);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
 }
 
 test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
@@ -928,8 +928,8 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
         .params = .{ .headers = .{ .@"User-Agent" = "CustomBot/2.0" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 1);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
@@ -949,8 +949,8 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via 
         .params = .{ .headers = .{ .@"User-Agent:Mozilla/5.0 (X" = "Y)" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.firstTarget().?.extra_headers.items.len, 0);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
@@ -972,7 +972,7 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
         } },
     });
 
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     try testing.expectEqual(target.extra_headers.items.len, 1);
     try testing.expectEqual("x-keep", target.extra_headers.items[0].name);
     try testing.expectEqual("ok", target.extra_headers.items[0].value);
@@ -997,7 +997,7 @@ test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
         } },
     });
 
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     try testing.expectEqual(target.extra_headers.items.len, 1);
     try testing.expectEqual("x-keep", target.extra_headers.items[0].name);
     try testing.expectEqual("ok", target.extra_headers.items[0].value);
@@ -1320,7 +1320,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .session_id = "SID-BLOCK",
     });
     const page = try bc.session.createPage();
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const client = &bc.cdp.browser.http_client;
     defer client.setBlockedUrls(&.{}) catch unreachable;
 
@@ -1436,7 +1436,7 @@ test "cdp.Network: a bad port fails before connecting, redirect hop included" {
             .loader_id = 1,
             .method = .GET,
             .url = url,
-            .origin = bc.firstTarget().?.security_origin,
+            .origin = (try testing.firstTarget(bc)).security_origin,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .fetch,
@@ -1470,7 +1470,7 @@ test "cdp.Network: loadingFinished reports the bytes received, not the decoded b
         .loader_id = 1,
         .method = .GET,
         .url = "http://127.0.0.1:9582/raw/gzip",
-        .origin = bc.firstTarget().?.security_origin,
+        .origin = (try testing.firstTarget(bc)).security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .fetch,
@@ -1508,7 +1508,7 @@ test "cdp.Network: POST body exposed as postData" {
         .loader_id = 1,
         .method = .POST,
         .url = "http://127.0.0.1:9582/echo_body",
-        .origin = bc.firstTarget().?.security_origin,
+        .origin = (try testing.firstTarget(bc)).security_origin,
         .body = body,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
@@ -1573,7 +1573,7 @@ const EchoDriver = struct {
             .url = "http://127.0.0.1:9582/echo_body",
             .body = body,
             .partial = partial,
-            .origin = bc.firstTarget().?.security_origin,
+            .origin = (try testing.firstTarget(bc)).security_origin,
             .request_mode = .no_cors,
             .credentials_mode = .same_origin,
             .resource_type = .fetch,
@@ -1624,7 +1624,7 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
         .params = .{ .requestId = &small },
     });
     try ctx.expectSentResult(.{ .body = "123", .base64Encoded = false }, .{ .id = 3 });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     try testing.expectEqual(3, target.captured_responses_size);
 
     // Re-enabling with a tighter limit evicts what's already captured.
@@ -1660,7 +1660,7 @@ test "cdp.Network: getResponseBody omits a partial body" {
         .params = .{ .requestId = &request_id },
     });
     try ctx.expectSentResult(.{ .body = "", .base64Encoded = false }, .{ .id = 2 });
-    try testing.expectEqual(0, bc.firstTarget().?.captured_responses_size);
+    try testing.expectEqual(0, (try testing.firstTarget(bc)).captured_responses_size);
 }
 
 test "cdp.Network: getResponseBody base64-encodes a non-UTF-8 body" {
@@ -1740,7 +1740,7 @@ test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
         .params = .{ .requestId = &second },
     });
     try ctx.expectSentResult(.{ .body = "bbbbbb", .base64Encoded = false }, .{ .id = 3 });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     try testing.expectEqual(6, target.captured_responses_size);
 
     // Network.disable releases everything retained.
@@ -1846,7 +1846,7 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
         .loader_id = 7,
         .method = .GET,
         .url = start_url,
-        .origin = bc.firstTarget().?.security_origin,
+        .origin = (try testing.firstTarget(bc)).security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .script,
@@ -1926,7 +1926,7 @@ test "cdp.Network: worker requests emit network events" {
     var bc = &cdp.browser_context.?;
     bc.id = "BID-NW";
     _ = try (try bc.createTarget()).attachPrimarySession("SID-NW");
-    bc.firstTarget().?.target_id = "TID-NW-0000000".*;
+    (try testing.firstTarget(bc)).target_id = "TID-NW-0000000".*;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
     try ctx.expectSentResult(null, .{ .id = 1 });

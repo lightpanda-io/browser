@@ -269,8 +269,8 @@ test "cdp.Emulation: locale, timezone and script execution stubs" {
 test "cdp.Emulation: viewport override fires matchMedia change events" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-MQL", .url = "hi.html", .target_id = "FID-0000000MQL".* });
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-MQL", .url = "hi.html", .target_id = "FID-0000000MQL".* });
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -301,7 +301,7 @@ test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach win
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-SCR", .url = "hi.html" });
-    const frame = bc.firstTarget().?.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -419,8 +419,8 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
 
     var ctx = try testing.context();
     defer ctx.deinit();
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
 
     // The default locale reaches both navigator and ICU.
     try expectJs(frame, "navigator.language === 'en-US' && navigator.languages.join() === 'en-US,en'");
@@ -497,7 +497,7 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM1" });
     _ = try bc.session.createPage();
-    const page = bc.firstTarget().?.mainPage().?;
+    const page = (try testing.firstTarget(bc)).mainPage().?;
 
     // Defaults to the compile-time viewport before any override.
     try testing.expectEqual(1920, page.getViewport().width);
@@ -580,7 +580,7 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const frame = target.mainFrame() orelse unreachable;
 
     {
@@ -644,7 +644,7 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const frame = target.mainFrame() orelse unreachable;
 
     {
@@ -709,7 +709,7 @@ test "cdp.Emulation: navigator.geolocation granted without an override is POSITI
 // Runs getCurrentPosition, pumps the scheduler, and returns the code the error
 // callback saw (0 if the success callback ran instead).
 fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const frame = target.mainFrame() orelse unreachable;
 
     {
@@ -757,7 +757,7 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const frame = target.mainFrame() orelse unreachable;
 
     {

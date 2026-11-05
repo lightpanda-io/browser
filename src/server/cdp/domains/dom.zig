@@ -926,7 +926,7 @@ test "cdp.dom: focus makes the node activeElement and routes key events to it" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
-    const frame = bc.firstTarget().?.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -965,7 +965,7 @@ test "cdp.dom: scrollIntoViewIfNeeded brings the node's quads into the viewport"
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
-    const frame = bc.firstTarget().?.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1000,7 +1000,7 @@ test "cdp.dom: focus errors on an element that can't take focus" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
-    const frame = bc.firstTarget().?.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1104,7 +1104,7 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
         try b.writeStreamingAll(lp.io, "bbbb");
     }
 
-    const frame = bc.firstTarget().?.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -1238,7 +1238,7 @@ test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_iframe.html" });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const child = target.mainFrame().?.child_frames.items[0];
 
     const text = child.document.getElementById("text") orelse unreachable;
@@ -1394,7 +1394,7 @@ test "cdp.dom: resolveNode into a child frame's context" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RN", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
     const child_main = try mainWorldContextId(bc, child);
@@ -1443,7 +1443,7 @@ test "cdp.dom: getFrameOwner returns the owner iframe element" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-FO", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
     const iframe_node = try target.node_registry.register(child.iframe.?.asNode());
@@ -1491,7 +1491,7 @@ test "cdp.dom: remote object ids belong to the session that minted them" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RO", .url = "cdp/dom1.html", .target_id = "FID-000000000R".*, .session_id = "SID-PRIMARY" });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     _ = try bc.attachSession(target, "SID-AUX", null);
 
     const root = target.mainFrame() orelse unreachable;
@@ -1554,7 +1554,7 @@ test "cdp.dom: getContentQuads of a node in a nested iframe is in the top-level 
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "input_mouse_frames.html" });
-    const main = bc.firstTarget().?.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     const child = main.child_frames.items[0];
     const nested = child.child_frames.items[0];
     const inner = nested.document.getElementById("inner").?;
@@ -1564,7 +1564,7 @@ test "cdp.dom: getContentQuads of a node in a nested iframe is in the top-level 
     const x = inner_rect.x + nested_rect.x + child_rect.x;
     const y = inner_rect.y + nested_rect.y + child_rect.y;
 
-    const node = try bc.firstTarget().?.node_registry.register(inner.asNode());
+    const node = try (try testing.firstTarget(bc)).node_registry.register(inner.asNode());
     try ctx.processMessage(.{
         .id = 1,
         .method = "DOM.getContentQuads",
@@ -1591,7 +1591,7 @@ test "cdp.dom: getContentQuads of a text node" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
-    const main = bc.firstTarget().?.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     {
         var ls: js.Local.Scope = undefined;
         main.js.localScope(&ls);
@@ -1610,16 +1610,16 @@ test "cdp.dom: getContentQuads of a text node" {
     try testing.expectEqual(p_rect.x, rect.x);
     try testing.expectEqual(p_rect.y, rect.y);
 
-    const node = try bc.firstTarget().?.node_registry.register(text);
+    const node = try (try testing.firstTarget(bc)).node_registry.register(text);
     try ctx.processMessage(.{ .id = 1, .method = "DOM.getContentQuads", .params = .{ .nodeId = node.id } });
     try ctx.expectSentResult(.{ .quads = &[_]Quad{rectToQuad(rect)} }, .{ .id = 1 });
 
     // Text without a box has no quads, as in Chrome.
-    const ws = try bc.firstTarget().?.node_registry.register(main.document.getElementById("ws").?.asNode().firstChild().?);
+    const ws = try (try testing.firstTarget(bc)).node_registry.register(main.document.getElementById("ws").?.asNode().firstChild().?);
     try ctx.processMessage(.{ .id = 2, .method = "DOM.getContentQuads", .params = .{ .nodeId = ws.id } });
     try ctx.expectSentError(-32000, "Could not compute content quads.", .{ .id = 2 });
 
-    const hidden = try bc.firstTarget().?.node_registry.register(main.document.getElementById("h").?.asNode().firstChild().?);
+    const hidden = try (try testing.firstTarget(bc)).node_registry.register(main.document.getElementById("h").?.asNode().firstChild().?);
     try ctx.processMessage(.{ .id = 3, .method = "DOM.getContentQuads", .params = .{ .nodeId = hidden.id } });
     try ctx.expectSentError(-32000, "Could not compute content quads.", .{ .id = 3 });
 }
@@ -1629,7 +1629,7 @@ test "cdp.dom: getContentQuads of a text node in a nested iframe is in the top-l
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "input_mouse_frames.html" });
-    const main = bc.firstTarget().?.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     const child = main.child_frames.items[0];
     const nested = child.child_frames.items[0];
     {
@@ -1646,7 +1646,7 @@ test "cdp.dom: getContentQuads of a text node in a nested iframe is in the top-l
     const x = rect.x + nested_rect.x + child_rect.x;
     const y = rect.y + nested_rect.y + child_rect.y;
 
-    const node = try bc.firstTarget().?.node_registry.register(text);
+    const node = try (try testing.firstTarget(bc)).node_registry.register(text);
     try ctx.processMessage(.{ .id = 1, .method = "DOM.getContentQuads", .params = .{ .nodeId = node.id } });
     const right = x + rect.width;
     const bottom = y + rect.height;
@@ -1695,7 +1695,7 @@ test "cdp.dom: getBoxModel of a text node" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
-    const main = bc.firstTarget().?.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     {
         var ls: js.Local.Scope = undefined;
         main.js.localScope(&ls);
@@ -1710,7 +1710,7 @@ test "cdp.dom: getBoxModel of a text node" {
     const rect = Range.textRect(text.is(DOMNode.CData).?, main).?;
     const quad = rectToQuad(rect);
 
-    const node = try bc.firstTarget().?.node_registry.register(text);
+    const node = try (try testing.firstTarget(bc)).node_registry.register(text);
     try ctx.processMessage(.{ .id = 1, .method = "DOM.getBoxModel", .params = .{ .nodeId = node.id } });
     try ctx.expectSentResult(.{ .model = BoxModel{
         .content = quad,
@@ -1722,11 +1722,11 @@ test "cdp.dom: getBoxModel of a text node" {
     } }, .{ .id = 1 });
 
     // Text without a box has no box model, as in Chrome.
-    const ws = try bc.firstTarget().?.node_registry.register(main.document.getElementById("ws").?.asNode().firstChild().?);
+    const ws = try (try testing.firstTarget(bc)).node_registry.register(main.document.getElementById("ws").?.asNode().firstChild().?);
     try ctx.processMessage(.{ .id = 2, .method = "DOM.getBoxModel", .params = .{ .nodeId = ws.id } });
     try ctx.expectSentError(-32000, "Could not compute box model.", .{ .id = 2 });
 
-    const comment = try bc.firstTarget().?.node_registry.register(main.document.getElementById("c").?.asNode().firstChild().?);
+    const comment = try (try testing.firstTarget(bc)).node_registry.register(main.document.getElementById("c").?.asNode().firstChild().?);
     try ctx.processMessage(.{ .id = 3, .method = "DOM.getBoxModel", .params = .{ .nodeId = comment.id } });
     try ctx.expectSentError(-32000, "Could not compute box model.", .{ .id = 3 });
 }

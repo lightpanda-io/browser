@@ -674,7 +674,7 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/semantic_tree_iframe.html", .target_id = "FID-000000000T".* });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
 
@@ -732,7 +732,7 @@ test "cdp.lp: getInteractiveElements reads the node's own frame" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/interactive_iframe.html", .target_id = "FID-000000000T".* });
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const root = target.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
 
@@ -863,7 +863,7 @@ test "cdp.lp: action tools" {
 
     // Test Click
     const btn = frame.document.getElementById("btn").?.asNode();
-    const target = bc.firstTarget().?;
+    const target = try testing.firstTarget(bc);
     const btn_id = (try target.node_registry.register(btn)).id;
     try ctx.processMessage(.{
         .id = 1,
@@ -1055,9 +1055,9 @@ test "cdp.lp: handleJavaScriptDialog controls confirm/prompt/alert return values
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-D2", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-D2", .url = "cdp/dialog.html", .target_id = "FID-000000000X".* });
 
-    const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();

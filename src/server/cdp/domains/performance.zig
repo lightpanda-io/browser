@@ -100,7 +100,7 @@ test "cdp.performance: getMetrics" {
     try testing.expectEqual(1, findMetric(before, "Frames"));
 
     {
-        const frame = bc.firstTarget().?.mainFrame() orelse unreachable;
+        const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
