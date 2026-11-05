@@ -527,15 +527,13 @@ fn visitNode(
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Not just the element's own display: a slotted element inherits
-        // from its slot, which this light-tree walk never visits.
+        // from its slot, which this light-tree walk never visits. The
+        // cascade applies the UA `[hidden]` fallback, so an author
+        // `display` rule wins over the attribute.
         switch (self.frame._style_manager.rendering(el)) {
             .none => return,
             .invisible => invisible = true,
             .visible => {},
-        }
-
-        if (el.is(Element.Html)) |html_el| {
-            if (html_el.getHidden()) return;
         }
     } else if (node.is(CData.Text)) |text_node| {
         if (parent_invisible or controls_only) return;
@@ -1368,6 +1366,30 @@ test "SemanticTree: visibility:hidden drops the element, not a visible descendan
         try testing.expect(std.mem.find(u8, text, "Shown again") != null);
         try testing.expect(std.mem.find(u8, text, "Page content") != null);
     }
+}
+
+test "SemanticTree: the cascade decides whether `hidden` hides, not the raw attribute" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/hidden_cascade.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try st.textStringify(&aw.writer);
+    const text = aw.written();
+
+    // The UA stylesheet's `[hidden] { display: none }` fallback loses to the
+    // author rule `#card { display: grid }`, so the card renders — innerText
+    // shows it, and the tree has to show it too.
+    try testing.expect(std.mem.find(u8, text, "Card Link") != null);
+    // Without an author display rule the fallback still cuts the subtree.
+    try testing.expect(std.mem.find(u8, text, "Plain hidden") == null);
+    try testing.expect(std.mem.find(u8, text, "Page content") != null);
 }
 
 test "SemanticTree: deep nesting doesn't overflow the native stack" {

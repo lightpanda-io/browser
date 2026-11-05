@@ -94,7 +94,7 @@ _exec_command_settings: exec_command.Settings = .{},
 _design_mode: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
-// extent() cache, keyed on style version and viewport.
+// extent() cache, keyed on layout version and viewport.
 _extent: ?struct {
     version: usize,
     viewport_width: u32,
@@ -401,7 +401,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     const options = options_ orelse return element;
     if (options.is) |is_value| {
         try element.setAttribute(comptime .wrap("is"), .wrap(is_value), frame);
-        try Element.Html.Custom.checkAndAttachBuiltIn(element, frame);
+        try Element.Html.Custom.initBuiltIn(element, frame);
     }
 
     return element;
@@ -498,7 +498,7 @@ pub const Extent = struct { width: f64, height: f64 };
 /// size.
 pub fn extent(self: *Document) Extent {
     const frame = self._frame orelse return .{ .width = 0, .height = 0 };
-    const version = frame.page.style_version;
+    const version = frame._style_manager.layoutVersion();
     const viewport = frame.page.getViewport();
     if (self._extent) |cached| {
         if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
@@ -658,11 +658,6 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
         if (std.mem.eql(u8, normalized, "keyboardevent")) {
             const KeyboardEvent = @import("event/KeyboardEvent.zig");
             break :blk (try KeyboardEvent.init("", null, frame)).asEvent();
-        }
-
-        if (std.mem.eql(u8, normalized, "inputevent")) {
-            const InputEvent = @import("event/InputEvent.zig");
-            break :blk (try InputEvent.init("", null, frame)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
@@ -2053,8 +2048,8 @@ pub const JsApi = struct {
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});
     pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});
-    pub const createElement = bridge.function(Document.createElement, .{});
-    pub const createElementNS = bridge.function(Document.createElementNS, .{});
+    pub const createElement = bridge.function(Document.createElement, .{ .ce_reactions = true });
+    pub const createElementNS = bridge.function(Document.createElementNS, .{ .ce_reactions = true });
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});

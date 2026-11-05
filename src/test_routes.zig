@@ -33,6 +33,10 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
+// /auth/proxy/*: a proxy retry carries nothing the origin can see, so this
+// tells the challenge (first request) from the retry (second).
+var auth_proxy_challenged = std.atomic.Value(bool).init(false);
+
 /// A `/src/browser/tests/` load with `held=1` in its query waits while this is
 /// set, so a test can keep a load in flight exactly as long as it needs.
 pub var hold_loads = std.atomic.Value(bool).init(false);
@@ -145,6 +149,7 @@ pub fn handle(req: *std.http.Server.Request) !void {
         cache_set_cookie_count = 0;
         sse_flag.store(false, .release);
         sse_reconnect_hits.store(0, .release);
+        auth_proxy_challenged.store(false, .release);
         {
             beacon_mutex.lockUncancelable(lp.io);
             defer beacon_mutex.unlock(lp.io);
@@ -316,6 +321,27 @@ pub fn handle(req: *std.http.Server.Request) !void {
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Location", .value = location },
+            },
+        });
+    }
+
+    // The way back from /redirect-cross-origin/: to the same path on 127.0.0.1.
+    if (std.mem.startsWith(u8, path, "/redirect-127/")) {
+        var location_buf: [1024]u8 = undefined;
+        const location = try std.mem.print(&location_buf, "http://127.0.0.1:9582/{s}", .{path["/redirect-127/".len..]});
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = location },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/set-cookie-lax")) {
+        return req.respond("<p>lax", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Set-Cookie", .value = "xsite_redirect_lax=1; SameSite=Lax" },
             },
         });
     }
@@ -502,6 +528,50 @@ pub fn handle(req: *std.http.Server.Request) !void {
                 .{ .name = "WWW-Authenticate", .value = "Basic realm=\"test\"" },
             },
         });
+    }
+
+    // /auth/{server,proxy}/{same,cross}: challenges the first request (401
+    // or 407), then redirects the retry to /echo-authorization on this host
+    // (same) or the other loopback host (cross).
+    if (std.mem.startsWith(u8, path, "/auth/")) {
+        const rest = path["/auth/".len..];
+        const proxy = std.mem.startsWith(u8, rest, "proxy/");
+        const challenge = if (proxy) !auth_proxy_challenged.swap(true, .acq_rel) else blk: {
+            var it = req.iterateHeaders();
+            while (it.next()) |header| {
+                if (std.ascii.eqlIgnoreCase(header.name, "authorization")) break :blk false;
+            }
+            break :blk true;
+        };
+        if (challenge) {
+            return req.respond("No", .{
+                .status = if (proxy) .proxy_auth_required else .unauthorized,
+                .extra_headers = &.{
+                    .{ .name = if (proxy) "Proxy-Authenticate" else "WWW-Authenticate", .value = "Basic realm=\"test\"" },
+                },
+            });
+        }
+        if (proxy) auth_proxy_challenged.store(false, .release);
+        const host = if (std.mem.endsWith(u8, rest, "/cross")) "localhost" else "127.0.0.1";
+        var location_buf: [64]u8 = undefined;
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = try std.mem.print(&location_buf, "http://{s}:9582/echo-authorization", .{host}) },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/echo-authorization")) {
+        var it = req.iterateHeaders();
+        var value: []const u8 = "NONE";
+        while (it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "authorization")) {
+                value = header.value;
+                break;
+            }
+        }
+        return req.respond(value, .{});
     }
 
     if (std.mem.eql(u8, path, "/xhr/500")) {

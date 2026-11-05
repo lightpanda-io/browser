@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=default>
@@ -28,7 +29,8 @@
   });
 
   testing.expectEqual(true, event.getModifierState("Alt"));
-  testing.expectEqual(true, event.getModifierState("AltGraph"));
+  // altKey doesn't set AltGraph.
+  testing.expectEqual(false, event.getModifierState("AltGraph"));
   testing.expectEqual(true, event.getModifierState("Control"));
   testing.expectEqual(true, event.getModifierState("Shift"));
   testing.expectEqual(true, event.getModifierState("Meta"));
@@ -169,7 +171,9 @@
     testing.expectEqual('keyup', evt.type);
     testing.expectEqual(true, evt.bubbles);
     testing.expectEqual(true, evt.cancelable);
-    testing.expectEqual('q', evt.key);
+    testing.diverges('Chrome ignores the key argument', () => {
+      testing.expectEqual('q', evt.key);
+    });
     testing.expectEqual(1, evt.location);
     testing.expectEqual(true, evt.ctrlKey);
     testing.expectEqual(false, evt.altKey);
@@ -185,7 +189,9 @@
     testing.expectEqual('foo', evt.type);
     testing.expectEqual(false, evt.bubbles);
     testing.expectEqual(false, evt.cancelable);
-    testing.expectEqual('', evt.key);
+    testing.diverges('Chrome ignores the key argument', () => {
+      testing.expectEqual('', evt.key);
+    });
     testing.expectEqual(0, evt.location);
   }
 </script>

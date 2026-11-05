@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=noNata>
@@ -67,7 +68,9 @@
     testing.expectEqual('compositionend', evt.type);
     testing.expectEqual(false, evt.bubbles);
     testing.expectEqual(false, evt.cancelable);
-    testing.expectEqual('', evt.data);
+    testing.diverges('Chrome has no "" default for dataArg: a missing one is "undefined"', () => {
+      testing.expectEqual('', evt.data);
+    });
   }
 </script>
 

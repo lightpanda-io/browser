@@ -1027,10 +1027,23 @@ pub const Jar = struct {
     }
 
     pub fn populateFromResponse(self: *Jar, url: [:0]const u8, set_cookie: []const u8) !void {
+        return self.populateFromResponseInContext(url, set_cookie, true);
+    }
+
+    // `same_site` is true when the response is to a same-site request or a
+    // top-level navigation.
+    pub fn populateFromResponseInContext(self: *Jar, url: [:0]const u8, set_cookie: []const u8, same_site: bool) !void {
         const c = Cookie.parse(self.allocator, url, set_cookie) catch |err| {
             log.debug(.frame, "cookie parse failed", .{ .raw = set_cookie, .err = err });
             return;
         };
+
+        if (same_site == false and c.same_site != .none) {
+            // Cookies that aren't on the same site must have SameSite=None
+            log.debug(.frame, "cross-site cookie ignored", .{ .name = c.name, .same_site = c.same_site });
+            c.deinit();
+            return;
+        }
 
         const now = lp.datetime.timestamp(.real);
         try self.addFromUrl(url, c, now, true);

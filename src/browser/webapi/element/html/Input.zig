@@ -507,8 +507,57 @@ pub fn suffersStepMismatch(self: *const Input) bool {
 /// magnitudes, so float error in a large value with a fractional step is not a mismatch.
 fn offStep(value: f64, base: f64, step: f64) bool {
     const rungs = (value - base) / step;
-    const tolerance = @max(1e-9, 4 * std.math.floatEps(f64) * (@abs(value) + @abs(base)) / step);
-    return @abs(rungs - @round(rungs)) > tolerance;
+    return @abs(rungs - @round(rungs)) > rungTolerance(value, base, step);
+}
+
+fn rungTolerance(value: f64, base: f64, step: f64) f64 {
+    return @max(1e-9, 4 * std.math.floatEps(f64) * (@abs(value) + @abs(base)) / step);
+}
+
+/// The index k of a rung base + k*step for `value`. A value within float
+/// tolerance of a rung is on it; `.nearest` breaks ties upward.
+fn rungOf(value: f64, base: f64, step: f64, mode: enum { floor, ceil, nearest }) f64 {
+    const rungs = (value - base) / step;
+    const tolerance = rungTolerance(value, base, step);
+    const near = @round(rungs);
+    if (@abs(rungs - near) <= tolerance) return near;
+    return switch (mode) {
+        .floor => @floor(rungs),
+        .ceil => @ceil(rungs),
+        .nearest => @floor(rungs + 0.5 + tolerance),
+    };
+}
+
+/// base + rung*step, rounded to the decimal places of base and step. Browsers
+/// do this math in decimal; in f64, 0.2 + 0.1 would serialize as 0.30000000000000004.
+fn rungValue(base: f64, step: f64, rung: f64) f64 {
+    const value = base + rung * step;
+    const places = @max(decimalPlaces(base), decimalPlaces(step));
+    if (places >= pow10.len) return value;
+    const scaled = value * pow10[places];
+    // Beyond 2^53 the f64 has no fractional precision left to fix.
+    if (@abs(scaled) >= 1 << 53) return value;
+    return @round(scaled) / pow10[places];
+}
+
+// Every power up to 10^22 is exact in f64.
+const pow10 = blk: {
+    var table: [23]f64 = undefined;
+    var p: f64 = 1;
+    for (&table) |*t| {
+        t.* = p;
+        p *= 10;
+    }
+    break :blk table;
+};
+
+/// Digits after the point in the shortest round-trip decimal form of `x`.
+fn decimalPlaces(x: f64) usize {
+    // {d} writes every digit: up to ~330 chars for f64's extremes.
+    var buf: [400]u8 = undefined;
+    const str = std.fmt.bufPrint(&buf, "{d}", .{x}) catch return 0;
+    const dot = std.mem.findScalar(u8, str, '.') orelse return 0;
+    return str.len - dot - 1;
 }
 
 fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overflow }) bool {
@@ -1029,19 +1078,17 @@ fn stepBy(self: *Input, n: i32, frame: *Frame) !void {
     const before = valueToNumber(typ, current) orelse 0;
     if (n == 0) return;
     const base = self.stepBase();
-    const rungs = (before - base) / step;
     const steps: f64 = @floatFromInt(n);
-    var value = if (offStep(before, base, step))
-        // Off the ladder: the snap to the next rung counts as the first step
-        // (what browsers do; the spec text ignores n here).
-        base + (if (n < 0) @floor(rungs) + steps + 1 else @ceil(rungs) + steps - 1) * step
-    else
-        before + steps * step;
+    // Off the ladder, the snap to the next rung counts as the first step (what
+    // browsers do; the spec text ignores n here).
+    var rung = rungOf(before, base, step, if (n < 0) .floor else .ceil) + steps;
+    if (offStep(before, base, step)) rung -= std.math.sign(steps);
+    var value = rungValue(base, step, rung);
     if (valueToNumber(typ, self.getMin())) |min| {
-        if (value < min) value = base + @ceil((min - base) / step - 1e-9) * step;
+        if (value < min) value = rungValue(base, step, rungOf(min, base, step, .ceil));
     }
     if (valueToNumber(typ, self.getMax())) |max| {
-        if (value > max) value = base + @floor((max - base) / step + 1e-9) * step;
+        if (value > max) value = rungValue(base, step, rungOf(max, base, step, .floor));
     }
     // Clamping never moves against the direction of travel.
     if ((n < 0 and value > before) or (n > 0 and value < before)) return;
@@ -1494,19 +1541,9 @@ fn snapToStep(value: f64, min: f64, max: f64, step_base: f64, step_attr: []const
         break :blk 1;
     };
 
-    const diff = (value - step_base) / step;
-    const n_floor = @floor(diff);
-    const n_ceil = @ceil(diff);
-    const n: f64 = if (n_floor == n_ceil) n_floor else blk: {
-        const dist_floor = diff - n_floor;
-        const dist_ceil = n_ceil - diff;
-        if (dist_ceil < dist_floor) break :blk n_ceil;
-        if (dist_floor < dist_ceil) break :blk n_floor;
-        break :blk n_ceil; // tie -> round up
-    };
-
-    var candidate = step_base + n * step;
-    if (candidate > max) candidate = step_base + (n - 1) * step;
+    const n = rungOf(value, step_base, step, .nearest);
+    var candidate = rungValue(step_base, step, n);
+    if (candidate > max) candidate = rungValue(step_base, step, n - 1);
     if (candidate < min) return value; // no valid rung in range; leave clamped value
     return candidate;
 }

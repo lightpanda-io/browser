@@ -25,6 +25,7 @@ threadlocal var current_page: ?*PageContext = null;
 
 pub const Scope = enum {
     app,
+    attribution,
     bidi,
     browser,
     bug,

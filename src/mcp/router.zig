@@ -98,7 +98,7 @@ fn enqueue(allocator: std.mem.Allocator, queue: *MessageQueue, line: []const u8)
 
 /// The `requestId` if `line` is a `notifications/cancelled`, borrowing
 /// `arena`.
-fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Value {
+pub fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Value {
     // Skip the JSON scan for the (large) tool calls streaming past.
     if (std.mem.find(u8, line, "notifications/cancelled") == null) return null;
     const Peek = struct {
@@ -120,6 +120,7 @@ const Method = enum {
     @"tools/call",
     @"resources/list",
     @"resources/read",
+    @"logging/setLevel",
 };
 
 const method_map = std.StaticStringMap(Method).initComptime(.{
@@ -130,6 +131,7 @@ const method_map = std.StaticStringMap(Method).initComptime(.{
     .{ "tools/call", .@"tools/call" },
     .{ "resources/list", .@"resources/list" },
     .{ "resources/read", .@"resources/read" },
+    .{ "logging/setLevel", .@"logging/setLevel" },
 });
 
 pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8) !void {
@@ -156,6 +158,7 @@ pub fn handleMessage(server: anytype, arena: std.mem.Allocator, msg: []const u8)
         .@"tools/call" => try server.handleToolCall(arena, req),
         .@"resources/list" => try handleOptional(server, req, "handleResourceList", .{req}),
         .@"resources/read" => try handleOptional(server, req, "handleResourceRead", .{ arena, req }),
+        .@"logging/setLevel" => try handleOptional(server, req, "handleSetLogLevel", .{ arena, req }),
     }
 }
 

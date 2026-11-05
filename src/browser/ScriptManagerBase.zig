@@ -639,6 +639,10 @@ pub const Script = struct {
     // getAsyncImport replacing .import with .import_async) can't lose it.
     hint_element: ?*Element.Html = null,
 
+    // The script is attributed to the request that fetched it. Null for inline
+    // scripts
+    request_task: ?js.Attribution.Tag = null,
+
     // for debugging a rare production issue
     header_callback_called: bool = false,
 
@@ -760,6 +764,7 @@ pub const Script = struct {
     pub fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
         const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
 
+        self.request_task = transfer._task;
         self.status = transfer.responseStatus().?;
         self.manager.owner.pageStatus().noteResponse(.script, transfer);
         if (transfer.responseStatus() != 200) {
@@ -937,6 +942,11 @@ pub const Script = struct {
         defer ls.deinit();
 
         const local = &ls.local;
+
+        const attribution = frame.js.attribution;
+        const task = attribution.begin(.script, .{ .label = url, .parent = self.request_task orelse attribution.current() });
+        const task_scope = attribution.enter(task);
+        defer task_scope.exit();
 
         // Per spec, trigger any microtasks BEFORE execution in case the parser
         // (e.g. via event callbacks) queued anything. Only at a microtask

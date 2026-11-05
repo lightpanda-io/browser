@@ -155,6 +155,9 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
                 if (frame._notified_network_idle.check(total_network_activity == 0)) {
                     try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
                 }
+                if (frame.checkSettled()) {
+                    try sendPageLifecycle(bc, "settled", now, frame_id, loader_id);
+                }
             }
         },
     }
@@ -973,6 +976,12 @@ pub fn frameNetworkAlmostIdle(bc: *CDP.BrowserContext, event: *const Notificatio
     return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
 }
 
+// Puppeteer and Playwright ignore names they don't know, so it is harmless to
+// them and useful through a raw CDP session.
+pub fn frameSettled(bc: *CDP.BrowserContext, event: *const Notification.FrameSettled) !void {
+    return sendPageLifecycle(bc, "settled", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.loader_id));
+}
+
 fn sendPageLifecycle(bc: *CDP.BrowserContext, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
@@ -1734,6 +1743,56 @@ test "cdp.page: setLifecycleEventsEnabled reports the initial about:blank as loa
     try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "DOMContentLoaded", .frameId = bc.target_id.? }, .{ .session_id = session_id });
     try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "load", .frameId = bc.target_id.? }, .{ .session_id = session_id });
     try testing.expectEqual(.waiting, bc.mainFrame().?._load_state);
+}
+
+test "cdp.page: lifecycle settled follows load once the page's tracked work is done" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+    try ctx.processMessage(.{ .id = 3, .method = "Page.setLifecycleEventsEnabled", .sessionId = session_id, .params = .{ .enabled = true } });
+
+    // Its load handler fetches, yields, fetches again and renders #settled.
+    try ctx.processMessage(.{ .id = 4, .method = "Page.navigate", .sessionId = session_id, .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/runner/settled.html",
+    } });
+    try ctx.processMessage(.{ .id = 5, .method = "LP.waitUntil", .sessionId = session_id, .params = .{ .until = "settled", .timeout = 3000 } });
+    try ctx.expectSentResult(null, .{ .id = 5, .session_id = session_id });
+
+    try ctx.expectSentEvent("Page.lifecycleEvent", .{ .name = "settled", .frameId = bc.target_id.? }, .{ .session_id = session_id });
+    try testing.expect(try lastLifecycleIndex(&ctx, "load") < try lastLifecycleIndex(&ctx, "settled"));
+    try testing.expect(bc.mainFrame().?.document.getElementById("settled") != null);
+
+    // Once per document: re-enabling doesn't replay it.
+    const before = try lifecycleCount(&ctx, "settled");
+    try ctx.processMessage(.{ .id = 6, .method = "Page.setLifecycleEventsEnabled", .sessionId = session_id, .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 6, .session_id = session_id });
+    try testing.expectEqual(before, try lifecycleCount(&ctx, "settled"));
+}
+
+fn lastLifecycleIndex(ctx: *testing.TestContext, name: []const u8) !usize {
+    var found: ?usize = null;
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |m| : (i += 1) {
+        const method = m.object.get("method") orelse continue;
+        if (!std.mem.eql(u8, method.string, "Page.lifecycleEvent")) continue;
+        if (std.mem.eql(u8, m.object.get("params").?.object.get("name").?.string, name)) found = i;
+    }
+    return found orelse error.MissingLifecycleEvent;
+}
+
+fn lifecycleCount(ctx: *testing.TestContext, name: []const u8) !usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |m| : (i += 1) {
+        const method = m.object.get("method") orelse continue;
+        if (!std.mem.eql(u8, method.string, "Page.lifecycleEvent")) continue;
+        if (std.mem.eql(u8, m.object.get("params").?.object.get("name").?.string, name)) count += 1;
+    }
+    return count;
 }
 
 // puppeteer: the utility world is created on the bootstrap about:blank and

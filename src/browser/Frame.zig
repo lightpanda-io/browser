@@ -143,6 +143,9 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
+// Held while a dispatch of queued events is pending.
+_queued_events_hold: JS.Attribution.Hold = .{},
+
 _image_decodes: Element.Html.Image.Decodes = .{},
 
 _focus_fixup_pending: bool = false,
@@ -206,6 +209,9 @@ _custom_element_creation: union(enum) {
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .empty,
 
+// Keyed by the "is" value at creation: a later change to the attribute doesn't count.
+_undefined_builtins: std.AutoArrayHashMapUnmanaged(*Element, []const u8) = .empty,
+
 // Every form-associated custom element in this frame (usually none)
 _form_associated: std.ArrayList(*Element.Html.Custom) = .empty,
 
@@ -232,6 +238,7 @@ _last_navigate_error: ?anyerror = null,
 
 _notified_network_idle: IdleNotification = .init,
 _notified_network_almost_idle: IdleNotification = .init,
+_notified_settled: bool = false,
 
 // A navigation event that happens from a script gets scheduled to run on the
 // next tick.
@@ -928,9 +935,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .throttle = self.parent == null,
         .origin = self.origin,
         .initiator_origin = opts.initiator_origin,
-        // Our own url is already the destination, so the owner's site for
-        // cookies would say "same-site" for any top-level navigation.
-        .cookie_origin = opts.initiator_url,
+        // Our own url is already the destination, so our owner's site for
+        // cookies would judge the request against itself.
+        .cookie_origin = if (self.parent) |parent| parent._http_owner.siteForCookies() else opts.initiator_url,
         .resource_type = .document,
         .request_mode = .navigate,
         .credentials_mode = .include,
@@ -2561,6 +2568,7 @@ pub const QueuedEvent = struct {
     kind: Kind,
     element: *Element.Html,
     generation: u32 = 0, // Image/Link request generation
+    task: ?JS.Attribution.Tag = null,
 
     pub const Kind = enum { load, @"error", select, selectionchange, close };
 };
@@ -2585,7 +2593,9 @@ fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind
 }
 
 fn queueEvent(self: *Frame, event: QueuedEvent) !void {
-    try self._queued_events.append(self.page_arena, event);
+    var queued = event;
+    queued.task = self.js.attribution.current();
+    try self._queued_events.append(self.page_arena, queued);
     if (self._queued_events.items.len == 1) {
         try self.js.scheduler.add(self, struct {
             fn cleanup(ctx: *anyopaque) !?u32 {
@@ -2593,7 +2603,15 @@ fn queueEvent(self: *Frame, event: QueuedEvent) !void {
                 try f.dispatchQueuedEvents();
                 return null;
             }
-        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
+        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents", .finalizer = struct {
+            fn dropped(ctx: *anyopaque) void {
+                const f: *Frame = @ptrCast(@alignCast(ctx));
+                f._queued_events_hold.release();
+            }
+        }.dropped });
+    }
+    if (self._queued_events_hold.settle == null) {
+        self._queued_events_hold = self.page.settle.hold(queued.task);
     }
 }
 
@@ -2818,6 +2836,9 @@ fn fireElementEvent(self: *Frame, el: *Element, name: String, opts: Event.Option
 fn dispatchQueuedEvents(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
 
+    // Events queued during this dispatch take a new hold for the next one.
+    self._queued_events_hold.release();
+
     // Swap buffers - new additions during dispatch go to the other buffer
     const to_process = self._queued_events;
     self._queued_events = if (self._queued_events == &self._queued_events_1)
@@ -2840,6 +2861,9 @@ fn dispatchQueuedEvents(self: *Frame) !void {
                 continue;
             }
         }
+
+        const task_scope = self.js.attribution.enterNew(.event, .{ .parent = queued.task, .label = @tagName(queued.kind) });
+        defer task_scope.exit();
 
         const element = html_element.asElement();
         switch (queued.kind) {
@@ -2890,12 +2914,34 @@ pub fn checkIdleNotifications(self: *Frame, total_http_activity: usize) void {
             if (self._notified_network_idle.check(total_http_activity == 0)) {
                 self.notifyNetworkIdle();
             }
+            if (self.checkSettled()) {
+                self.notifySettled();
+            }
         },
         else => {},
     }
     for (self.child_frames.items) |child| {
         child.checkIdleNotifications(total_http_activity);
     }
+}
+
+// True the first time it is loaded with none of the page's tracked work pending.
+// Doesn't fire again, whether someone was listening the first time or not.
+pub fn checkSettled(self: *Frame) bool {
+    if (self._notified_settled or self._load_state != .complete or self.page.settle.pending != 0) {
+        return false;
+    }
+    self._notified_settled = true;
+    return true;
+}
+
+pub fn notifySettled(self: *Frame) void {
+    self._session.notification.dispatch(.frame_settled, &.{
+        .req_id = self._req_id,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .timestamp = lp.datetime.timestamp(.boot),
+    });
 }
 
 pub fn notifyNetworkIdle(self: *Frame) void {
@@ -4252,6 +4298,7 @@ test "WebApi: Frames" {
 }
 
 test "WebApi: Frames with iframe loading off" {
+    testing.silenceLog(&.{ .frame, .disabled });
     try testing.htmlRunner("frames/loading_off", .{ .load_resources = .{ .worker = true, .iframe = false } });
 }
 

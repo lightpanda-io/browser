@@ -41,6 +41,8 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         .classify => .{ .readOnlyHint = true, .destructiveHint = false },
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
+        // Listing is read-only, but `follow` makes a different window current.
+        .popups => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
         // Overwrite `path`.
         .screenshot, .download => .{ .idempotentHint = true },
@@ -124,7 +126,7 @@ pub const extra_tools = [_]McpTool{
         .name = "run",
         .title = "Run an agent script",
         .annotations = .{},
-        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. Pass the source as `script`, or the `path` of a file `save` wrote. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
+        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. Pass the source as `script`, or the `path` of a file `save` wrote. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. To read several URLs, make one `new Page()` per URL and `await Promise.all(pages.map((p, i) => p.goto(urls[i])))` so they load in parallel, then read each with `page.extract` or `page.evaluate`. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
         .inputSchema = run_schema,
     },
     .{
@@ -212,7 +214,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .source = .mcp }) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .page_tools_seen = &active.page_tools_seen, .source = .mcp }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -311,6 +313,25 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     return runScript(server, arena, script, args.path orelse "<mcp>", args.timeout orelse default_run_timeout_ms) catch .{ .fail = "out of memory" };
 }
 
+/// Streams each console line while the script runs, up to the cap the
+/// result's console output has.
+const ConsoleStream = struct {
+    server: *Server,
+    bytes: usize = 0,
+
+    fn observe(context: *anyopaque, method: lp.Runtime.ConsoleMethod, line: []const u8) void {
+        const self: *ConsoleStream = @ptrCast(@alignCast(context));
+        self.bytes += line.len + 1;
+        if (self.bytes > max_run_console_bytes) return;
+        self.server.reportConsoleLine(switch (method) {
+            .debug => .debug,
+            .info, .log => .info,
+            .warn => .warning,
+            .@"error" => .@"error",
+        }, line);
+    }
+};
+
 fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, name: []const u8, timeout_ms: u32) error{OutOfMemory}!ExtraResult {
     const active = server.active_session;
     const session = active.session;
@@ -328,6 +349,8 @@ fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, name
     var console: std.Io.Writer.Allocating = .init(arena);
     var capped: lp.LimitedWriter = .init(&console.writer, max_run_console_bytes);
     runtime.console_sink = &capped.writer;
+    var stream: ConsoleStream = .{ .server = server };
+    runtime.console_observer = .{ .context = &stream, .notify = ConsoleStream.observe };
     // Separate from the console so the cap can't drop it.
     var returned: std.Io.Writer.Allocating = .init(arena);
     runtime.result_sink = &returned.writer;
@@ -780,6 +803,12 @@ test "MCP - callPageTool returns the WebMCP tool's text content" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/webmcp/page_tools.html", &out.writer);
     defer server.deinit();
 
+    // Shows the tools, so the call's result doesn't open with them.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"pageTools"}}
+    );
+    out.clearRetainingCapacity();
+
     const msg =
         \\{
         \\  "jsonrpc": "2.0",
@@ -919,6 +948,156 @@ test "MCP - submitting a target=_blank form follows the new window" {
     ;
     try router.handleMessage(server, testing.arena_allocator, click);
     try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?q=1") != null);
+}
+
+test "MCP - click follows a window opened by a timer" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#delayed" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+}
+
+test "MCP - click follows a window opened after a fetch" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#fetched" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?f=1") != null);
+}
+
+test "MCP - click with a late navigation reports the page it landed on" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    // The navigation commits during the late-popup watch; the result must
+    // describe the new page.
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#late_nav" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+    try testing.expect(std.mem.find(u8, out.written(), "mcp_async_popup.html") == null);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window") == null);
+}
+
+test "MCP - popups lists opened windows and follows one" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_async_popup.html", &out.writer);
+    defer server.deinit();
+
+    // The click auto-follows the first popup.
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#sync" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.find(u8, out.written(), "Opened a new window; tools now act on it.") != null);
+
+    // A second window.open, from the followed popup: evaluate settles
+    // nothing, so the window is only visible through popups.
+    out.clearRetainingCapacity();
+    const open_second =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "evaluate",
+        \\    "arguments": { "script": "return window.open('mcp_actions.html?q=2', 'second') != null;" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, open_second);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+
+    out.clearRetainingCapacity();
+    const list =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "popups", "arguments": {} }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, list);
+    const Entry = struct { id: u32, url: []const u8, title: ?[]const u8, popup: bool, current: bool };
+    const text = try testToolText(testing.arena_allocator, out.written());
+    const entries = try std.json.parseFromSliceLeaky([]Entry, testing.arena_allocator, text, .{});
+    try testing.expectEqual(@as(usize, 3), entries.len);
+    try testing.expect(std.mem.endsWith(u8, entries[0].url, "mcp_async_popup.html"));
+    try testing.expectEqual(false, entries[0].popup);
+    try testing.expect(std.mem.endsWith(u8, entries[1].url, "mcp_actions.html"));
+    try testing.expectEqual(true, entries[1].current);
+    try testing.expect(std.mem.endsWith(u8, entries[2].url, "mcp_actions.html?q=2"));
+    try testing.expectEqual(false, entries[2].current);
+    const second_id = entries[2].id;
+    const root_id = entries[0].id;
+
+    out.clearRetainingCapacity();
+    const follow = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{second_id});
+    try router.handleMessage(server, testing.arena_allocator, follow);
+    try testing.expect(std.mem.find(u8, out.written(), "\"isError\":false") != null);
+
+    const get_url =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 5,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "getUrl", "arguments": {} }
+        \\}
+    ;
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expect(std.mem.find(u8, out.written(), "mcp_actions.html?q=2") != null);
+
+    out.clearRetainingCapacity();
+    const back = try testing.arena_allocator.print("{{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{{\"name\":\"popups\",\"arguments\":{{\"follow\":{d}}}}}}}", .{root_id});
+    try router.handleMessage(server, testing.arena_allocator, back);
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expect(std.mem.find(u8, out.written(), "mcp_async_popup.html") != null);
 }
 
 test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
@@ -1454,12 +1633,44 @@ test "MCP - run: a script drives the session and returns its output" {
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('btn:', page.evaluate(\"document.getElementById('btn').textContent\"));\nreturn page.extract({ btn: '#btn' });"}}}
     );
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    try testing.expectJson(.{
+        .method = "notifications/message",
+        .params = .{ .level = "info", .logger = "console", .data = "btn: Click Me" },
+    }, lines.next().?);
     try testing.expectJson(.{ .id = 1, .result = .{
         .isError = false,
         .content = &.{.{ .type = "text", .text = "btn: Click Me\n{\"btn\":\"Click Me\"}\n" }},
-    } }, out.written());
+    } }, lines.next().?);
+    try testing.expectEqual("", lines.rest());
 
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
+}
+
+test "MCP - run: logging/setLevel filters console notifications" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"verbose"}}
+    );
+    try testing.expectJson(.{ .id = 1, .@"error" = .{ .code = -32602 } }, out.written());
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"logging/setLevel","params":{"level":"warning"}}
+    );
+    try testing.expectJson("{\"id\":2,\"result\":{}}", out.written());
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"script":"console.log('quiet');\nconsole.error('loud');"}}}
+    );
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    try testing.expectJson(.{ .method = "notifications/message", .params = .{ .level = "error", .data = "loud" } }, lines.next().?);
+    try testing.expectEqual("quiet\nloud\n", try testToolText(aa, lines.next().?));
 }
 
 test "MCP - run: closes the pages it opened, keeps cookies and earlier pages" {
@@ -2570,12 +2781,20 @@ test "MCP - sessions: refused without a directory (stdio)" {
     try testing.expect(std.mem.find(u8, out.written(), "require the HTTP transport") != null);
 }
 
-/// The text of a tools/call result, which tools like findElement fill with JSON.
-fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
+/// The text of the tools/call result ending `output`, after any
+/// notifications; tools like findElement fill it with JSON.
+fn testToolText(arena: std.mem.Allocator, output: []const u8) ![]const u8 {
+    const response = testLastLine(output);
     const Response = struct { result: struct { content: []const struct { text: []const u8 } } };
     const parsed = try std.json.parseFromSliceLeaky(Response, arena, response, .{ .ignore_unknown_fields = true });
     try testing.expectEqual(1, parsed.result.content.len);
     return parsed.result.content[0].text;
+}
+
+fn testLastLine(output: []const u8) []const u8 {
+    const trimmed = std.mem.trimEnd(u8, output, "\n");
+    const start = if (std.mem.findScalarLast(u8, trimmed, '\n')) |i| i + 1 else 0;
+    return trimmed[start..];
 }
 
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {

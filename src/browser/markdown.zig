@@ -1021,18 +1021,23 @@ test "browser.markdown: anchor without href is plain text" {
     , "");
 }
 
-test "browser.markdown: hidden elements are skipped" {
+test "browser.markdown: inline aria-hidden is cut, block containers kept" {
     try testMarkdownHTML(
         \\<p>before</p>
         \\<p style="display:none">inline</p>
         \\<div hidden><p>attribute</p></div>
         \\<p aria-hidden="true">aria</p>
         \\<span aria-hidden="TRUE">aria caps</span>
+        \\<span style="display:inline-block" aria-hidden="true">icon lig</span>
+        \\<div aria-hidden="true"><span>kept child</span></div>
         \\<p aria-hidden="false">aria false</p>
         \\<details><summary>Summary</summary><p>collapsed</p></details><dialog><p>closed dialog</p></dialog><p>after</p>
     ,
         \\
         \\before
+        \\
+        \\aria
+        \\kept child
         \\
         \\aria false
         \\Summary
@@ -1040,6 +1045,56 @@ test "browser.markdown: hidden elements are skipped" {
         \\after
         \\
     );
+}
+
+test "browser.markdown: inline aria-hidden holding a block is kept" {
+    try testMarkdownHTML(
+        \\<x-root aria-hidden="true"><h1>Shop</h1></x-root>
+        \\<x-root aria-hidden="true"><x-page><p>nested</p></x-page></x-root>
+        \\<span aria-hidden="true"><div>wrapped</div></span>
+    ,
+        \\
+        \\# Shop
+        \\
+        \\nested
+        \\wrapped
+        \\
+    );
+}
+
+test "browser.markdown: inline aria-hidden with no rendered block is cut" {
+    try testMarkdownHTML(
+        \\<p>before</p>
+        \\<span aria-hidden="true"><div style="display:none">hidden block</div>icon</span>
+        \\<span aria-hidden="true"><svg><foreignObject><div>in svg</div></foreignObject></svg>glyph</span>
+        \\<span aria-hidden="true"><b>nested</b> inline</span>
+        \\<p>after</p>
+    ,
+        \\
+        \\before
+        \\
+        \\after
+        \\
+    );
+}
+
+test "browser.markdown: inline aria-hidden shadow host follows its flat tree" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const host = try doc.createElement("div", null, frame);
+    try host.setHTMLUnsafe(
+        \\<x-app aria-hidden="true"><template shadowrootmode="open"><p>shadow block</p></template></x-app>
+        \\<x-icon aria-hidden="true"><template shadowrootmode="open"><span>star</span></template></x-icon>
+    , null, frame);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(.{ .root = host.asNode() }, .{}, &aw.writer, frame);
+
+    try testing.expectString("\nshadow block\n", aw.written());
 }
 
 test "browser.markdown: stylesheet display:none is skipped" {

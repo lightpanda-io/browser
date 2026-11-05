@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <meta charset="UTF-8">
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=TextEncoder>
@@ -190,11 +191,13 @@
     testing.expectEqual(0, res.written);
 
     // [AllowShared]: a SharedArrayBuffer-backed view is written like any other.
-    const shared = new Uint8Array(new SharedArrayBuffer(4));
-    res = encoder.encodeInto('ab', shared);
-    testing.expectEqual(2, res.read);
-    testing.expectEqual(2, res.written);
-    testing.expectEqual([97, 98, 0, 0], Array.from(shared));
+    testing.diverges('Chrome lacks [AllowShared] on encodeInto: TypeError "must not be shared"', () => {
+      const shared = new Uint8Array(new SharedArrayBuffer(4));
+      res = encoder.encodeInto('ab', shared);
+      testing.expectEqual(2, res.read);
+      testing.expectEqual(2, res.written);
+      testing.expectEqual([97, 98, 0, 0], Array.from(shared));
+    });
   }
 </script>
 
@@ -288,24 +291,32 @@
   {
     const encoder = new TextEncoder();
 
+    // Chrome follows WebIDL: the destination has no [AllowResizable], so a
+    // view over a resizable buffer is a TypeError. We accept it.
+    const reason = 'Chrome throws TypeError for a view over a resizable buffer';
+
     // A length-tracking view over a resizable buffer uses its current length.
-    const growable = new ArrayBuffer(2, { maxByteLength: 8 });
-    const tracking = new Uint8Array(growable);
-    growable.resize(6);
-    let res = encoder.encodeInto('abcdefgh', tracking);
-    testing.expectEqual(6, res.read);
-    testing.expectEqual(6, res.written);
-    testing.expectEqual([97, 98, 99, 100, 101, 102], Array.from(tracking));
+    testing.diverges(reason, () => {
+      const growable = new ArrayBuffer(2, { maxByteLength: 8 });
+      const tracking = new Uint8Array(growable);
+      growable.resize(6);
+      const res = encoder.encodeInto('abcdefgh', tracking);
+      testing.expectEqual(6, res.read);
+      testing.expectEqual(6, res.written);
+      testing.expectEqual([97, 98, 99, 100, 101, 102], Array.from(tracking));
+    });
 
     // A fixed-length view the buffer shrank out from under is out of bounds,
     // so it has no room.
-    const shrinkable = new ArrayBuffer(8, { maxByteLength: 8 });
-    const fixed = new Uint8Array(shrinkable, 0, 6);
-    shrinkable.resize(4);
-    res = encoder.encodeInto('abc', fixed);
-    testing.expectEqual(0, res.read);
-    testing.expectEqual(0, res.written);
-    testing.expectEqual([0, 0, 0, 0], Array.from(new Uint8Array(shrinkable)));
+    testing.diverges(reason, () => {
+      const shrinkable = new ArrayBuffer(8, { maxByteLength: 8 });
+      const fixed = new Uint8Array(shrinkable, 0, 6);
+      shrinkable.resize(4);
+      const res = encoder.encodeInto('abc', fixed);
+      testing.expectEqual(0, res.read);
+      testing.expectEqual(0, res.written);
+      testing.expectEqual([0, 0, 0, 0], Array.from(new Uint8Array(shrinkable)));
+    });
   }
 </script>
 

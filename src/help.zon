@@ -193,14 +193,26 @@
     \\          Wait for an element matching the CSS selector to appear. Checked after
     \\          --wait-until condition is met.
     \\  --wait-until <UNTIL>
-    \\          Wait until the specified event. Checked before other --wait-* options.
-    \\          Defaults to 'load'. If --wait-selector, --wait-script or
-    \\          --wait-script-file specified, defaults to none.
-    \\          Allowed values: "load", "domcontentloaded", "networkalmostidle",
-    \\          "networkidle", "done".
-    \\          'done' waits for full quiescence (no pending scripts or network);
-    \\          pages with constant background activity never reach it and run
-    \\          to --wait-ms.
+    \\          Wait until the specified event. Allowed values:
+    \\              domcontentloaded  The 'DOMContentLoaded' event. Often too early
+    \\                                for content to be reliably loaded. Pairs well
+    \\                                with another --wait-* (e.g. --wait-selector).
+    \\              done              Full quiescence, no pending scripts/network.
+    \\                                Polling, keepalive requests and telemetry can
+    \\                                hold it until --wait-ms.
+    \\              load              The 'load' event.
+    \\              networkalmostidle At most 2 requests in flight for the last
+    \\                                500ms.
+    \\              networkidle       No network activity for the last 500ms.
+    \\              settled           Experimental. Waits for load, then for the
+    \\                                requests and short timers that page-load work
+    \\                                started, ignoring intervals, long timeouts,
+    \\                                idle callbacks and WebSocket traffic.
+    \\                                Resolves at load when load started nothing.
+    \\          Defaults to 'load'.
+    \\          If --wait-selector, --wait-script or --wait-script-file is specified,
+    \\          this step is skipped unless explicitly specified. If both are
+    \\          specified, this step is run first.
     \\  --with-base
     \\          Add a <base> tag in dump.
     \\          Defaults to false.

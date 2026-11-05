@@ -41,7 +41,7 @@ primitive_data: [recorded_tool_count]PrimitiveData,
 console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// Notified before each `console.*` line is written. The REPL uses it to
 /// clear the live spinner so script output starts on a clean line instead
-/// of colliding with the indicator; the line still goes to stdout/stderr.
+/// of colliding with the indicator; MCP streams the line to the caller.
 console_observer: ?ConsoleObserver = null,
 /// When set, every console line writes here — stderr-bound methods included.
 console_sink: ?*std.Io.Writer = null,
@@ -114,7 +114,7 @@ const ConsoleData = struct {
 
 const ConsoleObserver = struct {
     context: *anyopaque,
-    notify: *const fn (context: *anyopaque) void,
+    notify: *const fn (context: *anyopaque, method: ConsoleMethod, line: []const u8) void,
 };
 
 const InitError = error{
@@ -781,7 +781,7 @@ fn invokeConsole(self: *Runtime, method: ConsoleMethod, info: *const v8.Function
 }
 
 fn writeConsoleLine(self: *Runtime, method: ConsoleMethod, line: []const u8) void {
-    if (self.console_observer) |obs| obs.notify(obs.context);
+    if (self.console_observer) |obs| obs.notify(obs.context, method, line);
     if (self.console_sink) |sink| {
         sink.print("{s}\n", .{line}) catch {};
         return;

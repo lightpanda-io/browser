@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<script>
+  // Neither holds settled: a long timeout and an interval (which keeps the
+  // network busy, so networkidle can't resolve either).
+  setTimeout(() => {}, 5000);
+  setInterval(() => fetch('/xhr/slow'), 50);
+
+  // A polling loop: a short timeout that re-arms itself. Past the nesting
+  // limit it's no longer tracked, nor is the fetch it starts every few rounds.
+  (function poll(n) {
+    if (n % 20 === 19) fetch('/xhr/slow');
+    setTimeout(() => poll(n + 1), 10);
+  })(0);
+
+  // Load work: fetch, yield, fetch again, then render.
+  window.addEventListener('load', () => {
+    fetch('/xhr/slow')
+      .then(() => new Promise(resolve => setTimeout(resolve, 0)))
+      .then(() => fetch('/xhr/slow'))
+      .then(() => {
+        const div = document.createElement('div');
+        div.id = 'settled';
+        document.body.appendChild(div);
+      });
+  });
+</script>

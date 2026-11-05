@@ -495,6 +495,18 @@ pub fn of(tool: Tool) Definition {
                 \\}
             ),
         },
+        .popups => .{
+            .description = "Windows the current page opened (`window.open` or target=_blank), main page first. A click that opens a window is followed automatically; a window opened late, after a fetch or a timer, lands here. `follow` makes that window current — subsequent tools act on it; pass the main page's id to switch back. Windows live until the page closes.",
+            .summary = "List windows the page opened, or switch to one",
+            .input_schema = minify(
+                \\{
+                \\  "type": "object",
+                \\  "properties": {
+                \\    "follow": { "type": "integer", "description": "Id from a previous popups call. Makes that window current for subsequent tool calls." }
+                \\  }
+                \\}
+            ),
+        },
         .download => .{
             .description = "Fetch a URL and save the response body to a local file, sending the session's cookies so authenticated sites work. The way to get a binary or large document (PDF, spreadsheet, archive) out of the browser. Nothing is saved unless the status is 200-203 (like Chrome), and a failed download leaves an existing file at `path` untouched. Requires a loaded page — it fails before the first `goto`.",
             .summary = "Fetch a URL with the session's cookies into a file",
@@ -510,7 +522,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .pageTools => .{
-            .description = "List the tools the current page registers for agents through WebMCP (`navigator.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Many pages register their tools after `load`: if the list is empty on a page you expect to have tools, call `waitForState` with `networkidle` and list again.",
+            .description = "List the tools the current page registers for agents through WebMCP (`navigator.modelContext.registerTool`), as JSON with each tool's `name`, `description`, `inputSchema` and hints. A page tool runs the site's own code and can be more reliable than driving its UI; call one with `callPageTool`. Other tool results already show the page's tools, with their schemas, whenever the set changes; call this to list them again. Many pages register their tools after `load`: on a page you expect to have tools, `waitForState` with `networkidle` gives them time.",
             .summary = "List the page's WebMCP tools",
             .input_schema = minify(
                 \\{ "type": "object", "properties": {} }

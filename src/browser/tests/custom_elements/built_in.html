@@ -184,3 +184,28 @@
     testing.expectEqual('BUTTON', btn.tagName);
 }
 </script>
+
+<button is="late-button"></button>
+<button is="late-button"></button>
+<button is="late-button"></button>
+<button is="late-button"></button>
+<script id="upgrade_ctor_calls_zig">
+{
+    // Each constructor re-enters Zig, which resets the per-call arena.
+    // The pending upgrade list must survive that.
+    let upgraded = 0;
+    class LateButton extends HTMLButtonElement {
+        constructor() {
+            super();
+            document.querySelectorAll('button[is]').length;
+            this.getAttribute('is');
+            upgraded++;
+        }
+    }
+    customElements.define('late-button', LateButton, { extends: 'button' });
+    testing.expectEqual(4, upgraded);
+    for (const btn of document.querySelectorAll('button[is="late-button"]')) {
+        testing.expectEqual(true, btn instanceof LateButton);
+    }
+}
+</script>

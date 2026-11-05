@@ -1545,7 +1545,7 @@ test "browser.screenshot: shadow dom and slots" {
     try testing.expectEqual("shadow light", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
 }
 
-test "browser.screenshot: hidden elements are skipped" {
+test "browser.screenshot: inline aria-hidden is cut, block containers kept" {
     defer testing.test_session.closeAllPages();
     const frame = try testing.createFrame();
     frame.url = "http://localhost/";
@@ -1557,10 +1557,12 @@ test "browser.screenshot: hidden elements are skipped" {
         \\<div hidden><p>attribute</p></div>
         \\<p aria-hidden="true">aria</p>
         \\<span aria-hidden="TRUE">aria caps</span>
+        \\<span style="display:inline-block" aria-hidden="true">icon lig</span>
+        \\<div aria-hidden="true"><span>kept child</span></div>
         \\<p aria-hidden="false">aria false</p>
         \\<details><summary>Summary</summary><p>collapsed</p></details><dialog><p>closed dialog</p></dialog><p>after</p>
     );
-    try testing.expectString("before\naria false\nSummary\nafter", try collectLines(div.asNode(), frame));
+    try testing.expectString("before\naria\nkept child\naria false\nSummary\nafter", try collectLines(div.asNode(), frame));
 
     // The root is exempt, so a shot scoped to a hidden subtree still renders it.
     const modal = try doc.createElement("div", null, frame);
