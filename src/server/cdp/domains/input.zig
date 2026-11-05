@@ -3988,15 +3988,42 @@ test "cdp.input: a cancelled keydown keeps Backspace from editing a host" {
     );
 }
 
-test "cdp.input: Backspace that would merge blocks leaves an editing host unchanged" {
-    // Chrome merges the paragraphs; we fire beforeinput and stop
+test "cdp.input: Backspace at the start of a block merges it into the one before" {
     try expectEditingHostInput(
         \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>one</p><p id="p">two</p></div>');
         \\const host = document.getElementById('host');
         \\host.focus();
         \\getSelection().collapse(document.getElementById('p').firstChild, 0);
     , backspace,
-        \\host.innerHTML === '<p>one</p><p id="p">two</p>' && window.types() === 'beforeinput:host'
+        \\host.innerHTML === '<p>onetwo</p>' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'beforeinput:host:deleteContentBackward:null:true:true:true:true',
+        \\  'input:host:deleteContentBackward:null:false:true:true:true',
+        \\]) &&
+        \\getSelection().anchorNode === host.firstChild.firstChild && getSelection().anchorOffset === 3
+    );
+}
+
+test "cdp.input: Delete at the end of a block merges the next one into it" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p">one</p><ul><li>two</li><li>three</li></ul></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 3);
+    , delete,
+        \\host.innerHTML === '<p id="p">onetwo</p><ul><li>three</li></ul>' &&
+        \\window.types() === 'beforeinput:host,input:host'
+    );
+}
+
+test "cdp.input: Backspace at the start of the first block fires only beforeinput" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p">one</p><p>two</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 0);
+    , backspace,
+        \\host.innerHTML === '<p id="p">one</p><p>two</p>' && window.types() === 'beforeinput:host'
     );
 }
 

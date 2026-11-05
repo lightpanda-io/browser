@@ -488,29 +488,203 @@
 }
 </script>
 
-<script id="delete_contenteditable_not_yet_supported">
-{
-  const host = $('#host');
-  function run(html, setup, forward) {
+<script>
+  // Deletes in #host set to `html`, the caret at a path of child indexes
+  // ending in an offset (or the selection from `at` to `to`).
+  function delIn(html, forward, at, to) {
+    const host = $('#host');
     host.innerHTML = html;
     host.focus();
-    setup(host);
-    return [del(forward), host.innerHTML];
+    const nodeAt = path => path.slice(0, -1).reduce((n, i) => n.childNodes[i], host);
+    if (to) {
+      getSelection().setBaseAndExtent(nodeAt(at), at.at(-1), nodeAt(to), to.at(-1));
+    } else {
+      getSelection().collapse(nodeAt(at), at.at(-1));
+    }
+    const result = del(forward);
+    return [result, host.innerHTML, caret()];
   }
-  const at = (node, offset) => getSelection().collapse(node, offset);
+  const back = (html, ...at) => delIn(html, false, at);
+  const fwd = (html, ...at) => delIn(html, true, at);
+</script>
 
-  testing.diverges('no block merging', () => {
-    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => at(h.lastChild.firstChild, 0), false));
-    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => at(h.firstChild.firstChild, 2), true));
-    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => getSelection().setBaseAndExtent(h.firstChild.firstChild, 1, h.lastChild.firstChild, 1), false));
+<script id="delete_merge">
+{
+  // the later line joins the end of the earlier block
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><p>cd</p>', 1, 0, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], fwd('<p>ab</p><p>cd</p>', 0, 0, 2));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<p>abcd</p><p>ef</p>', '#abcd@2'], back('<p>ab</p><p>cd</p><p>ef</p>', 1, 0, 0));
+
+  // the earlier block stays, whatever the later one
+  testing.expectEqual([true, '<h1>abcd</h1>', '#abcd@2'], back('<h1>ab</h1><p>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><h1>cd</h1>', 1, 0, 0));
+  testing.expectEqual([true, '<p class="x">abcd</p>', '#abcd@2'], back('<p class=x>ab</p><p class=y>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, '<pre>abcd</pre>', '#abcd@2'], back('<pre>ab</pre><p>cd</p>', 1, 0, 0));
+
+  // inline elements move along, a plain <span> doesn't
+  testing.expectEqual([true, '<p><b>ab</b><i>cd</i></p>', '#ab@2'], back('<p><b>ab</b></p><p><i>cd</i></p>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<p>ab<b>cd</b>ef</p>', '#ab@2'], fwd('<p>ab</p><p><b>cd</b>ef</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>abcd</p><p>ef</p>', '#abcd@2'], back('<p>ab</p><p><span>cd</span><br>ef</p>', 1, 0, 0, 0));
+
+  // only the first line moves
+  testing.expectEqual([true, '<p>abcd</p><p>ef</p>', '#abcd@2'], back('<p>ab</p><p>cd<br>ef</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>ab<br>cdef</p>', '#cdef@2'], fwd('<p>ab<br>cd</p><p>ef</p>', 0, 2, 2));
+  testing.expectEqual([true, '<p>abcd</p><div><p>ef</p></div>', '#abcd@2'], back('<p>ab</p><div>cd<p>ef</p></div>', 1, 0, 0));
+
+  // text right in the host
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('ab<p>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], fwd('ab<p>cd</p>', 0, 2));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p>cd', 1, 0));
+  testing.expectEqual([true, '<p>abcd</p>ef', '#abcd@2'], back('<p>ab</p>cd<br>ef', 1, 0));
+
+  // emptied containers go
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><div><p>cd</p></div>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p><div><p>ef</p></div>', '#abcd@2'], back('<p>ab</p><div><p>cd</p><p>ef</p></div>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<div><p>abcd</p></div>', '#abcd@2'], back('<div><p>ab</p></div><p>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, '<blockquote><p>abcd</p></blockquote>', '#abcd@2'], back('<blockquote><p>ab</p></blockquote><p>cd</p>', 1, 0, 0));
+
+  // what can't be seen between the two goes, and spaces at the join
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p>\n<p>cd</p>', 2, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], fwd('<p>ab</p>\n<p>cd</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><p></p><p>cd</p>', 2, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><p style="display:none">x</p><p>cd</p>', 2, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab </p><p> cd</p>', 1, 0, 0));
+
+  // a <br> ending the earlier block goes
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab<br></p><p>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], fwd('<p>ab<br></p><p>cd</p>', 0, 0, 2));
+}
+</script>
+
+<script id="delete_merge_empty">
+{
+  testing.expectEqual([true, '<p>cd</p>', '#cd@0'], back('<p><br></p><p>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>cd</p>', '#cd@0'], fwd('<p><br></p><p>cd</p>', 0, 0));
+  testing.expectEqual([true, '<p>ab</p>', '#ab@2'], back('<p>ab</p><p><br></p>', 1, 0));
+  testing.expectEqual([true, '<p>ab</p>', '#ab@2'], fwd('<p>ab</p><p><br></p>', 0, 0, 2));
+  testing.expectEqual([true, '<p><br></p>', 'P@0'], back('<p><br></p><p><br></p>', 1, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+}
+</script>
+
+<script id="delete_merge_lists">
+{
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<ul><li>ab</li><li>cd</li></ul>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], fwd('<ul><li>ab</li><li>cd</li></ul>', 0, 0, 0, 2));
+  testing.expectEqual([true, '<ul><li>ab</li></ul>', '#ab@2'], back('<ul><li>ab</li><li><br></li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<p>abcd</p><ul><li>ef</li></ul>', '#abcd@2'], back('<p>ab</p><ul><li>cd</li><li>ef</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<ul><li>ab</li></ul><p>cd</p>', 1, 0, 0));
+  testing.expectEqual([true, '<ol><li>abcd</li></ol>', '#abcd@2'], back('<ol><li>ab</li></ol><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li><p>abcd</p></li></ul>', '#abcd@2'], back('<ul><li><p>ab</p></li><li><p>cd</p></li></ul>', 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li><li><ul><li>ef</li></ul></li></ul>', '#abcd@2'],
+    back('<ul><li>ab</li><li>cd<ul><li>ef</li></ul></li></ul>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<dl><dt>abcd</dt></dl>', '#abcd@2'], back('<dl><dt>ab</dt><dd>cd</dd></dl>', 0, 1, 0, 0));
+}
+</script>
+
+<script id="delete_merge_nothing">
+{
+  // at the start of the first block, the end of the last: succeeds, no event
+  testing.expectEqual([true, '<p>ab</p><p>cd</p>', '#ab@0'], back('<p>ab</p><p>cd</p>', 0, 0, 0));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, '<p>ab</p><p>cd</p>', '#cd@2'], fwd('<p>ab</p><p>cd</p>', 1, 0, 2));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, '<blockquote><p>cd</p></blockquote>', '#cd@0'], back('<blockquote><p>cd</p></blockquote>', 0, 0, 0, 0));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@0'], back('<ul><li>ab</li><li>cd</li></ul>', 0, 0, 0, 0));
+  testing.expectEqual([], events);
+
+  // next to a non-editable block
+  testing.expectEqual([true, '<p contenteditable="false">ab</p><p>cd</p>', '#cd@0'], back('<p contenteditable=false>ab</p><p>cd</p>', 1, 0, 0));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, '<p>ab</p><p contenteditable="false">cd</p>', '#ab@2'], fwd('<p>ab</p><p contenteditable=false>cd</p>', 0, 0, 2));
+  testing.expectEqual([], events);
+
+  // at the edge of a table cell
+  const cells = '<table><tbody><tr><td>ab</td><td>cd</td></tr></tbody></table>';
+  testing.expectEqual([true, cells, '#cd@0'], back(cells, 0, 0, 0, 1, 0, 0));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, cells, '#ab@2'], fwd(cells, 0, 0, 0, 0, 0, 2));
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_whole_elements">
+{
+  // a <br>, an image, a non-editable inline or an inline-block goes whole
+  testing.expectEqual([true, 'ab', '#a@1'], back('a<br>b', 2, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, 'ab', '#a@1'], fwd('a<br>b', 0, 1));
+  testing.expectEqual([true, '<p>abcd</p>', '#ab@2'], back('<p>ab<br>cd</p>', 0, 2, 0));
+  testing.expectEqual([true, 'ab', '#a@1'], back('a<img>b', 2, 0));
+  testing.expectEqual([true, 'ab', '#a@1'], fwd('a<img>b', 0, 1));
+  testing.expectEqual([true, '<p>abcd</p>', '#ab@2'], back('<p>ab<span contenteditable=false>x</span>cd</p>', 0, 2, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#ab@2'], back('<p>ab<span style="display:inline-block">x</span>cd</p>', 0, 2, 0));
+
+  // an <hr> between two blocks goes, they stay apart
+  testing.expectEqual([true, '<p>ab</p><p>cd</p>', '#cd@0'], back('<p>ab</p><hr><p>cd</p>', 2, 0, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<p>ab</p><p>cd</p>', '#ab@2'], fwd('<p>ab</p><hr><p>cd</p>', 0, 0, 2));
+}
+</script>
+
+<script id="delete_merge_selection">
+{
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, '<p>ad</p>', '#ad@1'], sel('<p>ab</p><p>cd</p>', [0, 0, 1], [1, 0, 1]));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<p>ad</p>', '#ad@1'], delIn('<p>ab</p><p>cd</p>', true, [0, 0, 1], [1, 0, 1]));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<p>af</p>', '#af@1'], sel('<p>ab</p><p>cd</p><p>ef</p>', [0, 0, 1], [2, 0, 1]));
+  testing.expectEqual([true, '<h1>ad</h1>', '#ad@1'], sel('<h1>ab</h1><p>cd</p>', [0, 0, 1], [1, 0, 1]));
+  testing.expectEqual([true, '<p><b>a</b><i>d</i></p>', '#a@1'], sel('<p><b>ab</b></p><p><i>cd</i></p>', [0, 0, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual([true, '<p>ad</p>', '#ad@1'], sel('<p>ab</p><div><p>cd</p></div>', [0, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual([true, '<div><p>ad</p></div>', '#ad@1'], sel('<div><p>ab</p></div><p>cd</p>', [0, 0, 0, 1], [1, 0, 1]));
+  testing.expectEqual([true, '<p>ad</p><ul><li>ef</li></ul>', '#ad@1'], sel('<p>ab</p><ul><li>cd</li><li>ef</li></ul>', [0, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual([true, '<ul><li>ad</li></ul>', '#ad@1'], sel('<ul><li>ab</li><li>cd</li></ul>', [0, 0, 0, 1], [0, 1, 0, 1]));
+  testing.expectEqual([true, 'ad', '#ad@1'], sel('ab<p>cd</p>', [0, 1], [1, 0, 1]));
+  testing.expectEqual([true, '<p>ad</p>', '#ad@1'], sel('<p>ab</p>cd', [0, 0, 1], [1, 1]));
+  testing.expectEqual([true, '<p>ad</p><p>ef</p>', '#ad@1'], sel('<p>ab</p><p>cd<br>ef</p>', [0, 0, 1], [1, 0, 1]));
+  testing.expectEqual([true, '<p>af</p>', '#af@1'], sel('<p>ab</p><p>cd<br>ef</p>', [0, 0, 1], [1, 2, 1]));
+
+  // a whole block
+  testing.expectEqual([true, '<p>a</p>', '#a@1'], sel('<p>ab</p><p>cd</p>', [0, 0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p>d</p>', '#d@0'], sel('<p>ab</p><p>cd</p>', [0, 0, 0], [1, 0, 1]));
+  testing.expectEqual([true, '<p><br></p>', 'P@0'], sel('<p>ab</p><p>cd</p>', [0, 0, 0], [1, 0, 2]));
+}
+</script>
+
+<script id="delete_contenteditable_not_yet_supported">
+{
+  // Chrome keeps the look of the moved line: <p>ab<span style="color: blue;">cd</span></p>
+  testing.diverges('no style kept for a moved line', () => {
+    testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><p style="color:blue">cd</p>', 1, 0, 0));
   });
-  testing.diverges('no deleting a <br> or an image', () => {
-    testing.expectEqual([false, 'a<br>b'], run('a<br>b', h => at(h.lastChild, 0), false));
-    testing.expectEqual([false, 'a<img>b'], run('a<img>b', h => at(h.firstChild, 1), true));
+  // Chrome drops the outer block: abcd
+  testing.diverges('no merging a block into one around it', () => {
+    testing.expectEqual([false, '<div>ab<p>cd</p></div>', '#cd@0'], back('<div>ab<p>cd</p></div>', 0, 1, 0, 0));
+    testing.expectEqual([false, '<div><p>ab</p>cd</div>', '#cd@0'], back('<div><p>ab</p>cd</div>', 0, 1, 0));
+    testing.expectEqual([false, '<ul><li>ab<ul><li>cd</li></ul></li></ul>', '#cd@0'], back('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
   });
-  // Chrome: a&nbsp;
-  testing.diverges('no nbsp for a space left at the end', () => {
-    testing.expectEqual([true, 'a '], run('a b', h => at(h.firstChild, 3), false));
+  // Chrome: <ul><li>ab</li><li>cd</li></ul>
+  testing.diverges('no merging lists', () => {
+    testing.expectEqual([false, '<ul><li>ab</li></ul><ul><li>cd</li></ul>', '#cd@0'], back('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  });
+  testing.diverges('no merging next to a table', () => {
+    testing.expectEqual([false, '<table><tbody><tr><td>ab</td></tr></tbody></table><p>cd</p>', '#cd@0'],
+      back('<table><tbody><tr><td>ab</td></tr></tbody></table><p>cd</p>', 1, 0, 0));
+  });
+  // Chrome: <p>abcd</p><pre>ef</pre>
+  testing.diverges('no splitting a line out of preformatted text', () => {
+    testing.expectEqual([false, '<p>ab</p><pre>cd\nef</pre>', '#cd\nef@0'], back('<p>ab</p><pre>cd\nef</pre>', 1, 0, 0));
+  });
+  // Chrome: a&nbsp; for the first, ab cd for the second
+  testing.diverges('no nbsp fixup', () => {
+    testing.expectEqual([true, 'a ', '#a @2'], back('a b', 0, 3));
+    testing.expectEqual([true, '<p>ab&nbsp;cd</p>', '#ab\u00a0cd@2'], back('<p>ab</p><p>&nbsp;cd</p>', 1, 0, 0));
   });
   getSelection().removeAllRanges();
 }
