@@ -305,6 +305,25 @@ fn handleRun(server: *Server, arena: std.mem.Allocator, arguments: ?std.json.Val
     return runScript(server, arena, script, args.path orelse "<mcp>", args.timeout orelse default_run_timeout_ms) catch .{ .fail = "out of memory" };
 }
 
+/// Streams each console line while the script runs, up to the cap the
+/// result's console output has.
+const ConsoleStream = struct {
+    server: *Server,
+    bytes: usize = 0,
+
+    fn observe(context: *anyopaque, method: lp.Runtime.ConsoleMethod, line: []const u8) void {
+        const self: *ConsoleStream = @ptrCast(@alignCast(context));
+        self.bytes += line.len + 1;
+        if (self.bytes > max_run_console_bytes) return;
+        self.server.reportConsoleLine(switch (method) {
+            .debug => .debug,
+            .info, .log => .info,
+            .warn => .warning,
+            .@"error" => .@"error",
+        }, line);
+    }
+};
+
 fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, name: []const u8, timeout_ms: u32) error{OutOfMemory}!ExtraResult {
     const active = server.active_session;
     const session = active.session;
@@ -322,6 +341,8 @@ fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, name
     var console: std.Io.Writer.Allocating = .init(arena);
     var capped: lp.LimitedWriter = .init(&console.writer, max_run_console_bytes);
     runtime.console_sink = &capped.writer;
+    var stream: ConsoleStream = .{ .server = server };
+    runtime.console_observer = .{ .context = &stream, .notify = ConsoleStream.observe };
     // Separate from the console so the cap can't drop it.
     var returned: std.Io.Writer.Allocating = .init(arena);
     runtime.result_sink = &returned.writer;
@@ -1397,12 +1418,44 @@ test "MCP - run: a script drives the session and returns its output" {
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('btn:', page.evaluate(\"document.getElementById('btn').textContent\"));\nreturn page.extract({ btn: '#btn' });"}}}
     );
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    try testing.expectJson(.{
+        .method = "notifications/message",
+        .params = .{ .level = "info", .logger = "console", .data = "btn: Click Me" },
+    }, lines.next().?);
     try testing.expectJson(.{ .id = 1, .result = .{
         .isError = false,
         .content = &.{.{ .type = "text", .text = "btn: Click Me\n{\"btn\":\"Click Me\"}\n" }},
-    } }, out.written());
+    } }, lines.next().?);
+    try testing.expectEqual("", lines.rest());
 
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
+}
+
+test "MCP - run: logging/setLevel filters console notifications" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"verbose"}}
+    );
+    try testing.expectJson(.{ .id = 1, .@"error" = .{ .code = -32602 } }, out.written());
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"logging/setLevel","params":{"level":"warning"}}
+    );
+    try testing.expectJson("{\"id\":2,\"result\":{}}", out.written());
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"script":"console.log('quiet');\nconsole.error('loud');"}}}
+    );
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    try testing.expectJson(.{ .method = "notifications/message", .params = .{ .level = "error", .data = "loud" } }, lines.next().?);
+    try testing.expectEqual("quiet\nloud\n", try testToolText(aa, lines.next().?));
 }
 
 test "MCP - run: closes the pages it opened, keeps cookies and earlier pages" {
@@ -2513,12 +2566,20 @@ test "MCP - sessions: refused without a directory (stdio)" {
     try testing.expect(std.mem.find(u8, out.written(), "require the HTTP transport") != null);
 }
 
-/// The text of a tools/call result, which tools like findElement fill with JSON.
-fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
+/// The text of the tools/call result ending `output`, after any
+/// notifications; tools like findElement fill it with JSON.
+fn testToolText(arena: std.mem.Allocator, output: []const u8) ![]const u8 {
+    const response = testLastLine(output);
     const Response = struct { result: struct { content: []const struct { text: []const u8 } } };
     const parsed = try std.json.parseFromSliceLeaky(Response, arena, response, .{ .ignore_unknown_fields = true });
     try testing.expectEqual(1, parsed.result.content.len);
     return parsed.result.content[0].text;
+}
+
+fn testLastLine(output: []const u8) []const u8 {
+    const trimmed = std.mem.trimEnd(u8, output, "\n");
+    const start = if (std.mem.findScalarLast(u8, trimmed, '\n')) |i| i + 1 else 0;
+    return trimmed[start..];
 }
 
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {

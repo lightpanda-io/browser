@@ -1759,7 +1759,7 @@ const ScriptOutput = struct {
 
     /// `Runtime.ConsoleObserver` callback: on the first line, clear the live
     /// spinner so output starts clean instead of colliding with the indicator.
-    fn observe(context: *anyopaque) void {
+    fn observe(context: *anyopaque, _: ScriptRuntime.ConsoleMethod, _: []const u8) void {
         const self: *ScriptOutput = @ptrCast(@alignCast(context));
         if (self.emitted) return;
         self.emitted = true;
