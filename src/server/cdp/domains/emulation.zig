@@ -169,11 +169,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     if (reserved) {
-        log.warn(.browser, "Emulation.setUserAgentOverride", .{
-            .param = "userAgent",
-            .value = ua,
-            .info = "User agent must not contain Mozilla. The `userAgent` parameter was ignored."
-        });
+        log.warn(.browser, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla. The `userAgent` parameter was ignored." });
         return cmd.sendResult(null, .{});
     }
 
