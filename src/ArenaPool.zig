@@ -147,8 +147,8 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         bucket.free_list = entry.next;
         bucket.free_list_len -= 1;
         entry.released = false;
+        entry.debug = debug;
         if (lp.IS_DEBUG) {
-            entry.debug = debug;
             const gop = try self._leak_track.getOrPut(self.allocator, debug);
             if (!gop.found_existing) {
                 gop.value_ptr.* = 0;
@@ -171,7 +171,7 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         .bytes = 0,
         .account = account,
         .reported = 0,
-        .debug = if (lp.IS_DEBUG) debug else {},
+        .debug = debug,
         ._arena = undefined,
     };
     // Routed through the entry so it sees every node the arena takes and gives
@@ -203,7 +203,7 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
             // it'll crash in some random code.
             lp.assert(false, "ArenaPool double release", .{
                 .bucket = @tagName(bucket.size),
-                .name = if (comptime lp.IS_DEBUG) entry.debug else "",
+                .name = entry.debug,
             });
         }
         entry.released = true;
