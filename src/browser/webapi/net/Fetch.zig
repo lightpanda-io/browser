@@ -93,7 +93,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         }
     }
 
-    const body = request.bodyBytes() catch |err| switch (err) {
+    const body = request.bodyBytes(.uint8array) catch |err| switch (err) {
         error.TypeError => return exec.js.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
@@ -103,7 +103,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 }
 
 pub fn start(request: *Request, completion: Completion, exec: *const Execution) !void {
-    const body = try request.bodyBytes();
+    const body = try request.bodyBytes(.uint8array);
     return submit(request, body, .{ .completion = completion }, exec);
 }
 

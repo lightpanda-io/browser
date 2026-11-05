@@ -2793,10 +2793,10 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         break :blk new_sheet;
     };
 
-    // Parse first, only swap `_href` on success. `replaceSync` itself is
+    // Parse first, only swap `_href` on success. `replaceRules` itself is
     // not atomic (clears rules before the insert loop), so a mid-parse
     // OOM still drops the old rules — full atomicity would require a
-    // scratch-list pattern in `CSSStyleSheet.replaceSync`. Keeping
+    // scratch-list pattern in `CSSStyleSheet.replaceRules`. Keeping
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
     const content_type: ?Mime = if (response.content_type) |value|
@@ -2805,7 +2805,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         null;
     const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
     const text = try css_charset.decode(arena.allocator(), response.body.items(), protocol_charset, self.charset);
-    sheet.replaceSync(text, self) catch |err| {
+    sheet.replaceRules(text, self) catch |err| {
         log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
         return self.queueLinkEvent(link, .@"error", generation);
     };

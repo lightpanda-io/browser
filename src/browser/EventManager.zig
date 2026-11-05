@@ -172,13 +172,6 @@ pub const DispatchDirectOptions = EventManagerBase.DispatchDirectOptions;
 // propagation - just calls the registered listeners.
 pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchDirectOptions) !void {
     const frame = self.frame;
-
-    // Set window.event to the currently dispatching event (WHATWG spec)
-    const window = frame.window;
-    const prev_event = window._current_event;
-    window._current_event = event;
-    defer window._current_event = prev_event;
-
     try self.base.dispatchDirect(frame.js, target, event, frame.page, opts);
 }
 
@@ -221,12 +214,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     }
 
     const frame = self.frame;
-
-    // Set window.event to the currently dispatching event (WHATWG spec)
-    const window = frame.window;
-    const prev_event = window._current_event;
-    window._current_event = event;
-    defer window._current_event = prev_event;
 
     var was_handled = false;
 
@@ -448,14 +435,7 @@ fn legacyType(event: *const Event) ?lp.String {
     return null;
 }
 
-// Per spec ("invocation target in shadow tree"), window.event is left
-// undefined while invoking listeners whose target lives in a shadow tree.
-fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
-    return if (rootIsShadowRoot(target)) null else event;
-}
-
 fn dispatchPhase(self: *EventManager, listeners: TargetListeners, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
-    const frame = self.frame;
     const base = self.base;
     const list = listeners.list;
 
@@ -463,11 +443,6 @@ fn dispatchPhase(self: *EventManager, listeners: TargetListeners, current_target
     const real_type = event._type_string;
     event._type_string = listeners.typ;
     defer event._type_string = real_type;
-
-    const window = frame.window;
-    const prev_current_event = window._current_event;
-    window._current_event = currentEventForTarget(current_target, event);
-    defer window._current_event = prev_current_event;
 
     // Track dispatch depth for deferred removal
     base.dispatch_depth += 1;

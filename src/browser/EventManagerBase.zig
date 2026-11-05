@@ -23,6 +23,7 @@ const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 
 const Event = @import("webapi/Event.zig");
+const Node = @import("webapi/Node.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const ErrorEvent = @import("webapi/event/ErrorEvent.zig");
 const BeforeUnloadEvent = @import("webapi/event/BeforeUnloadEvent.zig");
@@ -515,18 +516,38 @@ pub const Listener = struct {
         if (self.function == .handler_source) {
             _ = self.compileHandler(local.ctx, event._current_target.?);
         }
-        if (self.otherWorldContext(local)) |ctx| {
-            var ls: js.Local.Scope = undefined;
-            ctx.localScope(&ls);
-            defer ls.deinit();
-            return self.invoke(&ls.local, event, context);
+        const callback_ctx = self.callbackContext(local);
+
+        // DOM "inner invoke" step 8: window.event is set on the callback's
+        // realm (not the target's), and left alone while the invocation
+        // target is in a shadow tree.
+        const window = if (callback_ctx) |ctx| switch (ctx.global) {
+            .frame => |f| f.window,
+            .worker => null,
+        } else null;
+        const prev_event = if (window) |w| w._current_event else null;
+        if (window) |w| {
+            if (inShadowTree(event._current_target.?) == false) {
+                w._current_event = event;
+            }
+        }
+        defer if (window) |w| {
+            w._current_event = prev_event;
+        };
+
+        if (callback_ctx) |ctx| {
+            if (ctx.identity != local.ctx.identity) {
+                var ls: js.Local.Scope = undefined;
+                ctx.localScope(&ls);
+                defer ls.deinit();
+                return self.invoke(&ls.local, event, context);
+            }
         }
         return self.invoke(local, event, context);
     }
 
-    // The context the callback was created in, when it belongs to another
-    // world than `local`.
-    fn otherWorldContext(self: *const Listener, local: *const js.Local) ?*js.Context {
+    // The context the callback was created in.
+    fn callbackContext(self: *const Listener, local: *const js.Local) ?*js.Context {
         const handle: *const js.v8.Object = switch (self.function) {
             .value => |f| @ptrCast(local.toLocal(f).handle),
             .object => |o| local.toLocal(o).handle,
@@ -534,11 +555,12 @@ pub const Listener = struct {
             // compiled by run() before this is called
             .handler_source => unreachable,
         };
-        const ctx = js.Context.fromObject(handle) orelse return null;
-        if (ctx.identity == local.ctx.identity) {
-            return null;
-        }
-        return ctx;
+        return js.Context.fromObject(handle);
+    }
+
+    fn inShadowTree(target: *EventTarget) bool {
+        const node = target.is(Node) orelse return false;
+        return node.containingShadowRoot() != null;
     }
 
     fn invoke(

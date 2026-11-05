@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <head>
+  <meta name=lp-mode content=test>
   <style>
     .hidden { color: red; }
   </style>
@@ -50,8 +51,11 @@ those blocks so the innerText and removal cases see the document as parsed.
     const idf = document.getElementById('sheet');
     const iwin = idf.contentWindow;
 
-    idf.contentDocument.styleSheets[0].replaceSync('#probe { display: none; }');
-    testing.expectEqual('none', iwin.displayOf('probe'));
+    // Only constructed sheets can be replaced, from either realm.
+    testing.expectError('NotAllowedError', () => {
+      idf.contentDocument.styleSheets[0].replaceSync('#probe { display: none; }');
+    });
+    testing.expectEqual('block', iwin.displayOf('probe'));
   });
 </script>
 
