@@ -98,7 +98,7 @@ fn enqueue(allocator: std.mem.Allocator, queue: *MessageQueue, line: []const u8)
 
 /// The `requestId` if `line` is a `notifications/cancelled`, borrowing
 /// `arena`.
-fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Value {
+pub fn cancelledRequestId(arena: std.mem.Allocator, line: []const u8) ?std.json.Value {
     // Skip the JSON scan for the (large) tool calls streaming past.
     if (std.mem.find(u8, line, "notifications/cancelled") == null) return null;
     const Peek = struct {

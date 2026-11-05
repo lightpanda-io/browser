@@ -75,6 +75,8 @@ const Worker = struct {
     queue: JobQueue = .{},
     /// Guarded by `workers_mutex`, for `session_list`.
     url: ?[]const u8 = null,
+    /// Guarded by `workers_mutex`, for `cancel`.
+    server: ?*Server = null,
 };
 
 /// How the default session reports whether it came up.
@@ -316,6 +318,22 @@ fn publishUrl(self: *HttpServer, worker: *Worker, url: ?[]const u8) void {
     if (old) |o| self.allocator.free(o);
 }
 
+fn publishServer(self: *HttpServer, worker: *Worker, server: ?*Server) void {
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    worker.server = server;
+}
+
+/// Bypasses the queue, where a cancellation would wait behind the call it
+/// cancels.
+fn cancel(self: *HttpServer, id: []const u8, request_id: std.json.Value) void {
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    const worker = self.workers.get(id) orelse return;
+    const server = worker.server orelse return;
+    server.handleCancelledRequest(request_id);
+}
+
 /// Accept MCP-over-HTTP connections until stop() (e.g. from the signal
 /// handler). Blocks the calling thread; each accepted connection is served
 /// by its own thread doing blocking IO.
@@ -423,6 +441,8 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
     };
     defer if (server) |s| s.deinit();
     if (server) |s| s.directory = self;
+    self.publishServer(worker, server);
+    defer self.publishServer(worker, null);
     if (start) |st| {
         st.ok = server != null;
         st.done.set(lp.io);
@@ -571,8 +591,14 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
     }
 
+    const target_id = target(arena, session_id, body);
+    if (router.cancelledRequestId(arena, body)) |request_id| {
+        self.cancel(target_id orelse Server.default_session_id, request_id);
+        return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
+    }
+
     var job: Job = .{ .body = body, .out = out };
-    const routed = self.submit(arena, target(arena, session_id, body), &job) catch |err| switch (err) {
+    const routed = self.submit(arena, target_id, &job) catch |err| switch (err) {
         error.SessionEnded => return request.respond("Session ended, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
         else => {
             log.err(.mcp, "mcp session routing", .{ .err = err });
@@ -881,4 +907,50 @@ test "HttpServer - idle sessions are reaped" {
     defer testing.allocator.free(revived);
     try testing.expect(std.mem.find(u8, revived, "session busy") != null);
     try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "busy", call, null));
+}
+
+const WaitCall = struct {
+    port: u16,
+    response: ?[]u8 = null,
+
+    fn run(self: *WaitCall) void {
+        self.response = testPost(testing.allocator, self.port, "cancel",
+            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"false","timeout":30000}}}
+        ) catch null;
+    }
+};
+
+test "HttpServer - notifications/cancelled reaches the call in flight" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    const port = server.port;
+
+    const loaded = try testPost(testing.allocator, port, "cancel",
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank"}}}
+    );
+    defer testing.allocator.free(loaded);
+
+    var wait: WaitCall = .{ .port = port };
+    const started = lp.datetime.milliTimestamp(.boot);
+    const wait_thread = try std.Thread.spawn(.{}, WaitCall.run, .{&wait});
+    lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+
+    const cancel_call =
+        \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}
+    ;
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .POST, "cancel", cancel_call, null));
+    // Doesn't start a session.
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .POST, "never-started", cancel_call, null));
+
+    wait_thread.join();
+    defer if (wait.response) |r| testing.allocator.free(r);
+    try testing.expect(lp.datetime.milliTimestamp(.boot) - started < 10_000);
+    // A cancelled call gets no response.
+    try testing.expectEqual(0, (wait.response orelse return error.TestUnexpectedResult).len);
+
+    const after = try testPost(testing.allocator, port, "cancel",
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_list"}}
+    );
+    defer testing.allocator.free(after);
+    try testing.expect(std.mem.find(u8, after, "\\\"never-started\\\"") == null);
 }
