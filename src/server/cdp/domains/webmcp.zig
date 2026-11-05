@@ -90,6 +90,7 @@ const InvokeToolParams = struct {
 fn invokeTool(cmd: *CDP.Command) !void {
     const params = (try cmd.params(InvokeToolParams)) orelse return error.InvalidParams;
 
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const target = try cmd.target();
     const arena = target.arena.allocator();
     const frame_id = try id.parseFrameId(params.frameId);
@@ -105,7 +106,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     const inv_id = target.invocation_id_gen.incr();
     const inv_id_str = id.toInvocationId(inv_id);
 
-    const invocation = try arena.create(Invocation);
+    const invocation = try bc.arena.create(Invocation);
     invocation.* = .{
         .id = inv_id,
         .target = target,
