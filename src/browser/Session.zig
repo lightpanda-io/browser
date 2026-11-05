@@ -94,9 +94,11 @@ _nav_cursor: usize = 0,
 // `commitPendingPage`).
 _tool_frame_override: ?u32 = null,
 
-// A popup the last tool action opened (target=_blank). Tools act on it, as
-// a user whose click opened a tab would, until it goes away.
-_followed_popup: ?u32 = null,
+// A popup the last action opened, or one `popups {follow}` chose; tools act
+// on it until it closes. Only an explicit follow outranks
+// `_tool_frame_override`, and only on that page: the Runtime re-arms the
+// override every call, and a click's popup must not move a script's handle.
+_followed_popup: ?FollowedPopup = null,
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
@@ -552,10 +554,16 @@ pub fn primaryPage(self: *Session) ?PageHandle {
 pub fn currentFrame(self: *Session) ?*Frame {
     if (self._tool_frame_override) |frame_id| {
         // No pages[0] fallthrough: the override targets one specific page.
-        return self.findFrameByFrameId(frame_id);
+        const override_frame = self.findFrameByFrameId(frame_id) orelse return null;
+        // Not cleared on a mismatch: a follow on a sibling page applies again
+        // when the Runtime calls into it.
+        const followed = self._followed_popup orelse return override_frame;
+        if (!followed.explicit) return override_frame;
+        const popup = override_frame.page.findFrameByFrameId(followed.frame_id) orelse return override_frame;
+        return if (popup.parent == null) popup else override_frame;
     }
-    if (self._followed_popup) |frame_id| {
-        if (self.findFrameByFrameId(frame_id)) |frame| {
+    if (self._followed_popup) |followed| {
+        if (self.findFrameByFrameId(followed.frame_id)) |frame| {
             return frame;
         }
         self._followed_popup = null;
@@ -575,9 +583,14 @@ pub fn setToolFrameOverride(self: *Session, frame_id: ?u32) void {
     self._tool_frame_override = frame_id;
 }
 
+pub const FollowedPopup = struct {
+    frame_id: u32,
+    explicit: bool,
+};
+
 /// See `_followed_popup`.
-pub fn followPopup(self: *Session, frame_id: u32) void {
-    self._followed_popup = frame_id;
+pub fn followPopup(self: *Session, popup: FollowedPopup) void {
+    self._followed_popup = popup;
 }
 
 // Multi-page aware: frame ids are globally unique (monotonic on `Browser`).

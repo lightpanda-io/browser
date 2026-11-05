@@ -52,6 +52,10 @@ pub fn init(session: *Session, _: Opts) Runner {
 pub const WaitCondition = struct {
     frame_id: u32,
     until: lp.Config.WaitUntil = .done,
+    /// Also complete once the page's popup count exceeds this. A
+    /// navigation's replacement page starts with no popups, so there `until`
+    /// alone bounds the wait.
+    popups_above: ?usize = null,
     status: Status = .pending,
 
     const Status = union(enum) {
@@ -284,6 +288,13 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             condition.status = .{ .err = error.FrameNotFound };
             continue;
         };
+
+        if (condition.popups_above) |count| {
+            if (page.popups.items.len > count) {
+                condition.status = .complete;
+                continue;
+            }
+        }
 
         const frame = &page.frame;
         switch (frame._parse_state) {

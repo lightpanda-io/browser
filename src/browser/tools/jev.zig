@@ -286,21 +286,6 @@ pub fn unverified(
 
 const settle_timeout_ms: u32 = 2000;
 
-/// Let the page act on a click: a consent banner removes itself from a
-/// handler or after a request of its own, and a sign-in form navigates. A page
-/// that never goes idle is not a failure here, only one we stop waiting for.
-pub fn settle(session: *lp.Session) ToolError!void {
-    const frame = session.currentFrame() orelse return;
-    lp.actions.waitForState(.networkidle, settle_timeout_ms, frame._frame_id, session) catch |err| switch (err) {
-        error.Cancelled => return ToolError.Cancelled,
-        error.Timeout => {},
-        else => {
-            log.debug(.browser, "settle error", .{ .err = @errorName(err) });
-            return ToolError.InternalError;
-        },
-    };
-}
-
 pub fn clickAndSettle(
     session: *lp.Session,
     registry: *NodeRegistry,
@@ -309,8 +294,24 @@ pub fn clickAndSettle(
 ) ToolError!void {
     const scope = beginAction(session);
     lp.actions.click(node, page) catch |err| return mapActionError(err);
+    try settleAndFollow(session, registry, scope);
+}
+
+/// Let the page act on a click: a consent banner removes itself, a sign-in
+/// form navigates. One wait covers network idle and a window opened late;
+/// the second pass, scoped from after the first, follows that window. A page
+/// that never goes idle is not a failure, only one we stop waiting for.
+pub fn settleAndFollow(session: *lp.Session, registry: *NodeRegistry, scope: tools.ActionScope) ToolError!void {
     _ = try settleAction(session, registry, scope);
-    try settle(session);
+    const settled = beginAction(session);
+    tools.watchPopups(session, settled.popups, .networkidle, settle_timeout_ms) catch |err| switch (err) {
+        error.Cancelled => return ToolError.Cancelled,
+        else => {
+            log.debug(.browser, "settle error", .{ .err = err });
+            return ToolError.InternalError;
+        },
+    };
+    _ = try settleAction(session, registry, settled);
 }
 
 const testing = @import("../../testing.zig");

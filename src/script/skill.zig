@@ -216,7 +216,7 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .login => "Fills the sign-in fields Jev picks and submits. Credentials go in as `$LP_*` placeholders. Pass the `*Selector` fields from an earlier result to replay with no model call; otherwise needs `TYPESAFE_API_KEY`.",
         .findElement => "`name` is a case-insensitive substring, or a JS regex literal like `/sign (in|up)/` (also case-insensitive).",
         .callPageTool => "Runs a tool the page registered through WebMCP; returns its text result.",
-        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools => "",
+        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => "",
     };
 }
 

@@ -58,8 +58,8 @@ const unusableAnswer = jev.unusableAnswer;
 const compact = jev.compact;
 const verdict = jev.verdict;
 const unverified = jev.unverified;
-const settle = jev.settle;
 const clickAndSettle = jev.clickAndSettle;
+const settleAndFollow = jev.settleAndFollow;
 const Frame = lp.Frame;
 
 const Questions = zenai.typesafe.Questions;
@@ -487,8 +487,7 @@ fn submitLogin(
 
     const scope = beginAction(session);
     lp.actions.press(input.node, "Enter", input.page) catch |err| return mapActionError(err);
-    _ = try settleAction(session, registry, scope);
-    try settle(session);
+    try settleAndFollow(session, registry, scope);
     outcome.pressedEnter = true;
     outcome.submitted = true;
     return null;

@@ -119,6 +119,7 @@ pub const Tool = enum {
     getUrl,
     getCookies,
     getEnv,
+    popups,
     download,
     pageTools,
     callPageTool,
@@ -164,6 +165,7 @@ pub const Tool = enum {
             .classify => 32,
             .acceptCookies => 33,
             .login => 34,
+            .popups => 35,
         };
     }
 
@@ -173,7 +175,7 @@ pub const Tool = enum {
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
             .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download, .callPageTool, .classify, .acceptCookies, .login => true,
-            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools => false,
+            .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => false,
         };
     }
 
@@ -184,7 +186,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -194,7 +196,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -205,7 +207,7 @@ pub const Tool = enum {
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
             .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
-            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -215,7 +217,7 @@ pub const Tool = enum {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
             .screenshot => &.{"path"},
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => &.{},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => &.{},
         };
     }
 
@@ -223,7 +225,7 @@ pub const Tool = enum {
     /// markdown, evaluate return value) rather than a status line on stderr.
     pub fn producesData(self: Tool) bool {
         return switch (self) {
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .pageTools, .callPageTool, .classify, .acceptCookies, .login => true,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools, .callPageTool, .classify, .acceptCookies, .login => true,
             .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .download => false,
         };
     }
@@ -232,7 +234,7 @@ pub const Tool = enum {
     pub fn returnsJson(self: Tool) bool {
         return switch (self) {
             .extract, .classify, .acceptCookies, .login => true,
-            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .pageTools, .callPageTool, .download => false,
+            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .pageTools, .callPageTool, .download => false,
         };
     }
 
@@ -244,7 +246,7 @@ pub const Tool = enum {
     pub fn reportsPageState(self: Tool) bool {
         return switch (self) {
             .goto, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked => true,
-            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .screenshot, .waitForSelector, .waitForScript, .waitForState, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -257,7 +259,7 @@ pub const Tool = enum {
             .extract, .classify, .evaluate => .extraction,
             .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .acceptCookies, .login => .interaction,
             .waitForSelector, .waitForScript, .waitForState => .waiting,
-            .getUrl, .getCookies, .getEnv, .consoleLogs => .state,
+            .getUrl, .getCookies, .getEnv, .consoleLogs, .popups => .state,
             .pageTools, .callPageTool => .page_tools,
         };
     }
@@ -627,6 +629,7 @@ fn dispatch(
         .login => login.exec(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
+        .popups => execPopups(arena, session, registry, substituted),
         .getUrl => .{ .text = try execGetUrl(session) },
         .getCookies => .{ .text = try execGetCookies(arena, session, substituted) },
         .download => try execDownload(arena, session, substituted),
@@ -1133,7 +1136,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
 /// for it, and if it left `page`, drop the stale node ids and say where it
 /// landed.
 fn settleScriptNavigation(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, page: *lp.Frame, result: ToolResult) ToolError!ToolResult {
-    try awaitQueuedNavigation(session, page);
+    try awaitQueuedNavigation(session);
     const after = session.currentFrame() orelse return result;
     if (after == page) return result;
 
@@ -1516,10 +1519,11 @@ pub fn mapActionError(err: anytype) ToolError {
 
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
-fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void {
+fn awaitQueuedNavigation(session: *lp.Session) ToolError!void {
     // Runner waits are keyed by Page root (a popup lives on its opener's
     // Page). Read it before processing: a synthetic root navigation frees
     // the Page in place.
+    const frame = session.currentFrame() orelse return;
     const root_frame_id = frame.page.frame._frame_id;
     const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
     if (navigated == false) {
@@ -1541,9 +1545,12 @@ fn formatActionResult(
 }
 
 /// What `finalizeAction` compares against; take it before the action runs.
-const ActionScope = struct {
+pub const ActionScope = struct {
     frame: ?*lp.Frame,
     popups: usize,
+    /// Watch for a window the action opens late. Click-like actions only:
+    /// the watch can cost its full budget on pages that never go quiet.
+    await_late_popup: bool = false,
 };
 
 pub fn beginAction(session: *lp.Session) ActionScope {
@@ -1565,15 +1572,20 @@ const Settled = struct {
 /// writes its own result calls this directly.
 pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: ActionScope) ToolError!Settled {
     const before = scope.frame;
-    if (before) |b| {
-        try awaitQueuedNavigation(session, b);
+    var page = try drainNavigation(session, registry, before);
+
+    // Skipped after a navigation: the new page's timers would hold the watch
+    // for its full budget, and the old page's pending popup died with it.
+    if (scope.await_late_popup and page == before and page.page.popups.items.len == scope.popups) {
+        watchPopups(session, scope.popups, .done, late_popup_budget_ms) catch |err| switch (err) {
+            // A cancel must not come out as a plain "Clicked".
+            error.Cancelled => return ToolError.Cancelled,
+            // Best effort: any other tick error just ends the watch.
+            else => log.debug(.browser, "late popup watch", .{ .err = err }),
+        };
+        // The watch can end with the click's own navigation still queued.
+        page = try drainNavigation(session, registry, before);
     }
-    var page = try requireFrame(session);
-    // A queued navigation that swaps the root frame tears down the previous
-    // Page (`Session.replaceRootImmediate` / `commitPendingPage`), so every
-    // DOMNode pointer in the registry now dangles. Drop the registry so the
-    // next action can't dereference freed memory.
-    if (before != null and before.? != page) registry.reset();
 
     var note: []const u8 = "";
     if (page.page.popups.items.len > scope.popups) {
@@ -1586,13 +1598,43 @@ pub fn settleAction(session: *lp.Session, registry: *NodeRegistry, scope: Action
         const popups = page.page.popups.items;
         if (popups.len > scope.popups) {
             page = popups[popups.len - 1];
-            session.followPopup(page._frame_id);
+            session.followPopup(.{ .frame_id = page._frame_id, .explicit = false });
             registry.reset();
             note = " Opened a new window; tools now act on it.";
         }
     }
 
     return .{ .frame = page, .note = note };
+}
+
+/// Drain a queued navigation and resolve the live frame. A navigation that
+/// swapped the root tore down the Page `before` belonged to
+/// (`Session.replaceRootImmediate` / `commitPendingPage`), so every DOMNode
+/// pointer in the registry dangles. `before` is only compared, never
+/// dereferenced.
+fn drainNavigation(session: *lp.Session, registry: *NodeRegistry, before: ?*lp.Frame) ToolError!*lp.Frame {
+    try awaitQueuedNavigation(session);
+    const page = try requireFrame(session);
+    if (before != null and before.? != page) registry.reset();
+    return page;
+}
+
+// Handlers that fetch or set a timer before `window.open`. A quiet page pays
+// nothing; a busy one pays at most this.
+const late_popup_budget_ms = 1000;
+
+/// Wait for `until`, ending early once the page opens a window. The runner
+/// re-resolves the page each tick, so a navigation mid-wait can't leave it
+/// reading a freed Page.
+pub fn watchPopups(session: *lp.Session, popups_before: usize, until: lp.Config.WaitUntil, timeout_ms: u32) !void {
+    const frame = session.currentFrame() orelse return;
+    var runner = session.runner(.{});
+    var conditions = [_]lp.Session.Runner.WaitCondition{.{
+        .frame_id = frame.page.frame._frame_id,
+        .until = until,
+        .popups_above = popups_before,
+    }};
+    _ = try runner.waitResult(timeout_ms, &conditions);
 }
 
 /// `settleAction`, plus the resulting page URL and title tagged onto `body` so
@@ -1613,7 +1655,8 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
-    const scope = beginAction(session);
+    var scope = beginAction(session);
+    scope.await_late_popup = true;
 
     lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
@@ -1752,7 +1795,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     // script may have queued a navigation (e.g. top.location=…); drain it so
     // the next command reads post-navigation state
-    try awaitQueuedNavigation(session, frame);
+    try awaitQueuedNavigation(session);
 
     return "Script returned truthy.";
 }
@@ -1815,7 +1858,8 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
         if (args.backendNodeId) |id| target_node = try resolveActionNode(registry, id);
     }
 
-    const scope = beginAction(session);
+    var scope = beginAction(session);
+    scope.await_late_popup = true;
 
     lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
 
@@ -1980,6 +2024,56 @@ fn execConsoleLogs(arena: std.mem.Allocator, session: *lp.Session) ToolError![]c
 fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
     const page = try requireFrame(session);
     return page.url;
+}
+
+/// One entry of the `popups` listing: the page's main window first, then the
+/// windows it opened.
+const PopupEntry = struct {
+    id: u32,
+    url: []const u8,
+    title: ?[]const u8,
+    popup: bool,
+    current: bool,
+};
+
+/// List the current page's windows (`window.open` / target=_blank), or make
+/// one current with `follow`. Not recorded: frame ids are session-scoped, and
+/// a replay re-follows through `settleAction`.
+fn execPopups(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct { follow: ?u32 = null };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
+    const page = try requireFrame(session);
+
+    if (args.follow) |frame_id| {
+        // Windows only: an iframe has a parent.
+        const target = page.page.findFrameByFrameId(frame_id);
+        if (target == null or target.?.parent != null) {
+            return .{ .text = try arena.print("no window with id {d}; call popups for the current ids", .{frame_id}), .is_error = true };
+        }
+        session.followPopup(.{ .frame_id = frame_id, .explicit = true });
+        registry.reset();
+    }
+
+    const current_id: ?u32 = if (session.currentFrame()) |f| f._frame_id else null;
+    const root = &page.page.frame;
+    const entries = arena.alloc(PopupEntry, page.page.popups.items.len + 1) catch return ToolError.InternalError;
+    entries[0] = .{
+        .id = root._frame_id,
+        .url = root.url,
+        .title = root.getTitle() catch null,
+        .popup = false,
+        .current = current_id == root._frame_id,
+    };
+    for (page.page.popups.items, 1..) |popup, i| {
+        entries[i] = .{
+            .id = popup._frame_id,
+            .url = popup.url,
+            .title = popup.getTitle() catch null,
+            .popup = true,
+            .current = current_id == popup._frame_id,
+        };
+    }
+    return .{ .text = try renderJson(arena, entries, .{}) };
 }
 
 fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -2940,4 +3034,106 @@ test "fill: a password is not typed where it would leave in the clear" {
     const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, tree.text, "hunter2") == null);
     try std.testing.expect(std.mem.find(u8, tree.text, "ada") != null);
+}
+
+test "popups: a follow id must be one of the page's windows" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/semantic_tree_iframe.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    // An iframe is a frame but not a window: `findFrameByFrameId` would find
+    // it, and following it would leave the listing without a `current` entry.
+    const iframe_id = page.frame().?.child_frames.items[0]._frame_id;
+    const refused = try call(aa, session, &registry, "popups", try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"follow\":{d}}}", .{iframe_id}), .{}), .{ .source = .user });
+    try std.testing.expect(refused.is_error);
+    try std.testing.expect(std.mem.find(u8, refused.text, "no window with id") != null);
+
+    const unknown = try call(aa, session, &registry, "popups", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"follow":999999}
+    , .{}), .{ .source = .user });
+    try std.testing.expect(unknown.is_error);
+
+    // The main window's own id follows back to itself.
+    const root = try call(aa, session, &registry, "popups", try std.json.parseFromSliceLeaky(std.json.Value, aa, try aa.print("{{\"follow\":{d}}}", .{page.frame_id}), .{}), .{ .source = .user });
+    try std.testing.expect(!root.is_error);
+}
+
+test "popups: only an explicit follow outranks the script Runtime's tool frame override" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("ticking.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"return window.open('about:blank', 'w') != null;"}
+    , .{}), .{ .source = .user });
+    const root = page.frame().?;
+    const popup = root.page.popups.items[0];
+
+    // The Runtime binds every call to the handle's frame. A window a click
+    // opened must not move the handle; an explicit follow on the same page
+    // must win over that binding, and keep winning after the Runtime unbinds.
+    session.setToolFrameOverride(root._frame_id);
+    session.followPopup(.{ .frame_id = popup._frame_id, .explicit = false });
+    try testing.expectEqual(root._frame_id, session.currentFrame().?._frame_id);
+    session.followPopup(.{ .frame_id = popup._frame_id, .explicit = true });
+    try testing.expectEqual(popup._frame_id, session.currentFrame().?._frame_id);
+    session.setToolFrameOverride(null);
+    try testing.expectEqual(popup._frame_id, session.currentFrame().?._frame_id);
+    session._followed_popup = null;
+}
+
+test "click: a cancel during the late-popup watch stays cancelled" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_async_popup.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    var hook_ctx: u8 = 0;
+    const Always = struct {
+        fn check(_: *anyopaque) bool {
+            return true;
+        }
+    };
+    session.cancel_hook = .{ .context = @ptrCast(&hook_ctx), .check = Always.check };
+    defer session.cancel_hook = null;
+
+    // The watch is the first runner wait on this path.
+    const result = call(aa, session, &registry, "click", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#delayed"}
+    , .{}), .{ .source = .user });
+    try std.testing.expectError(error.Cancelled, result);
+}
+
+test "watchPopups: watches the page while a popup is followed" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_async_popup.html", .{});
+    defer page.close();
+    const session = page.session;
+    const aa = testing.arena_allocator;
+
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"window.open('mcp_actions.html'); setTimeout(function() { window.open('mcp_actions.html?f=2'); }, 50); return true;"}
+    , .{}), .{ .source = .user });
+    const popups = &page.frame().?.page.popups;
+    try testing.expectEqual(1, popups.items.len);
+    session.followPopup(.{ .frame_id = popups.items[0]._frame_id, .explicit = false });
+    defer session._followed_popup = null;
+
+    // Keyed on the followed popup's id, the wait would find no page and
+    // return before the timer opens the second window.
+    try watchPopups(session, 1, .networkidle, 2000);
+    try testing.expectEqual(2, popups.items.len);
 }
