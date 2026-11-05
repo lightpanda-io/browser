@@ -224,8 +224,9 @@ fn dispatchBrowserTool(
             error.InvalidParams,
             error.InvalidSelector,
             error.InvalidNodeType,
+            error.ScriptError,
             error.ActionFailed,
-        => .InvalidParams,
+            => .InvalidParams,
             error.Cancelled => .Cancelled,
             error.Timeout, error.NavigationTimeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
@@ -645,14 +646,22 @@ test "MCP - a wrong-typed argument is named instead of bare InvalidParams" {
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
 
-    // A string where the schema says integer used to die in parseValue with a
-    // bare InvalidParams; the diagnosis names the field and what arrived.
+    // std.json coerces numeric strings, so `timeout: "60"` parses — the type
+    // check must not reject it.
     try router.handleMessage(server, testing.arena_allocator,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#btn","timeout":"60"}}}
     );
-    try testing.expectJson(.{ .id = 1, .result = .{
+    try testing.expectJson(.{ .id = 1, .result = .{ .isError = false } }, out.written());
+    out.clearRetainingCapacity();
+
+    // A value that really can't parse: the diagnosis names the field and
+    // what arrived, instead of parseValue's bare InvalidParams.
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForSelector","arguments":{"selector":"#btn","timeout":"many"}}}
+    );
+    try testing.expectJson(.{ .id = 2, .result = .{
         .isError = true,
-        .content = &.{.{ .text = "argument 'timeout' must be an integer, got string \"60\"" }},
+        .content = &.{.{ .text = "argument 'timeout' must be an integer, got string \"many\"" }},
     } }, out.written());
 }
 

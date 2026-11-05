@@ -118,8 +118,9 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
         return;
     }
     if (input._input_type == .radio and !checked) {
-        // A click can never uncheck a radio.
-        return error.InvalidNodeType;
+        // A click can never uncheck a radio. The node type is right, so this
+        // is a fact about the page, not a bad argument.
+        return error.ActionFailed;
     }
 
     // The click's activation behavior (EventManager.ActivationState) toggles
@@ -157,9 +158,10 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
 /// its picker would. `change` fires right away: nothing commits it on blur.
 fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
     const el = ctl.asElement();
-    if (!ctl.acceptsTextEntry() or !Frame.user_input.acceptsEdit(el)) {
-        return error.InvalidNodeType;
-    }
+    // Not a text-entry control is an argument problem; the right control
+    // that won't take an edit (disabled, read-only) is a fact about the page.
+    if (!ctl.acceptsTextEntry()) return error.InvalidNodeType;
+    if (!Frame.user_input.acceptsEdit(el)) return error.ActionFailed;
 
     if (ctl.tracksSelection()) {
         try ctl.select(frame);

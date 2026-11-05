@@ -330,6 +330,7 @@ pub const ToolError = error{
     InvalidParams,
     InvalidSelector,
     InvalidNodeType,
+    ScriptError,
     ActionFailed,
     NodeNotFound,
     NavigationFailed,
@@ -349,8 +350,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
         error.NavigationTimeout => "NavigationTimeout: no response arrived before the timeout, so the page is empty. Other sessions may be holding every connection (see --http-max-concurrent); retry goto or close idle sessions.",
         error.InvalidParams => "InvalidParams: the arguments don't fit this tool. Check names and types against the tool's input schema; `selector` parameters take plain CSS only.",
         error.InvalidSelector => "InvalidSelector: the selector argument is not a valid CSS selector. Only plain CSS is supported — playwright-style prefixes (text=, role=, xpath=) are not. Use findElement(role, name) for text/role lookup, or read tree/markdown to find a usable id/class.",
-        error.InvalidNodeType => "InvalidNodeType: the matched element's type doesn't fit this action — fill needs an input/textarea/contenteditable, selectOption needs a <select>, setChecked needs a checkable input, click/hover/press need an Element. Check the tag with nodeDetails.",
-        error.ActionFailed => "ActionFailed: the element couldn't be interacted with — it may be hidden, disabled, covered, not focusable (press without a target needs a focused element), or the page cancelled the edit (a beforeinput handler calling preventDefault). Re-inspect with tree/interactiveElements, check disabled flags, or scroll it into view.",
+        error.InvalidNodeType => "InvalidNodeType: the matched element's type doesn't fit this action — fill needs an input, textarea or <select>, selectOption needs a <select>, setChecked needs a checkbox or radio, click/hover/press need an Element. Check the tag with nodeDetails.",
+        error.ScriptError => "ScriptError: the script didn't run — it has a syntax error or threw. Run it with evaluate to see the failure and fix it; a waitForScript script must return a truthy value.",
+        error.ActionFailed => "ActionFailed: the element couldn't be interacted with — it may be hidden, disabled, read-only, covered, not focusable (press without a target needs a focused element), the page cancelled the edit (a beforeinput handler calling preventDefault), or the action is impossible here (a click can't uncheck a radio — check another radio in the group). Re-inspect with tree/interactiveElements or scroll it into view.",
         error.Timeout => "Timeout: the waited-for condition never held within the timeout. Retry with a larger `timeout`, or check the page state first (tree/evaluate) — the condition may never become true.",
         error.NavigationFailed => "NavigationFailed: the page didn't settle after the navigation. Check the current URL with getUrl and retry.",
         error.Cancelled => "Cancelled: the call was aborted — the session was closed or another request interrupted it.",
@@ -496,7 +498,8 @@ fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
 pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
     return switch (err) {
         error.FrameNotLoaded => .frame_not_loaded,
-        error.InvalidParams, error.InvalidSelector, error.InvalidNodeType, error.ActionFailed => .invalid_params,
+        error.InvalidParams, error.InvalidSelector, error.InvalidNodeType, error.ScriptError => .invalid_params,
+        error.ActionFailed => .action_failed,
         error.NodeNotFound => .node_not_found,
         error.NavigationFailed => .navigation_failed,
         error.NavigationTimeout => .navigation_timeout,
@@ -1763,7 +1766,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
     lp.actions.waitForScript(args.script, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
         error.Timeout => return ToolError.Timeout,
-        error.ScriptError => return ToolError.InvalidParams,
+        error.ScriptError => return ToolError.ScriptError,
         else => {
             log.debug(.browser, "waitForScript error", .{ .err = @errorName(err) });
             return ToolError.InternalError;
@@ -2277,9 +2280,10 @@ test "call: an argument diagnosis is in-band but counts as invalid_params" {
 
 test "errorMessage: every error says more than its name" {
     const members = [_]ToolError{
-        error.FrameNotLoaded, error.InvalidParams,    error.InvalidSelector, error.InvalidNodeType,
-        error.ActionFailed,   error.NodeNotFound,     error.NavigationFailed, error.NavigationTimeout,
-        error.Cancelled,      error.Timeout,          error.InternalError,   error.OutOfMemory,
+        error.FrameNotLoaded,    error.InvalidParams, error.InvalidSelector, error.InvalidNodeType,
+        error.ScriptError,       error.ActionFailed,  error.NodeNotFound,    error.NavigationFailed,
+        error.NavigationTimeout, error.Cancelled,     error.Timeout,         error.InternalError,
+        error.OutOfMemory,
     };
     for (members) |m| {
         try std.testing.expect(!std.mem.eql(u8, errorMessage(m), @errorName(m)));
@@ -2325,8 +2329,55 @@ test "fill: a page that cancels the edit is an ActionFailed, not an InternalErro
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#fillCancel\",\"value\":\"x\"}", .{});
     const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
-    try std.testing.expectEqual(.invalid_params, telemetryOutcome(r));
+    try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
     try std.testing.expectError(error.ActionFailed, r);
+}
+
+test "fill: a disabled or read-only control is an ActionFailed, not an InvalidNodeType" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    // The control type fits fill; the page refuses the edit, so this is a
+    // page-side fact (ActionFailed), not a bad argument (InvalidNodeType).
+    const readonly = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#fillRo\",\"value\":\"x\"}", .{});
+    const r = call(aa, page.session, &registry, "fill", readonly, .{ .source = .user });
+    try std.testing.expectError(error.ActionFailed, r);
+    try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
+}
+
+test "setChecked: a radio can't be unchecked, and the error says so" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const check = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#rad\",\"checked\":true}", .{});
+    _ = try call(aa, page.session, &registry, "setChecked", check, .{ .source = .user });
+
+    const uncheck = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#rad\",\"checked\":false}", .{});
+    const r = call(aa, page.session, &registry, "setChecked", uncheck, .{ .source = .user });
+    try std.testing.expectError(error.ActionFailed, r);
+    try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
+}
+
+test "waitForScript: a script that doesn't compile is a ScriptError, not bare InvalidParams" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"script\":\"return (\"}", .{});
+    const r = call(aa, page.session, &registry, "waitForScript", args, .{ .source = .user });
+    try std.testing.expectError(error.ScriptError, r);
+    try std.testing.expect(std.mem.find(u8, errorMessage(error.ScriptError), "evaluate") != null);
 }
 
 test "waitForState: a state the page never reaches times out" {
