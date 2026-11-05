@@ -452,7 +452,7 @@ pub fn upgradeBuiltIns(definition: *CustomElementDefinition, frame: *Frame) !voi
     var candidates: std.ArrayList(*Element) = .empty;
     for (frame._undefined_builtins.keys(), frame._undefined_builtins.values()) |element, is_value| {
         if (std.mem.eql(u8, is_value, definition.name) and element.asNode().isConnected()) {
-            try candidates.append(frame.local_arena, element);
+            try candidates.append(frame.call_arena, element);
         }
     }
     for (candidates.items) |element| {
