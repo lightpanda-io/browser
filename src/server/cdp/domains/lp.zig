@@ -511,12 +511,12 @@ fn handleJavaScriptDialog(cmd: anytype) !void {
     })) orelse return error.InvalidParam;
 
     const target = try cmd.target();
-    const bc = target.bc;
+    const arena = target.arena.allocator();
 
     // Duplicate promptText into the BrowserContext arena so it outlives the
     // CDP command's own message arena (the dialog may fire on a later command).
     const prompt_text: ?[]const u8 = if (params.promptText) |t|
-        try bc.arena.dupe(u8, t)
+        try arena.dupe(u8, t)
     else
         null;
 
