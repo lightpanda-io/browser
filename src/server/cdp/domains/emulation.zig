@@ -554,6 +554,8 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
         .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
     });
     try testing.waitForPage(bc);
+    _ = try testing.sentResult(&ctx, 2);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", (try testing.firstTarget(bc)).mainFrame().?.url);
     try std.testing.expectEqualDeep(configured, browser.getViewport());
 
     try ctx.processMessage(.{ .id = 20, .method = "Browser.resetPermissions" });
