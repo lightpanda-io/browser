@@ -48,12 +48,12 @@ pub const EncodingStream = struct {
     // Transformer API.
 
     pub fn transform(self: *EncodingStream, controller: *TransformStream.TransformStreamDefaultController, chunk: js.Value) !void {
-        const input = chunk.toZig(js.BufferSource) catch {
+        const input = (chunk.toZig(js.BufferSource) catch {
             return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
-        };
+        }).bytes();
 
-        if (input.bytes.len == 0) return;
-        return self.process(controller, input.bytes, false);
+        if (input.len == 0) return;
+        return self.process(controller, input, false);
     }
 
     pub fn flush(self: *EncodingStream, controller: *TransformStream.TransformStreamDefaultController) !void {
@@ -186,21 +186,21 @@ pub const DecodingStream = struct {
     // Transformer API.
 
     pub fn transform(self: *DecodingStream, controller: *TransformStream.TransformStreamDefaultController, chunk: js.Value) !void {
-        const input = chunk.toZig(js.BufferSource) catch {
+        const input = (chunk.toZig(js.BufferSource) catch {
             return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
-        };
+        }).bytes();
 
         if (self.state == .ended) {
             // The compressed data already ended. (Every other way to end
             // errors the writable side.)
-            if (input.bytes.len > 0) {
+            if (input.len > 0) {
                 return self.fail(controller, "Junk found after end of compressed data");
             }
             return;
         }
 
-        if (input.bytes.len == 0) return;
-        return self.process(controller, input.bytes);
+        if (input.len == 0) return;
+        return self.process(controller, input);
     }
 
     pub fn flush(self: *DecodingStream, controller: *TransformStream.TransformStreamDefaultController) !void {

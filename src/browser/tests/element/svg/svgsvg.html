@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <svg id=first x="10" y="20px" width="25%" height="2.54cm" preserveAspectRatio="xMinYMax slice">
@@ -40,7 +41,7 @@
 
   length.valueAsString = '2.54cm';
   testing.expectEqual(SVGLength.SVG_LENGTHTYPE_CM, length.unitType);
-  testing.expectEqual(2.54, length.valueInSpecifiedUnits);
+  testing.expectEqual(Math.fround(2.54), length.valueInSpecifiedUnits);
   testing.expectEqual(96, Math.round(length.value));
   testing.expectEqual('2.54cm', length.valueAsString);
 
@@ -48,14 +49,16 @@
   // valueInSpecifiedUnits converts (12 user units = 0.3175cm).
   length.value = 12;
   testing.expectEqual(SVGLength.SVG_LENGTHTYPE_CM, length.unitType);
-  testing.expectEqual(0.3175, length.valueInSpecifiedUnits);
+  testing.expectEqual(Math.fround(0.3175), length.valueInSpecifiedUnits);
   testing.expectEqual(12, length.value);
   testing.expectEqual('0.3175cm', length.valueAsString);
   length.newValueSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_PX, 4.5);
   testing.expectEqual('4.5px', length.valueAsString);
   testing.expectError('NotSupportedError', () => length.newValueSpecifiedUnits(0, 1));
   testing.expectError('TypeError', () => { length.value = Infinity; });
-  testing.expectError('SyntaxError', () => { length.valueAsString = 'calc(1px + 2%)'; });
+  testing.diverges('SVGLength has no calc() support', () => {
+    testing.expectError('SyntaxError', () => { length.valueAsString = 'calc(1px + 2%)'; });
+  });
   testing.expectError('SyntaxError', () => { length.valueAsString = 'NaN'; });
 
   const angle = svg.createSVGAngle();
@@ -99,11 +102,13 @@
   testing.expectEqual(10, Math.round(copied.matrix.f));
   testing.expectError('TypeError', () => copied.setScale(Infinity, 1));
 
-  const matrix3d = new DOMMatrix();
-  matrix3d.m13 = 7;
-  const copied2d = svg.createSVGTransformFromMatrix(matrix3d);
-  testing.expectEqual(true, copied2d.matrix.is2D);
-  testing.expectEqual(0, copied2d.matrix.m13);
+  testing.diverges('SVG 2 takes a DOMMatrix; Chrome only takes its legacy SVGMatrix', () => {
+    const matrix3d = new DOMMatrix();
+    matrix3d.m13 = 7;
+    const copied2d = svg.createSVGTransformFromMatrix(matrix3d);
+    testing.expectEqual(true, copied2d.matrix.is2D);
+    testing.expectEqual(0, copied2d.matrix.m13);
+  });
 }
 </script>
 
@@ -124,10 +129,12 @@
 
   const nested = $('#nested');
   nested.setAttribute('width', '50%');
-  testing.expectEqual(
-    Math.round(svg.width.baseVal.value / 2),
-    Math.round(nested.width.baseVal.value),
-  );
+  testing.diverges('no layout: Chrome resolves the nested percentage against the rendered outer <svg>', () => {
+    testing.expectEqual(
+      Math.round(svg.width.baseVal.value / 2),
+      Math.round(nested.width.baseVal.value),
+    );
+  });
   nested.setAttribute('style', 'font-size: 20px');
   nested.setAttribute('x', '2em');
   testing.expectEqual(40, nested.x.baseVal.value);
@@ -178,7 +185,9 @@
   svg.setAttribute('preserveAspectRatio', 'none meet');
   testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE, aspect.baseVal.align);
   testing.expectEqual(SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE, aspect.animVal.align);
-  testing.expectError('TypeError', () => { aspect.baseVal.align = 0; });
+  testing.diverges('SVG 2 throws TypeError for an unknown align; Chrome keeps SVG 1.1 NotSupportedError', () => {
+    testing.expectError('TypeError', () => { aspect.baseVal.align = 0; });
+  });
   testing.expectError('NoModificationAllowedError', () => { aspect.animVal.meetOrSlice = 2; });
 
   const empty = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -197,29 +206,31 @@
   // SVG2 defines SVGPoint/SVGMatrix/SVGRect as aliases of the DOM geometry
   // types, which is what we return. Browsers (Chrome and Firefox both) still
   // ship distinct legacy interfaces, so the instanceof and DOM-geometry-only
-  // members (w, is2D) fail there. The DOM types are functional supersets of
+  // members (w, is2D) diverge there. The DOM types are functional supersets of
   // the legacy ones, so site-facing behavior only gains members.
   const svg = $('#first');
 
   const point = svg.createSVGPoint();
-  testing.expectEqual(true, point instanceof DOMPoint);
   testing.expectEqual(0, point.x);
   testing.expectEqual(0, point.y);
-  testing.expectEqual(1, point.w);
   point.x = 5;
   testing.expectEqual(5, point.x);
 
   const matrix = svg.createSVGMatrix();
-  testing.expectEqual(true, matrix instanceof DOMMatrix);
   testing.expectEqual(1, matrix.a);
   testing.expectEqual(0, matrix.b);
   testing.expectEqual(1, matrix.d);
-  testing.expectEqual(true, matrix.is2D);
 
   const rect = svg.createSVGRect();
-  testing.expectEqual(true, rect instanceof DOMRect);
   testing.expectEqual(0, rect.x);
   testing.expectEqual(0, rect.width);
+  testing.diverges('SVG 2 aliases; Chrome keeps the legacy SVGPoint/SVGMatrix/SVGRect', () => {
+    testing.expectEqual(true, point instanceof DOMPoint);
+    testing.expectEqual(1, point.w);
+    testing.expectEqual(true, matrix instanceof DOMMatrix);
+    testing.expectEqual(true, matrix.is2D);
+    testing.expectEqual(true, rect instanceof DOMRect);
+  });
 
   const number = svg.createSVGNumber();
   testing.expectEqual(true, number instanceof SVGNumber);

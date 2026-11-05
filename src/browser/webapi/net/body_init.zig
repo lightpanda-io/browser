@@ -55,7 +55,7 @@ pub const BodyInit = union(enum) {
     pub fn sizeHint(self: BodyInit) ?usize {
         return switch (self) {
             .bytes => |b| b.len,
-            .buffer => |b| b.bytes.len,
+            .buffer => |b| b.bytes().len,
             .blob => |b| b._slice.len + b._mime.len,
             .form_data, .url_search_params, .stream => null,
         };
@@ -108,7 +108,7 @@ pub const BodyInit = union(enum) {
             },
             .buffer => |b| {
                 return .{
-                    .bytes = try arena.dupe(u8, b.bytes),
+                    .bytes = try arena.dupe(u8, b.bytes()),
                     .content_type = null, // Buffer sources carry no default Content-Type
                 };
             },
@@ -216,7 +216,15 @@ test "BodyInit: FormData emits multipart with random boundary" {
 }
 
 test "BodyInit: buffer source has no default Content-Type" {
-    const r = try (BodyInit{ .buffer = .{ .bytes = "hello" } }).extract(testing.arena_allocator);
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const value = try ls.local.exec("new TextEncoder().encode('hello')", null);
+    const r = try (BodyInit{ .buffer = try value.toZig(js.BufferSource) }).extract(testing.arena_allocator);
     try testing.expectString("hello", r.bytes);
     try testing.expectEqual(true, r.content_type == null);
 }

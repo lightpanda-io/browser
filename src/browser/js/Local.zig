@@ -188,9 +188,17 @@ pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js
 
 // Compile `src` into a context-bound Script
 pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Script {
-    const result = try self.compileWithCache(src, name, null);
+    const result = try self.compileWithCache(src, name, .{}, null);
     return result.script;
 }
+
+// Where a script's source starts in the resource `name`, e.g. an inline script
+// in its document. 0-based, the column in UTF-16 code units. V8 adds it to the
+// positions it reports, the column only on the source's first line.
+pub const SourcePosition = struct {
+    line: u32 = 0,
+    column: u32 = 0,
+};
 
 const CompileResult = struct {
     script: js.Script,
@@ -203,13 +211,25 @@ const CompileResult = struct {
 
 // Like compile, but takes an optional cached_data which is a previously
 // compiled and serialized script (see Script.Unbound.createCodeCache)
-pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
+pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, position: SourcePosition, cached_data: ?[]const u8) !CompileResult {
     const script_name = try self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = try self.isolate.initStringHandle(src);
 
     // Create ScriptOrigin
     var origin: v8.ScriptOrigin = undefined;
-    v8.v8__ScriptOrigin__CONSTRUCT(&origin, @ptrCast(script_name));
+    v8.v8__ScriptOrigin__CONSTRUCT2(
+        &origin,
+        script_name,
+        std.math.lossyCast(c_int, position.line),
+        std.math.lossyCast(c_int, position.column),
+        false, // resource_is_shared_cross_origin
+        -1, // script_id
+        null, // source_map_url
+        false, // resource_is_opaque
+        false, // is_wasm
+        false, // is_module
+        null, // host_defined_options
+    );
 
     // The Source takes ownership of the CachedData pointer (it holds it in a
     // unique_ptr), so we must not delete it ourselves — Source__DESTRUCT does.
@@ -255,95 +275,19 @@ pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, 
 //  5 - Update our identity_map (so that, if we return this same instance again,
 //      we can just grab it from the identity_map)
 pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !js.Object {
-    const ctx = self.ctx;
-    const context_arena = ctx.arena;
-
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .@"struct" => {
-            // Struct, has to be placed on the heap
-            const heap = try context_arena.create(T);
+            // Struct, has to be placed on the heap. It lives as long as its identity map
+            // entry and strong v8.Global, which can outlive this context (e.g. an iframe
+            // or popup re-navigated in place).
+            const heap = try self.ctx.identity_arena.create(T);
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_handle, heap);
         },
-        .pointer => |ptr| {
-            const resolved = resolveValue(value);
-
-            const resolved_ptr_id = @intFromPtr(resolved.ptr);
-            const gop = try ctx.addIdentity(resolved_ptr_id);
-            if (gop.found_existing) {
-                // we've seen this instance before, return the same object
-                return .{
-                    .local = self,
-                    .handle = @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle)),
-                };
-            }
-
-            const isolate = self.isolate;
-            const JsApi = bridge.Struct(ptr.child).JsApi;
-
-            // Sometimes we're creating a new Object, like when
-            // we're returning a value from a function. In those cases
-            // we have to get the object template, and we can get an object
-            // by calling initInstance its InstanceTemplate.
-            // Sometimes though we already have the Object to bind to
-            // for example, when we're executing a constructor, v8 has
-            // already created the "this" object.
-            const js_obj = js.Object{
-                .local = self,
-                .handle = js_obj_handle orelse blk: {
-                    const function_template_handle = ctx.templates[resolved.class_id];
-                    const object_template_handle = v8.v8__FunctionTemplate__InstanceTemplate(function_template_handle).?;
-                    break :blk v8.v8__ObjectTemplate__NewInstance(object_template_handle, self.handle).?;
-                },
-            };
-
-            if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
-                // The TAO tells us the Zig instance and its type, so that
-                // we can map back from JS. See TaggedOpaque for details.
-                try resolved.tagged.store(js_obj.handle, ctx.identity_arena);
-            } else {
-                // If the struct is empty, we don't need to do all
-                // the TOA stuff and setting the internal data.
-                // When we try to map this from JS->Zig, in
-                // TaggedOpaque, we'll also know there that
-                // the type is empty and can create an empty instance.
-            }
-
-            // dont' use js_obj.persist(), because we don't want to track this in
-            // context.global_objects, we want to track it in context.identity_map.
-            v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
-            if (resolved.finalizer) |finalizer| {
-                const finalizer_ptr_id = finalizer.ptr_id;
-
-                const page = ctx.page;
-                const session = page.session;
-                const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.arena, finalizer_ptr_id);
-                if (finalizer_gop.found_existing == false) {
-                    // This is the first context (and very likely only one) to
-                    // see this Zig instance. We need to create the FinalizerCallback
-                    // so that we can cleanup on Page teardown if v8 doesn't finalize.
-                    errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
-                    finalizer.acquire_ref(finalizer_ptr_id);
-                    finalizer_gop.value_ptr.* = createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
-                }
-                const fc = finalizer_gop.value_ptr;
-                const browser = session.browser;
-                const identity_finalizer = try browser.fc_identity_pool.create(browser.allocator);
-                identity_finalizer.* = .{
-                    .browser = browser,
-                    .page = page,
-                    .identity = ctx.identity,
-                    .finalizer_ptr_id = finalizer_ptr_id,
-                    .resolved_ptr_id = resolved_ptr_id,
-                    .next = fc.identities,
-                };
-                fc.identities = identity_finalizer;
-                fc.identity_count += 1;
-
-                v8.v8__Global__SetWeakFinalizer(gop.value_ptr, identity_finalizer, finalizer.release_ref, v8.kParameter);
-            }
-            return js_obj;
+        .pointer => return .{
+            .local = self,
+            .handle = try self.wrapMostSpecific(js_obj_handle, value),
         },
         else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
     }
@@ -593,7 +537,7 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 if (js_val.isUndefined()) {
                     return null;
                 }
-                return .{ .value = try js_val.toStringSlice() };
+                return .{ .value = try self.jsValueToZig([]const u8, js_val) };
             }
 
             if (comptime o.child == js.Object) {
@@ -627,8 +571,8 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 }
             },
             .slice => {
-                if (ptr.sentinel() == null) {
-                    if (try jsValueToTypedArray(ptr.child, js_val)) |value| {
+                if (ptr.sentinel() == null and ptr.child != u8) {
+                    if (try self.jsValueToTypedArray(ptr.child, js_val)) |value| {
                         return value;
                     }
                 }
@@ -794,7 +738,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         // zig fmt: on
         => {
             const ValueType = @typeInfo(@FieldType(T, "values")).pointer.child;
-            const arr = (try jsValueToTypedArray(ValueType, js_val)) orelse return null;
+            const arr = (try self.jsValueToTypedArray(ValueType, js_val)) orelse return null;
             return .{ .values = arr };
         },
         js.BufferSource => {
@@ -804,12 +748,16 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             if (js_val.isArrayBufferView() and !js_val.isBufferSource()) {
                 return error.TypeError;
             }
-            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
-            return .{ .bytes = bytes };
+            if (!js_val.isArrayBuffer() and !js_val.isArrayBufferView()) {
+                return null;
+            }
+            return .{ .value = js_val };
         },
         js.AllowSharedBufferSource => {
-            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
-            return .{ .bytes = bytes };
+            if (!js_val.isArrayBuffer() and !js_val.isArrayBufferView()) {
+                return null;
+            }
+            return .{ .value = js_val };
         },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
@@ -919,8 +867,15 @@ pub fn assertDictionaryFieldOrder(comptime T: type) void {
     }
 }
 
-fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
-    return jsValueToArrayBufferSlice(T, false, js_val);
+// A copy, as a WebIDL sequence is: page code that runs before the slice is
+// used (a later argument's getter or valueOf) can detach or shrink the buffer.
+fn jsValueToTypedArray(self: *const Local, comptime T: type, js_val: js.Value) !?[]T {
+    const values = (try jsValueToArrayBufferSlice(T, false, js_val)) orelse return null;
+    return try self.call_arena.dupe(T, values);
+}
+
+pub fn bufferSourceBytes(js_val: js.Value) []u8 {
+    return (jsValueToArrayBufferSlice(u8, true, js_val) catch unreachable).?;
 }
 
 // With `any_view`, every ArrayBufferView is accepted as a byte slice regardless
@@ -1129,13 +1084,8 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                 return .{ .invalid = {} };
             },
             .slice => {
-                if (js_val.isTypedArray()) {
+                if (js_val.isTypedArray() and ptr.child != u8) {
                     switch (ptr.child) {
-                        u8 => if (ptr.sentinel() == null) {
-                            if (js_val.isUint8Array() or js_val.isUint8ClampedArray()) {
-                                return .{ .ok = {} };
-                            }
-                        },
                         i8 => if (js_val.isInt8Array()) {
                             return .{ .ok = {} };
                         },
@@ -1355,10 +1305,14 @@ const Resolved = struct {
         release_ref_from_zig: *const fn (ptr_id: usize, page: *Page) void,
     };
 };
-fn resolveValue(value: anytype) Resolved {
+// Walks value's _type chain down to the most specific type (see Resolved) and
+// returns that instance's JS object, creating it on first use. The identity
+// lookup happens at the leaf, so a hit costs one walk and never builds a
+// Resolved. Only the small handle travels back up the chain.
+fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !*const v8.Object {
     const T = bridge.Struct(@TypeOf(value));
     if (!@hasField(T, "_type")) {
-        return resolveT(T, value);
+        return self.wrapLeaf(js_obj_handle, T, value);
     }
 
     // A bare-tag _type means the subtypes are chain members, not payloads
@@ -1370,15 +1324,15 @@ fn resolveValue(value: anytype) Resolved {
                 if (S == T) {
                     // A tag can map to the type itself (e.g. Media.generic);
                     // the value is already the most specific type.
-                    return resolveT(T, value);
+                    return self.wrapLeaf(js_obj_handle, T, value);
                 }
-                return resolveValue(value.subtype(S));
+                return self.wrapMostSpecific(js_obj_handle, value.subtype(S));
             },
         }
     }
 
     if (comptime @typeInfo(@TypeOf(value._type)) != .@"union") {
-        return resolveT(T, value);
+        return self.wrapLeaf(js_obj_handle, T, value);
     }
 
     const U = @typeInfo(@TypeOf(value._type)).@"union";
@@ -1390,20 +1344,102 @@ fn resolveValue(value: anytype) Resolved {
                 .void => {
                     // Unusual case, but the Event (and maybe others) can be
                     // returned as-is. In that case, it has a dummy void type.
-                    return resolveT(T, value);
+                    return self.wrapLeaf(js_obj_handle, T, value);
                 },
                 else => @compileError(@typeName(field_type) ++ " has an unsupported _type field"),
             };
-            return resolveValue(child);
+            return self.wrapMostSpecific(js_obj_handle, child);
         }
     }
     unreachable;
 }
 
-fn resolveT(comptime T: type, value: *T) Resolved {
+fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: type, value: *T) !*const v8.Object {
     if (comptime lp.IS_DEBUG) {
         assertChainContiguity(T, value);
     }
+    const gop = try self.ctx.addIdentity(@intFromPtr(value));
+    if (gop.found_existing) {
+        // we've seen this instance before, return the same object
+        return @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle));
+    }
+    const resolved = resolveT(T, value);
+    const store_tagged = comptime !@hasDecl(T.JsApi.Meta, "empty_with_no_proto");
+    return self.wrapNew(js_obj_handle, &resolved, gop.value_ptr, store_tagged);
+}
+
+// The first time an instance goes to JS. Kept out of line: wrapLeaf is
+// instantiated once per concrete type.
+noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolved: *const Resolved, global: *v8.Global, store_tagged: bool) !*const v8.Object {
+    const ctx = self.ctx;
+    const resolved_ptr_id = @intFromPtr(resolved.ptr);
+    const isolate = self.isolate;
+
+    // Sometimes we're creating a new Object, like when
+    // we're returning a value from a function. In those cases
+    // we have to get the object template, and we can get an object
+    // by calling initInstance its InstanceTemplate.
+    // Sometimes though we already have the Object to bind to
+    // for example, when we're executing a constructor, v8 has
+    // already created the "this" object.
+    const js_obj = js.Object{
+        .local = self,
+        .handle = js_obj_handle orelse blk: {
+            const function_template_handle = ctx.templates[resolved.class_id];
+            const object_template_handle = v8.v8__FunctionTemplate__InstanceTemplate(function_template_handle).?;
+            break :blk v8.v8__ObjectTemplate__NewInstance(object_template_handle, self.handle).?;
+        },
+    };
+
+    if (store_tagged) {
+        // The TAO tells us the Zig instance and its type, so that
+        // we can map back from JS. See TaggedOpaque for details.
+        try resolved.tagged.store(js_obj.handle, ctx.identity_arena);
+    } else {
+        // If the struct is empty, we don't need to do all
+        // the TOA stuff and setting the internal data.
+        // When we try to map this from JS->Zig, in
+        // TaggedOpaque, we'll also know there that
+        // the type is empty and can create an empty instance.
+    }
+
+    // dont' use js_obj.persist(), because we don't want to track this in
+    // context.global_objects, we want to track it in context.identity_map.
+    v8.v8__Global__New(isolate.handle, js_obj.handle, global);
+    if (resolved.finalizer) |finalizer| {
+        const finalizer_ptr_id = finalizer.ptr_id;
+
+        const page = ctx.page;
+        const session = page.session;
+        const finalizer_gop = try page.finalizer_callbacks.getOrPut(page.arena, finalizer_ptr_id);
+        if (finalizer_gop.found_existing == false) {
+            // This is the first context (and very likely only one) to
+            // see this Zig instance. We need to create the FinalizerCallback
+            // so that we can cleanup on Page teardown if v8 doesn't finalize.
+            errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
+            finalizer.acquire_ref(finalizer_ptr_id);
+            finalizer_gop.value_ptr.* = createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
+        }
+        const fc = finalizer_gop.value_ptr;
+        const browser = session.browser;
+        const identity_finalizer = try browser.fc_identity_pool.create(browser.allocator);
+        identity_finalizer.* = .{
+            .browser = browser,
+            .page = page,
+            .identity = ctx.identity,
+            .finalizer_ptr_id = finalizer_ptr_id,
+            .resolved_ptr_id = resolved_ptr_id,
+            .next = fc.identities,
+        };
+        fc.identities = identity_finalizer;
+        fc.identity_count += 1;
+
+        v8.v8__Global__SetWeakFinalizer(global, identity_finalizer, finalizer.release_ref, v8.kParameter);
+    }
+    return js_obj.handle;
+}
+
+fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,

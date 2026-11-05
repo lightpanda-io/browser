@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <body>
   <input id="input1" type="text">
@@ -446,8 +447,16 @@
   plain.focus();
   testing.expectEqual(div, document.activeElement);
 
+  // an invalid value is the inherit state, not an editing host
+  const invalid = document.createElement('div');
+  invalid.setAttribute('contenteditable', 'bogus');
+  document.body.appendChild(invalid);
+  invalid.focus();
+  testing.expectEqual(div, document.activeElement);
+
   div.remove();
   plain.remove();
+  invalid.remove();
 }
 </script>
 

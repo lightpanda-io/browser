@@ -147,6 +147,9 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }
 
+    const task_scope = self.frame.js.attribution.enterIfUntagged(.event, event._type_string.str());
+    defer if (task_scope) |ts| ts.exit();
+
     switch (target._type) {
         .node => try self.dispatchNode(target.subtype(Node), event),
         else => try self.dispatchDirect(target, event, .{ .context = "dispatch" }),
@@ -288,7 +291,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             // activation behavior (ancestors only for bubbling events).
             if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
-                    Frame.user_input.handleClick(frame, activation_target, target) catch |err| {
+                    Frame.user_input.handleClick(frame, activation_target, target, event._is_trusted) catch |err| {
                         log.debug(.event, "frame.click", .{ .err = err });
                     };
                 }

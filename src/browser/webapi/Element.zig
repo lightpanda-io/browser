@@ -24,6 +24,7 @@ const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
+const layout = @import("../layout.zig");
 const text_measure = @import("../text_measure.zig");
 
 const CSS = @import("CSS.zig");
@@ -157,7 +158,10 @@ pub const Flags = packed struct(u8) {
     // and the attribute scan for the many elements that have neither.
     has_inline_style: bool = false,
 
-    _unused: u4 = 0,
+    // Created with an "is" value and not upgraded (yet, or ever): not :defined.
+    builtin_undefined: bool = false,
+
+    _unused: u3 = 0,
 };
 
 _type: Type,
@@ -242,13 +246,21 @@ pub fn asConstNode(self: *const Element) *const Node {
     return Factory.protoOf(@constCast(self));
 }
 
-/// TODO: localName and prefix comparison.
-pub fn isEqualNode(self: *Element, other: *Element) bool {
-    const self_tag = self.getTagNameDump();
-    const other_tag = other.getTagNameDump();
-    // Compare namespaces and tags.
-    const dirty = self._namespace != other._namespace or !std.mem.eql(u8, self_tag, other_tag);
-    if (dirty) {
+pub fn isEqualNode(self: *Element, other: *Element, frame: *Frame) bool {
+    if (self._namespace != other._namespace) {
+        return false;
+    }
+
+    // Custom namespace URIs live in a page lookup, not in the enum.
+    if (self._namespace == .unknown and !optionalStringEql(self.getNamespaceUri(frame), other.getNamespaceUri(frame))) {
+        return false;
+    }
+
+    if (!optionalStringEql(self._prefix(), other._prefix())) {
+        return false;
+    }
+
+    if (!std.mem.eql(u8, self.getLocalName(), other.getLocalName())) {
         return false;
     }
 
@@ -256,7 +268,13 @@ pub fn isEqualNode(self: *Element, other: *Element) bool {
         return false;
     }
 
-    return self.asNode().isEqualChildren(other.asNode());
+    return self.asNode().isEqualChildren(other.asNode(), frame);
+}
+
+fn optionalStringEql(a: ?[]const u8, b: ?[]const u8) bool {
+    const av = a orelse return b == null;
+    const bv = b orelse return false;
+    return std.mem.eql(u8, av, bv);
 }
 
 pub fn getTagNameLower(self: *const Element) []const u8 {
@@ -287,6 +305,7 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
                     .embed => "embed",
                     .fieldset => "fieldset",
                     .font => "font",
+                    .frame => "frame",
                     .frameset => "frameset",
                     .form => "form",
                     .generic => he.subtype(Html.Generic)._tag_name.str(),
@@ -371,6 +390,7 @@ pub fn getTagNameSpec(self: *const Element, allocator: Allocator) []const u8 {
                 .embed => "EMBED",
                 .fieldset => "FIELDSET",
                 .font => "FONT",
+                .frame => "FRAME",
                 .frameset => "FRAMESET",
                 .form => "FORM",
                 .generic => upperTag(he.subtype(Html.Generic)._tag),
@@ -814,21 +834,25 @@ pub fn isDisabled(self: *const Element) bool {
         return true;
     }
 
-    // <option> takes a different inheritance path: per HTML
-    // "concept-option-disabled" an option is disabled when its parent is an
-    // <optgroup disabled>. It does NOT inherit from <select disabled> or
-    // an ancestor <fieldset disabled>.
-    if (self.getTag() == .option) {
-        if (self.asConstNode()._parent) |parent_node| {
-            if (parent_node.is(Element)) |parent_el| {
-                if (parent_el.getTag() == .optgroup and
-                    parent_el.getAttributeInterned("disabled") != null)
-                {
+    // <option> and <optgroup> inherit from their owner <select> (itself
+    // disabled by an ancestor <fieldset>), and an option also from its
+    // <optgroup>. whatwg/html#12205.
+    const tag = self.getTag();
+    if (tag == .option or tag == .optgroup) {
+        const parent = self.asConstNode()._parent orelse return false;
+        if (tag == .option) {
+            var node: ?*Node = parent;
+            while (node) |n| : (node = n._parent) {
+                if (n.is(Html.Select) != null) break;
+                const optgroup = n.is(Html.OptGroup) orelse continue;
+                if (optgroup.asElement().getAttributeInterned("disabled") != null) {
                     return true;
                 }
+                break;
             }
         }
-        return false;
+        const pos = Html.Select.listPosition(parent) orelse return false;
+        return pos.select.asElement().isDisabled();
     }
 
     const element_node = self.asConstNode();
@@ -896,6 +920,10 @@ pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Fra
     _ = try self._attributes.putSafe(name, value, self, frame);
 }
 
+pub fn setInertStyleAttribute(self: *Element, value: String, frame: *Frame) !void {
+    try self._attributes.putInertStyle(value, self, frame);
+}
+
 pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
     const shadow_root = self.hostedShadowRoot(frame) orelse return null;
     if (shadow_root._mode == .closed) return null;
@@ -954,6 +982,8 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     const page = frame.page;
     try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
+    // The host's children leave the flat tree until a slot takes them
+    frame.renderingChanged();
     return shadow_root;
 }
 
@@ -1159,7 +1189,7 @@ pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 
 // The other DOMTokenList-reflected attributes (class and rel have dedicated
 // lookups above).
-pub const TokenListAttribute = enum { sizes, sandbox, @"for" };
+pub const TokenListAttribute = enum { sizes, sandbox, @"for", blocking };
 pub const TokenListKey = struct { element: *Element, attribute: TokenListAttribute };
 pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.DOMTokenList);
 
@@ -1210,19 +1240,52 @@ pub fn isSvgLink(self: *Element) bool {
     return self.is(Svg.Graphics.A) != null and self.svgAnchorHref() != null;
 }
 
-// An editing host takes focus like a form control does.
+// The contenteditable attribute's own state: true for the true and
+// plaintext-only states, false for false, null for inherit (no attribute,
+// or an invalid value). The attribute only applies to HTML elements.
+pub fn contentEditableState(self: *Element) ?bool {
+    if (self.is(Html) == null) {
+        return null;
+    }
+    const value = self.getAttributeInterned("contenteditable") orelse return null;
+    if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true") or std.ascii.eqlIgnoreCase(value, "plaintext-only")) {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "false")) {
+        return false;
+    }
+    return null;
+}
+
+// An editing host takes focus like a form control does. In a designMode
+// document the body is one: the spec names the document element, but Chrome
+// edits and focuses the body, and so do we.
 pub fn isEditingHost(self: *Element) bool {
-    const value = self.getAttributeInterned("contenteditable") orelse return false;
-    return std.ascii.eqlIgnoreCase(value, "false") == false;
+    if (self.contentEditableState()) |editable| {
+        return editable;
+    }
+    if (self.is(Html.Body) == null) {
+        return false;
+    }
+    const root = self.asNode().parentNode() orelse return false;
+    if (root.is(Html.Html) == null) {
+        return false;
+    }
+    const document = (root.parentNode() orelse return false).is(Node.Document) orelse return false;
+    return document._design_mode;
 }
 
 // An editing host or a descendant of one: the nearest contenteditable
-// attribute decides.
+// attribute in a true or false state decides, then the document's designMode.
 pub fn isEditable(self: *Element) bool {
-    var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
-        if (el.getAttributeInterned("contenteditable") != null) {
-            return el.isEditingHost();
+    var node: ?*Node = self.asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Element)) |el| {
+            if (el.contentEditableState()) |editable| {
+                return editable;
+            }
+        } else if (n.is(Node.Document)) |document| {
+            return document._design_mode;
         }
     }
     return false;
@@ -1538,6 +1601,11 @@ pub fn isVisible(self: *Element, frame: *Frame) bool {
     return !owner._style_manager.isHidden(self, .{});
 }
 
+fn computedPosition(self: *Element, frame: *Frame) StyleManager.Position {
+    const owner = self.ownerFrame(frame) orelse return .static;
+    return owner._style_manager.position(self);
+}
+
 const CheckVisibilityOpts = struct {
     checkOpacity: bool = false,
     checkVisibilityCSS: bool = false,
@@ -1594,6 +1662,15 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
                 return .{ .value = parsed, .explicit = true };
             } else |_| {}
         }
+    }
+
+    // An iframe without a size is 300x150, like any replaced element without
+    // an intrinsic size. Its content is hit-tested inside this box.
+    if (tag == .iframe) {
+        return .{ .value = switch (axis) {
+            .width => 300.0,
+            .height => 150.0,
+        }, .explicit = true };
     }
 
     return .{ .value = 5.0 };
@@ -1661,7 +1738,7 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (axis == .width) {
         const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-        return self.boxWidth(owner);
+        return layout.boxWidth(self, owner);
     }
 
     const own = self.getElementAxis(frame, axis);
@@ -1675,133 +1752,6 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         return own.value;
     }
     return @max(own.value, self.contentAxis(frame, axis));
-}
-
-// Width flows down (height flows up): a block in normal flow is as wide as
-// its containing block.
-fn boxWidth(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, .box)) |width| {
-        return width;
-    }
-
-    const own = self.getElementAxis(owner, .width);
-    const width = blk: {
-        if (self.isRootContainer()) {
-            // html/body return their set value regardless of children.
-            break :blk own.value;
-        }
-        const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-            .fixed => |width| width,
-            .percent => |fraction| fraction * self.containingBlockWidth(owner),
-            .fill => self.containingBlockWidth(owner),
-            .grow => @max(self.growShare(owner), self.contentWidth(owner)),
-            .shrink => @max(own.value, self.contentWidth(owner)),
-            .contents => break :blk 0,
-        };
-        break :blk self.clampWidth(width, .box, owner);
-    };
-    style_manager.cacheWidth(self, .box, width);
-    return width;
-}
-
-// What the box adds to its parent's content width.
-fn widthContribution(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
-        .shrink, .grow => @max(own.value, self.contentWidth(owner)),
-        .percent, .fill => if (style_manager.clipsOverflowX(self)) 0 else self.contentWidth(owner),
-        .contents => return self.contentWidth(owner),
-    };
-    return self.clampWidth(width, .contribution, owner);
-}
-
-// max-width caps the width, min-width wins over both.
-fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
-    const limits = owner._style_manager.widthLimits(self);
-    var clamped = width;
-    if (limits.max) |max| {
-        clamped = @min(clamped, self.resolveWidthLimit(max, of == .box, owner) orelse clamped);
-    }
-    if (limits.min) |min| {
-        clamped = @max(clamped, self.resolveWidthLimit(min, of == .box, owner) orelse clamped);
-    }
-    return clamped;
-}
-
-fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_percent: bool, owner: *Frame) ?f64 {
-    return switch (limit) {
-        .px => |px| px,
-        .percent => |fraction| if (resolve_percent) fraction * self.containingBlockWidth(owner) else null,
-    };
-}
-
-/// The width of the nearest ancestor with a box; the viewport above the root.
-fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
-    const parent = owner._style_manager.boxParent(self) orelse {
-        return @floatFromInt(owner.page.getViewport().width);
-    };
-    return parent.boxWidth(owner);
-}
-
-/// A growing flex item's share: the row's free space, after the siblings
-/// that don't grow, split evenly among those that do.
-fn growShare(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    const parent = style_manager.boxParent(self) orelse return 0;
-    var taken: f64 = 0;
-    var growers: f64 = 0;
-    var children: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
-    while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(el)) {
-            continue;
-        }
-        switch (style_manager.widthSizing(el)) {
-            .grow => growers += 1,
-            // Its children are the row's items
-            .contents => taken += el.widthContribution(owner),
-            // Only walks up, and the row's width never reads a child's box
-            else => taken += el.boxWidth(owner),
-        }
-    }
-    return @max(0, parent.boxWidth(owner) - taken) / @max(1, growers);
-}
-
-// The width the children would take unconstrained: the sum of their
-// contributions. In a flex row or grid they sit side by side; elsewhere
-// block-level children stack, so the widest counts, and inline-level ones
-// share one line that never wraps (the dummy layout has no line breaking,
-// which keeps the "append until the lane outgrows its shell" idiom
-// terminating).
-fn contentWidth(self: *Element, owner: *Frame) f64 {
-    const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, .content)) |width| {
-        return width;
-    }
-
-    const in_row = style_manager.laysOutInRow(self);
-    var widest: f64 = 0;
-    var line: f64 = 0;
-    var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
-    while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(el)) {
-            continue;
-        }
-        const width = el.widthContribution(owner);
-        if (in_row or style_manager.isBlockLevel(el) == false) {
-            line += width;
-        } else {
-            widest = @max(widest, line, width);
-            line = 0;
-        }
-    }
-    const width = @max(widest, line);
-    style_manager.cacheWidth(self, .content, width);
-    return width;
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1820,14 +1770,22 @@ pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
 
 // Some cases need the bounding rect but have already done the visibility check.
 pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
-    // Client rects are viewport-relative: offset the faux-layout document
-    // position by the owning window's scroll position.
+    const origin = self.clientOrigin(frame);
+    return .{
+        .x = origin.x,
+        .y = origin.y,
+        .width = self.boxAxis(frame, .width),
+        .height = self.boxAxis(frame, .height),
+    };
+}
+
+// Client rects are viewport-relative: offset the faux-layout document
+// position by the owning window's scroll position.
+pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     const window = (self.ownerFrame(frame) orelse frame).window;
     return .{
         .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
         .y = calculateDocumentPosition(self.asNode(), frame) - @as(f64, @floatFromInt(window.getScrollY())),
-        .width = self.boxAxis(frame, .width),
-        .height = self.boxAxis(frame, .height),
     };
 }
 
@@ -1904,6 +1862,10 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
+    if (self.is(Html.TextArea)) |textarea| {
+        return textarea.getScrollHeight(frame);
+    }
+
     const height = self.getElementAxis(frame, .height).value;
 
     // The root scroller reports what the viewport scrolls over.
@@ -1926,7 +1888,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-    return @max(self.boxWidth(owner), self.contentWidth(owner));
+    return @max(layout.boxWidth(self, owner), layout.contentWidth(self, .scrollable, owner));
 }
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
@@ -1977,7 +1939,11 @@ pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (axis == .height) {
         const width = self.getElementAxis(frame, .width);
         if (width.explicit) {
-            wrap = .{ .line_width = width.value, .font_size = style_manager.computedFontSize(self) };
+            wrap = .{
+                .line_width = width.value,
+                .font_size = style_manager.computedFontSize(self),
+                .white_space = style_manager.whiteSpace(self),
+            };
         }
     }
 
@@ -2040,11 +2006,10 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
         else => {},
     }
 
-    const self_position = self.positionStyle(frame);
-    if (std.mem.eql(u8, self_position, "fixed")) {
+    const self_position = self.computedPosition(frame);
+    if (self_position == .fixed) {
         return null;
     }
-    const self_static = self_position.len == 0 or std.mem.eql(u8, self_position, "static");
 
     var node: ?*Node = self.asNode()._parent;
     while (node) |n| {
@@ -2059,21 +2024,15 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
         if (tag == .body) {
             return ancestor;
         }
-        const position = ancestor.positionStyle(frame);
-        if (position.len > 0 and !std.mem.eql(u8, position, "static")) {
+        if (ancestor.computedPosition(frame) != .static) {
             return ancestor;
         }
-        if (self_static and (tag == .td or tag == .th or tag == .table)) {
+        if (self_position == .static and (tag == .td or tag == .th or tag == .table)) {
             return ancestor;
         }
         node = n._parent;
     }
     return null;
-}
-
-fn positionStyle(self: *Element, frame: *Frame) []const u8 {
-    const style = self.inlineStyle(frame) orelse return "";
-    return style.asCSSStyleDeclaration().getPropertyValue("position", frame);
 }
 
 pub fn getClientTop(_: *Element) f64 {
@@ -2141,9 +2100,10 @@ fn countSubtreeNodes(node: *Node, frame: *const Frame) f64 {
     return count;
 }
 
-// The horizontal position follows the same single-row assumption as
-// contentAxis: an element sits to the right of the visible element
-// siblings before it.
+// An element sits to the right of the visible element siblings before it on
+// its line. A block-level box takes a line of its own at its parent's left
+// edge, as it fills the parent's width (layout.boxWidth); only a flex row's
+// items, sized by their content, share a line whatever their display.
 
 // translateX is commonly used to shift elements around, e.g. in a carousel to
 // shift things around. So we honor any transform: translateX inline styles.
@@ -2163,18 +2123,34 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
             }
         }
-        var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
-        while (siblings.next()) |s| {
-            if (s == current) break;
-            if (s.is(Element)) |el| {
-                if (!style_manager.hasDisplayNone(el)) {
-                    x += el.getElementAxis(frame, .width).value;
-                }
-            }
-        }
+        x += lineOffset(current, parent, style_manager, frame);
         current = parent;
     }
 
+    return x;
+}
+
+fn lineOffset(node: *Node, parent: *Node, style_manager: *StyleManager, frame: *Frame) f64 {
+    const el = node.is(Element) orelse return 0;
+    const in_row = style_manager.isFlexRowItem(el);
+    if (in_row == false and style_manager.isBlockLevel(el)) {
+        return 0;
+    }
+
+    var x: f64 = 0.0;
+    var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
+    while (siblings.next()) |s| {
+        if (s == node) break;
+        const sibling = s.is(Element) orelse continue;
+        if (style_manager.hasDisplayNone(sibling)) {
+            continue;
+        }
+        if (in_row == false and style_manager.isBlockLevel(sibling)) {
+            x = 0;
+            continue;
+        }
+        x += sibling.getElementAxis(frame, .width).value;
+    }
     return x;
 }
 
@@ -2486,79 +2462,25 @@ pub fn getTag(self: *const Element) Tag {
     return switch (self._type) {
         .html => blk: {
             const he = self.subtype(Html);
+            // Single-tag types share the tag's value (see Html.Type)
+            const raw = @backingInt(he._type);
+            if (raw < tag_count) {
+                break :blk @fromBackingInt(@intCast(raw));
+            }
             break :blk switch (he._type) {
-                .anchor => .a,
-                .area => .area,
-                .base => .base,
-                .div => .div,
-                .dl => .dl,
-                .embed => .embed,
-                .form => .form,
-                .p => .p,
-                .custom => .custom,
-                .data => .data,
-                .datalist => .datalist,
-                .details => .details,
-                .dialog => .dialog,
-                .directory => .dir,
-                .iframe => .iframe,
-                .img => .img,
-                .br => .br,
-                .button => .button,
-                .canvas => .canvas,
-                .fieldset => .fieldset,
-                .font => .font,
-                .frameset => .frameset,
-                .heading => he.subtype(Html.Heading)._tag,
-                .label => .label,
-                .legend => .legend,
-                .li => .li,
-                .map => .map,
-                .marquee => .marquee,
-                .ul => .ul,
-                .ol => .ol,
-                .object => .object,
-                .optgroup => .optgroup,
-                .output => .output,
-                .picture => .picture,
-                .param => .param,
-                .pre => .pre,
                 .generic => he.subtype(Html.Generic)._tag,
+                .heading => he.subtype(Html.Heading)._tag,
                 .media => switch (he.subtype(Html.Media)._type) {
                     .audio => .audio,
                     .video => .video,
                     .generic => .media,
                 },
-                .meter => .meter,
                 .mod => he.subtype(Html.Mod)._tag,
-                .progress => .progress,
                 .quote => he.subtype(Html.Quote)._tag,
-                .script => .script,
-                .select => .select,
-                .slot => .slot,
-                .source => .source,
-                .span => .span,
-                .option => .option,
-                .table => .table,
-                .table_caption => .caption,
                 .table_cell => he.subtype(Html.TableCell)._tag,
                 .table_col => he.subtype(Html.TableCol)._tag,
-                .table_row => .tr,
                 .table_section => he.subtype(Html.TableSection)._tag,
-                .template => .template,
-                .textarea => .textarea,
-                .time => .time,
-                .track => .track,
-                .input => .input,
-                .link => .link,
-                .meta => .meta,
-                .hr => .hr,
-                .style => .style,
-                .title => .title,
-                .body => .body,
-                .html => .html,
-                .head => .head,
-                .unknown => .unknown,
+                else => unreachable,
             };
         },
         .svg => self.subtype(Svg).getTag(),
@@ -2569,8 +2491,12 @@ pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
     return self.asConstNode().ownerFrame(frame);
 }
 
+pub const tag_count = @typeInfo(Tag).@"enum".field_names.len;
+
 pub const Tag = enum {
     a,
+    abbr,
+    acronym,
     address,
     audio,
     area,
@@ -2582,9 +2508,15 @@ pub const Tag = enum {
     br,
     button,
     base,
+    basefont,
+    bdi,
+    bdo,
+    big,
     canvas,
     caption,
+    center,
     circle,
+    cite,
     code,
     col,
     colgroup,
@@ -2604,7 +2536,9 @@ pub const Tag = enum {
     ellipse,
     em,
     fieldset,
+    figcaption,
     figure,
+    frame,
     frameset,
     form,
     font,
@@ -2627,6 +2561,7 @@ pub const Tag = enum {
     img,
     input,
     ins,
+    kbd,
     label,
     legend,
     li,
@@ -2634,12 +2569,16 @@ pub const Tag = enum {
     link,
     main,
     map,
+    mark,
     marquee,
     media,
     menu,
     meta,
     meter,
     nav,
+    nobr,
+    noembed,
+    noframes,
     noscript,
     object,
     ol,
@@ -2650,19 +2589,29 @@ pub const Tag = enum {
     path,
     param,
     picture,
+    plaintext,
     polygon,
     polyline,
     pre,
     progress,
     q,
+    rb,
     rect,
+    rp,
+    rt,
+    rtc,
+    ruby,
     s,
+    samp,
     script,
+    search,
     section,
     select,
     slot,
+    small,
     source,
     span,
+    strike,
     strong,
     style,
     sub,
@@ -2682,8 +2631,12 @@ pub const Tag = enum {
     title,
     tr,
     track,
+    tt,
+    u,
     ul,
+    @"var",
     video,
+    wbr,
     unknown,
 
     // If the tag is "unknown", we can't use the optimized tag matching, but
@@ -2704,13 +2657,13 @@ pub const Tag = enum {
             // Semantic Layout
             .article, .aside, .footer, .header, .main, .nav, .section,
             // Grouping / Containers
-            .address, .div, .fieldset, .figure, .p,
+            .address, .center, .div, .fieldset, .figcaption, .figure, .p, .search,
             // Headings
             .h1, .h2, .h3, .h4, .h5, .h6,
             // Lists
             .dl, .ol, .ul,
             // Preformatted / Quotes
-            .blockquote, .pre,
+            .blockquote, .plaintext, .pre,
             // Tables
             .table,
             // Other
@@ -2739,25 +2692,24 @@ pub const Tag = enum {
 
     // UA stylesheet display:none defaults per HTML Rendering §15.3.1
     // "Hidden elements" (https://html.spec.whatwg.org/multipage/rendering.html#hidden-elements).
-    // The spec also lists basefont, noembed, noframes, rp; those tags are
-    // obsolete and not represented in this enum, so they fall through to
-    // `.unknown`/`.custom` and aren't matched here.
     pub fn isHiddenByUaStylesheet(self: Tag) bool {
         return switch (self) {
             .area,
             .base,
+            .basefont,
             .datalist,
             .head,
             .link,
             .meta,
+            .noembed,
+            .noframes,
             .noscript,
             .param,
+            .rp,
             .script,
-            .source,
             .style,
             .template,
             .title,
-            .track,
             => true,
             else => false,
         };
@@ -2900,8 +2852,10 @@ pub const JsApi = struct {
     }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const part = bridge.accessor(Element.getPartList, Element.setPartList, .{ .ce_reactions = true });
+    // HTMLElement and SVGElement define their own; this one stands in for
+    // MathMLElement, which we don't have.
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
-    pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
+    pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{ .ce_reactions = true });
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const hasAttributeNS = bridge.function(Element.hasAttributeNS, .{});
@@ -3081,6 +3035,28 @@ test "Element: scroll extent" {
     // offset stays unbounded.
     try text.setScrollTop(9999, frame);
     try testing.expectEqual(9999, text.getScrollTop(frame));
+}
+
+test "Element: getTag for every tag name" {
+    // getTag casts Html.Type to Tag, so the two enums must stay aligned. Names
+    // that aren't HTML elements (svg tags, internal ones) create an unknown
+    // element.
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var matched: usize = 0;
+    inline for (@typeInfo(Tag).@"enum".field_names) |name| {
+        const el = try frame.window._document.createElement(name, null, frame);
+        const tag = el.getTag();
+        if (tag == @field(Tag, name)) {
+            matched += 1;
+        } else if (tag != .unknown) {
+            std.debug.print("createElement(\"{s}\") has tag {t}\n", .{ name, tag });
+            return error.TagMismatch;
+        }
+    }
+    // Most names are HTML elements, so the check above isn't vacuous
+    try testing.expect(matched > 100);
 }
 
 test "Element: div chain slot size" {

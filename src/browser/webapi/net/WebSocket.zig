@@ -95,7 +95,7 @@ _close_reason: []const u8 = "",
 // negotiated protocol
 _protocol: []const u8 = "",
 
-// Event handlers
+_task: js.Attribution.Tag,
 
 const ReadyState = enum(u8) {
     connecting = 0,
@@ -153,9 +153,17 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
             // Fragments are not allowed in WebSocket URLs.
             return error.SyntaxError;
         }
-        for (protocols) |protocol| {
+        for (protocols, 0..) |protocol, i| {
             if (!isValidProtocol(protocol)) {
                 return error.SyntaxError;
+            }
+            // The WebSocket constructor rejects a list where a value occurs
+            // more than once, so `new WebSocket(url, ['a', 'a'])` throws
+            // instead of sending a duplicated Sec-WebSocket-Protocol entry.
+            for (protocols[0..i]) |seen| {
+                if (std.mem.eql(u8, seen, protocol)) {
+                    return error.SyntaxError;
+                }
             }
         }
     }
@@ -196,6 +204,10 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
         ._proto = undefined,
         ._url = resolved_url,
         ._http_client = http_client,
+        ._task = exec.js.attribution.begin(.request, .{
+            .label = resolved_url,
+            .detail = "WebSocket",
+        }),
     });
 
     // This ensures that if we fail to connect, we have at least 1 event slot
@@ -230,8 +242,8 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     const resolved_url = self._url;
     const http_client = self._http_client;
 
-    if (isBlockedPort(resolved_url)) {
-        return error.BlockedPort;
+    if (http.isBadPortUrl(resolved_url)) {
+        return error.UnsafePort;
     }
 
     const conn = http_client.network.newConnection() orelse {
@@ -242,6 +254,9 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
 
     try conn.setURL(resolved_url);
     try conn.setConnectOnly(false);
+    // receivedHeaderCallback reads the first status line as the upgrade's,
+    // so a proxy's CONNECT response must not reach it.
+    try conn.setSuppressConnectHeaders();
 
     try conn.setReadCallback(sendDataCallback, true);
     try conn.setWriteCallback(receivedDataCallback);
@@ -285,15 +300,6 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     try http_client.trackConn(conn);
 
     self._conn = conn;
-}
-
-fn isBlockedPort(url: [:0]const u8) bool {
-    const port = URL.getPort(url);
-    if (port.len == 0) {
-        // the default port for ws/wss is never blocked
-        return false;
-    }
-    return http.isBadPort(std.fmt.parseInt(u16, port, 10) catch return false);
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
@@ -366,7 +372,15 @@ pub fn deliverEvents(self: *WebSocket) void {
             // a terminal event or a re-entrant kill got us; drop the rest
             break;
         }
-        switch (self._events.items[i]) {
+        const event = self._events.items[i];
+        const task_scope = self._exec.js.attribution.enterNew(.message, .{
+            .parent = self._task,
+            .label = "WebSocket",
+            .detail = @tagName(event),
+            .cut = event != .open,
+        });
+        defer task_scope.exit();
+        switch (event) {
             .open => {
                 self._ready_state = .open;
                 self.dispatchOpenEvent() catch |err| {
@@ -579,7 +593,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                     .data = try str.toSliceWithAlloc(arena.allocator()),
                 } });
             } else {
-                const buffer = (try js_val.toZig(js.BufferSource)).bytes;
+                const buffer = (try js_val.toZig(js.BufferSource)).bytes();
 
                 const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
                 errdefer arena.release();

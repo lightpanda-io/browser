@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
+
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -134,14 +134,6 @@ pub fn getOwnPropertyNames(self: Object) !js.Array {
         return error.TypeError;
     };
 
-    return .{
-        .local = self.local,
-        .handle = handle,
-    };
-}
-
-pub fn getPropertyNames(self: Object) js.Array {
-    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle).?;
     return .{
         .local = self.local,
         .handle = handle,

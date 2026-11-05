@@ -278,8 +278,7 @@ fn getResponseBody(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, no_body, .{});
     };
     const body = switch (transfer._response_pause) {
-        .final => transfer.res.buffer.items,
-        .cached => |cached| cached,
+        .final, .cached => transfer.res.buffer.items(),
         .redirect, .failed => return cmd.sendError(-32000, no_body, .{}),
     };
     // Like Chrome, always base64, whatever the body is.
@@ -688,6 +687,8 @@ pub const InterceptState = struct {
             .stylesheet => .Stylesheet,
             .image => .Image,
             .text_track => .TextTrack,
+            .beacon => .Ping,
+            .download => .Other,
         };
     }
 
@@ -747,6 +748,7 @@ pub const InterceptState = struct {
 };
 
 const testing = @import("../testing.zig");
+const js = @import("../../../browser/js/js.zig");
 const repeat = @import("../../../string.zig").repeat;
 test "cdp.Fetch: interception events belong to the enabling session" {
     var ctx = try testing.context();
@@ -1140,6 +1142,49 @@ test "cdp.Fetch: response stage fulfillRequest replaces the response" {
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
+test "cdp.Fetch: fulfillRequest stores the response's cookies" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FC", .session_id = "SID-FC", .target_id = "TID-FC-0000000".*, .url = "hi.html" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?fulfilled'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000001" }, .{});
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Fetch.fulfillRequest",
+        .params = .{
+            .requestId = "INT-0000000001",
+            .responseCode = 200,
+            .responseHeaders = &[_]http.Header{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Set-Cookie", .value = "a=1; Path=/" },
+                .{ .name = "Set-Cookie", .value = "b=2; Path=/; HttpOnly" },
+            },
+            // <script>window.atParse = document.cookie</script>
+            .body = "PHNjcmlwdD53aW5kb3cuYXRQYXJzZSA9IGRvY3VtZW50LmNvb2tpZTwvc2NyaXB0Pg==",
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.waitForPage(bc);
+
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const at_parse = try ls.local.exec("window.atParse", null);
+    try testing.expectEqual("a=1", try at_parse.toStringSlice());
+    try testing.expectEqual(2, bc.session.cookie_jar.len);
+}
+
 test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1152,11 +1197,9 @@ test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact
     try ResponseStageProbe.tickUntilPaused(bc, 1);
 
     // The bytes the test server sends for /images/small.png.
-    var png: [1024]u8 = undefined;
-    @memset(&png, 'x');
-    @memcpy(png[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
+    const png = @embedFile("../../../browser/tests/fixtures/images/320x240.png");
     var encoded: [std.base64.standard.Encoder.calcSize(png.len)]u8 = undefined;
-    _ = std.base64.standard.Encoder.encode(&encoded, &png);
+    _ = std.base64.standard.Encoder.encode(&encoded, png);
 
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(.{ .body = &encoded, .base64Encoded = true }, .{ .id = 2 });
@@ -1164,7 +1207,7 @@ test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
-    try testing.expectEqualSlices(u8, &png, probe.body.items);
+    try testing.expectEqualSlices(u8, png, probe.body.items);
 }
 
 test "cdp.Fetch: response stage pauses a redirect response, then the response it leads to" {
@@ -1243,7 +1286,7 @@ test "cdp.Fetch: response stage continueRequest ignores request overrides, but a
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
-    try testing.expectEqual(1024, probe.body.items.len);
+    try testing.expectEqual(@embedFile("../../../browser/tests/fixtures/images/320x240.png").len, probe.body.items.len);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
 }
 
@@ -1353,13 +1396,13 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
 
     var probe: ResponseStageProbe = .{};
     defer probe.deinit();
-    // Nothing listens on port 1: the connection is refused.
-    try probe.start(bc, "http://127.0.0.1:1/");
+    // Nothing listens on port 65534: the connection is refused.
+    try probe.start(bc, "http://127.0.0.1:65534/");
     try ResponseStageProbe.tickUntilPaused(bc, 1);
 
     try ctx.expectSentEvent("Fetch.requestPaused", .{
         .requestId = "INT-0000000001",
-        .request = .{ .url = "http://127.0.0.1:1/" },
+        .request = .{ .url = "http://127.0.0.1:65534/" },
         .responseErrorReason = "ConnectionFailed",
     }, .{ .session_id = "SID-RS" });
     const paused = try sentPausedParams(&ctx, "INT-0000000001");
@@ -1532,6 +1575,57 @@ test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry d
     try testing.expectEqual(401, probe.status);
     try testing.expectEqualSlices(u8, "No", probe.body.items);
     try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+// Answers the challenge on `url` with u:p and expects the redirect target to
+// see `expected` as its Authorization header.
+fn expectAuthThenRedirect(url: [:0]const u8, source: []const u8, expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    // Only the challenged URL: the redirect hop goes straight to the network.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .params = .{ .patterns = .{.{ .urlPattern = "http://127.0.0.1:9582/auth/*" }}, .handleAuthRequests = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, url);
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{
+        .requestId = "INT-0000000002",
+        .authChallenge = .{ .source = source },
+    }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "ProvideCredentials", .username = "u", .password = "p" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(200, probe.status);
+    try testing.expectEqualSlices(u8, expected, probe.body.items);
+}
+
+test "cdp.Fetch: continueWithAuth proxy credentials never reach a server" {
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/proxy/same", "Proxy", "NONE");
+}
+
+test "cdp.Fetch: continueWithAuth server credentials follow a same-origin redirect only" {
+    // "dTpw" = base64("u:p"). Credentials are scoped to the origin; Chrome
+    // narrows Basic to the challenged directory and wouldn't send them to
+    // /echo-authorization up front.
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/server/same", "Server", "Basic dTpw");
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/server/cross", "Server", "NONE");
 }
 
 test "cdp.Fetch: continueWithAuth on a request-stage pause is rejected and keeps the pause" {

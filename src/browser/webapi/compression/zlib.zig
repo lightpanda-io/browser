@@ -205,23 +205,23 @@ pub fn Deflate(comptime mode: enum(u1) { compress, decompress }) type {
         }
 
         pub fn transform(self: *Deflate(mode), controller: *TransformStream.DefaultController, chunk: js.Value) !void {
-            const input = chunk.toZig(js.BufferSource) catch {
+            const input = (chunk.toZig(js.BufferSource) catch {
                 return self.fail(controller, "Chunk is not an ArrayBuffer or ArrayBufferView");
-            };
+            }).bytes();
 
             if (self.state == .ended) {
                 // Only decompression gets here, the compressed data already ended.
                 // (Every other way to end errors or closes the writable side.)
-                if (input.bytes.len > 0) {
+                if (input.len > 0) {
                     return self.fail(controller, "Junk found after end of compressed data");
                 }
                 return;
             }
 
-            if (input.bytes.len == 0) {
+            if (input.len == 0) {
                 return;
             }
-            return self.process(controller, input.bytes, false);
+            return self.process(controller, input, false);
         }
 
         pub fn flush(self: *Deflate(mode), controller: *TransformStream.DefaultController) !void {

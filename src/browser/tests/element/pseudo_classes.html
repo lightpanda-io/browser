@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="container">
@@ -176,7 +177,9 @@
     testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 of.y)'));
     testing.expectEqual('3', texts('#nth_of_list li:nth-child(2 of:not(.y))'));
     testing.expectEqual('4', texts('#nth_of_list li:nth-last-child(2 of .y)'));
-    testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 OF .y)'));
+    testing.diverges('Chrome rejects an uppercase "OF"; CSS keywords are case-insensitive (Firefox accepts it)', () => {
+      testing.expectEqual('4', texts('#nth_of_list li:nth-child(2 OF .y)'));
+    });
     testing.expectEqual('3', texts('#nth_of_list li:nth-child(2 of :not(.y))'));
     testing.expectEqual('2,4', texts('#nth_of_list li:nth-child(-n+2 of .y, :last-child)'));
     testing.expectEqual('1,2,3,4,5', texts('#nth_of_list li:nth-child(n of li)'));
@@ -192,8 +195,10 @@
     testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y,)'));
     testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2of .y)'));
     testing.expectError("SyntaxError", () => document.querySelector(':nth-of-type(2 of .y)'));
-    testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of ::before)'));
-    testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y, ::before)'));
+    testing.diverges('Chrome accepts a pseudo-element in "of S"; spec takes a <complex-real-selector-list>', () => {
+      testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of ::before)'));
+      testing.expectError("SyntaxError", () => document.querySelector(':nth-child(2 of .y, ::before)'));
+    });
 }
 </script>
 
@@ -266,5 +271,88 @@
     }
 
     testing.expectEqual('sel2-1', $('#checked4').querySelector(':checked')?.value);
+}
+</script>
+
+<div id=required>
+    <p required id=req-p></p>
+    <input required id=req-text>
+    <input id=opt-text>
+    <input type=hidden required id=opt-hidden>
+    <input type=range required id=opt-range>
+    <input type=checkbox required id=req-checkbox>
+    <select required id=req-select></select>
+    <textarea id=opt-textarea></textarea>
+    <button required id=opt-button></button>
+    <input type=color required id=opt-color>
+    <svg><input id=svg-input /><textarea required id=svg-textarea /></svg>
+</div>
+
+<script id="required_optional">
+{
+    const ids = (s) => Array.from($('#required').querySelectorAll(s), (e) => e.id).join(' ');
+    testing.expectEqual('req-text req-checkbox req-select', ids(':required'));
+    testing.expectEqual('opt-text opt-hidden opt-range opt-textarea opt-button opt-color', ids(':optional'));
+    testing.expectEqual(false, $('#opt-color').validity.valueMissing);
+}
+</script>
+
+<div id=ranges>
+    <input type=number min=10 max=20 value=15 id=rng-in>
+    <input type=number min=10 max=20 value=5 id=rng-under>
+    <input type=number max=10 value=15 id=rng-over>
+    <input type=number min=10 max=20 id=rng-empty>
+    <input type=number value=15 id=rng-unlimited>
+    <input type=number min=abc value=15 id=rng-bad-min>
+    <input type=range id=rng-range>
+    <input type=date min=2026-01-01 value=2025-06-01 id=rng-date>
+    <input type=time min=22:00 max=02:00 value=23:00 id=rng-night>
+    <input type=number max=10 value=15 readonly id=rng-readonly>
+    <input type=number max=10 value=15 disabled id=rng-disabled>
+    <input type=text min=10 value=5 id=rng-text>
+</div>
+
+<script id="in_out_of_range">
+{
+    const ids = (s) => Array.from($('#ranges').querySelectorAll(s), (e) => e.id).join(' ');
+    testing.expectEqual('rng-in rng-empty rng-range rng-night', ids(':in-range'));
+    testing.expectEqual('rng-under rng-over rng-date', ids(':out-of-range'));
+
+    // the html5test sequence: a text input turned into a ranged number
+    const el = document.createElement('input');
+    el.type = 'text';
+    $('#ranges').appendChild(el);
+    el.setAttribute('type', 'number');
+    el.setAttribute('min', '10');
+    el.setAttribute('max', '20');
+    el.setAttribute('value', '15');
+    testing.expectEqual(true, el.matches(':in-range'));
+    el.setAttribute('value', '25');
+    testing.expectEqual(true, el.matches(':out-of-range'));
+    el.remove();
+}
+</script>
+
+<div id=defaults>
+    <form id=default-form>
+        <button type=button id=def-plain></button>
+        <button id=def-submit></button>
+        <input type=submit id=def-second>
+        <input type=checkbox checked id=def-checked>
+        <input type=checkbox id=def-unchecked>
+        <input type=radio name=r checked id=def-radio>
+        <select><option id=def-a>a</option><option selected id=def-b>b</option></select>
+    </form>
+    <button id=def-formless></button>
+</div>
+
+<script id="default">
+{
+    const ids = () => Array.from($('#defaults').querySelectorAll(':default'), (e) => e.id).join(' ');
+    testing.expectEqual('def-submit def-checked def-radio def-b', ids());
+    // The checked attribute decides, not the current state
+    $('#def-unchecked').checked = true;
+    $('#def-checked').checked = false;
+    testing.expectEqual('def-submit def-checked def-radio def-b', ids());
 }
 </script>

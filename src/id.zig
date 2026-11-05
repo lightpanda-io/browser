@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -19,9 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-pub fn uuidv4(hex: []u8) void {
-    lp.assert(hex.len == 36, "uuidv4.len", .{ .len = hex.len });
-
+pub fn uuidv4(hex: *[36]u8) void {
     var bin: [16]u8 = undefined;
     lp.io.random(&bin);
     bin[6] = (bin[6] & 0x0f) | 0x40;
@@ -42,19 +40,24 @@ pub fn uuidv4(hex: []u8) void {
 }
 
 const testing = std.testing;
-test "id: uuiv4" {
+test "id: uuidv4" {
     const expectUUID = struct {
         fn expect(uuid: [36]u8) !void {
-            for (uuid, 0..) |b, i| {
-                switch (b) {
-                    '0'...'9', 'a'...'z' => {},
-                    '-' => {
-                        if (i != 8 and i != 13 and i != 18 and i != 23) {
-                            return error.InvalidEncoding;
-                        }
+            for (uuid, 0..) |c, i| {
+                switch (i) {
+                    8, 13, 18, 23 => try testing.expectEqual('-', c),
+                    else => switch (c) {
+                        '0'...'9', 'a'...'f' => {},
+                        else => return error.InvalidHexEncoding,
                     },
-                    else => return error.InvalidHexEncoding,
                 }
+            }
+            // Version: 0100 in the high nibble of byte 6.
+            try testing.expectEqual('4', uuid[14]);
+            // Variant: 10 in the high bits of byte 8.
+            switch (uuid[19]) {
+                '8', '9', 'a', 'b' => {},
+                else => return error.InvalidVariant,
             }
         }
     }.expect;

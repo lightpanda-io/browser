@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<meta name=lp-mode content="skipped: runs with iframe loading off, Chrome always loads iframes">
+<!-- Runs with iframe loading off. An iframe that needs no request (no src,
+     an empty src, about:blank) gets its about:blank window on insertion, and
+     that frame loads nothing else. support/post_to_parent.html posts 'hello'
+     if anything loads it. -->
+<script src="../../testing.js"></script>
+
+<script>
+  window.hellos = 0;
+  window.addEventListener('message', (e) => {
+    if (e.data === 'hello') window.hellos += 1;
+  });
+  window.settle = () => new Promise((r) => setTimeout(r, 200));
+  window.hrefOf = (f) => f.contentWindow === null ? null : f.contentWindow.location.href;
+</script>
+
+<iframe id=markup_blank></iframe>
+
+<script id=markup_blank_has_window>
+  {
+    const f = document.getElementById('markup_blank');
+    testing.expectEqual('about:blank', f.contentWindow.location.href);
+    testing.expectTrue(f.contentDocument !== null);
+  }
+</script>
+
+<script id=sandbox_on_append>
+  {
+    // A hidden about:blank iframe used as a sandbox, patched right away.
+    const f = document.createElement('iframe');
+    f.src = 'about:blank';
+    f.style.display = 'none';
+    document.body.appendChild(f);
+    const w = f.contentWindow;
+    testing.expectTrue(w !== null);
+    testing.expectTrue(w !== window);
+    w.onerror = () => {};
+    testing.expectEqual('function', typeof w.onerror);
+    testing.expectEqual('function', typeof w.setTimeout);
+    testing.expectEqual('about:blank', w.location.href);
+    testing.expectEqual(w.document, f.contentDocument);
+  }
+</script>
+
+<script id=no_src_document_write>
+  {
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const d = f.contentWindow.document;
+    d.open();
+    d.write('<p id=written>written</p>');
+    d.close();
+    testing.expectEqual('written', f.contentDocument.getElementById('written').textContent);
+  }
+</script>
+
+<script id=empty_src_has_window>
+  {
+    const f = document.createElement('iframe');
+    f.setAttribute('src', '');
+    document.body.appendChild(f);
+    testing.expectEqual('about:blank', window.hrefOf(f));
+  }
+</script>
+
+<script id=url_and_srcdoc_not_loaded type=module>
+  {
+    const state = await testing.async();
+    const f = document.createElement('iframe');
+    f.src = '../support/post_to_parent.html';
+    document.body.appendChild(f);
+    const s = document.createElement('iframe');
+    s.srcdoc = '<p>srcdoc</p>';
+    document.body.appendChild(s);
+    await window.settle();
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(0, window.hellos);
+      testing.expectEqual(null, f.contentWindow);
+      testing.expectEqual(null, s.contentWindow);
+    });
+  }
+</script>
+
+<script id=script_in_blank_runs type=module>
+  {
+    // Code the parent puts into the frame's document runs there.
+    const state = await testing.async();
+    let own = null;
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.blank_script) own = e.data.own;
+    });
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const s = f.contentDocument.createElement('script');
+    s.textContent = "parent.postMessage({blank_script: true, own: window !== parent}, '*')";
+    f.contentDocument.body.appendChild(s);
+    await window.settle();
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, own);
+    });
+  }
+</script>
+
+<script id=fragment_navigation_runs type=module>
+  {
+    const state = await testing.async();
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const w = f.contentWindow;
+    // Resolve on the event, not a parent timer: a parent timer that comes due
+    // in the same macrotask pass runs before the iframe's queued hashchange.
+    let hashchanges = 0;
+    w.addEventListener('hashchange', () => {
+      hashchanges += 1;
+      state.resolve();
+    });
+    w.location.hash = 'x';
+    await state.done(() => {
+      testing.expectEqual('#x', w.location.hash);
+      testing.expectEqual('about:blank#x', w.location.href);
+      testing.expectEqual(1, hashchanges);
+    });
+  }
+</script>
+
+<script id=navigation_not_loaded type=module>
+  {
+    // Neither the parent setting its location nor setting src to a URL
+    // loads anything into the frame: its document stays.
+    const state = await testing.async();
+    const a = document.createElement('iframe');
+    document.body.appendChild(a);
+    a.contentWindow.location = '../support/post_to_parent.html';
+    const b = document.createElement('iframe');
+    document.body.appendChild(b);
+    b.contentDocument.body.innerHTML = '<p>kept</p>';
+    b.src = '../support/post_to_parent.html';
+    await window.settle();
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(0, window.hellos);
+      testing.expectEqual('about:blank', window.hrefOf(a));
+      testing.expectEqual('about:blank', window.hrefOf(b));
+      testing.expectEqual('kept', b.contentDocument.querySelector('p').textContent);
+    });
+  }
+</script>

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- Dialog elements -->
@@ -50,22 +51,21 @@
 
     dialog.returnValue = 'success'
     testing.expectEqual('success', dialog.returnValue)
-    testing.expectEqual('success', dialog.getAttribute('returnvalue'))
 
     dialog.returnValue = 'cancel'
     testing.expectEqual('cancel', dialog.returnValue)
-    testing.expectEqual('cancel', dialog.getAttribute('returnvalue'))
   }
 </script>
 
-<script id="returnValue_reflects_to_attribute">
+<script id="returnValue_is_not_an_attribute">
   {
     const dialog = document.createElement('dialog')
+    dialog.returnValue = 'confirmed'
     testing.expectEqual(null, dialog.getAttribute('returnvalue'))
 
-    dialog.returnValue = 'confirmed'
-    testing.expectEqual('confirmed', dialog.getAttribute('returnvalue'))
-    testing.expectTrue(dialog.outerHTML.includes('returnvalue="confirmed"'))
+    dialog.setAttribute('returnvalue', 'other')
+    testing.expectEqual('confirmed', dialog.returnValue)
+    testing.expectEqual('', dialog.cloneNode().returnValue)
   }
 </script>
 
@@ -102,11 +102,50 @@
 <script id="showModal_sets_open">
   {
     const dialog = document.createElement('dialog')
+    document.body.append(dialog)
     testing.expectEqual(false, dialog.open)
 
     dialog.showModal()
     testing.expectEqual(true, dialog.open)
     testing.expectEqual('', dialog.getAttribute('open'))
+
+    // already modal: a no-op
+    dialog.showModal()
+    testing.expectEqual(true, dialog.open)
+    dialog.close()
+    dialog.remove()
+  }
+</script>
+
+<script id="showModal_throws_when_disconnected">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectError('InvalidStateError', () => dialog.showModal())
+    testing.expectEqual(false, dialog.open)
+  }
+</script>
+
+<script id="showModal_throws_when_open_non_modal">
+  {
+    const dialog = document.createElement('dialog')
+    document.body.append(dialog)
+    dialog.show()
+    testing.expectError('InvalidStateError', () => dialog.showModal())
+    dialog.close()
+    dialog.remove()
+  }
+</script>
+
+<script id="showModal_throws_when_popover_showing">
+  {
+    const dialog = document.createElement('dialog')
+    dialog.popover = 'manual'
+    document.body.append(dialog)
+    dialog.showPopover()
+    testing.expectError('InvalidStateError', () => dialog.showModal())
+    testing.expectEqual(false, dialog.open)
+    dialog.hidePopover()
+    dialog.remove()
   }
 </script>
 
@@ -149,7 +188,6 @@
 
     dialog.close('confirmed')
     testing.expectEqual('confirmed', dialog.returnValue)
-    testing.expectEqual('confirmed', dialog.getAttribute('returnvalue'))
   }
 </script>
 
@@ -180,9 +218,13 @@
     document.addEventListener('close', () => { bubbled = true })
 
     dialog.close('done')
-    testing.expectEqual(1, fired)
-    testing.expectEqual(false, bubbled)
-    testing.expectEqual(false, cancelable)
+    // queued, not fired synchronously
+    testing.expectEqual(0, fired)
+    testing.onload(() => {
+      testing.expectEqual(1, fired)
+      testing.expectEqual(false, bubbled)
+      testing.expectEqual(false, cancelable)
+    })
   }
 </script>
 
@@ -214,13 +256,13 @@
 
     $('#b_submit').click()
 
-    testing.expectEqual(1, fired)
     testing.expectEqual(false, dialog.open)
     testing.expectEqual('confirm', dialog.returnValue)
+    testing.onload(() => testing.expectEqual(1, fired))
   }
 </script>
 
-<script id="dialog_method_uses_empty_value_when_submitter_has_none">
+<script id="dialog_method_keeps_returnValue_when_submitter_has_no_value">
   {
     document.body.insertAdjacentHTML('beforeend',
       '<dialog id="d_novalue"><form method="dialog">' +
@@ -233,8 +275,9 @@
 
     $('#b_novalue').click()
 
+    // no value attribute: the result is null, which keeps returnValue
     testing.expectEqual(false, dialog.open)
-    testing.expectEqual('', dialog.returnValue)
+    testing.expectEqual('preset', dialog.returnValue)
   }
 </script>
 

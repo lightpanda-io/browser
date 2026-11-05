@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div>0</div>
 <div>1</div>
@@ -25,7 +26,7 @@
 <script id=basic>
   {
     const all = document.getElementsByTagName('*');
-    testing.expectEqual(24, all.length);
+    testing.expectEqual(25, all.length);
     testing.expectEqual(false, "values" in all);
     testing.expectEqual(false, "entries" in all);
     testing.expectEqual(false, "forEach" in all);

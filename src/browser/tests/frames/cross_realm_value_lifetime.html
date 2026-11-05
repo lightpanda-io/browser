@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+Values made through an iframe's realm and held by this window must stay
+readable after the iframe navigates in place. Their wrappers live in the
+page-wide identity map, but the navigation destroys the iframe's context and
+releases its arena (see Context.identity_arena).
+-->
+<script>
+  // Builds values through a fresh iframe's realm, navigates the iframe in
+  // place, then calls `churn` 64 times in the new context. Test builds don't
+  // poison a released arena (it goes back to the pool), so a dangling read
+  // only shows wrong data once that memory is reused: the churn repeats the
+  // case's own allocation so it lands there. Calls run one after the other,
+  // so each case's released arena is reused by its own churn.
+  let pending = Promise.resolve();
+  function afterNavigation(make, churn) {
+    const run = pending.then(async () => {
+      const iframe = document.createElement('iframe');
+      const onceLoad = () => new Promise((r) => { iframe.onload = () => r(); });
+
+      let loaded = onceLoad();
+      iframe.src = 'about:blank';
+      document.body.appendChild(iframe);
+      await loaded;
+      const values = make(iframe.contentWindow);
+
+      loaded = onceLoad();
+      iframe.src = 'support/win_a.html';
+      await loaded;
+      for (let i = 0; i < 64; i++) {
+        churn(iframe.contentWindow, i);
+      }
+      return values;
+    });
+    pending = run.catch(() => {});
+    return run;
+  }
+</script>
+
+<script id=dom_exception_constructor type=module>
+  const state = await testing.async();
+
+  const e = await afterNavigation(
+    (w) => new w.DOMException('made in the iframe', 'NotFoundError'),
+    (w, i) => new w.DOMException('churn ' + i, 'SyntaxError'),
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('NotFoundError', e.name);
+    testing.expectEqual('made in the iframe', e.message);
+    testing.expectEqual(8, e.code);
+  });
+</script>
+
+<script id=dom_exception_clone type=module>
+  const state = await testing.async();
+
+  const e = await afterNavigation(
+    (w) => w.structuredClone(new DOMException('cloned in the iframe', 'NotFoundError')),
+    (w, i) => w.structuredClone(new DOMException('churn ' + i, 'SyntaxError')),
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('NotFoundError', e.name);
+    testing.expectEqual('cloned in the iframe', e.message);
+    testing.expectEqual(8, e.code);
+  });
+</script>
+
+<script id=data_clone_error_message type=module>
+  const state = await testing.async();
+
+  const cloneError = (w, value) => {
+    try {
+      w.structuredClone(value);
+    } catch (err) {
+      return err;
+    }
+  };
+  const e = await afterNavigation(
+    (w) => cloneError(w, function notCloneable() {}),
+    (w, i) => cloneError(w, () => i),
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('DataCloneError', e.name);
+    // Chrome prefixes the message with "Failed to execute 'structuredClone' on
+    // 'Window': ".
+    testing.expectEqual(true, e.message.endsWith('function notCloneable() {} could not be cloned.'));
+  });
+</script>
+
+<script id=file_list_clone type=module>
+  const state = await testing.async();
+
+  const dt = new DataTransfer();
+  dt.items.add(new File(['a'], 'a.txt'));
+  dt.items.add(new File(['b'], 'b.txt'));
+  const other = new DataTransfer();
+  other.items.add(new File(['c'], 'churn.txt'));
+  other.items.add(new File(['d'], 'churn.txt'));
+
+  const fl = await afterNavigation(
+    (w) => w.structuredClone(dt.files),
+    (w) => Array.from(w.structuredClone(other.files), (f) => f.name),
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(2, fl.length);
+    testing.expectEqual('a.txt', fl[0].name);
+    testing.expectEqual('b.txt', fl[1].name);
+  });
+</script>
+</body>

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <ol id="ol1" start="5" reversed type="a">
@@ -45,7 +46,8 @@
     ol1.type = '1';
     testing.expectEqual('1', ol1.type);
 
+    // a plain reflection: no "1" default
     const ol2 = document.getElementById('ol2');
-    testing.expectEqual('1', ol2.type);
+    testing.expectEqual('', ol2.type);
   }
 </script>

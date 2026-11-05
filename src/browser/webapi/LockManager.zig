@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const log = lp.log;
 
 const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
 const Execution = @import("../js/Execution.zig");
 const AbortSignal = @import("AbortSignal.zig");
 const DOMException = @import("DOMException.zig");

@@ -22,11 +22,10 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
-const EventTarget = @import("EventTarget.zig");
-const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 
 const Worker = @import("Worker.zig");
+const EventTarget = @import("EventTarget.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const ServiceWorkerRegistration = @import("ServiceWorkerRegistration.zig");
@@ -295,7 +294,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
     const url = self._proto.url;
     var evaluated = true;
     if (self._proto._is_module) {
-        js_context.module(false, &ls.local, script, url, true) catch |err| {
+        js_context.module(false, &ls.local, script, url, .{}, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }
@@ -411,7 +410,7 @@ fn dispatchExtendable(
 fn releasePendingEvent(self: *ServiceWorkerGlobalScope) void {
     const event = self._pending_event orelse return;
     self._pending_event = null;
-    event.releaseRef(self._proto.page);
+    event.asEvent().releaseRef(self._proto.page);
 }
 
 fn setState(self: *ServiceWorkerGlobalScope, state: ServiceWorker.State) void {
@@ -545,14 +544,14 @@ pub fn getRegistration(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*S
     return r;
 }
 
-pub fn getServiceWorker(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*ServiceWorker {
+fn getServiceWorker(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*ServiceWorker {
     const registration = try self.getRegistration(exec);
     return registration.worker(self);
 }
 
 // TODO: Need an `ExtendableCookieChangeEvent` so that we can fire change
 // notifications (for now, reads work)
-pub fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
+fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
     if (self._cookie_store) |cs| {
         return cs;
     }

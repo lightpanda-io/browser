@@ -16,6 +16,10 @@
   for (const d of [A, B]) {
     for (const type of ['cancel', 'close']) {
       d.addEventListener(type, (e) => {
+        if (type === 'close' && d.resetClose) {
+          d.resetClose = false;
+          return;
+        }
         // A trailing "!" marks an event that was not cancelable.
         log.push(`${type}@${d.id}${e.cancelable ? '' : '!'}`);
         if (type === 'cancel' && preventCancel) e.preventDefault();
@@ -29,6 +33,8 @@
   window.reset = () => {
     for (const d of [A, B]) {
       if (!d.isConnected) document.body.append(d);
+      // close is queued: skip the one this queues, it fires in a later step
+      if (d.open) d.resetClose = true;
       d.close();
       d.returnValue = '';
     }

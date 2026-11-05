@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- Button elements -->
@@ -62,7 +63,6 @@
 <button id="named2"></button>
 
 <button id="required1" required></button>
-<button id="required2"></button>
 
 <script id="name_initial">
   testing.expectEqual('submit-btn', $('#named1').name)
@@ -95,39 +95,15 @@
   }
 </script>
 
-<script id="required_initial">
-  testing.expectEqual(true, $('#required1').required)
-  testing.expectEqual(false, $('#required2').required)
-</script>
-
-<script id="required_set">
+<script id="no_required">
   {
+    // <button> has no required IDL attribute; the content attribute is inert.
+    testing.expectFalse('required' in $('#required1'))
+    testing.expectEqual('', $('#required1').getAttribute('required'))
+
     const button = document.createElement('button')
-    testing.expectEqual(false, button.required)
-
     button.required = true
-    testing.expectEqual(true, button.required)
-    testing.expectEqual('', button.getAttribute('required'))
-
-    button.required = false
-    testing.expectEqual(false, button.required)
     testing.expectEqual(null, button.getAttribute('required'))
-  }
-</script>
-
-<script id="required_reflects_to_attribute">
-  {
-    const button = document.createElement('button')
-    testing.expectEqual(null, button.getAttribute('required'))
-    testing.expectFalse(button.outerHTML.includes('required'))
-
-    button.required = true
-    testing.expectEqual('', button.getAttribute('required'))
-    testing.expectTrue(button.outerHTML.includes('required'))
-
-    button.required = false
-    testing.expectEqual(null, button.getAttribute('required'))
-    testing.expectFalse(button.outerHTML.includes('required'))
   }
 </script>
 

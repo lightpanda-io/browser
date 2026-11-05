@@ -43,6 +43,7 @@ pub const Attribute = enum {
     sizes,
     sandbox,
     @"for",
+    blocking,
 
     fn name(self: Attribute) String {
         return switch (self) {
@@ -96,7 +97,14 @@ pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bo
             "allow-same-origin",                       "allow-scripts",                            "allow-storage-access-by-user-activation", "allow-top-navigation",
             "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols",
         },
-        .rel => &.{ "stylesheet", "preload", "modulepreload" },
+        .rel => switch (self._element.getTag()) {
+            // Resource hints are optional and ignored here, but reporting
+            // them unsupported sends prefetchers (quicklink, Gatsby) down
+            // their XHR fallback, fetching every link they would have hinted.
+            .link => &.{ "stylesheet", "preload", "modulepreload", "dns-prefetch", "preconnect", "prefetch" },
+            else => &.{ "noopener", "noreferrer", "opener" },
+        },
+        .blocking => &.{"render"},
         // no supported tokens defined
         .class, .part, .sizes, .@"for" => return error.TypeError,
     };
@@ -262,12 +270,20 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
     var i: i32 = 0;
     var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
 
-    var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
+    // if the attribute changes, we need to limit the iteration to the
+    // initial length. We lazily capture that, since it probably won't be needed
+    var limit: ?usize = null;
+    var value = self.getValue();
+    var it = std.mem.tokenizeAny(u8, value, WHITESPACE);
     while (it.next()) |token| {
         const gop = try seen.getOrPut(allocator, token);
         if (gop.found_existing) {
             continue;
         }
+        if (limit != null and limit.? <= i) {
+            return;
+        }
+
         var caught: js.TryCatch.Caught = .{};
         cb.tryCall(void, .{ token, i, self }, &caught) catch |err| {
             frame.page.recordJsError(err);
@@ -275,6 +291,22 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
             return;
         };
         i += 1;
+
+        const new_value = self.getValue();
+        if (new_value.ptr != value.ptr) {
+            if (limit == null) {
+                // `it` is still on the original value; seen holds its first i tokens
+                while (it.next()) |t| try seen.put(allocator, t, {});
+                limit = seen.count();
+            }
+            value = new_value;
+            it = std.mem.tokenizeAny(u8, value, WHITESPACE);
+            seen.clearRetainingCapacity();
+            while (seen.count() < i) {
+                const t = it.next() orelse return;
+                try seen.put(allocator, t, {});
+            }
+        }
     }
 }
 

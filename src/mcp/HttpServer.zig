@@ -24,7 +24,8 @@
 //! sessions run in parallel. Connection threads never touch a browser: they
 //! queue a `Job` on the session's worker and wait for it. Routing follows
 //! `Mcp-Session-Id`: an `initialize` without one mints a fresh session, an
-//! unknown id creates it, a known one joins it, a reaped one gets 404.
+//! unknown id creates it, a known one joins it, a reaped or deleted one gets
+//! 404 until `session_new` or `session_close` names it.
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -36,6 +37,7 @@ const sys_net = @import("../sys/net.zig");
 const Server = @import("Server.zig");
 const Transport = @import("Transport.zig");
 const router = @import("router.zig");
+const Queue = @import("Queue.zig").Queue;
 
 const log = lp.log;
 const posix = std.posix;
@@ -50,69 +52,75 @@ const max_request_bytes = 16 * 1024 * 1024;
 
 /// One unit of work handed from a connection thread to a session's worker.
 /// Allocated on the connection thread's stack — safe because that thread
-/// blocks on `done` for the whole time the worker reads `body` and writes
-/// `out`.
+/// waits for `finished` for the whole time the worker reads `body` and
+/// writes `out`.
 const Job = struct {
+    allocator: std.mem.Allocator,
     body: []const u8,
     /// Where the worker writes the response. The connection thread owns the
-    /// backing buffer and reads it back once `done` fires.
+    /// backing buffer and reads it back once `finished` is set.
     out: *std.Io.Writer,
-
-    done: std.Io.Event = .unset,
+    /// The client accepts `text/event-stream`.
+    streams: bool,
     next: ?*Job = null,
-};
 
-const Queue = struct {
     mutex: std.Io.Mutex = .init,
     cond: std.Io.Condition = .init,
-    head: ?*Job = null,
-    tail: ?*Job = null,
-    closed: bool = false,
+    /// Notifications not yet sent, one per line. Guarded by `mutex`.
+    pending: std.ArrayList(u8) = .empty,
+    /// Guarded by `mutex`.
+    finished: bool = false,
+    /// Guarded by `mutex`.
+    hung_up: bool = false,
 
-    /// Callers push only to a listed worker, whose queue is still open.
-    fn push(self: *Queue, job: *Job) void {
+    fn deinit(self: *Job) void {
+        self.pending.deinit(self.allocator);
+    }
+
+    fn sink(self: *Job) Transport.Notify {
+        if (!self.streams) return .drop;
+        return .{ .sink = .{ .context = self, .push = push } };
+    }
+
+    fn push(context: *anyopaque, message: []const u8) void {
+        const self: *Job = @ptrCast(@alignCast(context));
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-        std.debug.assert(!self.closed);
-        job.next = null;
-        if (self.tail) |t| t.next = job else self.head = job;
-        self.tail = job;
+        if (self.hung_up) return;
+        self.pending.ensureUnusedCapacity(self.allocator, message.len + 1) catch return;
+        self.pending.appendSliceAssumeCapacity(message);
+        self.pending.appendAssumeCapacity('\n');
         self.cond.signal(lp.io);
     }
 
-    const Pop = union(enum) { job: *Job, timeout, closed };
-
-    /// The next job, waiting at most `timeout_ms` (`.timeout` on timeout or
-    /// spurious wakeup, so the worker can pump its session and retry).
-    /// `.closed` only once the queue is closed AND drained, so no pushed job
-    /// is ever left behind.
-    fn pop(self: *Queue, timeout_ms: u64) Pop {
+    /// The worker's last touch: the connection thread may free the job after.
+    fn finish(self: *Job) void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-        if (self.head == null) {
-            if (self.closed) return .closed;
-            if (timeout_ms == 0) return .timeout;
+        self.finished = true;
+        self.cond.signal(lp.io);
+    }
+
+    fn hangUp(self: *Job) void {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+        self.hung_up = true;
+    }
+
+    /// Move pending notifications into the empty `into`, waiting up to
+    /// `timeout_ms` for one. True once finished, with every one moved.
+    fn wait(self: *Job, into: *std.ArrayList(u8), timeout_ms: u64) bool {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+        if (self.pending.items.len == 0 and !self.finished) {
             lp.timedWait(&self.cond, &self.mutex, timeout_ms * ns_per_ms) catch {};
         }
-        const job = self.head orelse return if (self.closed) .closed else .timeout;
-        self.head = job.next;
-        if (self.head == null) self.tail = null;
-        return .{ .job = job };
-    }
-
-    fn isEmpty(self: *Queue) bool {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        return self.head == null;
-    }
-
-    fn close(self: *Queue) void {
-        self.mutex.lockUncancelable(lp.io);
-        defer self.mutex.unlock(lp.io);
-        self.closed = true;
-        self.cond.signal(lp.io);
+        std.mem.swap(std.ArrayList(u8), &self.pending, into);
+        return self.finished;
     }
 };
+
+const JobQueue = Queue(Job);
 
 /// One session: its thread, its queue and, on that thread, its `Server`.
 /// Listed in `workers` until closed; its thread then drains the queue, tears
@@ -120,9 +128,11 @@ const Queue = struct {
 const Worker = struct {
     http: *HttpServer,
     id: []const u8,
-    queue: Queue = .{},
+    queue: JobQueue = .{},
     /// Guarded by `workers_mutex`, for `session_list`.
     url: ?[]const u8 = null,
+    /// Guarded by `workers_mutex`, for `cancel`.
+    server: ?*Server = null,
 };
 
 /// How the default session reports whether it came up.
@@ -153,10 +163,16 @@ conns: std.ArrayList(posix.socket_t) = .empty,
 
 workers_mutex: std.Io.Mutex = .init,
 workers: std.StringHashMapUnmanaged(*Worker) = .empty,
-/// Answered with 404. Never pruned: an entry is just the id, against the
-/// isolate the reaper freed. Guarded by `workers_mutex`.
-reaped: std.StringHashMapUnmanaged(void) = .empty,
+/// Ids the reaper or an HTTP DELETE ended, answered with 404 so a stale client
+/// doesn't silently get a fresh browser. Kept until `session_new` or
+/// `session_close` names the id: an entry is just the id, against the isolate
+/// it freed. Guarded by `workers_mutex`.
+tombstones: std.StringHashMapUnmanaged(void) = .empty,
 session_timeout_ms: ?u64,
+/// How long an event stream may go silent before a keep-alive comment, so
+/// proxies don't time out a long call. A call that outlives it switches to
+/// a stream even if it sends nothing else.
+heartbeat_ms: u64 = 15_000,
 /// Backs minted session ids (`s1`, `s2`, …).
 session_seq: u32 = 0,
 worker_wg: lp.WaitGroup = .{},
@@ -190,7 +206,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
 /// Runs after the accept loop has stopped, so no new connection can arrive.
 /// Shutting the sockets down unblocks the connection threads' pending reads;
 /// the workers must outlive their drain because a connection thread may
-/// still be blocked on `job.done`.
+/// still be waiting on its job.
 pub fn deinit(self: *HttpServer) void {
     {
         self.conn_mutex.lockUncancelable(lp.io);
@@ -213,9 +229,9 @@ pub fn deinit(self: *HttpServer) void {
     self.worker_wg.wait();
 
     self.workers.deinit(self.allocator);
-    var reaped = self.reaped.keyIterator();
-    while (reaped.next()) |id| self.allocator.free(id.*);
-    self.reaped.deinit(self.allocator);
+    var tombstones = self.tombstones.keyIterator();
+    while (tombstones.next()) |id| self.allocator.free(id.*);
+    self.tombstones.deinit(self.allocator);
     self.conns.deinit(self.allocator);
     self.allocator.destroy(self);
 }
@@ -231,11 +247,12 @@ fn submit(self: *HttpServer, arena: std.mem.Allocator, id: ?[]const u8, job: *Jo
 }
 
 /// For `session_new`: the session named `name` (null mints one), started if
-/// new, even if a session by that name was reaped. Returns its id, in `arena`.
+/// new, even if a session by that name was reaped or deleted. Returns its id,
+/// in `arena`.
 pub fn createSession(self: *HttpServer, arena: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
-    if (name) |n| _ = self.forgetReapedLocked(n);
+    if (name) |n| _ = self.forgetTombstoneLocked(n);
     const worker = try self.findOrSpawnLocked(name);
     return arena.dupe(u8, worker.id);
 }
@@ -256,29 +273,54 @@ pub fn listSessions(self: *HttpServer, arena: std.mem.Allocator) ![]SessionInfo 
 }
 
 /// Close session `id`: calls already queued still run, then its thread tears
-/// it down. Closing a reaped id frees it for reuse. False if there is no such
-/// session. The default lives as long as the process.
+/// it down. Closing a tombstoned id frees it for reuse. False if there is no
+/// such session. The default lives as long as the process.
 pub fn closeSession(self: *HttpServer, id: []const u8) bool {
     if (Server.isDefault(id)) return false;
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
-    if (self.forgetReapedLocked(id)) return true;
+    if (self.forgetTombstoneLocked(id)) return true;
     const worker = self.workers.get(id) orelse return false;
     self.removeLocked(worker);
     return true;
 }
 
+/// HTTP DELETE: close session `id` and tombstone it, so later requests get 404
+/// instead of a fresh session. Deleting a tombstoned id again, or the default
+/// (which lives as long as the process), succeeds and does nothing. False if
+/// there is no such session.
+fn deleteSession(self: *HttpServer, id: []const u8) bool {
+    if (Server.isDefault(id)) return true;
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    if (self.tombstones.contains(id)) return true;
+    const worker = self.workers.get(id) orelse return false;
+    self.removeLocked(worker);
+    // Close first: an id we fail to remember only lets a later request start
+    // a fresh session, as it did before tombstones.
+    self.tombstoneLocked(id) catch |err| {
+        log.warn(.mcp, "mcp session tombstone", .{ .session = id, .err = err });
+    };
+    return true;
+}
+
+fn tombstoneLocked(self: *HttpServer, id: []const u8) !void {
+    const owned_id = try self.allocator.dupe(u8, id);
+    errdefer self.allocator.free(owned_id);
+    try self.tombstones.putNoClobber(self.allocator, owned_id, {});
+}
+
 fn findOrSpawnLocked(self: *HttpServer, id: ?[]const u8) !*Worker {
     if (id) |name| {
         if (self.workers.get(name)) |worker| return worker;
-        if (self.reaped.contains(name)) return error.SessionExpired;
+        if (self.tombstones.contains(name)) return error.SessionEnded;
         return self.spawnLocked(name, null);
     }
     var buf: [16]u8 = undefined;
     while (true) {
         self.session_seq += 1;
         const candidate = std.fmt.bufPrint(&buf, "s{d}", .{self.session_seq}) catch unreachable;
-        if (!self.workers.contains(candidate) and !self.reaped.contains(candidate)) {
+        if (!self.workers.contains(candidate) and !self.tombstones.contains(candidate)) {
             return self.spawnLocked(candidate, null);
         }
     }
@@ -307,8 +349,8 @@ fn removeLocked(self: *HttpServer, worker: *Worker) void {
     worker.queue.close();
 }
 
-fn forgetReapedLocked(self: *HttpServer, id: []const u8) bool {
-    const kv = self.reaped.fetchRemove(id) orelse return false;
+fn forgetTombstoneLocked(self: *HttpServer, id: []const u8) bool {
+    const kv = self.tombstones.fetchRemove(id) orelse return false;
     self.allocator.free(kv.key);
     return true;
 }
@@ -321,11 +363,7 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     if (!worker.queue.isEmpty()) return false;
     if (self.workers.get(worker.id) != worker) return true;
 
-    const id = self.allocator.dupe(u8, worker.id) catch return false;
-    self.reaped.putNoClobber(self.allocator, id, {}) catch {
-        self.allocator.free(id);
-        return false;
-    };
+    self.tombstoneLocked(worker.id) catch return false;
     log.info(.mcp, "mcp session reaped", .{ .session = worker.id });
     self.removeLocked(worker);
     return true;
@@ -338,6 +376,22 @@ fn publishUrl(self: *HttpServer, worker: *Worker, url: ?[]const u8) void {
     if (old != null and url != null and std.mem.eql(u8, old.?, url.?)) return;
     worker.url = if (url) |u| self.allocator.dupe(u8, u) catch null else null;
     if (old) |o| self.allocator.free(o);
+}
+
+fn publishServer(self: *HttpServer, worker: *Worker, server: ?*Server) void {
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    worker.server = server;
+}
+
+/// Bypasses the queue, where a cancellation would wait behind the call it
+/// cancels.
+fn cancel(self: *HttpServer, id: []const u8, request_id: std.json.Value) void {
+    self.workers_mutex.lockUncancelable(lp.io);
+    defer self.workers_mutex.unlock(lp.io);
+    const worker = self.workers.get(id) orelse return;
+    const server = worker.server orelse return;
+    server.handleCancelledRequest(request_id);
 }
 
 /// Accept MCP-over-HTTP connections until stop() (e.g. from the signal
@@ -447,6 +501,8 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
     };
     defer if (server) |s| s.deinit();
     if (server) |s| s.directory = self;
+    self.publishServer(worker, server);
+    defer self.publishServer(worker, null);
     if (start) |st| {
         st.ok = server != null;
         st.done.set(lp.io);
@@ -461,7 +517,7 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
     var wait_ms: u64 = 0;
     while (true) {
         const job = switch (worker.queue.pop(wait_ms)) {
-            .job => |job| job,
+            .item => |job| job,
             .timeout => {
                 wait_ms = if (server) |s| s.idle() else 0;
                 const timeout = timeout_ms orelse continue;
@@ -478,16 +534,17 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
             },
             .closed => break,
         };
-        defer job.done.set(lp.io);
+        defer job.finish();
         _ = arena.reset(.retain_capacity);
         const s = server orelse {
             reject(arena.allocator(), job, "session failed to start");
             continue;
         };
-        s.transport.retarget(job.out);
+        s.transport.bind(job.out, job.sink());
         router.handleMessage(s, arena.allocator(), job.body) catch |err| {
             log.err(.mcp, "mcp handle", .{ .err = err });
         };
+        s.transport.notify = .drop;
         self.publishUrl(worker, if (s.active_session.session.currentFrame()) |frame| frame.url else null);
         idle_since = lp.datetime.milliTimestamp(.boot);
         wait_ms = 0;
@@ -557,8 +614,10 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
 }
 
 /// Handle one request: marshal it to the browser worker and write the reply.
-/// MCP Streamable HTTP — POST carries a JSON-RPC message; DELETE closes the
-/// session named by `Mcp-Session-Id`. std.http.Server owns the framing.
+/// MCP Streamable HTTP — POST carries a JSON-RPC message, answered with JSON
+/// or, once the call sends a notification or outlives `heartbeat_ms`, an
+/// event stream; DELETE closes the session named by `Mcp-Session-Id`.
+/// std.http.Server owns the framing.
 fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, request: *std.http.Server.Request) !void {
     const method = request.head.method;
     if (method != .POST and method != .DELETE) {
@@ -574,11 +633,12 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
 
     // Read the headers and keep_alive before the body reader invalidates
     // the head's string memory.
-    const session_id = checkHeaders(arena, request) catch |err| switch (err) {
+    const head = checkHeaders(arena, request) catch |err| switch (err) {
         error.ForbiddenOrigin => return request.respond("Origin not allowed\n", .{ .status = .forbidden, .keep_alive = false }),
         error.ForbiddenHost => return request.respond("Host not allowed, connect to the MCP endpoint by IP address or localhost\n", .{ .status = .forbidden, .keep_alive = false }),
         else => return err,
     };
+    const session_id = head.session_id;
     const keep_alive = request.head.keep_alive;
 
     var body_buf: [8 * 1024]u8 = undefined;
@@ -587,21 +647,50 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     };
 
     if (method == .DELETE) {
-        if (session_id) |sid| _ = self.closeSession(sid);
+        if (session_id) |sid| {
+            if (!self.deleteSession(sid)) {
+                return request.respond("Unknown session\n", .{ .status = .not_found, .keep_alive = keep_alive });
+            }
+        }
         return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
     }
 
-    var job: Job = .{ .body = body, .out = out };
-    const routed = self.submit(arena, target(arena, session_id, body), &job) catch |err| switch (err) {
-        error.SessionExpired => return request.respond("Session expired, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
+    const target_id = target(arena, session_id, body);
+    if (router.cancelledRequestId(arena, body)) |request_id| {
+        self.cancel(target_id orelse Server.default_session_id, request_id);
+        return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
+    }
+
+    var job: Job = .{ .allocator = self.allocator, .body = body, .out = out, .streams = head.event_stream };
+    defer job.deinit();
+    const routed = self.submit(arena, target_id, &job) catch |err| switch (err) {
+        error.SessionEnded => return request.respond("Session ended, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
         else => {
             log.err(.mcp, "mcp session routing", .{ .err = err });
             return request.respond("", .{ .status = .internal_server_error, .keep_alive = false });
         },
     };
-    job.done.waitUncancelable(lp.io);
+
+    var stream: EventStream = .{ .request = request, .session_id = routed, .keep_alive = keep_alive };
+    var events: std.ArrayList(u8) = .empty;
+    defer events.deinit(self.allocator);
+    var hung_up = false;
+    while (true) {
+        events.clearRetainingCapacity();
+        const finished = job.wait(&events, self.heartbeat_ms);
+        // A call that ends with nothing to stream still gets a plain reply.
+        if (job.streams and !hung_up and (events.items.len > 0 or !finished)) {
+            stream.send(events.items) catch {
+                hung_up = true;
+                job.hangUp();
+            };
+        }
+        if (finished) break;
+    }
+    if (hung_up) return error.WriteFailed;
 
     const resp = out.buffered();
+    if (stream.body != null) return stream.end(resp);
     const headers = [_]std.http.Header{
         .{ .name = "content-type", .value = "application/json" },
         .{ .name = "mcp-session-id", .value = routed },
@@ -614,17 +703,73 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     });
 }
 
+/// The `text/event-stream` reply to one POST, opened on its first event.
+const EventStream = struct {
+    request: *std.http.Server.Request,
+    session_id: []const u8,
+    keep_alive: bool,
+    buf: [4096]u8 = undefined,
+    body: ?std.http.BodyWriter = null,
+
+    /// Send `messages`, one JSON-RPC message per line; none sends a
+    /// keep-alive comment.
+    fn send(self: *EventStream, messages: []const u8) !void {
+        const body = try self.open();
+        if (messages.len == 0) {
+            try body.writer.writeAll(": keep-alive\n\n");
+        } else {
+            var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, messages, "\n"), '\n');
+            while (it.next()) |message| try writeEvent(&body.writer, message);
+        }
+        try body.writer.flush();
+        try body.flush();
+    }
+
+    /// Send the response, if the call has one, and close the stream.
+    fn end(self: *EventStream, response: []const u8) !void {
+        const body = &self.body.?;
+        const message = std.mem.trimEnd(u8, response, "\n");
+        if (message.len > 0) try writeEvent(&body.writer, message);
+        try body.end();
+    }
+
+    fn open(self: *EventStream) !*std.http.BodyWriter {
+        if (self.body) |*body| return body;
+        self.body = try self.request.respondStreaming(&self.buf, .{ .respond_options = .{
+            .keep_alive = self.keep_alive,
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "text/event-stream" },
+                .{ .name = "cache-control", .value = "no-cache" },
+                .{ .name = "mcp-session-id", .value = self.session_id },
+            },
+        } });
+        return &self.body.?;
+    }
+
+    fn writeEvent(writer: *std.Io.Writer, message: []const u8) !void {
+        try writer.print("event: message\ndata: {s}\n\n", .{message});
+    }
+};
+
+const Head = struct {
+    session_id: ?[]const u8 = null,
+    event_stream: bool = false,
+};
+
 /// One pass over the request headers: duplicate `Mcp-Session-Id` into
-/// `arena` (or null) and enforce the same browser-vector policy as the CDP
-/// handshake (see `cdp.Connection.upgrade`).
-fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[]const u8 {
-    var session_id: ?[]const u8 = null;
+/// `arena` (or null), note whether `Accept` takes an event stream, and
+/// enforce the same browser-vector policy as the CDP handshake (see
+/// `cdp.Connection.upgrade`).
+fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !Head {
+    var head: Head = .{};
     var it = request.iterateHeaders();
     while (it.next()) |header| {
         const key = header.name;
         const value = header.value;
         if (std.ascii.eqlIgnoreCase(key, "mcp-session-id")) {
-            session_id = try arena.dupe(u8, value);
+            head.session_id = try arena.dupe(u8, value);
+        } else if (std.ascii.eqlIgnoreCase(key, "accept")) {
+            head.event_stream = head.event_stream or acceptsEventStream(value);
         } else if (std.ascii.eqlIgnoreCase(key, "origin")) {
             log.warn(.mcp, "rejected request origin", .{
                 .origin = value[0..@min(value.len, 64)],
@@ -650,15 +795,25 @@ fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[
             }
         }
     }
-    return session_id;
+    return head;
 }
 
-/// `application/json`, case-insensitive, ignoring parameters (`; charset=`).
+fn acceptsEventStream(accept: []const u8) bool {
+    var it = std.mem.splitScalar(u8, accept, ',');
+    while (it.next()) |range| {
+        if (isMediaType(range, "text/event-stream")) return true;
+    }
+    return false;
+}
+
 fn isJsonContentType(content_type: ?[]const u8) bool {
-    const ct = content_type orelse return false;
-    const end = std.mem.findScalar(u8, ct, ';') orelse ct.len;
-    const media_type = std.mem.trim(u8, ct[0..end], " \t");
-    return std.ascii.eqlIgnoreCase(media_type, "application/json");
+    return isMediaType(content_type orelse return false, "application/json");
+}
+
+/// Case-insensitive, ignoring parameters (`; charset=`).
+fn isMediaType(value: []const u8, media_type: []const u8) bool {
+    const end = std.mem.findScalar(u8, value, ';') orelse value.len;
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, value[0..end], " \t"), media_type);
 }
 
 test "HttpServer - content type must be application/json" {
@@ -683,13 +838,24 @@ const testing = @import("../testing.zig");
 
 /// POSTs `body` to `port`, as session `sid`, and returns the response body.
 fn testPost(allocator: std.mem.Allocator, port: u16, sid: []const u8, body: []const u8) ![]u8 {
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    _ = try testStatus(allocator, port, .POST, sid, body, &out.writer);
-    return out.toOwnedSlice();
+    return testPostAccept(allocator, port, sid, body, "application/json");
 }
 
 fn testStatus(allocator: std.mem.Allocator, port: u16, method: std.http.Method, sid: []const u8, body: ?[]const u8, out: ?*std.Io.Writer) !std.http.Status {
+    return testRequest(allocator, port, method, sid, body, "application/json", out);
+}
+
+const accept_both = "application/json, text/event-stream";
+
+/// POSTs `body` as a client that takes `accept`, and returns the response body.
+fn testPostAccept(allocator: std.mem.Allocator, port: u16, sid: []const u8, body: []const u8, accept: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    _ = try testRequest(allocator, port, .POST, sid, body, accept, &out.writer);
+    return out.toOwnedSlice();
+}
+
+fn testRequest(allocator: std.mem.Allocator, port: u16, method: std.http.Method, sid: []const u8, body: ?[]const u8, accept: []const u8, out: ?*std.Io.Writer) !std.http.Status {
     var client: std.http.Client = .{ .allocator = allocator, .io = lp.io };
     defer client.deinit();
     const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/", .{port});
@@ -699,7 +865,10 @@ fn testStatus(allocator: std.mem.Allocator, port: u16, method: std.http.Method, 
         .method = method,
         .payload = body,
         .headers = .{ .content_type = .{ .override = "application/json" } },
-        .extra_headers = &.{.{ .name = "mcp-session-id", .value = sid }},
+        .extra_headers = &.{
+            .{ .name = "mcp-session-id", .value = sid },
+            .{ .name = "accept", .value = accept },
+        },
         .response_writer = out,
     });
     return result.status;
@@ -712,7 +881,7 @@ const SlowCall = struct {
 
     fn run(self: *SlowCall) void {
         self.response = testPost(testing.allocator, self.port, "slow",
-            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=1500"}}}
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?held=1"}}}
         ) catch null;
         self.done.store(true, .release);
     }
@@ -752,7 +921,9 @@ test "HttpServer - sessions run on their own threads" {
     defer server.stop();
     const port = server.port;
 
-    // A page that takes 1.5s to load in one session...
+    // A page held mid-load in one session...
+    testing.hold_loads.store(true, .release);
+    defer testing.hold_loads.store(false, .release);
     var slow: SlowCall = .{ .port = port };
     const slow_thread = try std.Thread.spawn(.{}, SlowCall.run, .{&slow});
     var slow_joined = false;
@@ -767,6 +938,7 @@ test "HttpServer - sessions run on their own threads" {
     try testing.expect(std.mem.find(u8, fast, "Navigated") != null);
     try testing.expect(!slow.done.load(.acquire));
 
+    testing.hold_loads.store(false, .release);
     slow_thread.join();
     slow_joined = true;
     defer if (slow.response) |r| testing.allocator.free(r);
@@ -780,7 +952,7 @@ test "HttpServer - sessions run on their own threads" {
     // JSON nested in the tool-result text, so its quotes are escaped.
     try testing.expect(std.mem.find(u8, list, "\\\"default\\\"") != null);
     try testing.expect(std.mem.find(u8, list, "\\\"slow\\\"") != null);
-    try testing.expect(std.mem.find(u8, list, "delay_ms=1500") != null);
+    try testing.expect(std.mem.find(u8, list, "held=1") != null);
     // Neither load reached the default session.
     try testing.expect(std.mem.find(u8, list, "{\\\"id\\\":\\\"default\\\"}") != null);
 
@@ -823,14 +995,50 @@ test "HttpServer - sessions run on their own threads" {
     try testing.expect(std.mem.find(u8, deleted, "\\\"slow\\\"") == null);
 }
 
+test "HttpServer - DELETE tombstones a session id" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    const port = server.port;
+    const call =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_list"}}
+    ;
+
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .DELETE, "unknown", null, null));
+    try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+
+    const listed = try testPost(testing.allocator, port, "default", call);
+    defer testing.allocator.free(listed);
+    try testing.expect(std.mem.find(u8, listed, "\\\"deleted\\\"") == null);
+
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+    try testing.expectEqual(.not_found, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+
+    const revived = try testPost(testing.allocator, port, "default",
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"deleted"}}}
+    );
+    defer testing.allocator.free(revived);
+    try testing.expect(std.mem.find(u8, revived, "session deleted") != null);
+    try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .DELETE, "deleted", null, null));
+    const closed = try testPost(testing.allocator, port, "default",
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_close","arguments":{"id":"deleted"}}}
+    );
+    defer testing.allocator.free(closed);
+    try testing.expect(std.mem.find(u8, closed, "closed session deleted") != null);
+    try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "deleted", call, null));
+}
+
 test "HttpServer - idle sessions are reaped" {
-    var server: TestServer = try .start(500);
+    var server: TestServer = try .start(150);
     defer server.stop();
     const port = server.port;
 
     // Time spent in a call isn't idle time: this load outlives the timeout.
     const busy = try testPost(testing.allocator, port, "busy",
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=800"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=300"}}}
     );
     defer testing.allocator.free(busy);
     try testing.expect(std.mem.find(u8, busy, "Navigated") != null);
@@ -841,11 +1049,11 @@ test "HttpServer - idle sessions are reaped" {
     try testing.expect(std.mem.find(u8, listed, "\\\"busy\\\"") != null);
 
     var reaped = false;
-    for (0..100) |_| {
-        lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+    for (0..500) |_| {
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
         server.http.workers_mutex.lockUncancelable(lp.io);
         defer server.http.workers_mutex.unlock(lp.io);
-        reaped = server.http.reaped.contains("busy");
+        reaped = server.http.tombstones.contains("busy");
         if (reaped) break;
     }
     try testing.expect(reaped);
@@ -862,4 +1070,137 @@ test "HttpServer - idle sessions are reaped" {
     defer testing.allocator.free(revived);
     try testing.expect(std.mem.find(u8, revived, "session busy") != null);
     try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "busy", call, null));
+}
+
+const WaitCall = struct {
+    port: u16,
+    response: ?[]u8 = null,
+
+    fn run(self: *WaitCall) void {
+        self.response = testPost(testing.allocator, self.port, "cancel",
+            \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"false","timeout":30000}}}
+        ) catch null;
+    }
+};
+
+test "HttpServer - notifications/cancelled reaches the call in flight" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    const port = server.port;
+
+    const loaded = try testPost(testing.allocator, port, "cancel",
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank"}}}
+    );
+    defer testing.allocator.free(loaded);
+
+    var wait: WaitCall = .{ .port = port };
+    const started = lp.datetime.milliTimestamp(.boot);
+    const wait_thread = try std.Thread.spawn(.{}, WaitCall.run, .{&wait});
+    lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+
+    const cancel_call =
+        \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}
+    ;
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .POST, "cancel", cancel_call, null));
+    // Doesn't start a session.
+    try testing.expectEqual(.accepted, try testStatus(testing.allocator, port, .POST, "never-started", cancel_call, null));
+
+    wait_thread.join();
+    defer if (wait.response) |r| testing.allocator.free(r);
+    try testing.expect(lp.datetime.milliTimestamp(.boot) - started < 10_000);
+    // A cancelled call gets no response.
+    try testing.expectEqual(0, (wait.response orelse return error.TestUnexpectedResult).len);
+
+    const after = try testPost(testing.allocator, port, "cancel",
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"session_list"}}
+    );
+    defer testing.allocator.free(after);
+    try testing.expect(std.mem.find(u8, after, "\\\"never-started\\\"") == null);
+}
+
+test "HttpServer - Accept lists text/event-stream" {
+    try testing.expect(acceptsEventStream("application/json, text/event-stream"));
+    try testing.expect(acceptsEventStream("Text/Event-Stream;q=0.9"));
+    try testing.expect(!acceptsEventStream("application/json"));
+    try testing.expect(!acceptsEventStream("text/event-streams"));
+}
+
+test "HttpServer - a call's notifications stream over SSE" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    const port = server.port;
+    const run_call =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"console.log('one');\nconsole.warn('two');\nreturn 'done';"}}}
+    ;
+
+    const streamed = try testPostAccept(testing.allocator, port, "sse", run_call, accept_both);
+    defer testing.allocator.free(streamed);
+    const one = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\",\"logger\":\"console\",\"data\":\"one\"}}\n\n";
+    const two = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"warning\",\"logger\":\"console\",\"data\":\"two\"}}\n\n";
+    try testing.expect(std.mem.startsWith(u8, streamed, one ++ two ++ "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":"));
+    try testing.expect(std.mem.find(u8, streamed, "one\\ntwo\\ndone\\n") != null);
+    try testing.expect(std.mem.endsWith(u8, streamed, "}\n\n"));
+
+    const plain = try testPostAccept(testing.allocator, port, "sse", run_call, "application/json");
+    defer testing.allocator.free(plain);
+    try testing.expect(std.mem.startsWith(u8, plain, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":"));
+    try testing.expect(std.mem.find(u8, plain, "notifications/message") == null);
+
+    const quiet = try testPostAccept(testing.allocator, port, "sse",
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
+    , accept_both);
+    defer testing.allocator.free(quiet);
+    try testing.expect(std.mem.startsWith(u8, quiet, "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":"));
+
+    const progress = try testPostAccept(testing.allocator, port, "sse",
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"_meta":{"progressToken":"t"},"name":"run","arguments":{"script":"console.log('one');\nconsole.log('two');"}}}
+    , accept_both);
+    defer testing.allocator.free(progress);
+    try testing.expect(std.mem.find(u8, progress, "\"params\":{\"progressToken\":\"t\",\"progress\":1,\"message\":\"one\"}") != null);
+    try testing.expect(std.mem.find(u8, progress, "\"params\":{\"progressToken\":\"t\",\"progress\":2,\"message\":\"two\"}") != null);
+    try testing.expect(std.mem.find(u8, progress, "notifications/message") == null);
+}
+
+test "HttpServer - a silent call outliving the heartbeat streams keep-alives" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    server.http.heartbeat_ms = 50;
+
+    const slow = try testPostAccept(testing.allocator, server.port, "beat",
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html?delay_ms=300"}}}
+    , accept_both);
+    defer testing.allocator.free(slow);
+    try testing.expect(std.mem.startsWith(u8, slow, ": keep-alive\n\n"));
+    try testing.expect(std.mem.find(u8, slow, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":") != null);
+    try testing.expect(std.mem.find(u8, slow, "Navigated") != null);
+}
+
+test "HttpServer - a client hanging up mid-stream leaves the session usable" {
+    var server: TestServer = try .start(null);
+    defer server.stop();
+    server.http.heartbeat_ms = 20;
+
+    {
+        const address = try std.Io.net.IpAddress.parse("127.0.0.1", server.port);
+        const conn = try address.connect(lp.io, .{ .mode = .stream });
+        defer conn.close(lp.io);
+        const body =
+            \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nfor (let i = 0; i < 200; i++) { console.log('line ' + i); await page.goto('about:blank'); }\nreturn 'done';"}}}
+        ;
+        var send_buf: [1024]u8 = undefined;
+        var writer = conn.writer(lp.io, &send_buf);
+        try writer.interface.print("POST / HTTP/1.1\r\nhost: 127.0.0.1\r\ncontent-type: application/json\r\naccept: " ++ accept_both ++ "\r\nmcp-session-id: gone\r\ncontent-length: {d}\r\n\r\n{s}", .{ body.len, body });
+        try writer.interface.flush();
+
+        var recv_buf: [1024]u8 = undefined;
+        var reader = conn.reader(lp.io, &recv_buf);
+        const status = try reader.interface.takeDelimiterInclusive('\n');
+        try testing.expect(std.mem.startsWith(u8, status, "HTTP/1.1 200"));
+    }
+
+    const after = try testPostAccept(testing.allocator, server.port, "gone",
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
+    , accept_both);
+    defer testing.allocator.free(after);
+    try testing.expect(std.mem.find(u8, after, "\\\"gone\\\"") != null);
 }

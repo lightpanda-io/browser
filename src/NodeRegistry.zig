@@ -32,6 +32,9 @@ pub const Id = u32;
 
 pub const Node = struct {
     id: Id,
+    // The id of the AX tree's synthetic ListMarker node of this <li>, 0 until
+    // asked for. It comes from node_id, so it never collides with a node's.
+    list_marker_id: Id = 0,
     dom: *DOMNode,
 };
 
@@ -40,6 +43,8 @@ allocator: Allocator,
 node_pool: std.heap.MemoryPool(Node),
 lookup_by_id: std.AutoHashMapUnmanaged(Id, *Node),
 lookup_by_node: std.HashMapUnmanaged(*DOMNode, *Node, NodeContext, std.hash_map.default_max_load_percentage),
+// The <li> of each ListMarker id handed out.
+list_marker_owners: std.AutoHashMapUnmanaged(Id, *Node),
 
 pub fn init(allocator: Allocator) NodeRegistry {
     return .{
@@ -47,6 +52,7 @@ pub fn init(allocator: Allocator) NodeRegistry {
         .node_pool = .empty,
         .lookup_by_id = .{},
         .lookup_by_node = .{},
+        .list_marker_owners = .{},
         .allocator = allocator,
     };
 }
@@ -55,35 +61,67 @@ pub fn deinit(self: *NodeRegistry) void {
     const allocator = self.allocator;
     self.lookup_by_id.deinit(allocator);
     self.lookup_by_node.deinit(allocator);
+    self.list_marker_owners.deinit(allocator);
     self.node_pool.deinit(allocator);
 }
 
 pub fn reset(self: *NodeRegistry) void {
     self.lookup_by_id.clearRetainingCapacity();
     self.lookup_by_node.clearRetainingCapacity();
+    self.list_marker_owners.clearRetainingCapacity();
     _ = self.node_pool.reset(self.allocator, .{ .retain_with_limit = 1024 });
 }
 
 /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
 /// IDs valid. Must run before the page's arena is freed — attribution reads
 /// each node's document.
-pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
+pub fn resetFrame(self: *NodeRegistry, frame: *const Frame) void {
+    if (self.lookup_by_id.count() == 0) return;
     const page = frame.page;
-    var doomed: std.ArrayListUnmanaged(*Node) = .empty;
+    var doomed: std.ArrayList(*Node) = .empty;
+    defer doomed.deinit(self.allocator);
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
         const node = node_ptr.*;
         // The document table is the browser's, so a sibling page's node
         // resolves correctly through this page's frame.
         if (node.dom.getDocument(frame)._page == page) {
-            doomed.append(arena, node) catch return;
+            doomed.append(self.allocator, node) catch return;
         }
     }
     for (doomed.items) |node| {
         _ = self.lookup_by_id.remove(node.id);
         _ = self.lookup_by_node.remove(node.dom);
+        if (node.list_marker_id != 0) {
+            _ = self.list_marker_owners.remove(node.list_marker_id);
+        }
         self.node_pool.destroy(node);
     }
+}
+
+/// `frame_destroyed` listener: a page's nodes go with its root frame, however
+/// the page was closed.
+pub fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
+    if (frame != &frame.page.frame) return;
+    const self: *NodeRegistry = @ptrCast(@alignCast(ctx));
+    self.resetFrame(frame);
+}
+
+/// The id of the ListMarker AX node of `li`, the same on every call.
+pub fn listMarkerId(self: *NodeRegistry, li: *Node) !Id {
+    if (li.list_marker_id != 0) {
+        return li.list_marker_id;
+    }
+    const id = self.node_id;
+    try self.list_marker_owners.putNoClobber(self.allocator, id, li);
+    self.node_id = id + 1;
+    li.list_marker_id = id;
+    return id;
+}
+
+/// The <li> of the ListMarker AX node `id`, if `id` is a marker's.
+pub fn listMarkerOwner(self: *const NodeRegistry, id: Id) ?*Node {
+    return self.list_marker_owners.get(id);
 }
 
 pub fn register(self: *NodeRegistry, dom_node: *DOMNode) !*Node {
@@ -165,9 +203,6 @@ test "NodeRegistry: resetFrame" {
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var page_a = try testing.pageTest("cdp/registry1.html", .{});
     defer page_a.close();
     var page_b = try testing.pageTest("cdp/registry2.html", .{});
@@ -181,9 +216,14 @@ test "NodeRegistry: resetFrame" {
     const ra = try registry.register(a_node);
     const rb = try registry.register(b_node);
     try testing.expectEqual(2, registry.lookup_by_id.count());
+    const a_marker = try registry.listMarkerId(ra);
+    const b_marker = try registry.listMarkerId(rb);
 
-    registry.resetFrame(arena.allocator(), frame_a);
+    registry.resetFrame(frame_a);
 
+    // An evicted node's marker goes with it.
+    try testing.expectEqual(null, registry.listMarkerOwner(a_marker));
+    try testing.expectEqual(rb, registry.listMarkerOwner(b_marker).?);
     try testing.expectEqual(null, registry.lookup_by_id.get(ra.id));
     try testing.expectEqual(null, registry.lookup_by_node.get(a_node));
     try testing.expectEqual(1, registry.lookup_by_id.count());
@@ -206,4 +246,27 @@ test "NodeRegistry: reset never reuses an id" {
     registry.reset();
     try testing.expectEqual(null, registry.lookup_by_id.get(first_id));
     try testing.expect((try registry.register(dom_node)).id != first_id);
+}
+
+test "NodeRegistry: listMarkerId" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_relatives.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const li = (try frame.window._document.querySelector(.wrap("#item"), frame)).?.asNode();
+
+    const node = try registry.register(li);
+    const marker_id = try registry.listMarkerId(node);
+    try testing.expectEqual(marker_id, try registry.listMarkerId(node));
+    try testing.expectEqual(node, registry.listMarkerOwner(marker_id));
+
+    // Marker and node ids share one counter.
+    try testing.expect(node.id != marker_id);
+    try testing.expectEqual(null, registry.listMarkerOwner(node.id));
+
+    registry.reset();
+    try testing.expectEqual(null, registry.listMarkerOwner(marker_id));
 }

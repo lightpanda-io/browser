@@ -129,7 +129,7 @@ const InputMessage = struct {
     method: ?[]const u8 = null,
 };
 
-pub const Timeouts = struct {
+const Timeouts = struct {
     script: ?u32 = 30_000,
     pageLoad: u32 = 300_000,
     implicit: u32 = 0,

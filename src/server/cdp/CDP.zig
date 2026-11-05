@@ -32,7 +32,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
-const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
 const Link = @import("../Link.zig");
@@ -501,6 +500,10 @@ pub const BrowserContext = struct {
     // (chromedp's keyDown/char/keyUp split), as Chrome does.
     suppress_next_char: bool = false,
 
+    // Input.setInterceptDrags. Nothing starts a drag from mouse input yet, so
+    // no Input.dragIntercepted is ever due.
+    intercept_drags: bool = false,
+
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,
@@ -535,6 +538,8 @@ pub const BrowserContext = struct {
 
     intercept_state: InterceptState,
     fetch_session_id: ?[]const u8 = null,
+
+    download_session_id: ?[]const u8 = null,
 
     // Request bodies retained for Network.getRequestPostData, which can be
     // called after the transfer is gone. Capped at max_post_data_size.
@@ -743,12 +748,15 @@ pub const BrowserContext = struct {
         }
     }
 
-    pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
+    pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) !Node.Writer {
         return .{
             .root = root,
             .depth = opts.depth,
             .exclude_root = opts.exclude_root,
+            .pierce = opts.pierce,
             .registry = &self.node_registry,
+            // shadow roots are tracked per Page, any of its frames will do
+            .frame = self.mainFrame() orelse return error.FrameNotLoaded,
         };
     }
 
@@ -759,17 +767,7 @@ pub const BrowserContext = struct {
         // cross-frame queries produces names/visibility from the wrong document.
         const main_frame = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(main_frame) orelse return error.InvalidNodeId;
-        const label_index = try frame.call_arena.create(Label.LabelByForIndex);
-        label_index.* = .{};
-        return .{
-            .frame = frame,
-            .root = root,
-            .registry = &self.node_registry,
-            .label_index = label_index,
-            .temp_arena = temp_arena,
-            .filter = opts.filter,
-            .depth = opts.depth,
-        };
+        return .init(frame, root, &self.node_registry, temp_arena, opts);
     }
 
     // The root frame of this context's live Page.
@@ -934,12 +932,14 @@ pub const BrowserContext = struct {
         self.page_life_cycle_events = true;
         try self.notification.register(.frame_network_idle, self, onFrameNetworkIdle);
         try self.notification.register(.frame_network_almost_idle, self, onFrameNetworkAlmostIdle);
+        try self.notification.register(.frame_settled, self, onFrameSettled);
     }
 
     pub fn lifecycleEventsDisable(self: *BrowserContext) void {
         self.page_life_cycle_events = false;
         self.notification.unregister(.frame_network_idle, self);
         self.notification.unregister(.frame_network_almost_idle, self);
+        self.notification.unregister(.frame_settled, self);
     }
 
     pub fn consoleEnable(self: *BrowserContext) !void {
@@ -994,11 +994,13 @@ pub const BrowserContext = struct {
     pub fn downloadEventsEnable(self: *BrowserContext) !void {
         try self.notification.register(.download_will_begin, self, onDownloadWillBegin);
         try self.notification.register(.download_progress, self, onDownloadProgress);
+        try self.notification.register(.download_data, self, onDownloadData);
     }
 
     pub fn downloadEventsDisable(self: *BrowserContext) void {
         self.notification.unregister(.download_will_begin, self);
         self.notification.unregister(.download_progress, self);
+        self.notification.unregister(.download_data, self);
     }
 
     fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
@@ -1009,6 +1011,11 @@ pub const BrowserContext = struct {
     fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/browser.zig").downloadProgress(self, msg);
+    }
+
+    fn onDownloadData(ctx: *anyopaque, msg: *const Notification.DownloadData) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/lp.zig").downloadData(self, msg);
     }
 
     pub fn webmcpEnable(self: *BrowserContext) !void {
@@ -1076,6 +1083,11 @@ pub const BrowserContext = struct {
     fn onFrameChildFrameDetached(ctx: *anyopaque, msg: *const Notification.FrameChildFrameDetached) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameDetached(self, msg);
+    }
+
+    fn onFrameSettled(ctx: *anyopaque, msg: *const Notification.FrameSettled) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        return @import("domains/page.zig").frameSettled(self, msg);
     }
 
     fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
@@ -1306,7 +1318,7 @@ pub const BrowserContext = struct {
         return true;
     }
 
-    pub fn detachAllSessions(self: *BrowserContext) void {
+    fn detachAllSessions(self: *BrowserContext) void {
         for (self.attached_sessions.values()) |attached| {
             self.destroySession(attached);
         }
@@ -1315,6 +1327,16 @@ pub const BrowserContext = struct {
     }
 
     fn destroySession(self: *BrowserContext, attached: *AttachedSession) void {
+        if (self.download_session_id) |download_session_id| {
+            if (std.mem.eql(u8, download_session_id, attached.id)) {
+                // Like Chrome, the download behavior goes away with the
+                // session that set it.
+                self.download_session_id = null;
+                self.session.download_behavior = .deny;
+                self.session.download_events_enabled = false;
+                self.downloadEventsDisable();
+            }
+        }
         self.notification.unregisterAll(attached);
         attached.inspector_session.deinit();
         self.cdp.allocator.destroy(attached);
@@ -1829,14 +1851,15 @@ test "cdp: --cookie-jar saves on dispose and --cookie loads it back" {
     {
         // no file yet: the context starts with an empty jar
         const bc = try ctx.loadBrowserContext(.{});
-        try testing.expectEqual(0, bc.session.cookie_jar.cookies.items.len);
+        try testing.expectEqual(0, bc.session.cookie_jar.len);
         try bc.session.cookie_jar.populateFromResponse("https://example.com/", "sid=abc; Path=/; Max-Age=3600; HttpOnly");
         ctx.cdp().disposeBrowserContext();
     }
 
     // a new context (a reconnect, or a restart) starts logged in
     const bc = try ctx.loadBrowserContext(.{});
-    const cookies = bc.session.cookie_jar.cookies.items;
-    try testing.expectEqual(1, cookies.len);
-    try testing.expectEqualSlices(u8, "abc", cookies[0].value);
+    const jar = &bc.session.cookie_jar;
+    try testing.expectEqual(1, jar.len);
+    var it = jar.iterator();
+    try testing.expectEqualSlices(u8, "abc", it.next().?.value);
 }

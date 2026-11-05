@@ -61,3 +61,38 @@
     testing.expectTrue(result === document.fonts);
 }
 </script>
+
+<script id="document_fonts_load_faces">
+{
+    // load() resolves with the added face for its family, and with one
+    // stand-in per other family, the same one on every call.
+    const added = new FontFace("LoadAdded", "url(added.woff)");
+    document.fonts.add(added);
+
+    const results = [];
+    for (const font of ["16px LoadAdded", "16px LoadA, 'LoadB', serif", "bold 12px loada", "16px LoadA, LoadA"]) {
+        document.fonts.load(font).then((fonts) => results.push(fonts));
+    }
+
+    testing.onload(() => {
+        testing.expectEqual(4, results.length);
+        const [own, pair, again, dup] = results;
+
+        testing.expectEqual(1, own.length);
+        testing.expectTrue(own[0] === added);
+
+        testing.expectEqual(2, pair.length);
+        testing.expectEqual('LoadA', pair[0].family);
+        testing.expectEqual('LoadB', pair[1].family);
+        testing.expectTrue(pair[0] instanceof FontFace);
+        testing.expectEqual('loaded', pair[0].status);
+
+        // Family names match case-insensitively.
+        testing.expectEqual(1, again.length);
+        testing.expectTrue(again[0] === pair[0]);
+
+        testing.expectEqual(1, dup.length);
+        testing.expectTrue(dup[0] === pair[0]);
+    });
+}
+</script>

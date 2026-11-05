@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <form>
@@ -54,6 +55,16 @@
   testing.expectEqual(false, $('#disabled-required').willValidate);
   testing.expectEqual(true, $('#disabled-required').validity.valid);
   testing.expectEqual(true, $('#disabled-required').checkValidity());
+}
+</script>
+
+<script id="readonly">
+{
+  const ta = document.createElement('textarea');
+  ta.required = true;
+  ta.readOnly = true;
+  testing.expectEqual(false, ta.willValidate);
+  testing.expectEqual(true, ta.checkValidity());
 }
 </script>
 

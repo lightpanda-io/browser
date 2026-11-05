@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("js/js.zig");
 const Frame = @import("Frame.zig");
+const URL = @import("URL.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -51,6 +52,10 @@ pub fn init(session: *Session, _: Opts) Runner {
 pub const WaitCondition = struct {
     frame_id: u32,
     until: lp.Config.WaitUntil = .done,
+    /// Also complete once the page's popup count exceeds this. A
+    /// navigation's replacement page starts with no popups, so there `until`
+    /// alone bounds the wait.
+    popups_above: ?usize = null,
     status: Status = .pending,
 
     const Status = union(enum) {
@@ -64,10 +69,16 @@ const WaitForFrameOpts = struct {
     until: lp.Config.WaitUntil = .done,
 };
 pub fn waitForFrame(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !void {
+    _ = try self.waitForFrameResult(frame_id, timeout_ms, opts);
+}
+
+/// `waitForFrame`, telling a met condition from a timeout.
+pub fn waitForFrameResult(self: *Runner, frame_id: u32, timeout_ms: u32, opts: WaitForFrameOpts) !WaitResult {
     const condition = WaitCondition{ .frame_id = frame_id, .until = opts.until };
     var conditions = [_]WaitCondition{condition};
-    _ = try self._wait(false, timeout_ms, &conditions);
+    const result = try self._wait(false, timeout_ms, &conditions);
     try firstConditionError(&conditions);
+    return result;
 }
 
 pub fn waitForFrameCDP(self: *Runner, frame_id: u32, timeout_ms: u32, until: lp.Config.WaitUntil) !void {
@@ -278,6 +289,13 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             continue;
         };
 
+        if (condition.popups_above) |count| {
+            if (page.popups.items.len > count) {
+                condition.status = .complete;
+                continue;
+            }
+        }
+
         const frame = &page.frame;
         switch (frame._parse_state) {
             .err => |err| {
@@ -302,6 +320,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                     .load => frame._load_state == .complete,
                     .networkidle => network_idle_held,
                     .networkalmostidle => network_almost_idle_held,
+                    .settled => frame._load_state == .complete and page.settle.pending == 0,
                 };
 
                 // `met` resolves the condition. Otherwise, as long as there's
@@ -485,6 +504,9 @@ fn hasRunnablePage(session: *Session) bool {
             // An image or raw document has a JS context too: its timers and
             // animation frames run like an HTML document's.
             .html, .complete, .raw_done => return true,
+            .pre => {
+                if (page.frame.document._ready_state == .complete and URL.isAboutBlank(page.frame.url)) return true;
+            },
             else => {},
         }
     }
@@ -502,6 +524,7 @@ test "Runner: waitForSelector timeout" {
 
 test "Runner: waitForSelector" {
     const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
 
     var runner = page.session.runner(.{});
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
@@ -729,4 +752,85 @@ test "Runner: networkidle waits out activity after the frame latched idle" {
     const again_start = lp.datetime.milliTimestamp(.boot);
     try again.waitForFrame(page.frame_id, 3000, .{ .until = .networkidle });
     try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - again_start < 250);
+}
+
+test "Runner: settled waits for load work, not for intervals, long timeouts or polling loops" {
+    const page = try testing.pageTest("runner/settled.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    const start = lp.datetime.milliTimestamp(.boot);
+    try runner.waitForFrame(page.frame_id, 3000, .{ .until = .settled });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start < 2000);
+    _ = try runner.waitForSelector(page.frame_id, "#settled", 0);
+    try testing.expectEqual(0, page.page().?.settle.pending);
+}
+
+test "Runner: settled is load when load starts nothing" {
+    const page = try testing.pageTest("runner/runner1.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+    try testing.expectEqual(0, page.page().?.settle.pending);
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .settled });
+    try testing.expectEqual(true, lp.datetime.milliTimestamp(.boot) - start < 50);
+}
+
+test "Runner: settled releases a port delivery its frame dropped" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Posted from tracked work, so the delivery holds settled until it runs.
+    const attribution = frame.js.attribution;
+    const task_scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+    _ = try ls.local.exec("const ch = new MessageChannel(); ch.port1.onmessage = () => {}; ch.port2.postMessage(1);", null);
+    task_scope.exit();
+    try testing.expectEqual(1, frame.page.settle.pending);
+
+    // Dropping the scheduler finalizes the delivery without running it.
+    frame.js.scheduler.reset();
+    try testing.expectEqual(0, frame.page.settle.pending);
+}
+
+test "Runner: fresh initial about blank advances timers and promise continuations" {
+    const page = try testing.test_session.createPage();
+    defer page.close();
+    const frame = page.frame().?;
+    try testing.expectEqual("about:blank", frame.url);
+    try testing.expectEqual(true, frame._parse_state == .pre);
+    try testing.expectEqual(true, frame._load_state == .waiting);
+    try testing.expectEqual(true, frame.document._ready_state == .complete);
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        try ls.local.eval(
+            \\globalThis.initialPageEvents = [];
+            \\setTimeout(() => {
+            \\  initialPageEvents.push('timer');
+            \\  Promise.resolve().then(() => initialPageEvents.push('promise'));
+            \\}, 0);
+        , null);
+    }
+    var runner = page.session.runner(.{});
+    var conditions: [0]WaitCondition = .{};
+    _ = try runner.tick(0, &conditions);
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const events = try ls.local.exec("initialPageEvents.join(',')", null);
+        try testing.expectEqual("timer,promise", try events.toStringSlice());
+    }
+    try testing.expectEqual(true, frame._parse_state == .pre);
+    try testing.expectEqual(true, frame._load_state == .waiting);
+    try testing.expectEqual(true, frame.document._ready_state == .complete);
 }

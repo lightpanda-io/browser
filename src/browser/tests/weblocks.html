@@ -440,9 +440,9 @@
   const state = await testing.async();
   const order = [];
 
-  navigator.locks.request('c', () => {
+  navigator.locks.request('steal-sync', () => {
     order.push('A');
-    navigator.locks.request('c', { steal: true }, () => {});
+    navigator.locks.request('steal-sync', { steal: true }, () => {});
     order.push('B');
     return new Promise(() => {});
   }).catch(() => order.push('C'));

@@ -1,8 +1,21 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script>
-  const FORMATS = ['gzip', 'deflate', 'deflate-raw', 'brotli'];
+  let SUPPORTS_BROTLI = true;
+  try {
+    new CompressionStream('brotli');
+  } catch (e) {
+    SUPPORTS_BROTLI = false;
+  }
+</script>
+
+<script>
+  const FORMATS = ['gzip', 'deflate', 'deflate-raw'];
+  if (SUPPORTS_BROTLI) {
+    FORMATS.push('brotli');
+  }
 
   async function readAll(readable) {
     return readRest(readable.getReader(), []);
@@ -64,7 +77,7 @@
     try {
       await promise;
     } catch (e) {
-      return e.name;
+      return e?.name ?? e;
     }
     return 'resolved';
   }
@@ -154,7 +167,9 @@
     testing.expectEqual(20, results['gzip'].length);
     testing.expectEqual(8, results['deflate'].length);
     testing.expectEqual(2, results['deflate-raw'].length);
-    testing.expectEqual(1, results['brotli'].length);
+    if (SUPPORTS_BROTLI) {
+      testing.expectEqual(1, results['brotli'].length);
+    }
     for (const format of FORMATS) {
       testing.expectEqual([], results[format].decompressed);
     }
@@ -187,10 +202,13 @@
 </script>
 
 <script id=bad_chunks type=module>
+  const formats = ['gzip'];
+  if (SUPPORTS_BROTLI) {
+    formats.push('brotli');
+  }
   const state = await testing.async();
-
   const results = [];
-  for (const format of ['gzip', 'brotli']) {
+  for (const format of formats) {
     for (const chunk of ['hello', undefined, null, 42, {}, [1, 2, 3]]) {
       const cs = new CompressionStream(format);
       const writer = cs.writable.getWriter();
@@ -232,9 +250,13 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual('TypeError', write);
-    testing.expectEqual('TypeError', next_write);
-    testing.expectEqual('TypeError', close);
+    // Known bug: cancelling the readable should error the writable with the
+    // cancel reason (undefined here); our writes still run and fail to enqueue.
+    testing.diverges("cancelling a TransformStream's readable doesn't error its writable", () => {
+      testing.expectEqual('TypeError', write);
+      testing.expectEqual('TypeError', next_write);
+      testing.expectEqual('TypeError', close);
+    });
   });
 </script>
 
@@ -386,79 +408,97 @@
 </script>
 
 <script id=brotli_matches_cli type=module>
+  // testing.async() comes first, even when skipping: the runner waits for
+  // every module that has one.
   const state = await testing.async();
+  if (SUPPORTS_BROTLI == false) {
+    state.resolve();
+    await state.done(() => {});
+  } else {
+    const encode = (text) => new TextEncoder().encode(text);
+    const results = {
+      hello: Array.from(await run(new CompressionStream('brotli'), [encode('hello')])),
+      repeated: Array.from(await run(new CompressionStream('brotli'), [encode('hello brotli, '.repeat(8))])),
+      // Only empty chunks: still a complete, valid stream.
+      empty: Array.from(await run(new CompressionStream('brotli'), [new Uint8Array(0), new ArrayBuffer(0)])),
+    };
 
-  const encode = (text) => new TextEncoder().encode(text);
-  const results = {
-    hello: Array.from(await run(new CompressionStream('brotli'), [encode('hello')])),
-    repeated: Array.from(await run(new CompressionStream('brotli'), [encode('hello brotli, '.repeat(8))])),
-    // Only empty chunks: still a complete, valid stream.
-    empty: Array.from(await run(new CompressionStream('brotli'), [new Uint8Array(0), new ArrayBuffer(0)])),
-  };
-
-  state.resolve();
-  await state.done(() => {
-    // Byte-for-byte what `brotli -q 5 -w 22` (v1.2.0) gives, the quality we
-    // use. 'hello' is too short to compress, so it's stored as is.
-    testing.expectEqual([11, 2, 128, 104, 101, 108, 108, 111, 3], results.hello);
-    testing.expectEqual([
-      27, 111, 0, 0, 196, 113, 108, 221, 252, 238, 234, 69, 68, 170, 65, 112,
-      171, 199, 115, 122, 14, 173, 143, 9,
-    ], results.repeated);
-    testing.expectEqual([59], results.empty);
-  });
+    state.resolve();
+    await state.done(() => {
+      // Byte-for-byte what `brotli -q 5 -w 22` (v1.2.0) gives, the quality we
+      // use. 'hello' is too short to compress, so it's stored as is.
+      testing.expectEqual([11, 2, 128, 104, 101, 108, 108, 111, 3], results.hello);
+      testing.expectEqual([
+        27, 111, 0, 0, 196, 113, 108, 221, 252, 238, 234, 69, 68, 170, 65, 112,
+        171, 199, 115, 122, 14, 173, 143, 9,
+      ], results.repeated);
+      testing.expectEqual([59], results.empty);
+    });
+  }
 </script>
 
 <script id=brotli_round_trip type=module>
+  // testing.async() comes first, even when skipping: the runner waits for
+  // every module that has one.
   const state = await testing.async();
+  if (SUPPORTS_BROTLI == false) {
+    state.resolve();
+    await state.done(() => {});
+  } else {
+    const noisy = noise(200 * 1024);
+    const tiny = noise(4096);
+    const text = new TextEncoder().encode('hello world '.repeat(1000));
+    const cases = {
+      noise: [noisy, [noisy.subarray(0, 1), noisy.subarray(1, 70000), noisy.subarray(70000)]],
+      tiny_writes: [tiny, Array.from(tiny, (_, i) => tiny.subarray(i, i + 1))],
+      text: [text, [text]],
+      // Closed without a single write.
+      empty: [new Uint8Array(0), []],
+    };
 
-  const noisy = noise(200 * 1024);
-  const tiny = noise(4096);
-  const text = new TextEncoder().encode('hello world '.repeat(1000));
-  const cases = {
-    noise: [noisy, [noisy.subarray(0, 1), noisy.subarray(1, 70000), noisy.subarray(70000)]],
-    tiny_writes: [tiny, Array.from(tiny, (_, i) => tiny.subarray(i, i + 1))],
-    text: [text, [text]],
-    // Closed without a single write.
-    empty: [new Uint8Array(0), []],
-  };
+    const results = {};
+    for (const [name, [input, chunks]] of Object.entries(cases)) {
+      const compressed = await run(new CompressionStream('brotli'), chunks);
+      results[name] = equal(await unbrotli(compressed), input);
+    }
 
-  const results = {};
-  for (const [name, [input, chunks]] of Object.entries(cases)) {
-    const compressed = await run(new CompressionStream('brotli'), chunks);
-    results[name] = equal(await unbrotli(compressed), input);
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual({ noise: true, tiny_writes: true, text: true, empty: true }, results);
+    });
   }
-
-  state.resolve();
-  await state.done(() => {
-    testing.expectEqual({ noise: true, tiny_writes: true, text: true, empty: true }, results);
-  });
 </script>
 
 <script id=brotli_output_before_close type=module>
+  // testing.async() comes first, even when skipping: the runner waits for
+  // every module that has one.
   const state = await testing.async();
+  if (SUPPORTS_BROTLI == false) {
+    state.resolve();
+    await state.done(() => {});
+  } else {
+    // The encoder holds input back until it has a whole meta-block; for this
+    // noise that's after 1 MiB, so the write produces output by itself. It
+    // then stops taking input until that output is taken, so the rest of the
+    // write needs another call into the encoder.
+    const input = noise(1664 * 1024);
+    const cs = new CompressionStream('brotli');
+    const writer = cs.writable.getWriter();
+    const reader = cs.readable.getReader();
 
-  // The encoder holds input back until it has a whole meta-block; for this
-  // noise that's after 1 MiB, so the write produces output by itself. It
-  // then stops taking input until that output is taken, so the rest of the
-  // write needs another call into the encoder.
-  const input = noise(1664 * 1024);
-  const cs = new CompressionStream('brotli');
-  const writer = cs.writable.getWriter();
-  const reader = cs.readable.getReader();
+    let first = null;
+    reader.read().then(({ value }) => {
+      first = value;
+    });
+    await writer.write(input);
+    const before_close = first !== null;
+    writer.close();
+    const compressed = await readRest(reader, before_close ? [first] : []);
+    const same = equal(await unbrotli(compressed), input);
 
-  let first = null;
-  reader.read().then(({ value }) => {
-    first = value;
-  });
-  await writer.write(input);
-  const before_close = first !== null;
-  writer.close();
-  const compressed = await readRest(reader, before_close ? [first] : []);
-  const same = equal(await unbrotli(compressed), input);
-
-  state.resolve();
-  await state.done(() => {
-    testing.expectEqual({ before_close: true, same: true }, { before_close, same });
-  });
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual({ before_close: true, same: true }, { before_close, same });
+    });
+  }
 </script>

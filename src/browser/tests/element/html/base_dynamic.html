@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <head>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 </head>
 <a id=a href=spice></a>
@@ -195,6 +196,7 @@
     // falls back to the document's fallback base URL.
     // The URL parser lowercases the scheme and strips spaces, tabs and
     // newlines: these are data: and javascript: URLs too.
+    testing.beginBrowserLog("Chrome: 'data'/'javascript' URLs may not be used as base URLs");
     for (const href of ['data:/,more-test', 'javascript:/,more-test',
                         'DATA:/,more-test', 'JavaScript:/,more-test',
                         ' data:/,more-test', 'java\tscript:/,more-test']) {
@@ -206,6 +208,7 @@
       testing.expectEqual(new URL('blah', document.URL).href, a.href);
       b.remove();
     }
+    testing.endBrowserLog();
   }
 </script>
 

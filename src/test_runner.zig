@@ -24,6 +24,17 @@ const Allocator = std.mem.Allocator;
 
 const BORDER: [80]u8 = @splat('=');
 
+// zenai logs every non-2xx response, and some tests make the mocked APIs fail
+// on purpose; they assert on the result instead.
+pub const std_options: std.Options = .{
+    .logFn = testLog,
+};
+
+fn testLog(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    if (scope == .zenai) return;
+    std.log.defaultLog(level, scope, format, args);
+}
+
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 pub var v8_peak_memory: usize = 0;

@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Tokenizer = @import("../css/Tokenizer.zig");
+const css_supports = @import("../css/supports.zig");
 
 const CSS = @This();
 _pad: bool = false,
@@ -120,10 +122,14 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
     return result;
 }
 
-pub fn supports(property_or_condition: []const u8, value: ?[]const u8) bool {
-    _ = property_or_condition;
-    _ = value;
-    return true;
+// With two arguments, this is asking: do we recognize the property. We don't
+// currently validate the value, we don't have a grammar for most properties.
+// With one, it's a condition: `(display: grid) and selector(:has(a))`.
+pub fn supports(property_or_condition: []const u8, value: ?[]const u8, frame: *Frame) bool {
+    if (value) |v| {
+        return css_supports.declaration(property_or_condition, v);
+    }
+    return css_supports.condition(frame.local_arena, property_or_condition);
 }
 
 fn escapeLen(comptime is_first: bool, c: u8) usize {

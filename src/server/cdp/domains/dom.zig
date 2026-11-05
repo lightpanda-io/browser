@@ -32,6 +32,7 @@ const Blob = @import("../../../browser/webapi/Blob.zig");
 const Factory = @import("../../../browser/Factory.zig");
 const xpath = @import("../../../browser/xpath/Evaluator.zig");
 const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Range = @import("../../../browser/webapi/Range.zig");
 const Input = @import("../../../browser/webapi/element/html/Input.zig");
 const Selector = @import("../../../browser/webapi/selector/Selector.zig");
 
@@ -91,15 +92,11 @@ fn getDocument(cmd: *CDP.Command) !void {
     };
     const params = try cmd.params(Params) orelse Params{};
 
-    if (params.pierce) {
-        log.debug(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
-    }
-
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try bc.node_registry.register(frame.window._document.asNode());
-    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .root = try bc.nodeWriter(node, .{ .depth = params.depth, .pierce = params.pierce }) }, .{});
 }
 
 // Closed set of XPath 1.0 named axes. Matched literally before `::` so
@@ -235,7 +232,7 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
 
         try cmd.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
-            .nodes = .{bc.nodeWriter(node, .{})},
+            .nodes = .{try bc.nodeWriter(node, .{})},
         }, .{
             .session_id = session_id,
         });
@@ -293,7 +290,11 @@ fn querySelector(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Could not find node with given id", .{});
     };
 
-    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse return error.NodeNotFoundForGivenId;
+    // As in Chrome, no match is a nodeId of 0, not an error: clients
+    // (chromedp's ByQuery, for one) read 0 as "not found yet" and poll.
+    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse {
+        return cmd.sendResult(.{ .nodeId = 0 }, .{});
+    };
     const dom_node = element.asNode();
     const registered_node = try bc.node_registry.register(dom_node);
 
@@ -359,7 +360,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         findContext(bc, root, context_id) orelse return error.ContextNotFound
     else
         // orelse root is safe here since there's no frame-specific state being used
-        (node.dom.ownerFrame(root) orelse root).js;
+        (node.dom.ownerFrame(root) orelse root).main_js;
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -404,8 +405,8 @@ fn findContext(bc: *CDP.BrowserContext, root: *Frame, context_id: u32) ?*js.Cont
 }
 
 fn findMainWorldContext(frame: *Frame, context_id: u32) ?*js.Context {
-    if (contextIdOf(frame.js) == context_id) {
-        return frame.js;
+    if (contextIdOf(frame.main_js) == context_id) {
+        return frame.main_js;
     }
     for (frame.child_frames.items) |child| {
         if (findMainWorldContext(child, context_id)) |js_context| {
@@ -431,14 +432,11 @@ fn describeNode(cmd: *CDP.Command) !void {
         pierce: bool = false,
     })) orelse return error.InvalidParams;
 
-    if (params.pierce) {
-        log.debug(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
-    }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+    return cmd.sendResult(.{ .node = try bc.nodeWriter(node, .{ .depth = params.depth, .pierce = params.pierce }) }, .{});
 }
 
 // An array of quad vertices, x immediately followed by y for each point, points clock-wise.
@@ -459,8 +457,13 @@ const BoxModel = struct {
 // Like Chrome, positions are in the top-level viewport: a node inside an
 // iframe is offset by where its frame sits.
 fn viewportRect(element: *DOMNode.Element, frame: *Frame) DOMNode.Element.DOMRect.Data {
-    var rect = element.boundingClientRectValues(frame);
-    const owner = element.ownerFrame(frame) orelse return rect;
+    return toTopViewport(element.boundingClientRectValues(frame), element.asNode(), frame);
+}
+
+// `rect` is in the viewport of the frame that owns `node`.
+fn toTopViewport(rect_: DOMNode.Element.DOMRect.Data, node: *DOMNode, frame: *Frame) DOMNode.Element.DOMRect.Data {
+    var rect = rect_;
+    const owner = node.ownerFrame(frame) orelse return rect;
     const point = Frame.user_input.pointInFrame(owner, frame, rect.x, rect.y);
     rect.x = point.x;
     rect.y = point.y;
@@ -546,18 +549,32 @@ fn getContentQuads(cmd: *CDP.Command) !void {
 
     const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    // TODO likely if the following CSS properties are set the quads should be empty
-    // visibility: hidden
-    // display: none
+    // TODO an element without a box (display: none) gets a zero-size quad, but
+    // Chrome sends "Could not compute content quads.", as we already do for text.
+    // visibility: hidden keeps its box, so it keeps its quads in Chrome too.
 
-    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
-    // TODO implement for document or text
+    // TODO implement for document.
     // Most likely document would require some hierachgy in the renderer. It is left unimplemented till we have a good example.
-    // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
     // Elements like SVGElement may have multiple quads.
 
-    const quad = rectToQuad(viewportRect(element, frame));
-    return cmd.sendResult(.{ .quads = &.{quad} }, .{});
+    // Text gives one quad: the bounding box of all its lines. Chrome gives
+    // one quad per line, but the layout only measures the whole box.
+    const rect = if (node.dom.is(DOMNode.Element)) |element|
+        viewportRect(element, frame)
+    else if (node.dom.is(DOMNode.CData.Text)) |text|
+        textViewportRect(text, frame) orelse return cmd.sendError(-32000, "Could not compute content quads.", .{})
+    else
+        return cmd.sendError(-32000, "Could not compute content quads.", .{});
+
+    return cmd.sendResult(.{ .quads = &.{rectToQuad(rect)} }, .{});
+}
+
+// The bounding box of all the text's lines, in the top-level viewport.
+// null when the text has no box: a hidden parent, only whitespace.
+fn textViewportRect(text: *DOMNode.CData.Text, frame: *Frame) ?DOMNode.Element.DOMRect.Data {
+    const cdata = text.asCData();
+    const rect = Range.textRect(cdata, frame) orelse return null;
+    return toTopViewport(rect, cdata.asNode(), frame);
 }
 
 fn getBoxModel(cmd: *CDP.Command) !void {
@@ -572,12 +589,19 @@ fn getBoxModel(cmd: *CDP.Command) !void {
 
     const node = try getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    // TODO implement for document or text
-    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+    // TODO an element without a box (display: none) gets a zero-size box, but
+    // Chrome sends "Could not compute box model.", as we already do for text.
+    // TODO implement for document.
+    // Text gets the bounding box of its lines, as in Chrome.
+    const rect = if (node.dom.is(DOMNode.Element)) |element|
+        viewportRect(element, frame)
+    else if (node.dom.is(DOMNode.CData.Text)) |text|
+        textViewportRect(text, frame) orelse return cmd.sendError(-32000, "Could not compute box model.", .{})
+    else
+        return cmd.sendError(-32000, "Could not compute box model.", .{});
 
     // Without padding, border or margin in the layout, the four boxes coincide.
     // Drivers read `border` for boundingBox(), so it must not be zero.
-    const rect = viewportRect(element, frame);
     const quad = rectToQuad(rect);
 
     return cmd.sendResult(.{ .model = BoxModel{
@@ -606,7 +630,7 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
 
     try cmd.sendEvent("DOM.setChildNodes", .{
         .parentId = node.id,
-        .nodes = bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
+        .nodes = try bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true, .pierce = params.pierce }),
     }, .{
         .session_id = session_id,
     });
@@ -1320,7 +1344,7 @@ test "cdp.dom: querySelector Node not found" {
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 1, .selector = "a" },
     });
-    try ctx.expectSentError(-31998, "NodeNotFoundForGivenId", .{ .id = 4 });
+    try ctx.expectSentResult(.{ .nodeId = 0 }, .{ .id = 4 });
 
     try ctx.processMessage(.{
         .id = 5,
@@ -1558,6 +1582,73 @@ test "cdp.dom: getContentQuads of a node in a nested iframe is in the top-level 
     try testing.expect((try ls.local.compileAndRun("clicked", null)).isTrue());
 }
 
+test "cdp.dom: getContentQuads of a text node" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
+    const main = bc.mainFrame().?;
+    {
+        var ls: js.Local.Scope = undefined;
+        main.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun(
+            \\document.body.insertAdjacentHTML('beforeend',
+            \\  '<p id=t>hello world</p><p id=ws>   </p><p id=h style="display:none">x</p>');
+        , null);
+    }
+
+    const p = main.document.getElementById("t").?;
+    const text = p.asNode().firstChild().?;
+    const rect = Range.textRect(text.is(DOMNode.CData).?, main).?;
+    const p_rect = p.boundingClientRectValues(main);
+    try testing.expect(rect.width > 0);
+    try testing.expectEqual(p_rect.x, rect.x);
+    try testing.expectEqual(p_rect.y, rect.y);
+
+    const node = try bc.node_registry.register(text);
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.getContentQuads", .params = .{ .nodeId = node.id } });
+    try ctx.expectSentResult(.{ .quads = &[_]Quad{rectToQuad(rect)} }, .{ .id = 1 });
+
+    // Text without a box has no quads, as in Chrome.
+    const ws = try bc.node_registry.register(main.document.getElementById("ws").?.asNode().firstChild().?);
+    try ctx.processMessage(.{ .id = 2, .method = "DOM.getContentQuads", .params = .{ .nodeId = ws.id } });
+    try ctx.expectSentError(-32000, "Could not compute content quads.", .{ .id = 2 });
+
+    const hidden = try bc.node_registry.register(main.document.getElementById("h").?.asNode().firstChild().?);
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.getContentQuads", .params = .{ .nodeId = hidden.id } });
+    try ctx.expectSentError(-32000, "Could not compute content quads.", .{ .id = 3 });
+}
+
+test "cdp.dom: getContentQuads of a text node in a nested iframe is in the top-level viewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "input_mouse_frames.html" });
+    const main = bc.mainFrame().?;
+    const child = main.child_frames.items[0];
+    const nested = child.child_frames.items[0];
+    {
+        var ls: js.Local.Scope = undefined;
+        nested.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun("document.body.insertAdjacentHTML('beforeend', '<p id=t>hello</p>');", null);
+    }
+
+    const text = nested.document.getElementById("t").?.asNode().firstChild().?;
+    const rect = Range.textRect(text.is(DOMNode.CData).?, nested).?;
+    const child_rect = child.iframe.?.asElement().boundingClientRectValues(main);
+    const nested_rect = nested.iframe.?.asElement().boundingClientRectValues(child);
+    const x = rect.x + nested_rect.x + child_rect.x;
+    const y = rect.y + nested_rect.y + child_rect.y;
+
+    const node = try bc.node_registry.register(text);
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.getContentQuads", .params = .{ .nodeId = node.id } });
+    const right = x + rect.width;
+    const bottom = y + rect.height;
+    try ctx.expectSentResult(.{ .quads = &[_]Quad{.{ x, y, right, y, right, bottom, x, bottom }} }, .{ .id = 1 });
+}
+
 test "cdp.dom: getBoxModel" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1593,4 +1684,45 @@ test "cdp.dom: getBoxModel" {
         .width = 1920,
         .height = 5,
     } }, .{ .id = 5 });
+}
+
+test "cdp.dom: getBoxModel of a text node" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
+    const main = bc.mainFrame().?;
+    {
+        var ls: js.Local.Scope = undefined;
+        main.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun(
+            \\document.body.insertAdjacentHTML('beforeend',
+            \\  '<p id=t>hello world</p><p id=ws>   </p><p id=c><!--c--></p>');
+        , null);
+    }
+
+    const text = main.document.getElementById("t").?.asNode().firstChild().?;
+    const rect = Range.textRect(text.is(DOMNode.CData).?, main).?;
+    const quad = rectToQuad(rect);
+
+    const node = try bc.node_registry.register(text);
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.getBoxModel", .params = .{ .nodeId = node.id } });
+    try ctx.expectSentResult(.{ .model = BoxModel{
+        .content = quad,
+        .padding = quad,
+        .border = quad,
+        .margin = quad,
+        .width = @trunc(rect.width),
+        .height = @trunc(rect.height),
+    } }, .{ .id = 1 });
+
+    // Text without a box has no box model, as in Chrome.
+    const ws = try bc.node_registry.register(main.document.getElementById("ws").?.asNode().firstChild().?);
+    try ctx.processMessage(.{ .id = 2, .method = "DOM.getBoxModel", .params = .{ .nodeId = ws.id } });
+    try ctx.expectSentError(-32000, "Could not compute box model.", .{ .id = 2 });
+
+    const comment = try bc.node_registry.register(main.document.getElementById("c").?.asNode().firstChild().?);
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.getBoxModel", .params = .{ .nodeId = comment.id } });
+    try ctx.expectSentError(-32000, "Could not compute box model.", .{ .id = 3 });
 }

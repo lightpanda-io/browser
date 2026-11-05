@@ -76,7 +76,7 @@ fn isAllNamed(el: *Element) bool {
         return false;
     }
     return switch (el.getTag()) {
-        .a, .button, .embed, .form, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
+        .a, .button, .embed, .form, .frame, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
         else => false,
     };
 }
@@ -146,7 +146,7 @@ pub const JsApi = struct {
     pub const namedItem = bridge.function(HTMLAllCollection.getByName, .{});
     pub const symbol_iterator = bridge.iterator(HTMLAllCollection.iterator, .{});
 
-    pub const callable = bridge.callable(HTMLAllCollection.callable, .{ .null_as_undefined = true });
+    pub const callable = bridge.callable(HTMLAllCollection.callable, .{});
 };
 
 const testing = @import("../../../testing.zig");

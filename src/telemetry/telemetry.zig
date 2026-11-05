@@ -145,6 +145,7 @@ pub const Event = union(enum) {
             is_error,
             frame_not_loaded,
             invalid_params,
+            action_refused,
             node_not_found,
             navigation_failed,
             navigation_timeout,

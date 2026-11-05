@@ -232,6 +232,16 @@ fn unitSuffix(unit: Unit) []const u8 {
     };
 }
 
+// value and valueInSpecifiedUnits are WebIDL `float`. Storage stays f64 so
+// valueAsString serializes what was parsed, not its f32 rounding.
+fn jsGetValue(self: *Angle) f32 {
+    return @floatCast(self.getValue());
+}
+
+fn jsGetValueInSpecifiedUnits(self: *Angle) f32 {
+    return @floatCast(self.getValueInSpecifiedUnits());
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Angle);
 
@@ -247,8 +257,8 @@ pub const JsApi = struct {
     pub const SVG_ANGLETYPE_GRAD = bridge.property(4, .{ .template = true });
 
     pub const unitType = bridge.accessor(Angle.getUnitType, null, .{});
-    pub const value = bridge.accessor(Angle.getValue, Angle.setValue, .{});
-    pub const valueInSpecifiedUnits = bridge.accessor(Angle.getValueInSpecifiedUnits, Angle.setValueInSpecifiedUnits, .{});
+    pub const value = bridge.accessor(Angle.jsGetValue, Angle.setValue, .{});
+    pub const valueInSpecifiedUnits = bridge.accessor(Angle.jsGetValueInSpecifiedUnits, Angle.setValueInSpecifiedUnits, .{});
     pub const valueAsString = bridge.accessor(Angle.getValueAsString, Angle.setValueAsString, .{});
     pub const newValueSpecifiedUnits = bridge.function(Angle.newValueSpecifiedUnits, .{});
     pub const convertToSpecifiedUnits = bridge.function(Angle.convertToSpecifiedUnits, .{});

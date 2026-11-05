@@ -49,7 +49,9 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
-    Frame.user_input.moveSequence(frame, el, .{}) catch |err| {
+    const point = Frame.user_input.gesturePoint(frame, el);
+    // The point is in the owner frame's viewport, as updateHoverTarget expects.
+    Frame.user_input.moveSequence(el.ownerFrame(frame) orelse frame, el, .{ .x = point.x, .y = point.y }) catch |err| {
         lp.log.debug(.app, "hover failed", .{ .err = err });
         return error.ActionFailed;
     };
@@ -59,7 +61,7 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
     const target: *Element = if (node) |n|
         (n.is(Element) orelse return error.InvalidNodeType)
     else
-        Frame.user_input.focusedElement(frame) orelse return error.ActionFailed;
+        Frame.user_input.focusedElement(frame) orelse return error.ActionRefused;
     const info = keyboard.named(alias(key));
 
     for ([_]keyboard.Direction{ .down, .up }) |direction| {
@@ -119,7 +121,7 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
     }
     if (input._input_type == .radio and !checked) {
         // A click can never uncheck a radio.
-        return error.InvalidNodeType;
+        return error.ActionRefused;
     }
 
     // The click's activation behavior (EventManager.ActivationState) toggles
@@ -130,7 +132,7 @@ pub fn setChecked(node: *DOMNode, checked: bool, frame: *Frame) !void {
 
     if (input.getChecked() != checked) {
         lp.log.debug(.app, "setChecked click prevented", .{});
-        return error.ActionFailed;
+        return error.ActionRefused;
     }
 }
 
@@ -157,9 +159,8 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
 /// its picker would. `change` fires right away: nothing commits it on blur.
 fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
     const el = ctl.asElement();
-    if (!ctl.acceptsTextEntry() or !Frame.user_input.acceptsEdit(el)) {
-        return error.InvalidNodeType;
-    }
+    if (!ctl.acceptsTextEntry()) return error.InvalidNodeType;
+    if (!Frame.user_input.acceptsEdit(el)) return error.ActionRefused;
 
     if (ctl.tracksSelection()) {
         try ctl.select(frame);
@@ -168,7 +169,7 @@ fn fillControl(ctl: anytype, text: []const u8, frame: *Frame) !void {
             return error.ActionFailed;
         };
         if (!edited) {
-            return error.ActionFailed;
+            return error.ActionRefused;
         }
         return ctl.dispatchChangeIfEdited(frame);
     }
@@ -245,7 +246,10 @@ pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, frame_id: u32, sessi
     return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, timer));
 }
 
+/// Fails with `error.Timeout` when the page doesn't reach `state` in time.
 pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, frame_id: u32, session: *Session) !void {
     var runner = session.runner(.{});
-    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = state });
+    if (try runner.waitForFrameResult(frame_id, timeout_ms, .{ .until = state }) == .timeout) {
+        return error.Timeout;
+    }
 }

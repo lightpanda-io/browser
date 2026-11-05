@@ -447,6 +447,13 @@
   // The default configuration on an unsafe method is still the default one
   div.setHTMLUnsafe('<b onclick="x()">b</b><script><\/script>', {sanitizer: 'default'});
   testing.expectEqual('<b>b</b>', div.innerHTML);
+
+  div.setHTMLUnsafe('');
+  testing.expectEqual('', div.innerHTML);
+
+  const html = document.createElement('html');
+  html.setHTMLUnsafe('');
+  testing.expectEqual('<head></head><body></body>', html.innerHTML);
 }
 </script>
 

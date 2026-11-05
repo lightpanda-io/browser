@@ -27,6 +27,7 @@ const StyleManager = @import("../../StyleManager.zig");
 const Node = @import("../Node.zig");
 const Window = @import("../Window.zig");
 const Element = @import("../Element.zig");
+const DOMStringMap = @import("DOMStringMap.zig");
 const EventTarget = @import("../EventTarget.zig");
 const ElementInternals = @import("../ElementInternals.zig");
 const global_event_handlers = @import("../global_event_handlers.zig");
@@ -52,6 +53,7 @@ pub const Embed = @import("html/Embed.zig");
 pub const FieldSet = @import("html/FieldSet.zig");
 pub const Font = @import("html/Font.zig");
 pub const Form = @import("html/Form.zig");
+pub const FrameElement = @import("html/FrameElement.zig");
 pub const FrameSet = @import("html/FrameSet.zig");
 pub const Generic = @import("html/Generic.zig");
 pub const Head = @import("html/Head.zig");
@@ -102,7 +104,6 @@ pub const Track = @import("html/Track.zig");
 pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
-const log = lp.log;
 const TextTransform = StyleManager.TextTransform;
 
 const HtmlElement = @This();
@@ -153,75 +154,79 @@ fn attachInternals(self: *HtmlElement, frame: *Frame) !*ElementInternals {
     return internals;
 }
 
+// A type with a single tag shares the tag's value, so Element.getTag is a
+// cast. Types shared by several tags keep theirs on the subtype and come
+// after every tag.
 pub const Type = enum(u8) {
-    anchor,
-    area,
-    base,
-    body,
-    br,
-    button,
-    canvas,
-    custom,
-    data,
-    datalist,
-    details,
-    dialog,
-    directory,
-    div,
-    dl,
-    embed,
-    fieldset,
-    font,
-    form,
-    frameset,
-    generic,
+    anchor = @backingInt(Element.Tag.a),
+    area = @backingInt(Element.Tag.area),
+    base = @backingInt(Element.Tag.base),
+    body = @backingInt(Element.Tag.body),
+    br = @backingInt(Element.Tag.br),
+    button = @backingInt(Element.Tag.button),
+    canvas = @backingInt(Element.Tag.canvas),
+    custom = @backingInt(Element.Tag.custom),
+    data = @backingInt(Element.Tag.data),
+    datalist = @backingInt(Element.Tag.datalist),
+    details = @backingInt(Element.Tag.details),
+    dialog = @backingInt(Element.Tag.dialog),
+    directory = @backingInt(Element.Tag.dir),
+    div = @backingInt(Element.Tag.div),
+    dl = @backingInt(Element.Tag.dl),
+    embed = @backingInt(Element.Tag.embed),
+    fieldset = @backingInt(Element.Tag.fieldset),
+    font = @backingInt(Element.Tag.font),
+    form = @backingInt(Element.Tag.form),
+    frame = @backingInt(Element.Tag.frame),
+    frameset = @backingInt(Element.Tag.frameset),
+    head = @backingInt(Element.Tag.head),
+    html = @backingInt(Element.Tag.html),
+    hr = @backingInt(Element.Tag.hr),
+    img = @backingInt(Element.Tag.img),
+    iframe = @backingInt(Element.Tag.iframe),
+    input = @backingInt(Element.Tag.input),
+    label = @backingInt(Element.Tag.label),
+    legend = @backingInt(Element.Tag.legend),
+    li = @backingInt(Element.Tag.li),
+    link = @backingInt(Element.Tag.link),
+    map = @backingInt(Element.Tag.map),
+    marquee = @backingInt(Element.Tag.marquee),
+    meta = @backingInt(Element.Tag.meta),
+    meter = @backingInt(Element.Tag.meter),
+    object = @backingInt(Element.Tag.object),
+    ol = @backingInt(Element.Tag.ol),
+    optgroup = @backingInt(Element.Tag.optgroup),
+    option = @backingInt(Element.Tag.option),
+    output = @backingInt(Element.Tag.output),
+    p = @backingInt(Element.Tag.p),
+    picture = @backingInt(Element.Tag.picture),
+    param = @backingInt(Element.Tag.param),
+    pre = @backingInt(Element.Tag.pre),
+    progress = @backingInt(Element.Tag.progress),
+    script = @backingInt(Element.Tag.script),
+    select = @backingInt(Element.Tag.select),
+    slot = @backingInt(Element.Tag.slot),
+    source = @backingInt(Element.Tag.source),
+    span = @backingInt(Element.Tag.span),
+    style = @backingInt(Element.Tag.style),
+    table = @backingInt(Element.Tag.table),
+    table_caption = @backingInt(Element.Tag.caption),
+    table_row = @backingInt(Element.Tag.tr),
+    template = @backingInt(Element.Tag.template),
+    textarea = @backingInt(Element.Tag.textarea),
+    time = @backingInt(Element.Tag.time),
+    title = @backingInt(Element.Tag.title),
+    track = @backingInt(Element.Tag.track),
+    ul = @backingInt(Element.Tag.ul),
+    unknown = @backingInt(Element.Tag.unknown),
+    generic = Element.tag_count,
     heading,
-    head,
-    html,
-    hr,
-    img,
-    iframe,
-    input,
-    label,
-    legend,
-    li,
-    link,
-    map,
-    marquee,
     media,
-    meta,
-    meter,
     mod,
-    object,
-    ol,
-    optgroup,
-    option,
-    output,
-    p,
-    picture,
-    param,
-    pre,
-    progress,
     quote,
-    script,
-    select,
-    slot,
-    source,
-    span,
-    style,
-    table,
-    table_caption,
     table_cell,
     table_col,
-    table_row,
     table_section,
-    template,
-    textarea,
-    time,
-    title,
-    track,
-    ul,
-    unknown,
 };
 
 pub fn Subtype(comptime tag: Type) type {
@@ -245,6 +250,7 @@ pub fn Subtype(comptime tag: Type) type {
         .fieldset => FieldSet,
         .font => Font,
         .form => Form,
+        .frame => FrameElement,
         .frameset => FrameSet,
         .generic => Generic,
         .heading => Heading,
@@ -483,6 +489,28 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
+// spellcheck="true"/"" enables checking, "false" disables it, anything else
+// (or no attribute) inherits from the parent. The default is UA-defined:
+// Chrome checks everything.
+pub fn getSpellcheck(self: *HtmlElement) bool {
+    var node: ?*Node = self.asElement().asNode();
+    while (node) |n| : (node = n.parentNode()) {
+        const el = n.is(Element) orelse continue;
+        const value = el.getAttributeSafe(comptime .wrap("spellcheck")) orelse continue;
+        if (value.len == 0 or std.ascii.eqlIgnoreCase(value, "true")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "false")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn setSpellcheck(self: *HtmlElement, spellcheck: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("spellcheck"), .wrap(if (spellcheck) "true" else "false"), frame);
+}
+
 // The draggable IDL attribute reflects the enumerated content attribute:
 // "true" => true, "false" => false, anything else (or no attribute) is the
 // auto state, which defaults to true only for <img> and <a> with an href.
@@ -611,17 +639,8 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("title"), .wrap(value), frame);
 }
 
-// HTML §7.7.5.2 specifies the IDL attribute as true iff the element's effective
-// content editable state is "true" or "plaintext-only". Lightpanda has no
-// caret/keyboard editing pipeline, so a true answer cannot be honored
-// end-to-end — downstream CDP tools (notably Puppeteer's dispatchKeyEvent
-// path) would route into an input pipeline that silently no-ops. Always
-// return false, and log .not_implemented when the spec would have said true
-// so usage surfaces in telemetry rather than silently depending on an
-// unsupported value. Spec walk per HTML §7.7.5.2 still applies — the nearest
-// ancestor with `contenteditable` wins; "false" disables. See PR #2310 for
-// the routing-vs-fail-loud discussion.
-/// Reflects the attribute only; `isContentEditable` stays false regardless.
+/// Reflects the attribute only; `isContentEditable` gives the state the
+/// element ends up with (see Element.isEditable).
 pub fn getContentEditable(self: *HtmlElement) []const u8 {
     const raw = self.asElement().getAttributeInterned("contenteditable") orelse return "inherit";
     if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
@@ -644,10 +663,7 @@ pub fn setContentEditable(self: *HtmlElement, value: []const u8, frame: *Frame) 
 }
 
 pub fn getIsContentEditable(self: *HtmlElement) bool {
-    if (self.asElement().isEditable()) {
-        log.info(.not_implemented, "IsContentEditable", .{});
-    }
-    return false;
+    return self.asElement().isEditable();
 }
 
 // An event handler content attribute (onclick="...") sets the handler to its
@@ -771,6 +787,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     // The text of an invisible element isn't included, but we still walk all
     // its children, since they can make themeselves visible again.
     const text_hidden = state.style_manager.hasVisibilityHiddenInherited(el);
+    // A closed <details> renders only its summary; its other elements are
+    // display:none, and its loose text isn't rendered either.
+    const closed_details = if (el.is(Details)) |d| d.isClosed() else false;
 
     var it = el.asNode().childrenIterator();
     while (it.next()) |child| {
@@ -794,9 +813,9 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                 const c = child.subtype(Node.CData);
                 switch (c._type) {
                     .text => {
-                        if (child_filter != .none or text_hidden) {
-                            // Text directly inside <select>/<optgroup> is skipped,
-                            // as is visibility:hidden text
+                        if (child_filter != .none or text_hidden or closed_details) {
+                            // Text directly inside <select>/<optgroup> or a closed
+                            // <details> is skipped, as is visibility:hidden text
                             continue;
                         }
                         if (table_ctx and isAllAsciiWhitespace(c.getData().str())) {
@@ -1113,6 +1132,11 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
     pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
+    pub const dataset = bridge.accessor(_dataset, null, .{});
+    fn _dataset(self: *HtmlElement, frame: *Frame) !*DOMStringMap {
+        return self.asElement().getDataset(frame);
+    }
+
     pub const innerText = bridge.accessor(_innerText, _setInnerText, .{ .ce_reactions = true });
     fn _innerText(self: *HtmlElement, frame: *Frame) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(frame.local_arena);
@@ -1137,6 +1161,7 @@ pub const JsApi = struct {
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const inert = bridge.accessor(HtmlElement.getInert, HtmlElement.setInert, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
+    pub const spellcheck = bridge.accessor(HtmlElement.getSpellcheck, HtmlElement.setSpellcheck, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
@@ -1201,6 +1226,8 @@ pub const JsApi = struct {
     pub const onloadstart = EventTarget.handlerAccessor(HtmlElement, "loadstart");
     pub const onlostpointercapture = EventTarget.handlerAccessor(HtmlElement, "lostpointercapture");
     pub const onmousedown = EventTarget.handlerAccessor(HtmlElement, "mousedown");
+    pub const onmouseenter = EventTarget.handlerAccessor(HtmlElement, "mouseenter");
+    pub const onmouseleave = EventTarget.handlerAccessor(HtmlElement, "mouseleave");
     pub const onmousemove = EventTarget.handlerAccessor(HtmlElement, "mousemove");
     pub const onmouseout = EventTarget.handlerAccessor(HtmlElement, "mouseout");
     pub const onmouseover = EventTarget.handlerAccessor(HtmlElement, "mouseover");
@@ -1236,10 +1263,6 @@ pub const JsApi = struct {
     pub const onsuspend = EventTarget.handlerAccessor(HtmlElement, "suspend");
     pub const ontimeupdate = EventTarget.handlerAccessor(HtmlElement, "timeupdate");
     pub const ontoggle = EventTarget.handlerAccessor(HtmlElement, "toggle");
-    pub const ontouchcancel = EventTarget.handlerAccessor(HtmlElement, "touchcancel");
-    pub const ontouchend = EventTarget.handlerAccessor(HtmlElement, "touchend");
-    pub const ontouchmove = EventTarget.handlerAccessor(HtmlElement, "touchmove");
-    pub const ontouchstart = EventTarget.handlerAccessor(HtmlElement, "touchstart");
     pub const ontransitioncancel = EventTarget.handlerAccessor(HtmlElement, "transitioncancel");
     pub const ontransitionend = EventTarget.handlerAccessor(HtmlElement, "transitionend");
     pub const ontransitionrun = EventTarget.handlerAccessor(HtmlElement, "transitionrun");

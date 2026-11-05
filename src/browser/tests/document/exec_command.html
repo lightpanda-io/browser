@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body>
+<!-- Chrome's selectAll on the document collapses when the first text is editable -->
+<p id="first">first</p>
+<div id="host" contenteditable>abc</div>
+<div id="plain">plain</div>
+<input id="text" value="hello">
+<input id="ro" readonly value="ro">
+<textarea id="area">abc</textarea>
+</body>
+
+<script>
+  // Events from the last edit, as "type:target:inputType:data".
+  let events = [];
+  for (const type of ['beforeinput', 'textInput', 'input']) {
+    document.addEventListener(type, e => {
+      events.push(`${type}:${e.target.id}:${e.inputType ?? ''}:${e.data}`);
+    }, true);
+  }
+  function exec(value) {
+    events = [];
+    return document.execCommand('insertText', false, value);
+  }
+</script>
+
+<script id="unsupported">
+{
+  // Chrome doesn't support these either. Slack calls the first two (#4216).
+  for (const cmd of ['enableObjectResizing', 'autoUrlDetect', 'nope']) {
+    testing.expectEqual(false, document.execCommand(cmd, false, false));
+    testing.expectEqual(false, document.queryCommandSupported(cmd));
+    testing.expectEqual(false, document.queryCommandEnabled(cmd));
+    testing.expectEqual(false, document.queryCommandState(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+    testing.expectEqual('', document.queryCommandValue(cmd));
+  }
+}
+</script>
+
+<script id="not_yet_supported">
+{
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  getSelection().selectAllChildren(host);
+  testing.expectEqual(false, document.queryCommandState('bold'));
+  testing.expectEqual(false, document.queryCommandIndeterm('bold'));
+  testing.diverges('no formatting commands', () => {
+    testing.expectEqual(false, document.queryCommandSupported('bold'));
+    testing.expectEqual(false, document.execCommand('bold'));
+    testing.expectEqual('abc', host.innerHTML);
+  });
+  // supported in Chrome whether or not there's a user click; exec isn't
+  testing.diverges('no clipboard', () => {
+    testing.expectEqual(false, document.queryCommandSupported('copy'));
+  });
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="settings">
+{
+  // always enabled, even with nothing selected; no events
+  getSelection().removeAllRanges();
+  document.activeElement.blur();
+  events = [];
+  for (const cmd of ['styleWithCSS', 'useCSS', 'defaultParagraphSeparator']) {
+    testing.expectEqual(true, document.queryCommandSupported(cmd));
+    testing.expectEqual(true, document.queryCommandEnabled(cmd));
+    testing.expectEqual(false, document.queryCommandIndeterm(cmd));
+  }
+
+  testing.expectEqual(false, document.queryCommandState('styleWithCSS'));
+  testing.expectEqual('', document.queryCommandValue('styleWithCSS'));
+  // anything but "false" turns it on
+  for (const [value, css] of [['true', true], ['FALSE', false], ['', true], ['False', false], ['0', true], [null, true]]) {
+    document.execCommand('styleWithCSS', false, 'false');
+    testing.expectEqual(true, document.execCommand('styleWithCSS', false, value));
+    testing.expectEqual(css, document.queryCommandState('styleWithCSS'));
+  }
+  testing.expectEqual(true, document.execCommand('styleWithCSS'));
+  testing.expectEqual(true, document.queryCommandState('STYLEWITHCSS'));
+  testing.expectEqual(false, document.queryCommandIndeterm('styleWithCSS'));
+
+  // the opposite: "false" turns CSS on; it has no state of its own
+  testing.expectEqual(true, document.execCommand('useCSS', false, 'true'));
+  testing.expectEqual(false, document.queryCommandState('styleWithCSS'));
+  testing.expectEqual(true, document.execCommand('useCSS', false, 'false'));
+  testing.expectEqual(true, document.queryCommandState('styleWithCSS'));
+  testing.expectEqual(false, document.queryCommandState('useCSS'));
+  testing.expectEqual(true, document.execCommand('useCSS'));
+  testing.expectEqual(false, document.queryCommandState('styleWithCSS'));
+
+  testing.expectEqual('div', document.queryCommandValue('defaultParagraphSeparator'));
+  testing.expectEqual(false, document.queryCommandState('defaultParagraphSeparator'));
+  testing.expectEqual(true, document.execCommand('defaultParagraphSeparator', false, 'P'));
+  testing.expectEqual('p', document.queryCommandValue('defaultparagraphseparator'));
+  // Chrome ignores anything but div and p, yet returns true
+  for (const value of ['h1', ' div', 'br', '', null]) {
+    testing.expectEqual(true, document.execCommand('defaultParagraphSeparator', false, value));
+    testing.expectEqual('p', document.queryCommandValue('defaultParagraphSeparator'));
+  }
+  testing.expectEqual(true, document.execCommand('defaultParagraphSeparator', false, 'div'));
+  testing.expectEqual('div', document.queryCommandValue('defaultParagraphSeparator'));
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="settings_per_document">
+{
+  document.execCommand('styleWithCSS', false, 'true');
+  document.execCommand('defaultParagraphSeparator', false, 'p');
+
+  const iframe = document.createElement('iframe');
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  testing.expectEqual(false, doc.queryCommandState('styleWithCSS'));
+  testing.expectEqual('div', doc.queryCommandValue('defaultParagraphSeparator'));
+  iframe.remove();
+
+  // without a frame, nothing is supported
+  const frameless = document.implementation.createHTMLDocument('');
+  testing.expectEqual(false, frameless.queryCommandSupported('styleWithCSS'));
+  testing.expectEqual(false, frameless.execCommand('styleWithCSS', false, 'true'));
+  testing.expectEqual(false, frameless.queryCommandState('styleWithCSS'));
+  testing.expectEqual(false, frameless.execCommand('defaultParagraphSeparator', false, 'p'));
+  testing.expectEqual('', frameless.queryCommandValue('defaultParagraphSeparator'));
+
+  document.execCommand('styleWithCSS', false, 'false');
+  document.execCommand('defaultParagraphSeparator', false, 'div');
+}
+</script>
+
+<script id="insert_text_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().selectAllChildren($('#plain'));
+  testing.expectEqual(true, document.queryCommandSupported('insertText'));
+  testing.expectEqual(false, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, exec('X'));
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  testing.expectEqual([], events);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_input">
+{
+  const input = $('#text');
+  input.focus();
+  input.setSelectionRange(1, 3);
+  testing.expectEqual(true, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, document.queryCommandState('insertText'));
+  testing.expectEqual('', document.queryCommandValue('insertText'));
+
+  // no beforeinput or textInput, unlike typing
+  testing.expectEqual(true, exec('XY'));
+  testing.expectEqual('hXYlo', input.value);
+  testing.expectEqual(3, input.selectionStart);
+  testing.expectEqual(3, input.selectionEnd);
+  testing.expectEqual(['input:text:insertText:XY'], events);
+
+  // case-insensitive
+  events = [];
+  testing.expectEqual(true, document.execCommand('INSERTtext', false, 'Z'));
+  testing.expectEqual('hXYZlo', input.value);
+
+  // nothing to insert at a caret: nothing happens, but it succeeds
+  testing.expectEqual(true, exec(undefined));
+  testing.expectEqual('hXYZlo', input.value);
+  testing.expectEqual([], events);
+
+  // empty text over a selection deletes it
+  input.setSelectionRange(0, 2);
+  testing.expectEqual(true, exec(''));
+  testing.expectEqual('YZlo', input.value);
+  testing.expectEqual(['input:text:insertText:'], events);
+
+  input.setSelectionRange(0, 0);
+  testing.expectEqual(true, exec('a\nb'));
+  testing.expectEqual('a bYZlo', input.value);
+}
+</script>
+
+<script id="insert_text_not_cancelable">
+{
+  const input = $('#text');
+  input.value = '';
+  input.focus();
+  let cancelable = null;
+  input.addEventListener('input', e => {
+    cancelable = e.cancelable;
+    e.preventDefault();
+  }, {once: true});
+  testing.expectEqual(true, exec('P'));
+  testing.expectEqual('P', input.value);
+  testing.expectEqual(false, cancelable);
+}
+</script>
+
+<script id="insert_text_nested">
+{
+  const input = $('#text');
+  input.value = '';
+  input.focus();
+  let nested = null;
+  input.addEventListener('input', () => {
+    nested = document.execCommand('insertText', false, 'N');
+  }, {once: true});
+  testing.expectEqual(true, exec('Q'));
+  testing.expectEqual(false, nested);
+  testing.expectEqual('Q', input.value);
+}
+</script>
+
+<script id="insert_text_change_on_blur">
+{
+  const input = $('#text');
+  input.value = '';
+  input.focus();
+  let changes = 0;
+  input.addEventListener('change', () => changes += 1);
+  exec('C');
+  testing.expectEqual(0, changes);
+  input.blur();
+  testing.expectEqual(1, changes);
+}
+</script>
+
+<script id="insert_text_readonly">
+{
+  const ro = $('#ro');
+  ro.focus();
+  testing.expectEqual(false, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, exec('X'));
+  testing.expectEqual('ro', ro.value);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="insert_text_textarea">
+{
+  const area = $('#area');
+  area.focus();
+  area.setSelectionRange(3, 3);
+  // one input event per line and per line break
+  testing.expectEqual(true, exec('\nline'));
+  testing.expectEqual('abc\nline', area.value);
+  testing.expectEqual(['input:area:insertText:null', 'input:area:insertText:line'], events);
+}
+</script>
+
+<script id="insert_text_contenteditable">
+{
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  host.focus();
+  getSelection().setBaseAndExtent(host.firstChild, 1, host.firstChild, 2);
+  testing.expectEqual(true, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(true, exec('XY'));
+  testing.expectEqual('aXYc', host.innerHTML);
+  testing.expectEqual(3, getSelection().anchorOffset);
+  testing.expectEqual(['input:host:insertText:XY'], events);
+
+  // text, not markup
+  testing.expectEqual(true, exec('<b>'));
+  testing.expectEqual('aXY&lt;b&gt;c', host.innerHTML);
+
+  // Chrome splits the block: aXY&lt;b&gt;a<div>bc</div>
+  testing.diverges('no block splitting', () => {
+    testing.expectEqual(false, exec('a\nb'));
+    testing.expectEqual('aXY&lt;b&gt;c', host.innerHTML);
+  });
+}
+</script>
+
+<script id="insert_text_not_in_select">
+{
+  // the Selection API can reach into a <select>; editing there is refused
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p><select><option>def</option></select>';
+  host.focus();
+  getSelection().selectAllChildren(host.querySelector('option'));
+  exec('X');
+  testing.expectEqual('<p>abc</p><select><option>def</option></select>', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_follows_selection">
+{
+  // Chrome focuses the host when the selection moves into it; the command
+  // follows the selection either way.
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  document.activeElement.blur();
+  getSelection().setBaseAndExtent(host.firstChild, 0, host.firstChild, 0);
+  testing.expectEqual(true, document.queryCommandEnabled('insertText'));
+  testing.expectEqual(true, exec('S'));
+  testing.expectEqual('Sabc', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="insert_text_other_document">
+{
+  const doc = document.implementation.createHTMLDocument();
+  doc.body.innerHTML = '<div contenteditable>x</div>';
+  doc.getSelection?.()?.selectAllChildren(doc.body.firstChild);
+  testing.expectEqual(false, doc.queryCommandSupported('insertText'));
+  testing.expectEqual(false, doc.queryCommandEnabled('insertText'));
+  testing.expectEqual(false, doc.execCommand('insertText', false, 'y'));
+  testing.expectEqual('x', doc.body.firstChild.innerHTML);
+}
+</script>
+
+<script>
+  function del(forward) {
+    events = [];
+    return document.execCommand(forward ? 'forwardDelete' : 'delete');
+  }
+  // the caret as "node@offset", node being "#text" data or a tag name
+  function caret() {
+    const s = getSelection();
+    const n = s.anchorNode;
+    return (n.nodeType == 3 ? '#' + n.data : n.nodeName) + '@' + s.anchorOffset;
+  }
+</script>
+
+<script id="delete_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().selectAllChildren($('#plain'));
+  for (const cmd of ['delete', 'forwardDelete']) {
+    testing.expectEqual(true, document.queryCommandSupported(cmd));
+    testing.expectEqual(false, document.queryCommandEnabled(cmd));
+  }
+  testing.expectEqual(false, del(false));
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="delete_input">
+{
+  const input = $('#text');
+  input.focus();
+  input.value = 'hello';
+  input.setSelectionRange(2, 2);
+  testing.expectEqual(true, document.queryCommandEnabled('delete'));
+  testing.expectEqual(true, del(false));
+  testing.expectEqual('hllo', input.value);
+  testing.expectEqual(1, input.selectionStart);
+  testing.expectEqual(['input:text:deleteContentBackward:null'], events);
+
+  testing.expectEqual(true, del(true));
+  testing.expectEqual('hlo', input.value);
+  testing.expectEqual(1, input.selectionStart);
+  testing.expectEqual(['input:text:deleteContentForward:null'], events);
+
+  input.setSelectionRange(0, 2);
+  testing.expectEqual(true, document.execCommand('FORWARDDELETE'));
+  testing.expectEqual('o', input.value);
+
+  // nothing to delete: succeeds, no event
+  input.setSelectionRange(0, 0);
+  testing.expectEqual(true, del(false));
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, del(true));
+  testing.expectEqual('o', input.value);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_readonly">
+{
+  $('#ro').focus();
+  $('#ro').setSelectionRange(1, 1);
+  testing.expectEqual(false, document.queryCommandEnabled('delete'));
+  testing.expectEqual(false, del(false));
+  testing.expectEqual('ro', $('#ro').value);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_textarea">
+{
+  const area = $('#area');
+  area.value = 'ab\ncd';
+  area.focus();
+  area.setSelectionRange(3, 3);
+  testing.expectEqual(true, del(false));
+  testing.expectEqual('abcd', area.value);
+  testing.expectEqual(['input:area:deleteContentBackward:null'], events);
+}
+</script>
+
+<script id="delete_contenteditable">
+{
+  const host = $('#host');
+  function run(html, setup, forward) {
+    host.innerHTML = html;
+    host.focus();
+    setup(host);
+    const result = del(forward);
+    return [result, host.innerHTML, caret()];
+  }
+  const at = (node, offset) => getSelection().collapse(node, offset);
+
+  testing.expectEqual([true, 'on two', '#on two@2'], run('one two', h => at(h.firstChild, 3), false));
+  testing.expectEqual([true, 'onetwo', '#onetwo@3'], run('one two', h => at(h.firstChild, 3), true));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+
+  // into the previous text, through an inline element
+  testing.expectEqual([true, 'a<b>cd</b>ef', '#a@1'], run('ab<b>cd</b>ef', h => at(h.childNodes[1].firstChild, 0), false));
+  testing.expectEqual([true, 'a<b>cd</b>ef', '#a@1'], run('ab<b>cd</b>ef', h => at(h, 1), false));
+  testing.expectEqual([true, 'ab<b>d</b>ef', '#ab@2'], run('ab<b>cd</b>ef', h => at(h.firstChild, 2), true));
+
+  // an emptied inline element goes
+  testing.expectEqual([true, 'abef', '#ab@2'], run('ab<b>c</b>ef', h => at(h.childNodes[1].firstChild, 1), false));
+  testing.expectEqual([true, 'abef', '#ab@2'], run('ab<b>c</b>ef', h => at(h.childNodes[1].firstChild, 0), true));
+
+  // an emptied block keeps a line: <br>
+  testing.expectEqual([true, '<br>', 'DIV@0'], run('x', h => at(h.firstChild, 1), false));
+  testing.expectEqual([true, '<p><br></p><p>y</p>', 'P@0'], run('<p>x</p><p>y</p>', h => at(h.firstChild.firstChild, 0), true));
+
+  // a whole code point, surrogate pairs included
+  testing.expectEqual([true, 'ab', '#ab@1'], run('a😀b', h => at(h.firstChild, 3), false));
+  testing.expectEqual([true, 'ab', '#ab@1'], run('a😀b', h => at(h.firstChild, 1), true));
+
+  // nothing to delete at the edges of the host: succeeds, no event
+  testing.expectEqual([true, 'ab', '#ab@0'], run('ab', h => at(h.firstChild, 0), false));
+  testing.expectEqual([], events);
+  testing.expectEqual([true, 'ab', '#ab@2'], run('ab', h => at(h.firstChild, 2), true));
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="delete_contenteditable_selection">
+{
+  const host = $('#host');
+  function run(html, setup) {
+    host.innerHTML = html;
+    host.focus();
+    setup(host);
+    const result = del(false);
+    return [result, host.innerHTML, caret()];
+  }
+  const sel = (a, ao, f, fo) => getSelection().setBaseAndExtent(a, ao, f, fo);
+
+  testing.expectEqual([true, 'a<b>d</b>ef', '#a@1'], run('ab<b>cd</b>ef', h => sel(h.firstChild, 1, h.childNodes[1].firstChild, 1)));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, 'abef', '#ab@2'], run('ab<b>cd</b>ef', h => sel(h.firstChild, 2, h.lastChild, 0)));
+  testing.expectEqual([true, '<br>', 'DIV@0'], run('ab<b>cd</b>ef', h => sel(h.firstChild, 0, h.lastChild, 2)));
+  testing.expectEqual([true, '<p><br></p><p>cd</p>', 'P@0'], run('<p>ab</p><p>cd</p>', h => sel(h.firstChild.firstChild, 0, h.firstChild.firstChild, 2)));
+}
+</script>
+
+<script id="delete_selection_dropped">
+{
+  // a listener that drops the selection mid-command
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  getSelection().removeAllRanges();
+  document.activeElement.blur();
+  host.focus();
+  document.addEventListener('selectionchange', () => getSelection().removeAllRanges(), {once: true});
+  del(true);
+  testing.expectEqual(true, host.isConnected);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="delete_inline_host">
+{
+  // no <br> in an inline host
+  const span = document.createElement('span');
+  span.contentEditable = 'true';
+  span.textContent = 'x';
+  document.body.appendChild(span);
+  span.focus();
+  getSelection().collapse(span.firstChild, 1);
+  testing.expectEqual(true, del(false));
+  testing.expectEqual('', span.innerHTML);
+  span.remove();
+}
+</script>
+
+<script id="delete_contenteditable_not_yet_supported">
+{
+  const host = $('#host');
+  function run(html, setup, forward) {
+    host.innerHTML = html;
+    host.focus();
+    setup(host);
+    return [del(forward), host.innerHTML];
+  }
+  const at = (node, offset) => getSelection().collapse(node, offset);
+
+  testing.diverges('no block merging', () => {
+    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => at(h.lastChild.firstChild, 0), false));
+    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => at(h.firstChild.firstChild, 2), true));
+    testing.expectEqual([false, '<p>ab</p><p>cd</p>'], run('<p>ab</p><p>cd</p>', h => getSelection().setBaseAndExtent(h.firstChild.firstChild, 1, h.lastChild.firstChild, 1), false));
+  });
+  testing.diverges('no deleting a <br> or an image', () => {
+    testing.expectEqual([false, 'a<br>b'], run('a<br>b', h => at(h.lastChild, 0), false));
+    testing.expectEqual([false, 'a<img>b'], run('a<img>b', h => at(h.firstChild, 1), true));
+  });
+  // Chrome: a&nbsp;
+  testing.diverges('no nbsp for a space left at the end', () => {
+    testing.expectEqual([true, 'a '], run('a b', h => at(h.firstChild, 3), false));
+  });
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script>
+  // selectstart targets from the last selectAll
+  let selectstarts = [];
+  document.addEventListener('selectstart', e => {
+    selectstarts.push(`${e.target.id || e.target.nodeName}:${e.bubbles}:${e.cancelable}:${e.isTrusted}`);
+  }, true);
+  function selectAll() {
+    selectstarts = [];
+    return document.execCommand('selectAll');
+  }
+  function reset() {
+    getSelection().removeAllRanges();
+    document.activeElement.blur();
+  }
+  // the whole body is selected. Chrome trims the range to the first and last
+  // text, so the edge elements are only partly in it.
+  function bodySelected() {
+    const s = getSelection();
+    return s.rangeCount === 1 && s.isCollapsed === false && s.containsNode($('#first'), true) && s.containsNode($('#plain'), true);
+  }
+</script>
+
+<script id="select_all_queries">
+{
+  reset();
+  testing.expectEqual(true, document.queryCommandSupported('selectAll'));
+  testing.expectEqual(true, document.queryCommandSupported('SELECTALL'));
+  // enabled with nothing focused or selected
+  testing.expectEqual(true, document.queryCommandEnabled('selectAll'));
+  testing.expectEqual(false, document.queryCommandState('selectAll'));
+  testing.expectEqual(false, document.queryCommandIndeterm('selectAll'));
+  testing.expectEqual('', document.queryCommandValue('selectAll'));
+
+  const doc = document.implementation.createHTMLDocument('');
+  testing.expectEqual(false, doc.queryCommandSupported('selectAll'));
+  testing.expectEqual(false, doc.queryCommandEnabled('selectAll'));
+  testing.expectEqual(false, doc.execCommand('selectAll'));
+}
+</script>
+
+<script id="select_all_document">
+{
+  reset();
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+
+  // a caret in plain text
+  getSelection().collapse($('#plain').firstChild, 2);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(true, bodySelected());
+
+  // a focused control without a text selection
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  document.body.appendChild(cb);
+  reset();
+  cb.focus();
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+  cb.remove();
+  reset();
+}
+</script>
+
+<script id="select_all_controls">
+{
+  reset();
+  const input = $('#text');
+  input.value = 'hello';
+  input.focus();
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 5], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual(['text:true:true:true'], selectstarts);
+
+  // readonly still selects
+  const ro = $('#ro');
+  ro.focus();
+  ro.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 2], [ro.selectionStart, ro.selectionEnd]);
+
+  const area = $('#area');
+  area.value = 'abc\ndef';
+  area.focus();
+  area.setSelectionRange(2, 2);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 7], [area.selectionStart, area.selectionEnd]);
+  testing.expectEqual(['area:true:true:true'], selectstarts);
+
+  // the focused control wins over a selection elsewhere
+  const host = $('#host');
+  host.innerHTML = 'abc';
+  getSelection().collapse(host.firstChild, 1);
+  input.focus();
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([0, 5], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual(['text:true:true:true'], selectstarts);
+  reset();
+}
+</script>
+
+<script id="select_all_contenteditable">
+{
+  reset();
+  const host = $('#host');
+  host.innerHTML = 'ab<b>cd</b><div id="inner">ef</div>';
+  getSelection().collapse(host.querySelector('b').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  testing.expectEqual('abcdef', getSelection().toString().replace(/\s/g, ''));
+  testing.expectEqual(false, getSelection().containsNode($('#plain'), true));
+
+  // the outermost host
+  getSelection().collapse($('#inner').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  testing.expectEqual('abcdef', getSelection().toString().replace(/\s/g, ''));
+
+  // a non-editable island isn't in the host
+  host.innerHTML = 'ab<span contenteditable=false>xy</span>';
+  getSelection().collapse(host.querySelector('span').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+
+  // focus alone doesn't count
+  reset();
+  host.innerHTML = 'abc';
+  host.focus();
+  getSelection().removeAllRanges();
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+
+  // a selection crossing the host: the anchor's host, else the start's
+  reset();
+  getSelection().setBaseAndExtent(host.firstChild, 1, $('#plain').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  testing.expectEqual('abc', getSelection().toString());
+  getSelection().setBaseAndExtent(host.firstChild, 1, $('#first').firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  getSelection().setBaseAndExtent($('#plain').firstChild, 1, host.firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['host:true:true:true'], selectstarts);
+  getSelection().setBaseAndExtent($('#first').firstChild, 1, host.firstChild, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, bodySelected());
+  reset();
+}
+</script>
+
+<script id="select_all_canceled">
+{
+  reset();
+  const cancel = e => e.preventDefault();
+  document.addEventListener('selectstart', cancel);
+
+  getSelection().collapse($('#plain').firstChild, 2);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(['BODY:true:true:true'], selectstarts);
+  testing.expectEqual(true, getSelection().isCollapsed);
+  testing.expectEqual(2, getSelection().anchorOffset);
+
+  const input = $('#text');
+  input.focus();
+  input.setSelectionRange(1, 1);
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual([1, 1], [input.selectionStart, input.selectionEnd]);
+
+  document.removeEventListener('selectstart', cancel);
+  reset();
+}
+</script>
+
+<script id="select_all_nested">
+{
+  reset();
+  let nested = null;
+  document.addEventListener('selectstart', () => { nested = document.execCommand('selectAll'); }, {once: true});
+  testing.expectEqual(true, selectAll());
+  testing.expectEqual(false, nested);
+  testing.expectEqual(true, bodySelected());
+  reset();
+}
+</script>
+
+<script id="select_all_select_event" type=module>
+{
+  // Chrome fires select before execCommand returns; we queue it, as select() does
+  const state = await testing.async();
+  const input = document.createElement('input');
+  input.value = 'hey';
+  document.body.appendChild(input);
+  input.focus();
+  input.addEventListener('select', e => state.resolve([e.target === input, input.selectionStart, input.selectionEnd]), {once: true});
+  document.execCommand('selectAll');
+  await state.done(res => {
+    testing.expectEqual([true, 0, 3], res);
+    input.remove();
+  });
+}
+</script>
+
+<script>
+  function lineBreak() {
+    events = [];
+    return document.execCommand('insertLineBreak');
+  }
+</script>
+
+<script id="line_break_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().removeAllRanges();
+  testing.expectEqual(true, document.queryCommandSupported('insertLineBreak'));
+  testing.expectEqual(false, document.queryCommandEnabled('insertLineBreak'));
+  testing.expectEqual(false, lineBreak());
+  getSelection().selectAllChildren($('#plain'));
+  testing.expectEqual(false, lineBreak());
+  testing.expectEqual('plain', $('#plain').innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_textarea">
+{
+  const area = $('#area');
+  area.value = 'abc';
+  area.focus();
+  area.setSelectionRange(2, 2);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('ab\nc', area.value);
+  testing.expectEqual([3, 3], [area.selectionStart, area.selectionEnd]);
+  testing.expectEqual(['input:area:insertLineBreak:null'], events);
+
+  area.setSelectionRange(0, 2);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('\n\nc', area.value);
+  testing.expectEqual(1, area.selectionStart);
+
+  area.readOnly = true;
+  testing.expectEqual(false, lineBreak());
+  testing.expectEqual('\n\nc', area.value);
+  testing.expectEqual([], events);
+  area.readOnly = false;
+}
+</script>
+
+<script id="line_break_input">
+{
+  // nowhere to put it in one line: succeeds, no edit, no event
+  const input = $('#text');
+  input.value = 'hello';
+  input.focus();
+  input.setSelectionRange(1, 3);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('hello', input.value);
+  testing.expectEqual([1, 3], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="line_break_contenteditable">
+{
+  const host = $('#host');
+  function run(html, setup, style) {
+    host.innerHTML = html;
+    host.style.whiteSpace = style ?? '';
+    host.focus();
+    setup(host);
+    const result = lineBreak();
+    return [result, host.innerHTML, caret()];
+  }
+  const at = (node, offset) => getSelection().collapse(node, offset);
+  const sel = (a, ao, f, fo) => getSelection().setBaseAndExtent(a, ao, f, fo);
+
+  testing.expectEqual([true, 'ab<br>c', '#c@0'], run('abc', h => at(h.firstChild, 2)));
+  testing.expectEqual(['input:host:insertLineBreak:null'], events);
+  testing.expectEqual([true, '<br>abc', '#abc@0'], run('abc', h => at(h.firstChild, 0)));
+  testing.expectEqual([true, '<p>ab<br>c</p>', '#c@0'], run('<p>abc</p>', h => at(h.firstChild.firstChild, 2)));
+  testing.expectEqual([true, 'a<b>b<br>c</b>d', '#c@0'], run('a<b>bc</b>d', h => at(h.childNodes[1].firstChild, 1)));
+  testing.expectEqual([true, 'a<img><br>b', '#b@0'], run('a<img>b', h => at(h, 2)));
+
+  // at the end of a paragraph, a second <br> gives the new line its height
+  testing.expectEqual([true, 'abc<br><br>', 'DIV@2'], run('abc', h => at(h.firstChild, 3)));
+  testing.expectEqual([true, '<p>abc<br><br></p>', 'P@2'], run('<p>abc</p>', h => at(h.firstChild.firstChild, 3)));
+  testing.expectEqual([true, '<ul><li>abc<br><br></li></ul>', 'LI@2'], run('<ul><li>abc</li></ul>', h => at(h.firstChild.firstChild.firstChild, 3)));
+  // not when text or a <br> follows
+  testing.expectEqual([true, '<p>a<b>bc<br></b>d</p>', '#d@0'], run('<p>a<b>bc</b>d</p>', h => at(h.firstChild.childNodes[1].firstChild, 2)));
+  testing.expectEqual([true, 'abc<br><br>def', 'DIV@2'], run('abc<br>def', h => at(h.firstChild, 3)));
+
+  // replaces the selection
+  testing.expectEqual([true, 'a<br>c', '#c@0'], run('abc', h => sel(h.firstChild, 1, h.firstChild, 2)));
+  testing.expectEqual([true, '<br><br>', 'DIV@1'], run('abc', h => sel(h.firstChild, 0, h.firstChild, 3)));
+
+  // "\n" where white-space keeps it, but never in a <pre>
+  testing.expectEqual([true, 'ab\nc', '#c@0'], run('abc', h => at(h.firstChild, 2), 'pre-wrap'));
+  testing.expectEqual([true, 'ab\nc', '#c@0'], run('abc', h => at(h.firstChild, 2), 'pre-line'));
+  testing.expectEqual([true, '<pre>ab<br>c</pre>', '#c@0'], run('<pre>abc</pre>', h => at(h.firstChild.firstChild, 2)));
+
+  // a caret in a non-editable island
+  testing.expectEqual([false, 'a<span contenteditable="false">xy</span>b', '#xy@1'],
+    run('a<span contenteditable=false>xy</span>b', h => at(h.childNodes[1].firstChild, 1)));
+  testing.expectEqual([], events);
+
+  host.style.whiteSpace = '';
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_unfocused_host">
+{
+  // the selection is enough
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p>';
+  document.activeElement.blur();
+  getSelection().collapse(host.firstChild.firstChild, 1);
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual('<p>a<br>bc</p>', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_nested">
+{
+  const area = $('#area');
+  area.value = 'ab';
+  area.focus();
+  area.setSelectionRange(1, 1);
+  let nested = null;
+  area.addEventListener('input', () => { nested = document.execCommand('insertLineBreak'); }, {once: true});
+  testing.expectEqual(true, lineBreak());
+  testing.expectEqual(false, nested);
+  testing.expectEqual('a\nb', area.value);
+}
+</script>
+
+<script id="line_break_not_yet_supported">
+{
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p><p>def</p>';
+  host.focus();
+  getSelection().setBaseAndExtent(host.firstChild.firstChild, 1, host.lastChild.firstChild, 2);
+  // Chrome: <p>a<br>f</p>
+  testing.diverges('no block merging', () => {
+    testing.expectEqual(false, lineBreak());
+    testing.expectEqual('<p>abc</p><p>def</p>', host.innerHTML);
+  });
+
+  // Chrome: true, value unchanged, no event
+  const area = $('#area');
+  area.value = 'abc';
+  area.maxLength = 3;
+  area.focus();
+  area.setSelectionRange(1, 1);
+  testing.diverges('maxlength not enforced', () => {
+    lineBreak();
+    testing.expectEqual('a\nbc', area.value);
+  });
+  area.removeAttribute('maxlength');
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script>
+  function paragraph() {
+    events = [];
+    return document.execCommand('insertParagraph');
+  }
+  // [result, host's html, caret] for insertParagraph with the caret at
+  // `at` (child indexes from the host, then the offset) or the selection to `to`
+  function splitIn(html, at, to, opts) {
+    const host = opts?.host ?? $('#host');
+    host.innerHTML = html;
+    host.style.whiteSpace = opts?.style ?? '';
+    host.focus();
+    const nodeAt = path => path.slice(0, -1).reduce((n, i) => n.childNodes[i], host);
+    if (to) {
+      getSelection().setBaseAndExtent(nodeAt(at), at.at(-1), nodeAt(to), to.at(-1));
+    } else {
+      getSelection().collapse(nodeAt(at), at.at(-1));
+    }
+    const result = paragraph();
+    return [result, host.innerHTML, caret()];
+  }
+  const split = (html, ...at) => splitIn(html, at);
+</script>
+
+<script id="paragraph_nothing_editable">
+{
+  document.activeElement.blur();
+  getSelection().removeAllRanges();
+  testing.expectEqual(true, document.queryCommandSupported('insertParagraph'));
+  testing.expectEqual(false, document.queryCommandEnabled('insertParagraph'));
+  testing.expectEqual(false, document.queryCommandState('insertParagraph'));
+  testing.expectEqual('', document.queryCommandValue('insertParagraph'));
+  testing.expectEqual(false, paragraph());
+  // a focused host with no selection
+  $('#host').innerHTML = '<p>abc</p>';
+  $('#host').focus();
+  getSelection().removeAllRanges();
+  testing.expectEqual(false, paragraph());
+  testing.expectEqual('<p>abc</p>', $('#host').innerHTML);
+  testing.expectEqual(false, document.implementation.createHTMLDocument('').queryCommandSupported('insertParagraph'));
+}
+</script>
+
+<script id="paragraph_controls">
+{
+  const area = $('#area');
+  area.value = 'abc';
+  area.focus();
+  area.setSelectionRange(1, 1);
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('a\nbc', area.value);
+  testing.expectEqual([2, 2], [area.selectionStart, area.selectionEnd]);
+  testing.expectEqual(['input:area:insertParagraph:null'], events);
+  area.setSelectionRange(2, 3);
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('a\n\nc', area.value);
+
+  area.readOnly = true;
+  testing.expectEqual(false, paragraph());
+  testing.expectEqual([], events);
+  area.readOnly = false;
+
+  // nowhere to put it in one line: succeeds, no edit, no event
+  const input = $('#text');
+  input.value = 'hello';
+  input.focus();
+  input.setSelectionRange(1, 3);
+  testing.expectEqual(true, document.queryCommandEnabled('insertParagraph'));
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('hello', input.value);
+  testing.expectEqual([1, 3], [input.selectionStart, input.selectionEnd]);
+  testing.expectEqual([], events);
+}
+</script>
+
+<script id="paragraph_split">
+{
+  testing.expectEqual([true, '<p>a</p><p>bc</p>', '#bc@0'], split('<p>abc</p>', 0, 0, 1));
+  testing.expectEqual(['input:host:insertParagraph:null'], events);
+  testing.expectEqual(true, document.queryCommandEnabled('insertParagraph'));
+
+  // the block is cloned, attributes and all
+  testing.expectEqual([true, '<p id="x" class="y">a</p><p id="x" class="y">bc</p>', '#bc@0'], split('<p id=x class=y>abc</p>', 0, 0, 1));
+  testing.expectEqual([true, '<div>a</div><div>bc</div>', '#bc@0'], split('<div>abc</div>', 0, 0, 1));
+  testing.expectEqual([true, '<h1>a</h1><h1>bc</h1>', '#bc@0'], split('<h1>abc</h1>', 0, 0, 1));
+  testing.expectEqual([true, '<ul><li>a</li><li>bc</li></ul>', '#bc@0'], split('<ul><li>abc</li></ul>', 0, 0, 0, 1));
+  testing.expectEqual([true, '<blockquote>a</blockquote><blockquote>bc</blockquote>', '#bc@0'], split('<blockquote>abc</blockquote>', 0, 0, 1));
+  testing.expectEqual([true, '<blockquote><p>a</p><p>bc</p></blockquote>', '#bc@0'], split('<blockquote><p>abc</p></blockquote>', 0, 0, 0, 1));
+  testing.expectEqual([true, '<span style="display:block">a</span><span style="display:block">bc</span>', '#bc@0'],
+    split('<span style="display:block">abc</span>', 0, 0, 1));
+  testing.expectEqual([true, '<table><tbody><tr><td><p>a</p><p>bc</p></td></tr></tbody></table>', '#bc@0'],
+    split('<table><tbody><tr><td><p>abc</p></td></tr></tbody></table>', 0, 0, 0, 0, 0, 0, 1));
+
+  // everything after the caret goes, blocks and line breaks included
+  testing.expectEqual([true, '<div>a</div><div>b<p>cd</p></div>', '#b@0'], split('<div>ab<p>cd</p></div>', 0, 0, 1));
+  testing.expectEqual([true, '<p>ab<br>c</p><p>d</p>', '#d@0'], split('<p>ab<br>cd</p>', 0, 2, 1));
+  testing.expectEqual([true, '<p>ab</p><p><br>cd</p>', 'P@0'], split('<p>ab<br>cd</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>a<img></p><p>b</p>', '#b@0'], split('<p>a<img>b</p>', 0, 2));
+
+  // a line that would be left with nothing gets a <br>
+  testing.expectEqual([true, '<p>ab<br><br></p><p>cd</p>', '#cd@0'], split('<p>ab<br>cd</p>', 0, 2, 0));
+  testing.expectEqual([true, '<div>ab</div><div><br><p>cd</p></div>', 'DIV@0'], split('<div>ab<p>cd</p></div>', 0, 0, 2));
+  testing.expectEqual([true, '<ul><li>abc</li><li><br><ul><li>x</li></ul></li></ul>', 'LI@0'],
+    split('<ul><li>abc<ul><li>x</li></ul></li></ul>', 0, 0, 0, 3));
+
+  // whitespace around the block stays
+  testing.expectEqual([true, '\n<p>a</p><p>bc</p>\n', '#bc@0'], split('\n<p>abc</p>\n', 1, 0, 1));
+}
+</script>
+
+<script id="paragraph_inline">
+{
+  // the inline elements around the caret are split too, empty halves dropped
+  testing.expectEqual([true, '<p>a<b>b</b></p><p><b>c</b>d</p>', '#c@0'], split('<p>a<b>bc</b>d</p>', 0, 1, 0, 1));
+  testing.expectEqual([true, '<p>a<b>b<i>c</i></b></p><p><b><i>d</i>e</b>f</p>', '#d@0'], split('<p>a<b>b<i>cd</i>e</b>f</p>', 0, 1, 1, 0, 1));
+  testing.expectEqual([true, '<p>a<b>bc</b></p><p>d</p>', '#d@0'], split('<p>a<b>bc</b>d</p>', 0, 1, 0, 2));
+  testing.expectEqual([true, '<p>a</p><p><b>bc</b>d</p>', '#bc@0'], split('<p>a<b>bc</b>d</p>', 0, 1));
+
+  // the new empty line keeps the formatting
+  testing.expectEqual([true, '<p>a<b>bc</b></p><p><b><br></b></p>', 'B@0'], split('<p>a<b>bc</b></p>', 0, 1, 0, 2));
+  testing.expectEqual([true, '<p>a<b>bc</b></p><p><b><br></b></p>', 'B@0'], split('<p>a<b>bc</b></p>', 0, 2));
+  testing.expectEqual([true, '<p><b><br></b></p><p><b>bc</b>d</p>', '#bc@0'], split('<p><b>bc</b>d</p>', 0, 0, 0, 0));
+  testing.expectEqual([true, '<p><b><br></b></p><p><b>bc</b>d</p>', '#bc@0'], split('<p><b>bc</b>d</p>', 0, 0));
+  testing.expectEqual([true, '<h1><b>abc</b></h1><div><b><br></b></div>', 'B@0'], split('<h1><b>abc</b></h1>', 0, 0, 0, 3));
+  testing.expectEqual([true, '<ul><li><b>abc</b></li><li><b><br></b></li></ul>', 'B@0'], split('<ul><li><b>abc</b></li></ul>', 0, 0, 0, 0, 3));
+}
+</script>
+
+<script id="paragraph_edges">
+{
+  // at the end: a new empty block, the caret in it
+  testing.expectEqual([true, '<p>abc</p><p><br></p>', 'P@0'], split('<p>abc</p>', 0, 0, 3));
+  testing.expectEqual([true, '<div>abc</div><div><br></div>', 'DIV@0'], split('<div>abc</div>', 0, 0, 3));
+  testing.expectEqual([true, '<ul><li>abc</li><li><br></li></ul>', 'LI@0'], split('<ul><li>abc</li></ul>', 0, 0, 0, 3));
+  testing.expectEqual([true, '<blockquote>abc</blockquote><blockquote><br></blockquote>', 'BLOCKQUOTE@0'], split('<blockquote>abc</blockquote>', 0, 0, 3));
+  testing.expectEqual([true, '<p><br></p><p><br></p>', 'P@0'], split('<p><br></p>', 0, 0));
+  // a caret in a <br> is before it
+  testing.expectEqual([true, '<div><br></div><div><br></div>', 'DIV@0'], split('<div><br></div>', 0, 0, 0));
+  testing.expectEqual([true, '<h1><br></h1><div><br></div>', 'DIV@0'], split('<h1><br></h1>', 0, 0, 0));
+  testing.expectEqual([true, '<p>ab<br></p><p><br></p>', 'P@0'], split('<p>ab<br></p>', 0, 1, 0));
+  testing.expectEqual([true, '\n<p>abc</p><p><br></p>\n', 'P@0'], split('\n<p>abc</p>\n', 1, 0, 3));
+  // a <br> ending the block only holds its line open
+  testing.expectEqual([true, '<p>ab<br></p><p><br></p>', 'P@0'], split('<p>ab<br></p>', 0, 0, 2));
+  // a heading continues with the separator element
+  testing.expectEqual([true, '<h1>abc</h1><div><br></div>', 'DIV@0'], split('<h1>abc</h1>', 0, 0, 3));
+
+  // at the start: a new empty block before, the caret stays
+  testing.expectEqual([true, '<p><br></p><p>abc</p>', '#abc@0'], split('<p>abc</p>', 0, 0, 0));
+  testing.expectEqual([true, '<h1><br></h1><h1>abc</h1>', '#abc@0'], split('<h1>abc</h1>', 0, 0, 0));
+  testing.expectEqual([true, '<ul><li><br></li><li>abc</li></ul>', '#abc@0'], split('<ul><li>abc</li></ul>', 0, 0, 0, 0));
+
+  // a caret between blocks goes into one
+  testing.expectEqual([true, '<p><br></p><p>a</p><p>b</p>', '#a@0'], split('<p>a</p><p>b</p>', 0));
+  testing.expectEqual([true, '<p>a</p><p><br></p><p>b</p>', '#b@0'], split('<p>a</p><p>b</p>', 1));
+  testing.expectEqual([true, '<p>a</p><p>b</p><p><br></p>', 'P@0'], split('<p>a</p><p>b</p>', 2));
+}
+</script>
+
+<script id="paragraph_host_text">
+{
+  // text right in the host: the rest of it goes in the separator element
+  testing.expectEqual([true, 'a<div>bc</div>', '#bc@0'], split('abc', 0, 1));
+  testing.expectEqual([true, 'a<div>b<br>cd</div>', '#b@0'], split('ab<br>cd', 0, 1));
+  testing.expectEqual([true, 'ab<br>c<div>d</div>', '#d@0'], split('ab<br>cd', 2, 1));
+  testing.expectEqual([true, 'ab<div><br>cd</div>', 'DIV@0'], split('ab<br>cd', 0, 2));
+  testing.expectEqual([true, 'ab<br><br><div>cd</div>', '#cd@0'], split('ab<br>cd', 2, 0));
+  testing.expectEqual([true, 'a<div>bc<p>def</p></div>', '#bc@0'], split('abc<p>def</p>', 0, 1));
+  testing.expectEqual([true, 'abc<div><br><p>def</p></div>', 'DIV@0'], split('abc<p>def</p>', 0, 3));
+  testing.expectEqual([true, 'abc<div><br><p>def</p></div>', 'DIV@0'], split('abc<p>def</p>', 1));
+  testing.expectEqual([true, '<p>abc</p>d<div>ef</div>', '#ef@0'], split('<p>abc</p>def', 1, 1));
+  testing.expectEqual([true, 'a<b>b</b><div><b>c</b>d</div>', '#c@0'], split('a<b>bc</b>d', 1, 0, 1));
+  testing.expectEqual([true, '<b>bc</b><div>d</div>', '#d@0'], split('<b>bc</b>d', 0, 0, 2));
+  testing.expectEqual([true, '<span>a</span><div><span>bc</span></div>', '#bc@0'], split('<span>abc</span>', 0, 0, 1));
+  testing.expectEqual([true, 'a<div>bc</div>', '#bc@0'], splitIn('abc', [0, 1], null, {style: 'pre-wrap'}));
+
+  // at the end and the start
+  testing.expectEqual([true, 'abc<div><br></div>', 'DIV@0'], split('abc', 0, 3));
+  testing.expectEqual([true, 'abc\n<div><br></div>', 'DIV@0'], split('abc\n', 0, 3));
+  testing.expectEqual([true, 'ab<br><div><br></div>', 'DIV@0'], split('ab<br>', 0, 2));
+  testing.expectEqual([true, '<br><div><br></div>', 'DIV@0'], split('<br>', 0));
+  testing.expectEqual([true, 'a<b>bc</b><div><b><br></b></div>', 'B@0'], split('a<b>bc</b>', 1, 0, 2));
+  testing.expectEqual([true, '<div><br></div>abc', '#abc@0'], split('abc', 0, 0));
+  testing.expectEqual([true, '<p>abc</p><div><br></div>def', '#def@0'], split('<p>abc</p>def', 1, 0));
+  testing.expectEqual([true, '<div><b><br></b></div><b>bc</b>d', '#bc@0'], split('<b>bc</b>d', 0, 0, 0));
+  // an empty host gets two lines
+  testing.expectEqual([true, '<div><br></div><div><br></div>', 'DIV@0'], split('', 0));
+}
+</script>
+
+<script id="paragraph_separator">
+{
+  document.execCommand('defaultParagraphSeparator', false, 'p');
+  testing.expectEqual([true, 'a<p>bc</p>', '#bc@0'], split('abc', 0, 1));
+  testing.expectEqual([true, '<h2>abc</h2><p><br></p>', 'P@0'], split('<h2>abc</h2>', 0, 0, 3));
+  // a clone otherwise
+  testing.expectEqual([true, '<div>abc</div><div><br></div>', 'DIV@0'], split('<div>abc</div>', 0, 0, 3));
+  testing.expectEqual([true, '<ul><li>a</li></ul><p><br></p>', 'P@0'], split('<ul><li>a</li><li><br></li></ul>', 0, 1, 0));
+  document.execCommand('defaultParagraphSeparator', false, 'div');
+}
+</script>
+
+<script id="paragraph_spaces">
+{
+  // a space at the split would collapse away
+  testing.expectEqual([true, '<p>ab&nbsp;</p><p>cd</p>', '#cd@0'], split('<p>ab cd</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab</p><p>&nbsp;cd</p>', '# cd@0'], split('<p>ab cd</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>ab&nbsp;</p><p>&nbsp;cd</p>', '# cd@0'], split('<p>ab  cd</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab&nbsp;</p><p><b>cd</b></p>', '#cd@0'], split('<p>ab <b>cd</b></p>', 0, 1, 0, 0));
+  // not where white-space keeps it
+  testing.expectEqual([true, '<p style="white-space:pre-wrap">ab </p><p style="white-space:pre-wrap">cd</p>', '#cd@0'],
+    split('<p style="white-space:pre-wrap">ab cd</p>', 0, 0, 3));
+}
+</script>
+
+<script id="paragraph_list">
+{
+  // an empty item leaves the list
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div>', 'DIV@0'], split('<ul><li>a</li><li><br></li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div>', 'DIV@0'], split('<ul><li>a</li><li></li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<ol><li>a</li></ol><div><br></div>', 'DIV@0'], split('<ol><li>a</li><li><br></li></ol>', 0, 1, 0));
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div><ul><li>b</li></ul>', 'DIV@0'],
+    split('<ul><li>a</li><li><br></li><li>b</li></ul>', 0, 1, 0));
+  testing.expectEqual([true, '<div><br></div><ul><li>b</li></ul>', 'DIV@0'], split('<ul><li><br></li><li>b</li></ul>', 0, 0, 0));
+  testing.expectEqual([true, '<div><br></div>', 'DIV@0'], split('<ul><li><br></li></ul>', 0, 0, 0));
+}
+</script>
+
+<script id="paragraph_list_item_blocks">
+{
+  // a block in a list item goes on in a new item, the rest of the item stays
+  testing.expectEqual([true, '<ul><li><p>a</p></li><li><p>bc</p></li></ul>', '#bc@0'], split('<ul><li><p>abc</p></li></ul>', 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li><p>a</p>x</li><li><p>bc</p></li></ul>', '#bc@0'], split('<ul><li><p>abc</p>x</li></ul>', 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li><p>a</p><p>def</p></li><li><p>bc</p></li></ul>', '#bc@0'],
+    split('<ul><li><p>abc</p><p>def</p></li></ul>', 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li>x<p>a</p></li><li><p>bc</p></li></ul>', '#bc@0'], split('<ul><li>x<p>abc</p></li></ul>', 0, 0, 1, 0, 1));
+  testing.expectEqual([true, '<ul><li><div><p>a</p></div></li><li><p>bc</p></li></ul>', '#bc@0'],
+    split('<ul><li><div><p>abc</p></div></li></ul>', 0, 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<ul><li><p>abc</p></li><li><p><br></p></li></ul>', 'P@0'], split('<ul><li><p>abc</p></li></ul>', 0, 0, 0, 0, 3));
+  testing.expectEqual([true, '<ul><li><p><br></p></li><li><p>abc</p></li></ul>', '#abc@0'], split('<ul><li><p>abc</p></li></ul>', 0, 0, 0, 0, 0));
+  // an item with only an empty block leaves the list
+  testing.expectEqual([true, '<ul><li>a</li></ul><div><br></div>', 'DIV@0'], split('<ul><li>a</li><li><p><br></p></li></ul>', 0, 1, 0, 0));
+  // not in a blockquote
+  testing.expectEqual([true, '<blockquote><p>a</p><p>bc</p><p>d</p></blockquote>', '#bc@0'], split('<blockquote><p>abc</p><p>d</p></blockquote>', 0, 0, 0, 1));
+}
+</script>
+
+<script id="paragraph_line_break">
+{
+  // a <pre>, a table cell, an inline host: a line break, as insertLineBreak
+  testing.expectEqual([true, '<pre>a<br>bc</pre>', '#bc@0'], split('<pre>abc</pre>', 0, 0, 1));
+  testing.expectEqual(['input:host:insertParagraph:null'], events);
+  testing.expectEqual([true, '<pre>abc<br><br></pre>', 'PRE@2'], split('<pre>abc</pre>', 0, 0, 3));
+  testing.expectEqual([true, '<table><tbody><tr><td>a<br>bc</td></tr></tbody></table>', '#bc@0'],
+    split('<table><tbody><tr><td>abc</td></tr></tbody></table>', 0, 0, 0, 0, 0, 1));
+  testing.expectEqual([true, '<table><tbody><tr><td>abc<br><br></td></tr></tbody></table>', 'TD@2'],
+    split('<table><tbody><tr><td>abc</td></tr></tbody></table>', 0, 0, 0, 0, 0, 3));
+  testing.expectEqual([true, '<table><tbody><tr><td>ab<br><br></td><td>cd</td></tr></tbody></table>', 'TD@2'],
+    split('<table><tbody><tr><td>ab</td><td>cd</td></tr></tbody></table>', 0, 0, 0, 0, 0, 2));
+  testing.expectEqual([true, '<table><tbody><tr><td>ab<b>c<br><br></b></td></tr></tbody></table>', 'B@2'],
+    split('<table><tbody><tr><td>ab<b>c</b></td></tr></tbody></table>', 0, 0, 0, 0, 1, 0, 1));
+
+  const span = document.createElement('span');
+  span.id = 'shost';
+  span.contentEditable = true;
+  document.body.appendChild(span);
+  testing.expectEqual([true, 'a<br>bc', '#bc@0'], splitIn('abc', [0, 1], null, {host: span}));
+  testing.expectEqual(['input:shost:insertParagraph:null'], events);
+  testing.expectEqual([true, 'abc<br><br>', 'SPAN@2'], splitIn('abc', [0, 3], null, {host: span}));
+  span.remove();
+}
+</script>
+
+<script id="paragraph_selection">
+{
+  // replaced, on one line
+  testing.expectEqual([true, '<p>a</p><p>d</p>', '#d@0'], splitIn('<p>abcd</p>', [0, 0, 1], [0, 0, 3]));
+  testing.expectEqual([true, '<p><br></p><p><br></p>', 'P@0'], splitIn('<p>abcd</p>', [0, 0, 0], [0, 0, 4]));
+  testing.expectEqual([true, '<p><b><br></b></p><p><b>c</b>d</p>', '#c@0'], splitIn('<p>a<b>bc</b>d</p>', [0, 0, 0], [0, 1, 0, 1]));
+  testing.expectEqual([true, '<p>a<b>b</b></p><p><b><br></b></p>', 'B@0'], splitIn('<p>a<b>bc</b>d</p>', [0, 1, 0, 1], [0, 2, 1]));
+
+  // across blocks: the blocks merge, then split
+  testing.expectEqual([true, '<p>a</p><p>f</p>', '#f@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p>a</p><p>f</p>', '#f@0'], splitIn('<p>abc</p><p>x</p><p>def</p>', [0, 0, 1], [2, 0, 2]));
+  testing.expectEqual([true, '<h1>a</h1><h1>f</h1>', '#f@0'], splitIn('<h1>abc</h1><p>def</p>', [0, 0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p>a<b>b</b></p><p><i>e</i>f</p>', '#e@0'], splitIn('<p>a<b>bc</b></p><p><i>de</i>f</p>', [0, 1, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual([true, '<ul><li>a</li><li>f</li></ul>', '#f@0'], splitIn('<ul><li>abc</li><li>def</li></ul>', [0, 0, 0, 1], [0, 1, 0, 2]));
+  testing.expectEqual([true, 'a<div>f</div>', '#f@0'], splitIn('abc<p>def</p>', [0, 1], [1, 0, 2]));
+  testing.expectEqual([true, '<p><br></p><p>f</p>', '#f@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 0], [1, 0, 2]));
+  testing.expectEqual([true, '<p><br></p><p><br></p>', 'P@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 0], [1, 0, 3]));
+  testing.expectEqual([true, '<p>a</p><p><br></p>', 'P@0'], splitIn('<p>abc</p><p>def</p>', [0, 0, 1], [1, 0, 3]));
+}
+</script>
+
+<script id="paragraph_refused">
+{
+  // a caret in a non-editable island
+  testing.expectEqual([false, 'a<span contenteditable="false">xy</span>b', '#xy@1'],
+    split('a<span contenteditable=false>xy</span>b', 1, 0, 1));
+  testing.expectEqual([], events);
+  testing.expectEqual(false, document.queryCommandEnabled('insertParagraph'));
+}
+</script>
+
+<script id="paragraph_unfocused_host">
+{
+  // the selection is enough
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p>';
+  document.activeElement.blur();
+  getSelection().collapse(host.firstChild.firstChild, 1);
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual('<p>a</p><p>bc</p>', host.innerHTML);
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="paragraph_nested">
+{
+  const host = $('#host');
+  host.innerHTML = '<p>abc</p>';
+  host.focus();
+  getSelection().collapse(host.firstChild.firstChild, 1);
+  let nested = null;
+  host.addEventListener('input', () => { nested = document.execCommand('insertParagraph'); }, {once: true});
+  testing.expectEqual(true, paragraph());
+  testing.expectEqual(false, nested);
+  testing.expectEqual('<p>a</p><p>bc</p>', host.innerHTML);
+}
+</script>
+
+<script id="paragraph_not_yet_supported">
+{
+  // Chrome: <ul><li>a</li><li><br></li></ul>, the item outdented
+  testing.diverges('no outdenting', () => {
+    testing.expectEqual([false, '<ul><li>a<ul><li><br></li></ul></li></ul>', 'LI@0'],
+      split('<ul><li>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  });
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="command_required">
+{
+  testing.expectError('TypeError', () => document.execCommand());
+  testing.expectError('TypeError', () => document.queryCommandSupported());
+}
+</script>

@@ -36,6 +36,7 @@ pub const Skipped = enum {
     worker,
     image,
     stylesheet,
+    beacon,
 };
 
 // The sub-resources the page itself asks for, and which we load.
@@ -58,22 +59,21 @@ blocked: Counts(Loaded) = .{},
 // The first recognized bot challenge on a sub-resource.
 resource_challenge: ?HttpClient.BotChallenge = null,
 // Globals that uncaught ReferenceErrors named. Most of what a page needs and
-// we lack shows up here first, before any call we could count: TradingView
-// dies at `new Path2D()` and never reaches getContext. Deduped and capped;
+// we lack shows up here first, before any call we could count: a page that
+// dies at `createImageBitmap()` never reaches getContext. Deduped and capped;
 // the names are whatever V8 put in the message, site bugs included.
 missing_globals: MissingGlobals = .{},
 
 // Missing globals that stand for a feature we already count, so the common
 // cases stay a one-field check. Only globals we don't register.
 const global_features = std.StaticStringMap(Unsupported).initComptime(.{
-    .{ "Path2D", .canvas2d },
     .{ "ImageBitmap", .canvas2d },
     .{ "createImageBitmap", .canvas2d },
     .{ "WebGL2RenderingContext", .webgl },
 });
 
 // A bit of a hack. Say we want to report that canvas was used, but some sites
-// will try to create a Path2D first and fail there. We do have a
+// will try to create an ImageBitmap first and fail there. We do have a
 // unknownObjectPropertyCallback in bridge, but that gets called on the global
 // before v8 tries to resolve it itself, so it's very noisy and full of site
 // and framework-specific globals. Instead, we try to parse an uncaught error.
@@ -118,7 +118,7 @@ pub fn noteSkipped(self: *PageStatus, what: Skipped) void {
 
     const level: log.Level = switch (what) {
         .iframe, .worker => .warn,
-        .image, .stylesheet => .debug,
+        .image, .stylesheet, .beacon => .debug,
     };
 
     switch (what) {
@@ -255,7 +255,7 @@ test "PageStatus: missing globals from uncaught ReferenceErrors" {
 
     const json = try std.json.Stringify.valueAlloc(testing.allocator, status.missing_globals, .{});
     defer testing.allocator.free(json);
-    try testing.expectEqual("[\"Path2D\",\"someUndefinedThing\",\"WebGL2RenderingContext\"]", json);
+    try testing.expectEqual("[\"createImageBitmap\",\"someUndefinedThing\",\"WebGL2RenderingContext\"]", json);
 }
 
 test "PageStatus: failed and blocked sub-resources" {
@@ -313,5 +313,5 @@ test "PageStatus: counts serialize as an object with every tag" {
     try testing.expectEqual("{\"webgl\":2,\"canvas2d\":0}", json);
 
     const skipped = try std.json.Stringify.valueAlloc(testing.arena_allocator, status.skipped, .{});
-    try testing.expectEqual("{\"iframe\":1,\"worker\":0,\"image\":0,\"stylesheet\":0}", skipped);
+    try testing.expectEqual("{\"iframe\":1,\"worker\":0,\"image\":0,\"stylesheet\":0,\"beacon\":0}", skipped);
 }

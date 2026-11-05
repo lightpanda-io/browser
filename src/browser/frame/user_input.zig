@@ -28,10 +28,14 @@ const lp = @import("lightpanda");
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
+const dump = @import("../dump.zig");
+const StyleManager = @import("../StyleManager.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
+const Range = @import("../webapi/Range.zig");
 const Element = @import("../webapi/Element.zig");
+const Document = @import("../webapi/Document.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
 const TextEvent = @import("../webapi/event/TextEvent.zig");
 const InputEvent = @import("../webapi/event/InputEvent.zig");
@@ -41,6 +45,8 @@ const TouchEvent = @import("../webapi/event/TouchEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
 const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
+const DragEvent = @import("../webapi/event/DragEvent.zig");
+const DataTransfer = @import("../webapi/DataTransfer.zig");
 
 const log = lp.log;
 
@@ -91,7 +97,7 @@ const CompatHover = struct {
 // hovered item so that trasitions can fire the correct events. e.g. mouseout
 // bubbles up normally, but mouseleave will only fire on parents where the new
 // target isn't part of.
-pub fn updateHoverTarget(frame: *Frame, to: ?*Element, emitter: anytype) void {
+fn updateHoverTarget(frame: *Frame, to: ?*Element, emitter: anytype) void {
     const page = frame.page;
     const from = page.input_hover_target;
     if (from == to) {
@@ -542,13 +548,24 @@ fn mouseUpAndClick(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
     }
 }
 
+/// The point a real gesture on `target` reports: the centre of its bounding
+/// rect in the target document's viewport, where a user's pointer would sit.
+/// An element with no box (display:none, detached) stays at (0, 0).
+pub fn gesturePoint(frame: *Frame, target: *Element) Point {
+    const owner = target.ownerFrame(frame) orelse frame;
+    const rect = target.boundingClientRectValues(owner);
+    return .{ .x = rect.x + rect.width / 2, .y = rect.y + rect.height / 2 };
+}
+
 /// The trusted primary-button gesture a real user click produces; widgets key
 /// off pointerdown/mousedown, not click alone. A focus failure is logged, not
 /// returned.
 pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
-    try moveSequence(frame, target, .{ .modifiers = modifiers });
+    const point = gesturePoint(frame, target);
+    // The point is in the owner frame's viewport, as updateHoverTarget expects.
+    try moveSequence(target.ownerFrame(frame) orelse frame, target, .{ .modifiers = modifiers, .x = point.x, .y = point.y });
 
-    const g: Gesture = .{ .click_count = 1, .modifiers = modifiers };
+    const g: Gesture = .{ .click_count = 1, .modifiers = modifiers, .x = point.x, .y = point.y };
     var pointer: PointerButtons = .{};
     try pointer.press(frame, target, g);
     _ = try pointer.release(frame, target, g);
@@ -815,8 +832,178 @@ fn deltaToScroll(d: f64) i32 {
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
+/// One string of a drag's data, for one MIME type (CDP Input.DragDataItem).
+const DragItem = struct {
+    mimeType: []const u8,
+    data: []const u8,
+};
+
+/// What a drag from outside the page carries: its items, and the operations
+/// its source allows, as Chrome's mask (copy 1, link 2, move 16).
+pub const DragData = struct {
+    items: []const DragItem,
+    dragOperationsMask: u32,
+};
+
+pub const DragType = enum { enter, over, drop, cancel };
+
+/// A drag from outside the page, driven message by message (CDP
+/// Input.dispatchDragEvent). Mouse input never starts a drag, so there is no
+/// source element and no dragstart, drag or dragend.
+pub const DragInput = struct {
+    /// Set by dragEnter. A drop or dragCancel ends the drag, and dragOver and
+    /// drop do nothing until the next dragEnter.
+    active: bool = false,
+    /// The element the drag is over (the spec's current target element).
+    target: ?*Element = null,
+};
+
+const drag_copy: u32 = 1;
+const drag_link: u32 = 2;
+const drag_move: u32 = 16;
+const drag_every = drag_copy | drag_link | drag_move;
+
+fn dragEffectAllowed(mask: u32) []const u8 {
+    return switch (mask & drag_every) {
+        0 => "none",
+        drag_copy => "copy",
+        drag_link => "link",
+        drag_move => "move",
+        drag_copy | drag_link => "copyLink",
+        drag_copy | drag_move => "copyMove",
+        drag_link | drag_move => "linkMove",
+        else => "all",
+    };
+}
+
+/// The dropEffect a dragenter or dragover starts with, picked as Blink does.
+fn dragDefaultDropEffect(mask: u32) []const u8 {
+    const ops = mask & drag_every;
+    if (ops == drag_every) return "copy";
+    if (ops & drag_move != 0) return "move";
+    if (ops & drag_copy != 0) return "copy";
+    if (ops & drag_link != 0) return "link";
+    return "none";
+}
+
+fn dragAllows(mask: u32, effect: []const u8) bool {
+    const bit: u32 = if (std.mem.eql(u8, effect, "copy"))
+        drag_copy
+    else if (std.mem.eql(u8, effect, "link"))
+        drag_link
+    else if (std.mem.eql(u8, effect, "move"))
+        drag_move
+    else
+        0;
+    return mask & bit != 0;
+}
+
+/// Moves, drops or cancels a drag from outside the page, as Chrome does for
+/// Input.dispatchDragEvent. dragEnter, dragOver and drop each run one step: a
+/// new target gets dragenter, then the old one dragleave; the same target gets
+/// dragover. A drop then goes to the target if that step accepted the drag
+/// with an operation the source allows. If not, the target gets dragleave only
+/// when a listener called preventDefault(). dragCancel fires nothing.
+pub fn triggerDrag(frame: *Frame, typ: DragType, x: f64, y: f64, data: DragData, modifiers: Modifiers) !void {
+    const drag = &frame.page.input_drag;
+    switch (typ) {
+        .cancel => {
+            drag.* = .{};
+            return;
+        },
+        .enter => drag.active = true,
+        .over, .drop => if (!drag.active) return,
+    }
+
+    const d: DragDispatch = .{ .x = x, .y = y, .data = data, .modifiers = modifiers };
+    const drop_effect = dragDefaultDropEffect(data.dragOperationsMask);
+    const hit = try mouseHitTest(frame, x, y);
+    var result: DragResult = .{ .cancelled = false, .drop_effect = "none" };
+    if (hit.target != drag.target) {
+        const old = drag.target;
+        drag.target = hit.target;
+        if (hit.target) |target| {
+            result = try emitDrag(frame, target, "dragenter", old, d, .protected, drop_effect);
+        }
+        if (old) |target| {
+            _ = try emitDrag(frame, target, "dragleave", hit.target, d, .protected, "none");
+        }
+    } else if (drag.target) |target| {
+        result = try emitDrag(frame, target, "dragover", null, d, .protected, drop_effect);
+    }
+    // A listener may have discarded the target's frame and reset us.
+    if (drag.target != hit.target) return;
+    if (typ != .drop) return;
+
+    drag.* = .{};
+    const target = hit.target orelse return;
+    if (result.cancelled and dragAllows(data.dragOperationsMask, result.drop_effect)) {
+        _ = try emitDrag(frame, target, "drop", null, d, .read_only, result.drop_effect);
+    } else if (result.cancelled) {
+        _ = try emitDrag(frame, target, "dragleave", null, d, .protected, "none");
+    }
+}
+
+const DragDispatch = struct {
+    x: f64,
+    y: f64,
+    data: DragData,
+    modifiers: Modifiers,
+};
+
+const DragResult = struct {
+    cancelled: bool,
+    /// dataTransfer.dropEffect once the listeners ran.
+    drop_effect: []const u8,
+};
+
+/// Dispatches a trusted DragEvent whose dataTransfer holds the drag's items.
+/// Each event gets its own DataTransfer, as in Blink.
+fn emitDrag(
+    frame: *Frame,
+    target: *Element,
+    comptime typ: []const u8,
+    related: ?*Element,
+    d: DragDispatch,
+    mode: DataTransfer.Mode,
+    drop_effect: []const u8,
+) !DragResult {
+    const owner = target.ownerFrame(frame) orelse frame;
+    if (owner.window._closed) return .{ .cancelled = true, .drop_effect = "none" };
+
+    const data_transfer = try DataTransfer.init(owner);
+    data_transfer.acquireRef();
+    defer data_transfer.releaseRef(owner.page);
+    for (d.data.items) |item| {
+        try data_transfer.setData(item.mimeType, item.data);
+    }
+    data_transfer._mode = mode;
+    data_transfer._drop_effect = drop_effect;
+    data_transfer._effect_allowed = dragEffectAllowed(d.data.dragOperationsMask);
+
+    // No relatedTarget from another document.
+    const same_document = if (related) |el| el.ownerFrame(frame) == owner else false;
+    const related_target = if (same_document) related.?.asEventTarget() else null;
+    const point = pointInFrame(frame, owner, d.x, d.y);
+    const event: *DragEvent = try .initTrusted(typ, .{
+        .bubbles = true,
+        .cancelable = comptime !std.mem.eql(u8, typ, "dragleave"),
+        .composed = true,
+        .clientX = point.x,
+        .clientY = point.y,
+        .relatedTarget = related_target,
+        .ctrlKey = d.modifiers.ctrl,
+        .shiftKey = d.modifiers.shift,
+        .altKey = d.modifiers.alt,
+        .metaKey = d.modifiers.meta,
+        .dataTransfer = data_transfer,
+    }, owner);
+    const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
+    return .{ .cancelled = cancelled, .drop_effect = data_transfer._drop_effect };
+}
+
 // pointerId 1 is the mouse.
-pub const first_touch_pointer_id: i32 = 2;
+const first_touch_pointer_id: i32 = 2;
 // Chrome's touch slop, also the tap slop: inside it touchmove is suppressed.
 const tap_slop_px = 15;
 // Chrome's multi-tap window: the next tap must start within this time of the
@@ -824,7 +1011,7 @@ const tap_slop_px = 15;
 const multi_tap_ms = 400;
 const multi_tap_slop_px = 20;
 
-pub const TouchContact = struct {
+const TouchContact = struct {
     target: *Element,
     point: Touch.Point,
     start: Touch.Point,
@@ -894,7 +1081,7 @@ const TouchType = enum {
     touchcancel,
 };
 
-pub const LastTap = struct {
+const LastTap = struct {
     count: u32,
     x: f64,
     y: f64,
@@ -1126,6 +1313,11 @@ pub fn forgetFrame(frame: *Frame) void {
             page.input_pointer.reset();
         }
     }
+    if (page.input_drag.target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_drag = .{};
+        }
+    }
     const touch = &page.input_touch;
     if (touch.contact) |contact| {
         if (contact.target.ownerFrame(frame) == frame) {
@@ -1161,24 +1353,26 @@ fn isEditingHost(node: *Node) bool {
     return element.isEditingHost();
 }
 
-fn outermostEditingHost(target: *Element) ?*Element {
+pub fn outermostEditingHost(target: *Element) ?*Element {
     var host: ?*Element = null;
     var current: ?*Element = target;
     while (current) |el| : (current = el.parentElement()) {
-        if (el.getAttributeInterned("contenteditable") == null) {
-            continue;
+        if (el.contentEditableState()) |editable| {
+            if (editable == false) {
+                break;
+            }
+            host = el;
+        } else if (el.isEditingHost()) {
+            // the body of a designMode document
+            host = el;
         }
-        if (el.isEditingHost() == false) {
-            break;
-        }
-        host = el;
     }
     return host;
 }
 
 /// Mousedown default action. A mousedown outside any focusable element moves
 /// focus to the body.
-pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
+fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     if (outermostEditingHost(target)) |host| {
         try host.focus(frame);
         return;
@@ -1284,14 +1478,15 @@ const JavascriptUrlTask = struct {
 // target is the element that's being activated. Imagine a span inside an anchor
 // the span is clicked (event_target), but it's the anchor that we're activating
 // (target).
-pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
+// user_initiated: a trusted click, for the navigate event it can start.
+pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node, user_initiated: bool) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
 
     if (element.is(Element.Svg.Graphics.A) != null) {
         const href = element.svgAnchorHref() orelse return;
         const target_name = element.getAttributeInterned("target") orelse "";
-        return followLink(frame, target, element, href, target_name);
+        return followLink(frame, target, element, href, target_name, user_initiated);
     }
 
     const html_element = element.is(Element.Html) orelse return;
@@ -1300,7 +1495,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
             const href = element.getAttributeInterned("href") orelse return;
-            return followLink(frame, target, element, href, anchor.getTarget());
+            return followLink(frame, target, element, href, anchor.getTarget(), user_initiated);
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
@@ -1315,7 +1510,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 if (element.isDisabled()) {
                     return;
                 }
-                return frame.submitForm(element, input.getForm(), .{});
+                return frame.submitForm(element, input.getForm(), .{ .user_initiated = user_initiated });
             }
             if (input._input_type == .reset) {
                 if (element.isDisabled()) {
@@ -1331,7 +1526,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
                 if (element.isDisabled()) {
                     return;
                 }
-                return frame.submitForm(element, button.getForm(), .{});
+                return frame.submitForm(element, button.getForm(), .{ .user_initiated = user_initiated });
             }
             if (std.mem.eql(u8, button.getType(), "reset")) {
                 if (element.isDisabled()) {
@@ -1380,7 +1575,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
 }
 
 // Follow a link on activation. Shared by HTML <a> and SVG <a>.
-fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8) !void {
+fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8, user_initiated: bool) !void {
     if (href.len == 0) {
         return;
     }
@@ -1389,9 +1584,11 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     // a script clicks a link in another frame.
     const owner = target.ownerFrame(frame) orelse return;
 
-    if (URL.isJavascriptUrl(href) == false and try element.hasAttribute(comptime .wrap("download"), frame)) {
-        log.debug(.browser, "a.download", .{ .type = owner._type, .url = owner.url });
-        return;
+    // <a href="/images/panda.png" download>
+    const maybe_download = try element.getAttribute(comptime .wrap("download"), frame);
+    if (URL.isJavascriptUrl(href) == false and maybe_download != null) {
+        const download = maybe_download orelse unreachable;
+        return @import("../Download.zig").fromHref(owner, href, download.str());
     }
 
     const target_frame = blk: {
@@ -1410,6 +1607,8 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     try owner.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
+        .source_element = element,
+        .user_initiated = user_initiated,
     }, .{ .anchor = target_frame });
 }
 
@@ -1495,6 +1694,10 @@ pub fn textForKey(keyboard_event: *const KeyboardEvent) ?[]const u8 {
 /// `keypress` on `target` and, unless a listener cancels it, performs the
 /// text edit it stands for.
 pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text: []const u8) !void {
+    // read before dispatch, which can free the event
+    const shift = keypress.getShiftKey();
+    const user_initiated = keypress.asEvent()._is_trusted;
+
     if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), keypress.asEvent())) {
         return;
     }
@@ -1506,11 +1709,17 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
             try input.dispatchChangeIfEdited(frame);
-            return implicitFormSubmission(frame, input);
+            return implicitFormSubmission(frame, input, user_initiated);
         }
         _ = try applyEdit(frame, input, .{ .insert = text });
     } else if (target.is(Element.Html.TextArea)) |textarea| {
         _ = try applyEdit(frame, textarea, if (is_enter) .line_break else .{ .insert = text });
+    } else if (target.isEditable()) {
+        if (is_enter) {
+            try breakInEditingHost(frame, target, shift);
+        } else {
+            _ = try insertIntoEditingHost(frame, target, text);
+        }
     }
 }
 
@@ -1518,7 +1727,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
 /// its activation submits the form with it as the submitter; otherwise the
 /// form submits itself (SubmitEvent.submitter is null).
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
-fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
+fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input, user_initiated: bool) !void {
     const form = input.getForm() orelse return;
     if (form.getDefaultButton(frame)) |button| {
         if (button.isDisabled()) {
@@ -1529,7 +1738,7 @@ fn implicitFormSubmission(frame: *Frame, input: *Element.Html.Input) !void {
     if (!form.canSubmitImplicitly(input, frame)) {
         return;
     }
-    return frame.submitForm(form.asElement(), form, .{});
+    return frame.submitForm(form.asElement(), form, .{ .user_initiated = user_initiated });
 }
 
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
@@ -1572,6 +1781,10 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         }
     }
 
+    if (isSelectAll(keyboard_event, key)) {
+        return selectAll(frame);
+    }
+
     if (target.is(Element.Html.Input)) |input| {
         if (!input.acceptsTextEntry()) {
             return;
@@ -1582,15 +1795,22 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     if (target.is(Element.Html.TextArea)) |textarea| {
         return editKey(frame, keyboard_event, textarea, key);
     }
+
+    if (key == .Backspace or key == .Delete) {
+        if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
+            // TODO: delete word/line with the right modifier
+            return;
+        }
+        const element = target.is(Element) orelse return;
+        if (element.isEditable()) {
+            return deleteInEditingHost(frame, element, key == .Delete);
+        }
+    }
 }
 
 // edit keys other than text insertion (typeChar's) are handled by Input and
 // TextArea the same
 fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
-    if (isSelectAll(keyboard_event, key)) {
-        return ctl.select(frame);
-    }
-
     if (caretMove(key, ctl)) |move| {
         // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
         if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
@@ -1646,6 +1866,1354 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
     return true;
 }
 
+/// Plain text typed into editable content (contenteditable): cancellable
+/// through beforeinput like a control's edit, then replaces the selection and
+/// leaves the caret after the text. The events target the editing host of
+/// `target`, as in Chrome. A selection outside the editable content of the
+/// host puts the text at the host's first editable position, where Chrome
+/// places the caret when the host is focused. Only text insertion is supported: line breaks,
+/// deletion and formatting need an editing pipeline. Returns whether the edit
+/// happened.
+fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !bool {
+    const host_el = outermostEditingHost(target) orelse return false;
+    if (!try allowEdit(frame, host_el, text, text, "insertText")) {
+        return false;
+    }
+    // a beforeinput or textInput listener can make it non-editable or remove it
+    if (!host_el.isEditable() or !host_el.asNode().isConnected()) {
+        return false;
+    }
+    try insertAtSelection(frame, host_el, text);
+    return true;
+}
+
+/// Backspace (or Delete when `forward`) in editable content:
+fn deleteInEditingHost(frame: *Frame, target: *Element, forward: bool) !void {
+    const host_el = outermostEditingHost(target) orelse return;
+    const input_type = if (forward) "deleteContentForward" else "deleteContentBackward";
+    if (!try allowEdit(frame, host_el, null, null, input_type)) {
+        return;
+    }
+
+    // a beforeinput listener can make it non-editable or remove it
+    if (!host_el.isEditable() or !host_el.asNode().isConnected()) {
+        return;
+    }
+
+    if (!try deleteAtSelection(frame, host_el, forward)) {
+        // Chrome merges blocks, deletes a <br>, an image, ...
+        log.info(.not_implemented, "contenteditable delete", .{ .forward = forward });
+    }
+}
+
+/// Enter (insertParagraph) or Shift+Enter (insertLineBreak) in editable
+/// content. Cancellable through beforeinput.
+fn breakInEditingHost(frame: *Frame, target: *Element, line_break: bool) !void {
+    const host_el = outermostEditingHost(target) orelse return;
+    if (!selectionEditableIn(host_el, frame.document)) {
+        return;
+    }
+    const input_type = if (line_break) "insertLineBreak" else "insertParagraph";
+    if (!try allowEdit(frame, host_el, null, "\n", input_type)) {
+        return;
+    }
+    // a beforeinput or textInput listener can make it non-editable or remove it
+    if (!host_el.isEditable() or !host_el.asNode().isConnected()) {
+        return;
+    }
+
+    const done = if (line_break)
+        try insertLineBreakAtSelection(frame, host_el, input_type)
+    else
+        try insertParagraphAtSelection(frame, host_el);
+    if (!done) {
+        // Chrome merges blocks across a selection, outdents nested list items
+        log.info(.not_implemented, "contenteditable enter", .{ .input_type = input_type });
+    }
+}
+
+/// Ctrl+A and execCommand("selectAll"). The focused text control selects its
+/// value; otherwise the selection spans the editing host holding it, or the
+/// body. A canceled selectstart leaves the selection alone.
+pub fn selectAll(frame: *Frame) !void {
+    const doc = frame.document;
+    const target: union(enum) {
+        root: *Element,
+        input: *Element.Html.Input,
+        textarea: *Element.Html.TextArea,
+    } = blk: {
+        if (doc._active_element) |el| {
+            if (el.is(Element.Html.Input)) |input| {
+                if (input.tracksSelection()) {
+                    break :blk .{ .input = input };
+                }
+            }
+            if (el.is(Element.Html.TextArea)) |textarea| {
+                break :blk .{ .textarea = textarea };
+            }
+        }
+
+        if (doc._selection._range) |range| {
+            const anchor = doc._selection.getAnchorNode() orelse range.asAbstractRange().getStartContainer();
+            const host = editingHostOf(anchor) orelse editingHostOf(range.asAbstractRange().getStartContainer());
+            if (host) |h| {
+                break :blk .{ .root = h };
+            }
+        }
+        if (doc.getBody()) |body| {
+            break :blk .{ .root = body.asElement() };
+        }
+        break :blk .{ .root = doc.getDocumentElement() orelse return };
+    };
+
+    const event_target = switch (target) {
+        inline .input, .textarea => |ctl| ctl.asElement().asEventTarget(),
+        .root => |el| el.asEventTarget(),
+    };
+    const event = try Event.initTrusted(comptime .wrap("selectstart"), .{ .bubbles = true, .cancelable = true }, frame.page);
+    if (try frame._event_manager.dispatchCancelable(event_target, event)) {
+        return;
+    }
+
+    switch (target) {
+        inline .input, .textarea => |ctl| try ctl.select(frame),
+        .root => |el| try doc._selection.selectAllChildren(el.asNode(), frame),
+    }
+}
+
+fn editingHostOf(node: *Node) ?*Element {
+    const el = node.is(Element) orelse node.parentElement() orelse return null;
+    if (el.isEditable() == false) {
+        return null;
+    }
+    return outermostEditingHost(el);
+}
+
+/// The edit part of insertIntoEditingHost, without the events that can cancel
+/// it: replaces the selection in `host_el` with `text`, leaves the caret after
+/// it and fires input.
+pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !void {
+    const host = host_el.asNode();
+    const selection = &frame.document._selection;
+    var container: *Node, var offset: u32 = firstCaretPosition(host);
+    if (selection._range) |range| {
+        const abstract = range.asAbstractRange();
+        if (isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer())) {
+            if (!abstract.getCollapsed()) {
+                try range.deleteContents(frame);
+            }
+            container = abstract.getStartContainer();
+            offset = abstract.getStartOffset();
+        }
+    }
+
+    // Join the text node at the caret, as Chrome does, rather than adding a
+    // sibling next to it.
+    var text_node: ?*Node.CData.Text = container.is(Node.CData.Text);
+    if (text_node) |t| {
+        // a caret inside a surrogate pair: before the pair
+        const data = t.asCData().getData().str();
+        offset = @intCast(Node.CData.utf16Len(data[0..Node.CData.utf16OffsetToUtf8Floor(data, offset)]));
+    } else {
+        if (container.is(Node.CData) != null) {
+            // a caret in a comment or processing instruction: after it
+            offset = @intCast(container.parentNode().?.getChildIndex(container).? + 1);
+            container = container.parentNode().?;
+        }
+        if (offset > 0) {
+            if (container.getChildAt(offset - 1)) |before| {
+                if (before.is(Node.CData.Text)) |t| {
+                    text_node = t;
+                    offset = @intCast(t.asCData().getLength());
+                }
+            }
+        }
+    }
+    if (text_node == null) {
+        if (container.getChildAt(offset)) |after| {
+            if (after.is(Node.CData.Text)) |t| {
+                text_node = t;
+                offset = 0;
+            }
+        }
+    }
+
+    const caret: u32 = if (text_node) |t| blk: {
+        try t.asCData().insertData(offset, text, frame);
+        break :blk offset + @as(u32, @intCast(Node.CData.utf16Len(text)));
+    } else blk: {
+        const new_node = try frame.document.createTextNode(text);
+        _ = try container.insertBefore(new_node, container.getChildAt(offset), frame);
+        text_node = new_node.is(Node.CData.Text).?;
+        break :blk @intCast(Node.CData.utf16Len(text));
+    };
+    try selection.collapse(text_node.?.asCData().asNode(), caret, frame);
+
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+        .data = text,
+        .inputType = "insertText",
+    }, frame);
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+}
+
+/// Deletes the selection in `host_el`, or the character before (or after,
+/// when `forward`) a collapsed one, and fires input. Inline elements left
+/// empty go, and a block left empty gets a <br> placeholder, as in Chrome. At
+/// the edge of the host there's nothing to delete: no edit, no event. Returns
+/// false, without editing, for what needs an editing pipeline: merging blocks
+/// and deleting a <br>, an image or other non-text content.
+pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool {
+    const host = host_el.asNode();
+    const selection = &frame.document._selection;
+    const usable = if (selection._range) |range| blk: {
+        const abstract = range.asAbstractRange();
+        break :blk isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer());
+    } else false;
+    if (!usable) {
+        const container, const offset = firstCaretPosition(host);
+        try selection.collapse(container, offset, frame);
+    }
+    // Live, so it follows the edits below. A collapse replaces it, and a
+    // selectionchange listener can do anything, so there's one collapse,
+    // after the edit.
+    const live = selection._range orelse return false;
+    const range = live.asAbstractRange();
+    if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
+        return false;
+    }
+    const style_manager = &frame._style_manager;
+
+    var caret: ?struct { *Node, u32 } = null;
+    if (range.getCollapsed()) {
+        const container = range.getStartContainer();
+        const root = blockRoot(style_manager, host, container);
+        const found = if (forward)
+            charAfter(style_manager, root, container, range.getStartOffset())
+        else
+            charBefore(style_manager, root, container, range.getStartOffset());
+        const char = switch (found) {
+            .char => |c| c,
+            .edge => return root == host,
+            .unsupported => return false,
+        };
+        const cdata = char.text.asCData();
+        try cdata.replaceData(char.offset, char.len, "", frame);
+        if (cdata.getLength() == 0) {
+            try removeEmpty(frame, root, cdata.asNode());
+        } else if (!forward) {
+            caret = .{ cdata.asNode(), char.offset };
+        }
+    } else {
+        const common = range.getCommonAncestorContainer();
+        const start = range.getStartContainer();
+        const end = range.getEndContainer();
+        // a boundary inside a block (or anything but a plain inline) would
+        // leave two blocks to merge
+        if (!onlyInlinesBetween(style_manager, common, start) or !onlyInlinesBetween(style_manager, common, end)) {
+            return false;
+        }
+        const root = blockRoot(style_manager, host, common);
+        try live.deleteContents(frame);
+        for ([_]*Node{ end, start }) |node| {
+            const cdata = node.is(Node.CData.Text) orelse continue;
+            if (cdata.asCData().getLength() == 0 and root.contains(node) and node != root) {
+                try removeEmpty(frame, root, node);
+            }
+        }
+    }
+
+    if (caret == null) {
+        // Like Chrome, a caret right after a text node goes into it.
+        const container = range.getStartContainer();
+        const offset = range.getStartOffset();
+        if (container.is(Node.CData) == null and offset > 0) {
+            if (container.getChildAt(offset - 1)) |before| {
+                if (before.is(Node.CData.Text)) |t| {
+                    caret = .{ before, @intCast(t.asCData().getLength()) };
+                }
+            }
+        }
+    }
+    if (caret) |c| {
+        try selection.collapse(c[0], c[1], frame);
+    }
+
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+        .data = null,
+        .inputType = if (forward) "deleteContentForward" else "deleteContentBackward",
+    }, frame);
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+    return true;
+}
+
+/// Replaces the selection in `host_el` with a line break and fires input
+/// (`input_type` is insertParagraph when insertParagraph falls back to this).
+pub fn insertLineBreakAtSelection(frame: *Frame, host_el: *Element, input_type: []const u8) !bool {
+    const host = host_el.asNode();
+    const selection = &frame.document._selection;
+    // Live, so it follows the edits below.
+    const live = selection._range orelse return false;
+    const range = live.asAbstractRange();
+    if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
+        return false;
+    }
+    const style_manager = &frame._style_manager;
+
+    if (!range.getCollapsed() and !try deleteInlineSelection(frame, host, live)) {
+        return false;
+    }
+
+    // Where the break goes, as a child index: a text node is split.
+    var parent: *Node = range.getStartContainer();
+    var index: u32 = range.getStartOffset();
+    if (parent.is(Node.CData)) |cdata| {
+        const node = parent;
+        parent = node.parentNode() orelse return false;
+        index = parent.getChildIndex(node).?;
+        if (node.is(Node.CData.Text)) |t| {
+            const offset = range.getStartOffset();
+            if (offset >= cdata.getLength()) {
+                index += 1;
+            } else if (offset > 0) {
+                _ = try t.splitText(offset, frame);
+                index += 1;
+            }
+        } else {
+            // a comment or processing instruction: after it
+            index += 1;
+        }
+    }
+
+    const use_br = blk: {
+        const el = parent.is(Element) orelse break :blk true;
+        var current: ?*Element = el;
+        while (current) |e| : (current = e.asNode().parentElement()) {
+            if (e.is(Element.Html.Pre) != null) {
+                break :blk true;
+            }
+        }
+        break :blk !style_manager.whiteSpace(el).newlines;
+    };
+
+    const root = lineRoot(style_manager, host, parent);
+    const paragraph_end = atParagraphEnd(style_manager, root, parent, index);
+
+    const doc = frame.document;
+    const line_break = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
+    _ = try parent.insertBefore(line_break, parent.getChildAt(index), frame);
+
+    if (paragraph_end) {
+        // the caret goes on the new line, before the second break
+        const extra = if (use_br) (try doc.createElement("br", null, frame)).asNode() else try doc.createTextNode("\n");
+        _ = try parent.insertBefore(extra, line_break.nextSibling(), frame);
+        try selection.collapse(parent, index + 1, frame);
+    } else {
+        const container, const offset = caretAfter(style_manager, root, parent, index + 1);
+        try selection.collapse(container, offset, frame);
+    }
+
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+        .data = null,
+        .inputType = input_type,
+    }, frame);
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+    return true;
+}
+
+// Deletes a selection whose ends are on the same line. Drops what it leaves empty
+// Returns false, without editing, for wgeb crossing a block boundary.
+fn deleteInlineSelection(frame: *Frame, host: *Node, live: *Range) !bool {
+    const range = live.asAbstractRange();
+    const style_manager = &frame._style_manager;
+    const common = range.getCommonAncestorContainer();
+    const start = range.getStartContainer();
+    const end = range.getEndContainer();
+    if (!onlyInlinesBetween(style_manager, common, start) or !onlyInlinesBetween(style_manager, common, end)) {
+        return false;
+    }
+    const root = blockRoot(style_manager, host, common);
+    try live.deleteContents(frame);
+    for ([_]*Node{ end, start }) |node| {
+        const cdata = node.is(Node.CData.Text) orelse continue;
+        if (cdata.asCData().getLength() == 0 and root.contains(node) and node != root) {
+            try removeEmpty(frame, root, node);
+        }
+    }
+    return true;
+}
+
+// Deletes a selection running from one block into the next, then merges the
+// two, as Chrome does before splitting them again: the end block's remains
+// join the start block. Only for an end block that follows the start block as
+// its sibling or child (text right in the host). Returns false, without
+// editing, for anything else.
+fn deleteAndMergeBlocks(frame: *Frame, host: *Node, live: *Range) !bool {
+    const range = live.asAbstractRange();
+    const style_manager = &frame._style_manager;
+    const start = range.getStartContainer();
+    const end = range.getEndContainer();
+    const start_block = blockRoot(style_manager, host, start);
+    const end_block = blockRoot(style_manager, host, end);
+    if (start_block == end_block or end_block == host) {
+        return false;
+    }
+    if (!onlyInlinesBetween(style_manager, start_block, start) or !onlyInlinesBetween(style_manager, end_block, end)) {
+        return false;
+    }
+    const end_parent = end_block.parentNode() orelse return false;
+    const nested = end_parent == start_block;
+    if (!nested and end_parent != start_block.parentNode()) {
+        return false;
+    }
+
+    // deleteContents leaves the range after the start block; the caret
+    // belongs at the join
+    const start_offset = range.getStartOffset();
+    try live.deleteContents(frame);
+    var child = end_block.firstChild();
+    while (child) |c| {
+        child = c.nextSibling();
+        if (nested) {
+            _ = try start_block.insertBefore(c, end_block, frame);
+        } else {
+            _ = try start_block.appendChild(c, frame);
+        }
+    }
+    _ = try end_parent.removeChild(end_block, frame);
+    try live.setStart(start, start_offset);
+    live.collapse(true);
+
+    for ([_]*Node{ end, start }) |node| {
+        const cdata = node.is(Node.CData.Text) orelse continue;
+        if (cdata.asCData().getLength() == 0 and start_block.contains(node) and node != start_block) {
+            try removeEmpty(frame, start_block, node);
+        }
+    }
+    return true;
+}
+
+/// Splits the paragraph at the selection, as Enter does, and fires input.
+/// The block holding the caret is cloned, along with the inline elements
+/// around the caret; a heading split at its end continues with the
+/// defaultParagraphSeparator element instead, and so does text right in the
+/// host. An empty list item leaves its list. In a <pre>, a table cell or an
+/// inline host it's a line break. Returns false, without editing, for what
+/// needs an editing pipeline.
+pub fn insertParagraphAtSelection(frame: *Frame, host_el: *Element) !bool {
+    const host = host_el.asNode();
+    const selection = &frame.document._selection;
+    // Live, so it follows the deletion below.
+    const live = selection._range orelse return false;
+    const range = live.asAbstractRange();
+    if (!isEditableIn(host, range.getStartContainer()) or !isEditableIn(host, range.getEndContainer())) {
+        return false;
+    }
+    const style_manager = &frame._style_manager;
+
+    // text-only elements: nothing to split into
+    var current: ?*Node = range.getStartContainer();
+    while (current) |n| : (current = n.parentNode()) {
+        const el = n.is(Element) orelse continue;
+        switch (el.getTag()) {
+            .title, .style, .script => return false,
+            else => {},
+        }
+        if (n == host) {
+            break;
+        }
+    }
+    if (breaksLine(style_manager, host, range.getStartContainer())) {
+        return insertLineBreakAtSelection(frame, host_el, "insertParagraph");
+    }
+    if (!range.getCollapsed()) {
+        if (!try deleteInlineSelection(frame, host, live) and !try deleteAndMergeBlocks(frame, host, live)) {
+            return false;
+        }
+    }
+
+    const container, const offset = canonicalCaret(style_manager, range.getStartContainer(), range.getStartOffset());
+    if (breaksLine(style_manager, host, container)) {
+        return insertLineBreakAtSelection(frame, host_el, "insertParagraph");
+    }
+    const block = blockRoot(style_manager, host, container);
+
+    const caret: struct { *Node, u32 } = blk: {
+        const block_el = block.is(Element) orelse return false;
+        if (!block_el.isEditable()) {
+            return false;
+        }
+        // a block in a list item makes a new item
+        const item = if (block_el.getTag() == .li) block else listItemOf(host, block);
+        if (item) |li| {
+            if (isEmptyItem(li)) {
+                break :blk try leaveList(frame, host, li) orelse {
+                    // Chrome outdents an empty item of a nested list
+                    return false;
+                };
+            }
+        }
+        const wrap = if (item != null and item != block) item else null;
+
+        if (block == host and visibleAfter(style_manager, host, host, 0) == null) {
+            // Chrome puts the first line in a block too
+            const first = try newBlock(frame, host, host, false);
+            _ = try first.appendChild((try frame.document.createElement("br", null, frame)).asNode(), frame);
+            _ = try host.appendChild(first, frame);
+            const second = try newBlock(frame, host, host, false);
+            _ = try second.appendChild((try frame.document.createElement("br", null, frame)).asNode(), frame);
+            _ = try host.appendChild(second, frame);
+            break :blk .{ second, 0 };
+        }
+
+        if (atBlockEnd(style_manager, block, container, offset)) {
+            // an empty line after the block, the caret on it
+            const new_block = try newBlock(frame, host, block, true);
+            const inner = try fillEmptyLine(frame, style_manager, new_block, block, container);
+            try placeAfter(frame, host, block, wrap, new_block);
+            break :blk .{ inner, 0 };
+        }
+
+        if (atBlockStart(style_manager, host, block, container, offset)) {
+            // an empty line before the block, the caret where it was
+            var new_block = try newBlock(frame, host, block, false);
+            _ = try fillEmptyLine(frame, style_manager, new_block, block, container);
+            if (wrap) |w| {
+                const new_item = try w.cloneNode(false, frame);
+                _ = try new_item.appendChild(new_block, frame);
+                new_block = new_item;
+            }
+            const ref = if (wrap) |w| w else if (block == host) hostChildAt(host, container, offset) else block;
+            const parent = if (ref) |r| r.parentNode().? else host;
+            _ = try parent.insertBefore(new_block, ref, frame);
+            break :blk .{ container, if (container == parent) offset + 1 else offset };
+        }
+
+        const right = try splitBlock(frame, style_manager, host, block, wrap, container, offset);
+        break :blk firstCaretPosition(right);
+    };
+    try selection.collapse(caret[0], caret[1], frame);
+
+    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+        .data = null,
+        .inputType = "insertParagraph",
+    }, frame);
+    try frame._event_manager.dispatch(host_el.asEventTarget(), event.asEvent());
+    return true;
+}
+
+// Whether Chrome puts a line break at `node` rather than split its block: in
+// a <pre>, a table cell or an inline host.
+fn breaksLine(style_manager: *StyleManager, host: *Node, node: *Node) bool {
+    const block = lineRoot(style_manager, host, node);
+    const el = block.is(Element) orelse return true;
+    return switch (el.getTag()) {
+        .pre, .td, .th, .caption => true,
+        else => block == host and !style_manager.isBlockLevel(el),
+    };
+}
+
+// blockRoot, stopping at a table cell. The style manager has no table
+// layout: cells and rows look like plain inlines to it, so blockRoot can be
+// a whole table.
+fn lineRoot(style_manager: *StyleManager, host: *Node, node: *Node) *Node {
+    const block = blockRoot(style_manager, host, node);
+    var current: ?*Node = node;
+    while (current) |n| : (current = n.parentNode()) {
+        if (n == block) {
+            break;
+        }
+        const el = n.is(Element) orelse continue;
+        switch (el.getTag()) {
+            .td, .th, .caption => return n,
+            else => {},
+        }
+    }
+    return block;
+}
+
+// Puts `new_block` after `block`: at the end of the host for text right in
+// it, in a new list item after `wrap` for a block in a list item.
+fn placeAfter(frame: *Frame, host: *Node, block: *Node, wrap: ?*Node, new_block: *Node) !void {
+    if (wrap) |w| {
+        const new_item = try w.cloneNode(false, frame);
+        _ = try new_item.appendChild(new_block, frame);
+        _ = try w.parentNode().?.insertBefore(new_item, w.nextSibling(), frame);
+    } else if (block == host) {
+        _ = try host.appendChild(new_block, frame);
+    } else {
+        _ = try block.parentNode().?.insertBefore(new_block, block.nextSibling(), frame);
+    }
+}
+
+// The list item holding `block` in `host`, at any depth.
+fn listItemOf(host: *Node, block: *Node) ?*Node {
+    var current = block.parentNode();
+    while (current) |n| : (current = n.parentNode()) {
+        if (n == host) {
+            return null;
+        }
+        const el = n.is(Element) orelse return null;
+        if (el.getTag() == .li) {
+            return n;
+        }
+    }
+    return null;
+}
+
+// The block for a new line next to `block`: a shallow clone of it, or the
+// defaultParagraphSeparator element for text right in the host and after a
+// heading.
+fn newBlock(frame: *Frame, host: *Node, block: *Node, at_end: bool) !*Node {
+    const use_separator = block == host or (at_end and switch (block.is(Element).?.getTag()) {
+        .h1, .h2, .h3, .h4, .h5, .h6 => true,
+        else => false,
+    });
+    if (!use_separator) {
+        return block.cloneNode(false, frame);
+    }
+    const tag = @tagName(frame.document._exec_command_settings.paragraph_separator);
+    return (try frame.document.createElement(tag, null, frame)).asNode();
+}
+
+// Fills `new_block` with a <br> inside clones of the inline elements holding
+// `container` in `block`, so typing on the new line keeps their formatting.
+// Returns where the caret goes: the innermost clone, or `new_block`.
+fn fillEmptyLine(frame: *Frame, style_manager: *StyleManager, new_block: *Node, block: *Node, container: *Node) !*Node {
+    var built = (try frame.document.createElement("br", null, frame)).asNode();
+    var innermost = new_block;
+    var current: ?*Node = if (container.is(Element) != null) container else container.parentNode();
+    while (current) |n| : (current = n.parentNode()) {
+        if (n == block) {
+            break;
+        }
+        const el = n.is(Element) orelse break;
+        if (!isTextInline(style_manager, el)) {
+            break;
+        }
+        const clone = try n.cloneNode(false, frame);
+        _ = try clone.appendChild(built, frame);
+        if (innermost == new_block) {
+            innermost = clone;
+        }
+        built = clone;
+    }
+    _ = try new_block.appendChild(built, frame);
+    return innermost;
+}
+
+// Moves what follows the caret in `block` to a new block right after it,
+// splitting the inline elements the caret is in. Returns the new block.
+fn splitBlock(frame: *Frame, style_manager: *StyleManager, host: *Node, block: *Node, wrap: ?*Node, container: *Node, offset: u32) !*Node {
+    // the split point as a child index, a text node split in two
+    var parent = container;
+    var index = offset;
+    if (container.is(Node.CData)) |cdata| {
+        parent = container.parentNode().?;
+        index = parent.getChildIndex(container).?;
+        if (container.is(Node.CData.Text)) |t| {
+            if (offset >= cdata.getLength()) {
+                index += 1;
+            } else if (offset > 0) {
+                _ = try t.splitText(offset, frame);
+                index += 1;
+            }
+        } else {
+            index += 1;
+        }
+    }
+
+    // each inline element up to the block goes in two, the halves left empty
+    // dropped
+    while (parent != block) {
+        const clone = try parent.cloneNode(false, frame);
+        try moveChildrenFrom(frame, parent, index, clone);
+        const grand = parent.parentNode().?;
+        _ = try grand.insertBefore(clone, parent.nextSibling(), frame);
+        index = grand.getChildIndex(parent).? + 1;
+        if (clone.firstChild() == null) {
+            _ = try grand.removeChild(clone, frame);
+        }
+        if (parent.firstChild() == null) {
+            _ = try grand.removeChild(parent, frame);
+            index -= 1;
+        }
+        parent = grand;
+    }
+
+    const right = try newBlock(frame, host, block, false);
+    try moveChildrenFrom(frame, block, index, right);
+
+    // Each half keeps its line: a space at the split would collapse away, a
+    // <br> ending the first half holds no line of its own, and a half with
+    // no line (empty or opening with a block) gets a <br>. The first half
+    // is done before the second goes in, which in the host is after it.
+    try keepEdgeSpace(frame, style_manager, block, true);
+    if (edgeLeaf(style_manager, block, true)) |last| {
+        if (last.is(Element)) |el| {
+            if (el.getTag() == .br) {
+                const br = (try frame.document.createElement("br", null, frame)).asNode();
+                _ = try last.parentNode().?.insertBefore(br, last.nextSibling(), frame);
+            }
+        }
+    }
+    if (visibleAfter(style_manager, block, block, 0) == null) {
+        _ = try block.appendChild((try frame.document.createElement("br", null, frame)).asNode(), frame);
+    }
+
+    try placeAfter(frame, host, block, wrap, right);
+    try keepEdgeSpace(frame, style_manager, right, false);
+    const first = visibleAfter(style_manager, right, right, 0);
+    const opens_with_block = if (first) |f| blk: {
+        const el = f.is(Element) orelse break :blk false;
+        break :blk style_manager.isBlockLevel(el);
+    } else true;
+    if (opens_with_block) {
+        const br = (try frame.document.createElement("br", null, frame)).asNode();
+        _ = try right.insertBefore(br, right.firstChild(), frame);
+    }
+    return right;
+}
+
+fn moveChildrenFrom(frame: *Frame, from: *Node, index: u32, to: *Node) !void {
+    var child = from.getChildAt(index);
+    while (child) |c| {
+        child = c.nextSibling();
+        _ = try to.appendChild(c, frame);
+    }
+}
+
+// A collapsible space at the start (or end, when `last`) of `block` becomes a
+// no-break space, as Chrome does, so the line keeps it.
+fn keepEdgeSpace(frame: *Frame, style_manager: *StyleManager, block: *Node, comptime last: bool) !void {
+    const leaf = edgeLeaf(style_manager, block, last) orelse return;
+    const cdata = leaf.is(Node.CData) orelse return;
+    const data = cdata.getData().str();
+    const parent_el = leaf.parentElement() orelse return;
+    if (!style_manager.whiteSpace(parent_el).collapse) {
+        return;
+    }
+    if (last and data[data.len - 1] == ' ') {
+        try cdata.replaceData(cdata.getLength() - 1, 1, "\u{a0}", frame);
+    } else if (!last and data[0] == ' ') {
+        try cdata.replaceData(0, 1, "\u{a0}", frame);
+    }
+}
+
+// The first (or last, when `last`) non-empty text node or element a caret
+// can't pass through in `root`, looking through plain inlines.
+fn edgeLeaf(style_manager: *StyleManager, root: *Node, comptime last: bool) ?*Node {
+    var node = if (last) root.lastChild() else root.firstChild();
+    while (node) |n| {
+        const sibling = if (last) n.previousSibling() else n.nextSibling();
+        if (n.is(Node.CData)) |cdata| {
+            if (n.is(Node.CData.Text) != null and cdata.getLength() > 0) {
+                return n;
+            }
+            node = sibling;
+            continue;
+        }
+        const el = n.is(Element) orelse return n;
+        if (!isTextInline(style_manager, el)) {
+            return n;
+        }
+        node = (if (last) n.lastChild() else n.firstChild()) orelse sibling;
+    }
+    return null;
+}
+
+// Chrome turns an empty list item into a line after its list, the items
+// that followed it in a new list after that. Returns the caret, or null for
+// a nested list (Chrome outdents the item) or a list Enter can't leave.
+fn leaveList(frame: *Frame, host: *Node, item: *Node) !?struct { *Node, u32 } {
+    const list = item.parentNode() orelse return null;
+    const list_el = list.is(Element) orelse return null;
+    switch (list_el.getTag()) {
+        .ul, .ol => {},
+        else => return null,
+    }
+    if (list == host or !host.contains(list)) {
+        return null;
+    }
+    const outer = list.parentNode() orelse return null;
+    if (outer.is(Element)) |el| {
+        if (el.getTag() == .li) {
+            return null;
+        }
+    }
+
+    if (item.nextSibling() != null) {
+        const rest = try list.cloneNode(false, frame);
+        var child = item.nextSibling();
+        while (child) |c| {
+            child = c.nextSibling();
+            _ = try rest.appendChild(c, frame);
+        }
+        _ = try outer.insertBefore(rest, list.nextSibling(), frame);
+    }
+    _ = try list.removeChild(item, frame);
+
+    const line = try newBlock(frame, host, host, false);
+    _ = try line.appendChild((try frame.document.createElement("br", null, frame)).asNode(), frame);
+    _ = try outer.insertBefore(line, list.nextSibling(), frame);
+
+    var has_item = false;
+    var child = list.firstChild();
+    while (child) |c| : (child = c.nextSibling()) {
+        if (c.is(Element) != null) {
+            has_item = true;
+            break;
+        }
+    }
+    if (!has_item) {
+        _ = try outer.removeChild(list, frame);
+    }
+    return .{ line, 0 };
+}
+
+// Whether nothing on the line follows the caret in `block`, a trailing <br>
+// aside: it only holds the line open.
+fn atBlockEnd(style_manager: *StyleManager, block: *Node, container: *Node, offset: u32) bool {
+    const after = visibleAfter(style_manager, block, container, offset) orelse return true;
+    const el = after.is(Element) orelse return false;
+    if (el.getTag() != .br) {
+        return false;
+    }
+    const parent = after.parentNode().?;
+    return visibleAfter(style_manager, block, parent, parent.getChildIndex(after).? + 1) == null;
+}
+
+// Whether nothing precedes the caret in `block`. In the host, a line right
+// after a block starts too.
+fn atBlockStart(style_manager: *StyleManager, host: *Node, block: *Node, container: *Node, offset: u32) bool {
+    const before = visibleBefore(style_manager, block, container, offset) orelse return true;
+    if (block != host) {
+        return false;
+    }
+    const el = before.is(Element) orelse return false;
+    return style_manager.isBlockLevel(el);
+}
+
+// A list item with nothing in it but maybe a <br>, at any depth.
+fn isEmptyItem(item: *Node) bool {
+    var breaks: u32 = 0;
+    var node = item.firstChild();
+    while (node) |n| {
+        if (n.is(Node.CData)) |cdata| {
+            if (n.is(Node.CData.Text) != null and !isBlank(cdata.getData().str())) {
+                return false;
+            }
+        } else if (n.is(Element)) |el| {
+            if (el.getTag() == .br) {
+                breaks += 1;
+                if (breaks > 1) {
+                    return false;
+                }
+            } else if (dump.isVoidElement(el)) {
+                return false;
+            } else if (n.firstChild()) |child| {
+                node = child;
+                continue;
+            }
+        }
+        // next in tree order, without leaving the item
+        var current = n;
+        node = while (current != item) : (current = current.parentNode().?) {
+            if (current.nextSibling()) |next| {
+                break next;
+            }
+        } else null;
+    }
+    return true;
+}
+
+// The child of `host` holding the caret, null when it's at the end.
+fn hostChildAt(host: *Node, container: *Node, offset: u32) ?*Node {
+    if (container == host) {
+        return host.getChildAt(offset);
+    }
+    var node = container;
+    while (node.parentNode()) |parent| : (node = parent) {
+        if (parent == host) {
+            return node;
+        }
+    }
+    return null;
+}
+
+// Where Chrome puts a caret that sits between nodes rather than in text: at
+// the end of the text or inline element before it, else at the start of
+// what follows, else at the end of the block before it.
+fn canonicalCaret(style_manager: *StyleManager, start: *Node, start_offset: u32) struct { *Node, u32 } {
+    var container = start;
+    var offset = start_offset;
+    if (container.is(Node.CData) != null) {
+        if (container.is(Node.CData.Text) != null) {
+            return .{ container, offset };
+        }
+        // a comment or processing instruction: after it
+        const parent = container.parentNode() orelse return .{ container, offset };
+        offset = parent.getChildIndex(container).? + 1;
+        container = parent;
+    } else if (container.is(Element)) |el| {
+        if (dump.isVoidElement(el)) {
+            // in a <br>, an <img>: before it
+            const parent = container.parentNode() orelse return .{ container, offset };
+            offset = parent.getChildIndex(container).?;
+            container = parent;
+        }
+    }
+    while (true) {
+        const prev = skipIgnorable(if (offset > 0) container.getChildAt(offset - 1) else null, true);
+        if (prev) |p| {
+            if (p.is(Node.CData.Text)) |t| {
+                return .{ p, @intCast(t.asCData().getLength()) };
+            }
+            if (p.is(Element)) |el| {
+                if (isTextInline(style_manager, el)) {
+                    container = p;
+                    offset = childCount(p);
+                    continue;
+                }
+            }
+        }
+        if (skipIgnorable(container.getChildAt(offset), false)) |n| {
+            if (n.is(Node.CData.Text) != null) {
+                return .{ n, 0 };
+            }
+            const el = n.is(Element) orelse return .{ container, offset };
+            if (!enterable(style_manager, el)) {
+                return .{ container, offset };
+            }
+            container = n;
+            offset = 0;
+            continue;
+        }
+        const p = prev orelse return .{ container, offset };
+        const el = p.is(Element) orelse return .{ container, offset };
+        if (!enterable(style_manager, el)) {
+            return .{ container, offset };
+        }
+        container = p;
+        offset = childCount(p);
+    }
+}
+
+// Skips comments, processing instructions and whitespace-only text, going
+// back (or forward).
+fn skipIgnorable(start: ?*Node, comptime backward: bool) ?*Node {
+    var node = start;
+    while (node) |n| : (node = if (backward) n.previousSibling() else n.nextSibling()) {
+        const cdata = n.is(Node.CData) orelse return n;
+        if (n.is(Node.CData.Text) != null and !isBlank(cdata.getData().str())) {
+            return n;
+        }
+    }
+    return null;
+}
+
+// An element a caret can go in.
+fn enterable(style_manager: *StyleManager, el: *Element) bool {
+    return el.isEditable() and !dump.isVoidElement(el) and !style_manager.hasDisplayNone(el);
+}
+
+fn childCount(node: *Node) u32 {
+    const last = node.lastChild() orelse return 0;
+    return node.getChildIndex(last).? + 1;
+}
+
+fn isBlank(data: []const u8) bool {
+    return std.mem.trim(u8, data, " \t\n\r\x0c").len == 0;
+}
+
+// The first thing after the caret in `root` that takes room on the line:
+// text that isn't just whitespace, or an element a caret can't pass through
+// (a <br>, an image, a block). Null when there's none.
+fn visibleAfter(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) ?*Node {
+    var parent = container;
+    var next: ?*Node = null;
+    if (container.is(Node.CData)) |cdata| {
+        if (container.is(Node.CData.Text) != null) {
+            const data = cdata.getData().str();
+            if (!isBlank(data[Node.CData.utf16OffsetToUtf8Floor(data, offset)..])) {
+                return container;
+            }
+        }
+        parent = container.parentNode() orelse return null;
+        next = container.nextSibling();
+    } else {
+        next = container.getChildAt(offset);
+    }
+
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return null;
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return null;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text) != null and !isBlank(cdata.getData().str())) {
+                return node;
+            }
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return node;
+        if (!isTextInline(style_manager, el)) {
+            return node;
+        }
+        parent = node;
+        next = node.firstChild();
+    }
+}
+
+// visibleAfter, looking back.
+fn visibleBefore(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) ?*Node {
+    var parent = container;
+    var prev: ?*Node = null;
+    if (container.is(Node.CData)) |cdata| {
+        if (container.is(Node.CData.Text) != null) {
+            const data = cdata.getData().str();
+            if (!isBlank(data[0..Node.CData.utf16OffsetToUtf8Floor(data, offset)])) {
+                return container;
+            }
+        }
+        parent = container.parentNode() orelse return null;
+        prev = container.previousSibling();
+    } else if (offset > 0) {
+        prev = container.getChildAt(offset - 1);
+    }
+
+    while (true) {
+        const node = prev orelse {
+            if (parent == root) {
+                return null;
+            }
+            prev = parent.previousSibling();
+            parent = parent.parentNode() orelse return null;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text) != null and !isBlank(cdata.getData().str())) {
+                return node;
+            }
+            prev = node.previousSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return node;
+        if (!isTextInline(style_manager, el)) {
+            return node;
+        }
+        parent = node;
+        prev = node.lastChild();
+    }
+}
+
+// Whether nothing follows child `index` of `parent` on its line in `root`:
+// no text, no <br>, no image or other inline content before a block or the
+// end of `root`.
+fn atParagraphEnd(style_manager: *StyleManager, root: *Node, start: *Node, index: u32) bool {
+    var parent = start;
+    var next = start.getChildAt(index);
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return true;
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return true;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text) != null and std.mem.trim(u8, cdata.getData().str(), " \t\n\r\x0c").len > 0) {
+                return false;
+            }
+            // comments, whitespace that collapses away
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return false;
+        if (isTextInline(style_manager, el)) {
+            parent = node;
+            next = node.firstChild();
+            continue;
+        }
+        return style_manager.isBlockLevel(el);
+    }
+}
+
+// Where Chrome leaves the caret after an inserted break: at the start of the
+// text that follows on the line, else right after the break.
+fn caretAfter(style_manager: *StyleManager, root: *Node, start: *Node, index: u32) struct { *Node, u32 } {
+    var parent = start;
+    var next = start.getChildAt(index);
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return .{ start, index };
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return .{ start, index };
+            continue;
+        };
+        if (node.is(Node.CData.Text)) |t| {
+            if (t.asCData().getLength() > 0) {
+                return .{ node, 0 };
+            }
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return .{ start, index };
+        if (!isTextInline(style_manager, el)) {
+            return .{ start, index };
+        }
+        parent = node;
+        next = node.firstChild();
+    }
+}
+
+// The innermost box holding `node` that text can't run out of: its nearest
+// ancestor that isn't a plain inline, or the host.
+fn blockRoot(style_manager: *StyleManager, host: *Node, node: *Node) *Node {
+    var current: *Node = if (node.is(Element) != null) node else node.parentNode() orelse return host;
+    while (current != host) {
+        const el = current.is(Element) orelse return host;
+        if (!isTextInline(style_manager, el)) {
+            return current;
+        }
+        current = current.parentNode() orelse return host;
+    }
+    return host;
+}
+
+// An element a caret moves through as if it weren't there: editable, shown,
+// plain inline, not void (<br>, <img>).
+fn isTextInline(style_manager: *StyleManager, el: *Element) bool {
+    return el.isEditable() and !dump.isVoidElement(el) and !style_manager.hasDisplayNone(el) and style_manager.isPlainInline(el);
+}
+
+fn onlyInlinesBetween(style_manager: *StyleManager, ancestor: *Node, node: *Node) bool {
+    var current: ?*Node = node;
+    while (current) |n| : (current = n.parentNode()) {
+        if (n == ancestor) {
+            return true;
+        }
+        const el = n.is(Element) orelse continue;
+        if (!isTextInline(style_manager, el)) {
+            return false;
+        }
+    }
+    return false;
+}
+
+const CharToDelete = union(enum) {
+    // a code point in `text`, as a UTF-16 offset and length
+    char: struct { text: *Node.CData.Text, offset: u32, len: u32 },
+    // nothing to delete before (or after) the caret in `root`
+    edge,
+    // a <br>, an image, a block, ...
+    unsupported,
+};
+
+fn charBefore(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) CharToDelete {
+    var parent = container;
+    var prev: ?*Node = null;
+    if (container.is(Node.CData)) |cdata| {
+        if (container.is(Node.CData.Text)) |t| {
+            if (offset > 0) {
+                return lastCodePoint(t, cdata.getData().str(), offset);
+            }
+        }
+        parent = container.parentNode() orelse return .unsupported;
+        prev = container.previousSibling();
+    } else if (offset > 0) {
+        prev = container.getChildAt(offset - 1);
+    }
+
+    while (true) {
+        const node = prev orelse {
+            if (parent == root) {
+                return .edge;
+            }
+            prev = parent.previousSibling();
+            parent = parent.parentNode() orelse return .unsupported;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text)) |t| {
+                const len = cdata.getLength();
+                if (len > 0) {
+                    return lastCodePoint(t, cdata.getData().str(), @intCast(len));
+                }
+            }
+            // empty text, comments
+            prev = node.previousSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return .unsupported;
+        if (!isTextInline(style_manager, el)) {
+            return .unsupported;
+        }
+        parent = node;
+        prev = node.lastChild();
+    }
+}
+
+fn charAfter(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) CharToDelete {
+    var parent = container;
+    var next: ?*Node = null;
+    if (container.is(Node.CData)) |cdata| {
+        if (container.is(Node.CData.Text)) |t| {
+            if (offset < cdata.getLength()) {
+                return firstCodePoint(t, cdata.getData().str(), offset);
+            }
+        }
+        parent = container.parentNode() orelse return .unsupported;
+        next = container.nextSibling();
+    } else {
+        next = container.getChildAt(offset);
+    }
+
+    while (true) {
+        const node = next orelse {
+            if (parent == root) {
+                return .edge;
+            }
+            next = parent.nextSibling();
+            parent = parent.parentNode() orelse return .unsupported;
+            continue;
+        };
+        if (node.is(Node.CData)) |cdata| {
+            if (node.is(Node.CData.Text)) |t| {
+                if (cdata.getLength() > 0) {
+                    return firstCodePoint(t, cdata.getData().str(), 0);
+                }
+            }
+            next = node.nextSibling();
+            continue;
+        }
+        const el = node.is(Element) orelse return .unsupported;
+        if (!isTextInline(style_manager, el)) {
+            return .unsupported;
+        }
+        parent = node;
+        next = node.firstChild();
+    }
+}
+
+// The code point ending at UTF-16 offset `end` (> 0). A whole code point,
+// not a grapheme, like Backspace in a text control.
+fn lastCodePoint(text: *Node.CData.Text, data: []const u8, end: u32) CharToDelete {
+    var byte = Node.CData.utf16OffsetToUtf8Floor(data, end);
+    if (Node.CData.utf16Len(data[0..byte]) < end) {
+        // inside a surrogate pair: the whole pair
+        byte = @min(byte + (std.unicode.utf8ByteSequenceLength(data[byte]) catch 1), data.len);
+    }
+    var start = byte - 1;
+    while (start > 0 and (data[start] & 0xC0) == 0x80) {
+        start -= 1;
+    }
+    const len: u32 = @intCast(Node.CData.utf16Len(data[start..byte]));
+    const offset: u32 = @intCast(Node.CData.utf16Len(data[0..start]));
+    return .{ .char = .{ .text = text, .offset = offset, .len = len } };
+}
+
+// The code point starting at UTF-16 offset `start`.
+fn firstCodePoint(text: *Node.CData.Text, data: []const u8, start: u32) CharToDelete {
+    const byte = Node.CData.utf16OffsetToUtf8Floor(data, start);
+    const seq = std.unicode.utf8ByteSequenceLength(data[byte]) catch 1;
+    const end = @min(byte + seq, data.len);
+    const len: u32 = @intCast(Node.CData.utf16Len(data[byte..end]));
+    const offset: u32 = @intCast(Node.CData.utf16Len(data[0..byte]));
+    return .{ .char = .{ .text = text, .offset = offset, .len = len } };
+}
+
+// Removes `node` (an emptied text node) along with the inline elements it
+// leaves empty. A block (or block host) left with nothing gets a <br>, so
+// it keeps a line to put the caret on.
+fn removeEmpty(frame: *Frame, root: *Node, node: *Node) !void {
+    var gone = node;
+    while (gone.parentNode()) |parent| {
+        if (parent == root or gone.previousSibling() != null or gone.nextSibling() != null) {
+            break;
+        }
+        gone = parent;
+    }
+    const parent = gone.parentNode() orelse return;
+    _ = try parent.removeChild(gone, frame);
+
+    if (root.firstChild() != null) {
+        return;
+    }
+    const root_el = root.is(Element) orelse return;
+    if (!frame._style_manager.isBlockLevel(root_el)) {
+        return;
+    }
+    // a caret in what was removed is now at (root, 0), and stays there
+    const br = try frame.document.createElement("br", null, frame);
+    _ = try root.appendChild(br.asNode(), frame);
+}
+
+// Where Chrome puts the caret when an editing host is focused: its first
+// editable position, so inside a leading <p> rather than before it. Skips
+// comments and whitespace-only text, and stops at a void or non-editable
+// element.
+fn firstCaretPosition(host: *Node) struct { *Node, u32 } {
+    var container = host;
+    descend: while (true) {
+        var index: u32 = 0;
+        var child = container.firstChild();
+        while (child) |c| : ({
+            child = c.nextSibling();
+            index += 1;
+        }) {
+            if (c.is(Node.CData.Text)) |t| {
+                if (std.mem.trim(u8, t.asCData().getData().str(), " \t\n\r\x0c").len == 0) {
+                    continue;
+                }
+                return .{ c, 0 };
+            }
+            const el = c.is(Element) orelse continue;
+            if (el.isEditable() == false or dump.isVoidElement(el)) {
+                return .{ container, index };
+            }
+            container = c;
+            continue :descend;
+        }
+        return .{ container, 0 };
+    }
+}
+
+/// Whether the selection is in editable content of `host`, which line and
+/// paragraph breaks need: unlike typed text, they don't fall back to the
+/// host's first position.
+pub fn selectionEditableIn(host_el: *Element, doc: *Document) bool {
+    const range = doc._selection._range orelse return false;
+    const abstract = range.asAbstractRange();
+    const host = host_el.asNode();
+    return isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer());
+}
+
+// Whether `node` is inside `host` and editable: the nearest contenteditable
+// attribute of its element (or of its parent, for a text node) allows editing.
+fn isEditableIn(host: *Node, node: *Node) bool {
+    if (!host.contains(node)) {
+        return false;
+    }
+    const element = node.is(Element) orelse node.parentElement() orelse return false;
+    return element.isEditable();
+}
+
 pub fn acceptsEdit(el: *Element) bool {
     if (el.isDisabled()) {
         return false;
@@ -1673,13 +3241,13 @@ fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
     };
 }
 
-// Ctrl+A alone, as in Chrome on Linux
+// Ctrl+A
 fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
     if (!keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey() or keyboard_event.getShiftKey()) {
         return false;
     }
     return switch (key) {
-        .standard => |s| std.ascii.eqlIgnoreCase(s, "a"),
+        .standard => |s| return s.len == 1 and (s[0] == 'a' or s[0] == 'A'),
         else => false,
     };
 }
@@ -1861,6 +3429,8 @@ pub fn insertText(frame: *Frame, v: []const u8) !void {
         _ = try applyEdit(frame, input, .{ .insert = v });
     } else if (html_element.is(Element.Html.TextArea)) |textarea| {
         _ = try applyEdit(frame, textarea, .{ .insert = v });
+    } else if (html_element.isEditable()) {
+        _ = try insertIntoEditingHost(frame, html_element, v);
     }
 }
 
@@ -2790,4 +4360,100 @@ test "user_input: shadow mouse press and release on shadow siblings clicks the h
     try triggerMousePress(frame, start.x + 1, start.y + 1, mouse_button.main, 1);
     try triggerMouseRelease(frame, end.x + end.width - 1, end.y + 1, mouse_button.main, 1);
     try testing.expect((try ls.local.compileAndRun("events.length === 1 && events[0].listener === 'host' && events[0].trusted", null)).isTrue());
+}
+
+test "user_input: element clicks report the element's centre point" {
+    const page = try testing.pageTest("input_click_coords.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const target = frame.document.getElementById("target").?;
+    const rect = target.boundingClientRectValues(frame);
+    try triggerClick(frame, target, .{});
+    const chain = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerdown','mousedown','pointerup','mouseup','click'].includes(e.type))
+    , .{});
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 5 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ chain, chain, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+}
+
+test "user_input: hover reports the element's centre point" {
+    const page = try testing.pageTest("input_click_coords.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const actions = @import("../actions.zig");
+    const target = frame.document.getElementById("hoverme").?;
+    const rect = target.boundingClientRectValues(frame);
+    try actions.hover(target.asNode(), frame);
+    const hovered = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerover','mouseover','pointerenter','mouseenter','pointermove','mousemove'].includes(e.type))
+    , .{});
+    // The hover boundary pairs and the move: 2 over + 2 enter + 2 move.
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 6 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ hovered, hovered, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+}
+
+test "user_input: element click inside an iframe reports the point in each document's viewport" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const child = frame.child_frames.items[0];
+    const target = child.document.getElementById("middle").?;
+    const rect = target.boundingClientRectValues(child);
+
+    var main_ls: js.Local.Scope = undefined;
+    frame.js.localScope(&main_ls);
+    defer main_ls.deinit();
+    _ = try main_ls.local.compileAndRun(
+        \\window.events = [];
+        \\for (const type of ['pointerover', 'mouseover']) {
+        \\  document.addEventListener(type, e => events.push({tag: e.target.tagName, x: e.clientX, y: e.clientY, trusted: e.isTrusted}));
+        \\}
+    , null);
+    var ls: js.Local.Scope = undefined;
+    child.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.events = [];
+        \\const target = document.getElementById('middle');
+        \\for (const type of ['pointerover','mouseover','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click']) {
+        \\  target.addEventListener(type, e => events.push({type, x:e.clientX, y:e.clientY, trusted:e.isTrusted}));
+        \\}
+    , null);
+
+    // MCP/CDP click passes the main frame for a node inside an iframe: the
+    // boundary events must still carry the point in each document's viewport.
+    try triggerClick(frame, target, .{});
+
+    const chain = try std.fmt.allocPrint(frame.local_arena,
+        \\events.filter(e => ['pointerover','mouseover','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click'].includes(e.type))
+    , .{});
+    // The whole chain sits in the child viewport, at the target's rect centre.
+    try testing.expect((try ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "{s}.length === 9 && {s}.every(e => e.trusted && e.x === {d} && e.y === {d})",
+        .{ chain, chain, rect.x + rect.width / 2, rect.y + rect.height / 2 },
+    ), null)).isTrue());
+
+    // The iframe the pointer entered reports the point in the main viewport.
+    const iframe = child.iframe.?.asElement();
+    const child_rect = iframe.boundingClientRectValues(frame);
+    try testing.expect((try main_ls.local.compileAndRun(try std.fmt.allocPrint(
+        frame.local_arena,
+        "events.length === 2 && events.every(e => e.trusted && e.tag === 'IFRAME' && e.x === {d} && e.y === {d})",
+        .{ child_rect.x + iframe.getClientLeft() + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop() + rect.y + rect.height / 2 },
+    ), null)).isTrue());
 }

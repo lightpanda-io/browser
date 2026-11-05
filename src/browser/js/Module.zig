@@ -112,6 +112,26 @@ pub fn getModuleNamespace(self: Module) js.Value {
     };
 }
 
+// Serialize the compiled module. Unlike Script.Unbound.createCodeCache, this
+// doesn't copy. The caller must deinit the result.
+pub fn createCodeCache(self: Module) !CodeCache {
+    const unbound = v8.v8__Module__GetUnboundModuleScript(self.handle).?;
+    const cached = v8.v8__ScriptCompiler__CreateModuleCodeCache(unbound) orelse return error.CodeCacheFailed;
+    return .{ .handle = cached };
+}
+
+pub const CodeCache = struct {
+    handle: *v8.ScriptCompilerCachedData,
+
+    pub fn deinit(self: CodeCache) void {
+        v8.v8__ScriptCompiler__CachedData__DELETE(self.handle);
+    }
+    pub fn bytes(self: CodeCache) []const u8 {
+        const len: usize = @intCast(self.handle.*.length);
+        return self.handle.*.data[0..len];
+    }
+};
+
 pub fn persist(self: Module) !Global {
     var ctx = self.local.ctx;
     var global: v8.Global = undefined;

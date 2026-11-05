@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- Cross-site first, then redirected back to this page's site: the last hop
+     is same-site with the parent, so its Lax cookie is stored. -->
+<iframe src="http://localhost:9582/redirect-127/set-cookie-lax"></iframe>
+
+<script id=redirect_back_to_parent_site_stores_lax_cookie>
+  testing.onload(() => {
+    testing.expectEqual(true, document.cookie.includes('xsite_redirect_lax=1'));
+    document.cookie = 'xsite_redirect_lax=; path=/; Max-Age=0';
+    testing.expectEqual(false, document.cookie.includes('xsite_redirect_lax'));
+  });
+</script>

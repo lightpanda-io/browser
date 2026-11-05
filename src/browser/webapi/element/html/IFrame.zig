@@ -37,8 +37,13 @@ const IFrame = @This();
 pub const Proto = HtmlElement;
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _executed: bool = false,
+// Loaded while iframe loading was off: navigates to about:blank only.
+_blank_only: bool = false,
 _window: ?*Window = null,
 
+pub fn asHtml(self: *IFrame) *HtmlElement {
+    return Factory.protoOf(self);
+}
 pub fn asElement(self: *IFrame) *Element {
     return Factory.protoOf(self).asElement();
 }

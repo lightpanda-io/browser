@@ -21,7 +21,8 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
 const http = @import("../../../network/http.zig");
-const Transfer = @import("../../../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../../network/HttpClient.zig");
+const Transfer = HttpClient.Transfer;
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -367,6 +368,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return;
     }
 
+    const allow_wildcard = !transfer.req.credentialsAllowed();
+
     var resp = transfer.submitSync(.{ .copy_headers = true }) catch |err| {
         log.debug(.http, "sync request failed", .{
             .source = "xhr",
@@ -386,7 +389,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         self._response_status_text = try self._arena.dupe(u8, st);
     }
     self._response_url = self._url;
-    self._response_len = resp.body.items.len;
+    self._response_len = resp.body.items().len;
 
     for (resp.headers) |hdr| {
         if (std.mem.eql(u8, hdr.name, "content-type")) {
@@ -400,9 +403,9 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             break;
         }
     }
-    try self.applyResponseHeaders(resp.headers);
+    try self.applyResponseHeaders(resp.headers, resp.cross_origin, allow_wildcard);
 
-    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
+    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items());
 
     var ls: js.Local.Scope = undefined;
     exec.js.localScope(&ls);
@@ -594,8 +597,9 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
                     if (!final.isHTML()) {
                         return null;
                     }
-                    const document = try exec._factory.genericDocument(.{});
-                    try Frame.parse.htmlAsChildren(frame, document.asNode(), data);
+                    const document = (try Frame.parse.htmlDocument(frame, data, .{})).asDocument();
+                    // the document can outlive this request and its arena
+                    document._url = try frame.page_arena.dupeSentinel(u8, self._response_url, 0);
                     break :blk .{ .document = document };
                 },
                 .worker => return error.NotSupportedInWorker,
@@ -659,10 +663,15 @@ fn applyContentType(self: *XMLHttpRequest, content_type: []const u8) !void {
     self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, content_type, &std.ascii.whitespace));
 }
 
-fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header) !void {
+fn applyResponseHeaders(self: *XMLHttpRequest, headers: []const http.Header, cross_origin: bool, allow_wildcard: bool) !void {
+    const expose_headers = if (cross_origin) HttpClient.findHeader(headers, "access-control-expose-headers") else null;
+
     const allocator = self._arena.allocator();
     for (headers) |hdr| {
         if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
+        if (cross_origin and !Headers.isCorsExposedResponseHeaderName(hdr.name, expose_headers, allow_wildcard)) {
             continue;
         }
         try self._response_headers.append(allocator, .{
@@ -709,7 +718,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         };
     }
 
-    try self.applyResponseHeaders(transfer.responseHeaders());
+    try self.applyResponseHeaders(transfer.responseHeaders(), transfer._cors_cross_origin, !transfer.req.credentialsAllowed());
 
     self._response_status = transfer.responseStatus().?;
     self._exec.page.status.noteResponse(.xhr, transfer);

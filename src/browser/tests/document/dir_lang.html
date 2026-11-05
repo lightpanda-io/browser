@@ -1,5 +1,6 @@
 <html lang="en" dir="ltr">
 <head>
+  <meta name=lp-mode content=test>
   <script src="../testing.js"></script>
 </head>
 <body>
@@ -8,9 +9,12 @@
     testing.expectEqual('ltr', document.documentElement.dir);
     testing.expectEqual('en', document.documentElement.lang);
 
-    // Document.dir and Document.lang delegate to documentElement
+    // Document.dir delegates to documentElement
     testing.expectEqual('ltr', document.dir);
-    testing.expectEqual('en', document.lang);
+
+    // Document has no lang property, setting one is a plain expando
+    testing.expectEqual(undefined, document.lang);
+    testing.expectEqual(false, 'lang' in document);
 
     // Setting via document updates the documentElement attribute
     document.dir = 'rtl';
@@ -18,15 +22,12 @@
     testing.expectEqual('rtl', document.documentElement.getAttribute('dir'));
 
     document.lang = 'fr';
-    testing.expectEqual('fr', document.documentElement.lang);
-    testing.expectEqual('fr', document.documentElement.getAttribute('lang'));
+    testing.expectEqual('en', document.documentElement.lang);
+    testing.expectEqual('en', document.documentElement.getAttribute('lang'));
 
     // Setting via element is reflected in document
     document.documentElement.dir = 'ltr';
     testing.expectEqual('ltr', document.dir);
-
-    document.documentElement.lang = 'de';
-    testing.expectEqual('de', document.lang);
 
     // div elements also have dir and lang
     const div = document.createElement('div');

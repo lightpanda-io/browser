@@ -34,12 +34,15 @@ const CLAMP_NESTING = 5;
 // Once we hit this depth, tasks are scheduled with blocks_done = false. This
 // prevents, for example, a setTimeout that sets itself, from blocking the Runner
 // from considering the page "done" forever (more commonly seen with requestAnimationFrame)
+// It's also where a timer chain stops being tracked for `settled`: polling loops
+// re-arm with short delays forever.
 const BLOCKING_NESTING = 10;
 
 // Every pending timeout, interval, animation frame and idle callback. Past
 // the cap setTimeout throws, which no browser does; keep it a backstop for
-// runaway pages, not a budget (a paginated storefront listing holds ~2.7k).
-const MAX_CALLBACKS = 8192;
+// runaway pages, not a budget (a paginated storefront listing holds ~2.7k, an
+// event bus that relays through setTimeout(fn, 0) ~8.4k from one task).
+const MAX_CALLBACKS = 65536;
 
 // lower limit for repeating timers since they never clean up
 // (unless clearInterval is called)
@@ -128,6 +131,7 @@ pub fn schedule(
     }
     errdefer _ = self._callbacks.remove(timer_id);
 
+    const parent_task = exec.js.attribution.current();
     const callback = try arena.create(ScheduleCallback);
     callback.* = .{
         .cb = cb,
@@ -140,7 +144,14 @@ pub fn schedule(
         .timer_id = timer_id,
         .params = persisted_params,
         .repeat_ms = if (opts.repeat) if (delay == 0) 1 else delay else null,
+        .delay_ms = delay,
+        .parent_task = parent_task,
+        .hold = if (opts.repeat == false and opts.mode == .normal and delay < js.Attribution.short_timeout_ms and nesting <= BLOCKING_NESTING)
+            exec.page.settle.hold(parent_task)
+        else
+            .{},
     };
+    errdefer callback.hold.release();
     gop.value_ptr.* = callback;
 
     try exec.js.scheduler.add(callback, ScheduleCallback.run, delay, .{
@@ -204,6 +215,14 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, removed after first invocation.
     repeat_ms: ?u32,
 
+    delay_ms: u32,
+
+    // The task that scheduled this one.
+    parent_task: ?js.Attribution.Tag,
+
+    // Noop for timers that don't hold the settle
+    hold: js.Attribution.Hold,
+
     // The nesting of this task. When it executes, this nesting will become
     // the Timer's _nesting_level so that any new timers will become nesting + 1
     nesting: u8,
@@ -219,6 +238,7 @@ const ScheduleCallback = struct {
 
     fn cancelled(ptr: *anyopaque) void {
         var self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
+        self.hold.release();
         self.deinit();
     }
 
@@ -256,6 +276,9 @@ const ScheduleCallback = struct {
 
     fn run(ptr: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
+        // Settled is only checked between tasks, and work this run starts
+        // takes its own holds.
+        self.hold.release();
         if (self.removed) {
             self.deinit();
             return null;
@@ -264,6 +287,21 @@ const ScheduleCallback = struct {
         var ls: js.Local.Scope = undefined;
         self.exec.js.localScope(&ls);
         defer ls.deinit();
+
+        const attribution = self.exec.js.attribution;
+        const kind: js.Attribution.Kind = switch (self.mode) {
+            .idle => .idle,
+            .animation_frame => .animation_frame,
+            .normal => if (self.repeat_ms == null) .timeout else .interval,
+        };
+        const task = attribution.begin(kind, .{
+            .label = self.name,
+            .delay_ms = self.delay_ms,
+            .parent = self.parent_task,
+            .cut = self.nesting > BLOCKING_NESTING,
+        });
+        const task_scope = attribution.enter(task);
+        defer task_scope.exit();
 
         const timers = self.timers;
         const prev_nesting = timers._nesting_level;

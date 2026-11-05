@@ -379,7 +379,7 @@ const FetchTerminator = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
         const b = self.browser orelse return;
-        b.env.terminate();
+        b.env.requestTerminate();
         self.browser = null;
     }
 };
@@ -422,7 +422,7 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App, cdp_server: ?*lp.Server, e
 
     var stdin_buf: [64 * 1024]u8 = undefined;
     var stdin = std.Io.File.stdin().readerStreaming(lp.io, &stdin_buf);
-    lp.mcp.router.processRequests(mcp_server, &stdin.interface, std.Io.File.stdin()) catch |err| {
+    lp.mcp.router.processRequests(mcp_server, &stdin.interface) catch |err| {
         err_out.* = err;
         log.fatal(.mcp, "mcp error", .{ .err = err });
     };

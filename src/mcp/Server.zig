@@ -35,6 +35,42 @@ const Self = @This();
 /// `Mcp-Session-Id`.
 pub const default_session_id = "default";
 
+/// How many caller-cancelled ids the server remembers (see `cancelled_ids`).
+const cancelled_capacity = 8;
+
+/// A JSON-RPC request id, narrowed so a cancellation can match the call it
+/// names. Strings borrow `value`; the cancelled set holds its own copies.
+const RequestId = union(enum) {
+    integer: i64,
+    string: []const u8,
+
+    /// Null for ids a match could never name: null, bool, fractional
+    /// numbers, and integers too big for i64 (`number_string`).
+    fn from(value: std.json.Value) ?RequestId {
+        return switch (value) {
+            .integer => |i| .{ .integer = i },
+            .float => |f| if (integral(f)) |i| .{ .integer = i } else null,
+            .string => |s| .{ .string = s },
+            else => null,
+        };
+    }
+
+    /// i64 as an exact f64 only holds integers up to 2^53; beyond that an
+    /// id could match a number the sender never meant.
+    fn integral(f: f64) ?i64 {
+        if (f != @trunc(f)) return null;
+        if (@abs(f) > 9007199254740992.0) return null;
+        return @trunc(f);
+    }
+
+    fn eql(self: RequestId, other: RequestId) bool {
+        return switch (self) {
+            .integer => |i| other == .integer and other.integer == i,
+            .string => |s| other == .string and std.mem.eql(u8, other.string, s),
+        };
+    }
+};
+
 allocator: std.mem.Allocator,
 app: *App,
 
@@ -47,6 +83,24 @@ session_id: []const u8,
 /// request can't name a session, so those tools are refused.
 directory: ?*HttpServer = null,
 transport: Transport,
+
+/// Guards the cancellation state below: the stdio reader or an HTTP
+/// connection thread records cancellations while the dispatch thread runs
+/// tool calls.
+cancel_mutex: std.Io.Mutex = .init,
+/// Ids from `notifications/cancelled`, owned. A ring rather than one slot:
+/// calls queued behind a long wait time out together, so several can land
+/// before the dispatcher sees any. When full the oldest is dropped.
+cancelled_ids: [cancelled_capacity]?RequestId = @splat(null),
+cancelled_next: usize = 0,
+
+/// From `logging/setLevel`; `notifications/message` below it is dropped.
+log_level: protocol.LogLevel = .debug,
+/// The `_meta.progressToken` of the call in flight, borrowing its arena.
+progress_token: ?std.json.Value = null,
+progress: u32 = 0,
+/// The tool call being dispatched; borrows its request arena.
+in_flight_id: ?RequestId = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
     return initSession(allocator, app, writer, default_session_id);
@@ -80,10 +134,18 @@ pub fn initSession(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writ
         .session_id = id,
         .transport = .init(allocator, writer),
     };
+
+    entry.session.cancel_hook = .{ .context = self, .check = cancelledCheck };
     return self;
 }
 
 pub fn deinit(self: *Self) void {
+    // The caller has joined the reader thread, so nothing races this.
+    self.active_session.session.cancel_hook = null;
+    for (self.cancelled_ids) |slot| {
+        if (slot) |id| self.freeRequestId(id);
+    }
+
     const entry = self.active_session;
     if (isDefault(self.session_id)) {
         if (self.app.config.cookieJarFile()) |cookie_jar_path| {
@@ -114,11 +176,23 @@ pub fn idle(self: *Self) u31 {
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
+    if (self.replySuppressed(id)) return;
     return self.transport.sendError(id, code, message);
 }
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
+    if (self.replySuppressed(id)) return;
     return self.transport.sendResult(id, result);
+}
+
+/// The spec says a cancelled request gets no response, whether the tool
+/// failed or swallowed the cancellation into a regular result.
+fn replySuppressed(self: *Self, id: std.json.Value) bool {
+    const request_id = RequestId.from(id) orelse return false;
+    self.cancel_mutex.lockUncancelable(lp.io);
+    defer self.cancel_mutex.unlock(lp.io);
+    const in_flight = self.in_flight_id orelse return false;
+    return in_flight.eql(request_id) and self.cancelledIndex(in_flight) != null;
 }
 
 pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
@@ -129,6 +203,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
     try self.sendResult(id, protocol.InitializeResult{
         .protocolVersion = @tagName(protocol.Version.negotiate(req.params)),
         .capabilities = .{
+            .logging = .{},
             .resources = .{},
             .tools = .{},
         },
@@ -142,11 +217,128 @@ pub fn handleToolList(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
 }
 
 pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    const id = req.id orelse return tools.handleCall(self, arena, req);
+    {
+        self.cancel_mutex.lockUncancelable(lp.io);
+        defer self.cancel_mutex.unlock(lp.io);
+        self.in_flight_id = RequestId.from(id);
+        // Cancelled while queued: never run it, and send nothing.
+        if (self.in_flight_id) |request_id| {
+            if (self.removeCancelled(request_id)) {
+                self.in_flight_id = null;
+                return;
+            }
+        }
+    }
+    defer self.endRequest();
+
+    self.progress_token = progressToken(req.params);
+    self.progress = 0;
+    defer self.progress_token = null;
+
     // Dispatch runs page JS, so enter the target isolate around it.
     const entry = self.active_session;
     entry.enterIsolate();
     defer entry.exitIsolate();
     return tools.handleCall(self, arena, req);
+}
+
+pub fn handleSetLogLevel(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
+    const id = req.id orelse return;
+    const params = lp.tools.parseArgs(struct { level: protocol.LogLevel }, arena, req.params) catch
+        return self.sendError(id, .InvalidParams, "expected { level: string }");
+    self.log_level = params.level;
+    try self.sendResult(id, struct {}{});
+}
+
+/// Report a console line from the call in flight: as progress when the
+/// caller asked for it with a `progressToken`, otherwise as a log message.
+pub fn reportConsoleLine(self: *Self, level: protocol.LogLevel, line: []const u8) void {
+    if (self.progress_token) |token| {
+        self.progress += 1;
+        self.transport.sendNotification("notifications/progress", .{
+            .progressToken = token,
+            .progress = self.progress,
+            .message = line,
+        }) catch {};
+        return;
+    }
+    if (@backingInt(level) < @backingInt(self.log_level)) return;
+    self.transport.sendNotification("notifications/message", .{
+        .level = level,
+        .logger = "console",
+        .data = line,
+    }) catch {};
+}
+
+fn progressToken(params: ?std.json.Value) ?std.json.Value {
+    const p = params orelse return null;
+    if (p != .object) return null;
+    const meta = p.object.get("_meta") orelse return null;
+    if (meta != .object) return null;
+    const token = meta.object.get("progressToken") orelse return null;
+    return switch (token) {
+        .string, .integer => token,
+        else => null,
+    };
+}
+
+/// Record a `notifications/cancelled`. Runs off the dispatch thread (on the
+/// stdio reader or an HTTP connection), so it only touches the state the
+/// session's cancel hook reads.
+pub fn handleCancelledRequest(self: *Self, value: std.json.Value) void {
+    var cancelled = RequestId.from(value) orelse return;
+    if (cancelled == .string) {
+        cancelled.string = self.allocator.dupe(u8, cancelled.string) catch return;
+    }
+    self.cancel_mutex.lockUncancelable(lp.io);
+    defer self.cancel_mutex.unlock(lp.io);
+    if (self.cancelled_ids[self.cancelled_next]) |oldest| self.freeRequestId(oldest);
+    self.cancelled_ids[self.cancelled_next] = cancelled;
+    self.cancelled_next = (self.cancelled_next + 1) % self.cancelled_ids.len;
+}
+
+/// Drop the finished call's cancellation, so a reused id isn't aborted.
+fn endRequest(self: *Self) void {
+    self.cancel_mutex.lockUncancelable(lp.io);
+    defer self.cancel_mutex.unlock(lp.io);
+    const request_id = self.in_flight_id orelse return;
+    _ = self.removeCancelled(request_id);
+    self.in_flight_id = null;
+}
+
+/// Caller holds `cancel_mutex`.
+fn cancelledIndex(self: *const Self, request_id: RequestId) ?usize {
+    for (self.cancelled_ids, 0..) |slot, i| {
+        const cancelled = slot orelse continue;
+        if (cancelled.eql(request_id)) return i;
+    }
+    return null;
+}
+
+/// Caller holds `cancel_mutex`.
+fn removeCancelled(self: *Self, request_id: RequestId) bool {
+    const i = self.cancelledIndex(request_id) orelse return false;
+    self.freeRequestId(self.cancelled_ids[i].?);
+    self.cancelled_ids[i] = null;
+    return true;
+}
+
+fn freeRequestId(self: *Self, request_id: RequestId) void {
+    switch (request_id) {
+        .string => |s| self.allocator.free(s),
+        .integer => {},
+    }
+}
+
+/// The session's `cancel_hook`: true once the caller cancelled the call
+/// being dispatched, so the wait loops polling it abort.
+fn cancelledCheck(context: *anyopaque) bool {
+    const self: *Self = @ptrCast(@alignCast(context));
+    self.cancel_mutex.lockUncancelable(lp.io);
+    defer self.cancel_mutex.unlock(lp.io);
+    const request_id = self.in_flight_id orelse return false;
+    return self.cancelledIndex(request_id) != null;
 }
 
 pub fn handleResourceList(self: *Self, req: protocol.Request) !void {
@@ -175,7 +367,7 @@ test "MCP.Server - Integration: synchronous smoke test" {
     var server = try Self.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
 
-    try router.processRequests(server, &in_reader, null);
+    try router.processRequests(server, &in_reader);
 
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2024-11-05" } }, out_alloc.writer.buffered());
 }
@@ -208,4 +400,163 @@ test "MCP.Server - initialize negotiates the protocol version" {
         \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"c","version":"1"}}}
     );
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 3, .result = .{ .protocolVersion = "2025-11-25" } }, out_alloc.writer.buffered());
+}
+
+test "MCP.Server - RequestId matches the shapes JSON-RPC ids take" {
+    const int_id = RequestId.from(.{ .integer = 7 }) orelse return error.TestUnexpectedResult;
+    try testing.expect(int_id.eql(.{ .integer = 7 }));
+    try testing.expect(!int_id.eql(.{ .integer = 8 }));
+
+    const str_id = RequestId.from(.{ .string = "req-42" }) orelse return error.TestUnexpectedResult;
+    try testing.expect(str_id.eql(.{ .string = "req-42" }));
+    try testing.expect(!str_id.eql(.{ .integer = 42 }));
+
+    try testing.expectEqual(RequestId{ .integer = 3 }, RequestId.from(.{ .float = 3.0 }).?);
+    try testing.expect(RequestId.from(.{ .float = 3.5 }) == null);
+    // Past 2^53 the integer the sender meant isn't recoverable.
+    try testing.expect(RequestId.from(.{ .float = 1e17 }) == null);
+
+    try testing.expect(RequestId.from(.null) == null);
+    try testing.expect(RequestId.from(.{ .bool = true }) == null);
+    try testing.expect(RequestId.from(.{ .number_string = "12345678901234567890123" }) == null);
+}
+
+test "MCP.Server - notifications/cancelled aborts the in-flight tool call" {
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Self.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    // A pipe stands in for stdin: a feed thread writes the conversation
+    // while processRequests runs its concurrent loop on this thread.
+    var fds: [2]std.posix.fd_t = undefined;
+    if (std.c.pipe(&fds) != 0) return error.TestUnexpectedResult;
+    const input: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
+    defer input.close(lp.io);
+
+    var stdin_buf: [64 * 1024]u8 = undefined;
+    var stdin = input.readerStreaming(lp.io, &stdin_buf);
+
+    const Feed = struct {
+        fn run(fd: std.posix.fd_t) void {
+            const write_end: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
+            var buf: [4096]u8 = undefined;
+            var writer = write_end.writerStreaming(lp.io, &buf);
+            const w = &writer.interface;
+
+            const goto_call =
+                \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"about:blank"}}}
+            ;
+            const wait_call =
+                \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"waitForScript","arguments":{"script":"false","timeout":30000}}}
+            ;
+            const cancel_call =
+                \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}
+            ;
+            const unrelated_cancel =
+                \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":99}}
+            ;
+            const evaluate_call =
+                \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"1+1"}}}
+            ;
+            const promise_call =
+                \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"new Promise(() => {})"}}}
+            ;
+            const cancel_promise =
+                \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}}
+            ;
+            const evaluate_2_call =
+                \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"2+2"}}}
+            ;
+
+            // Load a page, then park in a wait that would run its full
+            // 30s timeout unless the cancellation aborts it. Flush per
+            // message, like a real client, so the sleeps mean something.
+            w.writeAll(goto_call ++ "\n") catch {};
+            w.flush() catch {};
+            lp.io.sleep(.fromMilliseconds(500), .awake) catch {};
+            w.writeAll(wait_call ++ "\n") catch {};
+            w.flush() catch {};
+
+            // Abandon the wait (what an MCP client does on timeout) and
+            // queue the next call behind it: it must run right away. A
+            // second, unrelated cancellation lands before the dispatcher
+            // consumes the first — both must be recorded, so the abort
+            // isn't lost (a single cancellation slot strands the wait).
+            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            w.writeAll(cancel_call ++ "\n") catch {};
+            w.writeAll(unrelated_cancel ++ "\n") catch {};
+            w.writeAll(evaluate_call ++ "\n") catch {};
+            w.flush() catch {};
+
+            // A second abandoned call: an evaluate parked on a
+            // never-resolving promise surfaces its cancellation in-band (an
+            // is_error result reading "promise: cancelled") instead of
+            // propagating error.Cancelled. Per the spec it still gets no
+            // reply.
+            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            w.writeAll(promise_call ++ "\n") catch {};
+            w.flush() catch {};
+            lp.io.sleep(.fromMilliseconds(300), .awake) catch {};
+            w.writeAll(cancel_promise ++ "\n") catch {};
+            w.writeAll(evaluate_2_call ++ "\n") catch {};
+            w.flush() catch {};
+            write_end.close(lp.io);
+        }
+    };
+
+    const feed = try std.Thread.spawn(.{}, Feed.run, .{fds[1]});
+    defer feed.join();
+
+    const started = lp.datetime.milliTimestamp(.boot);
+    try router.processRequests(server, &stdin.interface);
+    const elapsed_ms = lp.datetime.milliTimestamp(.boot) - started;
+
+    // The wait call was abandoned after ~800ms; a server that ignores the
+    // cancellation holds the session for the wait's full 30s timeout.
+    try testing.expect(elapsed_ms < 20000);
+
+    const output = out_alloc.writer.buffered();
+    // The cancelled wait got no reply at all: the spec says a cancelled
+    // request is not responded to (no -32001 Cancelled error either).
+    try testing.expect(std.mem.find(u8, output, "\"id\":2") == null);
+    try testing.expect(std.mem.find(u8, output, "-32001") == null);
+    // ...and the evaluate queued behind it still ran.
+    try testing.expect(std.mem.find(u8, output, "\"text\":\"2\"") != null);
+
+    // The cancelled promise-waiting evaluate got no reply either, even
+    // though it reports its cancellation in-band rather than as
+    // error.Cancelled — no is_error result, no "promise: cancelled" text.
+    try testing.expect(std.mem.find(u8, output, "\"id\":4") == null);
+    try testing.expect(std.mem.find(u8, output, "promise: cancelled") == null);
+    // ...and the evaluate queued behind it still ran.
+    try testing.expect(std.mem.find(u8, output, "\"text\":\"4\"") != null);
+}
+
+test "MCP.Server - a tool call cancelled while queued is skipped without a reply" {
+    var out_alloc: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Self.init(testing.allocator, testing.test_app, &out_alloc.writer);
+    defer server.deinit();
+
+    // The cancellation names the id before the call is dispatched (the
+    // call was queued behind a long one when the client gave up): the call
+    // must not run, and per the spec it gets no response.
+    server.handleCancelledRequest(.{ .integer = 9 });
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"1+1"}}}
+    );
+    try testing.expectEqual(@as(usize, 0), out_alloc.writer.buffered().len);
+
+    // An unrelated id is unaffected by a leftover cancellation.
+    server.handleCancelledRequest(.{ .string = "stale" });
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"1+1"}}}
+    );
+    try testing.expect(std.mem.find(u8, out_alloc.writer.buffered(), "\"id\":10") != null);
 }

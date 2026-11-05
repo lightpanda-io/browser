@@ -20,13 +20,13 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const URL = @import("../../URL.zig");
 const HttpClient = @import("../../../network/HttpClient.zig");
 
 const AbortSignal = @import("../AbortSignal.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const Headers = @import("Headers.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -257,27 +257,26 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .proceed;
     }
 
-    // Determine response type based on origin comparison
     const exec = self._exec;
-    const requesting_origin = URL.getOrigin(arena.allocator(), exec.url.*) catch null;
-    const response_origin = URL.getOrigin(arena.allocator(), res._url) catch null;
-
-    if (requesting_origin) |fo| {
-        if (response_origin) |ro| {
-            if (std.mem.eql(u8, fo, ro)) {
-                res._type = .basic; // Same-origin
-            } else {
-                res._type = .cors; // Cross-origin (for simplicity, assume CORS passed)
-            }
-        } else {
-            res._type = .basic;
-        }
+    if (transfer.client.obey_cors) {
+        res._type = if (transfer._cors_cross_origin) .cors else .basic;
     } else {
         res._type = .basic;
     }
 
-    for (transfer.responseHeaders()) |hdr| {
-        try res._headers.append(hdr.name, hdr.value, exec);
+    if (res._type == .cors) {
+        const expose_headers = HttpClient.findHeader(transfer.responseHeaders(), "access-control-expose-headers");
+        const allow_wildcard = !transfer.req.credentialsAllowed();
+        for (transfer.responseHeaders()) |hdr| {
+            if (!Headers.isCorsExposedResponseHeaderName(hdr.name, expose_headers, allow_wildcard)) {
+                continue;
+            }
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
+    } else {
+        for (transfer.responseHeaders()) |hdr| {
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
     }
 
     self._headers_done = true;

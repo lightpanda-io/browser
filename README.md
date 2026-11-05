@@ -71,7 +71,19 @@ Verify the binary before running anything:
 
 [Linux aarch64 is also available](https://github.com/lightpanda-io/browser/releases/tag/nightly)
 
-> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image (e.g., `FROM debian:bookworm-slim` or `FROM ubuntu:24.04`) or [build from sources](#build-from-sources).
+If you use [**Nix**](https://nixos.org/download/), you can run Lightpanda directly from the flake without downloading a binary:
+```console
+nix run github:lightpanda-io/browser -- --help
+```
+
+Or pin it as an input in your own flake:
+```nix
+{
+  inputs.lightpanda.url = "github:lightpanda-io/browser";
+}
+```
+
+> **Note:** The Linux release binaries are linked against glibc. On musl-based Linux distributions (Alpine, etc.) the binary fails with `cannot execute: required file not found` because the glibc dynamic linker is missing. Use a glibc-based base image: the current release binaries need glibc **2.35** (`x86_64`) or **2.38** (`arm64`), so `debian:bookworm-slim` (2.36) is fine on `x86_64` but too old for `arm64` — use `FROM ubuntu:24.04`, `FROM debian:trixie-slim`, or `FROM debian:forky-slim` there — or [build from sources](#build-from-sources).
 >
 > **Android / Termux:** there is no native Android build. The Linux aarch64 binary needs the glibc loader (`/lib/ld-linux-aarch64.so.1`), which Android's Bionic libc does not provide, so it fails with the same `cannot execute: required file not found` error.
 
@@ -193,7 +205,9 @@ model at runtime.
 It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
 Face, the multi-lab gateways [Vercel AI Gateway](https://vercel.com/ai-gateway)
 and [OpenRouter](https://openrouter.ai) (one key for hundreds of models), any OpenAI-compatible endpoint via
-`OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
+`OPENAI_BASE_URL`, local models via Ollama, llama.cpp or [LLMD](https://zml.ai/llmd),
+and OpenAI Codex with a ChatGPT subscription instead of an API key (run
+`/provider codex` in the REPL to log in). You can also run
 without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
 reference.
@@ -251,6 +265,22 @@ longer clobber each other's page:
 - The `session_new`, `session_list` and `session_close` tools manage sessions
   explicitly. Sending `DELETE /mcp` with an `Mcp-Session-Id` closes that session.
 
+The `run` tool runs a [PandaScript](https://lightpanda.io/docs/usage/pandascript)
+in the caller's session, as `lightpanda run` does, and returns its console
+output and the value it returns. It takes the source as `script`, or the `path`
+of a file that `save` wrote. Pages the script opens are closed when it ends;
+cookies and storage stay, so a login carries over to the next `run`. An optional
+`timeout` in milliseconds (default 60000) stops a stuck script. A backend can
+drive Lightpanda with one POST:
+
+```bash
+curl -s http://127.0.0.1:9223/mcp -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "run", "arguments": { "script":
+    "const page = new Page();\nawait page.goto(\"https://example.com\");\nreturn page.extract({ title: \"title\", links: [\"a\"] });" } }
+}'
+```
+
 [Read full documentation](https://lightpanda.io/docs/open-source/guides/mcp-server)
 
 A skill is available in [lightpanda-io/agent-skill](https://github.com/lightpanda-io/agent-skill).
@@ -303,14 +333,12 @@ For full details, see our [Web Platform Tests results](https://perf.lightpanda.i
 
 ### Prerequisites
 
-Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
+Lightpanda is written with [Zig](https://ziglang.org/) `0.17.0`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
 [v8](https://chromium.googlesource.com/v8/v8.git),
 [Libcurl](https://curl.se/libcurl/) and [html5ever](https://github.com/servo/html5ever).
-
-To be able to build the v8 engine, you have to install some libs:
 
 For **Debian/Ubuntu based Linux**:
 
@@ -319,9 +347,11 @@ sudo apt install xz-utils ca-certificates \
     pkg-config libglib2.0-dev \
     clang make curl git
 ```
+`pkg-config` and `libglib2.0-dev` are only needed to build V8 from source (see
+below).
 You also need to [install Rust](https://rust-lang.org/tools/install/).
 
-For systems with [**Nix**](https://nixos.org/download/), you can use the devShell:
+For systems with [**Nix**](https://nixos.org/download/), you can use the devShell.
 ```
 nix develop
 ```
@@ -333,15 +363,22 @@ brew install cmake
 
 ### Build and run
 
-You can build the entire browser with `make build` or `make build-dev` for debug
+Run `make download-v8` once first to fetch the prebuilt V8 archive; both
+`make` and `zig build` pick it up. Without it, or on a platform with no
+published archive (the download then fails), the build compiles V8 from source,
+which takes several minutes. See
+[CONTRIBUTING.md](CONTRIBUTING.md#skip-the-v8-source-build) for details.
+
+Then build the entire browser with `make build` or `make build-dev` for debug
 env.
 
 But you can directly use the zig command: `zig build run`.
 
 #### Embed v8 snapshot
 
-Lighpanda uses v8 snapshot. By default, it is created on startup but you can
-embed it by using the following commands:
+Lightpanda uses a v8 snapshot. `make build` builds and embeds it. With a plain
+`zig build`, it is created on startup instead, unless you embed it by using the
+following commands:
 
 Generate the snapshot.
 ```

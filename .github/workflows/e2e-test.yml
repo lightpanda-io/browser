@@ -34,6 +34,9 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   zig-build-release:
     name: zig build release
@@ -47,6 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: ./.github/actions/install
@@ -81,6 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
 
@@ -139,6 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
 
@@ -204,6 +210,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
 
@@ -284,6 +291,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
 
@@ -389,6 +397,11 @@ jobs:
   perf-fmt:
     name: perf-fmt
     needs: cdp-and-hyperfine-bench
+    # The perf-fmt image is private to the organisation, so pulling it
+    # with GITHUB_TOKEN needs packages read on this job.
+    permissions:
+      contents: read
+      packages: read
 
     # Don't execute on PR
     if: github.event_name != 'pull_request'
@@ -440,6 +453,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          persist-credentials: false
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
 

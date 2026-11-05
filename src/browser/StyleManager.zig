@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
+const text_measure = @import("text_measure.zig");
 
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
@@ -62,6 +63,9 @@ flow: Group(Flow) = .{},
 
 widths: WidthMemo = .{},
 
+// Inline writes of a property the layout memos read.
+layout_bumps: usize = 0,
+
 // Keyed by property name, pruning to what is (hopefully) one or few rules
 custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
 
@@ -84,6 +88,10 @@ next_doc_order: u32 = 1,
 
 // When true, rules need to be rebuilt
 dirty: bool = false,
+
+// A rule's selector reads the style attribute, so any inline style write can
+// change what it matches.
+reads_style_attribute: bool = false,
 
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
@@ -561,21 +569,153 @@ fn addSelectorRules(
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, important: Declarations, layer: u16) !void {
-    const key = getBucketKey(selector.rightmost()) orelse return;
+    if (readsStyleAttribute(selector)) {
+        self.reads_style_attribute = true;
+    }
+    const matched = unwrapWhere(selector);
+    const placement = placeSelector(matched) orelse return;
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
     inline for (group_fields) |field| {
         inline for (.{ @field(props, field), @field(important, field) }, .{ priority, important_priority }) |declared, p| {
             if (declaresAny(declared)) {
-                try @field(self, field).bucket(self.arena.allocator(), key, .{
-                    .props = declared,
-                    .selector = selector,
+                try @field(self, field).bucket(self.arena.allocator(), placement, .{
+                    .props = .init(declared),
+                    .selector = matched,
                     .priority = p,
                 });
             }
         }
     }
+}
+
+fn readsStyleAttribute(selector: Selector.Selector) bool {
+    if (compoundReadsStyleAttribute(selector.first)) {
+        return true;
+    }
+    for (selector.segments) |segment| {
+        if (compoundReadsStyleAttribute(segment.compound)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn compoundReadsStyleAttribute(compound: Selector.Compound) bool {
+    for (compound.parts) |part| {
+        const nested: []const Selector.Selector = switch (part) {
+            .attribute => |attr| {
+                if (attr.name.eql(comptime .wrap("style"))) {
+                    return true;
+                }
+                continue;
+            },
+            .pseudo_class => |pseudo| switch (pseudo) {
+                .not, .is, .where, .has => |selectors| selectors,
+                .nth_child_of, .nth_last_child_of => |of| of.selectors,
+                else => continue,
+            },
+            else => continue,
+        };
+        for (nested) |selector| {
+            if (readsStyleAttribute(selector)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// The memos an inline write can invalidate on its own, one per Group. Plus
+/// the layout memos comes from several groups.
+const Memo = enum { visibility, geometry, touch_action, text, flow, layout };
+const Memos = std.EnumSet(Memo);
+
+comptime {
+    for (group_fields) |field| {
+        _ = @field(Memo, field);
+    }
+}
+
+/// Invalidates the memos an inline style write of `name` on `el` can change.
+/// This returns false when an individual memo cannot be cleared. The caller
+/// must report a full style change.
+pub fn inlineStyleWritten(self: *StyleManager, el: *Element, name: []const u8) bool {
+    self.assertOwns(el);
+    if (self.dirty or self.reads_style_attribute) {
+        return false;
+    }
+
+    var it = propertyReach(name).iterator();
+    while (it.next()) |memo| {
+        switch (memo) {
+            .layout => self.layout_bumps += 1,
+            .geometry => _ = {
+                // geometry properties aren't inherited. el1.style.width = '100px'
+                // might change the bounding rect of its parent or children,
+                // but they don't change their actual styles. We don't need
+                // to invalidate the entire geometry group for any of them.
+                _ = self.geometry.memo.remove(el);
+            },
+            inline else => |group| @field(self, @tagName(group)).bumps += 1,
+        }
+    }
+    return true;
+}
+
+/// The version the layout memos are valid for.
+pub fn layoutVersion(self: *const StyleManager) usize {
+    return self.frame.page.style_version + self.layout_bumps;
+}
+
+/// Lowercase property name -> the memos that read it. A name not in here
+/// reaches nothing. transform/z-index/custom properties...no memo reads them.
+/// Nothing substitutes var() (yet).
+const property_reach = blk: {
+    // layout reads everything, except what we explicitly ignore (safer option)
+    const layout_ignores = [_][]const u8{ "visibility", "opacity", "pointer-events", "touch-action", "overscroll-behavior-x", "overscroll-behavior-y" };
+
+    // font-size isn't cascaded by any group, but text wraps at it
+    const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
+    @setEvalBranchQuota(names.len * names.len * 100);
+
+    var kvs: [names.len]struct { []const u8, Memos } = undefined;
+    for (names, &kvs) |name, *kv| {
+        var memos: Memos = .empty;
+        for (group_fields) |field| {
+            const Spec = @FieldType(Declarations, field);
+            for (Spec.names) |declared| {
+                if (std.mem.eql(u8, name, declared)) {
+                    memos.insert(@field(Memo, field));
+                }
+            }
+        }
+        for (layout_ignores) |ignored| {
+            if (std.mem.eql(u8, name, ignored)) {
+                break;
+            }
+        } else {
+            memos.insert(.layout);
+        }
+        kv.* = .{ name, memos };
+    }
+    break :blk std.StaticStringMap(Memos).initComptime(kvs);
+};
+
+fn propertyReach(name: []const u8) Memos {
+    // A shorthand is shorter than its longhands, so nothing longer is read
+    var buf: [property_reach.max_len]u8 = undefined;
+    if (name.len > buf.len) {
+        return .empty;
+    }
+    const lower = std.ascii.lowerString(&buf, name);
+    if (CssParser.axisShorthand(lower)) |shorthand| {
+        const x_prop: Memos = property_reach.get(shorthand.x) orelse .empty;
+        const y_prop: Memos = property_reach.get(shorthand.y) orelse .empty;
+        return x_prop.unionWith(y_prop);
+    }
+    return property_reach.get(lower) orelse .empty;
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer
@@ -623,6 +763,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.dirty = false;
     errdefer self.dirty = true;
+    self.reads_style_attribute = false;
     var caps: [group_fields.len]Capacities = undefined;
     inline for (group_fields, &caps) |field, *c| {
         c.* = @field(self, field).capacities();
@@ -645,6 +786,9 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
+        if (sheet._disabled) {
+            continue;
+        }
         const before = self.next_doc_order;
         self.parseSheet(build_arena.allocator(), sheet) catch |err| {
             log.err(.browser, "StyleManager parseSheet", .{ .err = err });
@@ -683,11 +827,30 @@ pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
     return self.display(el) == .none;
 }
 
+/// `display: contents`. On the root element it computes to block instead.
+pub fn hasDisplayContents(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.generatesBox(el) == false;
+}
+
 /// Own property, not inherited; honors the UA hidden-element rules.
 pub fn display(self: *StyleManager, el: *Element) Display {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .other;
     return self.visibilityProps(el).display;
+}
+
+/// True when `el` generates an inline-level box: a plain `inline` box or an
+/// atomic inline (`inline-block`, `inline-flex`, ...). Block containers,
+/// tables and `display: contents` are false.
+pub fn isInlineLevel(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return switch (self.visibilityProps(el).box) {
+        .inline_level, .atomic_inline => true,
+        else => false,
+    };
 }
 
 /// Computed display:none coming only from inline style or an author stylesheet
@@ -716,13 +879,13 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(el).pointer_events_none;
 }
 
-/// Blink's VisibleToHitTestRequest. Ignores display:none, which callers handle
-/// for the whole subtree.
+/// Blink's VisibleToHitTestRequest, plus display:contents, which generates no
+/// box to hit. Ignores display:none, which callers handle for the whole subtree.
 pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return true;
     const p = self.visibilityProps(el);
-    return !p.visibility_hidden and !p.pointer_events_none;
+    return !p.visibility_hidden and !p.pointer_events_none and self.generatesBox(el);
 }
 
 /// Computed text-transform, which inherits: the nearest of `el` and its
@@ -748,6 +911,50 @@ pub fn ownTextTransform(self: *StyleManager, el: *Element) TextTransform {
         return .inherit;
     }
     return self.text.ownProps(self.arena.allocator(), el, self.frame).text_transform;
+}
+
+/// The two parts of computed white-space: white-space-collapse and
+/// text-wrap-mode.
+pub fn whiteSpace(self: *StyleManager, el: *Element) text_measure.WhiteSpace {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+
+    var wrap: WrapMode = .inherit;
+    var collapse: SpaceCollapse = .inherit;
+
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
+        const own = self.ownWhiteSpace(elem);
+        if (collapse == .inherit) {
+            collapse = own.collapse;
+        }
+        if (wrap == .inherit) {
+            wrap = own.wrap;
+        }
+        if (collapse != .inherit and wrap != .inherit) {
+            break;
+        }
+    }
+    return .{
+        .collapse = switch (collapse) {
+            .inherit, .collapse, .preserve_breaks => true,
+            .preserve, .preserve_spaces, .break_spaces => false,
+        },
+        .newlines = switch (collapse) {
+            .preserve, .preserve_breaks, .break_spaces => true,
+            .inherit, .collapse, .preserve_spaces => false,
+        },
+        .wrap = wrap != .nowrap,
+    };
+}
+
+fn ownWhiteSpace(self: *StyleManager, el: *Element) WhiteSpace {
+    if (!self.text.hasRules() and !el._flags.has_inline_style) {
+        // Most pages declare no white-space: skip the cascade and the memo.
+        return WhiteSpace.uaDefault(el.getTag()) orelse .{};
+    }
+    const p = self.text.ownProps(self.arena.allocator(), el, self.frame);
+    return .{ .collapse = p.white_space_collapse, .wrap = p.text_wrap_mode };
 }
 
 /// The axes along which `el` is a scroll container: its own computed overflow
@@ -817,11 +1024,18 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
         .content => return .shrink,
         .auto => {},
     }
-    if (vis.box != .block_level or el.getTag().isReplacedOrControl()) {
-        return .shrink;
+    const flow = self.flowProps(el);
+    if (flow.position.outOfFlow()) {
+        // Pinned on both sides, it stretches between them (CSS 2 §10.3.7).
+        // It's blockified, so an inline box does too; a table and a
+        // replaced box keep their own width.
+        const geometry = self.geometryProps(el);
+        if (vis.box == .table or el.getTag().isReplacedOrControl() or geometry.left.unit == .auto or geometry.right.unit == .auto) {
+            return .shrink;
+        }
+        return .fill;
     }
-    const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
-    if (flow.absolutely_positioned or flow.floated) {
+    if (vis.box != .block_level or el.getTag().isReplacedOrControl() or flow.floated) {
         return .shrink;
     }
     const parent = self.boxParent(el) orelse return .fill;
@@ -833,15 +1047,154 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
     return if (self.geometryProps(el).flex_grow) .grow else .shrink;
 }
 
+/// An in-flow child of a row flex container: one of the row's flex items.
+pub fn isFlexRowItem(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    if (self.flowProps(el).position.outOfFlow()) {
+        return false;
+    }
+    const parent = self.boxParent(el) orelse return false;
+    const parent_vis = self.visibilityProps(parent);
+    return parent_vis.display == .flex and parent_vis.flex_column == false;
+}
+
+/// A flex container that wraps its items onto new lines instead of
+/// shrinking them. The lines aren't modeled.
+pub fn flexWraps(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.visibilityProps(el).flex_wrap;
+}
+
+pub fn flexShrinks(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.geometryProps(el).flex_no_shrink == false;
+}
+
+/// The left and right margins together. A percentage resolves against the
+/// containing block's width.
+pub fn inlineMargins(self: *StyleManager, el: *Element, containing_width: ?f64) f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return 0;
+    const geometry = self.geometryProps(el);
+    return self.inlineSum(geometry.margin_left, geometry.margin_right, containing_width);
+}
+
+/// The left and right offsets of a positioned box, 0 for one in flow. A
+/// percentage resolves against the containing block's width.
+pub fn inlineInsets(self: *StyleManager, el: *Element, containing_width: f64) f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return 0;
+    if (self.flowProps(el).position.outOfFlow() == false) {
+        return 0;
+    }
+    const geometry = self.geometryProps(el);
+    return self.inlineSum(geometry.left, geometry.right, containing_width);
+}
+
+// A left and right length together, in px. A percentage resolves against
+// the containing block's width (0 when it isn't known); auto and values
+// that need layout are 0.
+fn inlineSum(self: *StyleManager, left: Length, right: Length, containing_width: ?f64) f64 {
+    const viewport = self.frame.page.getViewport();
+    var total: f64 = 0;
+    for ([_]Length{ left, right }) |length| {
+        total += length.resolve(viewport) orelse switch (length.unit) {
+            .percent => if (containing_width) |width| @as(f64, length.value) / 100.0 * width else 0,
+            else => 0,
+        };
+    }
+    return total;
+}
+
+/// The nearest element to el that generates a box, or `el` itself it it does
+pub fn boxElement(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    if (self.generatesBox(el)) {
+        return el;
+    }
+    return self.boxParent(el);
+}
+
 /// The nearest ancestor that generates a box
 pub fn boxParent(self: *StyleManager, el: *Element) ?*Element {
     var parent = el.asNode().flatTreeParentElement(self.frame);
     while (parent) |p| : (parent = p.asNode().flatTreeParentElement(self.frame)) {
-        if (self.visibilityProps(p).box != .contents) {
+        if (self.generatesBox(p)) {
             return p;
         }
     }
     return null;
+}
+
+fn generatesBox(self: *StyleManager, el: *Element) bool {
+    if (self.visibilityProps(el).box != .contents) {
+        return true;
+    }
+    const parent = el.asNode().parentNode() orelse return false;
+    // if we're at the root, and we have `display: contents`, we still force a block
+    return parent._type == .document;
+}
+
+/// The nearest ancestor whose width el's percentages and fill resolve
+/// against; null for the viewport. A plain inline box is skipped: a block
+/// inside a span sizes off the block around the span. An absolutely
+/// positioned box sizes off its nearest positioned ancestor, a fixed one
+/// off the viewport.
+pub fn containingBlock(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return self.boxParent(el);
+    switch (self.flowProps(el).position) {
+        .fixed => return null,
+        .absolute => {
+            var current = self.boxParent(el);
+            while (current) |c| : (current = self.boxParent(c)) {
+                if (self.flowProps(c).position != .static) {
+                    return c;
+                }
+            }
+            return null;
+        },
+        .static, .relative, .sticky => {},
+    }
+    return self.blockContainer(self.boxParent(el) orelse return null);
+}
+
+/// el, if it's a block container (anything but a plain inline box), else
+/// its containing block. Text in el wraps at this box's width.
+pub fn blockContainer(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return el;
+    var current: ?*Element = el;
+    while (current) |c| : (current = self.boxParent(c)) {
+        if (self.plainInline(c) == false) {
+            return c;
+        }
+    }
+    return null;
+}
+
+/// A plain inline box, like <span> or <b>: text runs through it on the same
+/// line, with no box boundary of its own.
+pub fn isPlainInline(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.plainInline(el);
+}
+
+fn plainInline(self: *StyleManager, el: *Element) bool {
+    if (self.visibilityProps(el).box != .inline_level or el.getTag().isReplacedOrControl()) {
+        return false;
+    }
+    // Floats, out-of-flow boxes and flex/grid items are blockified
+    const flow = self.flowProps(el);
+    if (flow.position.outOfFlow() or flow.floated) {
+        return false;
+    }
+    const parent = self.boxParent(el) orelse return false;
+    return self.visibilityProps(parent).display != .flex and self.visibilityProps(parent).display != .grid;
 }
 
 /// The children lay out side by side: a flex row or a grid. Elsewhere block
@@ -858,10 +1211,31 @@ pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
     switch (self.visibilityProps(el).box) {
         .block_level, .table => {},
-        .inline_level, .contents => return false,
+        .inline_level, .atomic_inline, .contents => return false,
     }
-    const flow = self.flow.ownProps(self.arena.allocator(), el, self.frame);
-    return flow.absolutely_positioned == false and flow.floated == false;
+    const flow = self.flowProps(el);
+    return flow.position.outOfFlow() == false and flow.floated == false;
+}
+
+/// position: absolute or fixed
+pub fn isOutOfFlow(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.flowProps(el).position.outOfFlow();
+}
+
+/// Own property, not inherited.
+pub fn position(self: *StyleManager, el: *Element) Position {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .static;
+    return self.flowProps(el).position;
+}
+
+/// `position: fixed` on `el` or on a box above it.
+pub fn inFixedBox(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return self.flowProps(el).in_fixed;
 }
 
 /// Overflow along x is clipped or scrolled within the box, so it doesn't
@@ -894,9 +1268,10 @@ fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
     };
 }
 
-pub const WidthKind = enum { box, content };
+// row_shrink is a flex row's shrink ratio, not a width
+pub const WidthKind = enum { box, content, full_content, scrollable_content, row_shrink };
 
-/// Element's computed widths (see Element.boxWidth), valid for one style
+/// Element's computed widths (see layout.boxWidth), valid for one style
 /// version and viewport. Each read otherwise walks up to the root and down
 /// the subtree.
 const WidthMemo = struct {
@@ -908,6 +1283,9 @@ const WidthMemo = struct {
     const Entry = struct {
         box: ?f64 = null,
         content: ?f64 = null,
+        full_content: ?f64 = null,
+        scrollable_content: ?f64 = null,
+        row_shrink: ?f64 = null,
     };
 };
 
@@ -933,7 +1311,7 @@ pub fn cacheWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind, w
 fn freshWidthMemo(self: *StyleManager) ?*WidthMemo {
     self.rebuildIfDirty() catch return null;
     const memo = &self.widths;
-    const version = self.frame.page.style_version;
+    const version = self.layoutVersion();
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
         memo.map.clearRetainingCapacity();
@@ -954,13 +1332,32 @@ fn geometryProps(self: *StyleManager, el: *Element) Geometry.Computed {
     return self.geometry.ownProps(self.arena.allocator(), el, self.frame);
 }
 
+/// Callers must have run rebuildIfDirty, which resets the memo.
+fn flowProps(self: *StyleManager, el: *Element) Flow.Computed {
+    return self.flow.inheritedProps(self.arena.allocator(), el, self.frame);
+}
+
+/// A Group's rule lookup work, counted in tests.
+const Work = struct {
+    // bucket hash lookups: the id, each class and the tag of the element,
+    // and of its parent when parent-keyed rules exist
+    probes: usize = 0,
+    // selectors matched against the element
+    matches: usize = 0,
+};
+
 /// Taken before the arena resets, to presize the new containers.
 const Capacities = struct {
-    id_rules: u32,
-    class_rules: u32,
-    tag_rules: u32,
+    subject: BucketCapacities,
+    parent: BucketCapacities,
     other_rules: usize,
     memo: u32,
+};
+
+const BucketCapacities = struct {
+    id: u32,
+    class: u32,
+    tag: u32,
 };
 
 /// One property group's rules and memo. A rule joins only the groups it
@@ -976,6 +1373,11 @@ fn Group(comptime Spec: type) type {
         const Field = std.meta.FieldEnum(Declared);
         const fields = @typeInfo(Declared).@"struct".field_names;
 
+        // applyRules' bucket lookups and selector matches, so tests can count
+        // work instead of timing it. Per group type, not a field: applyRules
+        // only has a const Self.
+        var work: if (lp.IS_TEST) Work else void = if (lp.IS_TEST) .{} else {};
+
         comptime {
             // compute copies each declared value into its Cascaded namesake
             for (fields) |field| {
@@ -984,8 +1386,8 @@ fn Group(comptime Spec: type) type {
         }
 
         const Rule = struct {
+            props: RuleProps,
             selector: Selector.Selector, // Single selector, not a list
-            props: Declared,
 
             // Packed priority: important:1 | layer_rank:11 | specificity:30 |
             // doc_order:22. A layered rule's rank bits stay 0 until
@@ -996,33 +1398,126 @@ fn Group(comptime Spec: type) type {
 
         const RuleList = std.MultiArrayList(Rule);
 
-        // Bucketed rules for fast lookup - keyed by rightmost selector part
-        id_rules: std.StringHashMapUnmanaged(RuleList) = .empty,
-        class_rules: std.StringHashMapUnmanaged(RuleList) = .empty,
-        tag_rules: std.AutoHashMapUnmanaged(Tag, RuleList) = .empty,
-        other_rules: RuleList = .empty, // universal, attribute, pseudo-class endings
+        // A rule's Declared without the optionals: which fields it sets, and
+        // their values. Read for every candidate rule, so kept small.
+        const RuleProps = struct {
+            set: std.EnumSet(Field) = .empty,
+            values: Cascaded = .{},
+
+            fn init(declared: Declared) RuleProps {
+                var self: RuleProps = .{};
+                inline for (fields) |field| {
+                    if (@field(declared, field)) |value| {
+                        @field(self.values, field) = value;
+                        self.set.insert(@field(Field, field));
+                    }
+                }
+                return self;
+            }
+        };
+
+        /// Rules filed under an id, class or tag, probed with one element's.
+        const Buckets = struct {
+            id: std.StringHashMapUnmanaged(RuleList) = .empty,
+            class: std.StringHashMapUnmanaged(RuleList) = .empty,
+            tag: std.AutoHashMapUnmanaged(Tag, RuleList) = .empty,
+
+            fn isEmpty(self: *const Buckets) bool {
+                return self.id.count() == 0 and self.class.count() == 0 and self.tag.count() == 0;
+            }
+
+            fn capacities(self: *const Buckets) BucketCapacities {
+                return .{ .id = self.id.count(), .class = self.class.count(), .tag = self.tag.count() };
+            }
+
+            fn reset(self: *Buckets, allocator: Allocator, caps: BucketCapacities) !void {
+                self.* = .{};
+                try self.id.ensureTotalCapacity(allocator, caps.id);
+                try self.class.ensureTotalCapacity(allocator, caps.class);
+                try self.tag.ensureTotalCapacity(allocator, caps.tag);
+            }
+
+            fn list(self: *Buckets, allocator: Allocator, key: BucketKey) !*RuleList {
+                return switch (key) {
+                    .id => |id| (try self.id.getOrPutValue(allocator, id, .empty)).value_ptr,
+                    .class => |class| (try self.class.getOrPutValue(allocator, class, .empty)).value_ptr,
+                    .tag => |tag| (try self.tag.getOrPutValue(allocator, tag, .empty)).value_ptr,
+                    .other => unreachable,
+                };
+            }
+
+            fn stamp(self: *Buckets, sm: *const StyleManager) void {
+                inline for (.{ &self.id, &self.class, &self.tag }) |map| {
+                    var it = map.valueIterator();
+                    while (it.next()) |rules| {
+                        stampRuleList(sm, rules);
+                    }
+                }
+            }
+
+            // Checks the rules filed under `keyed`'s id, classes and tag
+            // against `el`: the same element, or its parent.
+            fn apply(self: *const Buckets, keyed: *Element, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+                if (keyed.getId()) |id| {
+                    count(.probes);
+                    if (self.id.get(id)) |rules| {
+                        checkRules(&rules, p, priorities, el, frame);
+                    }
+                }
+
+                if (keyed.getClassName()) |class_attr| {
+                    var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
+                    while (it.next()) |class| {
+                        count(.probes);
+                        if (self.class.get(class)) |rules| {
+                            checkRules(&rules, p, priorities, el, frame);
+                        }
+                    }
+                }
+
+                count(.probes);
+                if (self.tag.get(keyed.getTag())) |rules| {
+                    checkRules(&rules, p, priorities, el, frame);
+                }
+            }
+        };
+
+        // Rules keyed by their rightmost compound's id, class or tag
+        subject: Buckets = .{},
+
+        // Rules with no such key whose `>` pins the subject's parent, keyed by
+        // that parent compound (Tailwind's `.space-x-4 > * ~ *`, `.row > *`)
+        parent: Buckets = .{},
+
+        // the whole point of the parent/subject optimization is to try to keep
+        // rules out of here, because it's the slowest and largest.
+        other_rules: RuleList = .empty,
 
         // Whether any bucketed rule is !important, so importantRuleWins can
         // skip the cascade on the many pages without one.
         has_important: bool = false,
 
-        // Valid while Page.style_version == memo_version.
+        // Valid while Page.style_version + bumps == memo_version.
         memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
         memo_version: usize = 0,
+
+        // Inline writes of a property this group declares (invalidate).
+        bumps: usize = 0,
 
         // inheritedProps' scratch, kept so each walk doesn't reallocate
         path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
 
+        // inheritedProps' cascades, so tests can count work instead of timing it
+        cascades: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+
         fn hasRules(self: *const Self) bool {
-            return self.id_rules.count() != 0 or self.class_rules.count() != 0 or
-                self.tag_rules.count() != 0 or self.other_rules.len != 0;
+            return self.subject.isEmpty() == false or self.parent.isEmpty() == false or self.other_rules.len != 0;
         }
 
         fn capacities(self: *const Self) Capacities {
             return .{
-                .id_rules = self.id_rules.count(),
-                .class_rules = self.class_rules.count(),
-                .tag_rules = self.tag_rules.count(),
+                .parent = self.parent.capacities(),
+                .subject = self.subject.capacities(),
                 .other_rules = self.other_rules.len,
                 .memo = self.memo.count(),
             };
@@ -1033,25 +1528,18 @@ fn Group(comptime Spec: type) type {
             self.path = .empty;
             try self.memo.ensureTotalCapacity(allocator, caps.memo);
 
-            self.id_rules = .empty;
-            try self.id_rules.ensureTotalCapacity(allocator, caps.id_rules);
-
-            self.class_rules = .empty;
-            try self.class_rules.ensureTotalCapacity(allocator, caps.class_rules);
-
-            self.tag_rules = .empty;
-            try self.tag_rules.ensureTotalCapacity(allocator, caps.tag_rules);
+            try self.parent.reset(allocator, caps.parent);
+            try self.subject.reset(allocator, caps.subject);
 
             self.other_rules = .{};
             self.has_important = false;
             try self.other_rules.ensureTotalCapacity(allocator, caps.other_rules);
         }
 
-        fn bucket(self: *Self, allocator: Allocator, key: BucketKey, rule: Rule) !void {
-            const list: *RuleList = switch (key) {
-                .id => |id| (try self.id_rules.getOrPutValue(allocator, id, .empty)).value_ptr,
-                .class => |class| (try self.class_rules.getOrPutValue(allocator, class, .empty)).value_ptr,
-                .tag => |tag| (try self.tag_rules.getOrPutValue(allocator, tag, .empty)).value_ptr,
+        fn bucket(self: *Self, allocator: Allocator, placement: Placement, rule: Rule) !void {
+            const list: *RuleList = switch (placement) {
+                .parent => |key| try self.parent.list(allocator, key),
+                .subject => |key| try self.subject.list(allocator, key),
                 .other => &self.other_rules,
             };
             try list.append(allocator, rule);
@@ -1062,12 +1550,8 @@ fn Group(comptime Spec: type) type {
 
         fn stampRules(self: *Self, sm: *const StyleManager) void {
             stampRuleList(sm, &self.other_rules);
-            inline for (.{ &self.id_rules, &self.class_rules, &self.tag_rules }) |map| {
-                var it = map.valueIterator();
-                while (it.next()) |rules| {
-                    stampRuleList(sm, rules);
-                }
-            }
+            self.parent.stamp(sm);
+            self.subject.stamp(sm);
         }
 
         fn stampRuleList(sm: *const StyleManager, rules: *RuleList) void {
@@ -1100,6 +1584,9 @@ fn Group(comptime Spec: type) type {
                     above = cached;
                     break;
                 }
+                if (comptime lp.IS_TEST) {
+                    self.cascades += 1;
+                }
                 self.path.append(allocator, .{ .el = elem, .own = self.compute(elem, frame) }) catch |err| {
                     log.warn(.browser, "StyleManager path", .{ .err = err });
                     // Degrades to the element's own values, without its ancestors
@@ -1118,7 +1605,8 @@ fn Group(comptime Spec: type) type {
         }
 
         fn freshMemo(self: *Self, frame: *Frame) *std.AutoHashMapUnmanaged(*Element, Computed) {
-            const version = frame.page.style_version;
+            // Both terms only grow, so the sum moves whenever either does
+            const version = frame.page.style_version + self.bumps;
             if (self.memo_version != version) {
                 self.memo.clearRetainingCapacity();
                 self.memo_version = version;
@@ -1174,49 +1662,47 @@ fn Group(comptime Spec: type) type {
             return false;
         }
 
+        // checkRules keeps the strongest rule per property, so the order the
+        // lists are walked in doesn't change the result.
         fn applyRules(self: *const Self, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
-            if (el.getId()) |id| {
-                if (self.id_rules.get(id)) |rules| {
-                    checkRules(&rules, p, priorities, el, frame);
-                }
-            }
+            self.subject.apply(el, p, priorities, el, frame);
 
-            if (el.getClassName()) |class_attr| {
-                var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
-                while (it.next()) |class| {
-                    if (self.class_rules.get(class)) |rules| {
-                        checkRules(&rules, p, priorities, el, frame);
+            if (self.parent.isEmpty() == false) {
+                // The DOM parent, as `>` matches: a shadow root's children have
+                // none, and no parent-keyed rule can match them.
+                if (el.asNode()._parent) |parent| {
+                    if (parent.is(Element)) |parent_el| {
+                        self.parent.apply(parent_el, p, priorities, el, frame);
                     }
                 }
-            }
-
-            if (self.tag_rules.get(el.getTag())) |rules| {
-                checkRules(&rules, p, priorities, el, frame);
             }
 
             checkRules(&self.other_rules, p, priorities, el, frame);
         }
 
-        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
-            for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
-                // Only rules that set a property nothing stronger has set yet are
-                // worth matching.
-                var relevant = false;
-                inline for (fields) |field| {
-                    if (@field(rule, field) != null and priority > priorities.get(@field(Field, field))) {
-                        relevant = true;
-                    }
-                }
-                if (!relevant or !matchesSelector(el, selector, frame)) {
-                    continue;
-                }
+        inline fn count(comptime field: std.meta.FieldEnum(Work)) void {
+            if (comptime lp.IS_TEST) {
+                @field(work, @tagName(field)) += 1;
+            }
+        }
 
+        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
+                var matched = false;
                 inline for (fields) |field| {
-                    if (@field(rule, field)) |value| {
-                        if (priority > priorities.get(@field(Field, field))) {
-                            @field(p, field) = value;
-                            priorities.set(@field(Field, field), priority);
+                    const f = @field(Field, field);
+                    // Only a rule that sets a property nothing stronger has set
+                    // yet is worth matching, once.
+                    if (rule.set.contains(f) and priority > priorities.get(f)) {
+                        if (matched == false) {
+                            count(.matches);
+                            if (matchesSelector(el, selector, frame) == false) {
+                                continue :rules;
+                            }
+                            matched = true;
                         }
+                        @field(p, field) = @field(rule.values, field);
+                        priorities.set(f, priority);
                     }
                 }
             }
@@ -1255,8 +1741,10 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
         if (el.parentElement()) |parent| {
-            if (parent.getTag() == .details and !parent.hasAttributeSafe(comptime .wrap("open"))) {
-                return true;
+            if (parent.is(Element.Html.Details)) |d| {
+                if (d.isClosed()) {
+                    return true;
+                }
             }
         }
     }
@@ -1315,7 +1803,7 @@ fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSS
 /// last in cascade order, so it joins the buckets directly. Anything else
 /// takes the rebuild path.
 pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) void {
-    if (self.dirty) {
+    if (self.dirty or sheet._disabled) {
         // The pending rebuild reads the sheet's rules and picks it up.
         return;
     }
@@ -1381,11 +1869,71 @@ fn extractCustomDeclarations(self: *StyleManager, style: *CSSStyleProperties) ![
 }
 
 const BucketKey = union(enum) {
+    other,
+    tag: Tag,
     id: []const u8,
     class: []const u8,
-    tag: Tag,
-    other,
 };
+
+/// Where a group files a rule.
+const Placement = union(enum) {
+    other,
+    parent: BucketKey,
+    subject: BucketKey,
+};
+
+/// Null for a selector we skip (see getBucketKey).
+fn placeSelector(selector: Selector.Selector) ?Placement {
+    const key = getBucketKey(selector.rightmost()) orelse return null;
+    if (key != .other) {
+        // our goal is just to limit things that end up in .other
+        return .{ .subject = key };
+    }
+
+    const compound = parentCompound(selector) orelse return .other;
+    const parent_key = getBucketKey(compound) orelse return .other;
+    if (parent_key == .other) {
+        return .other;
+    }
+    return .{ .parent = parent_key };
+}
+
+/// The compound a `>` requires the subject's parent to match, looking past
+/// any `+`/`~` chain (siblings share the parent).
+fn parentCompound(selector: Selector.Selector) ?Selector.Compound {
+    var i = selector.segments.len;
+    while (i > 0) {
+        i -= 1;
+        switch (selector.segments[i].combinator) {
+            .next_sibling, .subsequent_sibling => {},
+            .child => return if (i == 0) selector.first else selector.segments[i - 1].compound,
+            .descendant => return null,
+        }
+    }
+    return null;
+}
+
+/// Optimization. A lone `:where(X)` matches exactly what X does. What changes
+/// is its priority (it has zero specificity). So we need to remain aware of
+/// the :where with respect to the priority, but we can unwrap so that it
+/// hopefully doesn't land in the .other list.
+fn unwrapWhere(selector: Selector.Selector) Selector.Selector {
+    if (selector.segments.len != 0 or selector.first.parts.len != 1) {
+        return selector;
+    }
+
+    const inner = switch (selector.first.parts[0]) {
+        .pseudo_class => |pc| switch (pc) {
+            .where => |list| list,
+            else => return selector,
+        },
+        else => return selector,
+    };
+    if (inner.len != 1 or getBucketKey(inner[0].rightmost()) == null) {
+        return selector;
+    }
+    return inner[0];
+}
 
 /// Returns the best bucket key for a compound selector, or null if it contains
 /// a dynamic pseudo-class we should skip (hover, active, focus, etc.)
@@ -1421,7 +1969,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                     else => {},
                 }
             },
-            .pseudo_element => return null,
+            .pseudo_element, .never => return null,
             .universal, .attribute => {},
         }
     }
@@ -1468,7 +2016,7 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
             .class => classes.* += 1,
             .tag, .tag_name, .pseudo_element => elements.* += 1,
             .universal => {}, // zero specificity
-            .attribute => classes.* += 1,
+            .attribute, .never => classes.* += 1,
             .pseudo_class => |pc| {
                 switch (pc) {
                     // :where() has zero specificity
@@ -1505,8 +2053,8 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
 }
 
 fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) bool {
-    const node = el.asNode();
-    return SelectorList.matches(node, selector, node, null, frame);
+    // Outside @scope, a stylesheet's :scope is the root element.
+    return SelectorList.matches(el.asNode(), selector, frame.document.asNode(), null, frame);
 }
 
 /// Only the values the dumpers act on; everything else is `other`.
@@ -1524,9 +2072,12 @@ pub const Display = enum(u2) {
     }
 };
 
-const Box = enum(u2) {
+const Box = enum(u3) {
     block_level,
+    // A plain inline box: not a block container, so not a containing block
     inline_level,
+    // inline-block, inline-flex, ...: inline outside, block container inside
+    atomic_inline,
     contents,
     table,
 
@@ -1540,8 +2091,11 @@ const Box = enum(u2) {
             return .table;
         }
 
-        if (std.ascii.startsWithIgnoreCase(trimmed, "inline")) {
+        if (std.ascii.eqlIgnoreCase(trimmed, "inline") or std.ascii.eqlIgnoreCase(trimmed, "inline flow")) {
             return .inline_level;
+        }
+        if (std.ascii.startsWithIgnoreCase(trimmed, "inline")) {
+            return .atomic_inline;
         }
 
         inline for (.{ "block", "flow-root", "list-item", "flex", "grid", "flow" }) |keyword| {
@@ -1560,6 +2114,7 @@ const Box = enum(u2) {
     fn uaDefault(tag: Tag) Box {
         return switch (tag) {
             .table => .table,
+            .slot => .contents,
             .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
             else => if (tag.isBlock()) .block_level else .inline_level,
         };
@@ -1623,6 +2178,166 @@ pub const TextTransform = enum(u3) {
     }
 };
 
+// white-space-collapse
+const SpaceCollapse = enum(u3) {
+    inherit,
+    collapse,
+    preserve,
+    preserve_breaks,
+    preserve_spaces,
+    break_spaces,
+
+    // null when invalid
+    fn parse(value: []const u8) ?SpaceCollapse {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+            return .collapse;
+        }
+        return keyword(trimmed);
+    }
+
+    fn keyword(token: []const u8) ?SpaceCollapse {
+        if (std.ascii.eqlIgnoreCase(token, "collapse") or std.ascii.eqlIgnoreCase(token, "discard")) {
+            return .collapse;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "preserve")) {
+            return .preserve;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "preserve-breaks")) {
+            return .preserve_breaks;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "preserve-spaces")) {
+            return .preserve_spaces;
+        }
+        if (std.ascii.eqlIgnoreCase(token, "break-spaces")) {
+            return .break_spaces;
+        }
+        return null;
+    }
+};
+
+/// text-wrap-mode
+const WrapMode = enum(u2) {
+    inherit,
+    wrap,
+    nowrap,
+
+    // null when invalid
+    fn parse(value: []const u8) ?WrapMode {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+            return .wrap;
+        }
+        return keyword(trimmed);
+    }
+
+    /// The `text-wrap` shorthand
+    fn parseTextWrap(value: []const u8) ?WrapMode {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) {
+            return .inherit;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+            return .wrap;
+        }
+
+        var any = false;
+        var mode: ?WrapMode = null;
+
+        var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+        while (it.next()) |token| {
+            any = true;
+            if (keyword(token)) |m| {
+                if (mode != null) {
+                    return null;
+                }
+                mode = m;
+            } else if (isWrapStyle(token) == false) {
+                return null;
+            }
+        }
+        if (any == false) {
+            return null;
+        }
+        return mode orelse .wrap;
+    }
+
+    fn keyword(token: []const u8) ?WrapMode {
+        if (std.ascii.eqlIgnoreCase(token, "wrap")) return .wrap;
+        if (std.ascii.eqlIgnoreCase(token, "nowrap")) return .nowrap;
+        return null;
+    }
+
+    fn isWrapStyle(token: []const u8) bool {
+        inline for (.{ "auto", "balance", "pretty", "stable" }) |style| {
+            if (std.ascii.eqlIgnoreCase(token, style)) return true;
+        }
+        return false;
+    }
+};
+
+/// The `white-space` shorthand: a legacy keyword, or any of a
+/// white-space-collapse and a text-wrap-mode keyword. white-space-trim's
+/// keywords are accepted but not applied.
+const WhiteSpace = struct {
+    collapse: SpaceCollapse = .inherit,
+    wrap: WrapMode = .inherit,
+
+    // Null for an invalid value, which drops the declaration.
+    fn parse(value: []const u8) ?WhiteSpace {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (isInheritKeyword(trimmed)) return .{};
+        if (std.ascii.eqlIgnoreCase(trimmed, "normal") or std.ascii.eqlIgnoreCase(trimmed, "initial")) return .{ .collapse = .collapse, .wrap = .wrap };
+        if (std.ascii.eqlIgnoreCase(trimmed, "pre")) return .{ .collapse = .preserve, .wrap = .nowrap };
+        if (std.ascii.eqlIgnoreCase(trimmed, "pre-wrap")) return .{ .collapse = .preserve, .wrap = .wrap };
+        if (std.ascii.eqlIgnoreCase(trimmed, "pre-line")) return .{ .collapse = .preserve_breaks, .wrap = .wrap };
+
+        var collapse: ?SpaceCollapse = null;
+        var wrap: ?WrapMode = null;
+        var any = false;
+        var it = std.mem.tokenizeAny(u8, trimmed, &std.ascii.whitespace);
+        while (it.next()) |token| {
+            any = true;
+            if (SpaceCollapse.keyword(token)) |c| {
+                if (collapse != null) return null;
+                collapse = c;
+            } else if (WrapMode.keyword(token)) |w| {
+                if (wrap != null) return null;
+                wrap = w;
+            } else if (isTrimKeyword(token) == false) {
+                return null;
+            }
+        }
+        if (any == false) return null;
+        return .{ .collapse = collapse orelse .collapse, .wrap = wrap orelse .wrap };
+    }
+
+    fn uaDefault(tag: Tag) ?WhiteSpace {
+        return switch (tag) {
+            .pre => .{ .collapse = .preserve, .wrap = .nowrap },
+            .textarea => .{ .collapse = .preserve, .wrap = .wrap },
+            else => null,
+        };
+    }
+
+    fn isTrimKeyword(token: []const u8) bool {
+        inline for (.{ "discard-before", "discard-after", "discard-inner" }) |trim| {
+            if (std.ascii.eqlIgnoreCase(token, trim)) return true;
+        }
+        return false;
+    }
+};
+
+fn isInheritKeyword(value: []const u8) bool {
+    return inheritsKeyword(value) or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer");
+}
+
 /// A declared width or height. Values that need layout (auto, em, calc) are
 /// `auto`: they win the cascade but give no size. The intrinsic sizes, which
 /// follow the content, are `content`. A `percent` resolves against the
@@ -1641,6 +2356,19 @@ pub const Length = packed struct(u35) {
         if (parsed.value < 0) {
             return .{};
         }
+        return switch (parsed.unit) {
+            inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
+            .percentage => .{ .value = @floatCast(parsed.value), .unit = .percent },
+            else => .{
+                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
+                .unit = .px,
+            },
+        };
+    }
+
+    // A margin may be negative and has no intrinsic sizes; auto is 0.
+    fn parseMargin(text: []const u8) Length {
+        const parsed = units.parse(text) catch return .{};
         return switch (parsed.unit) {
             inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
             .percentage => .{ .value = @floatCast(parsed.value), .unit = .percent },
@@ -1673,11 +2401,13 @@ pub const Length = packed struct(u35) {
 /// Whether an element is rendered and takes pointer input.
 const Visibility = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-direction", "flex-flow" };
+        // A shorthand comes before its longhands, so a later longhand wins
+        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap" };
 
         display: ?Display = null,
         box: ?Box = null,
         flex_column: ?bool = null,
+        flex_wrap: ?bool = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -1687,9 +2417,23 @@ const Visibility = struct {
             if (std.ascii.eqlIgnoreCase(name, "display")) {
                 self.display = Display.parse(value);
                 self.box = Box.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction") or std.ascii.eqlIgnoreCase(name, "flex-flow")) {
-                // flex-flow's direction keyword comes first
-                self.flex_column = std.ascii.startsWithIgnoreCase(std.mem.trimStart(u8, value, &std.ascii.whitespace), "column");
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction")) {
+                self.flex_column = isColumnDirection(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-wrap")) {
+                self.flex_wrap = isWrap(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-flow")) {
+                self.flex_column = false;
+                self.flex_wrap = false;
+                // Either order; an omitted one resets to row or nowrap
+                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                while (it.next()) |token| {
+                    if (isColumnDirection(token)) {
+                        self.flex_column = true;
+                    }
+                    if (isWrap(token)) {
+                        self.flex_wrap = true;
+                    }
+                }
             } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
                 self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
             } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
@@ -1702,6 +2446,16 @@ const Visibility = struct {
                 });
             }
         }
+
+        fn isColumnDirection(value: []const u8) bool {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            return std.ascii.eqlIgnoreCase(trimmed, "column") or std.ascii.eqlIgnoreCase(trimmed, "column-reverse");
+        }
+
+        fn isWrap(value: []const u8) bool {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            return std.ascii.eqlIgnoreCase(trimmed, "wrap") or std.ascii.eqlIgnoreCase(trimmed, "wrap-reverse");
+        }
     };
 
     // The element's own values, from the cascade.
@@ -1712,17 +2466,21 @@ const Visibility = struct {
         // Without an author `display` it's the tag's UA default, see finish
         box: Box = .inline_level,
         flex_column: bool = false,
+        flex_wrap: bool = false,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
         opacity_zero: bool = false,
         pointer_events_none: ?bool = null,
+        // see Node.isOutsideFlatTree. Hidden like display:none
+        outside_flat_tree: bool = false,
     };
 
-    const Computed = packed struct(u10) {
+    const Computed = packed struct(u12) {
         display: Display = .other,
         box: Box = .inline_level,
         flex_column: bool = false,
+        flex_wrap: bool = false,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -1734,10 +2492,11 @@ const Visibility = struct {
                 .display = own.display,
                 .box = own.box,
                 .flex_column = own.flex_column,
+                .flex_wrap = own.flex_wrap,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,
-                .in_display_none = own.display == .none or parent.in_display_none,
+                .in_display_none = own.display == .none or own.outside_flat_tree or parent.in_display_none,
                 .in_opacity_zero = own.opacity_zero or parent.in_opacity_zero,
             };
         }
@@ -1755,6 +2514,7 @@ const Visibility = struct {
     // origin regardless of specificity, so `.x { display: flex }` on a
     // `<div class="x" hidden>` must report visible.
     pub fn finish(p: *Cascaded, el: *Element, frame: *Frame, priorities: *const Priorities(Declared)) void {
+        p.outside_flat_tree = el.asNode().isOutsideFlatTree();
         p.author_display = priorities.get(.display) != 0;
         if (priorities.get(.box) == 0) {
             p.box = Box.uaDefault(el.getTag());
@@ -1768,11 +2528,12 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
         flex_grow: ?bool = null,
+        flex_no_shrink: ?bool = null,
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
@@ -1780,6 +2541,10 @@ const Geometry = struct {
         height: ?Length = null,
         min_width: ?Length = null,
         max_width: ?Length = null,
+        margin_left: ?Length = null,
+        margin_right: ?Length = null,
+        left: ?Length = null,
+        right: ?Length = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
@@ -1787,8 +2552,37 @@ const Geometry = struct {
                 self.overflow_x_clips = overflowClips(value);
             } else if (std.ascii.eqlIgnoreCase(name, "flex-grow")) {
                 self.flex_grow = flexGrows(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "flex-shrink")) {
+                if (flexFactor(value)) |factor| {
+                    self.flex_no_shrink = factor == 0;
+                }
             } else if (std.ascii.eqlIgnoreCase(name, "flex")) {
                 self.flex_grow = flexShorthandGrows(value);
+                self.flex_no_shrink = flexShorthandNoShrink(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin")) {
+                const sides = boxSides(value) orelse return;
+                self.margin_left = sides.left;
+                self.margin_right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "margin-inline")) {
+                const sides = inlineSides(value) orelse return;
+                self.margin_left = sides.left;
+                self.margin_right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "inset")) {
+                const sides = boxSides(value) orelse return;
+                self.left = sides.left;
+                self.right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "inset-inline")) {
+                const sides = inlineSides(value) orelse return;
+                self.left = sides.left;
+                self.right = sides.right;
+            } else if (std.ascii.eqlIgnoreCase(name, "left") or std.ascii.eqlIgnoreCase(name, "inset-inline-start")) {
+                self.left = Length.parseMargin(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "right") or std.ascii.eqlIgnoreCase(name, "inset-inline-end")) {
+                self.right = Length.parseMargin(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin-left") or std.ascii.eqlIgnoreCase(name, "margin-inline-start")) {
+                self.margin_left = Length.parseMargin(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "margin-right") or std.ascii.eqlIgnoreCase(name, "margin-inline-end")) {
+                self.margin_right = Length.parseMargin(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
                 self.overflow_y_scrolls = overflowScrolls(value);
             } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
@@ -1804,6 +2598,40 @@ const Geometry = struct {
             } else if (std.ascii.eqlIgnoreCase(name, "max-width")) {
                 self.max_width = Length.parse(value);
             }
+        }
+
+        const Sides = struct { left: Length, right: Length };
+
+        // The left and right of a `top [right [bottom [left]]]` shorthand
+        // (margin, inset).
+        fn boxSides(value: []const u8) ?Sides {
+            var count: usize = 0;
+            var tokens: [4][]const u8 = undefined;
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            while (it.next()) |token| : (count += 1) {
+                if (count == tokens.len) {
+                    return null;
+                }
+                tokens[count] = token;
+            }
+            if (count == 0) {
+                return null;
+            }
+            const right = tokens[@min(count - 1, 1)];
+            return .{
+                .left = Length.parseMargin(if (count == 4) tokens[3] else right),
+                .right = Length.parseMargin(right),
+            };
+        }
+
+        // `start [end]` (margin-inline, inset-inline), in a left-to-right flow
+        fn inlineSides(value: []const u8) ?Sides {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            const start = it.next() orelse return null;
+            return .{
+                .left = Length.parseMargin(start),
+                .right = Length.parseMargin(it.next() orelse start),
+            };
         }
 
         // `overlay` is Chrome's legacy alias of auto.
@@ -1825,6 +2653,12 @@ const Geometry = struct {
             return number > 0;
         }
 
+        // A non-negative <number>, null for anything else (a basis, a keyword)
+        fn flexFactor(value: []const u8) ?f64 {
+            const number = std.fmt.parseFloat(f64, std.mem.trim(u8, value, &std.ascii.whitespace)) catch return null;
+            return if (number >= 0) number else null;
+        }
+
         // `flex: <grow> [<shrink>] [<basis>]`; `auto` grows, `none` and
         // `initial` don't, and a lone width (`flex: 200px`) is a basis.
         fn flexShorthandGrows(value: []const u8) bool {
@@ -1832,6 +2666,21 @@ const Geometry = struct {
             const first = it.next() orelse return false;
             if (std.ascii.eqlIgnoreCase(first, "auto")) return true;
             return flexGrows(first);
+        }
+
+        // Only `none` and an explicit 0 shrink factor stop the shrinking; an
+        // omitted shrink is 1. The shrink is the number after the grow.
+        fn flexShorthandNoShrink(value: []const u8) bool {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            const first = it.next() orelse return false;
+            if (std.ascii.eqlIgnoreCase(first, "none")) {
+                return true;
+            }
+            if (flexFactor(first) == null) {
+                return false;
+            }
+            const second = it.next() orelse return false;
+            return flexFactor(second) == 0;
         }
 
         // `contain` keeps the scroll in the box, `none` also kills the bounce we
@@ -1842,10 +2691,11 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u146) {
+    const Computed = packed struct(u287) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
+        flex_no_shrink: bool = false,
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
@@ -1854,6 +2704,12 @@ const Geometry = struct {
         // auto, none and the intrinsic keywords don't limit
         min_width: Length = .{},
         max_width: Length = .{},
+        // auto, and values that need layout, are 0
+        margin_left: Length = .{},
+        margin_right: Length = .{},
+        // Positioned boxes only; auto, and values that need layout, are auto
+        left: Length = .{},
+        right: Length = .{},
     };
 };
 
@@ -1919,33 +2775,96 @@ const TouchAction = struct {
 /// value; `.inherit` means it takes its parent's.
 const Text = struct {
     const Declared = struct {
-        const names = [_][]const u8{"text-transform"};
+        const names = [_][]const u8{ "text-transform", "white-space", "white-space-collapse", "text-wrap-mode", "text-wrap" };
 
+        text_wrap_mode: ?WrapMode = null,
         text_transform: ?TextTransform = null,
+        white_space_collapse: ?SpaceCollapse = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "text-transform")) {
                 self.text_transform = TextTransform.parse(value);
+            } else if (std.ascii.eqlIgnoreCase(name, "white-space")) {
+                if (WhiteSpace.parse(value)) |white_space| {
+                    self.white_space_collapse = white_space.collapse;
+                    self.text_wrap_mode = white_space.wrap;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "white-space-collapse")) {
+                if (SpaceCollapse.parse(value)) |collapse| {
+                    self.white_space_collapse = collapse;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap-mode")) {
+                if (WrapMode.parse(value)) |mode| {
+                    self.text_wrap_mode = mode;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap")) {
+                if (WrapMode.parseTextWrap(value)) |mode| {
+                    self.text_wrap_mode = mode;
+                }
             }
         }
     };
 
-    const Computed = packed struct(u3) {
+    const Computed = packed struct(u8) {
+        text_wrap_mode: WrapMode = .inherit,
         text_transform: TextTransform = .inherit,
+        white_space_collapse: SpaceCollapse = .inherit,
     };
+
+    pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
+        const ua = WhiteSpace.uaDefault(el.getTag()) orelse return;
+        if (priorities.get(.white_space_collapse) == 0) {
+            p.white_space_collapse = ua.collapse;
+        }
+        if (priorities.get(.text_wrap_mode) == 0) {
+            p.text_wrap_mode = ua.wrap;
+        }
+    }
 };
 
-/// Whether a box is out of normal flow, which sizes it to its content.
+/// `inherit`, `unset` and `revert` are not handled, so they drop the
+/// declaration. `initial` is the initial value, static.
+pub const Position = enum(u3) {
+    static,
+    relative,
+    absolute,
+    fixed,
+    sticky,
+
+    // Null for an invalid value, which drops the declaration.
+    fn parse(value: []const u8) ?Position {
+        const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(trimmed, "static") or std.ascii.eqlIgnoreCase(trimmed, "initial")) return .static;
+        if (std.ascii.eqlIgnoreCase(trimmed, "relative")) return .relative;
+        if (std.ascii.eqlIgnoreCase(trimmed, "absolute")) return .absolute;
+        if (std.ascii.eqlIgnoreCase(trimmed, "fixed")) return .fixed;
+        if (std.ascii.eqlIgnoreCase(trimmed, "sticky") or std.ascii.eqlIgnoreCase(trimmed, "-webkit-sticky")) return .sticky;
+        return null;
+    }
+
+    /// Out of flow, so the box sizes to its content. Sticky is not: it lays
+    /// out in flow and is only offset when painted.
+    fn outOfFlow(self: Position) bool {
+        return self == .absolute or self == .fixed;
+    }
+
+    /// The computed-value keyword, as getComputedStyle reports it.
+    pub fn keyword(self: Position) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// Where a box sits: its position and whether it floats.
 const Flow = struct {
     const Declared = struct {
         const names = [_][]const u8{ "position", "float" };
 
-        absolutely_positioned: ?bool = null,
+        position: ?Position = null,
         floated: ?bool = null,
 
         fn apply(self: *Declared, name: []const u8, value: []const u8) void {
             if (std.ascii.eqlIgnoreCase(name, "position")) {
-                self.absolutely_positioned = std.ascii.eqlIgnoreCase(value, "absolute") or std.ascii.eqlIgnoreCase(value, "fixed");
+                self.position = Position.parse(value);
             } else if (std.ascii.eqlIgnoreCase(name, "float")) {
                 self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
                     std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
@@ -1953,9 +2872,23 @@ const Flow = struct {
         }
     };
 
-    const Computed = packed struct(u2) {
-        absolutely_positioned: bool = false,
+    pub const Cascaded = struct {
+        position: Position = .static,
         floated: bool = false,
+    };
+
+    const Computed = packed struct(u5) {
+        position: Position = .static,
+        floated: bool = false,
+        in_fixed: bool = false, // This element or an ancestor
+
+        fn resolve(own: Cascaded, parent: Computed) Computed {
+            return .{
+                .position = own.position,
+                .floated = own.floated,
+                .in_fixed = own.position == .fixed or parent.in_fixed,
+            };
+        }
     };
 };
 
@@ -2401,6 +3334,18 @@ test "StyleManager: text-transform" {
     try testing.htmlRunner("css/text_transform.html", .{});
 }
 
+test "StyleManager: stylesheet :scope is the root element" {
+    try testing.htmlRunner("css/scope_pseudo.html", .{});
+}
+
+test "StyleManager: position" {
+    try testing.htmlRunner("css/position.html", .{});
+}
+
+test "StyleManager: inline style writes" {
+    try testing.htmlRunner("css/inline_style_writes.html", .{});
+}
+
 test "StyleManager: text-transform without rules skips the memo" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -2542,6 +3487,26 @@ test "StyleManager: computeSpecificity: :is() takes most specific inner" {
     try testing.expectEqual(1 << 20, computeSpecificity(selector));
 }
 
+test "StyleManager: computeSpecificity: never-matching attribute keeps attribute weight" {
+    // :is([a^=""], div) -> (0, 1, 0): :is() takes its most specific argument,
+    // matching or not
+    const never_selector = Selector.Selector{
+        .first = .{ .parts = &.{.never} },
+        .segments = &.{},
+    };
+    const tag_selector = Selector.Selector{
+        .first = .{ .parts = &.{.{ .tag = .div }} },
+        .segments = &.{},
+    };
+    const selector = Selector.Selector{
+        .first = .{ .parts = &.{
+            .{ .pseudo_class = .{ .is = &.{ never_selector, tag_selector } } },
+        } },
+        .segments = &.{},
+    };
+    try testing.expectEqual(1 << 10, computeSpecificity(selector));
+}
+
 test "StyleManager: computeSpecificity: pseudo-class (general)" {
     // :hover -> (0, 1, 0) - pseudo-classes count as class-level
     const selector = Selector.Selector{
@@ -2647,9 +3612,9 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{} } },
         .{ .geometry = .{ .width = .{} } },
         .{ .visibility = .{ .display = .flex, .box = .block_level } },
-        .{ .visibility = .{ .display = .grid, .box = .inline_level } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = true, .floated = true } },
-        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .absolutely_positioned = false, .floated = false } },
+        .{ .visibility = .{ .display = .grid, .box = .atomic_inline } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true } },
+        .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .relative, .floated = false } },
     };
 
     var i: usize = 0;
@@ -2749,6 +3714,89 @@ test "StyleManager: memo: reuse and invalidation" {
     sm.sheetModified();
     try testing.expectEqual(false, sm.isHidden(p, .{}));
     try testing.expectEqual(2, sm.visibility.memo.count());
+}
+
+test "StyleManager: memo: an inline write it doesn't cascade keeps it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div></div>");
+    const div = body.firstChild().?.as(Element);
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+
+    // A carousel moves each slide with a transform, many times a second
+    const version = frame.page.style_version;
+    try style.setProperty("transform", "translateX(-50px)", null, frame);
+    try style.setProperty("z-index", "2", null, frame);
+    _ = try style.removeProperty("transform", frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectString("z-index: 2;", div.getAttributeSafe(comptime .wrap("style")).?);
+
+    // Once a selector reads the style attribute, any write can change a match
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("[style*=rotate] { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(div));
+    try style.setProperty("transform", "rotate(5deg)", null, frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(div));
+}
+
+test "StyleManager: memo: an inline write drops only the memos that read it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p></p></div>");
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const version = frame.page.style_version;
+
+    // A fading slide: its visibility, inherited below it, but no width
+    sm.cacheWidth(div, .box, 100);
+    try testing.expectEqual(false, sm.isHidden(p, .{ .check_opacity = true }));
+    try style.setProperty("opacity", "0", null, frame);
+    try testing.expectEqual(true, sm.isHidden(p, .{ .check_opacity = true }));
+    try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
+    try testing.expectEqual(0, sm.geometry.bumps);
+
+    // display reaches both
+    try style.setProperty("display", "none", null, frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(div));
+    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+
+    // A shorthand reaches what its longhands do: overflow-x clips the width
+    sm.cacheWidth(div, .box, 100);
+    const visibility_bumps = sm.visibility.bumps;
+    try testing.expectEqual(false, sm.clipsOverflowX(div));
+    try testing.expectEqual(false, sm.clipsOverflowX(p));
+    try style.setProperty("overflow", "hidden", null, frame);
+    try testing.expectEqual(true, sm.clipsOverflowX(div));
+    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+    try testing.expectEqual(visibility_bumps, sm.visibility.bumps);
+    // geometry isn't inherited: only the written element's entry goes
+    try testing.expect(sm.geometry.memo.contains(p));
+    try testing.expectEqual(false, sm.clipsOverflowX(p));
+
+    // No memo reads a custom property
+    sm.cacheWidth(div, .box, 100);
+    try style.setProperty("--offset", "4px", null, frame);
+    try testing.expectString("4px", sm.customPropertyValue(p, comptime .wrap("--offset")).?);
+    try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
+
+    // None of it touched another frame's memos
+    try testing.expectEqual(version, frame.page.style_version);
 }
 
 test "StyleManager: memo: inherited values, any query order" {
@@ -2869,30 +3917,26 @@ test "StyleManager: revert on visibility and pointer-events inherits" {
 }
 
 // Every element of a deep chain probed in document order, the shape of an
-// interactivity pass. Walking all ancestors per probe is quadratic, which only
-// the growth between two depths a factor of TIMES apart tells apart. The
-// fastest of ROUNDS so a scheduler stall on the small chain can't skew it.
+// interactivity pass. Walking all ancestors per probe would cascade each
+// element once per descendant; the memo cascades it once.
 test "StyleManager: memo: probing a deep tree stays linear" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
 
-    const SMALL = 1000;
-    const TIMES = 10;
-    // well above TIMES, well below TIMES squared
-    const LIMIT = TIMES * 3;
-    const ROUNDS = 3;
+    const DEPTH = 1000;
+    const top = try buildDivChain(frame, DEPTH);
 
-    const small = try buildDivChain(frame, SMALL);
-    const large = try buildDivChain(frame, SMALL * TIMES);
-
-    var small_us: u64 = std.math.maxInt(u64);
-    var large_us: u64 = std.math.maxInt(u64);
-    for (0..ROUNDS) |_| {
-        small_us = @min(small_us, probeChain(frame, small));
-        large_us = @min(large_us, probeChain(frame, large));
+    frame.styleChanged();
+    const before = sm.visibility.cascades;
+    var current: ?*Element = top;
+    while (current) |el| {
+        const child = if (el.asNode().firstChild()) |c| c.as(Element) else null;
+        // only the deepest one declares it
+        try testing.expectEqual(child == null, sm.hasPointerEventsNone(el));
+        current = child;
     }
-    const ratio = @as(f64, @floatFromInt(large_us)) / @as(f64, @floatFromInt(@max(small_us, 1)));
-    try testing.expect(ratio < LIMIT);
+    try testing.expectEqual(DEPTH, sm.visibility.cascades - before);
 }
 
 fn buildDivChain(frame: *Frame, depth: usize) !*Element {
@@ -2906,20 +3950,6 @@ fn buildDivChain(frame: *Frame, depth: usize) !*Element {
         top = div;
     }
     return top;
-}
-
-fn probeChain(frame: *Frame, top: *Element) u64 {
-    const sm = &frame._style_manager;
-    frame.styleChanged();
-    const start = lp.datetime.microTimestamp(.awake);
-    var current: ?*Element = top;
-    while (current) |el| {
-        const child = if (el.asNode().firstChild()) |c| c.as(Element) else null;
-        // only the deepest one declares it
-        std.debug.assert(sm.hasPointerEventsNone(el) == (child == null));
-        current = child;
-    }
-    return @intCast(lp.datetime.microTimestamp(.awake) - start);
 }
 
 test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
@@ -2971,4 +4001,129 @@ test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
     _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
     try testing.expectEqual(true, sm.dirty);
     try testing.expectEqual(false, sm.isHidden(c, .{}));
+}
+
+// Child-combinator rules whose subject compound has no id, class or tag
+// (Tailwind 3's `.space-x-N > :not([hidden]) ~ :not([hidden])`, Tailwind 4's
+// `:where(.space-x-N > :not(:last-child))`, Bootstrap's `.row > *`) are filed
+// under the parent compound. Counts the Geometry cascade's lookups: matches
+// is what the parent buckets prune, probes is what they cost.
+test "StyleManager: work: child-combinator rules keyed by parent" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const GeometryGroup = @TypeOf(sm.geometry);
+
+    const SPACE_RULES = 40;
+    const css = comptime blk: {
+        var text: []const u8 = ".row > * { width: 100% }\n";
+        for (0..SPACE_RULES) |i| {
+            text = text ++ std.fmt.comptimePrint(
+                \\.space-x-{d} > :not([hidden]) ~ :not([hidden]) {{ margin-left: {d}px }}
+                \\:where(.gap-x-{d} > :not(:last-child)) {{ margin-right: {d}px }}
+                \\
+            , .{ i, i, i, i });
+        }
+        break :blk text;
+    };
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div class="space-x-4"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="row"><div></div><div></div><div></div><div></div></div><div><div></div><div></div><div></div><div></div></div><div class="gap-x-4"><span></span><span></span><span></span><span></span></div>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(css, frame);
+    _ = try body.insertBefore(style_el.asNode(), body.firstChild(), frame);
+
+    // Each row's parent, then its children
+    var elements: [24]*Element = undefined;
+    var count: usize = 0;
+    var it = style_el.asNode().nextSibling();
+    while (it) |node| : (it = node.nextSibling()) {
+        elements[count] = node.as(Element);
+        count += 1;
+        var child = node.firstChild();
+        while (child) |c| : (child = c.nextSibling()) {
+            elements[count] = c.as(Element);
+            count += 1;
+        }
+    }
+    try testing.expectEqual(elements.len, count);
+
+    try sm.rebuildIfDirty();
+    GeometryGroup.work = .{};
+    for (elements) |el| {
+        _ = sm.geometryProps(el);
+    }
+    const work = GeometryGroup.work;
+
+    // The cascade the counts describe
+    const spans = elements[1..9];
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[0]).margin_left);
+    try testing.expectEqual(Length{ .value = 4, .unit = .px }, sm.geometryProps(spans[1]).margin_left);
+    try testing.expectEqual(Length{ .value = 100, .unit = .percent }, sm.geometryProps(elements[10]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(elements[15]).width);
+    const gap_spans = elements[20..24];
+    try testing.expectEqual(Length{ .value = 4, .unit = .px }, sm.geometryProps(gap_spans[0]).margin_right);
+    try testing.expectEqual(Length{}, sm.geometryProps(gap_spans[3]).margin_right);
+
+    // Filed in `other`, every element was matched against all 81 rules:
+    // 24 * 81 = 1944 matches for 27 probes. Now each child of a keyed parent
+    // matches its one rule, at the price of probing every element's parent:
+    // the 4 rows' <body> tag, each child's parent tag plus its class if any.
+    try testing.expectEqual(Work{
+        .probes = (24 + 3) + (4 + 8 * 2 + 4 * 2 + 4 * 1 + 4 * 2),
+        .matches = 8 + 4 + 4,
+    }, work);
+}
+
+test "StyleManager: parent-keyed and :where rules keep their priority" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div class="a"><p></p><p class="x"></p><p></p><p></p></div><section class="a"><p></p></section>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    // `div > *` (0,0,1) beats the later :where (0,0,0); the :where beats
+    // the earlier `*` (0,0,0) on document order; `.a > .x + *` keys on
+    // `.a` past the `+`; `.a:hover > *` can't be keyed, and stays in other.
+    try style_el.asNode().setTextContent(
+        \\* { width: 30px }
+        \\div > * { width: 20px }
+        \\:where(.a > *) { width: 10px }
+        \\.a > .x + * { margin-left: 5px }
+        \\.a:hover > * { margin-right: 7px }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), body.firstChild(), frame);
+
+    const div = style_el.asNode().nextSibling().?.as(Element);
+    const section = div.asNode().nextSibling().?.as(Element);
+    const ps = div.asNode().firstChild().?;
+    const x = ps.nextSibling().?;
+    const after_x = x.nextSibling().?.as(Element);
+
+    try sm.rebuildIfDirty();
+    try testing.expectEqual(Length{ .value = 20, .unit = .px }, sm.geometryProps(ps.as(Element)).width);
+    try testing.expectEqual(Length{ .value = 10, .unit = .px }, sm.geometryProps(section.asNode().firstChild().?.as(Element)).width);
+    try testing.expectEqual(Length{ .value = 30, .unit = .px }, sm.geometryProps(section).width);
+    try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(after_x).margin_left);
+    try testing.expectEqual(Length{}, sm.geometryProps(after_x.asNode().nextSibling().?.as(Element)).margin_left);
+    try testing.expectEqual(Length{}, sm.geometryProps(after_x).margin_right);
+
+    // `*` and `.a:hover > *`
+    try testing.expectEqual(2, sm.geometry.other_rules.len);
+    try testing.expectEqual(1, sm.geometry.parent.tag.count());
+    try testing.expectEqual(1, sm.geometry.parent.class.count());
+    try testing.expectEqual(2, sm.geometry.parent.class.get("a").?.len);
 }

@@ -110,6 +110,10 @@ pub const ErrorReason = enum {
 
 // Chrome's net error for an ErrorReason's error, else the error's name.
 pub fn errorText(err: anyerror) []const u8 {
+    if (err == error.UnsafePort) {
+        // Not a Fetch.failRequest reason, so not in ErrorReason.
+        return "net::ERR_UNSAFE_PORT";
+    }
     inline for (comptime std.enums.values(ErrorReason)) |reason| {
         if (err == reason.toError()) {
             return reason.netError();
@@ -280,20 +284,28 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
 
 const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
-// Only matches the cookie on provided parameters
-fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
-    if (!std.mem.eql(u8, cookie.name, name)) return false;
+// Only matches the cookie on provided parameters. We do not want to use
+// Cookie.appliesTo here, as a Cookie with a shorter path would match. Similar
+// to deduplicating with areCookiesEqual, except domain and path are optional.
+const CookieMatch = struct {
+    name: []const u8,
+    domain: ?[]const u8,
+    path: ?[]const u8,
 
-    if (domain) |domain_| {
-        const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
-        const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
-        if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+    fn matches(self: *const CookieMatch, cookie: *const Cookie) bool {
+        if (!std.mem.eql(u8, cookie.name, self.name)) return false;
+
+        if (self.domain) |domain_| {
+            const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
+            const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
+            if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+        }
+        if (self.path) |path_| {
+            if (!std.mem.eql(u8, cookie.path, path_)) return false;
+        }
+        return true;
     }
-    if (path) |path_| {
-        if (!std.mem.eql(u8, cookie.path, path_)) return false;
-    }
-    return true;
-}
+};
 
 fn deleteCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -311,21 +323,12 @@ fn deleteCookies(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const cookies = &bc.session.cookie_jar.cookies;
-
-    var index = cookies.items.len;
-    while (index > 0) {
-        index -= 1;
-        const cookie = &cookies.items[index];
-        const domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain);
-        const path = try Cookie.parsePath(cmd.arena, params.url, params.path);
-
-        // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
-        // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
-        if (cookieMatches(cookie, params.name, domain, path)) {
-            cookies.orderedRemove(index).deinit();
-        }
-    }
+    const match: CookieMatch = .{
+        .name = params.name,
+        .domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain),
+        .path = try Cookie.parsePath(cmd.arena, params.url, params.path),
+    };
+    bc.session.cookie_jar.removeWhere(&match, CookieMatch.matches);
     return cmd.sendResult(null, .{});
 }
 
@@ -401,7 +404,7 @@ fn getCookies(cmd: *CDP.Command) !void {
 
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items, .urls = urls.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar, .urls = urls.items };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -413,7 +416,7 @@ fn getAllCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -560,7 +563,7 @@ pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.Request
     try bc.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
-        .encodedDataLength = msg.content_length,
+        .encodedDataLength = msg.encoded_data_length,
     }, .{ .session_id = session_id });
 }
 
@@ -791,9 +794,10 @@ const ResponseWriter = struct {
 
 fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
     return switch (resource_type) {
-        .document, .stylesheet => "VeryHigh",
+        .document, .stylesheet, .download => "VeryHigh",
         .script, .worker, .xhr, .fetch, .eventsource => "High",
         .image, .text_track => "Low",
+        .beacon => "VeryLow",
     };
 }
 
@@ -827,6 +831,8 @@ test "cdp.network: errorText" {
     try testing.expectEqualSlices(u8, "net::ERR_FAILED", errorText(ErrorReason.Failed.toError()));
     try testing.expectEqualSlices(u8, "net::ERR_NAME_NOT_RESOLVED", errorText(ErrorReason.NameNotResolved.toError()));
     try testing.expectEqualSlices(u8, "CouldntConnect", errorText(error.CouldntConnect));
+    // A destination on the Fetch bad-port list, like Chrome's ERR_UNSAFE_PORT.
+    try testing.expectEqualSlices(u8, "net::ERR_UNSAFE_PORT", errorText(error.UnsafePort));
 }
 
 test "cdp.network emulateNetworkConditions and setBypassServiceWorker" {
@@ -1384,6 +1390,94 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .blockedReason = "inspector",
     }, .{ .session_id = "SID-BLOCK" });
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+}
+
+test "cdp.Network: a bad port fails before connecting, redirect hop included" {
+    testing.silenceLog(&.{.http});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-PORT",
+        .session_id = "SID-PORT",
+    });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+    });
+
+    const ErrorContext = struct {
+        err: ?anyerror = null,
+
+        fn callback(raw: *anyopaque, err: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.err = err;
+        }
+    };
+
+    // Nothing listens on 22 in tests either: UnsafePort, not CouldntConnect,
+    // shows the pipeline refused it.
+    for ([_][:0]const u8{ "http://127.0.0.1:22/", "http://127.0.0.1:9582/redirect-bad-port" }) |url| {
+        var error_context: ErrorContext = .{};
+        var request_id: [14]u8 = undefined;
+        _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+
+        try client.request(.{
+            .frame_id = page.frame_id,
+            .loader_id = 1,
+            .method = .GET,
+            .url = url,
+            .origin = bc.security_origin,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .fetch,
+            .notification = bc.session.notification,
+            .ctx = &error_context,
+            .error_callback = ErrorContext.callback,
+            .shutdown_callback = HttpClient.noopShutdown,
+        }, null);
+
+        try ctx.expectSentEvent("Network.loadingFailed", .{
+            .requestId = &request_id,
+            .errorText = "net::ERR_UNSAFE_PORT",
+        }, .{ .session_id = "SID-PORT" });
+        try testing.expectEqual(error.UnsafePort, error_context.err.?);
+    }
+}
+
+test "cdp.Network: loadingFinished reports the bytes received, not the decoded body" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-ED", .session_id = "SID-ED" });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/raw/gzip",
+        .origin = bc.security_origin,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
+        .resource_type = .fetch,
+        .notification = bc.session.notification,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    // The header block and the 29 gzipped bytes, not the 1000 decoded ones.
+    const r = testing.base.raw_responses.gzip;
+    try ctx.expectSentEvent("Network.loadingFinished", .{
+        .encodedDataLength = r.head.len + r.body.len,
+    }, .{ .session_id = "SID-ED" });
 }
 
 test "cdp.Network: POST body exposed as postData" {

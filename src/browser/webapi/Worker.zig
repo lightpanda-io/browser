@@ -26,6 +26,7 @@ const Frame = @import("../Frame.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
 const EventTarget = @import("EventTarget.zig");
+const MessagePort = @import("MessagePort.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
@@ -237,7 +238,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
             return;
         },
-        .module => js_context.module(false, &ls.local, script, self._url, true) catch |err| {
+        .module => js_context.module(false, &ls.local, script, self._url, .{}, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }
@@ -332,22 +333,17 @@ pub fn terminate(self: *Worker) void {
 }
 
 // Posts a message from the frame to the worker.
-pub fn postMessage(self: *Worker, data: js.Value) !void {
-    try self._worker_scope.receiveMessage(data);
+pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value) !void {
+    try self._worker_scope.receiveMessage(data, try MessagePort.transferList(transfer));
 }
 
 // Called internally by DedicatedWorkerGlobalScope when it wants to post a message to us
-pub fn receiveMessage(self: *Worker, data: js.Value) !void {
+pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessagePort) !void {
     const frame = self._frame;
-    const cloned_data = blk: {
-        var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
-        defer ls.deinit();
 
-        // clones from where it currently is (the Worker context) to our Page's context
-        const cloned = data.structuredCloneTo(&ls.local) catch |err| break :blk err;
-        break :blk cloned.persist();
-    };
+    // clones from where it currently is (the Worker context) to our Page's context
+    const message = try MessagePort.cloneMessage(data, transfer, &frame.js.execution);
+    errdefer message.release();
 
     const message_arena = try frame.getArena(.tiny, "Worker.receiveMessage");
     errdefer message_arena.release();
@@ -355,9 +351,11 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
     const callback = try message_arena.create(ReceiveMessageCallback);
     callback.* = .{
         .worker = self,
-        .data = cloned_data,
+        .message = message,
         .arena = message_arena,
+        .hold = frame.page.settle.hold(message.task),
     };
+    errdefer callback.hold.release();
 
     try frame.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "Worker.receiveMessage",
@@ -366,15 +364,15 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
 }
 
 const ReceiveMessageCallback = struct {
-    data: anyerror!js.Value.Global,
+    message: MessagePort.Message,
     arena: *lp.Arena,
     worker: *Worker,
+    hold: js.Attribution.Hold,
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
-        if (self.data) |d| {
-            d.release();
-        } else |_| {}
+        self.hold.release();
+        self.message.release();
         self.deinit();
     }
 
@@ -385,18 +383,24 @@ const ReceiveMessageCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ReceiveMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+        defer self.message.releasePorts();
+
+        self.hold.release();
 
         const worker = self.worker;
         const frame = worker._frame;
         const target = worker.asEventTarget();
 
-        // If data is null, structured clone failed - fire messageerror
-        const data = self.data catch |err| {
+        const task_scope = frame.js.attribution.enterNew(.message, .{ .parent = self.message.task, .label = "Worker" });
+        defer task_scope.exit();
+
+        // If data is null, deserialization failed - fire messageerror
+        const data = self.message.data orelse {
             if (!frame._event_manager.hasDirectListeners(target, "messageerror")) {
                 return null;
             }
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
-                .data = .{ .string = @errorName(err) },
+                .ports = self.message.ports,
                 .bubbles = false,
                 .cancelable = false,
             }, frame.page)).asEvent();
@@ -412,6 +416,7 @@ const ReceiveMessageCallback = struct {
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = .{ .value = data },
+            .ports = self.message.ports,
             .bubbles = false,
             .cancelable = false,
         }, frame.page)).asEvent();

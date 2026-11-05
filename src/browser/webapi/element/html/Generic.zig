@@ -46,5 +46,12 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub var class_id: bridge.ClassId = undefined;
+        // Generic elements have no interface of their own.
+        pub const wrap_as = HtmlElement.JsApi;
     };
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Generic" {
+    try testing.htmlRunner("element/html/generic.html", .{});
+}

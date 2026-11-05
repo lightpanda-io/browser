@@ -21,15 +21,15 @@
   testing.expectEqual('object', typeof document.forms);
   testing.expectEqual('object', typeof document.location);
 
-  // Plain Document should NOT have HTML-specific properties
+  // The HTML members live on Document, so a plain Document has them too.
   const plainDoc = new Document();
-  testing.expectEqual('undefined', typeof plainDoc.head);
-  testing.expectEqual('undefined', typeof plainDoc.body);
-  testing.expectEqual('undefined', typeof plainDoc.title);
-  testing.expectEqual('undefined', typeof plainDoc.images);
-  testing.expectEqual('undefined', typeof plainDoc.scripts);
-  testing.expectEqual('undefined', typeof plainDoc.links);
-  testing.expectEqual('undefined', typeof plainDoc.forms);
+  testing.expectEqual(null, plainDoc.head);
+  testing.expectEqual(null, plainDoc.body);
+  testing.expectEqual('', plainDoc.title);
+  testing.expectEqual(0, plainDoc.images.length);
+  testing.expectEqual(0, plainDoc.scripts.length);
+  testing.expectEqual(0, plainDoc.links.length);
+  testing.expectEqual(0, plainDoc.forms.length);
   // location lives on Document (returns null for non-HTMLDocument).
   testing.expectEqual(null, plainDoc.location);
 
