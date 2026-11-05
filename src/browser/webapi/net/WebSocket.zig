@@ -943,7 +943,7 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
         // MUST NOT send multiple subprotocol headers or select an unrequested
         // protocol.
         if (self._protocol.len != 0) {
-            log.warn(.websocket, "server sent multiple Sec-WebSocket-Protocol headers", .{ .protocol = value });
+            log.warn(.websocket, "duplicate SecWebSocketProtocol", .{ .protocol = value });
             return 0;
         }
         var matched = false;
@@ -954,7 +954,7 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             }
         }
         if (!matched) {
-            log.warn(.websocket, "server selected unrequested subprotocol", .{ .protocol = value });
+            log.warn(.websocket, "picked unrequested subprotocol", .{ .protocol = value });
             return 0;
         }
         self._protocol = self._arena.dupe(u8, value) catch |err| {
