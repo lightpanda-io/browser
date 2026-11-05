@@ -49,7 +49,9 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
-    Frame.user_input.moveSequence(frame, el, .{}) catch |err| {
+    const point = Frame.user_input.gesturePoint(frame, el);
+    // The point is in the owner frame's viewport, as updateHoverTarget expects.
+    Frame.user_input.moveSequence(el.ownerFrame(frame) orelse frame, el, .{ .x = point.x, .y = point.y }) catch |err| {
         lp.log.debug(.app, "hover failed", .{ .err = err });
         return error.ActionFailed;
     };
