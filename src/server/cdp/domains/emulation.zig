@@ -548,7 +548,11 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
     try testing.expectEqual(642, configured.screen_width.?);
     try testing.expectEqual(1086, configured.screen_height.?);
 
-    try (try testing.firstTarget(bc)).mainFrame().?.navigate("http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", .{});
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
+    });
     try testing.waitForPage(bc);
     try std.testing.expectEqualDeep(configured, browser.getViewport());
 
