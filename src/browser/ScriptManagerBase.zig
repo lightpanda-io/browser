@@ -341,6 +341,9 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
         };
         switch (entry.value_ptr.state) {
             .loading => {
+                // An enclosing navigation wait past its deadline stops waiting:
+                // the module fails to load, the enclosing JS run sees the error.
+                if (client.waitDeadlineExceeded()) return error.WaitDeadlineExceeded;
                 _ = try client.tickSync(200);
                 continue;
             },
