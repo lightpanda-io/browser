@@ -9,6 +9,7 @@
 <script id=redirect_back_to_parent_site_stores_lax_cookie>
   testing.onload(() => {
     testing.expectEqual(true, document.cookie.includes('xsite_redirect_lax=1'));
-    document.cookie = 'xsite_redirect_lax=; Max-Age=0';
+    document.cookie = 'xsite_redirect_lax=; path=/; Max-Age=0';
+    testing.expectEqual(false, document.cookie.includes('xsite_redirect_lax'));
   });
 </script>
