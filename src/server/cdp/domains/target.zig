@@ -198,6 +198,11 @@ fn createTarget(cmd: *CDP.Command) !void {
     const page = try bc.session.createPage();
     const frame = page.frame().?;
     const target = bc.findTargetByRootFrameId(page.frame_id) orelse {
+        // TODO we keep the assert in release builds, but this should only fail on
+        // OOM in BrowserContext.onFrameCreated (the notification dispatch logs its
+        // error instead of returning it), and we generally don't handle OOMs. Move
+        // it to debug builds only later; release would then close `page` and return
+        // an error.
         lp.assert(false, "CDP.target.createTarget no target", .{ .frame_id = page.frame_id });
     };
 
