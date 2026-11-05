@@ -357,7 +357,7 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
-    /// The call left a different frame current, so `--save` records the
+    /// The call left a different document current, so `--save` records the
     /// navigation a read tool's `url` made rather than one it skipped.
     navigated: bool = false,
     /// Only set when the caller passed `CallOpts.inline_image`.
@@ -563,7 +563,7 @@ fn callInner(
     else
         null;
 
-    const frame_before = if (session.currentFrame()) |f| f._frame_id else null;
+    const loader_before = if (session.currentFrame()) |f| f._loader_id else null;
     var result = dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
@@ -572,7 +572,7 @@ fn callInner(
         return err;
     };
     result.selector = selector;
-    if (session.currentFrame()) |frame| result.navigated = frame._frame_id != frame_before;
+    if (session.currentFrame()) |frame| result.navigated = frame._loader_id != loader_before;
     if (opts.nav_note) {
         if (session.currentFrame()) |frame| {
             if (result.navigated) {
@@ -2585,6 +2585,33 @@ test "tools: a navigation that keeps the frame id still reports the new page's W
         \\{"script":"location.href = 'late_tools.html'"}
     , .{}), opts);
     try std.testing.expect(std.mem.startsWith(u8, none.text, "late_tools.html\n(Navigated to "));
+}
+
+test "tools: a navigation that keeps the frame id counts as navigated" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+
+    const aa = testing.arena_allocator;
+    const opts: CallOpts = .{ .nav_note = true, .source = .user };
+    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"url":"http://localhost:9582/src/browser/tests/webmcp/late_tools.html"}
+    , .{}), opts);
+    const frame_id = session.currentFrame().?._frame_id;
+
+    const same_document = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"history.pushState(null, '', '#moved'); 1"}
+    , .{}), opts);
+    try std.testing.expect(!same_document.navigated);
+
+    const left = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"location.href = '/status/404'"}
+    , .{}), opts);
+    try std.testing.expectEqual(frame_id, session.currentFrame().?._frame_id);
+    try std.testing.expect(left.navigated);
+    try std.testing.expect(std.mem.startsWith(u8, left.text, "HTTP 404 Not Found: this is likely an error"));
 }
 
 test "tools: callPageTool runs the page's WebMCP tools" {
