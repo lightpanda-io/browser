@@ -1263,7 +1263,7 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
     // Check for customized built-in element via "is" attribute. A document
     // without a browsing context has no registry.
     if (document._frame != null) {
-        try Element.Html.Custom.checkAndAttachBuiltIn(element, frame);
+        try Element.Html.Custom.initBuiltIn(element, frame);
     }
 
     const node = element.asNode();

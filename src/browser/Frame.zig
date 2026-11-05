@@ -209,6 +209,9 @@ _custom_element_creation: union(enum) {
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .empty,
 
+// Keyed by the "is" value at creation: a later change to the attribute doesn't count.
+_undefined_builtins: std.AutoArrayHashMapUnmanaged(*Element, []const u8) = .empty,
+
 // Every form-associated custom element in this frame (usually none)
 _form_associated: std.ArrayList(*Element.Html.Custom) = .empty,
 

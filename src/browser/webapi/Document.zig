@@ -401,7 +401,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     const options = options_ orelse return element;
     if (options.is) |is_value| {
         try element.setAttribute(comptime .wrap("is"), .wrap(is_value), frame);
-        try Element.Html.Custom.checkAndAttachBuiltIn(element, frame);
+        try Element.Html.Custom.initBuiltIn(element, frame);
     }
 
     return element;

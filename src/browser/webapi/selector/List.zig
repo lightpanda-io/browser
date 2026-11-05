@@ -23,6 +23,7 @@ const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
+const CustomElementRegistry = @import("../CustomElementRegistry.zig");
 const ValidityState = @import("../element/html/ValidityState.zig");
 const Part = @import("Selector.zig").Part;
 const Selector = @import("Selector.zig");
@@ -788,11 +789,12 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .nth_last_of_type => |pattern| return matchesNthLastOfType(el, pattern, nth),
 
         // Custom elements
+        // https://dom.spec.whatwg.org/#concept-element-defined
         .defined => {
-            const tag_name = el.getTagNameLower();
-            if (std.mem.findScalar(u8, tag_name, '-') == null) return true;
-            const registry = &frame.window._custom_elements;
-            return registry.get(tag_name) != null;
+            if (el._flags.builtin_undefined) return false;
+            const custom = el.is(Node.Element.Html.Custom) orelse return true;
+            if (custom._definition != null) return !custom._upgrade_in_progress;
+            return !CustomElementRegistry.isValidName(custom._tag_name.str());
         },
 
         // Functional
