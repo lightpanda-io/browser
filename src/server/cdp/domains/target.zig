@@ -479,7 +479,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // workers), which aren't targets here. Only the browser-level call
     // decides whether new pages are auto-attached: chromedp sends it on its
     // first tab, then attaches each new tab itself.
-    if (cmd.sessionId()) |session_id| {
+    if (cmd.target_session_id) |session_id| {
         if (cmd.browser_context) |bc| {
             if (bc.attached_sessions.contains(session_id)) {
                 return cmd.sendResult(null, .{});

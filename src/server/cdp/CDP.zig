@@ -210,7 +210,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         .arena = arena,
         .sender = sender,
         .browser_context = if (self.browser_context) |*bc| bc else null,
-        .target_session_id = target_session_id,
+        .target_session_id = input.sessionId orelse target_session_id,
     };
 
     // See dispatchStartupCommand for more info on this.
@@ -991,8 +991,9 @@ pub const Command = struct {
     // The browser context this command targets
     browser_context: ?*BrowserContext,
 
-    // The session to route the command to when it has no sessionId of its
-    // own, see dispatch.
+    // The session the command is routed through: its own sessionId, else the
+    // one of the Target.sendMessageToTarget that wraps it (see dispatch).
+    // Replies and events keep input.session_id.
     target_session_id: ?[]const u8 = null,
 
     // The command input (the id, optional session_id, params, ...)
@@ -1037,20 +1038,12 @@ pub const Command = struct {
     // no session.
     pub fn target(self: *const Command) !*Target {
         const bc = self.browser_context orelse return error.BrowserContextNotLoaded;
-        if (self.sessionId()) |session_id| {
+        if (self.target_session_id) |session_id| {
             if (bc.attached_sessions.get(session_id)) |attached| {
                 return attached.target;
             }
         }
         return bc.firstTarget() orelse error.TargetNotLoaded;
-    }
-
-    // The session the command was sent through: its own sessionId, else the
-    // one of the Target.sendMessageToTarget that wraps it. For routing only
-    // (target, inspector session): replies (sendResult/sendError) and events
-    // keep input.session_id, see Target.sendMessageToTarget.
-    pub fn sessionId(self: *const Command) ?[]const u8 {
-        return self.input.session_id orelse self.target_session_id;
     }
 
     pub fn createBrowserContext(self: *Command) !*BrowserContext {

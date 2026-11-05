@@ -45,7 +45,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 fn attachedSession(cmd: *CDP.Command) ?*CDP.BrowserContext.AttachedSession {
     const bc = cmd.browser_context orelse return null;
     const target = cmd.target() catch return null;
-    const session_id = cmd.input.session_id orelse target.session_id orelse return null;
+    const session_id = cmd.target_session_id orelse target.session_id orelse return null;
     return bc.attached_sessions.get(session_id);
 }
 
