@@ -27,6 +27,7 @@ const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
 const NodeRegistry = @import("NodeRegistry.zig");
+const PageToolsSeen = @import("browser/tools.zig").PageToolsSeen;
 
 const ToolSession = @This();
 
@@ -34,6 +35,7 @@ browser: Browser,
 session: *Session,
 notification: *Notification,
 registry: NodeRegistry,
+page_tools_seen: PageToolsSeen = .{},
 
 /// Leaves the browser's isolate entered, like `Browser.init`; callers
 /// sharing one thread between several isolates park it with
