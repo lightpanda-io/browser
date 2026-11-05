@@ -233,8 +233,7 @@ jobs:
           aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
 
   build-docker-image:
-    if: needs.channel.outputs.channel != 'prerelease'
-    needs: [channel, build-linux]
+    needs: build-linux
     runs-on: ubuntu-latest
     steps:
       - name: Generate token for browser-docker
