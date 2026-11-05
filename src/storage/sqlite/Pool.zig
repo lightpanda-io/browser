@@ -29,6 +29,7 @@ available: usize,
 mutex: std.Io.Mutex,
 cond: std.Io.Condition,
 conns: []Sqlite.Conn,
+starve_timeout: std.Io.Duration = .fromSeconds(2),
 
 pub fn init(allocator: Allocator, path: [:0]const u8) !Pool {
     // can't have a pool of connections to in-memory database, so, to keep the
@@ -70,12 +71,23 @@ pub fn acquire(self: *Pool) !Sqlite.Conn {
     const conns = self.conns;
 
     self.mutex.lockUncancelable(lp.io);
+    // Set on the first wait, so the fast path doesn't read the clock.
+    var deadline: ?std.Io.Timeout = null;
     while (true) {
         const available = self.available;
         if (available == 0) {
-            // @ZIG16 Io.Condition has no timedWait; restore the 5s
-            // starvation bail-out when one lands.
-            self.cond.waitUncancelable(lp.io, &self.mutex);
+            const timeout = deadline orelse blk: {
+                const d = (std.Io.Timeout{ .duration = .{
+                    .raw = self.starve_timeout,
+                    .clock = .awake,
+                } }).toDeadline(lp.io);
+                deadline = d;
+                break :blk d;
+            };
+            self.cond.waitTimeout(lp.io, &self.mutex, timeout) catch |err| {
+                self.mutex.unlock(lp.io);
+                return err;
+            };
             continue;
         }
         const index = available - 1;
@@ -149,6 +161,16 @@ test "Sqlite: Pool" {
     row.deinit();
 
     try c1.exec("drop table pool_test", .{});
+}
+
+test "Sqlite: Pool starved acquire times out" {
+    var pool = try Pool.init(testing.allocator, ":memory:");
+    defer pool.deinit(testing.allocator);
+    pool.starve_timeout = .fromMilliseconds(10);
+
+    const conn = try pool.acquire();
+    defer pool.release(conn);
+    try testing.expectError(error.Timeout, pool.acquire());
 }
 
 fn testPool(p: *Pool) !void {
