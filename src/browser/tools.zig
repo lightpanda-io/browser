@@ -333,7 +333,7 @@ pub const ToolError = error{
     InvalidSelector,
     InvalidNodeType,
     ScriptError,
-    ActionFailed,
+    ActionRefused,
     NodeNotFound,
     NavigationFailed,
     NavigationTimeout,
@@ -354,7 +354,7 @@ pub fn errorMessage(err: ToolError) []const u8 {
         error.InvalidSelector => "InvalidSelector: the selector argument is not a valid CSS selector. Only plain CSS is supported — playwright-style prefixes (text=, role=, xpath=) are not. Use findElement(role, name) for text/role lookup, or read tree/markdown to find a usable id/class.",
         error.InvalidNodeType => "InvalidNodeType: the matched element's type doesn't fit this action — fill needs an input, textarea or <select>, selectOption needs a <select>, setChecked needs a checkbox or radio, click/hover/press need an Element. Check the tag with nodeDetails.",
         error.ScriptError => "ScriptError: the script didn't run — it has a syntax error or threw. waitForScript takes a JS expression with a truthy result (`window.ready === true`), not a function body: a top-level `return` is a syntax error here, though evaluate accepts one. Run the expression with evaluate to see what it throws.",
-        error.ActionFailed => "ActionFailed: the element refused the action — it's disabled or read-only, there's no focused element for a press without a target, the page cancelled the edit (a beforeinput handler calling preventDefault), or the action is impossible here (a click can't uncheck a radio — check another radio in the group). Re-inspect with tree/interactiveElements.",
+        error.ActionRefused => "ActionRefused: the element refused the action — it's disabled or read-only, there's no focused element for a press without a target, the page cancelled the edit (a beforeinput handler calling preventDefault), or the action is impossible here (a click can't uncheck a radio — check another radio in the group). Re-inspect with tree/interactiveElements.",
         error.Timeout => "Timeout: the waited-for condition never held within the timeout. Retry with a larger `timeout`, or check the page state first (tree/evaluate) — the condition may never become true.",
         error.NavigationFailed => "NavigationFailed: the page didn't settle after the navigation. Check the current URL with getUrl and retry.",
         error.Cancelled => "Cancelled: the call was aborted — the session was closed or another request interrupted it.",
@@ -532,7 +532,7 @@ pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
     return switch (err) {
         error.FrameNotLoaded => .frame_not_loaded,
         error.InvalidParams, error.InvalidSelector, error.InvalidNodeType, error.ScriptError => .invalid_params,
-        error.ActionFailed => .action_failed,
+        error.ActionRefused => .action_refused,
         error.NodeNotFound => .node_not_found,
         error.NavigationFailed => .navigation_failed,
         error.NavigationTimeout => .navigation_timeout,
@@ -1570,7 +1570,7 @@ fn resolveOptionalNode(registry: *NodeRegistry, backend_node_id: ?NodeRegistry.I
 pub fn mapActionError(err: anytype) ToolError {
     // Page-side facts the caller can act on, not internal failures.
     if (err == error.InvalidNodeType) return ToolError.InvalidNodeType;
-    if (err == error.ActionFailed) return ToolError.ActionFailed;
+    if (err == error.ActionRefused) return ToolError.ActionRefused;
     log.debug(.browser, "action error", .{ .err = @errorName(err) });
     return ToolError.InternalError;
 }
@@ -2407,6 +2407,12 @@ test "call: an argument diagnosis is in-band but counts as invalid_params" {
     try std.testing.expectEqual(.invalid_params, telemetryOutcome(bad_enum));
 }
 
+test "mapActionError: a failure inside an action is internal, not the element's fault" {
+    try std.testing.expectEqual(ToolError.InternalError, mapActionError(error.ActionFailed));
+    try std.testing.expectEqual(ToolError.ActionRefused, mapActionError(error.ActionRefused));
+    try std.testing.expectEqual(ToolError.InvalidNodeType, mapActionError(error.InvalidNodeType));
+}
+
 test "errorMessage: every error says more than its name" {
     for (std.meta.tags(ToolError)) |m| {
         try std.testing.expect(!std.mem.eql(u8, errorMessage(m), @errorName(m)));
@@ -2442,7 +2448,7 @@ test "fill: the wrong element type names the constraint" {
     try std.testing.expectError(error.InvalidNodeType, r);
 }
 
-test "fill: a page that cancels the edit is an ActionFailed, not an InternalError" {
+test "fill: a page that cancels the edit is an ActionRefused, not an InternalError" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -2452,11 +2458,11 @@ test "fill: a page that cancels the edit is an ActionFailed, not an InternalErro
     const aa = testing.arena_allocator;
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#fillCancel\",\"value\":\"x\"}", .{});
     const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
-    try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
-    try std.testing.expectError(error.ActionFailed, r);
+    try std.testing.expectEqual(.action_refused, telemetryOutcome(r));
+    try std.testing.expectError(error.ActionRefused, r);
 }
 
-test "fill: a disabled or read-only control is an ActionFailed, not an InvalidNodeType" {
+test "fill: a disabled or read-only control is an ActionRefused, not an InvalidNodeType" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -2470,8 +2476,8 @@ test "fill: a disabled or read-only control is an ActionFailed, not an InvalidNo
     }) |json| {
         const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, json, .{});
         const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
-        try std.testing.expectError(error.ActionFailed, r);
-        try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
+        try std.testing.expectError(error.ActionRefused, r);
+        try std.testing.expectEqual(.action_refused, telemetryOutcome(r));
     }
 }
 
@@ -2488,8 +2494,8 @@ test "setChecked: a radio can't be unchecked, and the error says so" {
 
     const uncheck = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#rad\",\"checked\":false}", .{});
     const r = call(aa, page.session, &registry, "setChecked", uncheck, .{ .source = .user });
-    try std.testing.expectError(error.ActionFailed, r);
-    try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
+    try std.testing.expectError(error.ActionRefused, r);
+    try std.testing.expectEqual(.action_refused, telemetryOutcome(r));
 }
 
 test "waitForScript: a script that doesn't compile is a ScriptError, not bare InvalidParams" {

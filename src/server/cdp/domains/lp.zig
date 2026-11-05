@@ -375,12 +375,16 @@ fn clickNode(cmd: anytype) !void {
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.click(node.dom, frame) catch |err| {
-        if (err == error.InvalidNodeType) return error.InvalidParam;
-        return error.InternalError;
-    };
+    lp.actions.click(node.dom, frame) catch |err| return mapActionError(err);
 
     return cmd.sendResult(.{}, .{});
+}
+
+fn mapActionError(err: anyerror) error{ InvalidParam, InternalError } {
+    return switch (err) {
+        error.InvalidNodeType, error.ActionRefused => error.InvalidParam,
+        else => error.InternalError,
+    };
 }
 
 fn fillNode(cmd: anytype) !void {
@@ -397,10 +401,7 @@ fn fillNode(cmd: anytype) !void {
     const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.fill(node.dom, params.text, frame) catch |err| {
-        if (err == error.InvalidNodeType or err == error.ActionFailed) return error.InvalidParam;
-        return error.InternalError;
-    };
+    lp.actions.fill(node.dom, params.text, frame) catch |err| return mapActionError(err);
 
     return cmd.sendResult(.{}, .{});
 }
@@ -423,10 +424,7 @@ fn scrollNode(cmd: anytype) !void {
     else
         null;
 
-    const result = lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| {
-        if (err == error.InvalidNodeType) return error.InvalidParam;
-        return error.InternalError;
-    };
+    const result = lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| return mapActionError(err);
 
     const target_id: ?NodeRegistry.Id = switch (result.target) {
         .window => null,

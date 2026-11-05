@@ -227,7 +227,7 @@ fn dispatchBrowserTool(
             error.InvalidSelector,
             error.InvalidNodeType,
             error.ScriptError,
-            error.ActionFailed,
+            error.ActionRefused,
             => .InvalidParams,
             error.Cancelled => .Cancelled,
             error.Timeout, error.NavigationTimeout => .Timeout,
