@@ -169,7 +169,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     if (reserved) {
-        log.debug(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+        log.warn(.cdp, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla. The `userAgent` parameter was ignored." });
         return cmd.sendResult(null, .{});
     }
 
@@ -345,7 +345,7 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -362,7 +362,7 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -415,7 +415,7 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
 }
 
 test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.languages" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
