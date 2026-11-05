@@ -841,6 +841,18 @@ pub fn display(self: *StyleManager, el: *Element) Display {
     return self.visibilityProps(el).display;
 }
 
+/// True when `el` generates an inline-level box: a plain `inline` box or an
+/// atomic inline (`inline-block`, `inline-flex`, ...). Block containers,
+/// tables and `display: contents` are false.
+pub fn isInlineLevel(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    return switch (self.visibilityProps(el).box) {
+        .inline_level, .atomic_inline => true,
+        else => false,
+    };
+}
+
 /// Computed display:none coming only from inline style or an author stylesheet
 /// rule — the UA stylesheet's hidden elements (<head>, <script>, [hidden], …)
 /// are NOT counted, so document scaffolding is preserved. Used by the HTML
