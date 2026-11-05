@@ -530,6 +530,7 @@ pub const BrowserContext = struct {
         }
 
         browser.closeSession();
+        browser.setViewportOverride(null);
 
         self.attached_sessions.deinit(allocator);
 
@@ -548,7 +549,7 @@ pub const BrowserContext = struct {
             browser.http_client.clearUserAgentOverride();
         }
         browser.http_client.clearAcceptLanguageOverride();
-        browser.clearOverrides();
+        browser.clearPermissions();
     }
 
     // A new target, not bound to a page yet: the next page created in the
