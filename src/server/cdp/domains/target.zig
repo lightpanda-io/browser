@@ -154,8 +154,9 @@ fn disposeBrowserContext(cmd: *CDP.Command) !void {
     }
 
     // Disposing a context closes its targets; drivers wait on those events.
-    while (bc.firstTarget()) |target| {
-        try bc.closeTarget(target);
+    // closeTarget removes the target from bc.targets.
+    while (bc.targets.items.len > 0) {
+        try bc.closeTarget(bc.targets.items[0]);
     }
     cmd.cdp.disposeBrowserContext();
     try cmd.sendResult(null, .{});
@@ -380,7 +381,7 @@ fn sendMessageToTarget(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    if (bc.firstTarget() == null) {
+    if (bc.targets.items.len == 0) {
         return error.TargetNotLoaded;
     }
     if (bc.attached_sessions.contains(params.sessionId) == false) {

@@ -1043,7 +1043,7 @@ pub const Command = struct {
                 return attached.target;
             }
         }
-        return bc.firstTarget() orelse error.TargetNotLoaded;
+        return if (bc.targets.items.len > 0) bc.targets.items[0] else error.TargetNotLoaded;
     }
 
     pub fn createBrowserContext(self: *Command) !*BrowserContext {
