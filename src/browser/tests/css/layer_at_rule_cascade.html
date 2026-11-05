@@ -179,8 +179,8 @@
 
 <script id=layer_replaceSync>
 {
-  // The cssRules path also fires through replaceSync.
-  $('#dyn2').sheet.replaceSync(
+  // A layer added through the cssRules path reaches the cascade.
+  $('#dyn2').sheet.insertRule(
     '@layer utilities { #dyn2-target { display: none; } }'
   );
   testing.expectFalse($('#dyn2-target').checkVisibility());
@@ -197,7 +197,7 @@
   for (let i = 0; i < 50; i++) css += '@layer a { ';
   css += '#deep-nest-target { display: none; }';
   for (let i = 0; i < 50; i++) css += ' }';
-  $('#deep-nest-style').sheet.replaceSync(css);
+  $('#deep-nest-style').sheet.insertRule(css);
   testing.expectTrue($('#deep-nest-target').checkVisibility());
 }
 </script>

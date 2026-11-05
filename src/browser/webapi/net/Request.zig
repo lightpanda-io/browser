@@ -333,11 +333,11 @@ fn getBodyUsed(self: *const Request) bool {
     return self._body_used;
 }
 
-pub fn bodyBytes(self: *Request) !?[]const u8 {
+pub fn bodyBytes(self: *Request, comptime chunks: ReadableStream.BodyChunks) !?[]const u8 {
     if (self._body) |body| {
         return body;
     } else if (self._body_stream) |stream| {
-        self._body = try stream.collectBodyBytes(self._arena.allocator());
+        self._body = try stream.collectBodyBytes(self._arena.allocator(), chunks);
         self._body_stream = null;
         // `body` keeps returning the original stream once it's drained.
         if (self._body_view == null) {
@@ -372,7 +372,7 @@ fn consume(self: *Request, exec: *const Execution) ![]const u8 {
     }
 
     try self.checkUnusable(local);
-    const body = self.bodyBytes() catch |err| switch (err) {
+    const body = self.bodyBytes(.uint8array) catch |err| switch (err) {
         error.TypeError => return local.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
@@ -401,7 +401,8 @@ pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
     }
 
     // This creates a new ReadableStream for the other types of body.
-    const body = try self.bodyBytes() orelse return null;
+    // Not a stream (handled above), so `chunks` doesn't apply.
+    const body = try self.bodyBytes(.uint8array) orelse return null;
     const stream = blk: {
         if (body.len == 0) {
             const stream = try ReadableStream.init(null, null, exec);
@@ -488,7 +489,8 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn clone(self: *Request, exec: *const Execution) !*Request {
     // No stream tee: a stream body is drained so each copy owns its bytes.
-    const body = self.bodyBytes() catch |err| switch (err) {
+    // Lenient, since a tee wouldn't read the chunks.
+    const body = self.bodyBytes(.lenient) catch |err| switch (err) {
         error.TypeError => return exec.js.local.?.typeError("Failed to read ReadableStream body"),
         else => return err,
     };

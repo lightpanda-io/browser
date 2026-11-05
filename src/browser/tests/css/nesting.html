@@ -158,7 +158,7 @@
 <script id=nesting_replace_sync>
 {
   const sheet = $('#replaced').sheet;
-  sheet.replaceSync('.om { &.hide { display: none; } .inner { visibility: hidden; } }');
+  sheet.insertRule('.om { &.hide { display: none; } .inner { visibility: hidden; } }', 0);
   testing.expectFalse($('#om').checkVisibility());
   testing.expectEqual('hidden', getComputedStyle($('#om-inner')).visibility);
   testing.expectEqual(2, sheet.cssRules[0].cssRules.length);

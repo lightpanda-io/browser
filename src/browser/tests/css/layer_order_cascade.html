@@ -173,10 +173,9 @@
 
 <script id=layer_order_replaceSync>
 {
-  $('#dyn2').sheet.replaceSync(
-    '@layer a { #dyn2-order { display: none; } }' +
-    '@layer b { .dyn2-order { display: block; } }'
-  );
+  const sheet = $('#dyn2').sheet;
+  sheet.insertRule('@layer a { #dyn2-order { display: none; } }', 0);
+  sheet.insertRule('@layer b { .dyn2-order { display: block; } }', 1);
   testing.expectTrue($('#dyn2-order').checkVisibility());
 }
 </script>

@@ -22,6 +22,7 @@ const CSSError = error{
     WriteFailed,
     StringTooLarge,
     SyntaxError,
+    NotAllowedError,
 };
 
 _href: ?[]const u8 = null,
@@ -30,9 +31,10 @@ _disabled: bool = false,
 _css_rules: ?*CSSRuleList = null,
 _owner_rule: ?*CSSRule = null,
 _owner_node: ?*Element = null,
+_constructed: bool = false, // only when true can it be replaced
 
 pub fn init(frame: *Frame) !*CSSStyleSheet {
-    return frame._factory.create(CSSStyleSheet{});
+    return frame._factory.create(CSSStyleSheet{ ._constructed = true });
 }
 
 pub fn initWithOwner(owner: *Element, frame: *Frame) !*CSSStyleSheet {
@@ -195,11 +197,22 @@ fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
 }
 
 pub fn replace(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!js.Promise {
-    try self.replaceSync(text, frame);
+    if (self._constructed == false) {
+        return error.NotAllowedError;
+    }
+    try self.replaceRules(text, frame);
     return frame.js.local.?.resolvePromise(self);
 }
 
-pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
+fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
+    if (self._constructed == false) {
+        return error.NotAllowedError;
+    }
+    return self.replaceRules(text, frame);
+}
+
+/// replaceSync without the constructed-sheet check, for loading a <link>.
+pub fn replaceRules(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
     const rules = try self.getCssRules(frame);
     rules.clear();
     try self.parseInto(text, frame);
