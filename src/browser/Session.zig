@@ -35,6 +35,7 @@ const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
 const Geolocation = @import("webapi/geolocation/Geolocation.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
+const PermissionOverrides = @import("PermissionOverrides.zig");
 pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
@@ -52,7 +53,7 @@ const ArenaPool = App.ArenaPool;
 const Session = @This();
 
 browser: *Browser,
-permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
+permissions: PermissionOverrides = .{},
 geolocation_override: ?Geolocation.Override = null,
 arena: *lp.Arena,
 // Session history, one per top-level browsing context, keyed by its root
@@ -188,21 +189,11 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 }
 
 pub fn setPermission(self: *Session, name: []const u8, state: PermissionState) !void {
-    const allocator = self.browser.allocator;
-    const gop = try self.permissions.getOrPut(allocator, name);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = allocator.dupe(u8, name) catch |err| {
-            _ = self.permissions.remove(name);
-            return err;
-        };
-    }
-    gop.value_ptr.* = state;
+    try self.permissions.set(self.browser.allocator, name, state);
 }
 
 pub fn clearPermissions(self: *Session) void {
-    var it = self.permissions.keyIterator();
-    while (it.next()) |key| self.browser.allocator.free(key.*);
-    self.permissions.clearRetainingCapacity();
+    self.permissions.clear(self.browser.allocator);
 }
 
 pub fn deinit(self: *Session) void {
@@ -226,7 +217,6 @@ pub fn deinit(self: *Session) void {
     }
 
     self.cookie_jar.deinit();
-    self.clearPermissions();
     self.permissions.deinit(self.browser.allocator);
 
     {
