@@ -59,7 +59,10 @@ pub fn Queue(comptime T: type) type {
             if (self.head == null) {
                 if (self.closed) return .closed;
                 if (timeout_ms == 0) return .timeout;
-                lp.timedWait(&self.cond, &self.mutex, timeout_ms * std.time.ns_per_ms) catch {};
+                self.cond.waitTimeout(lp.io, &self.mutex, .{ .duration = .{
+                    .raw = .fromNanoseconds(timeout_ms * std.time.ns_per_ms),
+                    .clock = .awake,
+                } }) catch {};
             }
             const item = self.head orelse return if (self.closed) .closed else .timeout;
             self.head = item.next;

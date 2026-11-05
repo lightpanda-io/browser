@@ -113,7 +113,10 @@ const Job = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
         if (self.pending.items.len == 0 and !self.finished) {
-            lp.timedWait(&self.cond, &self.mutex, timeout_ms * ns_per_ms) catch {};
+            self.cond.waitTimeout(lp.io, &self.mutex, .{ .duration = .{
+                .raw = .fromNanoseconds(timeout_ms * ns_per_ms),
+                .clock = .awake,
+            } }) catch {};
         }
         std.mem.swap(std.ArrayList(u8), &self.pending, into);
         return self.finished;

@@ -109,43 +109,6 @@ pub fn environMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return environ().createMap(allocator);
 }
 
-/// Io.Condition has no timed wait (@ZIG16: delete when std grows one).
-/// Mirrors std's Condition.waitInner with a deadline-bounded futex wait.
-/// Not a cancelation point. Returns error.Timeout when no signal arrives.
-pub fn timedWait(cond: *std.Io.Condition, mutex: *std.Io.Mutex, timeout_ns: u64) error{Timeout}!void {
-    const deadline: std.Io.Clock.Timestamp = .fromNow(io, .{
-        .raw = .fromNanoseconds(@intCast(timeout_ns)),
-        .clock = .awake,
-    });
-
-    var epoch = cond.epoch.load(.acquire);
-    _ = cond.state.fetchAdd(.{ .waiters = 1, .signals = 0 }, .monotonic);
-
-    mutex.unlock(io);
-    defer mutex.lockUncancelable(io);
-
-    while (true) {
-        io.futexWaitTimeout(u32, &cond.epoch.raw, epoch, .{ .deadline = deadline }) catch {};
-        epoch = cond.epoch.load(.acquire);
-
-        // Consume a pending signal even after a timeout-shaped wake, so a
-        // signal never gets stuck in the state with no waiter (same race
-        // std's waitInner defends against).
-        var prev_state = cond.state.load(.monotonic);
-        while (prev_state.signals > 0) {
-            prev_state = cond.state.cmpxchgWeak(prev_state, .{
-                .waiters = prev_state.waiters - 1,
-                .signals = prev_state.signals - 1,
-            }, .acquire, .monotonic) orelse return;
-        }
-
-        if (deadline.compare(.lte, .now(io, .awake))) {
-            _ = cond.state.fetchSub(.{ .waiters = 1, .signals = 0 }, .monotonic);
-            return error.Timeout;
-        }
-    }
-}
-
 /// Drop-in for the removed std.Thread.WaitGroup (start/finish/wait subset).
 pub const WaitGroup = struct {
     state: std.atomic.Value(u32) = .init(0),
