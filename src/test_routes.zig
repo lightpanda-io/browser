@@ -1219,6 +1219,39 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    // goto-timeout fixtures: a page whose parser-blocking <script src> delays
+    // its response by `s=<seconds>`, so a navigation wait must give up while a
+    // subresource fetch is still in flight.
+    if (std.mem.startsWith(u8, path, "/goto_timeout/page")) {
+        var seconds: usize = 0;
+        if (std.mem.find(u8, path, "s=")) |pos| {
+            var end = pos + 2;
+            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
+            seconds = std.fmt.parseInt(usize, path[pos + 2 .. end], 10) catch 0;
+        }
+        const body = try std.fmt.allocPrint(req_allocator, "<!doctype html><html><head><title>goto timeout</title></head><body><p id=\"status\">pending</p><script src=\"/goto_timeout/script.js?s={d}\"></script></body></html>", .{seconds});
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/goto_timeout/script.js")) {
+        var seconds: usize = 0;
+        if (std.mem.find(u8, path, "s=")) |pos| {
+            var end = pos + 2;
+            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
+            seconds = std.fmt.parseInt(usize, path[pos + 2 .. end], 10) catch 0;
+        }
+        lp.io.sleep(.fromMilliseconds(@intCast(seconds * 1000)), .awake) catch {};
+        return req.respond("document.getElementById('status').textContent = 'script ran';", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
     // Fixture for the browser `download` tool tests. Its cookie is scoped to
     // this path prefix, so it can't reach the handlers other tests on the
     // shared session rely on.

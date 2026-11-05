@@ -131,6 +131,17 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const timer: std.Io.Timestamp = .now(io, .boot);
 
+    // `timeout_ms` is an upper bound on this whole wait, but a single tick can
+    // run far longer than its requested slice: dispatching a response runs the
+    // parser, and a parser-blocking subresource spins inside `submitSync` on
+    // the same stack. Publish our remaining time as the http client's sync
+    // deadline so those inner waits give up in time (see
+    // HttpClient.wait_deadline_ms). The CDP pump re-enters _wait every second
+    // as a liveness slice, not a navigation bound — no deadline there.
+    if (comptime is_cdp == false) {
+        defer self.http_client.setWaitDeadline(null);
+    }
+
     // Periodic V8 GC hint during long waits. V8 is otherwise only nudged on
     // session/page teardown (Session.zig, Page.zig), so a page that stays
     // alive for seconds while running heavy JS accumulates wrappers and
@@ -160,6 +171,12 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             browser.env.memoryPressureNotification(.moderate);
         }
         session.processDestroyQueues();
+
+        if (comptime is_cdp == false) {
+            const elapsed_ms: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
+            const remaining_ms = timeout_ms -| elapsed_ms;
+            self.http_client.setWaitDeadline(lp.datetime.milliTimestamp(.boot) + remaining_ms);
+        }
 
         const tick_result = self._tick(is_cdp, 200, conditions) catch |err| {
             switch (err) {
