@@ -512,7 +512,7 @@ pub const BrowserContext = struct {
         // notification, and their isolated world contexts must go before
         // the page contexts they're nested in.
         for (self.targets.items) |target| {
-            target.destroy();
+            target.deinit();
         }
         self.targets.deinit(allocator);
 
@@ -547,8 +547,8 @@ pub const BrowserContext = struct {
     // A new target, not bound to a page yet: the next page created in the
     // session gets it (see onFrameCreated).
     pub fn createTarget(self: *BrowserContext) !*Target {
-        const target = try Target.create(self, self.next_group_id);
-        errdefer target.destroy();
+        const target = try Target.init(self, self.next_group_id);
+        errdefer target.deinit();
         try self.targets.append(self.cdp.allocator, target);
         self.next_group_id += 1;
         return target;
@@ -565,7 +565,7 @@ pub const BrowserContext = struct {
         if (std.mem.findScalar(*Target, self.targets.items, target)) |i| {
             _ = self.targets.orderedRemove(i);
         }
-        target.destroy();
+        target.deinit();
     }
 
     pub fn firstTarget(self: *const BrowserContext) ?*Target {

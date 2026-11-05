@@ -180,7 +180,7 @@ invocation_id_gen: CDP.InvocationIdGen = .{},
 webmcp_invocations: std.AutoHashMapUnmanaged(u32, *@import("domains/webmcp.zig").Invocation) = .empty,
 
 // Allocates the target. Its page is bound later, by onFrameCreated.
-pub fn create(bc: *BrowserContext, group_id: js.Inspector.GroupId) !*Target {
+pub fn init(bc: *BrowserContext, group_id: js.Inspector.GroupId) !*Target {
     const allocator = bc.cdp.allocator;
     const self = try allocator.create(Target);
     errdefer allocator.destroy(self);
@@ -201,7 +201,7 @@ pub fn create(bc: *BrowserContext, group_id: js.Inspector.GroupId) !*Target {
 }
 
 // Frees everything the target holds, its page excepted (see `close`).
-pub fn destroy(self: *Target) void {
+pub fn deinit(self: *Target) void {
     const allocator = self.cdp.allocator;
     const http_client = &self.cdp.browser.http_client;
 
