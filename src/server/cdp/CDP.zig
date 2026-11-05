@@ -210,7 +210,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         .arena = arena,
         .sender = sender,
         .browser_context = if (self.browser_context) |*bc| bc else null,
-        .target_session_id = input.sessionId orelse target_session_id,
+        .routing_session_id = input.sessionId orelse target_session_id,
     };
 
     // See dispatchStartupCommand for more info on this.
@@ -994,7 +994,7 @@ pub const Command = struct {
     // The session the command is routed through: its own sessionId, else the
     // one of the Target.sendMessageToTarget that wraps it (see dispatch).
     // Replies and events keep input.session_id.
-    target_session_id: ?[]const u8 = null,
+    routing_session_id: ?[]const u8 = null,
 
     // The command input (the id, optional session_id, params, ...)
     input: Input,
@@ -1038,7 +1038,7 @@ pub const Command = struct {
     // no session.
     pub fn target(self: *const Command) !*Target {
         const bc = self.browser_context orelse return error.BrowserContextNotLoaded;
-        if (self.target_session_id) |session_id| {
+        if (self.routing_session_id) |session_id| {
             if (bc.attached_sessions.get(session_id)) |attached| {
                 return attached.target;
             }

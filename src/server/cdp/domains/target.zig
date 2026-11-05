@@ -291,7 +291,7 @@ fn attachToTarget(cmd: *CDP.Command) !void {
     }
 
     // attachedToTarget is sent to the parent session. Use the message's own
-    // sessionId, not cmd.sessionId(): a message wrapped by
+    // sessionId, not cmd.routing_session_id: a message wrapped by
     // Target.sendMessageToTarget has none, so the event is sent with no
     // sessionId, where that client reads it. Events are never wrapped, so
     // an event with the wrapped session's id would be missed.
@@ -479,7 +479,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // workers), which aren't targets here. Only the browser-level call
     // decides whether new pages are auto-attached: chromedp sends it on its
     // first tab, then attaches each new tab itself.
-    if (cmd.target_session_id) |session_id| {
+    if (cmd.routing_session_id) |session_id| {
         if (cmd.browser_context) |bc| {
             if (bc.attached_sessions.contains(session_id)) {
                 return cmd.sendResult(null, .{});
