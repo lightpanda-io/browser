@@ -281,7 +281,7 @@ pub fn pageHandle(self: *const Target) ?Session.PageHandle {
 
 // True if `frame_id` is a frame of this target's page (popups included).
 pub fn ownsFrame(self: *const Target, frame_id: u32) bool {
-    return self.bc.targetForFrame(frame_id) == self;
+    return self.frame_id == frame_id or self.findFrame(frame_id) != null;
 }
 
 // The frame `frame_id` of this target's page (popups included). null for a
