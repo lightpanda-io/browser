@@ -10,6 +10,8 @@ env:
 
   RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
   VERSION_FLAG: ${{ github.ref_type == 'tag' && format('-Dversion={0}', github.ref_name) || '-Dversion=nightly' }}
+  # prerelease: release candidate tag (x.y.z-rcN). release: other tags. nightly: no tag.
+  CHANNEL: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-rc') && 'prerelease' || github.ref_type == 'tag' && 'release' || 'nightly' }}
 
 on:
   push:
@@ -26,6 +28,16 @@ permissions:
   packages: read
 
 jobs:
+  # A job-level `if:` can't read `env`, so this job exposes CHANNEL to the
+  # other jobs as `needs.channel.outputs.channel`.
+  channel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      channel: ${{ env.CHANNEL }}
+    steps:
+      - run: echo "channel=$CHANNEL"
+
   build-linux:
     strategy:
       fail-fast: false
@@ -102,7 +114,8 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }},lightpanda-${{ env.ARCH }}-${{ env.OS }}.debug${{ matrix.arch == 'x86_64' && ',lightpanda-docs.tar.gz' || '' }}
           tag: ${{ env.RELEASE }}
-          makeLatest: ${{ github.ref_type == 'tag' }}
+          prerelease: ${{ env.CHANNEL == 'prerelease' }}
+          makeLatest: ${{ env.CHANNEL == 'release' }}
 
       - name: Share binary with packaging jobs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -165,15 +178,17 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
-          makeLatest: ${{ github.ref_type == 'tag' }}
+          prerelease: ${{ env.CHANNEL == 'prerelease' }}
+          makeLatest: ${{ env.CHANNEL == 'release' }}
 
   package-debian:
-    if: github.ref_type == 'tag'
-    needs: build-linux
+    if: needs.channel.outputs.channel == 'release'
+    needs: [channel, build-linux]
     uses: ./.github/workflows/package-debian.yml
 
   update-versions:
-    needs: [build-linux, build-macos]
+    if: needs.channel.outputs.channel != 'prerelease'
+    needs: [channel, build-linux, build-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -218,7 +233,8 @@ jobs:
           aws cloudfront create-invalidation --distribution-id ${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
 
   build-docker-image:
-    needs: build-linux
+    if: needs.channel.outputs.channel != 'prerelease'
+    needs: [channel, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Generate token for browser-docker
@@ -239,7 +255,8 @@ jobs:
               --field tag="${{ env.RELEASE }}"
 
   update-homebrew-formula:
-    needs: [build-linux, build-macos]
+    if: needs.channel.outputs.channel != 'prerelease'
+    needs: [channel, build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Generate token for homebrew-browser
