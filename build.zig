@@ -331,15 +331,17 @@ fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]co
 
     const cache_dir = ".lp-cache";
     // The .so must keep the name the exe's DT_NEEDED records; the archive
-    // name encodes V8 version, os and arch.
+    // name encodes V8 version, os, arch and, for musl, the ABI: the glibc
+    // archive can't link against musl.
     const path = if (dev_fast)
         b.pathJoin(&.{ cache_dir, "prebuilt-v8", tag, "libc_v8.so" })
     else blk: {
         const version = actionDefault(action, "v8:") orelse return null;
-        break :blk b.pathJoin(&.{ cache_dir, "prebuilt-v8", tag, b.fmt("libc_v8_{s}_{s}_{s}.a", .{
+        break :blk b.pathJoin(&.{ cache_dir, "prebuilt-v8", tag, b.fmt("libc_v8_{s}_{s}_{s}{s}.a", .{
             version,
             @tagName(target.result.os.tag),
             @tagName(target.result.cpu.arch),
+            if (target.result.abi.isMusl()) "_musl" else "",
         }) });
     };
     std.Io.Dir.cwd().access(io, rootPath(b, path), .{}) catch {
@@ -464,8 +466,15 @@ fn linkRust(b: *Build, mod: *Build.Module, deps: Deps, prebuilt_rust_path: ?[]co
     const rust_step = b.step("rust", "Build the Rust staticlib (requires cargo)");
     rust_step.dependOn(&exec_cargo.step);
 
-    const obj = out_dir.path(b, out_subdir).path(b, "liblightpanda_ffi.a");
-    mod.addObjectFile(obj);
+    // Cargo defaults to the host triple, which is glibc on a glibc machine, and
+    // nests its output under the triple once one is passed.
+    const profile_dir = if (deps.target.result.abi.isMusl()) blk: {
+        const triple = b.fmt("{t}-unknown-linux-musl", .{deps.target.result.cpu.arch});
+        exec_cargo.addArgs(&.{ "--target", triple });
+        break :blk out_dir.path(b, triple).path(b, out_subdir);
+    } else out_dir.path(b, out_subdir);
+
+    mod.addObjectFile(profile_dir.path(b, "liblightpanda_ffi.a"));
 }
 
 /// Registers every file under `root` (relative to the build root) as an
