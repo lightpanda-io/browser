@@ -563,6 +563,9 @@ pub const BrowserContext = struct {
     // Frees `target`, which must be closed (see Target.close).
     fn removeTarget(self: *BrowserContext, target: *Target) void {
         if (std.mem.findScalar(*Target, self.targets.items, target)) |i| {
+            // Ordered: commands with no session go to targets.items[0] (see
+            // Command.target), which stays the oldest target when another one
+            // closes.
             _ = self.targets.orderedRemove(i);
         }
         target.deinit();
