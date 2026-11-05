@@ -103,8 +103,8 @@ pub fn diagnoseArgTypes(arena: std.mem.Allocator, tool: Tool, arguments: ?std.js
 }
 
 /// A description of `v`'s type when it doesn't fit `ft`, null when it does.
-/// Mirrors what `parseValue` (std.json) coerces rather than the JSON wire
-/// types, so nothing that parses today gets rejected here.
+/// Mirrors what `parseValue` (std.json) coerces into a numeric field rather
+/// than the JSON wire types, so a number in any form it accepts passes here.
 fn typeMismatch(arena: std.mem.Allocator, v: std.json.Value, ft: lp.Schema.FieldType) ?[]const u8 {
     const fits = switch (ft) {
         // The schema doesn't type the field; parseValue decides.
@@ -552,6 +552,15 @@ test "diagnoseArgTypes: a long bad string is truncated but recognizable" {
     const msg = diagnoseArgTypes(aa, .waitForSelector, raw).?;
     try std.testing.expect(std.mem.indexOf(u8, msg, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…") != null);
     try std.testing.expect(std.mem.indexOf(u8, msg, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == null);
+
+    // Byte 40 falls inside the é: cutting there would serialize as an array of
+    // numbers instead of a JSON string.
+    const multibyte = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"selector":"#a","timeout":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaéb"}
+    , .{});
+    const multibyte_msg = diagnoseArgTypes(aa, .waitForSelector, multibyte).?;
+    try std.testing.expect(std.unicode.utf8ValidateSlice(multibyte_msg));
+    try std.testing.expect(std.mem.indexOf(u8, multibyte_msg, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…") != null);
 }
 
 test "substituteEnvVars resolves LP_* vars" {

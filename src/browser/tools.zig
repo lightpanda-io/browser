@@ -353,8 +353,8 @@ pub fn errorMessage(err: ToolError) []const u8 {
         error.InvalidParams => "InvalidParams: the arguments don't fit this tool. Check names and types against the tool's input schema; `selector` parameters take plain CSS only.",
         error.InvalidSelector => "InvalidSelector: the selector argument is not a valid CSS selector. Only plain CSS is supported — playwright-style prefixes (text=, role=, xpath=) are not. Use findElement(role, name) for text/role lookup, or read tree/markdown to find a usable id/class.",
         error.InvalidNodeType => "InvalidNodeType: the matched element's type doesn't fit this action — fill needs an input, textarea or <select>, selectOption needs a <select>, setChecked needs a checkbox or radio, click/hover/press need an Element. Check the tag with nodeDetails.",
-        error.ScriptError => "ScriptError: the script didn't run — it has a syntax error or threw. Run it with evaluate to see the failure and fix it; a waitForScript script must return a truthy value.",
-        error.ActionFailed => "ActionFailed: the element couldn't be interacted with — it may be hidden, disabled, read-only, covered, not focusable (press without a target needs a focused element), the page cancelled the edit (a beforeinput handler calling preventDefault), or the action is impossible here (a click can't uncheck a radio — check another radio in the group). Re-inspect with tree/interactiveElements or scroll it into view.",
+        error.ScriptError => "ScriptError: the script didn't run — it has a syntax error or threw. waitForScript takes a JS expression with a truthy result (`window.ready === true`), not a function body: a top-level `return` is a syntax error here, though evaluate accepts one. Run the expression with evaluate to see what it throws.",
+        error.ActionFailed => "ActionFailed: the element refused the action — it's disabled or read-only, there's no focused element for a press without a target, the page cancelled the edit (a beforeinput handler calling preventDefault), or the action is impossible here (a click can't uncheck a radio — check another radio in the group). Re-inspect with tree/interactiveElements.",
         error.Timeout => "Timeout: the waited-for condition never held within the timeout. Retry with a larger `timeout`, or check the page state first (tree/evaluate) — the condition may never become true.",
         error.NavigationFailed => "NavigationFailed: the page didn't settle after the navigation. Check the current URL with getUrl and retry.",
         error.Cancelled => "Cancelled: the call was aborted — the session was closed or another request interrupted it.",
@@ -2474,10 +2474,15 @@ test "fill: a disabled or read-only control is an ActionFailed, not an InvalidNo
     const aa = testing.arena_allocator;
     // The control type fits fill; the page refuses the edit, so this is a
     // page-side fact (ActionFailed), not a bad argument (InvalidNodeType).
-    const readonly = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#fillRo\",\"value\":\"x\"}", .{});
-    const r = call(aa, page.session, &registry, "fill", readonly, .{ .source = .user });
-    try std.testing.expectError(error.ActionFailed, r);
-    try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
+    for ([_][]const u8{
+        "{\"selector\":\"#fillRo\",\"value\":\"x\"}",
+        "{\"selector\":\"#fillDisabled\",\"value\":\"x\"}",
+    }) |json| {
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, json, .{});
+        const r = call(aa, page.session, &registry, "fill", args, .{ .source = .user });
+        try std.testing.expectError(error.ActionFailed, r);
+        try std.testing.expectEqual(.action_failed, telemetryOutcome(r));
+    }
 }
 
 test "setChecked: a radio can't be unchecked, and the error says so" {

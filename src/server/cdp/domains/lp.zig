@@ -398,7 +398,7 @@ fn fillNode(cmd: anytype) !void {
     const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
     lp.actions.fill(node.dom, params.text, frame) catch |err| {
-        if (err == error.InvalidNodeType) return error.InvalidParam;
+        if (err == error.InvalidNodeType or err == error.ActionFailed) return error.InvalidParam;
         return error.InternalError;
     };
 
@@ -925,6 +925,28 @@ test "cdp.lp: action tools" {
     const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && document.getElementById('outerscroll').scrollTop === 30 && document.getElementById('innerleaf').scrollTop === 0 && window.scrollY === 0", null);
 
     try testing.expect(result.isTrue());
+}
+
+test "cdp.lp: fillNode on a control that refuses the edit is an InvalidParam" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    const disabled = frame.document.getElementById("fillDisabled").?.asNode();
+    const disabled_id = (try bc.node_registry.register(disabled)).id;
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.fillNode",
+        .params = .{ .backendNodeId = disabled_id, .text = "x" },
+    });
+    try ctx.expectSentError(-31998, "InvalidParam", .{ .id = 1 });
 }
 
 test "cdp.lp: waitForSelector" {
