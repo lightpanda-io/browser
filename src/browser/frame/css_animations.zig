@@ -268,6 +268,8 @@ const CssAnimation = struct {
     fn dispatch(self: *CssAnimation, typ: String, elapsed_ms: f64) !void {
         const event = try AnimationEvent.initTrusted(typ, .{
             .bubbles = true,
+            // Chrome's are, though the spec says not
+            .cancelable = true,
             .animationName = self.name,
             .elapsedTime = elapsed_ms / 1000,
         }, self.frame);

@@ -88,7 +88,8 @@
       testing.expectEqual(true, end instanceof AnimationEvent);
       testing.expectEqual(true, end.isTrusted);
       testing.expectEqual(true, end.bubbles);
-      testing.expectEqual(false, end.cancelable);
+      // As in Chrome, though the spec says not cancelable
+      testing.expectEqual(true, end.cancelable);
       testing.expectEqual('fadeIn', end.animationName);
       testing.expectEqual(0.05, end.elapsedTime);
       testing.expectEqual('', end.pseudoElement);
@@ -159,7 +160,9 @@
     const state = await testing.async();
     const el = document.getElementById('infinite');
     const log = record(el);
+    const started = untilEvent(el, 'animationstart');
     el.classList.add('pulse');
+    await started;
     await wait(80);
     const running = log.slice();
     el.classList.remove('pulse');
@@ -246,7 +249,9 @@
     });
     el.classList.add('two');
     await state.done(() => {
-      testing.expectEqual(['start fadeIn 0', 'start pulse 0', 'end fadeIn 0.01', 'end pulse 0.03'], log);
+      // Chrome sends fadeIn's end before pulse's start; only each one's own order is fixed
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], log.filter((l) => l.includes('fadeIn')));
+      testing.expectEqual(['start pulse 0', 'end pulse 0.03'], log.filter((l) => l.includes('pulse')));
     });
   }
 </script>
