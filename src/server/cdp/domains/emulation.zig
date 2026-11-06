@@ -109,7 +109,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     }
 
     // The override is stored on the Browser so it persists across page
-    // navigations for the whole CDP connection.
+    // navigations. Browser.closeSession clears it with the context's session.
     const browser = &cmd.cdp.browser;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
@@ -526,6 +526,51 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+test "cdp.Emulation: context disposal clears viewport overrides" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-OLD", .url = "cdp/dom1.html" });
+    const browser = &ctx.cdp().browser;
+    const defaults = browser.getViewport();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 321, .height = 543, .deviceScaleFactor = 2, .screenWidth = 642, .screenHeight = 1086 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    const configured = browser.getViewport();
+    try testing.expectEqual(321, configured.width);
+    try testing.expectEqual(543, configured.height);
+    try testing.expectEqual(@as(f32, 2), configured.scale);
+    try testing.expectEqual(642, configured.screen_width.?);
+    try testing.expectEqual(1086, configured.screen_height.?);
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
+    });
+    try testing.waitForPage(bc);
+    _ = try testing.sentResult(&ctx, 2);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", (try testing.firstTarget(bc)).mainFrame().?.url);
+    try std.testing.expectEqualDeep(configured, browser.getViewport());
+    try expectJs((try testing.firstTarget(bc)).mainFrame().?, "innerWidth === 321 && innerHeight === 543 && devicePixelRatio === 2 && screen.width === 642 && screen.height === 1086");
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
+    try ctx.expectSentError(-32000, "Failed to find context with id BID-UNKNOWN", .{ .id = 3 });
+    try std.testing.expectEqualDeep(configured, browser.getViewport());
+
+    try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-EMULATION-OLD" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expectEqual(null, browser.viewport_override);
+    try std.testing.expectEqualDeep(defaults, browser.getViewport());
+
+    const fresh = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-NEW", .url = "cdp/dom1.html" });
+    try testing.expectEqual(null, browser.viewport_override);
+    try expectJs((try testing.firstTarget(fresh)).mainFrame().?, "innerWidth === 1920 && innerHeight === 1080 && devicePixelRatio === 1 && screen.width === innerWidth && screen.height === innerHeight");
 }
 
 test "cdp.Emulation: setGeolocationOverride and clear" {

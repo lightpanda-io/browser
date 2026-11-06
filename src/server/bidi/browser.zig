@@ -235,6 +235,37 @@ test "bidi.browser: user contexts" {
     try ctx.expectSentError("unsupported operation", null, .{ .id = 14 });
 }
 
+test "bidi.browser: removing a user context resets its viewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.startSession();
+    try ctx.processMessage(.{ .id = 1, .method = "browser.createUserContext", .params = struct {}{} });
+    const user_context = try testing.arena.dupe(u8, ctx.bidi().user_context.id());
+    try ctx.expectSentResult(.{ .userContext = user_context }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "browsingContext.setViewport",
+        .params = .{ .userContexts = .{user_context}, .viewport = .{ .width = 375, .height = 812 }, .devicePixelRatio = 3 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(375, ctx.bidi().browser.getViewport().width);
+
+    try ctx.processMessage(.{ .id = 3, .method = "browser.removeUserContext", .params = .{ .userContext = user_context } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(null, ctx.bidi().browser.viewport_override);
+
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.create", .params = .{ .type = "tab" } });
+    const context_id = try testing.arena.dupe(u8, &(ctx.bidi().browsing_context orelse return error.NoBrowsingContext).id);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "script.evaluate",
+        .params = .{ .expression = "`${innerWidth}x${innerHeight}@${devicePixelRatio}`", .awaitPromise = false, .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "1920x1080@1" } }, .{ .id = 5 });
+}
+
 test "bidi.browser: client windows" {
     var ctx = try testing.context();
     defer ctx.deinit();

@@ -325,6 +325,19 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
         return;
     }
 
+    // Command: send-fragmented - send messages split across continuation
+    // frames, one write per frame, with a ping between two fragments
+    if (std.mem.eql(u8, payload, "send-fragmented")) {
+        try sendRawFrame(client, 0x02, &.{ 1, 2 });
+        try sendRawFrame(client, 0x80, &.{3});
+        try sendRawFrame(client, 0x01, "ab");
+        try sendRawFrame(client, 0x89, "p");
+        try sendRawFrame(client, 0x00, "c");
+        try sendRawFrame(client, 0x80, "d");
+        try sendRawFrame(client, 0x81, "end");
+        return;
+    }
+
     // Command: close:CODE:REASON - send close frame with specific code/reason
     if (std.mem.startsWith(u8, payload, "close:")) {
         const rest = payload["close:".len..];
@@ -383,6 +396,13 @@ fn sendFrame(client: posix.socket_t, opcode: u8, prefix: []const u8, payload: []
     if (payload.len > 0) {
         _ = try sys_net.write(client, payload);
     }
+}
+
+/// Sends a frame whose first byte (FIN bit + opcode) is given as-is.
+fn sendRawFrame(client: posix.socket_t, first_byte: u8, payload: []const u8) !void {
+    std.debug.assert(payload.len <= 125);
+    _ = try sys_net.write(client, &.{ first_byte, @intCast(payload.len) });
+    _ = try sys_net.write(client, payload);
 }
 
 fn sendLargeMessage(client: posix.socket_t, size: usize) !void {

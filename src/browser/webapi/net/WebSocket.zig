@@ -63,8 +63,13 @@ _owner_node: std.DoublyLinkedList.Node = .{},
 _send_queue: std.ArrayList(Message) = .empty,
 _send_offset: usize = 0,
 
-// buffered incoming frame
+// incoming data message, accumulated across its fragments
 _recv_buffer: std.ArrayList(u8) = .empty,
+_recv_fragmented: bool = false,
+// incoming control frame, kept apart since one can arrive between the
+// fragments of a data message (RFC 6455 §5.4)
+_control_buffer: [125]u8 = undefined,
+_control_len: usize = 0,
 
 // Incoming events, buffered and delivered by HttpClient's dispatcher. We never
 // run JS inside a libcurl callback. Too many things can go wrong.
@@ -848,48 +853,76 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
         return error.NoFrameMeta;
     };
 
-    if (meta.offset == 0) {
-        if (comptime lp.IS_DEBUG) {
-            log.debug(.websocket, "incoming message", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type });
+    if (comptime lp.IS_DEBUG) {
+        if (meta.offset == 0) {
+            log.debug(.websocket, "incoming frame", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type, .fin = meta.fin });
         }
-        // Start of new frame. Pre-allocate buffer
-        self._recv_buffer.clearRetainingCapacity();
-        if (meta.len > self._http_client.max_response_size) {
+    }
+
+    switch (meta.frame_type) {
+        .text, .binary, .cont => try self.receivedData(meta, data),
+        .close, .ping, .pong => try self.receivedControl(meta, data),
+    }
+}
+
+fn receivedData(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !void {
+    if (meta.offset == 0) {
+        if (!self._recv_fragmented) {
+            self._recv_buffer.clearRetainingCapacity();
+        }
+        const message_len = std.math.add(usize, self._recv_buffer.items.len, meta.len) catch return error.MessageTooLarge;
+        if (message_len > self._http_client.max_response_size) {
             return error.MessageTooLarge;
         }
-        try self._recv_buffer.ensureTotalCapacityPrecise(self._arena.allocator(), meta.len);
+        try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
     }
 
     try self._recv_buffer.appendSlice(self._arena.allocator(), data);
 
     if (meta.bytes_left > 0) {
-        // still more data waiting for this frame
+        return;
+    }
+    if (!meta.fin) {
+        self._recv_fragmented = true;
+        return;
+    }
+    self._recv_fragmented = false;
+
+    // libcurl repeats the message type on every fragment.
+    try self.bufferMessage(self._recv_buffer.items, meta.frame_type);
+}
+
+fn receivedControl(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !void {
+    if (meta.offset == 0) {
+        self._control_len = 0;
+    }
+    if (data.len > self._control_buffer.len - self._control_len) {
+        return error.ControlFrameTooLarge;
+    }
+    @memcpy(self._control_buffer[self._control_len..][0..data.len], data);
+    self._control_len += data.len;
+
+    if (meta.bytes_left > 0 or meta.frame_type != .close) {
         return;
     }
 
-    const message = self._recv_buffer.items;
-    switch (meta.frame_type) {
-        .text, .binary => try self.bufferMessage(message, meta.frame_type),
-        .close => {
-            // Parse close frame: 2-byte code (big-endian) + optional reason
-            const received_code = if (message.len >= 2)
-                @as(u16, message[0]) << 8 | message[1]
-            else
-                1005; // No status code received
+    const message = self._control_buffer[0..self._control_len];
+    // Parse close frame: 2-byte code (big-endian) + optional reason
+    const received_code = if (message.len >= 2)
+        @as(u16, message[0]) << 8 | message[1]
+    else
+        1005; // No status code received
 
-            if (self._ready_state != .closing) {
-                // Server-initiated: stash for the close event. (When we
-                // initiated, _close_code/_close_reason hold what close()
-                // sent, and handleCloseFrame completes the handshake.)
-                self._close_code = received_code;
-                if (message.len > 2) {
-                    self._close_reason = try self._arena.dupe(u8, message[2..]);
-                }
-            }
-            try self.bufferEvent(.close_frame);
-        },
-        .ping, .pong, .cont => {},
+    if (self._ready_state != .closing) {
+        // Server-initiated: stash for the close event. (When we
+        // initiated, _close_code/_close_reason hold what close()
+        // sent, and handleCloseFrame completes the handshake.)
+        self._close_code = received_code;
+        if (message.len > 2) {
+            self._close_reason = try self._arena.dupe(u8, message[2..]);
+        }
     }
+    try self.bufferEvent(.close_frame);
 }
 
 // libcurl has no mechanism to signal that the connection is established. The

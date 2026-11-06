@@ -178,6 +178,37 @@
 }
 </script>
 
+<script id=receive_fragmented type=module>
+{
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+  ws.binaryType = 'arraybuffer';
+
+  ws.addEventListener('open', () => {
+    ws.send('send-fragmented');
+  });
+
+  ws.addEventListener('message', (e) => {
+    if (typeof e.data === 'string') {
+      received.push(e.data);
+      if (e.data === 'end') ws.close();
+    } else {
+      received.push(Array.from(new Uint8Array(e.data)));
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual([[1, 2, 3], 'abcd', 'end'], received);
+  });
+}
+</script>
+
 <script id=send_large type=module>
 {
   const state = await testing.async();
