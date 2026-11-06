@@ -515,8 +515,10 @@ pub const BrowserContext = struct {
 
         // Before closeSession: the targets must not process any new
         // notification, and their isolated world contexts must go before
-        // the page contexts they're nested in.
-        for (self.targets.items) |target| {
+        // the page contexts they're nested in. Each target leaves the list
+        // before it's freed: its deinit can run callbacks (e.g. an aborted
+        // transfer) that look up the other targets.
+        while (self.targets.pop()) |target| {
             target.deinit();
         }
         self.targets.deinit(allocator);

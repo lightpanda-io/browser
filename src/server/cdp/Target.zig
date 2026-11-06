@@ -303,7 +303,8 @@ fn ownsTransfer(self: *const Target, transfer: *const HttpClient.Transfer) bool 
     const frame_id = req.document_frame_id orelse req.frame_id;
     if (frame_id == 0) {
         // self is in bc.targets, so the list isn't empty.
-        return self.bc.targets.items[0] == self;
+        const targets = self.bc.targets.items;
+        return targets.len > 0 and targets[0] == self;
     }
     return self.ownsFrame(frame_id);
 }
