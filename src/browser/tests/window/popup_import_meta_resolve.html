@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+A module's import.meta.resolve is a function of the module's realm, and the
+opener can hold it after that realm is gone: re-navigating the popup in place
+destroys the popup's context while the opener still references the function.
+Calling it must keep resolving against the module's URL rather than read the
+dead context.
+-->
+<script id=popup_import_meta_resolve_survives_renavigation type=module>
+  const state = await testing.async();
+
+  const ready = new Promise((resolve) => {
+    window.addEventListener('message', function onMessage(e) {
+      if (e.data && e.data.from === 'import_meta_resolve') {
+        window.removeEventListener('message', onMessage);
+        resolve();
+      }
+    });
+  });
+
+  const w = window.open(testing.BASE_URL + 'window/support/import_meta_resolve.html', 'popup_imr');
+  testing.expectTrue(w != null);
+  await ready;
+
+  const resolve = window.__import_meta_resolve;
+  const expected = testing.BASE_URL + 'window/support/mod.js';
+  testing.expectEqual(expected, resolve('./mod.js'));
+  // the popup's importmap applies, even when called from here
+  testing.expectEqual(testing.BASE_URL + 'window/support/mapped.js', resolve('mapped'));
+
+  // in-place re-navigation of the named popup
+  window.open(testing.BASE_URL + 'window/support/frame1.html', 'popup_imr');
+  await new Promise((r) => setTimeout(r, 500));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(expected, resolve('./mod.js'));
+  });
+</script>
+</body>
