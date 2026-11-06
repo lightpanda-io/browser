@@ -941,6 +941,7 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
         // protocol.
         if (self._protocol.len != 0) {
             log.warn(.websocket, "duplicate SecWebSocketProtocol", .{ .protocol = value });
+            self._protocol = "";
             return 0;
         }
         var matched = false;
