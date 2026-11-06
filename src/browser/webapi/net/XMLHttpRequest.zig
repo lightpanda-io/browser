@@ -65,10 +65,11 @@ _request_body: ?[]const u8 = null,
 _async: bool = true,
 
 _response: ?Response = null,
-_response_data: std.ArrayList(u8) = .empty,
+// Taken from the transfer, so it lives outside _arena; see reportResponseData.
+_response_data: HttpClient.Body = .empty,
+_response_data_reported: usize = 0,
 _response_status: u16 = 0,
 _response_status_text: ?[]const u8 = null,
-_response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
 _override_mime: ?Mime = null,
 _response_mime: ?Mime = null,
@@ -144,6 +145,7 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     }
 
     self.clearResponse(page);
+    self.freeResponseData();
 
     if (self._upload) |upload| {
         page.removeTarget(upload.asEventTarget());
@@ -159,8 +161,26 @@ fn releaseSelfRef(self: *XMLHttpRequest) void {
     self._active_requests -= 1;
     if (self._active_requests == 0) {
         self._arena.report();
+        self.reportResponseData();
     }
     self.releaseRef(self._exec.page);
+}
+
+// Like _arena.report(), for the body we hold outside the arena.
+fn reportResponseData(self: *XMLHttpRequest) void {
+    const account = self._arena.account orelse return;
+    const cap = self._response_data.capacity();
+    account.pending += @as(i64, @intCast(cap)) - @as(i64, @intCast(self._response_data_reported));
+    self._response_data_reported = cap;
+}
+
+fn freeResponseData(self: *XMLHttpRequest) void {
+    if (self._arena.account) |account| {
+        // used to inform v8 how much memory would be freed if it GCd
+        account.pending -= @intCast(self._response_data_reported);
+    }
+    self._response_data_reported = 0;
+    self._response_data.deinit();
 }
 
 pub fn releaseRef(self: *XMLHttpRequest, page: *Page) void {
@@ -213,10 +233,9 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
     self.clearResponse(self._exec.page);
     self._response_xml = null;
-    self._response_data.clearRetainingCapacity();
+    self.freeResponseData();
     self._response_status = 0;
     self._response_status_text = null;
-    self._response_len = 0;
     self._response_url = "";
     self._response_mime = null;
     self._response_mime_raw = null;
@@ -388,7 +407,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         self._response_status_text = try self._arena.dupe(u8, st);
     }
     self._response_url = self._url;
-    self._response_len = resp.body.items().len;
 
     for (resp.headers) |hdr| {
         if (std.mem.eql(u8, hdr.name, "content-type")) {
@@ -404,14 +422,16 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
     try self.applyResponseHeaders(resp.headers, resp.cross_origin, allow_wildcard);
 
-    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items());
+    self.freeResponseData();
+    self._response_data = resp.body;
+    resp.body = .empty;
 
     var ls: js.Local.Scope = undefined;
     exec.js.localScope(&ls);
     defer ls.deinit();
 
     try self.stateChanged(.done, exec);
-    const loaded = self._response_data.items.len;
+    const loaded = self._response_data.len();
     try self._proto.dispatch(.load, .{ .total = loaded, .loaded = loaded, .length_computable = true }, exec);
     try self._proto.dispatch(.load_end, .{ .total = loaded, .loaded = loaded, .length_computable = true }, exec);
 
@@ -419,7 +439,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .source = "xhr",
         .url = self._url,
         .status = self._response_status,
-        .len = self._response_data.items.len,
+        .len = self._response_data.len(),
     });
 }
 
@@ -528,7 +548,7 @@ fn getResponseText(self: *const XMLHttpRequest) []const u8 {
     // using the final encoding derived from the final MIME type
     // (_override_mime ?? _response_mime). Currently the raw bytes are
     // returned and V8 treats them as UTF-8.
-    return self._response_data.items;
+    return self._response_data.items();
 }
 
 pub fn getStatus(self: *const XMLHttpRequest) u16 {
@@ -552,7 +572,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     // current bytes directly instead of caching a value that would go
     // stale as more data arrives.
     if (self._response_type == .default or self._response_type == .text) {
-        return .{ .text = self._response_data.items };
+        return .{ .text = self._response_data.items() };
     }
 
     if (self._ready_state != .done) {
@@ -564,7 +584,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
         return res;
     }
 
-    const data = self._response_data.items;
+    const data = self._response_data.items();
     const res: Response = switch (self._response_type) {
         .default, .text => unreachable,
         .json => blk: {
@@ -648,7 +668,7 @@ fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Documen
 
     switch (exec.js.global) {
         .frame => |frame| {
-            const xml_document = (try Frame.parse.xmlDocument(frame, self._response_data.items)) orelse return null;
+            const xml_document = (try Frame.parse.xmlDocument(frame, self._response_data.items())) orelse return null;
             const document = xml_document.asDocument();
             self._response_xml = document;
             return document;
@@ -724,9 +744,6 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     if (transfer.statusText()) |st| {
         self._response_status_text = try self._arena.dupe(u8, st);
     }
-    if (transfer.getContentLength()) |cl| {
-        self._response_len = cl;
-    }
     self._response_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
 
     const exec = self._exec;
@@ -736,7 +753,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     defer ls.deinit();
 
     try self.stateChanged(.headers_received, exec);
-    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, exec);
+    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = transfer.getContentLength() orelse 0 }, exec);
     try self.stateChanged(.loading, exec);
 
     return .proceed;
@@ -745,13 +762,12 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
-    const body = transfer.responseBody();
-    if (body.len > 0) {
-        try self._response_data.appendSlice(self._arena.allocator(), body);
-
+    self.freeResponseData();
+    self._response_data = transfer.takeBody();
+    if (self._response_data.len() > 0) {
         try self._proto.dispatch(.progress, .{
-            .total = self._response_len orelse 0,
-            .loaded = self._response_data.items.len,
+            .total = transfer.getContentLength() orelse 0,
+            .loaded = self._response_data.len(),
         }, self._exec);
 
         if (transfer.isAborted()) {
@@ -769,7 +785,7 @@ fn httpDoneCallback(transfer: *Transfer) !void {
         .source = "xhr",
         .url = self._url,
         .status = self._response_status,
-        .len = self._response_data.items.len,
+        .len = self._response_data.len(),
     });
 
     // Not that the request is done, the http/client will free the transfer
@@ -780,7 +796,7 @@ fn httpDoneCallback(transfer: *Transfer) !void {
 
     try self.stateChanged(.done, exec);
 
-    const loaded = self._response_data.items.len;
+    const loaded = self._response_data.len();
     try self._proto.dispatch(.load, .{
         .total = loaded,
         .loaded = loaded,
@@ -934,6 +950,40 @@ test "WebApi: XHR" {
 
 test "WebApi: XHR in worker" {
     try testing.htmlRunner("net/xhr_worker.html", .{});
+}
+
+test "WebApi: XHR reports its response body to V8 and gives it back" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
+
+    const browser = frame.page.session.browser;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    browser.flushArenaMemory();
+    try testing.expectEqual(0, browser.arena_account.pending);
+
+    const len = try (try ls.local.exec(
+        \\globalThis.req = new XMLHttpRequest();
+        \\req.open('GET', 'http://localhost:9582/xhr', false);
+        \\req.send();
+        \\req.responseText.length;
+    , null)).toF64();
+    try testing.expect(len > 0);
+
+    // The arena is reported too, so at least the body.
+    const reported = browser.arena_account.pending;
+    try testing.expect(reported >= @as(i64, @intFromFloat(len)));
+
+    // open() frees the body and takes back what was reported for it: its
+    // capacity, so at least its length.
+    _ = try ls.local.exec("req.open('GET', 'http://localhost:9582/xhr', false);", null);
+    try testing.expect(reported - browser.arena_account.pending >= @as(i64, @intFromFloat(len)));
 }
 
 test "WebApi: XHR listeners are dropped when the XHR is freed" {
