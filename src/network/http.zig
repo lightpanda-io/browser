@@ -40,6 +40,7 @@ pub var test_connect_to: ?*libcurl.CurlSList = null;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
+pub const WsFrameMeta = libcurl.WsFrameMeta;
 
 const Error = libcurl.Error;
 
@@ -744,7 +745,7 @@ pub const Connection = struct {
         try libcurl.curl_ws_start_frame(self._easy, frame_type, @intCast(size));
     }
 
-    pub fn wsMeta(self: *const Connection) ?libcurl.WsFrameMeta {
+    pub fn wsMeta(self: *const Connection) ?WsFrameMeta {
         return libcurl.curl_ws_meta(self._easy);
     }
 };
