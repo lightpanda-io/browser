@@ -4095,8 +4095,9 @@ const SubmitFormOpts = struct {
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
-    if (submit_opts.fire_event and form.asNode().isConnected() == false) {
-        // interactive submission (e.g. submit button) noop if the form is disconnected
+    if (form.asNode().isConnected() == false) {
+        // "If form cannot navigate, then return": a disconnected form can't,
+        // whether submitted interactively or by form.submit().
         return;
     }
 

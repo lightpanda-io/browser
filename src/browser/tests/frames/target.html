@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <iframe name=f1 id=frame1></iframe>
@@ -26,6 +27,8 @@
     let form = document.createElement('form');
     form.target = 'frame2';
     form.action = 'support/page.html';
+    // a disconnected form can't navigate: submit() would be a no-op
+    document.body.appendChild(form);
     form.submit();
 
     frame2.onload = () => {
