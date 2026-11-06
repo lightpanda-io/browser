@@ -3419,9 +3419,41 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
 
 /// Whether a @keyframes rule has `name`, or with null, whether any does.
 pub fn hasKeyframes(self: *StyleManager, name: ?[]const u8) bool {
+    // The animation check asks on every page: one without keyframes would
+    // pay a rebuild that nothing else may need.
+    if (self.dirty and !self.sheetsMentionKeyframes()) {
+        return false;
+    }
     self.rebuildIfDirty() catch return false;
     const wanted = name orelse return self.keyframes.count() > 0;
     return self.keyframes.contains(wanted);
+}
+
+/// The sheets `parseSheet` reads, searched as text.
+fn sheetsMentionKeyframes(self: *StyleManager) bool {
+    const sheets = self.frame.document._style_sheets orelse return false;
+    for (sheets._sheets.items) |sheet| {
+        if (sheet._disabled) {
+            continue;
+        }
+        if (sheet._css_rules) |css_rules| {
+            for (css_rules._rules.items) |rule| {
+                if (std.ascii.findIgnoreCase(rule._text, "keyframes") != null) {
+                    return true;
+                }
+            }
+            continue;
+        }
+        const owner_node = sheet.getOwnerNode() orelse continue;
+        const style = owner_node.is(Element.Html.Style) orelse continue;
+        const arena = self.frame.getArena(.small, "StyleManager.sheetsMentionKeyframes") catch return true;
+        defer arena.release();
+        const text = style.asNode().getTextContentAlloc(arena.allocator()) catch return true;
+        if (std.ascii.findIgnoreCase(text, "keyframes") != null) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// The animation longhands that decide when the animation events fire, each as
@@ -3853,6 +3885,34 @@ test "StyleManager: inline style writes" {
 
 test "StyleManager: animation events" {
     try testing.htmlRunner("css/animation_events.html", .{});
+}
+
+test "StyleManager: hasKeyframes rebuilds only when a sheet mentions keyframes" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { color: red }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(false, sm.hasKeyframes(null));
+    try testing.expectEqual(true, sm.dirty);
+
+    try style_el.asNode().setTextContent("@keyframes fade { to { opacity: 0 } }", frame);
+    try testing.expectEqual(true, sm.hasKeyframes("fade"));
+    try testing.expectEqual(false, sm.dirty);
+
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    _ = try sheet.insertRule("@-webkit-keyframes spin { to { opacity: 1 } }", 0, frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(true, sm.hasKeyframes("spin"));
 }
 
 test "StyleManager: text-transform without rules skips the memo" {
