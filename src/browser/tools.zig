@@ -1713,13 +1713,30 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    // Read before the click: a handler can hide the element it was clicked on.
+    const caveat = clickCaveat(resolved);
+
     var scope = beginAction(session);
     scope.await_late_popup = true;
 
     lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
-    const body = try formatActionResult(arena, "Clicked element", resolved.target, "");
+    const body = try formatActionResult(arena, "Clicked element", resolved.target, caveat);
     return finalizeAction(arena, session, registry, scope, body);
+}
+
+/// The gesture goes through either way, as in Chrome, but a model reading only
+/// "Clicked element" would believe the page reacted.
+fn clickCaveat(resolved: NodeAndPage) []const u8 {
+    const el = resolved.node.is(Element) orelse return "";
+    if (el.isDisabled()) {
+        return " but it is disabled: the page got the pointer events and no click";
+    }
+    const owner = el.ownerFrame(resolved.page) orelse resolved.page;
+    if (owner._style_manager.isHidden(el, .{})) {
+        return " but it is not rendered (display: none here or on an ancestor): no user could click it";
+    }
+    return "";
 }
 
 fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
@@ -2432,6 +2449,34 @@ test "click: a playwright-style selector is an InvalidSelector, not bare Invalid
     try std.testing.expectEqual(.invalid_params, telemetryOutcome(r));
     try std.testing.expectError(error.InvalidSelector, r);
     try std.testing.expect(std.mem.find(u8, errorMessage(error.InvalidSelector), "findElement") != null);
+}
+
+test "click: the result says when the target is disabled or not rendered" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const hide = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"script\":\"document.getElementById('btnChord').parentElement.append(Object.assign(document.createElement('div'), {hidden: true, innerHTML: '<button id=hiddenBtn>x</button>'}))\"}", .{});
+    _ = try call(aa, page.session, &registry, "evaluate", hide, .{ .source = .user });
+
+    for ([_]struct { []const u8, ?[]const u8 }{
+        .{ "{\"selector\":\"#btn\"}", null },
+        .{ "{\"selector\":\"#btnDisabled\"}", "but it is disabled" },
+        .{ "{\"selector\":\"#hiddenBtn\"}", "but it is not rendered" },
+    }) |case| {
+        const json, const caveat = case;
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, json, .{});
+        const r = try call(aa, page.session, &registry, "click", args, .{ .source = .user });
+        try std.testing.expect(std.mem.startsWith(u8, r.text, "Clicked element"));
+        if (caveat) |c| {
+            try std.testing.expect(std.mem.find(u8, r.text, c) != null);
+        } else {
+            try std.testing.expect(std.mem.find(u8, r.text, " but it is ") == null);
+        }
+    }
 }
 
 test "fill: the wrong element type names the constraint" {
