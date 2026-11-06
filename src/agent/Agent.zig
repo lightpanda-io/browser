@@ -501,6 +501,10 @@ pub const SigBridge = struct {
 fn beforeTurnRequest(ctx: *anyopaque) void {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     self.conversation.compactForRequest();
+    // A delta builds on the full tree, so the model must still have it whole.
+    if (self.ts.tree_seen.key != null and !self.conversation.holdsResult("tree", self.ts.tree_seen.text.items)) {
+        self.ts.tree_seen.key = null;
+    }
     beforeRequest(ctx);
 }
 
