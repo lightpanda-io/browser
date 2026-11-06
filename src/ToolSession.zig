@@ -44,6 +44,7 @@ tree_seen: TreeSeen = .{},
 /// `exitIsolate` afterwards.
 pub fn init(self: *ToolSession, app: *App) !void {
     // `self` comes in undefined, so its field defaults don't apply.
+    self.page_tools_seen = .{};
     self.tree_seen = .{};
 
     self.notification = try .init(app.allocator);
