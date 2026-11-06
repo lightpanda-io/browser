@@ -158,9 +158,9 @@ pub const Writer = struct {
             switch (self.scope) {
                 .subtree => unreachable,
                 .children => {},
-                .node, .bare_node => try self.writeNotRendered(nearest, w),
+                .node, .bare_node => try self.writeOutOfTree(nearest, w),
                 .ancestors, .relatives => {
-                    try self.writeNotRendered(nearest, w);
+                    try self.writeOutOfTree(nearest, w);
                     if (nearest) |n| try self.writeAncestors(n, ignore_cache, w);
                 },
             }
@@ -222,7 +222,7 @@ pub const Writer = struct {
 
     // Chrome's AXNode for a DOM node outside the AX tree. `parent` is its
     // nearest ancestor in the tree, which doesn't list it in its childIds.
-    fn writeNotRendered(self: *const Writer, parent: ?*DOMNode, w: anytype) !void {
+    fn writeOutOfTree(self: *const Writer, parent: ?*DOMNode, w: anytype) !void {
         const id = self.root.id;
         try w.beginObject();
         try w.objectField("nodeId");
@@ -233,7 +233,7 @@ pub const Writer = struct {
         try self.writeAXValue(.{ .role = "none" }, w);
         try w.objectField("ignored");
         try w.write(true);
-        try self.writeIgnoredReason("notRendered", w);
+        try self.writeIgnoredReason(outOfTreeReason(self.root.dom, self.frame), w);
         if (parent) |p| {
             try w.objectField("parentId");
             try writeIdString((try self.registry.register(p)).id, w);
@@ -795,7 +795,7 @@ pub const Writer = struct {
         try w.write(ignore);
 
         if (ignore) {
-            try self.writeIgnoredReason("uninteresting", w);
+            try self.writeIgnoredReason(if (hidden == .invisible) "notVisible" else "uninteresting", w);
         } else {
             // Name
             try w.objectField("name");
@@ -1644,8 +1644,38 @@ fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
 /// owns it.
 fn hidesSubtree(node: *DOMNode) bool {
     const elt = node.is(DOMNode.Element) orelse return false;
+    return isAriaHidden(elt) or hasInertAttribute(elt);
+}
+
+fn isAriaHidden(elt: *DOMNode.Element) bool {
     const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
-    return std.ascii.eqlIgnoreCase(aria_hidden, "true") or elt.hasAttributeSafe(comptime .wrap("inert"));
+    return std.ascii.eqlIgnoreCase(aria_hidden, "true");
+}
+
+/// Like `Node.isInert`, only HTML elements take the attribute.
+fn hasInertAttribute(elt: *DOMNode.Element) bool {
+    return elt._namespace == .html and elt.hasAttributeSafe(comptime .wrap("inert"));
+}
+
+/// Chrome's ignored reason for a node outside the AX tree. aria-hidden on the
+/// node or above wins; otherwise the outermost of inert and display:none
+/// decides. Anything else (<head> content, <template>) is notRendered.
+fn outOfTreeReason(node: *DOMNode, frame: *Frame) []const u8 {
+    var aria_hidden: ?[]const u8 = null;
+    var outermost: []const u8 = "notRendered";
+    var current: ?*DOMNode = node;
+    while (current) |n| : (current = n.flatTreeParent(frame)) {
+        const elt = n.is(DOMNode.Element) orelse continue;
+        if (aria_hidden == null and isAriaHidden(elt)) {
+            aria_hidden = if (n == node) "ariaHiddenElement" else "ariaHiddenSubtree";
+        }
+        if (hasInertAttribute(elt)) {
+            outermost = "inertElement";
+        } else if (elt.ownerFrame(frame)) |owner| {
+            if (owner._style_manager.hasDisplayNone(elt)) outermost = "notRendered";
+        }
+    }
+    return aria_hidden orelse outermost;
 }
 
 /// The first flat-tree ancestor of `node` whose attributes hide its subtree.

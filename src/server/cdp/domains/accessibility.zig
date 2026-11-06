@@ -539,7 +539,7 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
     try ctx.processMessage(.{ .id = 2, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .objectId = gone } });
     const chain = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     try testing.expectEqual(4, chain.len);
-    try expectNotRendered(chain[0].object);
+    try expectOutOfTree(chain[0].object, "notRendered");
     try expectChain(chain);
     const body_id = chain[1].object.get("nodeId").?.string;
 
@@ -559,7 +559,7 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
     const title = try evaluatedObjectId(&ctx, 4);
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = title } });
     const nodes = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items;
-    try expectNotRendered(nodes[0].object);
+    try expectOutOfTree(nodes[0].object, "notRendered");
     try expectChain(nodes);
 
     try ctx.processMessage(.{ .id = 6, .method = "Accessibility.getChildAXNodes", .params = .{
@@ -575,7 +575,9 @@ test "cdp.accessibility: a node under inert or aria-hidden" {
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
 
     // As in Chrome: the node, then <main> (not the hiding <div>) and up.
-    inline for (.{ "under-inert", "p-under-aria-hidden" }, 0..) |dom_id, i| {
+    const cases = .{ .{ "under-inert", "inertElement" }, .{ "p-under-aria-hidden", "ariaHiddenSubtree" } };
+    inline for (cases, 0..) |case, i| {
+        const dom_id, const reason = case;
         try ctx.processMessage(.{ .id = 2 * i + 1, .method = "Runtime.evaluate", .params = .{
             .expression = "document.getElementById('" ++ dom_id ++ "')",
         } });
@@ -583,9 +585,56 @@ test "cdp.accessibility: a node under inert or aria-hidden" {
         try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = object_id } });
         const nodes = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items;
         try testing.expectEqual(5, nodes.len);
-        try expectNotRendered(nodes[0].object);
+        try expectOutOfTree(nodes[0].object, reason);
         try testing.expectEqual("main", axRole(nodes[1].object));
         try expectChain(nodes);
+    }
+}
+
+test "cdp.accessibility: ignoredReasons names why a node is hidden" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_ignored_reasons.html" });
+
+    // Checked against Chrome: aria-hidden on the node or above wins, then
+    // the outermost of inert and display:none.
+    const cases = .{
+        .{ "title", "notRendered" },
+        .{ "ah", "ariaHiddenElement" },
+        .{ "ah-child", "ariaHiddenSubtree" },
+        .{ "ah-upper", "ariaHiddenElement" },
+        .{ "ah-false", "ariaHiddenSubtree" },
+        .{ "inert", "inertElement" },
+        .{ "inert-child", "inertElement" },
+        .{ "vh", "notVisible" },
+        .{ "vh-child", "notVisible" },
+        .{ "dn", "notRendered" },
+        .{ "dn-child", "notRendered" },
+        .{ "ah-over-dn", "ariaHiddenSubtree" },
+        .{ "dn-over-ah", "ariaHiddenElement" },
+        .{ "ah-over-inert", "ariaHiddenSubtree" },
+        .{ "inert-over-ah", "ariaHiddenElement" },
+        .{ "inert-over-dn", "inertElement" },
+        .{ "dn-over-inert", "notRendered" },
+        .{ "inert-over-vh", "inertElement" },
+        .{ "svg-child", "ariaHiddenSubtree" },
+    };
+    inline for (cases, 0..) |case, i| {
+        const dom_id, const reason = case;
+        try ctx.processMessage(.{ .id = 2 * i + 1, .method = "Runtime.evaluate", .params = .{
+            .expression = "document.getElementById('" ++ dom_id ++ "')",
+        } });
+        const object_id = try evaluatedObjectId(&ctx, 2 * i + 1);
+        try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{
+            .objectId = object_id,
+            .fetchRelatives = false,
+        } });
+        const nodes = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items;
+        expectIgnoredReason(nodes[0].object, reason) catch |err| {
+            std.debug.print("#{s}\n", .{dom_id});
+            return err;
+        };
     }
 }
 
@@ -681,11 +730,17 @@ test "cdp.accessibility: an iframe's tree is its own" {
     }
 }
 
-fn expectNotRendered(node: std.json.ObjectMap) !void {
+fn expectOutOfTree(node: std.json.ObjectMap, reason: []const u8) !void {
     try testing.expectEqual("none", axRole(node));
-    try testing.expectEqual(true, node.get("ignored").?.bool);
-    try testing.expectEqual("notRendered", node.get("ignoredReasons").?.array.items[0].object.get("name").?.string);
     try testing.expectEqual(0, node.get("childIds").?.array.items.len);
+    try expectIgnoredReason(node, reason);
+}
+
+fn expectIgnoredReason(node: std.json.ObjectMap, reason: []const u8) !void {
+    try testing.expectEqual(true, node.get("ignored").?.bool);
+    const reasons = node.get("ignoredReasons").?.array.items;
+    try testing.expectEqual(1, reasons.len);
+    try testing.expectEqual(reason, reasons[0].object.get("name").?.string);
 }
 
 // `nodes` is a node then each ancestor up to a root.
