@@ -891,3 +891,142 @@
   new WebSocket('ws://127.0.0.1:9584/', ['a', 'b']).close();
 }
 </script>
+
+<script id=server_subprotocol_match type=module>
+// Matching subprotocol selected by the server: connection succeeds and ws.protocol is set
+{
+  const state = await testing.async();
+  let events = [];
+  let ws = new WebSocket('ws://127.0.0.1:9584/?protocol=chat', ['chat', 'superchat']);
+
+  ws.addEventListener('open', () => {
+    events.push('open');
+    events.push(ws.protocol);
+    ws.close();
+  });
+  ws.addEventListener('close', () => {
+    events.push('close');
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['open', 'chat', 'close'], events);
+  });
+}
+</script>
+
+<script id=server_subprotocol_unrequested type=module>
+// Server selects an unrequested subprotocol: connection fails (RFC 6455 §4.1)
+{
+  const state = await testing.async();
+  let events = [];
+  let ws = new WebSocket('ws://127.0.0.1:9584/?protocol=unrequested', ['chat']);
+
+  ws.addEventListener('open', () => { events.push('open'); });
+  ws.addEventListener('error', () => { events.push('error'); });
+  ws.addEventListener('close', (e) => {
+    events.push('close');
+    events.push(e.code);
+    events.push(e.wasClean);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['error', 'close', 1006, false], events);
+    testing.expectEqual('', ws.protocol);
+  });
+}
+</script>
+
+<script id=server_subprotocol_unsolicited type=module>
+// Server returns a subprotocol when the client requested none: connection fails
+{
+  const state = await testing.async();
+  let events = [];
+  let ws = new WebSocket('ws://127.0.0.1:9584/?protocol=unsolicited');
+
+  ws.addEventListener('open', () => { events.push('open'); });
+  ws.addEventListener('error', () => { events.push('error'); });
+  ws.addEventListener('close', (e) => {
+    events.push('close');
+    events.push(e.code);
+    events.push(e.wasClean);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['error', 'close', 1006, false], events);
+    testing.expectEqual('', ws.protocol);
+  });
+}
+</script>
+
+<script id=server_subprotocol_multiple type=module>
+// Server returns multiple Sec-WebSocket-Protocol headers: connection fails
+{
+  const state = await testing.async();
+  let events = [];
+  let ws = new WebSocket('ws://127.0.0.1:9584/?multiple-protocols=true', ['proto1', 'proto2']);
+
+  ws.addEventListener('open', () => { events.push('open'); });
+  ws.addEventListener('error', () => { events.push('error'); });
+  ws.addEventListener('close', (e) => {
+    events.push('close');
+    events.push(e.code);
+    events.push(e.wasClean);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['error', 'close', 1006, false], events);
+    testing.expectEqual('', ws.protocol);
+  });
+}
+</script>
+
+<script id=server_subprotocol_missing type=module>
+// Client offered subprotocols but the server picked none: connection fails
+{
+  const state = await testing.async();
+  let events = [];
+  let ws = new WebSocket('ws://127.0.0.1:9584/', ['chat']);
+
+  ws.addEventListener('open', () => { events.push('open'); });
+  ws.addEventListener('error', () => { events.push('error'); });
+  ws.addEventListener('close', (e) => {
+    events.push('close');
+    events.push(e.code);
+    events.push(e.wasClean);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['error', 'close', 1006, false], events);
+    testing.expectEqual('', ws.protocol);
+  });
+}
+</script>
+
+<script id=server_subprotocol_empty type=module>
+// Server sends an empty Sec-WebSocket-Protocol header when the client
+// requested none: connection fails
+{
+  const state = await testing.async();
+  let events = [];
+  let ws = new WebSocket('ws://127.0.0.1:9584/?protocol=');
+
+  ws.addEventListener('open', () => { events.push('open'); });
+  ws.addEventListener('error', () => { events.push('error'); });
+  ws.addEventListener('close', (e) => {
+    events.push('close');
+    events.push(e.code);
+    events.push(e.wasClean);
+    state.resolve();
+  });
+
+  await state.done(() => {
+    testing.expectEqual(['error', 'close', 1006, false], events);
+    testing.expectEqual('', ws.protocol);
+  });
+}
+</script>

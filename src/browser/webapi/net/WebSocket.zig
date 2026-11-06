@@ -95,6 +95,9 @@ _close_reason: []const u8 = "",
 // negotiated protocol
 _protocol: []const u8 = "",
 
+/// Subprotocols offered by the client at construction (RFC 6455 §4.1).
+_subprotocols: []const u8 = "",
+
 _task: js.Attribution.Tag,
 
 const ReadyState = enum(u8) {
@@ -267,7 +270,9 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
         try conn.addHeader(allocator, hdr.name, hdr.value);
     }
     if (protocols.len > 0) {
-        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
+        const subprotocols = try std.mem.join(allocator, ", ", protocols);
+        self._subprotocols = subprotocols;
+        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", subprotocols);
     }
 
     {
@@ -910,6 +915,12 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             return 0;
         }
 
+        // When the client offered subprotocols, the server has to pick one of them.
+        if (self._subprotocols.len != 0 and self._protocol.len == 0) {
+            log.warn(.websocket, "no subprotocol in response", .{});
+            return 0;
+        }
+
         log.info(.websocket, "connected", .{ .url = self._url });
 
         // readyState flips to .open and onopen fires at delivery
@@ -930,7 +941,27 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             self._got_upgrade = true;
         }
     } else if (std.ascii.eqlIgnoreCase(header_name, "sec-websocket-protocol")) {
-        // TODO, we should validate this against our sent list.
+        // RFC 6455 §4.1 / WHATWG WebSocket: The server's selected protocol must
+        // match one of the subprotocols offered by the client, and the server
+        // MUST NOT send multiple subprotocol headers or select an unrequested
+        // protocol.
+        if (self._protocol.len != 0) {
+            log.warn(.websocket, "duplicate SecWebSocketProtocol", .{ .protocol = value });
+            self._protocol = "";
+            return 0;
+        }
+        var matched = false;
+        var it = std.mem.tokenizeSequence(u8, self._subprotocols, ", ");
+        while (it.next()) |subprotocol| {
+            if (std.mem.eql(u8, subprotocol, value)) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            log.warn(.websocket, "picked unrequested subprotocol", .{ .protocol = value });
+            return 0;
+        }
         self._protocol = self._arena.dupe(u8, value) catch |err| {
             log.err(.websocket, "dupe protocol", .{ .err = err });
             return 0;
