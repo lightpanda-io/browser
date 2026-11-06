@@ -1725,16 +1725,17 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     return finalizeAction(arena, session, registry, scope, body);
 }
 
-/// The gesture goes through either way, as in Chrome, but a model reading only
-/// "Clicked element" would believe the page reacted.
+/// Chrome gives a disabled control the pointer events and no click; a
+/// hidden element gets a click no user could make. Either way a bare
+/// "Clicked element" reads as if the page reacted.
 fn clickCaveat(resolved: NodeAndPage) []const u8 {
     const el = resolved.node.is(Element) orelse return "";
     if (el.isDisabled()) {
         return " but it is disabled: the page got the pointer events and no click";
     }
     const owner = el.ownerFrame(resolved.page) orelse resolved.page;
-    if (owner._style_manager.isHidden(el, .{})) {
-        return " but it is not rendered (display: none here or on an ancestor): no user could click it";
+    if (owner._style_manager.isHidden(el, .{ .check_visibility = true })) {
+        return " but it is hidden (display: none or visibility: hidden): no user could click it";
     }
     return "";
 }
@@ -2451,7 +2452,7 @@ test "click: a playwright-style selector is an InvalidSelector, not bare Invalid
     try std.testing.expect(std.mem.find(u8, errorMessage(error.InvalidSelector), "findElement") != null);
 }
 
-test "click: the result says when the target is disabled or not rendered" {
+test "click: the result says when the target is disabled or hidden" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -2459,13 +2460,11 @@ test "click: the result says when the target is disabled or not rendered" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const hide = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"script\":\"document.getElementById('btnChord').parentElement.append(Object.assign(document.createElement('div'), {hidden: true, innerHTML: '<button id=hiddenBtn>x</button>'}))\"}", .{});
-    _ = try call(aa, page.session, &registry, "evaluate", hide, .{ .source = .user });
-
     for ([_]struct { []const u8, ?[]const u8 }{
         .{ "{\"selector\":\"#btn\"}", null },
         .{ "{\"selector\":\"#btnDisabled\"}", "but it is disabled" },
-        .{ "{\"selector\":\"#hiddenBtn\"}", "but it is not rendered" },
+        .{ "{\"selector\":\"#btnHidden\"}", "but it is hidden" },
+        .{ "{\"selector\":\"#btnInvisible\"}", "but it is hidden" },
     }) |case| {
         const json, const caveat = case;
         const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, json, .{});
