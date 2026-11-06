@@ -4470,7 +4470,7 @@ pub const Transfer = struct {
                     }
                     // Because of compression, Content-Length is the wire
                     // length, not necessarily the final length; the buffer
-                    // still grows past it (takeBody shrinks it back).
+                    // still grows past it.
                     res.buffer.ensureTotalCapacityPrecise(cl) catch {};
                 }
             }
@@ -4629,12 +4629,11 @@ pub const Transfer = struct {
     }
 
     // For a non-streaming done_callback: the body, moved out of the
-    // transfer (which is left with an empty one) and shrunk to fit.
+    // transfer (which is left with an empty one).
     pub fn takeBody(self: *Transfer) Body {
         lp.assert(self.req.isStreaming() == false, "Transfer.takeBody streaming", .{});
-        var body = self.res.buffer;
+        const body = self.res.buffer;
         self.res.buffer = .init(self.client.allocator);
-        body._list.shrinkAndFree(body._allocator, body._list.items.len);
         return body;
     }
 
@@ -4881,6 +4880,14 @@ pub const Body = struct {
     pub fn deinit(self: *Body) void {
         self._list.deinit(self._allocator);
         self._list = .empty;
+    }
+
+    pub fn len(self: *const Body) usize {
+        return self._list.items.len;
+    }
+
+    pub fn capacity(self: *const Body) usize {
+        return self._list.capacity;
     }
 
     pub fn items(self: *const Body) []const u8 {
