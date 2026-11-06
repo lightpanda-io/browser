@@ -729,6 +729,11 @@ const InnerTextState = struct {
     // text-transform of the element whose text is being written
     transform: TextTransform = .none,
 
+    // A row of the current table has been written, so the next one is
+    // preceded by a newline. Kept per table rather than per row group, so the
+    // rows of <thead>, <tbody> and <tfoot> are separated from each other too.
+    saw_row: bool = false,
+
     fn requireBreaks(self: *InnerTextState, n: u8) void {
         if (n > self.pending_breaks) {
             self.pending_breaks = n;
@@ -779,10 +784,18 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
         else => false,
     };
 
-    // Track whether we've already emitted a cell/row in this parent so we can
-    // insert tab/newline separators *between* them.
-    var saw_row = false;
+    // Track whether we've already emitted a cell in this row so we can insert
+    // tab separators *between* them.
     var saw_cell = false;
+
+    // A nested table starts its own rows.
+    const parent_saw_row = state.saw_row;
+    defer if (self_tag == .table) {
+        state.saw_row = parent_saw_row;
+    };
+    if (self_tag == .table) {
+        state.saw_row = false;
+    }
 
     // The text of an invisible element isn't included, but we still walk all
     // its children, since they can make themeselves visible again.
@@ -805,7 +818,7 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                             .select => if (tag != .option and tag != .optgroup) continue,
                             .optgroup => if (tag != .option) continue,
                         }
-                        try handleChildElement(e.subtype(HtmlElement), tag, state, &saw_cell, &saw_row);
+                        try handleChildElement(e.subtype(HtmlElement), tag, state, &saw_cell);
                     },
                 }
             },
@@ -838,7 +851,6 @@ fn handleChildElement(
     tag: Element.Tag,
     state: *InnerTextState,
     saw_cell: *bool,
-    saw_row: *bool,
 ) !void {
     // doesn't use StyleManger's isHidden, because we don't care if the element
     // is hidden through its parent. If you can el.innerText on an element, the
@@ -893,10 +905,10 @@ fn handleChildElement(
             try he.collectInnerText(state);
         },
         .table_row => {
-            if (saw_row.*) {
+            if (state.saw_row) {
                 try state.writeSeparator('\n');
             }
-            saw_row.* = true;
+            state.saw_row = true;
             try he.collectInnerText(state);
         },
     }
