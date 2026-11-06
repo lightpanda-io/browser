@@ -174,11 +174,6 @@ network_limits: network_domain.BufferLimits = .{},
 // own message arena.
 pending_dialog_response: ?Notification.DialogResponse = null,
 
-// webmcp tool invocation
-invocation_id_gen: CDP.InvocationIdGen = .{},
-// WebMCP domain state. Populated when `WebMCP.enable` is received.
-webmcp_invocations: std.AutoHashMapUnmanaged(u32, *@import("domains/webmcp.zig").Invocation) = .empty,
-
 // Allocates the target. Its page is bound later, by onFrameCreated.
 pub fn init(bc: *BrowserContext, group_id: js.Inspector.GroupId) !*Target {
     const allocator = bc.cdp.allocator;

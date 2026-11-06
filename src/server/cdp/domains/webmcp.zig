@@ -33,7 +33,9 @@ const log = lp.log;
 
 pub const Invocation = struct {
     id: u32,
-    target: *CDP.Target,
+    bc: *CDP.BrowserContext,
+    // The root frame of the tool's page: its target's frame_id.
+    root_frame_id: u32,
     // The document the tool ran in, which owns the signal.
     loader_id: u32,
     signal: *AbortSignal,
@@ -92,7 +94,6 @@ fn invokeTool(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const target = try cmd.target();
-    const arena = target.arena.allocator();
     const frame_id = try id.parseFrameId(params.frameId);
     const frame = target.findFrame(frame_id) orelse return error.FrameNotFound;
     const mc = frame.window._model_context orelse return error.NotFound;
@@ -103,17 +104,18 @@ fn invokeTool(cmd: *CDP.Command) !void {
     // `toolInvoked.input` and pass the parsed form into the JS callback.
     const input_str = try std.json.Stringify.valueAlloc(cmd.arena, params.input, .{});
 
-    const inv_id = target.invocation_id_gen.incr();
+    const inv_id = bc.invocation_id_gen.incr();
     const inv_id_str = id.toInvocationId(inv_id);
 
     const invocation = try bc.arena.create(Invocation);
     invocation.* = .{
         .id = inv_id,
-        .target = target,
+        .bc = bc,
+        .root_frame_id = frame.page.frame._frame_id,
         .loader_id = frame._loader_id,
         .signal = try AbortSignal.init(exec),
     };
-    try target.webmcp_invocations.put(arena, inv_id, invocation);
+    try bc.webmcp_invocations.put(bc.arena, inv_id, invocation);
 
     // Send toolInvoked event before we run the JS, so the client sees
     // them in order even if the tool resolves synchronously.
@@ -138,13 +140,13 @@ fn invokeTool(cmd: *CDP.Command) !void {
             error.ToolThrew => caught.exception orelse "tool threw",
             error.OutOfMemory => return error.OutOfMemory,
         };
-        try respondError(cmd.cdp, target, invocation, msg);
+        try respondError(invocation, msg);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
     // If the tool returned a non-promise value, settle immediately.
     if (!result.isPromise()) {
-        try respondCompleted(cmd.cdp, target, invocation, result);
+        try respondCompleted(invocation, result);
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     }
 
@@ -154,7 +156,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
     _ = promise.thenAndCatch(on_fulfilled, on_rejected) catch {
         // If we couldn't chain, settle as error. Map entry will be
         // cleaned up below.
-        try respondError(cmd.cdp, target, invocation, "promise chain failed");
+        try respondError(invocation, "promise chain failed");
         return cmd.sendResult(.{ .invocationId = &inv_id_str }, .{});
     };
 
@@ -166,10 +168,11 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
         invocationId: []const u8,
     })) orelse return error.InvalidParams;
 
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const target = try cmd.target();
 
     const inv_id = CDP.InvocationIdGen.parse(params.invocationId) catch return error.InvalidParams;
-    const entry = target.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
+    const entry = bc.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
     const invocation = entry.value;
 
     try cmd.cdp.sendEvent("WebMCP.toolResponded", .{
@@ -186,68 +189,79 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// Called from BrowserContext.deinit. Sends `toolResponded { status: "Canceled" }`
-// for every pending invocation so a CDP client waiting on `invokeTool` doesn't
-// see the invocation go silent on teardown. The V8 promise callbacks become
-// unreachable once the JS context is torn down by browser.closeSession, so
-// we don't need to clear them ourselves.
+// Called from Target.deinit. Sends `toolResponded { status: "Canceled" }` for
+// every pending invocation of `target` so a CDP client waiting on `invokeTool`
+// doesn't see the invocation go silent on teardown. The page, and its V8
+// promise callbacks, can outlive the target (its destruction is queued): a
+// late callback finds no entry in the map and does nothing.
 pub fn cancelAllPending(target: *CDP.Target) void {
-    var it = target.webmcp_invocations.iterator();
+    const bc = target.bc;
+    var it = bc.webmcp_invocations.iterator();
     while (it.next()) |entry| {
         const invocation = entry.value_ptr.*;
+        // Only this target's: the map holds the invocations of every target.
+        if (invocation.root_frame_id != target.frame_id) {
+            continue;
+        }
         target.cdp.sendEvent("WebMCP.toolResponded", .{
             .invocationId = &id.toInvocationId(invocation.id),
             .status = "Canceled",
         }, .{ .session_id = target.session_id }) catch |err| {
             log.debug(.cdp, "WebMCP cancelAllPending", .{ .err = err });
         };
+        bc.webmcp_invocations.removeByPtr(entry.key_ptr);
     }
-    target.webmcp_invocations.clearRetainingCapacity();
 }
 
 fn onPromiseFulfilled(invocation: *Invocation, value: js.Value) anyerror!void {
     // The map is the source of truth for "still active". cancelInvocation
     // removes it from the map and sends Canceled; we drop the late result.
-    if (invocation.target.webmcp_invocations.fetchRemove(invocation.id) == null) return;
-    respondCompleted(invocation.target.cdp, invocation.target, invocation, value) catch |err| {
+    if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
+    respondCompleted(invocation, value) catch |err| {
         log.debug(.cdp, "WebMCP fulfilled", .{ .err = err });
     };
 }
 
 fn onPromiseRejected(invocation: *Invocation, reason: js.Value) anyerror!void {
-    if (invocation.target.webmcp_invocations.fetchRemove(invocation.id) == null) return;
+    if (invocation.bc.webmcp_invocations.fetchRemove(invocation.id) == null) return;
     const msg = reason.toStringSlice() catch "tool rejected";
-    respondError(invocation.target.cdp, invocation.target, invocation, msg) catch |err| {
+    respondError(invocation, msg) catch |err| {
         log.debug(.cdp, "WebMCP rejected", .{ .err = err });
     };
 }
 
 fn respondCompleted(
-    cdp: *CDP,
-    target: *CDP.Target,
     invocation: *Invocation,
     value: js.Value,
 ) !void {
-    try cdp.sendEvent("WebMCP.toolResponded", .{
+    const bc = invocation.bc;
+    defer {
+        _ = bc.webmcp_invocations.remove(invocation.id);
+    }
+
+    const target = bc.findTargetByRootFrameId(invocation.root_frame_id) orelse return;
+    try bc.cdp.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Completed",
         .output = value,
     }, .{ .session_id = target.session_id });
-    _ = target.webmcp_invocations.remove(invocation.id);
 }
 
 fn respondError(
-    cdp: *CDP,
-    target: *CDP.Target,
     invocation: *Invocation,
     err_text: []const u8,
 ) !void {
-    try cdp.sendEvent("WebMCP.toolResponded", .{
+    const bc = invocation.bc;
+    defer {
+        _ = bc.webmcp_invocations.remove(invocation.id);
+    }
+
+    const target = bc.findTargetByRootFrameId(invocation.root_frame_id) orelse return;
+    try bc.cdp.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Error",
         .errorText = err_text,
     }, .{ .session_id = target.session_id });
-    _ = target.webmcp_invocations.remove(invocation.id);
 }
 
 pub fn onToolAdded(

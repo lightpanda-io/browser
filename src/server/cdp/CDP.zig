@@ -460,6 +460,11 @@ pub const BrowserContext = struct {
 
     notification: *Notification,
 
+    // webmcp tool invocation
+    invocation_id_gen: CDP.InvocationIdGen = .{},
+    // WebMCP domain state. Populated when `WebMCP.enable` is received.
+    webmcp_invocations: std.AutoHashMapUnmanaged(u32, *@import("domains/webmcp.zig").Invocation) = .empty,
+
     fn init(self: *BrowserContext, id: []const u8, cdp: *CDP) !void {
         const allocator = cdp.allocator;
 
