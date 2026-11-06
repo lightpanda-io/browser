@@ -169,7 +169,7 @@ pub fn fromHref(frame: *Frame, href: []const u8, filename_hint: []const u8) !voi
     var req = request(frame, url, shutdownCallback);
     req.ctx = download;
     req.header_callback = headerCallback;
-    req.data_callback = dataCallback;
+    req.stream_callback = streamCallback;
     req.done_callback = doneCallback;
     req.error_callback = errorCallback;
     const transfer = try newTransfer(frame, req);
@@ -190,7 +190,6 @@ pub fn request(frame: *Frame, url: [:0]const u8, shutdown_callback: HttpClient.R
         .request_mode = .navigate,
         .credentials_mode = .include,
         .resource_type = .download,
-        .streaming = true,
         .shutdown_callback = shutdown_callback,
     };
 }
@@ -287,15 +286,15 @@ fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderRes
     return .proceed;
 }
 
-fn dataCallback(transfer: *HttpClient.Transfer, bytes: []const u8) !void {
+fn streamCallback(transfer: *HttpClient.Transfer, bytes: []const u8) !void {
     const download, _ = fromRaw(transfer.req.ctx);
     return download.feed(bytes);
 }
 
 /// This must not fail! A `done_callback` error is routed to `error_callback`,
 /// which would destroy `ctx` a second time.
-fn doneCallback(raw_ctx: *anyopaque) !void {
-    end(raw_ctx, .completed);
+fn doneCallback(transfer: *HttpClient.Transfer) !void {
+    end(transfer.req.ctx, .completed);
 }
 
 fn errorCallback(raw_ctx: *anyopaque, err: anyerror) void {

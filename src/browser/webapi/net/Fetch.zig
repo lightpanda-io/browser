@@ -38,7 +38,6 @@ const Fetch = @This();
 
 _exec: *const Execution,
 _url: []const u8,
-_buf: std.ArrayList(u8),
 _response: *Response,
 _owns_response: bool,
 _signal: ?*AbortSignal,
@@ -114,7 +113,6 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
         ._exec = exec,
-        ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
         ._sink = sink,
         ._response = response,
@@ -154,7 +152,6 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
         },
         .header_before_body_error = true,
         .header_callback = httpHeaderDoneCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -211,10 +208,6 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     const arena = self._response._arena;
-    if (self._null_body == false) {
-        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
-    }
-
     const res = self._response;
 
     if (comptime lp.IS_DEBUG) {
@@ -283,30 +276,22 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
+    var response = self._response;
+    const body: []const u8 = if (self._null_body) "" else try response._arena.allocator().dupe(u8, transfer.responseBody());
 
-    if (self._null_body) {
-        return;
-    }
-
-    try self._buf.appendSlice(self._response._arena.allocator(), data);
-}
-
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *Fetch = @ptrCast(@alignCast(ctx));
     const signal = self._signal;
     self.detachSignal();
 
-    var response = self._response;
     response._http_transfer = null;
-    response._body = if (self._null_body) .empty else .{ .bytes = self._buf.items };
+    response._body = if (self._null_body) .empty else .{ .bytes = body };
 
     log.info(.http, "request complete", .{
         .source = "fetch",
         .url = self._url,
         .status = response._status,
-        .len = self._buf.items.len,
+        .len = body.len,
     });
 
     const resolver = switch (self._sink) {

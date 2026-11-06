@@ -512,8 +512,8 @@ const CorsPreflightContext = struct {
         return .proceed;
     }
 
-    fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
-        const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
+    fn doneCallback(transfer: *Transfer) anyerror!void {
+        const self: *CorsPreflightContext = @ptrCast(@alignCast(transfer.req.ctx));
         if (self.allowed) {
             self.cacheGrant(self.acam, self.acah, self.acma) catch |err| {
                 log.warn(.cors, "preflight cache store failed", .{ .url = self.url, .err = err });
