@@ -21,6 +21,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 
+const Navigation = @import("navigation/Navigation.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
 
 const History = @This();
@@ -63,7 +64,7 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     else
         try arena.dupeSentinel(u8, target.url, 0);
 
-    const json = state.toJson(arena.allocator()) catch return error.DataClone;
+    const json = try Navigation.serializeState(state, arena.allocator());
 
     const navigation = session.navigationFor(target);
     const result = try navigation.fireNavigateEvent(.{ .navigation_type = .push, .url = url, .same_document = true, .classic_history = true }, target);
@@ -100,7 +101,7 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
     else
         try arena.dupeSentinel(u8, target.url, 0);
 
-    const json = state.toJson(arena.allocator()) catch return error.DataClone;
+    const json = try Navigation.serializeState(state, arena.allocator());
 
     const navigation = session.navigationFor(target);
     const result = try navigation.fireNavigateEvent(.{ .navigation_type = .replace, .url = url, .same_document = true, .classic_history = true }, target);
@@ -206,4 +207,5 @@ test "WebApi: History" {
     try testing.htmlRunner("history.html", .{});
     try testing.htmlRunner("history_url_update.html", .{});
     try testing.htmlRunner("history_traverse.html", .{});
+    try testing.htmlRunner("history_state.html", .{});
 }

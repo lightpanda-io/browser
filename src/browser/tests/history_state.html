@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="testing.js"></script>
+
+<script id=undefined_state>
+  {
+    // Not a JSON text: reading it back used to throw a SyntaxError.
+    history.pushState(undefined, '');
+    testing.expectEqual(true, history.state == null);
+    history.replaceState(undefined, '');
+    testing.expectEqual(true, history.state == null);
+
+    history.pushState({ a: 1 }, '');
+    testing.expectEqual({ a: 1 }, history.state);
+  }
+</script>
+
+<script id=uncloneable_state>
+  {
+    testing.expectError('DataCloneError', () => history.pushState(() => 1, ''));
+    testing.expectError('DataCloneError', () => history.replaceState(Symbol('x'), ''));
+    testing.expectError('DataCloneError', () => history.pushState({ toJSON() {} }, ''));
+    testing.expectEqual({ a: 1 }, history.state);
+  }
+</script>
+
+<script id=navigation_update_current_entry>
+  {
+    testing.expectError('TypeError', () => navigation.updateCurrentEntry({ state: undefined }));
+    testing.expectError('DataCloneError', () => navigation.updateCurrentEntry({ state: () => 1 }));
+    navigation.updateCurrentEntry({ state: { b: 2 } });
+    testing.expectEqual({ b: 2 }, navigation.currentEntry.getState());
+  }
+</script>
