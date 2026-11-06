@@ -47,9 +47,9 @@ fn getComputedStyleForNode(cmd: *CDP.Command) !void {
         nodeId: NodeRegistry.Id,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const main_frame = bc.mainFrame() orelse return error.FrameNotLoaded;
-    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse return error.NodeNotFound;
+    const target = try cmd.target();
+    const main_frame = target.mainFrame() orelse return error.FrameNotLoaded;
+    const node = target.node_registry.lookup_by_id.get(params.nodeId) orelse return error.NodeNotFound;
 
     // A text node has the style of its parent element, like in Chrome.
     const element = node.dom.is(DOMNode.Element) orelse node.dom.parentElement() orelse return error.NodeIsNotAnElement;
