@@ -640,6 +640,12 @@
     \\          Unsupported escape hatch: V8 does not validate flags against the
     \\          prebuilt snapshot, so an incompatible flag can misbehave or
     \\          crash at any point.
+    \\  --v8_gc_hint_floor_mb <INT>
+    \\          Floor under which cleanup events (e.g. page teardown) does not
+    \\          notify V8 of memory pressure. Low numbers typically cost more
+    \\          CPU but can help keep memory usage down.
+    \\          Defaults to 1 (1MiB) in serve (CDP), mcp and agent mode.
+    \\          V8 GC hints are disabled by default with fetch.
     \\  --v8-max-heap-mb <INT>
     \\          Maximum V8 heap size in megabytes, per browser instance. Values
     \\          below ~16 are clamped by V8 and all behave the same.
