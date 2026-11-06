@@ -95,8 +95,8 @@ _close_reason: []const u8 = "",
 // negotiated protocol
 _protocol: []const u8 = "",
 
-// subprotocols offered by the client at construction (RFC 6455 §4.1)
-_requested_protocols: []const []const u8 = &.{},
+/// Subprotocols offered by the client at construction (RFC 6455 §4.1).
+_subprotocols: []const u8 = "",
 
 _task: js.Attribution.Tag,
 
@@ -270,12 +270,9 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
         try conn.addHeader(allocator, hdr.name, hdr.value);
     }
     if (protocols.len > 0) {
-        const req_protocols = try arena.allocator().alloc([]const u8, protocols.len);
-        for (protocols, 0..) |p, i| {
-            req_protocols[i] = try arena.dupe(u8, p);
-        }
-        self._requested_protocols = req_protocols;
-        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
+        const subprotocols = try std.mem.join(allocator, ", ", protocols);
+        self._subprotocols = subprotocols;
+        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", subprotocols);
     }
 
     {
@@ -947,8 +944,9 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             return 0;
         }
         var matched = false;
-        for (self._requested_protocols) |p| {
-            if (std.mem.eql(u8, p, value)) {
+        var it = std.mem.tokenizeSequence(u8, self._subprotocols, ", ");
+        while (it.next()) |subprotocol| {
+            if (std.mem.eql(u8, subprotocol, value)) {
                 matched = true;
                 break;
             }
