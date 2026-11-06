@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html dir=ltr>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<style>
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @-webkit-keyframes hide-to-left { to { transform: translateX(-100%) } }
+  @keyframes hide-to-left { to { transform: translateX(-100%) } }
+  @keyframes pulse { to { opacity: .5 } }
+  @keyframes "quoted" { to { opacity: .5 } }
+  @-webkit-keyframes webkit-only { to { opacity: .5 } }
+
+  .fade { animation: fadeIn .05s }
+  .fade-in-lightbox { -webkit-animation: fadeIn .03s ease-in; animation: fadeIn .03s ease-in }
+  .animate { -webkit-animation-duration: .03s; animation-duration: .03s }
+  html[dir=ltr] .animate.slide-out-next { -webkit-animation-name: hide-to-left; animation-name: hide-to-left }
+  .delayed { animation: fadeIn .02s cubic-bezier(.1, .7, 1, .1) .06s }
+  .pulse { animation: pulse .01s infinite alternate }
+  .long { animation: fadeIn .3s }
+  .two { animation: fadeIn .01s, pulse .03s }
+  .zero { animation: fadeIn 0s }
+  .missing { animation: noSuchKeyframes .01s }
+  .quoted { animation: "quoted" .01s }
+  .gone { display: none }
+  .webkit-only { -webkit-animation: webkit-only .01s }
+</style>
+
+<div id=shorthand></div>
+<div id=lightbox></div>
+<div id=webkit-only></div>
+<div id=longhands class=animate></div>
+<div id=delay></div>
+<div id=infinite></div>
+<div id=hidden-parent class=gone><div id=hidden-child></div></div>
+<div id=hidden-self class=gone></div>
+<div id=cancel></div>
+<div id=hide-self></div>
+<div id=hide-parent><div id=hide-child></div></div>
+<div id=list></div>
+<div id=zero></div>
+<div id=missing></div>
+<div id=refire></div>
+<div id=quoted></div>
+<div id=inline></div>
+<div id=cssom></div>
+<div id=cssom-late class=late></div>
+
+<script>
+  function record(el) {
+    const log = [];
+    for (const type of ['animationstart', 'animationend', 'animationcancel']) {
+      el.addEventListener(type, (e) => log.push(`${type.slice(9)} ${e.animationName} ${e.elapsedTime}`));
+    }
+    return log;
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function untilEvent(el, type) {
+    return new Promise((resolve) => el.addEventListener(type, resolve, { once: true }));
+  }
+</script>
+
+<script id=shorthand_fields type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('shorthand');
+    const seen = [];
+    // They bubble: the document sees them.
+    const listener = (e) => {
+      if (e.target === el) {
+        seen.push(e);
+        if (e.type === 'animationend') {
+          state.resolve();
+        }
+      }
+    };
+    document.addEventListener('animationstart', listener);
+    document.addEventListener('animationend', listener);
+    el.classList.add('fade');
+
+    await state.done(() => {
+      testing.expectEqual(['animationstart', 'animationend'], seen.map((e) => e.type));
+      const end = seen[1];
+      testing.expectEqual(true, end instanceof AnimationEvent);
+      testing.expectEqual(true, end.isTrusted);
+      testing.expectEqual(true, end.bubbles);
+      testing.expectEqual(false, end.cancelable);
+      testing.expectEqual('fadeIn', end.animationName);
+      testing.expectEqual(0.05, end.elapsedTime);
+      testing.expectEqual('', end.pseudoElement);
+      testing.expectEqual(0, seen[0].elapsedTime);
+    });
+  }
+</script>
+
+<script id=prefixed_shorthand type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('lightbox');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.className = 'fade-in-lightbox';
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.03'], log);
+    });
+  }
+</script>
+
+<script id=prefixed_alone type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('webkit-only');
+    const log = record(el);
+    el.classList.add('webkit-only');
+    await untilEvent(el, 'animationend');
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(['start webkit-only 0', 'end webkit-only 0.01'], log);
+    });
+  }
+</script>
+
+<script id=longhands_across_rules type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('longhands');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.classList.add('slide-out-next');
+    await state.done(() => {
+      testing.expectEqual(['start hide-to-left 0', 'end hide-to-left 0.03'], log);
+    });
+  }
+</script>
+
+<script id=delay type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('delay');
+    const log = record(el);
+    const begin = performance.now();
+    let started_after = 0;
+    el.addEventListener('animationstart', () => started_after = performance.now() - begin);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.classList.add('delayed');
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.02'], log);
+      testing.expectEqual(true, started_after >= 50);
+    });
+  }
+</script>
+
+<script id=infinite type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('infinite');
+    const log = record(el);
+    el.classList.add('pulse');
+    await wait(80);
+    const running = log.slice();
+    el.classList.remove('pulse');
+    await untilEvent(el, 'animationcancel');
+    state.resolve();
+    await state.done(() => {
+      // Never an end
+      testing.expectEqual(['start pulse 0'], running);
+      testing.expectEqual('cancel pulse', log[1].split(' ').slice(0, 2).join(' '));
+      testing.expectEqual(2, log.length);
+    });
+  }
+</script>
+
+<script id=display_none type=module>
+  {
+    const state = await testing.async();
+    const child = document.getElementById('hidden-child');
+    const self = document.getElementById('hidden-self');
+    const childLog = record(child);
+    const selfLog = record(self);
+    child.classList.add('fade');
+    self.classList.add('fade');
+    await wait(100);
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual([], childLog);
+      testing.expectEqual([], selfLog);
+    });
+  }
+</script>
+
+<script id=display_none_cancels type=module>
+  {
+    const state = await testing.async();
+    const self = document.getElementById('hide-self');
+    const child = document.getElementById('hide-child');
+    const selfLog = record(self);
+    const childLog = record(child);
+    self.classList.add('long');
+    child.classList.add('long');
+    await Promise.all([untilEvent(self, 'animationstart'), untilEvent(child, 'animationstart')]);
+    self.classList.add('gone');
+    document.getElementById('hide-parent').classList.add('gone');
+    await Promise.all([untilEvent(self, 'animationcancel'), untilEvent(child, 'animationcancel')]);
+    await wait(350);
+    state.resolve();
+    await state.done(() => {
+      const types = (log) => log.map((line) => line.split(' ').slice(0, 2).join(' '));
+      testing.expectEqual(['start fadeIn', 'cancel fadeIn'], types(selfLog));
+      testing.expectEqual(['start fadeIn', 'cancel fadeIn'], types(childLog));
+    });
+  }
+</script>
+
+<script id=removal_cancels type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('cancel');
+    const log = record(el);
+    el.classList.add('long');
+    await untilEvent(el, 'animationstart');
+    el.classList.remove('long');
+    const cancel = await untilEvent(el, 'animationcancel');
+    await wait(350);
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(2, log.length);
+      testing.expectEqual('start fadeIn 0', log[0]);
+      testing.expectEqual('fadeIn', cancel.animationName);
+      testing.expectEqual(true, cancel.bubbles);
+      testing.expectEqual(true, cancel.elapsedTime >= 0 && cancel.elapsedTime < 0.3);
+    });
+  }
+</script>
+
+<script id=name_list type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('list');
+    const log = record(el);
+    el.addEventListener('animationend', (e) => {
+      if (e.animationName === 'pulse') state.resolve();
+    });
+    el.classList.add('two');
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'start pulse 0', 'end fadeIn 0.01', 'end pulse 0.03'], log);
+    });
+  }
+</script>
+
+<script id=zero_duration type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('zero');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.classList.add('zero');
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0'], log);
+    });
+  }
+</script>
+
+<script id=no_keyframes type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('missing');
+    const log = record(el);
+    el.classList.add('missing');
+    await wait(60);
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual([], log);
+    });
+  }
+</script>
+
+<script id=no_refire type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('refire');
+    const log = record(el);
+    el.className = 'fade';
+    await untilEvent(el, 'animationend');
+    // The name stays: nothing restarts.
+    el.className = 'fade other';
+    el.setAttribute('data-x', '1');
+    await wait(100);
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.05'], log);
+    });
+  }
+</script>
+
+<script id=quoted_name type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('quoted');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.classList.add('quoted');
+    await state.done(() => {
+      testing.expectEqual(['start quoted 0', 'end quoted 0.01'], log);
+    });
+  }
+</script>
+
+<script id=inline_style type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('inline');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.style.animation = 'pulse .02s 2';
+    await state.done(() => {
+      testing.expectEqual(['start pulse 0', 'end pulse 0.04'], log);
+    });
+  }
+</script>
+
+<script id=inserted type=module>
+  {
+    const state = await testing.async();
+    const el = document.createElement('div');
+    el.className = 'fade';
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    document.body.appendChild(el);
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.05'], log);
+    });
+  }
+</script>
+
+<script id=cssom_rules type=module>
+  {
+    const state = await testing.async();
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    style.sheet.insertRule('@keyframes cssom { to { opacity: 0 } }', 0);
+    // The longhand after the shorthand wins
+    style.sheet.insertRule('.cssom { animation: cssom .5s; animation-duration: .01s }', 1);
+    const el = document.getElementById('cssom');
+    const log = record(el);
+    el.classList.add('cssom');
+    await untilEvent(el, 'animationend');
+
+    // A rule that comes after the class
+    const late = document.getElementById('cssom-late');
+    const late_log = record(late);
+    style.sheet.insertRule('.late { animation: fadeIn .01s }', 2);
+    await untilEvent(late, 'animationend');
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(['start cssom 0', 'end cssom 0.01'], log);
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], late_log);
+    });
+  }
+</script>
+
+<script id=constructor>
+  const e = new AnimationEvent('animationend', { animationName: 'x', elapsedTime: 1.5, bubbles: true });
+  testing.expectEqual('x', e.animationName);
+  testing.expectEqual(1.5, e.elapsedTime);
+  testing.expectEqual('', e.pseudoElement);
+  testing.expectEqual(true, e.bubbles);
+  testing.expectEqual(false, e.isTrusted);
+  testing.expectEqual(true, e instanceof Event);
+</script>

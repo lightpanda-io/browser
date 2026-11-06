@@ -2434,6 +2434,23 @@ test "click: a playwright-style selector is an InvalidSelector, not bare Invalid
     try std.testing.expect(std.mem.find(u8, errorMessage(error.InvalidSelector), "findElement") != null);
 }
 
+test "click: waits for the CSS animation it starts" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    _ = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.head.append(Object.assign(document.createElement('style'), {textContent: '@keyframes grow { to { opacity: .5 } } .grow { animation: grow .05s }'})); const b = document.getElementById('btn'); b.addEventListener('click', () => b.classList.add('grow')); b.addEventListener('animationend', () => { window.grown = true; }); 1"}
+    , .{}), .{ .source = .user });
+    _ = try call(aa, page.session, &registry, "click", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"selector\":\"#btn\"}", .{}), .{ .source = .user });
+    // evaluate does not wait for timers, so this reads the state the click left
+    const r = try call(aa, page.session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"script\":\"String(window.grown)\"}", .{}), .{ .source = .user });
+    try std.testing.expect(std.mem.find(u8, r.text, "true") != null);
+}
+
 test "fill: the wrong element type names the constraint" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
