@@ -103,11 +103,12 @@ progress: u32 = 0,
 in_flight_id: ?RequestId = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
-    return initSession(allocator, app, writer, default_session_id);
+    return initSession(allocator, app, .lines(writer), default_session_id);
 }
 
-/// A server for the session named `id`, which must outlive it.
-pub fn initSession(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer, id: []const u8) !*Self {
+/// A server for the session named `id`, which must outlive it. A null `sink`
+/// drops messages until one is set on `transport`.
+pub fn initSession(allocator: std.mem.Allocator, app: *App, sink: ?Transport.Sink, id: []const u8) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -132,7 +133,7 @@ pub fn initSession(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writ
         .app = app,
         .active_session = entry,
         .session_id = id,
-        .transport = .init(allocator, writer),
+        .transport = .init(allocator, sink),
     };
 
     entry.session.cancel_hook = .{ .context = self, .check = cancelledCheck };
