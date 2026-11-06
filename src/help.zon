@@ -640,7 +640,7 @@
     \\          Unsupported escape hatch: V8 does not validate flags against the
     \\          prebuilt snapshot, so an incompatible flag can misbehave or
     \\          crash at any point.
-    \\  --v8_gc_hint_floor_mb <INT>
+    \\  --v8-gc-hint-floor-mb <INT>
     \\          Floor under which cleanup events (e.g. page teardown) does not
     \\          notify V8 of memory pressure. Low numbers typically cost more
     \\          CPU but can help keep memory usage down.
