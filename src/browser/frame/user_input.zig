@@ -2000,6 +2000,7 @@ pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !vo
         const abstract = range.asAbstractRange();
         if (isEditableIn(host, abstract.getStartContainer()) and isEditableIn(host, abstract.getEndContainer())) {
             if (!abstract.getCollapsed()) {
+                try rewriteSpacesAround(frame, host, range, .pin);
                 try range.deleteContents(frame);
             }
             container = abstract.getStartContainer();
@@ -2038,16 +2039,36 @@ pub fn insertAtSelection(frame: *Frame, host_el: *Element, text: []const u8) !vo
         }
     }
 
+    const style_manager = &frame._style_manager;
+    const root = lineRoot(style_manager, host, container);
+    // like Chrome, typing on an empty line drops the <br> holding it open,
+    // before the text goes in
+    const placeholder = if (text_node) |t|
+        placeholderAt(style_manager, root, t.asCData().asNode(), offset)
+    else
+        placeholderAt(style_manager, root, container, offset);
+    if (placeholder) |br| {
+        _ = try br.parentNode().?.removeChild(br, frame);
+    }
+
     const caret: u32 = if (text_node) |t| blk: {
+        // spaces that don't show are removed
+        offset = try rewriteSpaces(frame, root, t.asCData().asNode(), offset, .drop);
         try t.asCData().insertData(offset, text, frame);
         break :blk offset + @as(u32, @intCast(Node.CData.utf16Len(text)));
     } else blk: {
         const new_node = try frame.document.createTextNode(text);
         _ = try container.insertBefore(new_node, container.getChildAt(offset), frame);
         text_node = new_node.is(Node.CData.Text).?;
+        offset = 0;
         break :blk @intCast(Node.CData.utf16Len(text));
     };
-    try selection.collapse(text_node.?.asCData().asNode(), caret, frame);
+    const node = text_node.?.asCData().asNode();
+    _ = try rebalanceSpaces(frame, node, caret);
+    if (std.mem.indexOfNone(u8, text, " ") != null) {
+        _ = try rebalanceSpaces(frame, node, offset);
+    }
+    try selection.collapse(node, caret, frame);
 
     const event = try InputEvent.initTrusted(comptime .wrap("input"), .{
         .bubbles = true,
@@ -2095,12 +2116,23 @@ pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool 
         else
             charBefore(style_manager, root, container, offset);
         switch (found) {
-            .char => |char| {
+            .char => |found_char| {
+                var char = found_char;
                 const cdata = char.text.asCData();
+                const data = cdata.getData().str();
+                if (spaceAt(data, Node.CData.utf16OffsetToUtf8Floor(data, char.offset)) == null) {
+                    // the spaces on either side meet: drop those that don't
+                    // show. After the char first: that can't move it.
+                    const node = cdata.asNode();
+                    _ = try rewriteSpacesBeside(frame, host, node, char.offset + char.len, true, .drop);
+                    char.offset = try rewriteSpacesBeside(frame, host, node, char.offset, false, .drop);
+                }
                 try cdata.replaceData(char.offset, char.len, "", frame);
                 if (cdata.getLength() == 0) {
                     try removeEmpty(frame, root, cdata.asNode());
-                } else if (!forward) {
+                } else if (!forward or range.getStartContainer() != container or range.getStartOffset() != offset) {
+                    // a forward delete leaves the caret be, unless dropping
+                    // spaces moved it
                     caret = .{ cdata.asNode(), char.offset };
                 }
             },
@@ -2138,6 +2170,12 @@ pub fn deleteAtSelection(frame: *Frame, host_el: *Element, forward: bool) !bool 
             }
         }
     }
+    // Like Chrome, the spaces where the edit was get rewritten. That can move
+    // the live range.
+    const at = caret orelse .{ range.getStartContainer(), range.getStartOffset() };
+    if (try rebalanceSpacesAfterDelete(frame, host, at[0], at[1])) {
+        caret = at;
+    }
     if (caret) |c| {
         try selection.collapse(c[0], c[1], frame);
     }
@@ -2167,6 +2205,27 @@ pub fn insertLineBreakAtSelection(frame: *Frame, host_el: *Element, input_type: 
 
     if (!range.getCollapsed() and !try deleteInlineSelection(frame, host, live)) {
         return false;
+    }
+
+    // A space after the caret that shows would start the new line, where it
+    // collapses: like Chrome, it becomes a no-break one. Hidden ones stay so.
+    var keep_space = false;
+    {
+        const container = range.getStartContainer();
+        const offset = range.getStartOffset();
+        const root = lineRoot(style_manager, host, container);
+        switch (charAfter(style_manager, root, container, offset)) {
+            .char => |c| {
+                const node = c.text.asCData().asNode();
+                const data = c.text.asCData().getData().str();
+                if (data[Node.CData.utf16OffsetToUtf8Floor(data, c.offset)] == ' ' and !hidesSpaceAt(style_manager, root, container, offset)) {
+                    // the run starts at the caret: it doesn't move
+                    _ = try rewriteSpaces(frame, root, node, c.offset, .drop);
+                    keep_space = true;
+                }
+            },
+            .edge, .unsupported => {},
+        }
     }
 
     // Where the break goes, as a child index: a text node is split.
@@ -2215,6 +2274,9 @@ pub fn insertLineBreakAtSelection(frame: *Frame, host_el: *Element, input_type: 
         try selection.collapse(parent, index + 1, frame);
     } else {
         const container, const offset = caretAfter(style_manager, root, parent, index + 1);
+        if (keep_space and container.is(Node.CData.Text) != null) {
+            _ = try rebalanceSpaces(frame, container, offset);
+        }
         try selection.collapse(container, offset, frame);
     }
 
@@ -2240,6 +2302,7 @@ fn deleteInlineSelection(frame: *Frame, host: *Node, live: *Range) !bool {
         return false;
     }
     const root = blockRoot(style_manager, host, common);
+    try rewriteSpacesAround(frame, host, live, .drop);
     try live.deleteContents(frame);
     for ([_]*Node{ end, start }) |node| {
         const cdata = node.is(Node.CData.Text) orelse continue;
@@ -2394,7 +2457,6 @@ fn deleteAcrossBlocks(frame: *Frame, host: *Node, live: *Range) !bool {
     const range = live.asAbstractRange();
     const style_manager = &frame._style_manager;
     const start = range.getStartContainer();
-    const start_offset = range.getStartOffset();
     const end = range.getEndContainer();
     const start_block = lineRoot(style_manager, host, start);
     const end_block = lineRoot(style_manager, host, end);
@@ -2404,6 +2466,9 @@ fn deleteAcrossBlocks(frame: *Frame, host: *Node, live: *Range) !bool {
     if (!canMergeLines(style_manager, host, start_block, end_block, childIndexAt(end_block, end, range.getEndOffset(), false))) {
         return false;
     }
+    // the spaces showing at either end survive the merge
+    try rewriteSpacesAround(frame, host, live, .pin);
+    const start_offset = range.getStartOffset();
 
     // the child of the end block where the line left in it starts
     const end_child = hostChildAt(end_block, end, range.getEndOffset());
@@ -2652,6 +2717,273 @@ fn trimCollapsible(frame: *Frame, style_manager: *StyleManager, node: *Node, com
             try cdata.replaceData(0, count, "", frame);
         }
     }
+}
+
+const SpaceRun = struct {
+    // byte offsets in the text
+    start: usize,
+    end: usize,
+};
+
+// The run of spaces around byte `at` of `data`, empty when there's none.
+fn spaceRun(data: []const u8, at: usize) SpaceRun {
+    var run: SpaceRun = .{ .start = at, .end = at };
+    while (spaceBefore(data, run.start)) |len| {
+        run.start -= len;
+    }
+    while (spaceAt(data, run.end)) |len| {
+        run.end += len;
+    }
+    return run;
+}
+
+// The byte length of the space starting at byte `i`, if there's one.
+fn spaceAt(data: []const u8, i: usize) ?usize {
+    if (i >= data.len) {
+        return null;
+    }
+    return switch (data[i]) {
+        ' ' => 1,
+        0xc2 => if (i + 1 < data.len and data[i + 1] == 0xa0) 2 else null,
+        else => null,
+    };
+}
+
+// The byte length of the space ending at byte `i`, if there's one.
+fn spaceBefore(data: []const u8, i: usize) ?usize {
+    if (i == 0) {
+        return null;
+    }
+    return switch (data[i - 1]) {
+        ' ' => 1,
+        0xa0 => if (i >= 2 and data[i - 2] == 0xc2) 2 else null,
+        else => null,
+    };
+}
+
+fn spacesCollapse(style_manager: *StyleManager, node: *Node) bool {
+    const parent = node.parentElement() orelse return false;
+    return style_manager.whiteSpace(parent).collapse;
+}
+
+// Chrome's spaces for a run of `count`: no-break and plain spaces taking
+// turns, starting with a no-break one, so none collapses. A lone space between
+// text stays plain. At either edge of its text node (`at_start`, `at_end`) a
+// space is a no-break one, as what's next to it could swallow it.
+fn chromeSpaces(allocator: std.mem.Allocator, count: usize, at_start: bool, at_end: bool) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var prev_nbsp = false;
+    for (0..count) |i| {
+        const nbsp = if (i == 0 and at_start)
+            true
+        else if (i + 1 == count)
+            at_end or (i > 0 and !prev_nbsp)
+        else
+            !prev_nbsp;
+        try out.appendSlice(allocator, if (nbsp) "\u{a0}" else " ");
+        prev_nbsp = nbsp;
+    }
+    return out.items;
+}
+
+// Rewrites the run of spaces around UTF-16 `offset` of text `node` as
+// chromeSpaces. The run keeps its length, so offsets in the text hold, but a
+// live range inside it moves to its start: callers collapse the selection
+// after. Returns whether anything changed.
+fn rebalanceSpaces(frame: *Frame, node: *Node, offset: u32) !bool {
+    if (!spacesCollapse(&frame._style_manager, node)) {
+        return false;
+    }
+    const cdata = node.is(Node.CData).?;
+    const data = cdata.getData().str();
+    const run = spaceRun(data, Node.CData.utf16OffsetToUtf8Floor(data, offset));
+    var count: usize = 0;
+    var i = run.start;
+    while (i < run.end) : (i += spaceAt(data, i).?) {
+        count += 1;
+    }
+    if (count == 0) {
+        return false;
+    }
+    const spaces = try chromeSpaces(frame.call_arena, count, run.start == 0, run.end == data.len);
+    if (std.mem.eql(u8, spaces, data[run.start..run.end])) {
+        return false;
+    }
+    try cdata.replaceData(Node.CData.utf16Len(data[0..run.start]), count, spaces, frame);
+    return true;
+}
+
+// rebalanceSpaces after a delete, where Chrome does it: at the caret, unless
+// it ends its text and more text follows on the line, then there. The text
+// before is left be.
+fn rebalanceSpacesAfterDelete(frame: *Frame, host: *Node, container: *Node, offset: u32) !bool {
+    if (container.is(Node.CData.Text)) |t| {
+        if (offset < t.asCData().getLength()) {
+            return rebalanceSpaces(frame, container, offset);
+        }
+    }
+    const style_manager = &frame._style_manager;
+    switch (charAfter(style_manager, lineRoot(style_manager, host, container), container, offset)) {
+        .char => |c| return rebalanceSpaces(frame, c.text.asCData().asNode(), c.offset),
+        .edge, .unsupported => {},
+    }
+    if (container.is(Node.CData.Text) != null) {
+        return rebalanceSpaces(frame, container, offset);
+    }
+    if (offset > 0) {
+        if (container.getChildAt(offset - 1)) |before| {
+            if (before.is(Node.CData.Text)) |t| {
+                return rebalanceSpaces(frame, before, @intCast(t.asCData().getLength()));
+            }
+        }
+    }
+    return false;
+}
+
+const HiddenSpaces = enum {
+    // drop the spaces that don't show
+    drop,
+    // drop them, and make the rest no-break spaces so they keep showing
+    // whatever the edit puts next to them
+    pin,
+};
+
+// Rewrites the run of spaces around UTF-16 `offset` of text `node` in `root`
+// (its line's root), with the collapsible spaces that don't show dropped:
+// one after another, one at the start of a line or after a collapsible space
+// in the text before, one ending a line. Returns `offset`, moved to follow.
+fn rewriteSpaces(frame: *Frame, root: *Node, node: *Node, offset: u32, mode: HiddenSpaces) !u32 {
+    const style_manager = &frame._style_manager;
+    if (!spacesCollapse(style_manager, node)) {
+        return offset;
+    }
+    const cdata = node.is(Node.CData).?;
+    const data = cdata.getData().str();
+    const at = Node.CData.utf16OffsetToUtf8Floor(data, offset);
+    const run = spaceRun(data, at);
+    if (run.start == run.end) {
+        return offset;
+    }
+
+    var kept: std.ArrayList(u8) = .empty;
+    var kept_at: ?usize = null;
+    var count: usize = 0;
+    var collapses = run.start == 0 and hidesSpaceAt(style_manager, root, node, 0);
+    var i = run.start;
+    while (i < run.end) {
+        if (i == at) {
+            kept_at = kept.items.len;
+        }
+        const len = spaceAt(data, i).?;
+        if (len == 2) {
+            try kept.appendSlice(frame.call_arena, "\u{a0}");
+            collapses = false;
+        } else if (!collapses) {
+            try kept.appendSlice(frame.call_arena, if (mode == .pin) "\u{a0}" else " ");
+            collapses = true;
+        }
+        i += len;
+        count += 1;
+    }
+    // collapses is set when the run ends with a kept collapsible space
+    if (collapses and kept.items.len > 0 and run.end == data.len and hidesTrailingSpace(style_manager, root, node)) {
+        kept.items.len -= if (mode == .pin) 2 else 1;
+    }
+    const new_at = @min(kept_at orelse kept.items.len, kept.items.len);
+
+    const start: u32 = @intCast(Node.CData.utf16Len(data[0..run.start]));
+    if (!std.mem.eql(u8, kept.items, data[run.start..run.end])) {
+        try cdata.replaceData(start, count, kept.items, frame);
+    }
+    return start + @as(u32, @intCast(Node.CData.utf16Len(kept.items[0..new_at])));
+}
+
+// Whether a collapsible space at (container, offset) collapses: at the start
+// of its line in `root`, or after a collapsible space.
+fn hidesSpaceAt(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) bool {
+    switch (charBefore(style_manager, root, container, offset)) {
+        .char => |c| {
+            const data = c.text.asCData().getData().str();
+            return switch (data[Node.CData.utf16OffsetToUtf8Floor(data, c.offset)]) {
+                ' ', '\t', '\n' => true,
+                else => false,
+            };
+        },
+        .edge => return true,
+        .unsupported => {
+            const before = visibleBefore(style_manager, root, container, offset) orelse return true;
+            const el = before.is(Element) orelse return false;
+            return isBr(before) or style_manager.isBlockLevel(el);
+        },
+    }
+}
+
+// Whether a collapsible space ending text `node` doesn't show: nothing
+// follows it on its line in `root`.
+fn hidesTrailingSpace(style_manager: *StyleManager, root: *Node, node: *Node) bool {
+    const parent = node.parentNode() orelse return true;
+    const after = visibleAfter(style_manager, root, parent, parent.getChildIndex(node).? + 1) orelse return true;
+    const el = after.is(Element) orelse return false;
+    return isBr(after) or style_manager.isBlockLevel(el);
+}
+
+// Before a delete from or to (container, offset) (`after`: the text after the
+// boundary stays): rewriteSpaces on the side that stays, in the boundary's
+// text or the text next to it on the line. Returns `offset`, moved to follow.
+fn rewriteSpacesBeside(frame: *Frame, host: *Node, container: *Node, offset: u32, comptime after: bool, mode: HiddenSpaces) !u32 {
+    const style_manager = &frame._style_manager;
+    const root = lineRoot(style_manager, host, container);
+    if (container.is(Node.CData.Text)) |t| {
+        const inside = if (after) offset < t.asCData().getLength() else offset > 0;
+        if (inside) {
+            return rewriteSpaces(frame, root, container, offset, mode);
+        }
+    }
+    const found = if (after) charAfter(style_manager, root, container, offset) else charBefore(style_manager, root, container, offset);
+    switch (found) {
+        .char => |c| _ = try rewriteSpaces(frame, root, c.text.asCData().asNode(), if (after) c.offset else c.offset + c.len, mode),
+        .edge, .unsupported => {},
+    }
+    return offset;
+}
+
+// rewriteSpacesBeside both ends of the selection `live`, which is then put
+// back around what it held.
+fn rewriteSpacesAround(frame: *Frame, host: *Node, live: *Range, mode: HiddenSpaces) !void {
+    const range = live.asAbstractRange();
+    const start = range.getStartContainer();
+    const start_offset = range.getStartOffset();
+    const end = range.getEndContainer();
+    var end_offset = try rewriteSpacesBeside(frame, host, end, range.getEndOffset(), true, mode);
+    const len_before = if (start.is(Node.CData)) |c| c.getLength() else 0;
+    const new_start_offset = try rewriteSpacesBeside(frame, host, start, start_offset, false, mode);
+    if (start == end) {
+        if (start.is(Node.CData)) |c| {
+            // the spaces before the selection changed length
+            end_offset = @intCast(@as(i64, end_offset) + @as(i64, @intCast(c.getLength())) - @as(i64, @intCast(len_before)));
+        }
+    }
+    try live.setStart(start, new_start_offset);
+    try live.setEnd(end, end_offset);
+}
+
+// The <br> keeping an empty line open, when (container, offset) is on one.
+fn placeholderAt(style_manager: *StyleManager, root: *Node, container: *Node, offset: u32) ?*Node {
+    if (visibleBefore(style_manager, root, container, offset)) |before| {
+        const el = before.is(Element) orelse return null;
+        if (!isBr(before) and !style_manager.isBlockLevel(el)) {
+            return null;
+        }
+    }
+    const br = visibleAfter(style_manager, root, container, offset) orelse return null;
+    if (!isBr(br)) {
+        return null;
+    }
+    const parent = br.parentNode().?;
+    if (!atParagraphEnd(style_manager, root, parent, parent.getChildIndex(br).? + 1)) {
+        return null;
+    }
+    return br;
 }
 
 // The child of `block` holding a position, as an index: its offset when the
