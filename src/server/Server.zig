@@ -84,6 +84,15 @@ http_connection_pool: Connection.Pool,
 workers: DoublyLinkedList,
 worker_pool: Worker.Pool,
 
+// --cdp-shared-browser: the CDP worker new connections join as guests, see
+// Guest. null when off, or until the first connection.
+shared_worker: ?*Worker = null,
+cdp_shared_browser: bool,
+
+// Guests across all workers. Each holds a socket, so they count towards
+// max_connections, and --cdp-max-connections caps them.
+guest_count: usize = 0,
+
 // HTTP sessions by id, what /session/{id} resolves. Sized to the pool at
 // init, so no allocation per request.
 sessions: std.AutoHashMapUnmanaged([36]u8, *Worker),
@@ -214,6 +223,7 @@ pub fn init(app: *App, address: Address) !*Server {
         .scratch = scratch,
         .request_arena = std.heap.ArenaAllocator.init(allocator),
         .protocols = protocols,
+        .cdp_shared_browser = config.cdpSharedBrowser(),
         .http_connections = .{},
         .http_connection_pool = http_connection_pool,
         .json_version_response = json_version_response,
@@ -335,6 +345,7 @@ fn runOnce(self: *Server) bool {
             .read_write => |rw| switch (rw.target) {
                 .http => |conn| http.processEvent(self, conn, rw, now),
                 .worker => |worker| self.processWebSocketEvent(worker, rw),
+                .guest => |guest| self.processGuestEvent(guest, rw),
             },
             .signal => pending_signal = true,
             .shutdown => pending_shutdown = true,
@@ -452,7 +463,7 @@ fn setSocketOption(socket: posix.socket_t, level: i32, option: u32, value: anyty
 }
 
 fn liveConnections(self: *const Server) usize {
-    return self.http_connection_pool.live + self.worker_pool.live;
+    return self.http_connection_pool.live + self.worker_pool.live + self.guest_count;
 }
 
 // We want to accept a connection, but have reached the connection limit. See
@@ -530,10 +541,109 @@ pub fn slotFreed(self: *Server) void {
 // a new Worker. CDP goes this route as do some WebDriver libraries.
 pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Protocol) void {
     self.detachConnection(conn); // removes from the loop, will get re-added
-    _ = self.spawnWorker(protocol, .{ .socket = conn.socket }) catch |err| {
+    const worker = self.spawnWorker(protocol, .{ .socket = conn.socket }) catch |err| {
         log.err(.serve, "worker spawn", .{ .err = err });
         sys_net.close(conn.socket);
+        return;
     };
+    if (protocol == .cdp and self.cdp_shared_browser) {
+        self.shared_worker = worker;
+    }
+}
+
+// --cdp-shared-browser: the worker a new CDP connection should join, null to
+// start a browser of its own (the option is off, there's no browser yet, or
+// the one there is ending with its connection).
+pub fn sharedWorker(self: *const Server) ?*Worker {
+    if (self.cdp_shared_browser == false) {
+        return null;
+    }
+    const worker = self.shared_worker orelse return null;
+    if (worker.link == null or worker.linkDropping() or self.shutdown_begun) {
+        return null;
+    }
+    return worker;
+}
+
+pub fn guestsFull(self: *const Server) bool {
+    return self.guest_count >= self.app.config.maxConnections();
+}
+
+// An HTTP connection is being upgraded to a CDP connection that joins a
+// running worker's browser (--cdp-shared-browser).
+pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection) void {
+    self.detachConnection(conn); // removes from the loop, the guest re-adds it
+
+    const guest = self.app.allocator.create(Guest) catch |err| {
+        log.err(.serve, "guest create", .{ .err = err });
+        sys_net.close(conn.socket);
+        return;
+    };
+    const link = Link.create(self.app, conn.socket, .cdp, &worker.inbox) catch |err| {
+        // create closed the socket
+        log.err(.serve, "link create", .{ .err = err });
+        self.app.allocator.destroy(guest);
+        return;
+    };
+    link.guest = true;
+    guest.* = .{ .worker = worker, .link = link };
+
+    self.io_engine.monitorGuest(guest) catch |err| {
+        log.err(.serve, "guest monitor", .{ .err = err });
+        link.destroy();
+        self.app.allocator.destroy(guest);
+        return;
+    };
+    worker.guests.append(&guest.node);
+    self.guest_count += 1;
+
+    // precedes anything read off the socket (the loop reads it later)
+    self.push(worker, .{ .guest = link });
+}
+
+fn processGuestEvent(self: *Server, guest: *Guest, rw: IOEvent.ReadWrite) void {
+    if (rw.readable) {
+        const read = guest.link.readAvailable(WS_READ_BUDGET) catch {
+            // EOF, a read error or bad framing: only this guest goes
+            return self.dropGuest(guest, true);
+        };
+        if (read.pushed) {
+            if (guest.worker.driver) |driver| {
+                driver.wakeup();
+            }
+        }
+        if (read.keep == false) {
+            // the link pushed its own guest_gone (close frame, bad JSON)
+            return self.dropGuest(guest, false);
+        }
+    } else if (rw.hangup) {
+        return self.dropGuest(guest, true);
+    }
+}
+
+// The loop lets go of a guest: no more reads, and the worker (told here when
+// `notify`, or by the link itself) destroys the link.
+fn dropGuest(self: *Server, guest: *Guest, notify: bool) void {
+    if (notify) {
+        self.push(guest.worker, .{ .guest_gone = .{ .link = guest.link, .reply_close = false } });
+    }
+    self.forgetGuest(guest);
+    self.slotFreed();
+}
+
+// The worker is ending: stop reading its guests. It destroys the links it
+// adopted, the inbox those it didn't.
+fn releaseGuests(self: *Server, worker: *Worker) void {
+    while (worker.guests.first) |node| {
+        self.forgetGuest(@fieldParentPtr("node", node));
+    }
+}
+
+fn forgetGuest(self: *Server, guest: *Guest) void {
+    self.io_engine.remove(guest.link.socket);
+    guest.worker.guests.remove(&guest.node);
+    self.app.allocator.destroy(guest);
+    self.guest_count -= 1;
 }
 
 // An HTTP connection is being upgraded to a WebSocket connection for use with
@@ -781,6 +891,7 @@ fn releaseLink(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) 
 fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) void {
     self.unmonitorLink(worker);
     worker.link = null;
+    self.releaseGuests(worker);
     if (worker.http_request) |parked| {
         // the worker stopped without answering (DELETE, shutdown, a failed init)
         worker.http_request = null;
@@ -805,6 +916,9 @@ fn releaseWorkerSlot(self: *Server, worker: *Worker) void {
     // still registered when the worker ended on its own (session.end, a
     // failed init)
     self.forgetSession(worker);
+    if (self.shared_worker == worker) {
+        self.shared_worker = null;
+    }
     self.workers.remove(&worker.node);
     worker.driver = null;
     worker.inbox.deinit();
@@ -925,6 +1039,7 @@ pub const IOEvent = union(enum) {
     pub const ReadWrite = struct {
         target: union(enum) {
             worker: *Worker,
+            guest: *Guest,
             http: *Connection,
         },
         hangup: bool,
@@ -1015,8 +1130,11 @@ const EPoll = struct {
     const WRITE_EVENTS = linux.EPOLL.OUT;
 
     // Poll data carries the owner: an http Connection as-is, a Worker with
-    // the low bit set (both are word-aligned, so the bit is free).
+    // the low bit set, a Guest with the next one (all are word-aligned, so
+    // both bits are free).
     const WS_TAG: usize = 1;
+    const GUEST_TAG: usize = 2;
+    const TAGS: usize = WS_TAG | GUEST_TAG;
 
     pub fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
         var event = linux.epoll_event{
@@ -1027,11 +1145,19 @@ const EPoll = struct {
     }
 
     fn monitorWebSocket(self: *const EPoll, worker: *Worker) !void {
+        return self.monitorRead(worker.link.?.socket, @intFromPtr(worker) | WS_TAG);
+    }
+
+    fn monitorGuest(self: *const EPoll, guest: *Guest) !void {
+        return self.monitorRead(guest.link.socket, @intFromPtr(guest) | GUEST_TAG);
+    }
+
+    fn monitorRead(self: *const EPoll, socket: posix.socket_t, data: usize) !void {
         var event = linux.epoll_event{
-            .data = .{ .ptr = @intFromPtr(worker) | WS_TAG },
+            .data = .{ .ptr = data },
             .events = READ_EVENTS,
         };
-        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, worker.link.?.socket, &event);
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, socket, &event);
     }
 
     pub fn waitWritable(self: *const EPoll, conn: *Connection) !void {
@@ -1086,10 +1212,11 @@ const EPoll = struct {
                 else => |nptr| {
                     const flags = event.events;
                     return .{ .read_write = .{
-                        .target = if (nptr & WS_TAG == 0)
-                            .{ .http = @ptrFromInt(nptr) }
-                        else
-                            .{ .worker = @ptrFromInt(nptr & ~WS_TAG) },
+                        .target = switch (nptr & TAGS) {
+                            WS_TAG => .{ .worker = @ptrFromInt(nptr & ~TAGS) },
+                            GUEST_TAG => .{ .guest = @ptrFromInt(nptr & ~TAGS) },
+                            else => .{ .http = @ptrFromInt(nptr) },
+                        },
                         .readable = flags & linux.EPOLL.IN != 0,
                         .writable = flags & linux.EPOLL.OUT != 0,
                         .hangup = flags & (linux.EPOLL.RDHUP | linux.EPOLL.HUP | linux.EPOLL.ERR) != 0,
@@ -1110,8 +1237,11 @@ const KQueue = struct {
     const Kevent = std.c.Kevent;
 
     // Poll data carries the owner: an http Connection as-is, a Worker with
-    // the low bit set (both are word-aligned, so the bit is free).
+    // the low bit set, a Guest with the next one (all are word-aligned, so
+    // both bits are free).
     const WS_TAG: usize = 1;
+    const GUEST_TAG: usize = 2;
+    const TAGS: usize = WS_TAG | GUEST_TAG;
 
     // The listener carries 0. The two wake channels are EVFILT_USER events,
     // whose ident only has to be unique amongst user events, so it doubles as
@@ -1167,6 +1297,10 @@ const KQueue = struct {
 
     fn monitorWebSocket(self: *const KQueue, worker: *Worker) !void {
         return self.monitor(worker.link.?.socket, EVFILT.READ, @intFromPtr(worker) | WS_TAG);
+    }
+
+    fn monitorGuest(self: *const KQueue, guest: *Guest) !void {
+        return self.monitor(guest.link.socket, EVFILT.READ, @intFromPtr(guest) | GUEST_TAG);
     }
 
     // A socket only ever has one of the two filters registered, so flipping is
@@ -1273,10 +1407,11 @@ const KQueue = struct {
                 else => |nptr| {
                     return .{
                         .read_write = .{
-                            .target = if (nptr & WS_TAG == 0)
-                                .{ .http = @ptrFromInt(nptr) }
-                            else
-                                .{ .worker = @ptrFromInt(nptr & ~WS_TAG) },
+                            .target = switch (nptr & TAGS) {
+                                WS_TAG => .{ .worker = @ptrFromInt(nptr & ~TAGS) },
+                                GUEST_TAG => .{ .guest = @ptrFromInt(nptr & ~TAGS) },
+                                else => .{ .http = @ptrFromInt(nptr) },
+                            },
                             .readable = event.filter == EVFILT.READ,
                             .writable = event.filter == EVFILT.WRITE,
                             // EV_EOF on a read filter can still come with buffered
@@ -1315,6 +1450,9 @@ pub const Worker = struct {
 
     // whether link's socket is in the poll set. Makes sure we don't double-remove
     monitored: bool = false,
+
+    // CDP connections that joined this worker's browser (Guest.node)
+    guests: DoublyLinkedList = .{},
 
     // HTTP WebDriver session id, null for cdp and bidi-only workers.
     session_id: ?[36]u8 = null,
@@ -1469,6 +1607,16 @@ pub const Worker = struct {
         server.worker_mutex.unlock(lp.io);
         server.io_engine.signal();
     }
+};
+
+// The loop's side of a CDP connection that joined another connection's worker
+// (--cdp-shared-browser). The loop reads its socket into the worker's inbox;
+// the worker owns the link, answers on it and destroys it.
+pub const Guest = struct {
+    worker: *Worker,
+    link: *Link,
+    // threads Worker.guests
+    node: DoublyLinkedList.Node = .{},
 };
 
 // Worker -> loop request, see worker_queue.
@@ -3119,6 +3267,128 @@ test "Client: close message" {
         // fin | close, masked | len, 4-byte mask
         &.{ 136, 128, 0, 0, 0, 0 },
     );
+}
+
+test "server: cdp shared browser" {
+    const server = testing.test_cdp_server.?;
+    server.cdp_shared_browser = true;
+    defer server.cdp_shared_browser = false;
+
+    // The first connection starts the browser and opens a page.
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attached_a = try cdpCommand(&a, 2, "Target.attachToTarget", try testing.arena_allocator.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id}), null, null);
+    const session_a = attached_a.get("sessionId").?.string;
+    _ = try cdpCommand(&a, 3, "Runtime.evaluate", "{\"expression\":\"window.shared = 42\"}", session_a, null);
+
+    // A second connection joins that browser: it sees the page and gets a
+    // session of its own on it.
+    var b = try createTestClient();
+    defer b.deinit();
+    try b.handshake("/");
+
+    const targets = try cdpCommand(&b, 1, "Target.getTargets", "{}", null, null);
+    const infos = targets.get("targetInfos").?.array.items;
+    try testing.expectEqual(1, infos.len);
+    try testing.expectEqual(target_id, infos[0].object.get("targetId").?.string);
+
+    const attached_b = try cdpCommand(&b, 2, "Target.attachToTarget", try testing.arena_allocator.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id}), null, null);
+    const session_b = attached_b.get("sessionId").?.string;
+    try testing.expect(std.mem.eql(u8, session_a, session_b) == false);
+
+    const read_b = try cdpCommand(&b, 3, "Runtime.evaluate", "{\"expression\":\"window.shared\",\"returnByValue\":true}", session_b, null);
+    try testing.expectEqual(42, read_b.get("result").?.object.get("value").?.integer);
+
+    // A guest's auto-attach is its own: turning it off doesn't take the
+    // first connection's session away.
+    _ = try cdpCommand(&b, 4, "Target.setAutoAttach", "{\"autoAttach\":false,\"waitForDebuggerOnStart\":false}", null, null);
+
+    // pings are answered on the guest's own connection
+    try sys_net.writeAll(b.socket, &.{ 137, 128, 0, 0, 0, 0 });
+    {
+        const pong = try b.readWebsocketMessage() orelse return error.NoMessage;
+        try testing.expectEqual(.pong, pong.type);
+    }
+
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    const read_a = try cdpCommand(&a, 4, "Runtime.evaluate", "{\"expression\":\"window.shared + 1\",\"returnByValue\":true}", session_a, &seen_by_a);
+    try testing.expectEqual(43, read_a.get("result").?.object.get("value").?.integer);
+    for (seen_by_a.items) |raw| {
+        // nothing meant for the guest went to the first connection
+        try testing.expect(std.mem.find(u8, raw, session_b) == null);
+    }
+
+    // The guest leaves; the browser carries on.
+    try sys_net.writeAll(b.socket, &.{ 136, 128, 0, 0, 0, 0 });
+    {
+        const close = try b.readWebsocketMessage() orelse return error.NoMessage;
+        try testing.expectEqual(.close, close.type);
+    }
+    _ = try cdpCommand(&a, 5, "Runtime.evaluate", "{\"expression\":\"window.shared\"}", session_a, null);
+
+    // Another guest joins; the browser ends with the first connection, and
+    // takes its guests along.
+    var c = try createTestClient();
+    defer c.deinit();
+    try c.handshake("/");
+    const joined = try cdpCommand(&c, 1, "Target.getTargets", "{}", null, null);
+    try testing.expectEqual(1, joined.get("targetInfos").?.array.items.len);
+
+    try sys_net.writeAll(a.socket, &.{ 136, 128, 0, 0, 0, 0 });
+    while (true) {
+        const msg = c.readWebsocketMessage() catch |err| switch (err) {
+            error.Closed => break,
+            else => return err,
+        } orelse return error.NoMessage;
+        if (msg.type == .close) {
+            break;
+        }
+    }
+
+    // and the next connection starts a browser of its own
+    var d = try createTestClient();
+    defer d.deinit();
+    try d.handshake("/");
+    const fresh = try cdpCommand(&d, 1, "Target.getTargets", "{}", null, null);
+    try testing.expectEqual(0, fresh.get("targetInfos").?.array.items.len);
+}
+
+// Sends a CDP command and returns its result. The messages read before the
+// response (events) are appended to `seen` when given. Everything lives in
+// testing.arena_allocator.
+fn cdpCommand(c: *TestClient, id: i64, method: []const u8, params: []const u8, session_id: ?[]const u8, seen: ?*std.ArrayList([]const u8)) !std.json.ObjectMap {
+    const arena = testing.arena_allocator;
+    const payload = if (session_id) |sid|
+        try arena.print("{{\"id\":{d},\"method\":\"{s}\",\"params\":{s},\"sessionId\":\"{s}\"}}", .{ id, method, params, sid })
+    else
+        try arena.print("{{\"id\":{d},\"method\":\"{s}\",\"params\":{s}}}", .{ id, method, params });
+    try c.bidiCommand(payload);
+
+    while (true) {
+        const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+        const raw = try arena.dupe(u8, msg.data);
+        if (msg.cleanup_fragment) {
+            c.reader.cleanup();
+        }
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, raw, .{});
+        const obj = value.object;
+        if (obj.get("id")) |msg_id| {
+            if (msg_id.integer == id) {
+                if (obj.get("error")) |err| {
+                    std.debug.print("{s} failed: {s}\n", .{ method, err.object.get("message").?.string });
+                    return error.CommandFailed;
+                }
+                return obj.get("result").?.object;
+            }
+        }
+        if (seen) |s| {
+            try s.append(arena, raw);
+        }
+    }
 }
 
 test "server: 404" {
