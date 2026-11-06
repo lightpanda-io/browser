@@ -1022,6 +1022,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: WebSocket" {
+    testing.expectLog(&.{ .websocket, .websocket, .websocket, .websocket, .websocket });
     try testing.htmlRunner("net/websocket.html", .{});
 }
 

@@ -2499,6 +2499,7 @@ test "setChecked: a radio can't be unchecked, and the error says so" {
 }
 
 test "waitForScript: a script that doesn't compile is a ScriptError, not bare InvalidParams" {
+    testing.expectLog(&.{.app});
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
