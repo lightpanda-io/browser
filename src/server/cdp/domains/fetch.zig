@@ -933,13 +933,16 @@ const ResponseStageProbe = struct {
         return .proceed;
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn streamCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         const self: *ResponseStageProbe = @ptrCast(@alignCast(transfer.req.ctx));
         try self.body.appendSlice(testing.allocator, data);
     }
 
-    fn doneCallback(raw: *anyopaque) !void {
-        const self: *ResponseStageProbe = @ptrCast(@alignCast(raw));
+    fn doneCallback(transfer: *HttpClient.Transfer) !void {
+        const self: *ResponseStageProbe = @ptrCast(@alignCast(transfer.req.ctx));
+        if (!self.streaming) {
+            try self.body.appendSlice(testing.allocator, transfer.responseBody());
+        }
         self.done = true;
     }
 
@@ -959,11 +962,10 @@ const ResponseStageProbe = struct {
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .script,
-            .streaming = self.streaming,
             .notification = bc.session.notification,
             .ctx = self,
             .header_callback = headerCallback,
-            .data_callback = dataCallback,
+            .stream_callback = if (self.streaming) streamCallback else null,
             .done_callback = doneCallback,
             .error_callback = errorCallback,
             .shutdown_callback = HttpClient.noopShutdown,

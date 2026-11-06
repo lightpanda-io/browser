@@ -232,7 +232,6 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
             .resource_type = .script,
             .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
             .header_callback = Script.headerCallback,
-            .data_callback = Script.dataCallback,
             .done_callback = Script.doneCallback,
             .error_callback = Script.errorCallback,
             .shutdown_callback = Script.shutdownCallback,
@@ -472,7 +471,6 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .credentials_mode = .same_origin,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
-        .data_callback = Script.dataCallback,
         .done_callback = Script.doneCallback,
         .error_callback = Script.errorCallback,
         .shutdown_callback = Script.shutdownCallback,
@@ -800,13 +798,9 @@ pub const Script = struct {
         return .proceed;
     }
 
-    pub fn dataCallback(transfer: *HttpClient.Transfer, _: []const u8) !void {
+    pub fn doneCallback(transfer: *HttpClient.Transfer) !void {
         const self: *Script = @ptrCast(@alignCast(transfer.req.ctx));
         self.source.remote = transfer.takeBody();
-    }
-
-    pub fn doneCallback(ctx: *anyopaque) !void {
-        const self: *Script = @ptrCast(@alignCast(ctx));
         self.complete = true;
         if (comptime lp.IS_DEBUG) {
             log.debug(.http, "script fetch complete", .{ .req = self.url });

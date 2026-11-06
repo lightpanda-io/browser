@@ -50,7 +50,6 @@ _registry_key: []const u8 = "",
 _closed: bool = false,
 _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
-_script_buffer: std.ArrayList(u8) = .empty,
 _http_transfer: ?*Transfer = null,
 
 // Ports pending connnection, created before the initial script finished
@@ -89,7 +88,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
         return self;
     }
 
-    self._script_arena = try session.getArena(.large, "SharedWorker.script");
+    self._script_arena = try session.getArena(.small, "SharedWorker.script");
     errdefer self.releaseScriptArena();
 
     const transfer = proto.newRequest(.{
@@ -101,7 +100,6 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
         .credentials_mode = .same_origin,
         .request_mode = .same_origin,
         .header_callback = httpHeaderCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -193,23 +191,17 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), transfer.bodyLen());
-
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *SharedWorkerGlobalScope = @ptrCast(@alignCast(transfer.req.ctx));
-    try self._script_buffer.appendSlice(self._script_arena.?.allocator(), data);
-}
-
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *SharedWorkerGlobalScope = @ptrCast(@alignCast(ctx));
     self._http_transfer = null;
     defer self.releaseScriptArena();
 
     const url = self._url;
-    const script = self._script_buffer.items;
+    // Evaluated synchronously, so borrowing the transfer's body is fine.
+    const script = transfer.responseBody();
 
     if (comptime lp.IS_DEBUG) {
         log.info(.browser, "shared worker fetch done", .{
@@ -303,7 +295,6 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
 fn releaseScriptArena(self: *SharedWorkerGlobalScope) void {
     const arena = self._script_arena orelse return;
     self._script_arena = null;
-    self._script_buffer = .empty;
     arena.release();
 }
 

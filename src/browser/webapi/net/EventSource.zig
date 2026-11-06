@@ -169,9 +169,8 @@ fn connect(self: *EventSource) !void {
         .request_mode = .cors,
         .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .resource_type = .eventsource,
-        .streaming = true,
         .header_callback = httpHeaderDoneCallback,
-        .data_callback = httpDataCallback,
+        .stream_callback = httpStreamCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -330,13 +329,13 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpStreamCallback(transfer: *Transfer, data: []const u8) !void {
     const self: *EventSource = @ptrCast(@alignCast(transfer.req.ctx));
     try self.parse(data);
 }
 
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *EventSource = @ptrCast(@alignCast(ctx));
+fn httpDoneCallback(transfer: *Transfer) !void {
+    const self: *EventSource = @ptrCast(@alignCast(transfer.req.ctx));
     self._transfer = null;
     self.reestablish();
 }

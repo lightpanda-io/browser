@@ -43,7 +43,6 @@ pub const Proto = WorkerGlobalScope;
 
 const ScriptLoad = struct {
     arena: *lp.Arena,
-    buffer: std.ArrayList(u8) = .empty,
     transfer: ?*Transfer = null,
 };
 
@@ -111,7 +110,7 @@ fn init(
     const proto = self._proto;
     errdefer proto.deinit();
 
-    self._script_load = .{ .arena = try session.getArena(.large, "ServiceWorker.script") };
+    self._script_load = .{ .arena = try session.getArena(.small, "ServiceWorker.script") };
     errdefer self.releaseScriptLoad();
 
     const transfer = proto.newRequest(.{
@@ -123,7 +122,6 @@ fn init(
         .credentials_mode = .same_origin,
         .request_mode = .same_origin,
         .header_callback = httpHeaderCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -225,20 +223,11 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    const load = &self._script_load.?;
-    try load.buffer.ensureTotalCapacityPrecise(load.arena.allocator(), transfer.bodyLen());
-
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *ServiceWorkerGlobalScope = @ptrCast(@alignCast(transfer.req.ctx));
-    const load = &self._script_load.?;
-    try load.buffer.appendSlice(load.arena.allocator(), data);
-}
-
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *ServiceWorkerGlobalScope = @ptrCast(@alignCast(ctx));
     // clear immediately, we 100% don't own this anymore
     self._script_load.?.transfer = null;
     defer self.releaseScriptLoad();
@@ -246,11 +235,12 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     if (comptime lp.IS_DEBUG) {
         log.info(.browser, "SWGS fetch done", .{
             .url = self._proto.url,
-            .len = self._script_load.?.buffer.items.len,
+            .len = transfer.bodyLen(),
         });
     }
 
-    try self.loadInitialScript(self._script_load.?.buffer.items);
+    // Evaluated synchronously, so borrowing the transfer's body is fine.
+    try self.loadInitialScript(transfer.responseBody());
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {

@@ -177,7 +177,6 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .credentials_mode = settings.credentials_mode,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
-        .data_callback = Script.dataCallback,
         .done_callback = PreloadedScript.doneCallback,
         .error_callback = PreloadedScript.errorCallback,
         .shutdown_callback = PreloadedScript.shutdownCallback,
@@ -457,7 +456,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .credentials_mode = settings.credentials_mode,
             .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
             .header_callback = Script.headerCallback,
-            .data_callback = Script.dataCallback,
             .done_callback = Script.doneCallback,
             .error_callback = Script.errorCallback,
             // Nothing holds the transfer; teardown cleanup runs through
@@ -618,13 +616,14 @@ const PreloadedScript = struct {
         }
     }
 
-    fn doneCallback(ctx: *anyopaque) !void {
-        const script: *Script = @ptrCast(@alignCast(ctx));
+    fn doneCallback(transfer: *HttpClient.Transfer) !void {
+        const script: *Script = @ptrCast(@alignCast(transfer.req.ctx));
         if (script.extra != .preload) {
             // Adopted by a real <script> element (addFromElement) while the
             // fetch was in flight; complete it as a normal frame script.
-            return Script.doneCallback(ctx);
+            return Script.doneCallback(transfer);
         }
+        script.source.remote = transfer.takeBody();
         script.complete = true;
         if (comptime lp.IS_DEBUG) {
             log.debug(.http, "script fetch complete", .{ .req = script.url });

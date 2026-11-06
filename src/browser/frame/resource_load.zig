@@ -86,7 +86,6 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         .resource_type = .image,
         .partial = 16 * 1024,
         .header_callback = ImageLoad.headerCallback,
-        .data_callback = ImageLoad.dataCallback,
         .done_callback = ImageLoad.doneCallback,
         .error_callback = ImageLoad.errorCallback,
         .shutdown_callback = ImageLoad.shutdownCallback,
@@ -169,8 +168,8 @@ const BeaconLoad = struct {
     size: usize,
     in_flight: *usize,
 
-    fn doneCallback(ctx: *anyopaque) !void {
-        settle(ctx);
+    fn doneCallback(transfer: *HttpClient.Transfer) !void {
+        settle(transfer.req.ctx);
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -204,13 +203,13 @@ const ImageLoad = struct {
         return .proceed;
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, prefix: []const u8) !void {
+    fn doneCallback(transfer: *HttpClient.Transfer) !void {
         const self: *ImageLoad = @ptrCast(@alignCast(transfer.req.ctx));
-        self.dimensions = image_dimensions.parse(prefix);
-    }
-
-    fn doneCallback(ctx: *anyopaque) !void {
-        const self: *ImageLoad = @ptrCast(@alignCast(ctx));
+        // The body is only the partial prefix the request asked for.
+        const prefix = transfer.responseBody();
+        if (prefix.len > 0) {
+            self.dimensions = image_dimensions.parse(prefix);
+        }
         const ok = self.status >= 200 and self.status < 300;
         self.settle(if (ok) .load else .@"error");
     }

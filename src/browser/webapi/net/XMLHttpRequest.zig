@@ -326,7 +326,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .resource_type = .xhr,
         .timeout_ms = self._timeout,
         .header_callback = httpHeaderDoneCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -728,7 +727,6 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
     }
-    try self._response_data.ensureTotalCapacityPrecise(self._arena.allocator(), transfer.bodyLen());
     self._response_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
 
     const exec = self._exec;
@@ -744,18 +742,28 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
-    try self._response_data.appendSlice(self._arena.allocator(), data);
 
-    try self._proto.dispatch(.progress, .{
-        .total = self._response_len orelse 0,
-        .loaded = self._response_data.items.len,
-    }, self._exec);
-}
+    const body = transfer.responseBody();
+    if (body.len > 0) {
+        try self._response_data.appendSlice(self._arena.allocator(), body);
 
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
+        try self._proto.dispatch(.progress, .{
+            .total = self._response_len orelse 0,
+            .loaded = self._response_data.items.len,
+        }, self._exec);
+
+        if (transfer.isAborted()) {
+            // The progress handler called abort()/open() or tore the page
+            // down. No other callback follows, so the ref is ours to drop.
+            if (self._http_transfer == transfer) {
+                self._http_transfer = null;
+            }
+            self.releaseSelfRef();
+            return;
+        }
+    }
 
     log.info(.http, "request complete", .{
         .source = "xhr",
@@ -808,7 +816,6 @@ pub fn abort(self: *XMLHttpRequest) void {
         self._http_transfer = null;
         resp.cancel();
     }
-    self.releaseSelfRef();
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {

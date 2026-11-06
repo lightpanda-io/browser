@@ -139,7 +139,6 @@ const TrackLoad = struct {
     generation: u32,
     arena: *lp.Arena,
     status: u16 = 0,
-    body: std.ArrayList(u8) = .empty,
 
     fn schedule(track: *Track, frame: *Frame) !void {
         const arena = try frame._session.getArena(.medium, "Track.load");
@@ -168,7 +167,7 @@ const TrackLoad = struct {
         const self: *TrackLoad = @ptrCast(@alignCast(ctx));
         self.fetch() catch |err| {
             log.info(.http, "track fetch", .{ .err = err });
-            self.settle(false);
+            self.settle(null);
         };
         return null;
     }
@@ -177,19 +176,19 @@ const TrackLoad = struct {
         const frame = self.frame;
         const track = self.track;
         if (self.generation != track._generation or frame.isGoingAway()) {
-            return self.settle(false);
+            return self.settle(null);
         }
 
         const src = track.asElement().getAttributeInterned("src") orelse "";
         if (src.len == 0) {
-            return self.settle(false);
+            return self.settle(null);
         }
         const url = try URL.resolve(self.arena.allocator(), frame.base(), src, .{ .encoding = frame.charset });
 
         // A potential-CORS request with the same-origin fallback flag: without
         // a crossorigin attribute on the media element, only same-origin
         // tracks load.
-        const media = track.parentMedia() orelse return self.settle(false);
+        const media = track.parentMedia() orelse return self.settle(null);
         const cross_origin = media.asElement().getAttributeInterned("crossorigin");
         const request_mode: HttpClient.Request.RequestMode = if (cross_origin == null) .same_origin else .cors;
         const credentials_mode: HttpClient.Request.CredentialsMode = blk: {
@@ -206,7 +205,6 @@ const TrackLoad = struct {
             .credentials_mode = credentials_mode,
             .resource_type = .text_track,
             .header_callback = TrackLoad.headerCallback,
-            .data_callback = TrackLoad.dataCallback,
             .done_callback = TrackLoad.doneCallback,
             .error_callback = TrackLoad.errorCallback,
             .shutdown_callback = TrackLoad.shutdownCallback,
@@ -230,20 +228,15 @@ const TrackLoad = struct {
         return .proceed;
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn doneCallback(transfer: *HttpClient.Transfer) !void {
         const self: *TrackLoad = @ptrCast(@alignCast(transfer.req.ctx));
-        try self.body.appendSlice(self.arena.allocator(), data);
-    }
-
-    fn doneCallback(ctx: *anyopaque) !void {
-        const self: *TrackLoad = @ptrCast(@alignCast(ctx));
-        self.settle(self.status >= 200 and self.status < 300);
+        self.settle(if (self.status >= 200 and self.status < 300) transfer.responseBody() else null);
     }
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *TrackLoad = @ptrCast(@alignCast(ctx));
         log.info(.http, "track fetch", .{ .err = err, .status = self.status });
-        self.settle(false);
+        self.settle(null);
     }
 
     // Teardown or a superseding navigation: give the slot back without
@@ -255,7 +248,8 @@ const TrackLoad = struct {
         frame._pending_loads -|= 1;
     }
 
-    fn settle(self: *TrackLoad, fetched: bool) void {
+    // `body` is null when the fetch failed.
+    fn settle(self: *TrackLoad, body: ?[]const u8) void {
         const frame = self.frame;
         const track = self.track;
         const arena = self.arena;
@@ -267,7 +261,7 @@ const TrackLoad = struct {
         }
 
         if (self.generation == track._generation) {
-            const loaded = fetched and track.addParsedCues(arena.allocator(), self.body.items, frame);
+            const loaded = if (body) |b| track.addParsedCues(arena.allocator(), b, frame) else false;
             track._ready_state = if (loaded) .loaded else .@"error";
             frame.queueElementEvent(track.asHtml(), if (loaded) .load else .@"error") catch |err| {
                 log.warn(.frame, "track queue event", .{ .err = err });

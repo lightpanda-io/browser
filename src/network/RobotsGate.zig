@@ -89,7 +89,6 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
     const robots_ctx = try arena.create(RobotsContext);
     robots_ctx.* = .{
         .gate = self,
-        .buffer = .empty,
         .arena = arena,
         .robots_url = owned_url,
     };
@@ -112,7 +111,6 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .request_mode = .no_cors,
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
-        .data_callback = RobotsContext.dataCallback,
         .done_callback = RobotsContext.doneCallback,
         .error_callback = RobotsContext.errorCallback,
         .shutdown_callback = RobotsContext.shutdownCallback,
@@ -172,7 +170,6 @@ const RobotsContext = struct {
     gate: *RobotsGate,
     arena: *lp.Arena,
     robots_url: [:0]const u8,
-    buffer: std.ArrayList(u8),
     status: u16 = 0,
     challenge: ?HttpClient.BotChallenge = null,
 
@@ -184,19 +181,11 @@ const RobotsContext = struct {
         }
         self.challenge = transfer.botChallenge();
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
-        try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), transfer.bodyLen());
         return .proceed;
     }
 
-    fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
+    fn doneCallback(transfer: *Transfer) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(transfer.req.ctx));
-        if (self.status == 200) {
-            try self.buffer.appendSlice(self.arena.allocator(), data);
-        }
-    }
-
-    fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
-        const self: *RobotsContext = @ptrCast(@alignCast(ctx_ptr));
         const robots_url = self.robots_url;
         const network = self.gate.network;
 
@@ -214,7 +203,8 @@ const RobotsContext = struct {
 
         switch (self.status) {
             200 => {
-                if (self.buffer.items.len == 0) {
+                const body = transfer.responseBody();
+                if (body.len == 0) {
                     // Empty robots.txt means we can short-circuit the allowed path.
                     self.settle(.{ .outcome = .{ .decision = .allowed } });
                     return;
@@ -222,7 +212,7 @@ const RobotsContext = struct {
 
                 const robots = network.robot_store.robotsFromBytes(
                     network.config.http_headers.user_agent,
-                    self.buffer.items,
+                    body,
                 ) catch |err| {
                     // We only return an error if an allocation or something fails.
                     // Our parser does already leniently handle malformed input and takes whichever rules it can parse.

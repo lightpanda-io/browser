@@ -1545,8 +1545,8 @@ const EchoDriver = struct {
     done: bool = false,
     err: ?anyerror = null,
 
-    fn doneCallback(raw: *anyopaque) !void {
-        const self: *EchoDriver = @ptrCast(@alignCast(raw));
+    fn doneCallback(transfer: *Transfer) !void {
+        const self: *EchoDriver = @ptrCast(@alignCast(transfer.req.ctx));
         self.done = true;
     }
 
@@ -1811,14 +1811,11 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
         done: bool = false,
         err: ?anyerror = null,
 
-        fn dataCallback(transfer: *Transfer, data: []const u8) !void {
+        fn doneCallback(transfer: *Transfer) !void {
             const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
-            @memcpy(self.body[self.body_len..][0..data.len], data);
-            self.body_len += data.len;
-        }
-
-        fn doneCallback(raw: *anyopaque) !void {
-            const self: *@This() = @ptrCast(@alignCast(raw));
+            const data = transfer.responseBody();
+            @memcpy(self.body[0..data.len], data);
+            self.body_len = data.len;
             self.done = true;
         }
 
@@ -1845,7 +1842,6 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
         .resource_type = .script,
         .notification = bc.session.notification,
         .ctx = &callback_context,
-        .data_callback = CallbackContext.dataCallback,
         .done_callback = CallbackContext.doneCallback,
         .error_callback = CallbackContext.errorCallback,
         .shutdown_callback = HttpClient.noopShutdown,

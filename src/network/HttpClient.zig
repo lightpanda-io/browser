@@ -1302,7 +1302,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     const cache = self.cache.active() orelse return false;
 
     const req = &transfer.req;
-    if (req.method != .GET or req.streaming or req.skip_cache) {
+    if (req.method != .GET or req.isStreaming() or req.skip_cache) {
         return false;
     }
 
@@ -1549,16 +1549,16 @@ const SyncContext = struct {
         return arena.allocator();
     }
 
-    fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
+    fn streamCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
-        if (self.options.body_writer) |w| {
-            return w.writeAll(data);
-        }
-        self.body = transfer.takeBody();
+        return self.options.body_writer.?.writeAll(data);
     }
 
-    fn doneCallback(ctx: *anyopaque) anyerror!void {
-        const self: *SyncContext = @ptrCast(@alignCast(ctx));
+    fn doneCallback(transfer: *Transfer) anyerror!void {
+        const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
+        if (self.options.body_writer == null) {
+            self.body = transfer.takeBody();
+        }
         self.completion = .done;
     }
 
@@ -2129,8 +2129,8 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 pub const Request = struct {
     const StartCallback = *const fn (transfer: *Transfer) anyerror!void;
     const HeaderCallback = *const fn (transfer: *Transfer) anyerror!Transfer.HeaderResult;
-    const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
-    const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
+    const StreamCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
+    const DoneCallback = *const fn (transfer: *Transfer) anyerror!void;
     const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
     pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
@@ -2248,11 +2248,6 @@ pub const Request = struct {
     // Set by syncRequest; only used to label the http_requests metric.
     sync: bool = false,
 
-    // Deliver the response body progressively: data_callback can fire multiple
-    // times. Currently, streaming request always bypass the cache as they are only
-    // used for EventSource.
-    streaming: bool = false,
-
     // When false, the caller does not guarantee that the body outlives the
     // transfer, and thus we'll need to dupe it.
     body_outlives_request: bool = false,
@@ -2268,7 +2263,13 @@ pub const Request = struct {
 
     start_callback: ?StartCallback = null,
     header_callback: HeaderCallback = Noop.headerCallback,
-    data_callback: DataCallback = Noop.dataCallback,
+
+    // Set to deliver the response body progressively: it fires once per
+    // received batch and the body is never buffered, so takeBody is
+    // unavailable. Streaming requests always bypass the cache.
+    // When not set, the body is buffered and available in done_callback.
+    stream_callback: ?StreamCallback = null,
+
     done_callback: DoneCallback = Noop.doneCallback,
     error_callback: ErrorCallback = Noop.errorCallback,
 
@@ -2279,6 +2280,10 @@ pub const Request = struct {
     // every caller decides — pass `HttpClient.noopShutdown` to opt out,
     // knowingly.
     shutdown_callback: ShutdownCallback,
+
+    pub fn isStreaming(req: *const Request) bool {
+        return req.stream_callback != null;
+    }
 
     // What Sec-Fetch-Site is measured against: a navigation's initiator,
     // everything else's own origin.
@@ -2350,7 +2355,7 @@ pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
         return transfer.failAsync(err);
     }
 
-    if (!transfer.req.streaming) {
+    if (!transfer.req.isStreaming()) {
         if (transfer.getContentLength()) |cl| {
             if (cl > self.max_response_size) {
                 return transfer.failAsync(error.ResponseTooLarge);
@@ -2502,8 +2507,8 @@ const Noop = struct {
     fn headerCallback(_: *Transfer) !Transfer.HeaderResult {
         return .proceed;
     }
-    fn dataCallback(_: *Transfer, _: []const u8) !void {}
-    fn doneCallback(_: *anyopaque) !void {}
+    fn streamCallback(_: *Transfer, _: []const u8) !void {}
+    fn doneCallback(_: *Transfer) !void {}
     fn errorCallback(_: *anyopaque, _: anyerror) void {}
 };
 
@@ -2514,10 +2519,10 @@ const Poison = struct {
     fn headerCallback(_: *Transfer) anyerror!Transfer.HeaderResult {
         @panic("callback on retired transfer");
     }
-    fn dataCallback(_: *Transfer, _: []const u8) anyerror!void {
+    fn streamCallback(_: *Transfer, _: []const u8) anyerror!void {
         @panic("callback on retired transfer");
     }
-    fn doneCallback(_: *anyopaque) anyerror!void {
+    fn doneCallback(_: *Transfer) anyerror!void {
         @panic("callback on retired transfer");
     }
     fn errorCallback(_: *anyopaque, _: anyerror) void {
@@ -2744,7 +2749,7 @@ pub const Transfer = struct {
     // bytes received, the body still compressed.
     _encoded_data_length: usize = 0,
 
-    // Length of the body data_callback will receive. Can be different than
+    // Length of the body done_callback will take. Can be different than
     // Content-Length if the content was compressed
     _body_len: usize = 0,
 
@@ -2983,10 +2988,9 @@ pub const Transfer = struct {
 
         const req = &self.req;
         req.sync = true;
-        if (opts.body_writer != null) req.streaming = true;
+        if (opts.body_writer != null) req.stream_callback = SyncContext.streamCallback;
         req.ctx = &sync_ctx;
         req.header_callback = SyncContext.headerCallback;
-        req.data_callback = SyncContext.dataCallback;
         req.done_callback = SyncContext.doneCallback;
         req.error_callback = SyncContext.errorCallback;
         req.shutdown_callback = SyncContext.shutdownCallback;
@@ -3104,7 +3108,10 @@ pub const Transfer = struct {
             // silently running user code from a retired transfer.
             self.req.start_callback = null;
             self.req.header_callback = Poison.headerCallback;
-            self.req.data_callback = Poison.dataCallback;
+            // Keep isStreaming() as it was.
+            if (self.req.stream_callback != null) {
+                self.req.stream_callback = Poison.streamCallback;
+            }
             self.req.done_callback = Poison.doneCallback;
             self.req.error_callback = Poison.errorCallback;
             self.req.shutdown_callback = Poison.shutdownCallback;
@@ -3155,6 +3162,13 @@ pub const Transfer = struct {
             return;
         }
 
+        if (self._outcome_delivered) {
+            // Aborted from inside done_callback: that callback was the
+            // outcome, no error_callback follows. isAborted() tells it.
+            self.detachOrDeinit();
+            return;
+        }
+
         const page_scope = self.logScope();
         defer page_scope.exit();
 
@@ -3171,7 +3185,7 @@ pub const Transfer = struct {
 
     // take whatever we have, and deliver it.
     pub fn finishEarly(self: *Transfer) bool {
-        if (self.state != .inflight or self.req.streaming or self._cache_intent == .revalidate) {
+        if (self.state != .inflight or self.req.isStreaming() or self._cache_intent == .revalidate) {
             return false;
         }
         const conn = self._conn orelse return false;
@@ -3335,7 +3349,9 @@ pub const Transfer = struct {
         self.state = .aborted;
         self.req.start_callback = null;
         self.req.header_callback = Noop.headerCallback;
-        self.req.data_callback = Noop.dataCallback;
+        if (self.req.stream_callback != null) {
+            self.req.stream_callback = Noop.streamCallback;
+        }
         self.req.done_callback = Noop.doneCallback;
         self.req.error_callback = Noop.errorCallback;
         if (self.owner) |o| {
@@ -3459,7 +3475,7 @@ pub const Transfer = struct {
         t.request_start = base + ct.pretransfer;
         t.response_start = base + ct.starttransfer;
         // the stream's response_end will get captured in recordResourceTiming
-        t.response_end = if (self.req.streaming) 0 else base + ct.total;
+        t.response_end = if (self.req.isStreaming()) 0 else base + ct.total;
 
         t.encoded_body_size = conn.getDownloadSize() catch 0;
         t.protocol = switch (conn.getHttpVersion() catch .none) {
@@ -3679,7 +3695,7 @@ pub const Transfer = struct {
 
     // Buffer the standard success event sequence. Every source (network,
     // cache, fulfill, synthetic) puts its body in res.buffer first, so a
-    // consumer can always takeBody.
+    // done_callback can always takeBody.
     fn bufferEvents(self: *Transfer) !void {
         // Single delivery point for every successful response — network,
         // cache, and synthetic, on both the sync and async paths. Redirect
@@ -3703,8 +3719,11 @@ pub const Transfer = struct {
         try self._events.ensureUnusedCapacity(self.arena.allocator(), 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
-        if (body.len > 0) {
-            self._events.appendAssumeCapacity(.data);
+        if (body.len > 0 and self.req.isStreaming()) {
+            // A streaming consumer whose body arrived in one piece (fulfill,
+            // synthetic) gets it as a single batch.
+            self.res.stream.data_queued = true;
+            self._events.appendAssumeCapacity(.stream_data);
         }
         self._events.appendAssumeCapacity(.done);
         self.scheduleDispatch();
@@ -3837,7 +3856,7 @@ pub const Transfer = struct {
         // we were never going to read would turn the size limit into a
         // spurious `error` event on a perfectly good response. A stream's
         // batch is capped in dataCallback instead.
-        if (opts.check_content_length and self.req.partial == null and !self.req.streaming) {
+        if (opts.check_content_length and self.req.partial == null and !self.req.isStreaming()) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -3935,7 +3954,7 @@ pub const Transfer = struct {
         // Per-request timeout override (e.g. XHR timeout)
         if (req.timeout_ms > 0) {
             try conn.setTimeout(req.timeout_ms);
-        } else if (req.streaming) {
+        } else if (req.isStreaming()) {
             try conn.setTimeout(0);
         }
 
@@ -4432,7 +4451,7 @@ pub const Transfer = struct {
             }
 
             // A stream only ever buffers its undelivered batch.
-            if (transfer.req.partial == null and !transfer.req.streaming) {
+            if (transfer.req.partial == null and !transfer.req.isStreaming()) {
                 // Headers aren't materialized yet; read them off the conn.
                 const content_length: ?usize = blk: {
                     const hdr = conn.getResponseHeader("content-length", 0) orelse break :blk null;
@@ -4483,7 +4502,7 @@ pub const Transfer = struct {
 
         const chunk = buffer[0..chunk_len];
 
-        if (transfer.req.streaming) {
+        if (transfer.req.isStreaming()) {
             if (transfer.state == .aborted) {
                 return http.writefunc_error;
             }
@@ -4588,10 +4607,25 @@ pub const Transfer = struct {
         return self._body_len;
     }
 
-    // For a non-streaming data_callback: the body, moved out of the
+    // For a callback that runs JS and then wants to carry on: whether that JS
+    // aborted the transfer or tore its owner down. Once done_callback has
+    // started, no error_callback or shutdown_callback follows, so a
+    // done_callback that sees this does its own cleanup.
+    pub fn isAborted(self: *const Transfer) bool {
+        return self.state == .aborted;
+    }
+
+    // For a non-streaming done_callback: the body, borrowed. Valid until the
+    // callback returns (or takeBody is called).
+    pub fn responseBody(self: *const Transfer) []const u8 {
+        lp.assert(self.req.isStreaming() == false, "Transfer.responseBody streaming", .{});
+        return self.res.buffer.items();
+    }
+
+    // For a non-streaming done_callback: the body, moved out of the
     // transfer (which is left with an empty one) and shrunk to fit.
     pub fn takeBody(self: *Transfer) Body {
-        lp.assert(self.req.streaming == false, "Transfer.takeBody streaming", .{});
+        lp.assert(self.req.isStreaming() == false, "Transfer.takeBody streaming", .{});
         var body = self.res.buffer;
         self.res.buffer = .init(self.client.allocator);
         body._list.shrinkAndFree(body._allocator, body._list.items.len);
@@ -4693,21 +4727,6 @@ pub const Transfer = struct {
                         return transfer.failDelivery(error.Abort);
                     }
                 },
-                .data => {
-                    // Read before data_callback, which can takeBody.
-                    const chunk = transfer.res.buffer.items();
-                    // A partial body is a prefix, not the response body.
-                    if (transfer._notify_cdp and req.partial == null) {
-                        transfer.notify(.http_response_data, &.{
-                            .data = chunk,
-                            .transfer = transfer,
-                        });
-                    }
-                    transfer._timing.decoded_body_size += chunk.len;
-                    req.data_callback(transfer, chunk) catch |err| {
-                        return transfer.failDelivery(err);
-                    };
-                },
                 .stream_data => {
                     // Move the batch into stream.spare and deliver it from
                     // there: chunks received during the callback (re-entrant
@@ -4727,13 +4746,25 @@ pub const Transfer = struct {
                         });
                     }
                     transfer._timing.decoded_body_size += chunk.len;
-                    req.data_callback(transfer, chunk) catch |err| {
+                    req.stream_callback.?(transfer, chunk) catch |err| {
                         return transfer.failDelivery(err);
                     };
                     res.stream.spare.clearRetainingCapacity();
                 },
                 .done => {
                     terminal = true;
+                    if (!req.isStreaming()) {
+                        // Read before done_callback, which can takeBody.
+                        const body = transfer.res.buffer.items();
+                        // A partial body is a prefix, not the response body.
+                        if (body.len > 0 and transfer._notify_cdp and req.partial == null) {
+                            transfer.notify(.http_response_data, &.{
+                                .data = body,
+                                .transfer = transfer,
+                            });
+                        }
+                        transfer._timing.decoded_body_size += body.len;
+                    }
                     if (transfer._notify_cdp) {
                         transfer.notify(.http_request_done, &.{
                             .transfer = transfer,
@@ -4744,7 +4775,7 @@ pub const Transfer = struct {
                     // the entry, as in a browser.
                     transfer.recordResourceTiming();
                     transfer._outcome_delivered = true;
-                    req.done_callback(req.ctx) catch |err| {
+                    req.done_callback(transfer) catch |err| {
                         return transfer.failDelivery(err);
                     };
                 },
@@ -4935,12 +4966,11 @@ const Response = struct {
     };
 };
 
-// A single buffered response event. The payload of `data` has transfer-arena
-// lifetime. `done`, and `err` are terminal — nothing follows them.
+// A single buffered response event. `done`, and `err` are terminal — nothing
+// follows them.
 const Event = union(enum) {
     start,
     header,
-    data, // the body is res.buffer
     stream_data, // the payload is carried in res.stream.data_queued
     done,
     err: anyerror,
@@ -5764,8 +5794,8 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
         owner: *Owner,
         done_called: bool = false,
 
-        fn doneCallback(ctx: *anyopaque) !void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
+        fn doneCallback(transfer: *Transfer) !void {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
             self.done_called = true;
             // Mimics a navigation / page-close kicked off from inside the
             // fulfilled response's done_callback, which kills this transfer.
@@ -5840,8 +5870,8 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
         shutdown_called: bool = false,
         shutdown_during_done: bool = false,
 
-        fn doneCallback(ctx: *anyopaque) !void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
+        fn doneCallback(transfer: *Transfer) !void {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
             self.done_called = true;
             self.in_done = true;
             defer self.in_done = false;
@@ -5897,6 +5927,86 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
     try testing.expectEqual(null, owner.transfers.first);
 }
 
+test "HttpClient: abort during done_callback does not also fire error_callback" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner = testOwner(null, null);
+
+    const Ctx = struct {
+        done_called: bool = false,
+        aborted_in_done: bool = false,
+        error_called: bool = false,
+        shutdown_called: bool = false,
+
+        fn doneCallback(transfer: *Transfer) !void {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            self.done_called = true;
+            // e.g. xhr.abort() from a progress handler.
+            transfer.cancel();
+            self.aborted_in_done = transfer.isAborted();
+        }
+
+        fn errorCallback(ctx: *anyopaque, _: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.error_called = true;
+        }
+
+        fn shutdownCallback(ctx: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.shutdown_called = true;
+        }
+    };
+    var ctx = Ctx{};
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .method = .GET,
+            .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .xhr,
+            .shutdown_callback = Ctx.shutdownCallback,
+            .error_callback = Ctx.errorCallback,
+            .ctx = &ctx,
+            .done_callback = Ctx.doneCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.intercepted += 1;
+    try client.fulfillIntercepted(transfer, 200, &.{}, "hello");
+    _ = client.dispatchCompleted(.all);
+
+    try testing.expect(ctx.done_called);
+    try testing.expect(ctx.aborted_in_done);
+    try testing.expectEqual(false, ctx.error_called);
+    try testing.expectEqual(false, ctx.shutdown_called);
+
+    // Freed exactly once regardless.
+    try testing.expectEqual(0, client.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
 test "HttpClient: kill during a non-terminal callback defers shutdown_callback" {
     // Same re-entrant kill, but from header_callback: the consumer has had no
     // outcome yet, so it must still get shutdown — once, and only after its
@@ -5928,8 +6038,8 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
             return .proceed;
         }
 
-        fn doneCallback(ctx: *anyopaque) !void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
+        fn doneCallback(transfer: *Transfer) !void {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
             self.done_called = true;
         }
 
@@ -6432,8 +6542,8 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
             return .proceed;
         }
 
-        fn doneCallback(ctx: *anyopaque) !void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
+        fn doneCallback(transfer: *Transfer) !void {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
             self.done_called = true;
         }
     };
