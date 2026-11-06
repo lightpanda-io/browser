@@ -371,50 +371,71 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     return .done;
 }
 
+/// Ticks `frame_id` until `condition.met()` returns true: once up front, then
+/// after each tick. Between ticks it sleeps until the next timer is due (at
+/// most 50 ms when idle), never past `timeout_ms`.
+pub fn waitUntil(self: *Runner, frame_id: u32, timeout_ms: u32, condition: anytype) !void {
+    if (try condition.met()) {
+        return;
+    }
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
+    while (true) {
+        // The tick doesn't poll the cancel hook. Don't move this check into
+        // it: Session.idleSlice ticks through a Ctrl-C to keep transfers going.
+        if (self.session.isCancelled()) {
+            return error.Cancelled;
+        }
+        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+        if (elapsed >= timeout_ms) {
+            return error.Timeout;
+        }
+        const remaining = timeout_ms - elapsed;
+        const ticked = try self.tickForFrame(frame_id, remaining, .{ .until = .done });
+        if (try condition.met()) {
+            return;
+        }
+        // Idle or between timers: without a sleep, a condition nothing
+        // changes spins the CPU.
+        const sleep_ms = @min(remaining, switch (ticked) {
+            .done => 50,
+            .ok => |next_ms| next_ms,
+        });
+        if (sleep_ms > 0) {
+            lp.io.sleep(.fromMilliseconds(sleep_ms), .awake) catch {};
+        }
+    }
+}
+
 pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
-    const session = self.session;
-    const arena = try session.getArena(.small, "Runner.waitForSelector");
+    const arena = try self.session.getArena(.small, "Runner.waitForSelector");
     defer arena.release();
 
-    const timer: std.Io.Timestamp = .now(lp.io, .boot);
     const selector = try Selector.parseLeaky(arena.allocator(), input);
     for (selector) |s| {
         if (!s.hasPseudoElement()) break;
     } else return error.InvalidSelector;
 
-    while (true) {
-        if (session.isCancelled()) {
-            return error.Cancelled;
-        }
-
-        const page = session.pendingOrLivePage(frame_id) orelse {
-            return error.FrameNotFound;
-        };
-        const frame = &page.frame;
-
-        if (try Selector.query(selector, frame.document.asNode(), frame)) |el| {
-            return el;
-        }
-
-        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-        if (elapsed >= timeout_ms) {
-            return error.Timeout;
-        }
-        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
-            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
-                }
-            },
-        }
-    }
+    var match: SelectorMatch = .{ .session = self.session, .frame_id = frame_id, .selector = selector };
+    try self.waitUntil(frame_id, timeout_ms, &match);
+    return match.found.?;
 }
+
+const SelectorMatch = struct {
+    session: *Session,
+    frame_id: u32,
+    selector: []const Selector.Selector,
+    found: ?*Node.Element = null,
+
+    fn met(self: *SelectorMatch) !bool {
+        const page = self.session.pendingOrLivePage(self.frame_id) orelse return error.FrameNotFound;
+        const frame = &page.frame;
+        self.found = try Selector.query(self.selector, frame.document.asNode(), frame);
+        return self.found != null;
+    }
+};
 
 pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms: u32) !void {
     const session = self.session;
-    const timer: std.Io.Timestamp = .now(lp.io, .boot);
 
     // Compile the script once and re-use the compiled form. A tick can create a
     // new context (an internal navigation), so we keep an unbound script (one
@@ -444,14 +465,17 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
     };
     defer compiled.deinit();
 
-    while (true) {
-        if (session.isCancelled()) {
-            return error.Cancelled;
-        }
+    var truthy: ScriptTruthy = .{ .session = session, .frame_id = frame_id, .compiled = &compiled };
+    return self.waitUntil(frame_id, timeout_ms, &truthy);
+}
 
-        const page = session.pendingOrLivePage(frame_id) orelse {
-            return error.FrameNotFound;
-        };
+const ScriptTruthy = struct {
+    session: *Session,
+    frame_id: u32,
+    compiled: *js.Script.Unbound.Global,
+
+    fn met(self: *ScriptTruthy) !bool {
+        const page = self.session.pendingOrLivePage(self.frame_id) orelse return error.FrameNotFound;
         const frame = &page.frame;
 
         var ls: js.Local.Scope = undefined;
@@ -462,32 +486,15 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const script = compiled.get(ls.local.isolate).bindToCurrentContext(&ls.local);
+        const script = self.compiled.get(ls.local.isolate).bindToCurrentContext(&ls.local);
         const value = script.run() catch |err| {
             const caught = try_catch.caughtOrError(frame.local_arena, err);
             log.err(.app, "wait script error", .{ .err = caught });
             return error.ScriptError;
         };
-
-        if (value.toBool()) {
-            return;
-        }
-
-        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-        if (elapsed >= timeout_ms) {
-            return error.Timeout;
-        }
-        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
-            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
-                }
-            },
-        }
+        return value.toBool();
     }
-}
+};
 
 fn firstConditionError(conditions: []const WaitCondition) !void {
     for (conditions) |condition| {
