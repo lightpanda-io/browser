@@ -870,7 +870,8 @@ fn receivedData(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !voi
         if (!self._recv_fragmented) {
             self._recv_buffer.clearRetainingCapacity();
         }
-        if (meta.len > self._http_client.max_response_size - self._recv_buffer.items.len) {
+        const message_len = std.math.add(usize, self._recv_buffer.items.len, meta.len) catch return error.MessageTooLarge;
+        if (message_len > self._http_client.max_response_size) {
             return error.MessageTooLarge;
         }
         try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
