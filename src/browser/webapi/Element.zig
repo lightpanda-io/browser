@@ -825,6 +825,13 @@ pub fn hasDisabledConcept(self: *const Element) bool {
     };
 }
 
+/// Chrome's IsDisabledFormControl: a disabled control, where trusted mouse
+/// events stop. A disabled <fieldset> disables its descendants but is not one
+/// itself.
+pub fn isDisabledFormControl(self: *const Element) bool {
+    return self.getTag() != .fieldset and self.isDisabled();
+}
+
 pub fn isDisabled(self: *const Element) bool {
     if (!self.hasDisabledConcept()) {
         return false;

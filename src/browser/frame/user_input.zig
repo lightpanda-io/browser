@@ -506,7 +506,7 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
 /// A disabled control gets the pointer events, contextmenu and auxclick, but
 /// no mouse events, click or focus, as in Chrome.
 fn mouseDown(frame: *Frame, target: *Element, g: Gesture) !void {
-    if (!target.isDisabled() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
+    if (!target.isDisabledFormControl() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
         focusForMouseDown(frame, target) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
     }
 }
@@ -525,7 +525,7 @@ fn releaseSequence(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
 /// `suppressed` drops the mouseup but keeps the click, as a cancelled
 /// pointerdown does.
 fn mouseUpAndClick(frame: *Frame, up_target: *Element, g: Gesture, suppressed: bool, click_target: ?*Element) !void {
-    if (!suppressed and !up_target.isDisabled()) {
+    if (!suppressed and !up_target.isDisabledFormControl()) {
         _ = try emitMouse(frame, up_target, "mouseup", g, g.click_count);
     }
 
@@ -536,7 +536,7 @@ fn mouseUpAndClick(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
     }
 
     if (g.button == mouse_button.main) {
-        if (click_el.isDisabled()) {
+        if (click_el.isDisabledFormControl()) {
             return;
         }
         _ = try emitPointer(frame, click_el, "click", g, g.click_count);
@@ -4907,4 +4907,46 @@ test "user_input: element click inside an iframe reports the point in each docum
         "events.length === 2 && events.every(e => e.trusted && e.tag === 'IFRAME' && e.x === {d} && e.y === {d})",
         .{ child_rect.x + iframe.getClientLeft() + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop() + rect.y + rect.height / 2 },
     ), null)).isTrue());
+}
+
+test "user_input: trusted mouse events stop at a disabled form control" {
+    const page = try testing.pageTest("input_click_disabled_path.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Expected chains recorded in Chrome 157 with a real mouse.
+    const pointer_bubbles = "pointerdown@inner pointerdown@btn pointerdown@document pointerdown@window mousedown@inner " ++
+        "pointerup@inner pointerup@btn pointerup@document pointerup@window mouseup@inner click@inner";
+    const full = "pointerdown@{0s} {1s}pointerdown@document pointerdown@window mousedown@{0s} {2s}mousedown@document mousedown@window " ++
+        "pointerup@{0s} {3s}pointerup@document pointerup@window mouseup@{0s} {4s}mouseup@document mouseup@window " ++
+        "click@{0s} {5s}click@document click@window";
+
+    for ([_]struct { []const u8, []const u8 }{
+        // Mouse events stop at the disabled button; pointer events don't.
+        .{ "inner", pointer_bubbles },
+        // A disabled fieldset is not a disabled control itself.
+        .{ "fsInner", try std.fmt.allocPrint(frame.local_arena, full, .{ "fsInner", "pointerdown@fs ", "mousedown@fs ", "pointerup@fs ", "mouseup@fs ", "click@fs " }) },
+        .{ "fs", try std.fmt.allocPrint(frame.local_arena, full, .{ "fs", "", "", "", "", "" }) },
+    }) |case| {
+        const id, const expected = case;
+        try triggerClick(frame, frame.document.getElementById(id).?, .{});
+        const actual = try (try ls.local.compileAndRun("take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+        try testing.expectString(expected, actual);
+    }
+
+    const inner = frame.document.getElementById("inner").?;
+    const point = gesturePoint(frame, inner);
+    for (1..3) |count| {
+        try triggerMousePress(frame, point.x, point.y, mouse_button.main, @intCast(count));
+        try triggerMouseRelease(frame, point.x, point.y, mouse_button.main, @intCast(count));
+    }
+    const dbl = try (try ls.local.compileAndRun("take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString(pointer_bubbles ++ " " ++ pointer_bubbles ++ " dblclick@inner", dbl);
+
+    // An untrusted click propagates as usual.
+    const synthetic = try (try ls.local.compileAndRun("inner.click(); take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString("click@inner click@btn click@document click@window", synthetic);
 }
