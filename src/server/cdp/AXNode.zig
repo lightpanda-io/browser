@@ -1647,7 +1647,12 @@ fn hidesSubtree(node: *DOMNode) bool {
     return isAriaHidden(elt) or hasInertAttribute(elt);
 }
 
+/// Like Chrome, aria-hidden doesn't apply to <html>, <body> or <option>.
 fn isAriaHidden(elt: *DOMNode.Element) bool {
+    switch (elt.getTag()) {
+        .html, .body, .option => return false,
+        else => {},
+    }
     const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
     return std.ascii.eqlIgnoreCase(aria_hidden, "true");
 }

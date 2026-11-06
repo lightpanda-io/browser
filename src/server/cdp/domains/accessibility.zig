@@ -638,6 +638,28 @@ test "cdp.accessibility: ignoredReasons names why a node is hidden" {
     }
 }
 
+test "cdp.accessibility: aria-hidden on body and option is ignored" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_aria_hidden_body.html" });
+
+    inline for (.{ .{ "btn", "button" }, .{ "opt", "option" } }, 0..) |case, i| {
+        const dom_id, const role = case;
+        try ctx.processMessage(.{ .id = 2 * i + 1, .method = "Runtime.evaluate", .params = .{
+            .expression = "document.getElementById('" ++ dom_id ++ "')",
+        } });
+        const object_id = try evaluatedObjectId(&ctx, 2 * i + 1);
+        try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{
+            .objectId = object_id,
+            .fetchRelatives = false,
+        } });
+        const node = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items[0].object;
+        try testing.expectEqual(role, axRole(node));
+        try testing.expectEqual(false, node.get("ignored").?.bool);
+    }
+}
+
 test "cdp.accessibility: ancestors with names computed from content" {
     var ctx = try testing.context();
     defer ctx.deinit();
