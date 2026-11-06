@@ -1890,7 +1890,7 @@ test "MCP - tree treats zero-filled backendNodeId as omitted" {
     try testing.expect(std.mem.find(u8, written, "\"isError\":true") == null);
 }
 
-test "MCP - tree delta answers against the session's last tree call" {
+test "MCP - tree delta answers against the session's last full tree" {
     const aa = testing.arena_allocator;
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -1903,7 +1903,7 @@ test "MCP - tree delta answers against the session's last tree call" {
     try testing.expect(std.mem.startsWith(u8, try testToolText(aa, out.written()), "[full tree]\n"));
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa, msg);
-    try testing.expectEqual("[unchanged since the last tree call]\n", try testToolText(aa, out.written()));
+    try testing.expectEqual("[unchanged since the last full tree]\n", try testToolText(aa, out.written()));
 }
 
 test "MCP - stale backendNodeId surfaces recovery guidance" {

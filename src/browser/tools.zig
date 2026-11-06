@@ -493,9 +493,9 @@ pub const PageToolsSeen = struct {
     }
 };
 
-/// The tree a model was last given, so a `delta` read can answer with what
-/// changed since. Every tree call replaces it, so a delta is always against
-/// the last tree the model saw.
+/// The last tree a model was given whole, so a `delta` read can answer with
+/// what changed since. Deltas leave it: each one tells everything since that
+/// tree, and the model never has to fold one onto another.
 pub const TreeSeen = struct {
     key: ?Key = null,
     text: std.ArrayList(u8) = .empty,
@@ -515,14 +515,12 @@ pub const TreeSeen = struct {
         self.text.deinit(allocator);
     }
 
-    fn delta(self: *const TreeSeen, arena: std.mem.Allocator, key: Key, text: []const u8) ![]const u8 {
-        if (self.key) |last| {
-            if (std.meta.eql(last, key)) {
-                if (std.mem.eql(u8, self.text.items, text)) return "[unchanged since the last tree call]\n";
-                if (try treeDelta(arena, self.text.items, text)) |d| return d;
-            }
-        }
-        return arena.print("[full tree]\n{s}", .{text});
+    /// Null when the model needs the full tree.
+    fn delta(self: *const TreeSeen, arena: std.mem.Allocator, key: Key, text: []const u8) !?[]const u8 {
+        const last = self.key orelse return null;
+        if (!std.meta.eql(last, key)) return null;
+        if (std.mem.eql(u8, self.text.items, text)) return "[unchanged since the last full tree]\n";
+        return treeDelta(arena, self.text.items, text);
     }
 
     fn store(self: *TreeSeen, allocator: std.mem.Allocator, key: Key, text: []const u8) error{OutOfMemory}!void {
@@ -1134,9 +1132,12 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     // A caller that keeps no baseline gets the first-call answer.
     const none: TreeSeen = .{};
     const last: *const TreeSeen = seen orelse &none;
-    const result = if (args.delta) last.delta(arena, key, text) catch return ToolError.OutOfMemory else text;
+    if (args.delta) {
+        if (last.delta(arena, key, text) catch return ToolError.OutOfMemory) |changes| return changes;
+    }
     if (seen) |s| try s.store(session.browser.app.allocator, key, text);
-    return result;
+    if (!args.delta) return text;
+    return arena.print("[full tree]\n{s}", .{text}) catch return ToolError.OutOfMemory;
 }
 
 /// A `tree` line, split up for `treeDelta`.
@@ -1193,7 +1194,7 @@ fn treeDelta(arena: std.mem.Allocator, old_text: []const u8, new_text: []const u
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
-    try w.writeAll("[changes since the last tree call: - removed with its subtree, ~ changed, + added]\n");
+    try w.writeAll("[changes since the last full tree: - removed with its subtree, ~ changed, + added]\n");
     var changes: usize = 0;
     for (old) |line| {
         if (new_index.contains(line.id)) continue;
@@ -2820,7 +2821,7 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
     try std.testing.expect(std.mem.find(u8, result.text, "'Hidden terms'") == null);
 }
 
-test "tools: tree delta returns what changed since the last tree call" {
+test "tools: tree delta returns what changed since the last full tree" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
@@ -2839,7 +2840,7 @@ test "tools: tree delta returns what changed since the last tree call" {
     const first = try call(aa, session, &registry, "tree", delta, opts);
     try std.testing.expectEqualStrings(try aa.print("[full tree]\n{s}", .{plain.text}), first.text);
     const again = try call(aa, session, &registry, "tree", delta, opts);
-    try std.testing.expectEqualStrings("[unchanged since the last tree call]\n", again.text);
+    try std.testing.expectEqualStrings("[unchanged since the last full tree]\n", again.text);
     // Without `delta`, keeping a baseline changes nothing in the output.
     try std.testing.expectEqualStrings(plain.text, (try call(aa, session, &registry, "tree", null, opts)).text);
 
@@ -2852,12 +2853,25 @@ test "tools: tree delta returns what changed since the last tree call" {
     const added = (try registry.register((try frame.document.querySelector(.wrap("button + button"), frame)).?.asNode())).id;
     const changed = try call(aa, session, &registry, "tree", delta, opts);
     try std.testing.expectEqualStrings(try aa.print(
-        \\[changes since the last tree call: - removed with its subtree, ~ changed, + added]
+        \\[changes since the last full tree: - removed with its subtree, ~ changed, + added]
         \\- {d}
         \\~ {d} [i] button 'Clicked'
         \\+ {d} [i] button 'Added' (after {d})
         \\
     , .{ hover, btn, added, btn }), changed.text);
+
+    // Still against the full tree: the next delta repeats the earlier changes.
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.getElementById('btn').textContent = 'Clicked twice'; 1"}
+    , .{}), .{ .source = .user });
+    const twice = try call(aa, session, &registry, "tree", delta, opts);
+    try std.testing.expectEqualStrings(try aa.print(
+        \\[changes since the last full tree: - removed with its subtree, ~ changed, + added]
+        \\- {d}
+        \\~ {d} [i] button 'Clicked twice'
+        \\+ {d} [i] button 'Added' (after {d})
+        \\
+    , .{ hover, btn, added, btn }), twice.text);
 
     // A navigation, or other options, start over with the full tree.
     const moved = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"delta\":true,\"url\":\"" ++ url ++ "?again\"}", .{}), opts);
@@ -2878,7 +2892,7 @@ test "tools: TreeSeen diffs only against the same document, root and options" {
     const aa = testing.arena_allocator;
     const key: TreeSeen.Key = .{ .frame_id = 1, .loader_id = 1, .root = 1, .max_depth = null, .max_bytes = null };
     try seen.store(allocator, key, "1 x\n");
-    try std.testing.expectEqualStrings("[unchanged since the last tree call]\n", try seen.delta(aa, key, "1 x\n"));
+    try std.testing.expectEqualStrings("[unchanged since the last full tree]\n", (try seen.delta(aa, key, "1 x\n")).?);
 
     // Same text, so only the key can tell.
     var others: [5]TreeSeen.Key = @splat(key);
@@ -2888,7 +2902,7 @@ test "tools: TreeSeen diffs only against the same document, root and options" {
     others[3].max_depth = 2;
     others[4].max_bytes = 100;
     for (others) |other| {
-        try std.testing.expectEqualStrings("[full tree]\n1 x\n", try seen.delta(aa, other, "1 x\n"));
+        try std.testing.expectEqual(null, try seen.delta(aa, other, "1 x\n"));
     }
 }
 
@@ -2924,7 +2938,7 @@ test "tools: treeDelta places added and moved nodes, and gives up on a reorder" 
         \\{s}
     , .{filler.written()});
     try std.testing.expectEqualStrings(
-        \\[changes since the last tree call: - removed with its subtree, ~ changed, + added]
+        \\[changes since the last full tree: - removed with its subtree, ~ changed, + added]
         \\- 2
         \\- 9
         \\+ 14 region 'Deals' (first in 5)
