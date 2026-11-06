@@ -255,7 +255,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .tree => .{
-            .description = "Semantic outline of the page as indented text: one node per line with its role, accessible name, value and backendNodeId, plus checked state and select options with the selected one marked. The default first read of an unfamiliar page; input and select values are already here, so no `nodeDetails` call is needed to read them. Pass `backendNodeId` to scope to a subtree and `maxDepth` to survey structure before going deeper. Read it again after any page-changing action, since the DOM it describes may have changed; use `nodeDetails` to turn a backendNodeId into a CSS selector for actions.",
+            .description = "Semantic outline of the page as indented text: one node per line with its role, accessible name, value and backendNodeId, plus checked state and select options with the selected one marked. The default first read of an unfamiliar page; input and select values are already here, so no `nodeDetails` call is needed to read them. Pass `backendNodeId` to scope to a subtree and `maxDepth` to survey structure before going deeper. Read it again after any page-changing action, since the DOM it describes may have changed; pass `delta` then to get only what changed since the last `tree` call. Use `nodeDetails` to turn a backendNodeId into a CSS selector for actions.",
             .summary = "Semantic DOM tree of the page",
             .input_schema = minify(
                 \\{
@@ -265,7 +265,8 @@ pub fn of(tool: Tool) Definition {
                 \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                 \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
                 \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." },
-                \\    "maxBytes": { "type": "integer", "description": "Optional cap on output size in bytes. Past it, lines are kept by priority (alerts, dialogs, invalid fields and the focused element, then controls and named nodes, then text; list entries breadth-first), and dropped lines are counted in a '[+N more @id]' marker. id is the backendNodeId of the node holding them, often a list item or list that isn't printed itself: call tree with backendNodeId=id to read them." }
+                \\    "maxBytes": { "type": "integer", "description": "Optional cap on output size in bytes. Past it, lines are kept by priority (alerts, dialogs, invalid fields and the focused element, then controls and named nodes, then text; list entries breadth-first), and dropped lines are counted in a '[+N more @id]' marker. id is the backendNodeId of the node holding them, often a list item or list that isn't printed itself: call tree with backendNodeId=id to read them." },
+                \\    "delta": { "type": "boolean", "description": "Optional. Return only what changed since the last tree call, by backendNodeId: '- id' removed with its subtree, '~ line' changed, '+ line' added; a new or moved line ends with its place, (after id) or (first in id), and the added lines under it follow indented. One line says when nothing changed. The first call, a navigation, another backendNodeId, maxDepth or maxBytes, or a change to most of the tree return the full tree under a '[full tree]' line." }
                 \\  }
                 \\}
             ),

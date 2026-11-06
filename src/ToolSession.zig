@@ -28,6 +28,7 @@ const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
 const NodeRegistry = @import("NodeRegistry.zig");
 const PageToolsSeen = @import("browser/tools.zig").PageToolsSeen;
+const TreeSeen = @import("browser/tools.zig").TreeSeen;
 
 const ToolSession = @This();
 
@@ -36,11 +37,15 @@ session: *Session,
 notification: *Notification,
 registry: NodeRegistry,
 page_tools_seen: PageToolsSeen = .{},
+tree_seen: TreeSeen = .{},
 
 /// Leaves the browser's isolate entered, like `Browser.init`; callers
 /// sharing one thread between several isolates park it with
 /// `exitIsolate` afterwards.
 pub fn init(self: *ToolSession, app: *App) !void {
+    // `self` comes in undefined, so its field defaults don't apply.
+    self.tree_seen = .{};
+
     self.notification = try .init(app.allocator);
     errdefer self.notification.deinit();
 
@@ -64,6 +69,7 @@ pub fn restartSession(self: *ToolSession) !void {
 /// The isolate must be current (`enterIsolate` if parked): Browser.deinit's
 /// Env.deinit exit has to balance against this context's isolate.
 pub fn deinit(self: *ToolSession) void {
+    self.tree_seen.deinit(self.browser.app.allocator);
     self.browser.deinit();
     self.registry.deinit();
     self.notification.deinit();
