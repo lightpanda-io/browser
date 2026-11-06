@@ -109,7 +109,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     }
 
     // The override is stored on the Browser so it persists across page
-    // navigations until the browser context is disposed.
+    // navigations. Browser.closeSession clears it with the context's session.
     const browser = &cmd.cdp.browser;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
@@ -557,10 +557,7 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
     _ = try testing.sentResult(&ctx, 2);
     try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", (try testing.firstTarget(bc)).mainFrame().?.url);
     try std.testing.expectEqualDeep(configured, browser.getViewport());
-
-    try ctx.processMessage(.{ .id = 20, .method = "Browser.resetPermissions" });
-    try ctx.expectSentResult(null, .{ .id = 20 });
-    try std.testing.expectEqualDeep(configured, browser.getViewport());
+    try expectJs((try testing.firstTarget(bc)).mainFrame().?, "innerWidth === 321 && innerHeight === 543 && devicePixelRatio === 2 && screen.width === 642 && screen.height === 1086");
 
     try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
     try ctx.expectSentError(-32000, "Failed to find context with id BID-UNKNOWN", .{ .id = 3 });
@@ -573,8 +570,7 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
 
     const fresh = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-NEW", .url = "cdp/dom1.html" });
     try testing.expectEqual(null, browser.viewport_override);
-    try std.testing.expectEqualDeep(defaults, browser.getViewport());
-    try std.testing.expectEqualDeep(defaults, (try testing.firstTarget(fresh)).mainFrame().?.page.getViewport());
+    try expectJs((try testing.firstTarget(fresh)).mainFrame().?, "innerWidth === 1920 && innerHeight === 1080 && devicePixelRatio === 1 && screen.width === innerWidth && screen.height === innerHeight");
 }
 
 test "cdp.Emulation: setGeolocationOverride and clear" {

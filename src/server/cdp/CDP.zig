@@ -530,7 +530,6 @@ pub const BrowserContext = struct {
         }
 
         browser.closeSession();
-        browser.setViewportOverride(null);
 
         self.attached_sessions.deinit(allocator);
 
