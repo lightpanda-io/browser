@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<head>
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  getComputedStyle().content: the declared value from the cascade, with its
+  strings serialized in double quotes. It doesn't inherit. @ant-design/cssinjs
+  reads which styles a static CSS file already ships from a probe element's
+  computed content, and injects the others itself.
+-->
+
+<style>
+  @layer base, top;
+
+  .probe { content: "a|b:1;c|d:2"; }
+  .single { content: 'it\'s "quoted"'; }
+  .escaped { content: "\2014 x\"y\\z"; }
+  .list { content: "a"   counter(item)   "b"; }
+  .both { content: "class"; }
+  .both.again { content: "compound"; }
+  #id-wins { content: "id"; }
+  .twice { content: "first"; }
+  .twice { content: "second"; }
+  @media (min-width: 1px) { .media { content: "media"; } }
+  .upper { CONTENT: "upper"; }
+  .pseudo::before, .pseudo::after { content: "pseudo"; }
+  .legacy:before { content: "legacy"; }
+  .mixed::before, .mixed { content: "mixed"; }
+  [data-x="::before"] { content: "attribute"; }
+  .a\:before { content: "escaped colon"; }
+  .hover:hover { content: "hover"; }
+  .initial { content: initial; }
+  .unset { content: UNSET; }
+  .revert { content: revert; }
+  .inherit { content: inherit; }
+
+  .imp-first { content: "first" !important; }
+  .imp-first { content: "later"; }
+  .imp-low.imp-low { content: "specific"; }
+  .imp-low { content: "important" !important; }
+  .imp-sheet { content: "sheet" !important; }
+
+  .adjacent { content: "a"counter(x); }
+  .none { content: none; }
+  .none-upper { content: NONE; }
+  .spaced-fn { content: COUNTER( item ); }
+  .commas { content: counters(a,"."); }
+  .quote { content: OPEN-QUOTE; }
+
+  @layer base { .rl-layer, .rl-unlayered, .rl-important { content: "base"; } }
+  @layer top { .rl-layer { content: revert-layer; } }
+  .rl-unlayered { content: revert-layer; }
+  .rl-inline { content: "unlayered"; }
+  @layer top { .rl-nothing { content: REVERT-LAYER; } }
+  @layer top { .rl-important { content: revert-layer !important; } }
+  .rl-important { content: "unlayered"; }
+</style>
+
+<div id=plain></div>
+<div id=probe class=probe><span id=child></span></div>
+<div id=single class=single></div>
+<div id=escaped class=escaped></div>
+<div id=list class=list></div>
+<div id=compound class="both again"></div>
+<div id=id-wins class="both again"></div>
+<div id=twice class=twice></div>
+<div id=media class=media></div>
+<div id=upper class=upper></div>
+<div id=pseudo class=pseudo></div>
+<div id=legacy class=legacy></div>
+<div id=mixed class=mixed></div>
+<div id=attribute data-x="::before"></div>
+<div id=escaped-colon class="a:before"></div>
+<div id=hover class=hover></div>
+<div id=inline class=probe style="content: 'inline'"></div>
+<div id=initial class="probe initial"></div>
+<div id=unset class="probe unset"></div>
+<div id=revert class="probe revert"></div>
+<div class=probe>
+  <span id=inherit class=inherit><span id=inherit-twice class=inherit></span></span>
+  <span id=inherit-inline style="content: inherit"></span>
+</div>
+<div><span id=inherit-nothing class=inherit></span></div>
+<div id=imp-first class=imp-first></div>
+<div id=imp-low class=imp-low></div>
+<div id=imp-sheet class=imp-sheet style="content: 'inline'"></div>
+<div id=imp-inline class=imp-sheet style="content: 'inline' !important"></div>
+<div id=adjacent class=adjacent></div>
+<div id=none class=none></div>
+<div id=none-upper class=none-upper></div>
+<div id=spaced-fn class=spaced-fn></div>
+<div id=commas class=commas></div>
+<div id=quote class=quote></div>
+<div id=rl-layer class=rl-layer></div>
+<div id=rl-unlayered class=rl-unlayered></div>
+<div id=rl-inline class=rl-inline style="content: revert-layer"></div>
+<div id=rl-nothing class=rl-nothing></div>
+<div id=rl-important class=rl-important></div>
+
+<script id=cascade>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('normal', content('plain'));
+  testing.expectEqual('"a|b:1;c|d:2"', content('probe'));
+  testing.expectEqual('"it\'s \\"quoted\\""', content('single'));
+  testing.expectEqual('"\u2014x\\"y\\\\z"', content('escaped'));
+  testing.expectEqual('"a" counter(item) "b"', content('list'));
+
+  testing.expectEqual('"compound"', content('compound'));
+  testing.expectEqual('"id"', content('id-wins'));
+  testing.expectEqual('"second"', content('twice'));
+  testing.expectEqual('"media"', content('media'));
+  testing.expectEqual('"upper"', content('upper'));
+  testing.expectEqual('"inline"', content('inline'));
+  testing.expectEqual('"inline"', getComputedStyle($('#inline')).getPropertyValue('content'));
+
+  // Rules for a pseudo-element or an interaction state don't reach the element.
+  testing.expectEqual('normal', content('pseudo'));
+  testing.expectEqual('normal', content('legacy'));
+  testing.expectEqual('normal', content('hover'));
+  // A selector list's other selectors still do.
+  testing.expectEqual('"mixed"', content('mixed'));
+  testing.expectEqual('"attribute"', content('attribute'));
+  testing.expectEqual('"escaped colon"', content('escaped-colon'));
+
+  testing.expectEqual('normal', content('child'));
+}
+</script>
+
+<script id=importance>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('"first"', content('imp-first'));
+  testing.expectEqual('"important"', content('imp-low'));
+  // An important rule beats a normal inline declaration, not an important one.
+  testing.expectEqual('"sheet"', content('imp-sheet'));
+  testing.expectEqual('"inline"', content('imp-inline'));
+}
+</script>
+
+<script id=serialization>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('"a" counter(x)', content('adjacent'));
+  // On an element, none computes to normal.
+  testing.expectEqual('normal', content('none'));
+  testing.expectEqual('normal', content('none-upper'));
+  testing.expectEqual('counter(item)', content('spaced-fn'));
+  testing.expectEqual('counters(a, ".")', content('commas'));
+  testing.expectEqual('open-quote', content('quote'));
+}
+</script>
+
+<script id=cssWideKeywords>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  testing.expectEqual('normal', content('initial'));
+  testing.expectEqual('normal', content('unset'));
+  // No UA style sets content on an element.
+  testing.expectEqual('normal', content('revert'));
+
+  // Only an explicit inherit reads the parent's.
+  testing.diverges("Chrome ignores content: inherit, where Firefox takes the parent's", () => {
+    testing.expectEqual('"a|b:1;c|d:2"', content('inherit'));
+    testing.expectEqual('"a|b:1;c|d:2"', content('inherit-twice'));
+    testing.expectEqual('"a|b:1;c|d:2"', content('inherit-inline'));
+  });
+  testing.expectEqual('normal', content('inherit-nothing'));
+}
+</script>
+
+<script id=revertLayer>
+{
+  const content = (id) => getComputedStyle($('#' + id)).content;
+
+  // The cascade without the winner's layer, nor the ones after it.
+  testing.expectEqual('"base"', content('rl-layer'));
+  testing.expectEqual('"base"', content('rl-unlayered'));
+  // The style attribute comes after the unlayered rules.
+  testing.expectEqual('"unlayered"', content('rl-inline'));
+  testing.expectEqual('normal', content('rl-nothing'));
+  // An important one drops the later layers' normal declarations too.
+  testing.expectEqual('"base"', content('rl-important'));
+}
+</script>
+
+<script id=probeElement>
+{
+  const probe = document.createElement('div');
+  probe.className = 'probe';
+  document.body.appendChild(probe);
+  testing.expectEqual('"a|b:1;c|d:2"', getComputedStyle(probe).content);
+  probe.remove();
+}
+</script>
+
+<script id=insertedRule>
+{
+  const sheet = document.styleSheets[0];
+  sheet.insertRule('.inserted { content: "inserted" }', sheet.cssRules.length);
+  const el = document.createElement('div');
+  el.className = 'inserted';
+  document.body.appendChild(el);
+  testing.expectEqual('"inserted"', getComputedStyle(el).content);
+  testing.expectEqual('"a|b:1;c|d:2"', getComputedStyle($('#probe')).content);
+}
+</script>

@@ -23,6 +23,8 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const color = @import("../../color.zig");
 const CssParser = @import("../../css/Parser.zig");
+const Tokenizer = @import("../../css/Tokenizer.zig");
+const escape = @import("../../css/escape.zig");
 const properties = @import("../../css/properties.zig");
 const StyleManager = @import("../../StyleManager.zig");
 
@@ -99,6 +101,67 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     return value;
 }
 
+/// `content` serialized as Chrome computes it: strings in double quotes, one
+/// space between components and none inside parentheses, keywords and
+/// function names in lowercase.
+fn computedContent(value: []const u8, frame: *Frame) []const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    writeComputedContent(&buf.writer, value) catch return value;
+    return buf.written();
+}
+
+fn writeComputedContent(writer: *std.Io.Writer, value: []const u8) !void {
+    var tokenizer: Tokenizer = .{ .input = value };
+    var start: usize = 0;
+    var depth: usize = 0;
+    var spaced = false;
+    while (tokenizer.next()) |token| : (start = tokenizer.position) {
+        switch (token) {
+            .white_space, .comment => continue,
+            .bad_string, .bad_url => return error.Invalid,
+            .close_parenthesis => {
+                depth -|= 1;
+                try writer.writeByte(')');
+                spaced = true;
+                continue;
+            },
+            .comma => {
+                try writer.writeByte(',');
+                spaced = true;
+                continue;
+            },
+            else => {},
+        }
+        if (spaced) {
+            try writer.writeByte(' ');
+        }
+        spaced = true;
+        switch (token) {
+            .string => |raw| try escape.writeString(writer, raw),
+            .function => |name| {
+                try writeLowercase(writer, name);
+                try writer.writeByte('(');
+                depth += 1;
+                spaced = false;
+            },
+            .parenthesis_block => {
+                try writer.writeByte('(');
+                depth += 1;
+                spaced = false;
+            },
+            // A counter's name keeps its case.
+            .ident => |name| if (depth == 0) try writeLowercase(writer, name) else try writer.writeAll(name),
+            else => try writer.writeAll(tokenizer.input[start..tokenizer.position]),
+        }
+    }
+}
+
+fn writeLowercase(writer: *std.Io.Writer, text: []const u8) !void {
+    for (text) |c| {
+        try writer.writeByte(std.ascii.toLower(c));
+    }
+}
+
 fn computedColor(value: []const u8, frame: *Frame) []const u8 {
     const parsed = switch (color.parse(value)) {
         .value => |v| v,
@@ -161,6 +224,10 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                 return style_manager.customPropertyValue(element, wrapped) orelse "";
             }
 
+            if (wrapped.eql(comptime .wrap("content"))) {
+                return cascadedContent(style_manager, element, owner, frame);
+            }
+
             // Resolved in pixels, as the synthetic text metrics measure it.
             if (wrapped.eql(comptime .wrap("font-size"))) {
                 return frame.local_arena.print("{d}px", .{style_manager.computedFontSize(element)}) catch "16px";
@@ -215,6 +282,25 @@ const CssWideKeyword = enum {
         return map.get(std.ascii.lowerString(&buf, value));
     }
 };
+
+/// The computed `content`. It doesn't inherit, so only an explicit `inherit`
+/// reads the parent's. No UA style sets it on an element, so `revert` reads
+/// like `unset`: the initial `normal`.
+fn cascadedContent(style_manager: *StyleManager, element: *Element, owner: *Frame, frame: *Frame) []const u8 {
+    var current = element;
+    while (true) {
+        const value = style_manager.contentValue(current) orelse return "normal";
+        // On an element, `none` computes to `normal`.
+        if (std.ascii.eqlIgnoreCase(value, "none")) {
+            return "normal";
+        }
+        const keyword = CssWideKeyword.parse(value) orelse return computedContent(value, frame);
+        switch (keyword) {
+            .initial, .unset, .revert => return "normal",
+            .inherit => current = current.asNode().flatTreeParentElement(owner) orelse return "normal",
+        }
+    }
+}
 
 /// The computed value inline styles
 fn inlineCascadedValue(style_manager: *StyleManager, element: *Element, name: String, frame: *Frame) []const u8 {
@@ -1443,6 +1529,10 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: CSSStyleDeclaration computed transform" {
     try testing.htmlRunner("css/computed_transform.html", .{});
+}
+
+test "WebApi: CSSStyleDeclaration computed content" {
+    try testing.htmlRunner("css/computed_content.html", .{});
 }
 
 test "WebApi: CSSStyleDeclaration computed inheritance" {
