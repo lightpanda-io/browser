@@ -915,6 +915,12 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             return 0;
         }
 
+        // When the client offered subprotocols, the server has to pick one of them.
+        if (self._subprotocols.len != 0 and self._protocol.len == 0) {
+            log.warn(.websocket, "no subprotocol in response", .{});
+            return 0;
+        }
+
         log.info(.websocket, "connected", .{ .url = self._url });
 
         // readyState flips to .open and onopen fires at delivery
