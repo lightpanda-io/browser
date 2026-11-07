@@ -121,6 +121,8 @@ pub const Entry = struct {
 allocator: std.mem.Allocator,
 map: ClockCache(Entry),
 mutex: std.Io.Mutex = .init,
+/// --cors-wildcard-authorization: a cached "*" grant also covers Authorization (Chromium behavior).
+wildcard_authorization: bool = false,
 
 pub fn init(allocator: std.mem.Allocator, capacity: usize) CorsStore {
     return .{ .allocator = allocator, .map = .init(allocator, capacity) };
@@ -151,13 +153,13 @@ fn getWithExpiration(self: *CorsStore, cache_key: []const u8) ?*Entry {
     return entry;
 }
 
-fn matches(entry: Entry, method: http.Method, authored_headers: []const []const u8) bool {
+fn matches(entry: Entry, method: http.Method, authored_headers: []const []const u8, wildcard_authorization: bool) bool {
     if (!isSafelistedMethod(method) and !entry.methods_wildcard and !entry.methods.contains(method)) {
         return false;
     }
     for (authored_headers) |name| {
         const is_authorization = std.ascii.eqlIgnoreCase(name, "authorization");
-        if (entry.headers_wildcard and !is_authorization) continue;
+        if (entry.headers_wildcard and (wildcard_authorization or !is_authorization)) continue;
         var found = false;
         for (entry.headers) |allowed| {
             if (std.ascii.eqlIgnoreCase(allowed, name)) {
@@ -184,7 +186,7 @@ pub fn coversRequest(
     defer self.mutex.unlock(lp.io);
 
     if (self.getWithExpiration(primary_key)) |entry| {
-        if (matches(entry.*, method, authored_headers)) return true;
+        if (matches(entry.*, method, authored_headers, self.wildcard_authorization)) return true;
     }
 
     if (key.credentials) return false;
@@ -193,7 +195,7 @@ pub fn coversRequest(
     defer allocator.free(cred_key);
 
     const entry = self.getWithExpiration(cred_key) orelse return false;
-    return matches(entry.*, method, authored_headers);
+    return matches(entry.*, method, authored_headers, self.wildcard_authorization);
 }
 
 /// Insert or merge a CORS grant for (origin, target). `entry` is not
@@ -416,4 +418,23 @@ test "CorsStore: covers never lets a wildcard cover Authorization" {
 
     try testing.expect(!try store.coversRequest(allocator, key, .GET, &.{"authorization"}));
     try testing.expect(try store.coversRequest(allocator, key, .GET, &.{"x-anything"}));
+}
+
+test "CorsStore: wildcard_authorization lets a wildcard cover Authorization" {
+    const allocator = testing.allocator;
+    var store = CorsStore.init(allocator, 10);
+    defer store.deinit();
+    store.wildcard_authorization = true;
+
+    const key = Key{ .origin = "https://a.example", .target = "https://api.example", .credentials = false };
+    try store.put(key, .{
+        .methods_wildcard = true,
+        .methods = .empty,
+        .headers_wildcard = true,
+        .headers = &.{},
+        .expires_at = std.math.maxInt(u64),
+    });
+
+    try testing.expect(try store.coversRequest(allocator, key, .GET, &.{"authorization"}));
+    try testing.expect(try store.coversRequest(allocator, key, .GET, &.{ "authorization", "x-anything" }));
 }
