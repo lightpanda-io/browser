@@ -1575,32 +1575,18 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
 fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
     promise.markAsHandled();
 
+    const PromiseSettled = struct {
+        promise: lp.js.Promise,
+        pub fn met(self: @This()) !bool {
+            return self.promise.state() != .pending;
+        }
+    };
     var runner = page._session.runner(.{});
-    const timer: std.Io.Timestamp = .now(lp.io, .boot);
-    while (promise.state() == .pending) {
-        // The tick doesn't poll the cancel hook; the Runner wait* loops check it too.
-        if (page._session.isCancelled()) {
-            return .{ .text = "promise: cancelled", .is_error = true };
-        }
-        const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-        if (elapsed_ms >= eval_promise_timeout_ms) {
-            return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
-        }
-        const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
-        const tick = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
-            error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
-            else => return .{ .text = "promise: tick failed", .is_error = true },
-        };
-        if (promise.state() != .pending) break;
-        // Idle or between timers: sleep, or a promise nothing settles spins the CPU.
-        const sleep_ms = switch (tick) {
-            .done => budget,
-            .ok => |next_ms| @min(next_ms, budget),
-        };
-        if (sleep_ms > 0) {
-            lp.io.sleep(.fromMilliseconds(sleep_ms), .awake) catch {};
-        }
-    }
+    runner.waitUntil(page._frame_id, eval_promise_timeout_ms, PromiseSettled{ .promise = promise }) catch |err| return switch (err) {
+        error.Cancelled => .{ .text = "promise: cancelled", .is_error = true },
+        error.Timeout => .{ .text = "promise: timed out waiting for resolution", .is_error = true },
+        else => .{ .text = "promise: tick failed", .is_error = true },
+    };
     return null;
 }
 
