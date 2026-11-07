@@ -46,8 +46,6 @@ const Allocator = std.mem.Allocator;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
-const GC_HINT_FLOOR = 1 * 1024 * 1024;
-
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
         JsApi.Meta.class_id = i;
@@ -132,6 +130,8 @@ heap_limit_protected: bool = false,
 // Message for the next TypeError the bridge builds. Set by local.typeError.
 // Think of it as our own little global errno. How cute.
 error_message: ?[]const u8 = null,
+
+gc_hint_floor: ?u64,
 
 pub const InitOpts = struct {
     with_inspector: bool = false,
@@ -240,6 +240,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .private_symbols = private_symbols,
         .disabled_api_names = disabled_api_names,
         .microtask_queues_are_running = false,
+        .gc_hint_floor = app.config.v8GCHintFloor(),
         .eternal_function_templates = eternal_function_templates,
     };
 }
@@ -261,7 +262,7 @@ pub fn deinit(self: *Env) void {
     const allocator = app.allocator;
 
     if (self.inspector) |i| {
-        i.deinit(allocator);
+        i.deinit();
     }
 
     allocator.free(self.templates);
@@ -704,8 +705,9 @@ pub fn runIdleTasks(self: *const Env) void {
 // any contexts which have been freed.
 // Skips if there's little to reclaim
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
+    const hint_floor = self.gc_hint_floor orelse return;
     const stats = self.isolate.getHeapStatistics();
-    if (stats.used_heap_size + stats.external_memory < GC_HINT_FLOOR) {
+    if (stats.used_heap_size + stats.external_memory < hint_floor) {
         return;
     }
     var handle_scope: js.HandleScope = undefined;

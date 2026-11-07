@@ -225,8 +225,8 @@
 
 <script id=cascade_replaceSync_matching>
 {
-  // The _css_rules path also fires through replaceSync, not just insertRule.
-  $('#dyn2').sheet.replaceSync(
+  // An at-rule added through the _css_rules path reaches the cascade.
+  $('#dyn2').sheet.insertRule(
     '@media (min-width: 600px) { #dyn2-target { display: none; } }'
   );
   testing.expectFalse($('#dyn2-target').checkVisibility());
@@ -274,7 +274,7 @@
   for (let i = 0; i < 50; i++) css += '@media screen { ';
   css += '#deep-nest-target { display: none; }';
   for (let i = 0; i < 50; i++) css += ' }';
-  $('#deep-nest-style').sheet.replaceSync(css);
+  $('#deep-nest-style').sheet.insertRule(css);
   testing.expectTrue($('#deep-nest-target').checkVisibility());
 }
 </script>

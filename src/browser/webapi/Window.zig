@@ -562,6 +562,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 // Runtime.exceptionThrown.
 pub fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, kind: @FieldType(Notification.ExceptionThrown, "kind"), frame: *Frame) void {
     frame._session.notification.dispatch(.exception_thrown, &.{
+        .frame_id = frame._frame_id,
         .timestamp = lp.datetime.timestamp(.boot),
         .value = err,
         .location = location,
@@ -714,9 +715,11 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?
     }
 
     const target_frame = self._frame;
-    const incumbent = target_frame.js.getIncumbent();
-    const source_window = incumbent.window;
-    const target_origin = try parseTargetOrigin(target_origin_arg, incumbent, target_frame, frame);
+    // If the sender's realm gone, like Chrome, the message is still delivered
+    // but without a source.
+    const maybe_incumbent = target_frame.js.getIncumbent();
+    const source_window: ?*Window = if (maybe_incumbent) |sender| sender.window else null;
+    const target_origin = try parseTargetOrigin(target_origin_arg, maybe_incumbent, target_frame, frame);
 
     const ports = try MessagePort.transferList(transfer_arg);
 
@@ -729,8 +732,8 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?
     const cloned = try MessagePort.cloneMessage(message, ports, &target_frame.js.execution);
     errdefer cloned.release();
 
-    // Origin should be the source window's origin (where the message came from)
-    const origin = try source_window._location.getOrigin(&frame.js.execution);
+    // Origin should be the source window's origin (where the message came from).
+    const origin = if (source_window) |source| try source._location.getOrigin(&frame.js.execution) else "null";
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
         .arena = arena,
@@ -762,12 +765,15 @@ const TargetOrigin = union(enum) {
     origin: ?[]const u8,
 };
 
-fn parseTargetOrigin(value: ?js.Value, incumbent: *const Frame, target: *const Frame, frame: *Frame) !TargetOrigin {
+fn parseTargetOrigin(value: ?js.Value, maybe_incumbent: ?*const Frame, target: *const Frame, frame: *Frame) !TargetOrigin {
     const target_origin = if (value) |v| try v.toStringSlice() else "/";
     if (std.mem.eql(u8, target_origin, "*")) {
         return .any;
     }
     if (std.mem.eql(u8, target_origin, "/")) {
+        // The sender's realm is gone and its origin with it, so "/" can't
+        // match anything.
+        const incumbent = maybe_incumbent orelse return .{ .origin = null };
         if (incumbent.origin == null and incumbent == target) {
             // An opaque origin is only same-origin with itself. We represent
             // every opaque origin as null (can't tell them apart), so the only
@@ -1032,7 +1038,7 @@ pub const Access = union(enum) {
 
 const PostMessageCallback = struct {
     frame: *Frame,
-    source: *Window,
+    source: ?*Window,
     arena: *lp.Arena,
     origin: []const u8,
     target_origin: TargetOrigin,
@@ -1087,7 +1093,7 @@ const PostMessageCallback = struct {
             if (frame._event_manager.hasDirectListeners(event_target, "messageerror")) {
                 const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                     .origin = self.origin,
-                    .source = .{ .window = self.source },
+                    .source = if (self.source) |source| .{ .window = source } else null,
                     .ports = self.message.ports,
                     .bubbles = false,
                     .cancelable = false,
@@ -1107,7 +1113,7 @@ const PostMessageCallback = struct {
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = .{ .value = data },
             .origin = self.origin,
-            .source = .{ .window = self.source },
+            .source = if (self.source) |source| .{ .window = source } else null,
             .ports = self.message.ports,
             .bubbles = false,
             .cancelable = false,
@@ -1333,6 +1339,7 @@ pub const JsApi = struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "alert",
@@ -1346,6 +1353,7 @@ pub const JsApi = struct {
         fn confirm(_: *const Window, message: ?[]const u8, frame: *Frame) bool {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "confirm",
@@ -1358,6 +1366,7 @@ pub const JsApi = struct {
         fn prompt(_: *const Window, message: ?[]const u8, default_text: ?[]const u8, frame: *Frame) ?[]const u8 {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "prompt",

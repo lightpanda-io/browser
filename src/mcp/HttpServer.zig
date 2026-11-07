@@ -53,21 +53,24 @@ const max_request_bytes = 16 * 1024 * 1024;
 /// One unit of work handed from a connection thread to a session's worker.
 /// Allocated on the connection thread's stack — safe because that thread
 /// waits for `finished` for the whole time the worker reads `body` and
-/// writes `out`.
+/// pushes messages.
 const Job = struct {
     allocator: std.mem.Allocator,
     body: []const u8,
-    /// Where the worker writes the response. The connection thread owns the
-    /// backing buffer and reads it back once `finished` is set.
-    out: *std.Io.Writer,
-    /// The client accepts `text/event-stream`.
+    /// The client accepts `text/event-stream`; notifications are dropped
+    /// otherwise.
     streams: bool,
     next: ?*Job = null,
 
     mutex: std.Io.Mutex = .init,
     cond: std.Io.Condition = .init,
-    /// Notifications not yet sent, one per line. Guarded by `mutex`.
+    /// Messages not yet sent, one per line; the response, if any, is last.
+    /// Guarded by `mutex`.
     pending: std.ArrayList(u8) = .empty,
+    /// A notification was pushed. Guarded by `mutex`.
+    notified: bool = false,
+    /// The response was pushed; nothing follows it. Guarded by `mutex`.
+    responded: bool = false,
     /// Guarded by `mutex`.
     finished: bool = false,
     /// Guarded by `mutex`.
@@ -77,19 +80,23 @@ const Job = struct {
         self.pending.deinit(self.allocator);
     }
 
-    fn sink(self: *Job) Transport.Notify {
-        if (!self.streams) return .drop;
-        return .{ .sink = .{ .context = self, .push = push } };
+    fn sink(self: *Job) Transport.Sink {
+        return .{ .context = self, .push = push };
     }
 
-    fn push(context: *anyopaque, message: []const u8) void {
+    fn push(context: *anyopaque, kind: Transport.Kind, message: []const u8) error{WriteFailed}!void {
         const self: *Job = @ptrCast(@alignCast(context));
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-        if (self.hung_up) return;
-        self.pending.ensureUnusedCapacity(self.allocator, message.len + 1) catch return;
+        if (self.hung_up or self.responded) return;
+        if (kind == .notification and !self.streams) return;
+        self.pending.ensureUnusedCapacity(self.allocator, message.len + 1) catch return error.WriteFailed;
         self.pending.appendSliceAssumeCapacity(message);
         self.pending.appendAssumeCapacity('\n');
+        switch (kind) {
+            .notification => self.notified = true,
+            .response => self.responded = true,
+        }
         self.cond.signal(lp.io);
     }
 
@@ -107,14 +114,20 @@ const Job = struct {
         self.hung_up = true;
     }
 
-    /// Move pending notifications into the empty `into`, waiting up to
-    /// `timeout_ms` for one. True once finished, with every one moved.
+    /// Move pending messages into the empty `into`, waiting up to
+    /// `timeout_ms` for one. True once finished, with every one moved. The
+    /// response only moves with `finished`, so it is always in the last batch.
     fn wait(self: *Job, into: *std.ArrayList(u8), timeout_ms: u64) bool {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
         if (self.pending.items.len == 0 and !self.finished) {
-            lp.timedWait(&self.cond, &self.mutex, timeout_ms * ns_per_ms) catch {};
+            self.cond.waitTimeout(lp.io, &self.mutex, .{ .duration = .{
+                .raw = .fromNanoseconds(timeout_ms * ns_per_ms),
+                .clock = .awake,
+            } }) catch {};
         }
+        // `finish` is the worker's next step after the response.
+        while (self.responded and !self.finished) self.cond.waitUncancelable(lp.io, &self.mutex);
         std.mem.swap(std.ArrayList(u8), &self.pending, into);
         return self.finished;
     }
@@ -485,13 +498,10 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
         self.allocator.destroy(worker);
     }
 
-    var placeholder: std.Io.Writer.Allocating = .init(self.allocator);
-    defer placeholder.deinit();
-
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
-    const server: ?*Server = Server.initSession(self.allocator, self.app, &placeholder.writer, worker.id) catch |err| blk: {
+    const server: ?*Server = Server.initSession(self.allocator, self.app, null, worker.id) catch |err| blk: {
         log.err(.mcp, "mcp session init", .{ .err = err, .session = worker.id });
         // Calls already queued get an error reply; no new ones arrive.
         self.workers_mutex.lockUncancelable(lp.io);
@@ -540,11 +550,11 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
             reject(arena.allocator(), job, "session failed to start");
             continue;
         };
-        s.transport.bind(job.out, job.sink());
+        s.transport.sink = job.sink();
         router.handleMessage(s, arena.allocator(), job.body) catch |err| {
             log.err(.mcp, "mcp handle", .{ .err = err });
         };
-        s.transport.notify = .drop;
+        s.transport.sink = null;
         self.publishUrl(worker, if (s.active_session.session.currentFrame()) |frame| frame.url else null);
         idle_since = lp.datetime.milliTimestamp(.boot);
         wait_ms = 0;
@@ -557,7 +567,7 @@ fn reject(arena: std.mem.Allocator, job: *Job, message: []const u8) void {
     const peek = std.json.parseFromSliceLeaky(Peek, arena, job.body, .{ .ignore_unknown_fields = true }) catch Peek{};
     // A notification (no id) gets no reply.
     const id = peek.id orelse return;
-    var transport: Transport = .init(arena, job.out);
+    var transport: Transport = .init(arena, job.sink());
     defer transport.deinit();
     transport.sendError(id, .InternalError, message) catch {};
 }
@@ -596,19 +606,11 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    // Reused across requests (served serially), not reallocated per request.
-    var out: std.Io.Writer.Allocating = .init(self.allocator);
-    defer out.deinit();
 
     while (true) {
         var request = http_server.receiveHead() catch return; // peer closed, bad head, or shutdown
         _ = arena.reset(.retain_capacity);
-        out.clearRetainingCapacity();
-        self.serve(&out.writer, arena.allocator(), &request) catch return;
-        if (out.writer.buffer.len > Transport.large_response) {
-            out.deinit();
-            out = .init(self.allocator);
-        }
+        self.serve(arena.allocator(), &request) catch return;
         if (!request.head.keep_alive or http_server.reader.state == .closing) return;
     }
 }
@@ -618,7 +620,7 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
 /// or, once the call sends a notification or outlives `heartbeat_ms`, an
 /// event stream; DELETE closes the session named by `Mcp-Session-Id`.
 /// std.http.Server owns the framing.
-fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, request: *std.http.Server.Request) !void {
+fn serve(self: *HttpServer, arena: std.mem.Allocator, request: *std.http.Server.Request) !void {
     const method = request.head.method;
     if (method != .POST and method != .DELETE) {
         return request.respond("", .{ .status = .method_not_allowed, .keep_alive = false });
@@ -661,7 +663,7 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         return request.respond("", .{ .status = .accepted, .keep_alive = keep_alive });
     }
 
-    var job: Job = .{ .allocator = self.allocator, .body = body, .out = out, .streams = head.event_stream };
+    var job: Job = .{ .allocator = self.allocator, .body = body, .streams = head.event_stream };
     defer job.deinit();
     const routed = self.submit(arena, target_id, &job) catch |err| switch (err) {
         error.SessionEnded => return request.respond("Session ended, start a new one\n", .{ .status = .not_found, .keep_alive = keep_alive }),
@@ -679,6 +681,7 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         events.clearRetainingCapacity();
         const finished = job.wait(&events, self.heartbeat_ms);
         // A call that ends with nothing to stream still gets a plain reply.
+        if (finished and stream.body == null and !job.notified) break;
         if (job.streams and !hung_up and (events.items.len > 0 or !finished)) {
             stream.send(events.items) catch {
                 hung_up = true;
@@ -688,9 +691,9 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         if (finished) break;
     }
     if (hung_up) return error.WriteFailed;
+    if (stream.body) |*events_body| return events_body.end();
 
-    const resp = out.buffered();
-    if (stream.body != null) return stream.end(resp);
+    const resp = std.mem.trimEnd(u8, events.items, "\n");
     const headers = [_]std.http.Header{
         .{ .name = "content-type", .value = "application/json" },
         .{ .name = "mcp-session-id", .value = routed },
@@ -723,14 +726,6 @@ const EventStream = struct {
         }
         try body.writer.flush();
         try body.flush();
-    }
-
-    /// Send the response, if the call has one, and close the stream.
-    fn end(self: *EventStream, response: []const u8) !void {
-        const body = &self.body.?;
-        const message = std.mem.trimEnd(u8, response, "\n");
-        if (message.len > 0) try writeEvent(&body.writer, message);
-        try body.end();
     }
 
     fn open(self: *EventStream) !*std.http.BodyWriter {

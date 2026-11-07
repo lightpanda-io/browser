@@ -220,22 +220,35 @@ fn mergeTransformed(bounds: *PathData.Bounds, rect: PathData.Bounds, matrix: Pat
 }
 
 /// Composes `transform` attributes from the element up to, excluding, its
-/// nearest <svg>. Null when the element isn't in a document.
-fn getCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+/// nearest <svg>. Identity when the element isn't in a document, like
+/// Chrome and Firefox.
+fn getCTM(self: *Graphics, frame: *Frame) !*DOMMatrix {
     return currentTransformMatrix(self, .viewport, frame);
 }
 
 /// Like getCTM through every enclosing <svg>, offset by where the outermost
 /// one sits on the page. Nested viewport x/y are not applied.
-fn getScreenCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+fn getScreenCTM(self: *Graphics, frame: *Frame) !*DOMMatrix {
     return currentTransformMatrix(self, .screen, frame);
 }
 
-fn currentTransformMatrix(self: *Graphics, space: enum { viewport, screen }, frame: *Frame) !?*DOMMatrix {
-    if (!self.asNode().isConnected()) {
-        return null;
+const Space = enum { viewport, screen };
+
+fn currentTransformMatrix(self: *Graphics, space: Space, frame: *Frame) !*DOMMatrix {
+    var matrix: PathData.Matrix = .{};
+    if (self.asNode().isConnected()) {
+        matrix = connectedTransformMatrix(self, space, frame);
     }
 
+    return try DOMMatrix.create(.{
+        matrix.a, matrix.b, 0, 0,
+        matrix.c, matrix.d, 0, 0,
+        0,        0,        1, 0,
+        matrix.e, matrix.f, 0, 1,
+    }, true, frame.page);
+}
+
+fn connectedTransformMatrix(self: *Graphics, space: Space, frame: *Frame) PathData.Matrix {
     var matrix = transformMatrix(self.asElement());
     var outermost: ?*Element = if (self._type == .svg) self.asElement() else null;
     var node = self.asNode().parentNode();
@@ -256,13 +269,7 @@ fn currentTransformMatrix(self: *Graphics, space: enum { viewport, screen }, fra
             matrix = (PathData.Matrix{ .e = rect.x, .f = rect.y }).multiply(matrix);
         }
     }
-
-    return try DOMMatrix.create(.{
-        matrix.a, matrix.b, 0, 0,
-        matrix.c, matrix.d, 0, 0,
-        0,        0,        1, 0,
-        matrix.e, matrix.f, 0, 1,
-    }, true, frame.page);
+    return matrix;
 }
 
 fn transformMatrix(element: *Element) PathData.Matrix {

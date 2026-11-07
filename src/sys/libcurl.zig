@@ -951,6 +951,8 @@ pub const WsFrameType = enum {
 
 pub const WsFrameMeta = struct {
     frame_type: WsFrameType,
+    // false when more fragments of the same message follow
+    fin: bool,
     offset: usize,
     bytes_left: usize,
     len: usize,
@@ -958,6 +960,7 @@ pub const WsFrameMeta = struct {
     fn from(frame: *const c.curl_ws_frame) WsFrameMeta {
         return .{
             .frame_type = WsFrameType.fromFlags(frame.flags),
+            .fin = @as(c_uint, @bitCast(frame.flags)) & c.CURLWS_CONT == 0,
             .offset = @intCast(frame.offset),
             .bytes_left = @intCast(frame.bytesleft),
             .len = if (frame.len < 0)

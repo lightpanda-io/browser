@@ -21,13 +21,14 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const ArenaPool = @import("../ArenaPool.zig");
 const sys_net = @import("../sys/net.zig");
+const ArenaPool = @import("../ArenaPool.zig");
+const repeat = @import("../string.zig").repeat;
 
 const WS = @import("WS.zig");
 const CDP = @import("cdp/CDP.zig");
 const Driver = @import("Driver.zig");
-const repeat = @import("../string.zig").repeat;
+const json_input = @import("json_input.zig");
 
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
@@ -319,13 +320,10 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     const arena = try self.arena_pool.acquire(bytes.len, "cdp data");
     errdefer arena.release();
 
-    const raw = try arena.dupe(u8, bytes);
-    const input = std.json.parseFromSliceLeaky(
-        CDP.InputMessage,
-        arena.allocator(),
-        raw,
-        .{ .ignore_unknown_fields = true },
-    ) catch {
+    var raw: []const u8 = try arena.dupe(u8, bytes);
+    const input = json_input.parseLeaky(CDP.InputMessage, arena.allocator(), &raw, .{
+        .ignore_unknown_fields = true,
+    }) catch {
         self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
         pushed.* = true;
         return false;

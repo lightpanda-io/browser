@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<head></head>
+<meta name=lp-mode content=test>
 <body>
 <script src="../testing.js"></script>
 
@@ -22,7 +22,7 @@ that point.
   });
 
   const rs = new ReadableStream({start(c) {
-    c.enqueue('i am the ');
+    c.enqueue(new TextEncoder().encode('i am the '));
     c.enqueue(new TextEncoder().encode('request body'));
     c.close();
   }});

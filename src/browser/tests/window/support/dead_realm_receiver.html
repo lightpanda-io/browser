@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<script>
+  // Reports each message it gets, and who it claims to be from, to its parent.
+  window.addEventListener('message', (e) => {
+    parent.postMessage({
+      report: true,
+      tag: e.data.tag,
+      last: e.data.last === true,
+      origin: e.origin,
+      sourceIsSelf: e.source === window,
+    }, '*');
+  });
+  parent.postMessage({ receiverReady: true }, '*');
+</script>

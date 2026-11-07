@@ -144,12 +144,18 @@ pub fn getLocked(self: *const ReadableStream) bool {
     return self._reader != null;
 }
 
+/// Which chunks collectBodyBytes accepts.
+pub const BodyChunks = enum {
+    uint8array,
+    lenient,
+};
+
 /// Drain a closed stream's internal queue into bytes for outbound HTTP
 /// request bodies. A stream that is locked, already used as a body, still
-/// readable, or errored - or that holds a chunk which isn't string or binary
-/// data - is `error.TypeError`. The queue is only consumed once every chunk
-/// has converted, so a rejected body leaves the stream as it was.
-pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]const u8 {
+/// readable, or errored - or that holds a chunk `chunks` rejects - is
+/// `error.TypeError`. The queue is only consumed once every chunk has
+/// converted, so a rejected body leaves the stream as it was.
+pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator, comptime chunks: BodyChunks) ![]const u8 {
     if (self._collected or self.getLocked()) {
         return error.TypeError;
     }
@@ -167,14 +173,24 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]cons
     const queue = &self._controller._queue;
     for (queue.items) |chunk| {
         const value = local.toLocal(chunk);
-        // toStringSmart falls back to toString(), which would turn a
-        // stray number or object into "42" / "[object Object]" bytes.
-        if (value.isString() == null and !value.isTypedArray() and
-            !value.isArrayBufferView() and !value.isArrayBuffer())
-        {
-            return error.TypeError;
+        switch (chunks) {
+            .uint8array => {
+                if (value.isUint8Array() == false) {
+                    return error.TypeError;
+                }
+                try buf.writer.writeAll((try local.jsValueToZig(js.AllowSharedBufferSource, value)).bytes());
+            },
+            .lenient => {
+                // toStringSmart falls back to toString(), which would turn a
+                // stray number or object into "42" / "[object Object]" bytes.
+                if (value.isString() == null and !value.isTypedArray() and
+                    !value.isArrayBufferView() and !value.isArrayBuffer())
+                {
+                    return error.TypeError;
+                }
+                try buf.writer.writeAll(try value.toStringSmart());
+            },
         }
-        try buf.writer.writeAll(try value.toStringSmart());
     }
 
     self._collected = true;

@@ -57,7 +57,6 @@ _url: [:0]const u8,
 _type: WorkerType = .classic,
 _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
-_script_buffer: std.ArrayList(u8) = .empty,
 _http_transfer: ?*Transfer = null,
 
 // Event handlers
@@ -94,7 +93,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         return self;
     }
 
-    self._script_arena = try session.getArena(.large, "Worker.script");
+    self._script_arena = try session.getArena(.small, "Worker.script");
     errdefer self.releaseScriptArena();
 
     const transfer = frame.newRequest(.{
@@ -108,7 +107,6 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .request_mode = .same_origin,
         .credentials_mode = .same_origin,
         .header_callback = httpHeaderCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -162,23 +160,17 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), transfer.bodyLen());
-
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *Worker = @ptrCast(@alignCast(transfer.req.ctx));
-    try self._script_buffer.appendSlice(self._script_arena.?.allocator(), data);
-}
-
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *Worker = @ptrCast(@alignCast(ctx));
     self._http_transfer = null;
     defer self.releaseScriptArena();
 
     const url = self._url;
-    const script = self._script_buffer.items;
+    // Evaluated synchronously, so borrowing the transfer's body is fine.
+    const script = transfer.responseBody();
 
     if (comptime lp.IS_DEBUG) {
         log.info(.browser, "worker fetch done", .{
@@ -291,7 +283,6 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 fn releaseScriptArena(self: *Worker) void {
     const arena = self._script_arena orelse return;
     self._script_arena = null;
-    self._script_buffer = .empty;
     arena.release();
 }
 

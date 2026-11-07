@@ -214,7 +214,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .page_tools_seen = &active.page_tools_seen, .source = .mcp }) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments, .{ .inline_image = true, .nav_note = true, .page_tools_seen = &active.page_tools_seen, .tree_seen = &active.tree_seen, .source = .mcp }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -1888,6 +1888,22 @@ test "MCP - tree treats zero-filled backendNodeId as omitted" {
     const written = out.written();
     try testing.expect(std.mem.find(u8, written, "NodeNotFound") == null);
     try testing.expect(std.mem.find(u8, written, "\"isError\":true") == null);
+}
+
+test "MCP - tree delta answers against the session's last full tree" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tree","arguments":{"delta":true}}}
+    ;
+    try router.handleMessage(server, aa, msg);
+    try testing.expect(std.mem.startsWith(u8, try testToolText(aa, out.written()), "[full tree]\n"));
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, aa, msg);
+    try testing.expectEqual("[unchanged since the last full tree]\n", try testToolText(aa, out.written()));
 }
 
 test "MCP - stale backendNodeId surfaces recovery guidance" {

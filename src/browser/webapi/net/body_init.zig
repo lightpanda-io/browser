@@ -117,7 +117,7 @@ pub const BodyInit = union(enum) {
                 // XHR buffers a closed stream synchronously; a stream that
                 // can't be drained here - still open, or already used as a
                 // body - rejects rather than send Content-Length: 0.
-                const bytes = try stream.collectBodyBytes(arena);
+                const bytes = try stream.collectBodyBytes(arena, .lenient);
                 return .{ .bytes = bytes, .content_type = null };
             },
         }

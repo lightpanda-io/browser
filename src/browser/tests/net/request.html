@@ -688,3 +688,23 @@
     testing.expectTrue(r.bodyUsed);
   });
 </script>
+
+<script id=request_body_stream_non_uint8array_chunk type=module>
+  // A body chunk that isn't a Uint8Array (here a string) is a TypeError.
+  const state = await testing.async();
+  const s = new ReadableStream({ start(c) { c.enqueue('x'); c.close(); } });
+  const r = new Request('https://example.com', { method: 'POST', body: s, duplex: 'half' });
+  let err = null;
+  try { await r.text(); } catch (e) { err = e; }
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('TypeError', err && err.name);
+  });
+</script>
+
+<script id=request_clone_non_uint8array_chunk>
+  // clone() tees the stream without reading it, so a bad chunk doesn't throw here.
+  const s = new ReadableStream({ start(c) { c.enqueue('x'); c.close(); } });
+  const r = new Request('https://example.com', { method: 'POST', body: s, duplex: 'half' });
+  testing.expectEqual('POST', r.clone().method);
+</script>

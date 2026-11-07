@@ -635,6 +635,27 @@
     });
 </script>
 
+<script id="CSSStyleSheet_replace_non_constructed" type=module>
+    // Only a sheet made with `new CSSStyleSheet()` can be replaced.
+    const state = await testing.async();
+    const style = document.createElement('style');
+    style.textContent = '.keep { color: red; }';
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectError('NotAllowedError', () => sheet.replaceSync('.x {}'));
+    let err = null;
+    try { await sheet.replace('.x {}'); } catch (e) { err = e; }
+    style.remove();
+
+    state.resolve();
+    await state.done(() => {
+        testing.expectEqual('NotAllowedError', err && err.name);
+        testing.expectEqual(1, sheet.cssRules.length);
+        testing.expectEqual('.keep', sheet.cssRules[0].selectorText);
+    });
+</script>
+
 <script id="CSSStyleRule_cssText">
 {
     const sheet = new CSSStyleSheet();

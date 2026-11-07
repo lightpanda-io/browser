@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<meta name=lp-mode content=test>
+<iframe id=navtarget></iframe>
+<script src="../testing.js"></script>
+
+<!--
+postMessage and Location navigation called by a function whose realm is gone.
+These APIs look at the calling (incumbent) realm. The function can outlive its
+realm in another window: here the support page hands its functions to us, then
+we re-navigate it in place or navigate it.
+-->
+<script>
+  function deadRealmReady(key) {
+    return new Promise((resolve) => {
+      window.addEventListener('message', function onMessage(e) {
+        if (e.data && e.data.from === key) {
+          window.removeEventListener('message', onMessage);
+          resolve(window[key]);
+        }
+      });
+    });
+  }
+
+  function deadRealmUrl(key) {
+    return testing.BASE_URL + 'window/support/dead_realm.html?key=' + key;
+  }
+
+  function nextMessage(key) {
+    return new Promise((resolve) => {
+      window.addEventListener('message', function onMessage(e) {
+        if (e.data && e.data.from === key) {
+          window.removeEventListener('message', onMessage);
+          resolve(e);
+        }
+      });
+    });
+  }
+
+  async function postFrom(dead, key) {
+    const received = nextMessage(key);
+    dead.postMessage({ from: key, n: 7 });
+    return received;
+  }
+
+  async function navigateFrom(dead) {
+    const location = document.getElementById('navtarget').contentWindow.location;
+    const before = location.href;
+    dead.assign(location, 'frame1.html');
+    dead.replace(location, 'frame1.html');
+    dead.setHref(location, 'frame1.html');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return { before, after: location.href };
+  }
+
+  function expectDeadIncumbent(message, navigation) {
+    // Like Chrome: the message is delivered, but there's no source window.
+    // (Chrome reports the dead realm's origin, which went with it here.)
+    testing.expectEqual(7, message.data.n);
+    testing.expectEqual(null, message.source);
+    // Like Chrome: the navigations are ignored.
+    testing.expectEqual(navigation.before, navigation.after);
+  }
+</script>
+
+<script id=popup_renavigated type=module>
+  const state = await testing.async();
+
+  const ready = deadRealmReady('drc_popup');
+  testing.expectTrue(window.open(deadRealmUrl('drc_popup'), 'drc_popup') != null);
+  const dead = await ready;
+
+  // in-place re-navigation of the named popup
+  const next = deadRealmReady('drc_popup_next');
+  window.open(deadRealmUrl('drc_popup_next'), 'drc_popup');
+  await next;
+
+  const message = await postFrom(dead, 'drc_popup_post');
+  const navigation = await navigateFrom(dead);
+  state.resolve();
+  await state.done(() => {
+    expectDeadIncumbent(message, navigation);
+  });
+</script>
+
+<script id=iframe_navigated type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const ready = deadRealmReady('drc_iframe_nav');
+  iframe.src = deadRealmUrl('drc_iframe_nav');
+  document.body.appendChild(iframe);
+  const dead = await ready;
+
+  const next = deadRealmReady('drc_iframe_nav_next');
+  iframe.src = deadRealmUrl('drc_iframe_nav_next');
+  await next;
+
+  const message = await postFrom(dead, 'drc_iframe_post');
+  const navigation = await navigateFrom(dead);
+  state.resolve();
+  await state.done(() => {
+    expectDeadIncumbent(message, navigation);
+  });
+</script>
+
+<script id=cross_origin_receiver type=module>
+  const state = await testing.async();
+
+  // A cross-origin frame that reports the messages it gets back to us.
+  const receiverOrigin = testing.ORIGIN.replace('127.0.0.1', 'localhost');
+  const receiverReady = new Promise((resolve) => {
+    window.addEventListener('message', function onMessage(e) {
+      if (e.data && e.data.receiverReady) {
+        window.removeEventListener('message', onMessage);
+        resolve();
+      }
+    });
+  });
+  const receiver = document.createElement('iframe');
+  receiver.src = testing.BASE_URL.replace(testing.ORIGIN, receiverOrigin) + 'window/support/dead_realm_receiver.html';
+  document.body.appendChild(receiver);
+  await receiverReady;
+  const post = receiver.contentWindow.postMessage.bind(receiver.contentWindow);
+
+  const ready = deadRealmReady('drc_cross');
+  window.open(deadRealmUrl('drc_cross'), 'drc_cross');
+  const dead = await ready;
+  const next = deadRealmReady('drc_cross_next');
+  window.open(deadRealmUrl('drc_cross_next'), 'drc_cross');
+  await next;
+
+  const reports = [];
+  const done = new Promise((resolve) => {
+    window.addEventListener('message', function onMessage(e) {
+      if (e.data && e.data.report) {
+        reports.push(e.data);
+        if (e.data.last) {
+          window.removeEventListener('message', onMessage);
+          resolve();
+        }
+      }
+    });
+  });
+  // "/" is the sender's own origin, which isn't the receiver's.
+  dead.call(post, { tag: 'own-origin' }, '/');
+  dead.call(post, { tag: 'any', last: true }, '*');
+  await done;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, reports.length);
+    const report = reports[0];
+    testing.expectEqual('any', report.tag);
+    // The message must not pass as one the receiver sent itself.
+    testing.expectEqual(false, report.origin === receiverOrigin);
+    testing.expectEqual(false, report.sourceIsSelf);
+  });
+</script>
+</body>

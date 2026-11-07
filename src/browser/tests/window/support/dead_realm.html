@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<script type=module>
+  // Hands functions of this module's realm to the window that created us,
+  // under the key from our query string, then tells it we're ready. They
+  // outlive this realm once that window navigates us away. None of them runs
+  // while we're alive: in particular, import.meta is only created on first
+  // use, so it gets created after this realm is gone.
+  const key = new URLSearchParams(location.search).get('key');
+  const host = window.opener || window.parent;
+  // Bound now: once this realm is gone, it can't access host's properties.
+  const post = host.postMessage.bind(host);
+  host[key] = {
+    dynamicImport: () => import('../../page/mod1.js'),
+    importMeta: () => import.meta,
+    postMessage: (data) => post(data, '*'),
+    assign: (location, url) => location.assign(url),
+    replace: (location, url) => location.replace(url),
+    setHref: (location, url) => { location.href = url; },
+    // Makes this realm the incumbent of whatever fn does.
+    call: (fn, ...args) => fn(...args),
+  };
+  host.postMessage({ from: key }, '*');
+</script>

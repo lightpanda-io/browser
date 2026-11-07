@@ -67,7 +67,12 @@ widths: WidthMemo = .{},
 layout_bumps: usize = 0,
 
 // Keyed by property name, pruning to what is (hopefully) one or few rules
-custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
+custom_rules: std.StringHashMapUnmanaged(LazyRules) = .empty,
+
+// The rules declaring `content`. Nothing memoizes it: it only matters to
+// scripts reading it back, often from a probe element. @ant-design/cssinjs reads
+// which styles a static CSS file already ships from a `content` rule.
+content_rules: LazyRules = .{},
 
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
@@ -463,14 +468,13 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
         @field(self, field).stampRules(self);
     }
 
-    // Custom rules parse their selectors lazily, but the layer ranks are only
-    // known now that every sheet has been read
+    // Lazy rules parse their selectors on first lookup, but the layer ranks
+    // are only known now that every sheet has been read
     var custom_it = self.custom_rules.valueIterator();
     while (custom_it.next()) |property| {
-        for (property.rules.items) |*rule| {
-            rule.priority |= self.layerRank(rule.priority) << RANK_SHIFT;
-        }
+        property.stampRules(self);
     }
+    self.content_rules.stampRules(self);
 }
 
 /// The rank finalizeLayerRanks still has to stamp for a packed priority, via
@@ -495,9 +499,9 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     if (selector_text.len == 0) {
         return;
     }
-    var customs: CustomSink = .{ .allocator = build_arena };
-    const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &customs);
-    _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), customs.map.values(), layer);
+    var sink: LazySink = .{ .allocator = build_arena };
+    const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &sink);
+    _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), sink.declarations(), layer);
 
     // CSS Nesting: the rules nested in the block follow their parent in
     // cascade order. Most blocks have none, and every nested rule needs a `{`.
@@ -521,48 +525,56 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
-// Custom properties are keyed by name instead, and lazily parse the selector.
-// Returns whether the rule set any tracked property.
+// Custom properties (keyed by name) and `content` are lazy rules instead: they
+// parse the selector on first lookup. Returns whether the rule set a tracked or
+// a custom property: nothing memoizes `content`.
 fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
     props: Declarations,
     important: Declarations,
-    customs: []const CustomDeclaration,
+    declared: LazyDeclarations,
     layer: u16,
 ) !bool {
+    var lazy = declared;
+    if (lazy.content != null and selectsOnlyPseudoElements(selector_text)) {
+        // Icon fonts declare it on hundreds of `::before` rules, and no element
+        // matches one.
+        lazy.content = null;
+    }
+
     const relevant = props.isRelevant() or important.isRelevant();
-    if (relevant == false and customs.len == 0) {
+    if (relevant == false and lazy.isEmpty()) {
         return false;
     }
 
     const arena = self.arena.allocator();
-    const before = self.next_doc_order;
+    var changed = lazy.customs.len > 0;
 
-    if (customs.len > 0) {
+    if (lazy.isEmpty() == false) {
         const priority = try self.nextPriority(layer);
-        for (customs) |custom| {
+        const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
+        for (lazy.customs) |custom| {
             const gop = try self.custom_rules.getOrPut(arena, custom.name);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = .{};
             }
-            // An appended rule joins a property that may already be parsed
-            gop.value_ptr.parsed = null;
-            try gop.value_ptr.rules.append(arena, .{
-                .value = custom.value,
-                .priority = priority,
-                .selector_text = selector_text,
-            });
+            try gop.value_ptr.append(arena, selector_text, custom.value, if (custom.important) important_priority else priority);
+        }
+        if (lazy.content) |content| {
+            try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
         }
     }
 
     if (relevant) {
+        const before = self.next_doc_order;
         const selectors = SelectorParser.parseList(arena, selector_text) catch &.{};
         for (selectors) |selector| {
             try self.addTrackedRule(selector, props, important, layer);
         }
+        changed = changed or self.next_doc_order != before;
     }
-    return self.next_doc_order != before;
+    return changed;
 }
 
 // One priority per selector, shared by every group it lands in: doc_order
@@ -733,6 +745,62 @@ fn isCustomProperty(name: []const u8) bool {
     return std.mem.startsWith(u8, name, "--");
 }
 
+/// Whether every selector of a list ends in a pseudo-element. A scan rather
+/// than a parse: anything it can't tell reads as false, and parsedRules skips
+/// those selectors anyway.
+fn selectsOnlyPseudoElements(text: []const u8) bool {
+    var depth: usize = 0;
+    var pseudo = false;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            '\\' => i += 1,
+            '"', '\'' => |quote| {
+                i += 1;
+                while (i < text.len and text[i] != quote) : (i += 1) {
+                    if (text[i] == '\\') {
+                        i += 1;
+                    }
+                }
+            },
+            '(', '[' => depth += 1,
+            ')', ']' => depth -|= 1,
+            ',' => if (depth == 0) {
+                if (pseudo == false) {
+                    return false;
+                }
+                pseudo = false;
+            },
+            ':' => if (depth == 0 and startsPseudoElement(text[i + 1 ..])) {
+                pseudo = true;
+            },
+            else => {},
+        }
+    }
+    return pseudo;
+}
+
+// `::name`, or one of the pseudo-elements CSS2 wrote with a single colon.
+fn startsPseudoElement(after_colon: []const u8) bool {
+    if (after_colon.len > 0 and after_colon[0] == ':') {
+        return true;
+    }
+    for ([_][]const u8{ "before", "after", "first-line", "first-letter" }) |name| {
+        if (std.ascii.startsWithIgnoreCase(after_colon, name) == false) {
+            continue;
+        }
+        const rest = after_colon[name.len..];
+        if (rest.len == 0) {
+            return true;
+        }
+        switch (rest[0]) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '\\', 0x80...0xFF => {},
+            else => return true,
+        }
+    }
+    return false;
+}
+
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
     self.cascadeChanged();
@@ -783,6 +851,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.custom_rules = .empty;
     try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
+    self.content_rules = .{};
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
@@ -1752,8 +1821,7 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     return false;
 }
 
-/// The CSSOM twin of addRawRule; returns whether the rule set any tracked
-/// property.
+/// The CSSOM twin of addRawRule; returns what addSelectorRules does.
 fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     return self.addRuleAs(style_rule, style_rule._selector_text);
 }
@@ -1766,14 +1834,14 @@ fn addRuleAs(self: *StyleManager, style_rule: *CSSStyleRule, selector_text: []co
     }
     const style = style_rule._style orelse return false;
     const folded = extractDeclared(Declarations, style);
-    const customs = try self.extractCustomDeclarations(style);
+    const lazy = try self.extractLazyDeclarations(style);
 
     // A custom rule holds selector_text until the property is looked up, but it
     // doesn't need a copy: setSelectorText allocates the replacement from the
     // frame arena and never frees the old one. Worst case we match a stale
     // selector, which is what the rest of this file already does when a rule is
     // mutated without going through sheetModified().
-    return self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), customs, NO_LAYER);
+    return self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), lazy, NO_LAYER);
 }
 
 /// The CSSOM counterpart to the nested rules addRawRule adds: a style rule
@@ -1815,12 +1883,15 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     if (style_rule._rules != null or !self.appendable(sheet, rule)) {
         return self.sheetModified();
     }
-    const added = self.addRule(style_rule) catch return self.sheetModified();
-    if (!added) {
+    const before = self.next_doc_order;
+    const changed = self.addRule(style_rule) catch return self.sheetModified();
+    if (self.next_doc_order != before) {
+        self.last_rule_sheet = sheet;
+    }
+    if (!changed) {
         // Nothing tracked changed, so every memoized answer still holds.
         return;
     }
-    self.last_rule_sheet = sheet;
     self.cascadeChanged();
 }
 
@@ -1842,30 +1913,36 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     return false;
 }
 
-/// The CSSOM counterpart to foldDeclarations' `--*` branch. Names within one
+/// The CSSOM counterpart to foldDeclarations' lazy branches. Names within one
 /// declaration block are already unique, so there is nothing to dedup here.
 ///
 /// Unlike the selector text, both strings have to be copied: they can point
 /// into the Property itself (small string optimization), and setProperty /
 /// removeProperty destroy it without going through sheetModified(). We'd be
 /// left reading freed memory rather than something merely stale.
-fn extractCustomDeclarations(self: *StyleManager, style: *CSSStyleProperties) ![]const CustomDeclaration {
+fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !LazyDeclarations {
     const arena = self.arena.allocator();
 
-    var customs: std.ArrayList(CustomDeclaration) = .empty;
+    var customs: std.ArrayList(LazyDeclaration) = .empty;
+    var content: ?LazyDeclaration = null;
     var it = style.asCSSStyleDeclaration().iterator();
     while (it.next()) |property| {
         const name = property._name.str();
-        if (isCustomProperty(name) == false) {
-            continue;
+        if (isCustomProperty(name)) {
+            try customs.append(arena, .{
+                .name = try arena.dupe(u8, name),
+                .value = try arena.dupe(u8, property._value.str()),
+                .important = property._important,
+            });
+        } else if (std.ascii.eqlIgnoreCase(name, "content")) {
+            content = .{
+                .name = "content",
+                .value = try arena.dupe(u8, property._value.str()),
+                .important = property._important,
+            };
         }
-        try customs.append(arena, .{
-            .name = try arena.dupe(u8, name),
-            .value = try arena.dupe(u8, property._value.str()),
-            .important = property._important,
-        });
     }
-    return customs.items;
+    return .{ .customs = customs.items, .content = content };
 }
 
 const BucketKey = union(enum) {
@@ -2936,16 +3013,33 @@ fn Priorities(comptime Declared: type) type {
     return std.enums.EnumArray(std.meta.FieldEnum(Declared), u64);
 }
 
-// custom_rules map is property_name -> CustomProperty, loosely:
+// custom_rules map is property_name -> LazyRules, loosely:
 //    --color => [(:root, "#ff0"), (.card, "#000")]
 // So when code says "getComputedStyle(el).getPropertyValue("--color")
-// We end up with a relatively small number of rules
-const CustomProperty = struct {
-    rules: std.ArrayList(CustomRule) = .empty,
-    parsed: ?[]const ParsedCustomRule = null, // lazily parsed
+// We end up with a relatively small number of rules. content_rules holds the
+// same for `content`.
+const LazyRules = struct {
+    rules: std.ArrayList(LazyRule) = .empty,
+    parsed: ?[]const ParsedRule = null, // lazily parsed
+
+    fn append(self: *LazyRules, arena: Allocator, selector_text: []const u8, value: []const u8, priority: u64) !void {
+        // An appended rule joins rules that may already be parsed
+        self.parsed = null;
+        try self.rules.append(arena, .{
+            .value = value,
+            .priority = priority,
+            .selector_text = selector_text,
+        });
+    }
+
+    fn stampRules(self: *LazyRules, sm: *const StyleManager) void {
+        for (self.rules.items) |*rule| {
+            rule.priority |= sm.layerRank(rule.priority) << RANK_SHIFT;
+        }
+    }
 };
 
-const CustomRule = struct {
+const LazyRule = struct {
     selector_text: []const u8,
     value: []const u8,
     priority: u64,
@@ -2953,17 +3047,28 @@ const CustomRule = struct {
 
 /// Some frameworks define hundreds+ of custom properties, 99% of which are
 /// never accessed via JS. So we don't parse them until something asks for it.
-const ParsedCustomRule = struct {
+const ParsedRule = struct {
     selector: Selector.Selector,
     value: []const u8,
     priority: u64, // packed the same way as a group Rule.priority
 };
 
-/// A `--*` declaration on its way from a rule block into custom_rules.
-const CustomDeclaration = struct {
+/// A lazy declaration on its way from a rule block into custom_rules or
+/// content_rules.
+const LazyDeclaration = struct {
     name: []const u8,
     value: []const u8,
     important: bool,
+};
+
+/// The lazy declarations of one rule block.
+const LazyDeclarations = struct {
+    customs: []const LazyDeclaration = &.{},
+    content: ?LazyDeclaration = null,
+
+    fn isEmpty(self: LazyDeclarations) bool {
+        return self.customs.len == 0 and self.content == null;
+    }
 };
 
 const Layer = struct {
@@ -3028,29 +3133,45 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
     return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr), null) catch unreachable;
 }
 
-/// `--*` declarations of one block, keyed by name so a block declaring the same
-/// custom property twice keeps only the winner.
-const CustomSink = struct {
+/// The lazy declarations of one block. Custom properties go by name, so a
+/// block declaring the same one twice keeps only the winner.
+const LazySink = struct {
     allocator: Allocator,
-    map: std.StringArrayHashMapUnmanaged(CustomDeclaration) = .empty,
+    customs: std.StringArrayHashMapUnmanaged(LazyDeclaration) = .empty,
+    content: ?LazyDeclaration = null,
+
+    fn declarations(self: *const LazySink) LazyDeclarations {
+        return .{ .customs = self.customs.values(), .content = self.content };
+    }
 };
 
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
 // materialized object was built from: a normal declaration never overrides an
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
-// case-sensitive and goes to `customs` when there is one.
-fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, customs: ?*CustomSink) !Slots(Declared) {
+// case-sensitive. Custom properties and `content` go to `lazy` when there is
+// one.
+fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, lazy: ?*LazySink) !Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = declarations;
     while (it.next()) |declaration| {
         if (isCustomProperty(declaration.name)) {
-            const sink = customs orelse continue;
-            const gop = try sink.map.getOrPut(sink.allocator, declaration.name);
+            const sink = lazy orelse continue;
+            const gop = try sink.customs.getOrPut(sink.allocator, declaration.name);
             if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
                 continue;
             }
             gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(declaration.name, "content")) {
+            const sink = lazy orelse continue;
+            if (sink.content) |earlier| {
+                if (earlier.important and !declaration.important) {
+                    continue;
+                }
+            }
+            sink.content = .{ .name = "content", .value = declaration.value, .important = declaration.important };
             continue;
         }
         slots.apply(declaration.name, declaration.value, declaration.important);
@@ -3157,48 +3278,110 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
     // Only the rules declaring this name; usually a handful, often none. An
     // element can still shadow them with an inline declaration, so a miss here
     // means walking for inline styles, not returning early.
-    const rules = self.parsedCustomRules(property_name.str()) catch |err| blk: {
+    const property = self.custom_rules.getPtr(property_name.str());
+    const rules = self.parsedRules(property) catch |err| blk: {
         log.err(.browser, "StyleManager customProperty", .{ .err = err });
         break :blk &.{};
     };
 
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        if (self.inlineStyleValue(elem, property_name)) |value| {
-            return value;
-        }
-
-        var winner: ?[]const u8 = null;
-        var priority: u64 = 0;
-        for (rules) |rule| {
-            if (rule.priority <= priority) {
-                continue;
-            }
-            if (matchesSelector(elem, rule.selector, self.frame) == false) {
-                continue;
-            }
-            winner = rule.value;
-            priority = rule.priority;
-        }
-
-        if (winner) |value| {
-            return value;
+        if (self.lazyWinner(elem, property_name, rules, null)) |winner| {
+            return winner.value;
         }
     }
 
     return null;
 }
 
-/// Gets the parsed rule for a custom property name
-fn parsedCustomRules(self: *StyleManager, name: []const u8) ![]const ParsedCustomRule {
-    const property = self.custom_rules.getPtr(name) orelse return &.{};
+/// Declared `content` of `el`, or null when nothing declares it. It doesn't
+/// inherit, so only `el`'s own declarations count.
+pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+
+    const rules = self.parsedRules(&self.content_rules) catch |err| blk: {
+        log.err(.browser, "StyleManager content", .{ .err = err });
+        break :blk &.{};
+    };
+    var before: ?u16 = null;
+    while (self.lazyWinner(el, comptime .wrap("content"), rules, before)) |winner| {
+        if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
+            return winner.value;
+        }
+        // Back to the layers before the winner's. Chrome and Firefox drop the
+        // later layers' declarations too, even under an important one.
+        before = winner.layer;
+    }
+    return null;
+}
+
+const LazyWinner = struct {
+    value: []const u8,
+    // Where it is in the layer order; see layerOrder.
+    layer: u16,
+};
+
+/// The style attribute cascades after every layer, unlayered rules included.
+const INLINE_LAYER: u16 = UNLAYERED_RANK + 1;
+
+/// The layer a packed priority's rule is in: its rank, which an important
+/// declaration packs reversed.
+fn layerOrder(priority: u64) u16 {
+    const rank: u16 = @intCast((priority & RANK_MASK) >> RANK_SHIFT);
+    if (priority & IMPORTANT_BIT != 0) {
+        return @intCast(UNLAYERED_RANK - rank);
+    }
+    return rank;
+}
+
+/// The declaration of a lazy property that wins on `el`, from the matching
+/// rules and its inline style. With `before`, only those from earlier layers.
+fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
+    const limit = before orelse std.math.maxInt(u16);
+
+    var winner: ?LazyWinner = null;
+    var priority: u64 = 0;
+    for (rules) |rule| {
+        if (rule.priority <= priority) {
+            continue;
+        }
+        const layer = layerOrder(rule.priority);
+        if (layer >= limit) {
+            continue;
+        }
+        if (matchesSelector(el, rule.selector, self.frame) == false) {
+            continue;
+        }
+        winner = .{ .value = rule.value, .layer = layer };
+        priority = rule.priority;
+    }
+
+    if (limit > INLINE_LAYER) {
+        if (el.inlineStyle(self.frame)) |style| {
+            const declaration = style.asCSSStyleDeclaration();
+            if (declaration.declaredValue(property_name, self.frame)) |value| {
+                const inline_priority = if (declaration.declaredImportant(property_name)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
+                if (inline_priority > priority) {
+                    winner = .{ .value = value, .layer = INLINE_LAYER };
+                }
+            }
+        }
+    }
+    return winner;
+}
+
+/// Gets the parsed rules of a lazy property; `maybe_property` is null when
+/// nothing declares it
+fn parsedRules(self: *StyleManager, maybe_property: ?*LazyRules) ![]const ParsedRule {
+    const property = maybe_property orelse return &.{};
     if (property.parsed) |parsed| {
-        // the custom property exists, and we already parsed it.
+        // the property exists, and we already parsed it.
         return parsed;
     }
 
     const arena = self.arena.allocator();
-    var parsed: std.ArrayList(ParsedCustomRule) = .empty;
+    var parsed: std.ArrayList(ParsedRule) = .empty;
 
     for (property.rules.items) |rule| {
         const selectors = SelectorParser.parseList(arena, rule.selector_text) catch continue;
@@ -4001,6 +4184,69 @@ test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
     _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
     try testing.expectEqual(true, sm.dirty);
     try testing.expectEqual(false, sm.isHidden(c, .{}));
+}
+
+test "StyleManager: selectsOnlyPseudoElements" {
+    for ([_][]const u8{ ".a::before", ".a:before", ".a:AFTER", ".a::before, .b:first-line", "a > b::marker", ".a:hover::after" }) |text| {
+        try testing.expectEqual(true, selectsOnlyPseudoElements(text));
+    }
+    for ([_][]const u8{ ".a", ".a::before, .b", ".a, .b::before", ".a\\:before", "[data-x=\"::before\"]", ":is(.a, .b)::before, .c", ".a:beforeish", ".a:not(.b)" }) |text| {
+        try testing.expectEqual(false, selectsOnlyPseudoElements(text));
+    }
+}
+
+test "StyleManager: content rules no element matches aren't kept" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.icon-a:before { content: "\f000" }
+        \\.icon-b::before, .icon-c::after { content: "\f001" }
+        \\.probe { content: "probe" }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    try testing.expectString("\"probe\"", sm.contentValue(probe).?);
+    try testing.expectEqual(1, sm.content_rules.rules.items.len);
+}
+
+test "StyleManager: ruleInserted: a content rule keeps the memos" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"a\"></div>");
+    const a = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { content: \"first\" }", frame);
+    _ = try body.insertBefore(style_el.asNode(), a.asNode(), frame);
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    try testing.expectString("\"first\"", sm.contentValue(a).?);
+
+    // CSS-in-JS inserts its rules one at a time, many of them pseudo-element
+    // content
+    const version = frame.page.style_version;
+    _ = try sheet.insertRule(".a::before { content: \"\" }", 1, frame);
+    _ = try sheet.insertRule(".a { content: \"second\" }", 2, frame);
+    try testing.expectEqual(false, sm.dirty);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectString("\"second\"", sm.contentValue(a).?);
 }
 
 // Child-combinator rules whose subject compound has no id, class or tag

@@ -501,6 +501,10 @@ pub const SigBridge = struct {
 fn beforeTurnRequest(ctx: *anyopaque) void {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     self.conversation.compactForRequest();
+    // A delta builds on the full tree, so the model must still have it whole.
+    if (self.ts.tree_seen.key != null and !self.conversation.holdsResult("tree", self.ts.tree_seen.text.items)) {
+        self.ts.tree_seen.key = null;
+    }
     beforeRequest(ctx);
 }
 
@@ -928,7 +932,8 @@ fn handleUsage(self: *Agent) void {
 
 /// Drop everything tied to the conversation: history (system prompt re-seeds
 /// lazily next turn), cumulative usage, the recorded action buffer and its save
-/// destination, and DOM node IDs. Shared by `/clear` and `/reset`.
+/// destination, DOM node IDs, and the tree the next `tree delta` diffs against.
+/// Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
     self.save_buffer.reset();
@@ -936,6 +941,7 @@ fn clearConversation(self: *Agent) void {
     self.save_path = null;
     self.total_usage = .{};
     self.ts.registry.reset();
+    self.ts.tree_seen.key = null;
 }
 
 /// Forget the conversation while leaving the browser session live — loaded page
@@ -1719,7 +1725,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true, .page_tools_seen = &self.ts.page_tools_seen, .source = .user }) catch |err| .{
+    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true, .page_tools_seen = &self.ts.page_tools_seen, .tree_seen = &self.ts.tree_seen, .source = .user }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -2231,6 +2237,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
         .record = self.capturing_for_save,
         .nav_note = true,
         .page_tools_seen = &self.ts.page_tools_seen,
+        .tree_seen = &self.ts.tree_seen,
         .source = .llm,
     });
     saved.selector = result.selector;

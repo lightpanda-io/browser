@@ -143,7 +143,10 @@ const Events = union(enum) {
 };
 pub const EventType = std.meta.FieldEnum(Events);
 
-pub const FrameRemove = struct {};
+pub const FrameRemove = struct {
+    // Root frame id of the Page being removed.
+    frame_id: u32,
+};
 
 pub const FrameNavigate = struct {
     req_id: u32,
@@ -295,6 +298,7 @@ pub const RequestServedFromCache = struct {
 };
 
 pub const JavascriptDialogOpening = struct {
+    frame_id: u32,
     url: [:0]const u8,
     message: []const u8,
     dialog_type: []const u8,
@@ -384,6 +388,8 @@ pub const ConsoleMessageType = enum {
 };
 
 pub const ConsoleMessage = struct {
+    // The frame the message was logged in (a worker's is its owner's).
+    frame_id: u32,
     timestamp: u64,
     source: enum {
         xml,
@@ -413,6 +419,7 @@ pub const ConsoleMessage = struct {
 // Chrome logs as "Uncaught …" or "Uncaught (in promise) …" and sends as
 // Runtime.exceptionThrown.
 pub const ExceptionThrown = struct {
+    frame_id: u32,
     timestamp: u64,
     value: js.Value,
     location: js.Value.ErrorLocation,

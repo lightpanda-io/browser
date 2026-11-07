@@ -23,6 +23,7 @@ const HttpClient = @import("../../network/HttpClient.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const ImportMap = @import("../ImportMap.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
 const js = @import("js.zig");
@@ -356,8 +357,9 @@ pub fn globalObject(self: *Context, local: *const js.Local) js.Object {
     };
 }
 
-pub fn getIncumbent(self: *Context) *Frame {
-    const ctx = fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?;
+pub fn getIncumbent(self: *Context) ?*Frame {
+    const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle) orelse return null;
+    const ctx = fromC(v8_incumbent) orelse return null;
     return switch (ctx.global) {
         .frame => |frame| frame,
         .worker => unreachable,
@@ -734,7 +736,8 @@ pub fn dynamicModuleCallback(
     _ = host_defined_options;
     _ = import_attrs;
 
-    const self = fromC(c_context.?).?;
+    // If the calling realm gone, reject.
+    const self = fromC(c_context.?) orelse return rejectInactiveImport(c_context.?);
 
     // prevent running a microtask checkpoint mid-script: import() is called
     // from running JS, and every reject below would otherwise drain the queue
@@ -786,8 +789,18 @@ pub fn dynamicModuleCallback(
     return @constCast(promise.handle);
 }
 
+fn rejectInactiveImport(c_context: *const v8.Context) ?*v8.Promise {
+    const isolate = js.Isolate{ .handle = v8.v8__Isolate__GetCurrent().? };
+    // On failure, V8 has an exception pending, which import() throws.
+    const resolver = v8.v8__Promise__Resolver__New(c_context) orelse return null;
+    const err = isolate.createError("Cannot import module from an inactive browsing context.");
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Reject(resolver, c_context, err, &out);
+    return @constCast(v8.v8__Promise__Resolver__GetPromise(resolver));
+}
+
 pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
-    const self = fromC(c_context.?).?;
+    const self = fromC(c_context.?) orelse return;
     var local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -815,26 +828,20 @@ pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta
 
     // import.meta.resolve(specifier) resolves against this module's URL,
     // applying the document's importmap. The base is bound per-module so the
-    // function keeps working even when detached from import.meta.
+    // function keeps working even when detached from `import.meta`. Another
+    // realm can hold the function after this context is gone (e.g. once this
+    // frame navigates away), so it mustn't point into our arena.
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/import.meta/resolve
-    const resolve_data = self.arena.create(ImportMetaResolveData) catch {
-        log.err(.js, "import meta", .{ .err = error.OutOfMemory });
+    const resolve_fn = v8.v8__Function__New__DEFAULT2(local.handle, importMetaResolveCallback, js_value.handle) orelse {
+        log.err(.js, "import meta", .{ .err = error.FailedToCreateFunction });
         return;
     };
-    resolve_data.* = .{ .context = self, .base = url };
-
-    const resolve_fn = newFunctionWithData(&local, importMetaResolveCallback, @ptrCast(resolve_data));
-    const resolve_value = js.Value{ .local = &local, .handle = @ptrCast(resolve_fn.handle) };
+    const resolve_value = js.Value{ .local = &local, .handle = @ptrCast(resolve_fn) };
     const resolve_res = meta.defineOwnProperty("resolve", resolve_value, 0) orelse false;
     if (!resolve_res) {
         log.err(.js, "import meta", .{ .err = error.FailedToSet });
     }
 }
-
-const ImportMetaResolveData = struct {
-    context: *Context,
-    base: [:0]const u8,
-};
 
 // Implements import.meta.resolve(specifier): resolves the specifier against the
 // module's base URL (applying the document's importmap) and returns the
@@ -847,10 +854,8 @@ fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) c
     defer c.deinit();
 
     const l = &c.local;
+    const isolate = l.isolate;
     const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
-    const data: *ImportMetaResolveData = @ptrCast(@alignCast(info.getData() orelse return));
-    const ctx = data.context;
-    const isolate = ctx.isolate;
 
     if (info.length() == 0) {
         _ = isolate.throwException(isolate.createTypeError("import.meta.resolve requires a specifier"));
@@ -862,7 +867,16 @@ fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) c
         return;
     };
 
-    const resolved = ctx.script_manager.resolveSpecifier(ctx.local_arena, data.base, specifier) catch {
+    const data = v8.v8__FunctionCallbackInfo__Data(callback_handle) orelse return;
+    const base = (js.String{ .local = l, .handle = @ptrCast(data) }).toSliceZ() catch {
+        _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
+        return;
+    };
+
+    const realm: ?*Context = if (v8.v8__Isolate__GetCurrentContext(isolate.handle)) |current| fromC(current) else null;
+    const importmap: *const ImportMap = if (realm) |ctx| &ctx.script_manager.importmap else &ImportMap.empty;
+
+    const resolved = (importmap.resolve(l.ctx.local_arena, base, specifier) catch null) orelse {
         _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
         return;
     };

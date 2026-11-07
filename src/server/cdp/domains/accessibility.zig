@@ -65,11 +65,11 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = try findFrame(cmd, bc, params.frameId) orelse return;
+    const target = try cmd.target();
+    const frame = try findFrame(cmd, target, params.frameId) orelse return;
 
-    const node = try bc.node_registry.register(frame.window._document.asNode());
-    return sendAXNodes(cmd, bc, frame, node, .{
+    const node = try target.node_registry.register(frame.window._document.asNode());
+    return sendAXNodes(cmd, target, frame, node, .{
         .depth = params.depth orelse 0,
     });
 }
@@ -80,11 +80,11 @@ fn getRootAXNode(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = try findFrame(cmd, bc, params.frameId) orelse return;
+    const target = try cmd.target();
+    const frame = try findFrame(cmd, target, params.frameId) orelse return;
 
-    const node = try bc.node_registry.register(frame.window._document.asNode());
-    return sendAXNodes(cmd, bc, frame, node, .{
+    const node = try target.node_registry.register(frame.window._document.asNode());
+    return sendAXNodes(cmd, target, frame, node, .{
         .scope = .bare_node,
     });
 }
@@ -97,10 +97,10 @@ fn getAXNodeAndAncestors(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try dom.getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const target = try cmd.target();
+    const node = try dom.getNode(cmd.arena, target, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return sendAXNodes(cmd, bc, bc.mainFrame() orelse return error.FrameNotLoaded, node, .{
+    return sendAXNodes(cmd, target, target.mainFrame() orelse return error.FrameNotLoaded, node, .{
         .scope = .ancestors,
     });
 }
@@ -112,8 +112,8 @@ fn getChildAXNodes(cmd: *CDP.Command) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = try findFrame(cmd, bc, params.frameId) orelse return;
+    const target = try cmd.target();
+    const frame = try findFrame(cmd, target, params.frameId) orelse return;
 
     // The AXNodeId is our node registry id, unique across frames: a given
     // frame only has to own the node.
@@ -122,7 +122,7 @@ fn getChildAXNodes(cmd: *CDP.Command) !void {
 
     // A ListMarker has no DOM node and no children. It's checked like its
     // <li>, and is gone once the <li> no longer has one.
-    if (bc.node_registry.listMarkerOwner(ax_id)) |li| {
+    if (target.node_registry.listMarkerOwner(ax_id)) |li| {
         if (!AXNode.hasListMarker(li.dom)) {
             return error.NodeNotFound;
         }
@@ -130,9 +130,9 @@ fn getChildAXNodes(cmd: *CDP.Command) !void {
         return cmd.sendResult(.{ .nodes = [0]u32{} }, .{});
     }
 
-    const node = bc.node_registry.lookup_by_id.get(ax_id) orelse return error.NodeNotFound;
+    const node = target.node_registry.lookup_by_id.get(ax_id) orelse return error.NodeNotFound;
     try checkOwnerFrame(node, owner_frame);
-    return sendAXNodes(cmd, bc, frame, node, .{
+    return sendAXNodes(cmd, target, frame, node, .{
         .scope = .children,
     });
 }
@@ -149,11 +149,11 @@ fn checkOwnerFrame(node: *const NodeRegistry.Node, frame: ?*Frame) !void {
 
 // Reply with the AX nodes `opts` selects around `node`: a `nodes` list, or a
 // single `node` for the .bare_node scope.
-fn sendAXNodes(cmd: *CDP.Command, bc: *CDP.BrowserContext, frame: *Frame, node: *const NodeRegistry.Node, opts: AXNode.Writer.Opts) !void {
+fn sendAXNodes(cmd: *CDP.Command, target: *CDP.Target, frame: *Frame, node: *const NodeRegistry.Node, opts: AXNode.Writer.Opts) !void {
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
 
-    const writer = try bc.axnodeWriter(temp_arena, node, opts);
+    const writer = try target.axnodeWriter(temp_arena, node, opts);
     if (opts.scope == .bare_node) {
         return cmd.sendResult(.{ .node = writer }, .{});
     }
@@ -162,11 +162,11 @@ fn sendAXNodes(cmd: *CDP.Command, bc: *CDP.BrowserContext, frame: *Frame, node: 
 
 // The frame `frame_id` names, or the main frame when null. Returns null after
 // replying with an error when the frame isn't part of this target.
-fn findFrame(cmd: *CDP.Command, bc: *CDP.BrowserContext, frame_id: ?[]const u8) !?*Frame {
+fn findFrame(cmd: *CDP.Command, target: *CDP.Target, frame_id: ?[]const u8) !?*Frame {
     const frame_id_ = frame_id orelse {
-        return bc.mainFrame() orelse return error.FrameNotLoaded;
+        return target.mainFrame() orelse return error.FrameNotLoaded;
     };
-    return bc.session.findFrameByFrameId(try id.parseFrameId(frame_id_)) orelse {
+    return target.findFrame(try id.parseFrameId(frame_id_)) orelse {
         try cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
         return null;
     };
@@ -182,10 +182,10 @@ fn queryAXTree(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try dom.getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const target = try cmd.target();
+    const node = try dom.getNode(cmd.arena, target, cmd.routing_session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return sendAXNodes(cmd, bc, bc.mainFrame() orelse return error.FrameNotLoaded, node, .{
+    return sendAXNodes(cmd, target, target.mainFrame() orelse return error.FrameNotLoaded, node, .{
         .filter = .{
             .accessible_name = params.accessibleName,
             .role = params.role,
@@ -202,10 +202,10 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
     };
     const params: Params = (try cmd.params(Params)) orelse .{};
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const node = try dom.getNode(cmd.arena, bc, cmd.input.session_id, params.nodeId, params.backendNodeId, params.objectId);
+    const target = try cmd.target();
+    const node = try dom.getNode(cmd.arena, target, cmd.routing_session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    return sendAXNodes(cmd, bc, bc.mainFrame() orelse return error.FrameNotLoaded, node, .{
+    return sendAXNodes(cmd, target, target.mainFrame() orelse return error.FrameNotLoaded, node, .{
         // Defaults to true, like Chrome.
         .scope = if (params.fetchRelatives orelse true) .relatives else .node,
     });
@@ -539,7 +539,7 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
     try ctx.processMessage(.{ .id = 2, .method = "Accessibility.getAXNodeAndAncestors", .params = .{ .objectId = gone } });
     const chain = (try testing.sentResult(&ctx, 2)).get("nodes").?.array.items;
     try testing.expectEqual(4, chain.len);
-    try expectNotRendered(chain[0].object);
+    try expectOutOfTree(chain[0].object, "notRendered");
     try expectChain(chain);
     const body_id = chain[1].object.get("nodeId").?.string;
 
@@ -559,7 +559,7 @@ test "cdp.accessibility: a node outside the AX tree hangs off its nearest ancest
     const title = try evaluatedObjectId(&ctx, 4);
     try ctx.processMessage(.{ .id = 5, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = title } });
     const nodes = (try testing.sentResult(&ctx, 5)).get("nodes").?.array.items;
-    try expectNotRendered(nodes[0].object);
+    try expectOutOfTree(nodes[0].object, "notRendered");
     try expectChain(nodes);
 
     try ctx.processMessage(.{ .id = 6, .method = "Accessibility.getChildAXNodes", .params = .{
@@ -575,7 +575,9 @@ test "cdp.accessibility: a node under inert or aria-hidden" {
     _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_tree.html" });
 
     // As in Chrome: the node, then <main> (not the hiding <div>) and up.
-    inline for (.{ "under-inert", "p-under-aria-hidden" }, 0..) |dom_id, i| {
+    const cases = .{ .{ "under-inert", "inertElement" }, .{ "p-under-aria-hidden", "ariaHiddenSubtree" } };
+    inline for (cases, 0..) |case, i| {
+        const dom_id, const reason = case;
         try ctx.processMessage(.{ .id = 2 * i + 1, .method = "Runtime.evaluate", .params = .{
             .expression = "document.getElementById('" ++ dom_id ++ "')",
         } });
@@ -583,9 +585,78 @@ test "cdp.accessibility: a node under inert or aria-hidden" {
         try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{ .objectId = object_id } });
         const nodes = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items;
         try testing.expectEqual(5, nodes.len);
-        try expectNotRendered(nodes[0].object);
+        try expectOutOfTree(nodes[0].object, reason);
         try testing.expectEqual("main", axRole(nodes[1].object));
         try expectChain(nodes);
+    }
+}
+
+test "cdp.accessibility: ignoredReasons names why a node is hidden" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_ignored_reasons.html" });
+
+    // Checked against Chrome: aria-hidden on the node or above wins, then
+    // the outermost of inert and display:none.
+    const cases = .{
+        .{ "title", "notRendered" },
+        .{ "ah", "ariaHiddenElement" },
+        .{ "ah-child", "ariaHiddenSubtree" },
+        .{ "ah-upper", "ariaHiddenElement" },
+        .{ "ah-false", "ariaHiddenSubtree" },
+        .{ "inert", "inertElement" },
+        .{ "inert-child", "inertElement" },
+        .{ "vh", "notVisible" },
+        .{ "vh-child", "notVisible" },
+        .{ "dn", "notRendered" },
+        .{ "dn-child", "notRendered" },
+        .{ "ah-over-dn", "ariaHiddenSubtree" },
+        .{ "dn-over-ah", "ariaHiddenElement" },
+        .{ "ah-over-inert", "ariaHiddenSubtree" },
+        .{ "inert-over-ah", "ariaHiddenElement" },
+        .{ "inert-over-dn", "inertElement" },
+        .{ "dn-over-inert", "notRendered" },
+        .{ "inert-over-vh", "inertElement" },
+        .{ "svg-child", "ariaHiddenSubtree" },
+    };
+    inline for (cases, 0..) |case, i| {
+        const dom_id, const reason = case;
+        try ctx.processMessage(.{ .id = 2 * i + 1, .method = "Runtime.evaluate", .params = .{
+            .expression = "document.getElementById('" ++ dom_id ++ "')",
+        } });
+        const object_id = try evaluatedObjectId(&ctx, 2 * i + 1);
+        try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{
+            .objectId = object_id,
+            .fetchRelatives = false,
+        } });
+        const nodes = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items;
+        expectIgnoredReason(nodes[0].object, reason) catch |err| {
+            std.debug.print("#{s}\n", .{dom_id});
+            return err;
+        };
+    }
+}
+
+test "cdp.accessibility: aria-hidden on body and option is ignored" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/ax_aria_hidden_body.html" });
+
+    inline for (.{ .{ "btn", "button" }, .{ "opt", "option" } }, 0..) |case, i| {
+        const dom_id, const role = case;
+        try ctx.processMessage(.{ .id = 2 * i + 1, .method = "Runtime.evaluate", .params = .{
+            .expression = "document.getElementById('" ++ dom_id ++ "')",
+        } });
+        const object_id = try evaluatedObjectId(&ctx, 2 * i + 1);
+        try ctx.processMessage(.{ .id = 2 * i + 2, .method = "Accessibility.getPartialAXTree", .params = .{
+            .objectId = object_id,
+            .fetchRelatives = false,
+        } });
+        const node = (try testing.sentResult(&ctx, 2 * i + 2)).get("nodes").?.array.items[0].object;
+        try testing.expectEqual(role, axRole(node));
+        try testing.expectEqual(false, node.get("ignored").?.bool);
     }
 }
 
@@ -681,11 +752,17 @@ test "cdp.accessibility: an iframe's tree is its own" {
     }
 }
 
-fn expectNotRendered(node: std.json.ObjectMap) !void {
+fn expectOutOfTree(node: std.json.ObjectMap, reason: []const u8) !void {
     try testing.expectEqual("none", axRole(node));
-    try testing.expectEqual(true, node.get("ignored").?.bool);
-    try testing.expectEqual("notRendered", node.get("ignoredReasons").?.array.items[0].object.get("name").?.string);
     try testing.expectEqual(0, node.get("childIds").?.array.items.len);
+    try expectIgnoredReason(node, reason);
+}
+
+fn expectIgnoredReason(node: std.json.ObjectMap, reason: []const u8) !void {
+    try testing.expectEqual(true, node.get("ignored").?.bool);
+    const reasons = node.get("ignoredReasons").?.array.items;
+    try testing.expectEqual(1, reasons.len);
+    try testing.expectEqual(reason, reasons[0].object.get("name").?.string);
 }
 
 // `nodes` is a node then each ancestor up to a root.

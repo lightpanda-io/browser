@@ -147,12 +147,32 @@ fn handleClient(client: posix.socket_t) void {
     var accept_key: [28]u8 = undefined;
     _ = std.base64.standard.Encoder.encode(&accept_key, &hash);
 
-    // Send upgrade response
-    var resp_buf: [256]u8 = undefined;
-    const resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "Connection: Upgrade\r\n" ++
-        "Sec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key}) catch return;
+    // Send upgrade response. A test can pin the subprotocol the server
+    // selects with `?protocol=<name>`, or force a second, duplicate
+    // Sec-WebSocket-Protocol header with `?multiple-protocols`.
+    var resp_buf: [512]u8 = undefined;
+    var resp: []const u8 = undefined;
+    if (std.mem.find(u8, request, "?multiple-protocols") != null) {
+        resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n" ++
+            "Sec-WebSocket-Accept: {s}\r\n" ++
+            "Sec-WebSocket-Protocol: proto1\r\n" ++
+            "Sec-WebSocket-Protocol: proto2\r\n\r\n", .{accept_key}) catch return;
+    } else if (std.mem.find(u8, request, "?protocol=")) |query_start| {
+        const remaining = request[query_start + "?protocol=".len ..];
+        const val_end = std.mem.findAny(u8, remaining, " \r\n&") orelse remaining.len;
+        resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n" ++
+            "Sec-WebSocket-Accept: {s}\r\n" ++
+            "Sec-WebSocket-Protocol: {s}\r\n\r\n", .{ accept_key, remaining[0..val_end] }) catch return;
+    } else {
+        resp = std.mem.print(&resp_buf, "HTTP/1.1 101 Switching Protocols\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "Connection: Upgrade\r\n" ++
+            "Sec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key}) catch return;
+    }
     _ = sys_net.write(client, resp) catch return;
 
     // Message loop with larger buffer for big messages
@@ -305,6 +325,19 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
         return;
     }
 
+    // Command: send-fragmented - send messages split across continuation
+    // frames, one write per frame, with a ping between two fragments
+    if (std.mem.eql(u8, payload, "send-fragmented")) {
+        try sendRawFrame(client, 0x02, &.{ 1, 2 });
+        try sendRawFrame(client, 0x80, &.{3});
+        try sendRawFrame(client, 0x01, "ab");
+        try sendRawFrame(client, 0x89, "p");
+        try sendRawFrame(client, 0x00, "c");
+        try sendRawFrame(client, 0x80, "d");
+        try sendRawFrame(client, 0x81, "end");
+        return;
+    }
+
     // Command: close:CODE:REASON - send close frame with specific code/reason
     if (std.mem.startsWith(u8, payload, "close:")) {
         const rest = payload["close:".len..];
@@ -363,6 +396,13 @@ fn sendFrame(client: posix.socket_t, opcode: u8, prefix: []const u8, payload: []
     if (payload.len > 0) {
         _ = try sys_net.write(client, payload);
     }
+}
+
+/// Sends a frame whose first byte (FIN bit + opcode) is given as-is.
+fn sendRawFrame(client: posix.socket_t, first_byte: u8, payload: []const u8) !void {
+    std.debug.assert(payload.len <= 125);
+    _ = try sys_net.write(client, &.{ first_byte, @intCast(payload.len) });
+    _ = try sys_net.write(client, payload);
 }
 
 fn sendLargeMessage(client: posix.socket_t, size: usize) !void {

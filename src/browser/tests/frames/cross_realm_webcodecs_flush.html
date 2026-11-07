@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<head></head>
+<meta name=lp-mode content=test>
 <body>
 <script src="../testing.js"></script>
 
@@ -22,7 +22,7 @@ local scope at that point.
   });
 
   const decoder = new AudioDecoder({output: () => {}, error: () => {}});
-  decoder.configure({codec: 'opus', sampleRate: 48000, numberOfChannels: 2});
+  decoder.configure({codec: 'lp-unsupported', sampleRate: 48000, numberOfChannels: 2});
   const flush = iframe.contentWindow.AudioDecoder.prototype.flush.call(decoder);
   const unconfigured = iframe.contentWindow.VideoEncoder.prototype.flush.call(new VideoEncoder({output: () => {}, error: () => {}}));
   // Both handled now: awaiting one leaves the other unhandled meanwhile.
@@ -32,7 +32,7 @@ local scope at that point.
   ]));
 
   await state.done((names) => {
-    // the codec is unsupported, so the pending configure closes it
+    // No browser supports the codec, so the pending configure closes it
     testing.expectEqual(['NotSupportedError', 'InvalidStateError'], names);
   });
 }
