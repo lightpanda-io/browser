@@ -84,6 +84,15 @@ handles: http.Handles,
 // with App.watchdog by Browser.init.
 heartbeat: Watchdog.Heartbeat = .{},
 
+// Absolute `.boot` millisecond deadline bounding any in-flight synchronous
+// fetch (parser-blocking script/stylesheet, sync XHR, worker import) on this
+// client, or null when no enclosing wait bounds them. A navigation waiter
+// (Runner._wait, the script Runtime's driveAsync) sets it before each tick so
+// a hung subresource can't stretch the wait past the caller's timeout: those
+// sync fetches spin inside `submitSync` on the same stack as the tick, and
+// without this bound they only end at curl's per-request wall clock.
+wait_deadline_ms: ?u64 = null,
+
 // Use to generate the next request ID
 next_request_id: u32 = 0,
 
@@ -880,6 +889,28 @@ fn clampToDelayed(self: *const Client, timeout_ms: u32) u32 {
         return 0;
     }
     return @intCast(@min(timeout_ms, transfer._run_at - now));
+}
+
+/// Bounds every in-flight synchronous fetch until cleared. Called by a
+/// navigation waiter before each of its ticks; null ends the bound.
+pub fn setWaitDeadline(self: *Client, deadline_ms: ?u64) void {
+    self.wait_deadline_ms = deadline_ms;
+}
+
+/// Whether the enclosing wait's deadline has passed. Always false when no
+/// deadline is set.
+pub fn waitDeadlineExceeded(self: *const Client) bool {
+    const deadline = self.wait_deadline_ms orelse return false;
+    return lp.datetime.milliTimestamp(.boot) >= deadline;
+}
+
+/// Milliseconds left before the enclosing wait's deadline, or null when no
+/// deadline is set. Clamped at 0 once passed.
+fn waitDeadlineRemaining(self: *const Client) ?u32 {
+    const deadline = self.wait_deadline_ms orelse return null;
+    const now = lp.datetime.milliTimestamp(.boot);
+    if (deadline <= now) return 0;
+    return @intCast(deadline - now);
 }
 
 // Deliver completed response. This is the ONLY place user callbacks run,
@@ -2986,6 +3017,13 @@ pub const Transfer = struct {
             return error.SyncWaitInterrupted;
         }
 
+        // An enclosing navigation wait has already run past its deadline: don't
+        // even start this fetch, the waiter must settle now.
+        if (client.waitDeadlineExceeded()) {
+            self.deinit();
+            return error.WaitDeadlineExceeded;
+        }
+
         var sync_ctx = SyncContext{ .client = client, .body = .init(client.allocator), .options = opts };
         errdefer {
             sync_ctx.body.deinit();
@@ -3011,7 +3049,16 @@ pub const Transfer = struct {
         try self.submit();
 
         while (sync_ctx.completion == .in_progress) {
-            client.tickSync(200) catch |err| {
+            // Cap the wait at the enclosing navigation wait's deadline: a hung
+            // subresource must not stretch a bounded `goto` past its timeout
+            // (this loop runs on the parser's stack, inside a dispatch, inside
+            // the waiter's tick — the waiter can't check its own deadline until
+            // we return).
+            const wait_ms: u32 = if (client.waitDeadlineRemaining()) |remaining|
+                @min(200, remaining)
+            else
+                200;
+            client.tickSync(wait_ms) catch |err| {
                 if (sync_ctx.completion == .in_progress) {
                     // tick failed for a reason unrelated to our transfer: OOM,
                     // client disconnect, or a queued teardown command (which
@@ -3023,6 +3070,15 @@ pub const Transfer = struct {
                 }
                 return err;
             };
+            if (client.waitDeadlineExceeded()) {
+                // Deadline of the enclosing wait reached: abort the fetch and
+                // hand the error up. The parser resumes without this resource
+                // (scriptAddedCallback and friends log the error and carry on),
+                // and the waiter rejects its navigation as timed out.
+                const err = error.WaitDeadlineExceeded;
+                self.abort(err);
+                return err;
+            }
         }
 
         switch (sync_ctx.completion) {
