@@ -33,13 +33,26 @@ dead context.
   // the popup's importmap applies, even when called from here
   testing.expectEqual(testing.BASE_URL + 'window/support/mapped.js', resolve('mapped'));
 
-  // in-place re-navigation of the named popup
-  window.open(testing.BASE_URL + 'window/support/frame1.html', 'popup_imr');
-  await new Promise((r) => setTimeout(r, 500));
+  // in-place re-navigation of the named popup; the new page tells us it's up
+  const next = new Promise((resolve) => {
+    window.addEventListener('message', function onMessage(e) {
+      if (e.data && e.data.from === 'imr_next') {
+        window.removeEventListener('message', onMessage);
+        resolve();
+      }
+    });
+  });
+  window.open(testing.BASE_URL + 'window/support/dead_realm.html?key=imr_next', 'popup_imr');
+  await next;
 
   state.resolve();
   await state.done(() => {
     testing.expectEqual(expected, resolve('./mod.js'));
+    testing.diverges('the importmap goes with the realm; Chrome still applies it', () => {
+      let mapped = null;
+      try { mapped = resolve('mapped'); } catch (e) {}
+      testing.expectEqual(null, mapped);
+    });
   });
 </script>
 </body>
