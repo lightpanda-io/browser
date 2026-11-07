@@ -535,7 +535,7 @@ test "cdp.browser: permission setup works before the first target" {
             try testing.expectEqual(0, ctx.cdp().pending_permissions.count());
 
             var ls: lp.js.Local.Scope = undefined;
-            bc.mainFrame().?.js.localScope(&ls);
+            (try testing.firstTarget(bc)).mainFrame().?.js.localScope(&ls);
             defer ls.deinit();
             _ = try ls.local.exec("navigator.permissions.query({name: 'geolocation'}).then(p => globalThis.permissionState = p.state)", null);
             ls.local.runMicrotasks();
