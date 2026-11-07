@@ -186,11 +186,15 @@ pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
 // `target_session_id` routes a page command that has no sessionId of its own
 // (Target.sendMessageToTarget wraps one).
 pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, target_session_id: ?[]const u8) !void {
-    const raw = try arena.dupe(u8, str);
-    replaceLoneSurrogates(raw);
-    const input = json.parseFromSliceLeaky(InputMessage, arena, raw, .{
-        .ignore_unknown_fields = true,
-    }) catch return error.InvalidJSON;
+    var raw = str;
+    const input = parseInput(arena, str) catch blk: {
+        const fixed = try arena.dupe(u8, str);
+        if (replaceLoneSurrogates(fixed) == false) {
+            return error.InvalidJSON;
+        }
+        raw = fixed;
+        break :blk parseInput(arena, fixed) catch return error.InvalidJSON;
+    };
     return self.dispatchParsed(arena, sender, raw, input, target_session_id);
 }
 
@@ -1110,8 +1114,10 @@ pub const Command = struct {
 // in a string cut in the middle of an emoji, as an escape. std.json can't
 // decode them to UTF-8 and rejects the whole message, which would close
 // the connection. A lone surrogate has no UTF-8 encoding, so it becomes
-// U+FFFD, as TextEncoder does.
-pub fn replaceLoneSurrogates(buf: []u8) void {
+// U+FFFD, as TextEncoder does. Returns whether anything was replaced.
+// Only called after a parse fails, so the happy path pays nothing.
+pub fn replaceLoneSurrogates(buf: []u8) bool {
+    var replaced = false;
     var i: usize = 0;
     while (i + 1 < buf.len) {
         if (buf[i] != '\\') {
@@ -1134,8 +1140,16 @@ pub fn replaceLoneSurrogates(buf: []u8) void {
             }
         }
         @memcpy(buf[i..][0..6], "\\ufffd");
+        replaced = true;
         i += 6;
     }
+    return replaced;
+}
+
+pub fn parseInput(arena: Allocator, str: []const u8) !InputMessage {
+    return json.parseFromSliceLeaky(InputMessage, arena, str, .{
+        .ignore_unknown_fields = true,
+    });
 }
 
 // The code unit of a \uXXXX escape at the start of buf, if it is a surrogate.
@@ -1218,20 +1232,20 @@ test "cdp: invalid json" {
 }
 
 test "cdp: replaceLoneSurrogates" {
-    const cases = [_][2][]const u8{
-        .{ "\"\\ud800\"", "\"\\ufffd\"" },
-        .{ "\"\\udc00x\"", "\"\\ufffdx\"" },
-        .{ "\"\\uD800\\uD800\"", "\"\\ufffd\\ufffd\"" },
-        .{ "\"\\ud83d\\ude00\"", "\"\\ud83d\\ude00\"" },
-        .{ "\"\\udc00\\ud800\"", "\"\\ufffd\\ufffd\"" },
-        .{ "\"\\\\ud800\"", "\"\\\\ud800\"" },
-        .{ "\"\\u00e9\\n\"", "\"\\u00e9\\n\"" },
-        .{ "\"\\ud80", "\"\\ud80" },
+    const cases = [_]struct { []const u8, []const u8, bool }{
+        .{ "\"\\ud800\"", "\"\\ufffd\"", true },
+        .{ "\"\\udc00x\"", "\"\\ufffdx\"", true },
+        .{ "\"\\uD800\\uD800\"", "\"\\ufffd\\ufffd\"", true },
+        .{ "\"\\ud83d\\ude00\"", "\"\\ud83d\\ude00\"", false },
+        .{ "\"\\udc00\\ud800\"", "\"\\ufffd\\ufffd\"", true },
+        .{ "\"\\\\ud800\"", "\"\\\\ud800\"", false },
+        .{ "\"\\u00e9\\n\"", "\"\\u00e9\\n\"", false },
+        .{ "\"\\ud80", "\"\\ud80", false },
     };
     for (cases) |c| {
         const buf = try testing.allocator.dupe(u8, c[0]);
         defer testing.allocator.free(buf);
-        replaceLoneSurrogates(buf);
+        try testing.expectEqual(c[2], replaceLoneSurrogates(buf));
         try testing.base.expectString(c[1], buf);
     }
 }

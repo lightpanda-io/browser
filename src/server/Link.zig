@@ -320,13 +320,7 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     errdefer arena.release();
 
     const raw = try arena.dupe(u8, bytes);
-    CDP.replaceLoneSurrogates(raw);
-    const input = std.json.parseFromSliceLeaky(
-        CDP.InputMessage,
-        arena.allocator(),
-        raw,
-        .{ .ignore_unknown_fields = true },
-    ) catch {
+    const input = parse(arena.allocator(), raw) orelse {
         self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
         pushed.* = true;
         return false;
@@ -335,6 +329,17 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input } });
     pushed.* = true;
     return true;
+}
+
+// On failure, retries once with lone surrogate escapes replaced (see
+// CDP.replaceLoneSurrogates). `raw` is our own copy, so it's fixed in place.
+fn parse(arena: Allocator, raw: []u8) ?CDP.InputMessage {
+    return CDP.parseInput(arena, raw) catch {
+        if (CDP.replaceLoneSurrogates(raw) == false) {
+            return null;
+        }
+        return CDP.parseInput(arena, raw) catch null;
+    };
 }
 
 // BiDi frames are pushed raw; the worker parses them.
