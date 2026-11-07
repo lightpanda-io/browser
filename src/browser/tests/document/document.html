@@ -2,6 +2,7 @@
 <head id="the_head">
   <meta charset="UTF-8">
   <title>Test Document Title</title>
+  <meta name=lp-mode content=test>
   <script src="../testing.js"></script>
 </head>
 
@@ -231,6 +232,18 @@
   document.cookie = 'teststandalone';
   testing.expectEqual(true, document.cookie.includes('teststandalone'));
   document.cookie = 'teststandalone; Max-Age=0';
+</script>
+
+<script id=cookie_empty_name_and_value>
+{
+  // Ignored: stored, it would read as an empty entry before the others.
+  document.cookie = 'testpair=1';
+  const before = document.cookie;
+  document.cookie = '=';
+  document.cookie = ' = ; Path=/';
+  testing.expectEqual(before, document.cookie);
+  document.cookie = 'testpair=; Max-Age=0';
+}
 </script>
 
 <script id=cookie_whitespace>

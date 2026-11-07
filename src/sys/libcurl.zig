@@ -25,6 +25,7 @@ const c = @import("curl");
 
 pub const Curl = c.CURL;
 pub const CurlM = c.CURLM;
+pub const CurlSH = c.CURLSH;
 pub const CurlCode = c.CURLcode;
 pub const CurlSList = c.curl_slist;
 pub const CurlHeader = c.curl_header;
@@ -225,6 +226,7 @@ const CurlOption = enum(c.CURLoption) {
     read_data = c.CURLOPT_READDATA,
     read_function = c.CURLOPT_READFUNCTION,
     connect_only = c.CURLOPT_CONNECT_ONLY,
+    suppress_connect_headers = c.CURLOPT_SUPPRESS_CONNECT_HEADERS,
     forbid_reuse = c.CURLOPT_FORBID_REUSE,
     pipewait = c.CURLOPT_PIPEWAIT,
     upload = c.CURLOPT_UPLOAD,
@@ -234,6 +236,8 @@ const CurlOption = enum(c.CURLoption) {
     ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
     ssl_ec_curves = c.CURLOPT_SSL_EC_CURVES,
     connect_to = c.CURLOPT_CONNECT_TO,
+    share = c.CURLOPT_SHARE,
+    resolve = c.CURLOPT_RESOLVE,
 };
 
 pub const CurlHttpVersion = enum(c_long) {
@@ -264,6 +268,7 @@ pub const CurlInfo = enum(c.CURLINFO) {
     pretransfer_time_t = c.CURLINFO_PRETRANSFER_TIME_T,
     starttransfer_time_t = c.CURLINFO_STARTTRANSFER_TIME_T,
     size_download_t = c.CURLINFO_SIZE_DOWNLOAD_T,
+    header_size = c.CURLINFO_HEADER_SIZE,
     http_version = c.CURLINFO_HTTP_VERSION,
     num_connects = c.CURLINFO_NUM_CONNECTS,
     conn_id = c.CURLINFO_CONN_ID,
@@ -469,6 +474,15 @@ const ErrorMulti = error{
     Unknown,
 };
 
+const ErrorShare = error{
+    BadOption,
+    InUse,
+    Invalid,
+    OutOfMemory,
+    NotBuiltIn,
+    Unknown,
+};
+
 const ErrorHeader = error{
     OutOfMemory,
     BadArgument,
@@ -615,6 +629,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .pipewait,
         .no_body,
         .forbid_reuse,
+        .suppress_connect_headers,
         .ssl_verify_peer,
         .proxy_ssl_verify_peer,
         => @as(c_long, @intFromBool(value)),
@@ -645,6 +660,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
 
         .http_header,
         .connect_to,
+        .resolve,
         => @as(?*CurlSList, value),
 
         .private,
@@ -655,6 +671,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         => @as(?*anyopaque, @ptrCast(value)),
 
         .ssl_ctx_data => @as(*crypto.X509_STORE, value),
+        .share => @as(?*CurlSH, value),
 
         .http_version => @as(c_long, @backingInt(@as(CurlHttpVersion, value))),
 
@@ -685,6 +702,7 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         .redirect_count,
         .num_connects,
         .http_version,
+        .header_size,
         => blk: {
             const p: *c_long = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
@@ -753,6 +771,54 @@ pub fn curl_easy_nextheader(
     const ptr = c.curl_easy_nextheader(easy, @backingInt(origin), request, prev);
     if (ptr == null) return null;
     return @ptrCast(ptr);
+}
+
+pub const CurlLockData = enum(c.curl_lock_data) {
+    share = c.CURL_LOCK_DATA_SHARE,
+    dns = c.CURL_LOCK_DATA_DNS,
+    _,
+};
+
+pub const CurlLockAccess = c.curl_lock_access;
+const CurlLockFunction = *const fn (?*Curl, CurlLockData, CurlLockAccess, ?*anyopaque) callconv(.c) void;
+const CurlUnlockFunction = *const fn (?*Curl, CurlLockData, ?*anyopaque) callconv(.c) void;
+
+const CurlSHOption = enum(c.CURLSHoption) {
+    share = c.CURLSHOPT_SHARE,
+    lock_function = c.CURLSHOPT_LOCKFUNC,
+    unlock_function = c.CURLSHOPT_UNLOCKFUNC,
+    user_data = c.CURLSHOPT_USERDATA,
+};
+
+pub fn curl_share_init() ?*CurlSH {
+    return c.curl_share_init();
+}
+
+pub fn curl_share_cleanup(share: *CurlSH) ErrorShare!void {
+    try errorSHCheck(c.curl_share_cleanup(share));
+}
+
+pub fn curl_share_setopt(share: *CurlSH, comptime option: CurlSHOption, value: anytype) ErrorShare!void {
+    const opt: c.CURLSHoption = @backingInt(option);
+    const code = switch (option) {
+        .share => c.curl_share_setopt(share, opt, @as(c_int, @intCast(@backingInt(@as(CurlLockData, value))))),
+        .lock_function => c.curl_share_setopt(share, opt, @as(CurlLockFunction, value)),
+        .unlock_function => c.curl_share_setopt(share, opt, @as(CurlUnlockFunction, value)),
+        .user_data => c.curl_share_setopt(share, opt, @as(?*anyopaque, @ptrCast(value))),
+    };
+    try errorSHCheck(code);
+}
+
+fn errorSHCheck(code: c.CURLSHcode) ErrorShare!void {
+    return switch (code) {
+        c.CURLSHE_OK => {},
+        c.CURLSHE_BAD_OPTION => ErrorShare.BadOption,
+        c.CURLSHE_IN_USE => ErrorShare.InUse,
+        c.CURLSHE_INVALID => ErrorShare.Invalid,
+        c.CURLSHE_NOMEM => ErrorShare.OutOfMemory,
+        c.CURLSHE_NOT_BUILT_IN => ErrorShare.NotBuiltIn,
+        else => ErrorShare.Unknown,
+    };
 }
 
 pub fn curl_multi_init() ?*CurlM {
@@ -885,6 +951,8 @@ pub const WsFrameType = enum {
 
 pub const WsFrameMeta = struct {
     frame_type: WsFrameType,
+    // false when more fragments of the same message follow
+    fin: bool,
     offset: usize,
     bytes_left: usize,
     len: usize,
@@ -892,6 +960,7 @@ pub const WsFrameMeta = struct {
     fn from(frame: *const c.curl_ws_frame) WsFrameMeta {
         return .{
             .frame_type = WsFrameType.fromFlags(frame.flags),
+            .fin = @as(c_uint, @bitCast(frame.flags)) & c.CURLWS_CONT == 0,
             .offset = @intCast(frame.offset),
             .bytes_left = @intCast(frame.bytesleft),
             .len = if (frame.len < 0)

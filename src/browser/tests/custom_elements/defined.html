@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<body>
+<button id="builtin_parsed" is="x-defined-btn" data-x="1">a</button>
+<button id="builtin_parsed_invalid" is="foo">a</button>
+<script src="../testing.js"></script>
+
+<script id="not_custom">
+  {
+    testing.expectEqual(true, document.createElement('div').matches(':defined'));
+    testing.expectEqual(true, document.createElement('font-face').matches(':defined'));
+    testing.expectEqual(true, document.createElementNS('http://www.w3.org/2000/svg', 'x-svg').matches(':defined'));
+    testing.expectEqual(false, document.createElement('x-never-defined').matches(':defined'));
+  }
+</script>
+
+<script id="disconnected_stays_undefined">
+  {
+    const el = document.createElement('x-defined-late');
+    customElements.define('x-defined-late', class extends HTMLElement {});
+    testing.expectEqual(false, el.matches(':defined'));
+
+    document.body.appendChild(el);
+    testing.expectEqual(true, el.matches(':defined'));
+    el.remove();
+    testing.expectEqual(true, el.matches(':defined'));
+  }
+</script>
+
+<script id="upgrade_api">
+  {
+    const el = document.createElement('x-defined-upgrade');
+    customElements.define('x-defined-upgrade', class extends HTMLElement {});
+    testing.expectEqual(false, el.matches(':defined'));
+    customElements.upgrade(el);
+    testing.expectEqual(true, el.matches(':defined'));
+  }
+</script>
+
+<script id="precustomized_during_upgrade">
+  {
+    const el = document.createElement('x-defined-pre');
+    document.body.appendChild(el);
+    let during = null;
+    customElements.define('x-defined-pre', class extends HTMLElement {
+      constructor() {
+        super();
+        during = this.matches(':defined');
+      }
+    });
+    testing.expectEqual(false, during);
+    testing.expectEqual(true, el.matches(':defined'));
+    el.remove();
+  }
+</script>
+
+<script id="custom_during_construction">
+  {
+    let during = null;
+    class XDefinedNew extends HTMLElement {
+      constructor() {
+        super();
+        during = this.matches(':defined');
+      }
+    }
+    customElements.define('x-defined-new', XDefinedNew);
+    const el = new XDefinedNew();
+    testing.expectEqual(true, during);
+    testing.expectEqual(true, el.matches(':defined'));
+  }
+</script>
+
+<script id="failed_upgrade">
+  {
+    const el = document.createElement('x-defined-fail');
+    document.body.appendChild(el);
+    window.onerror = () => true;
+    customElements.define('x-defined-fail', class extends HTMLElement {
+      constructor() {
+        super();
+        throw new Error('nope');
+      }
+    });
+    window.onerror = null;
+    testing.expectEqual(false, el.matches(':defined'));
+    el.remove();
+  }
+</script>
+
+<style>
+  x-defined-styled:not(:defined) { display: none; }
+</style>
+<script id="visibility_follows_upgrade">
+  {
+    const el = document.createElement('x-defined-styled');
+    el.textContent = 'hi';
+    document.body.appendChild(el);
+    testing.expectEqual(false, el.checkVisibility());
+
+    let during = null;
+    customElements.define('x-defined-styled', class extends HTMLElement {
+      constructor() {
+        super();
+        during = this.checkVisibility();
+      }
+    });
+    testing.expectEqual(false, during);
+    testing.expectEqual(true, el.checkVisibility());
+    el.remove();
+  }
+</script>
+
+<script id="customized_builtin">
+  {
+    const parsed = document.getElementById('builtin_parsed');
+    testing.expectEqual(false, parsed.matches(':defined'));
+    testing.expectEqual(false, document.getElementById('builtin_parsed_invalid').matches(':defined'));
+
+    const created = document.createElement('button', {is: 'x-defined-btn'});
+    testing.expectEqual(false, created.matches(':defined'));
+    testing.expectEqual(false, document.createElement('button', {is: 'foo'}).matches(':defined'));
+
+    // the "is" value is fixed at creation, the attribute doesn't make one
+    const attr = document.createElement('button');
+    attr.setAttribute('is', 'x-defined-btn');
+    testing.expectEqual(true, attr.matches(':defined'));
+
+    const fragment = document.createElement('div');
+    fragment.innerHTML = '<button is="x-defined-btn"></button>';
+    testing.expectEqual(false, fragment.firstChild.matches(':defined'));
+
+    const upgraded = document.createElement('button', {is: 'x-defined-btn'});
+
+    let during = null;
+    let connected = 0;
+    const changed = [];
+    customElements.define('x-defined-btn', class extends HTMLButtonElement {
+      static observedAttributes = ['data-x'];
+      constructor() {
+        super();
+        if (this === parsed) during = this.matches(':defined');
+      }
+      connectedCallback() { connected++; }
+      attributeChangedCallback(name, old, value) { changed.push(name + '=' + value); }
+    }, {extends: 'button'});
+
+    testing.expectEqual(false, during);
+    testing.expectEqual(true, parsed.matches(':defined'));
+    testing.expectEqual(1, connected);
+    testing.expectEqual('data-x=1', changed.join());
+
+    testing.expectEqual(false, created.matches(':defined'));
+    document.body.appendChild(created);
+    testing.expectEqual(true, created.matches(':defined'));
+    testing.expectEqual(2, connected);
+    created.remove();
+
+    testing.expectEqual(false, upgraded.matches(':defined'));
+    customElements.upgrade(upgraded);
+    testing.expectEqual(true, upgraded.matches(':defined'));
+
+    testing.expectEqual(true, document.createElement('button', {is: 'x-defined-btn'}).matches(':defined'));
+    testing.expectEqual(true, attr.matches(':defined'));
+    testing.expectEqual(false, fragment.firstChild.matches(':defined'));
+  }
+</script>
+
+<script id="customized_builtin_failed">
+  {
+    const el = document.createElement('button', {is: 'x-defined-btn-fail'});
+    document.body.appendChild(el);
+    window.onerror = () => true;
+    customElements.define('x-defined-btn-fail', class extends HTMLButtonElement {
+      constructor() {
+        super();
+        throw new Error('nope');
+      }
+    }, {extends: 'button'});
+    window.onerror = null;
+    testing.expectEqual(false, el.matches(':defined'));
+    el.remove();
+  }
+</script>

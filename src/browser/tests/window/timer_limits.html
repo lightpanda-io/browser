@@ -37,4 +37,20 @@
     window.clearInterval(id);
   }
 </script>
-:
+
+<script id=zero-delay-burst>
+{
+  // An event bus that relays each event through setTimeout(fn, 0) queues
+  // thousands from a single task, all pending at once. Clear them rather than
+  // run them: 10k callbacks blow the test timeout on slow (TSAN) CI builds.
+  const timeouts = [];
+  for (let i = 0; i < 10000; i++) {
+    timeouts.push(window.setTimeout(() => {}, 0));
+  }
+  testing.expectEqual(10000, timeouts.length);
+
+  for (const id of timeouts) {
+    window.clearTimeout(id);
+  }
+}
+</script>

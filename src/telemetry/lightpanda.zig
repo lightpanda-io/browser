@@ -189,7 +189,10 @@ fn run(self: *LightPanda) void {
                 if (elapsed >= linger_ns) {
                     break;
                 }
-                lp.timedWait(&self.cond, &self.mutex, linger_ns - elapsed) catch break;
+                self.cond.waitTimeout(lp.io, &self.mutex, .{ .duration = .{
+                    .raw = .fromNanoseconds(linger_ns - elapsed),
+                    .clock = .awake,
+                } }) catch break;
             }
         }
 
@@ -344,6 +347,7 @@ const EventRow = struct {
                     .is_error => "E",
                     .frame_not_loaded => "F",
                     .invalid_params => "P",
+                    .action_refused => "R",
                     .node_not_found => "N",
                     .navigation_failed => "V",
                     .navigation_timeout => "T",

@@ -23,6 +23,7 @@ const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
+const CustomElementRegistry = @import("../CustomElementRegistry.zig");
 const ValidityState = @import("../element/html/ValidityState.zig");
 const Part = @import("Selector.zig").Part;
 const Selector = @import("Selector.zig");
@@ -49,7 +50,7 @@ pub fn collect(
     allocator: std.mem.Allocator,
     root: *Node,
     selector: Selector.Selector,
-    nodes: *std.AutoArrayHashMapUnmanaged(*Node, void),
+    nodes: *std.ArrayList(*Node),
     nth: *NthCache,
     frame: *Frame,
 ) !void {
@@ -61,10 +62,40 @@ pub fn collect(
 
         while (tw.next()) |node| {
             if (matches(node, result.selector, root, nth, frame)) {
-                try nodes.put(allocator, node, {});
+                try nodes.append(allocator, node);
             }
         }
     }
+}
+
+// A selector list is matched in one walk so results come out in document
+// order. The #id shortcut narrows a single selector, so it isn't used here.
+pub fn collectAny(
+    allocator: std.mem.Allocator,
+    root: *Node,
+    selectors: []const Selector.Selector,
+    nodes: *std.ArrayList(*Node),
+    nth: *NthCache,
+    frame: *Frame,
+) !void {
+    var tw = TreeWalker.init(root, .{});
+    _ = tw.next(); // only descendants match
+    while (tw.next()) |node| {
+        if (matchesAny(node, selectors, root, nth, frame)) {
+            try nodes.append(allocator, node);
+        }
+    }
+}
+
+pub fn initOneAny(root: *Node, selectors: []const Selector.Selector, nth: *NthCache, frame: *Frame) ?*Node {
+    var tw = TreeWalker.init(root, .{});
+    _ = tw.next(); // only descendants match
+    while (tw.next()) |node| {
+        if (matchesAny(node, selectors, root, nth, frame)) {
+            return node;
+        }
+    }
+    return null;
 }
 
 // used internally to find the first match
@@ -304,7 +335,19 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
         .child => matchChild(node, target_compound, root, scope, nth, frame),
         .next_sibling => matchNextSibling(node, target_compound, scope, nth, frame),
         .subsequent_sibling => {
-            // For subsequent_sibling, try all matching siblings with backtracking
+            // For subsequent_sibling, try all matching siblings with backtracking.
+            const first_decides = blk: {
+                // Given #c > .a ~ .b
+                // We don't have to visit each of .b's siblings if the parent
+                // of the first matching .a sibling isn't `#c`..because every
+                // sibling shares the same parent, so if it isn't true for one
+                // it isn't true for any of them. Only a `+`, checking each
+                // candidate's own neighbour, needs every candidate tried.
+                if (segment_index == 0) {
+                    break :blk true;
+                }
+                break :blk selector.segments[segment_index - 1].combinator != .next_sibling;
+            };
             var sibling = node.previousSibling();
             while (sibling) |s| {
                 const sibling_el = s.is(Node.Element) orelse {
@@ -320,6 +363,9 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
                     // Try to match remaining segments from this sibling
                     if (matchSegments(s, selector, segment_index - 1, root, scope, nth, frame)) {
                         return true;
+                    }
+                    if (first_decides) {
+                        return false;
                     }
                     // This sibling didn't work, try the next one
                 }
@@ -448,7 +494,7 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, fra
         .universal => return true,
         .pseudo_class => |pseudo| return matchesPseudoClass(el, pseudo, scope, nth, frame),
         .attribute => |attr| return matchesAttribute(el, attr),
-        .pseudo_element => return false,
+        .pseudo_element, .never => return false,
     }
 }
 
@@ -563,6 +609,56 @@ fn isReadWrite(el: *Node.Element) bool {
     return el.isEditable();
 }
 
+// Only input, select and textarea can be required, and an input only for the
+// types the required attribute applies to.
+fn isRequired(el: *Node.Element) bool {
+    if (el.hasAttributeInterned("required") == false) {
+        return false;
+    }
+    if (el.is(Node.Element.Html.Input)) |input| {
+        return input.requiredApplies();
+    }
+    return el.is(Node.Element.Html.Select) != null or el.is(Node.Element.Html.TextArea) != null;
+}
+
+fn isOptional(el: *Node.Element) bool {
+    if (el.is(Node.Element.Html.Input) == null and
+        el.is(Node.Element.Html.Select) == null and
+        el.is(Node.Element.Html.TextArea) == null and
+        el.is(Node.Element.Html.Button) == null)
+    {
+        return false;
+    }
+    return isRequired(el) == false;
+}
+
+// Null when :in-range and :out-of-range both don't apply: not an input
+// candidate for constraint validation, or no range limitations.
+fn isInRange(el: *Node.Element) ?bool {
+    const input = el.is(Node.Element.Html.Input) orelse return null;
+    if (!input.getWillValidate()) {
+        return null;
+    }
+    return input.isInRange();
+}
+
+// https://html.spec.whatwg.org/multipage/semantics-other.html#selector-default
+fn isDefault(el: *Node.Element, frame: *Frame) bool {
+    if (el.is(Node.Element.Html.Option) != null) {
+        return el.hasAttributeInterned("selected");
+    }
+    if (el.is(Node.Element.Html.Input)) |input| {
+        if (input._input_type == .checkbox or input._input_type == .radio) {
+            return el.hasAttributeInterned("checked");
+        }
+    }
+    if (Node.Element.Html.Form.isSubmitButton(el) == false) {
+        return false;
+    }
+    const form = Node.Element.Html.Form.ownerOf(el) orelse return false;
+    return form.getDefaultButton(frame) == el;
+}
+
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const node = el.asNode();
     switch (pseudo) {
@@ -605,18 +701,14 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             }
             return ValidityState.isValid(el, frame) == false;
         },
-        .required => {
-            return el.hasAttributeInterned("required");
-        },
-        .optional => {
-            return el.hasAttributeInterned("required") == false;
-        },
-        .in_range => return false,
-        .out_of_range => return false,
+        .required => return isRequired(el),
+        .optional => return isOptional(el),
+        .in_range => return isInRange(el) == true,
+        .out_of_range => return isInRange(el) == false,
         .placeholder_shown => return false,
         .read_only => return !isReadWrite(el),
         .read_write => return isReadWrite(el),
-        .default => return false,
+        .default => return isDefault(el, frame),
 
         // User interaction
         .hover => return false,
@@ -657,7 +749,12 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return parent._type == .document;
         },
         .scope => {
-            // :scope matches the reference element (querySelector root)
+            // :scope matches the reference element (querySelector root);
+            // for a document that is its root element
+            if (scope._type == .document) {
+                const parent = node.parentNode() orelse return false;
+                return parent == scope;
+            }
             return node == scope;
         },
         .empty => {
@@ -692,11 +789,12 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .nth_last_of_type => |pattern| return matchesNthLastOfType(el, pattern, nth),
 
         // Custom elements
+        // https://dom.spec.whatwg.org/#concept-element-defined
         .defined => {
-            const tag_name = el.getTagNameLower();
-            if (std.mem.findScalar(u8, tag_name, '-') == null) return true;
-            const registry = &frame.window._custom_elements;
-            return registry.get(tag_name) != null;
+            if (el._flags.builtin_undefined) return false;
+            const custom = el.is(Node.Element.Html.Custom) orelse return true;
+            if (custom._definition != null) return !custom._upgrade_in_progress;
+            return !CustomElementRegistry.isValidName(custom._tag_name.str());
         },
 
         // Functional

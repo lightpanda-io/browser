@@ -383,7 +383,7 @@ fn convert(comptime T: type, value: js.Value, name: []const u8, local: *const js
                 const buffer = local.jsValueToZig(js.BufferSource, m) catch |err| {
                     return conversionError(err, local, "algorithm has a missing or invalid member");
                 };
-                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, buffer.bytes) };
+                @field(out, field_name) = .{ .values = try local.call_arena.dupe(u8, buffer.bytes()) };
             }
         }
     }
@@ -397,7 +397,7 @@ fn isBufferSource(comptime FieldType: type) bool {
 
 /// A WebIDL BigInteger (RsaHashedKeyGenParams.publicExponent): a Uint8Array,
 /// not another view or a buffer. Read as a BufferSource member is.
-pub const BigInteger = struct {
+const BigInteger = struct {
     values: []const u8,
 };
 
@@ -447,7 +447,7 @@ pub const Encrypt = union(enum) {
     /// AES-KW, which takes no params.
     aes_kw: []const u8,
 
-    pub const AesParams = struct {
+    const AesParams = struct {
         additionalData: ?js.TypedArray(u8) = null,
         counter: ?js.TypedArray(u8) = null,
         iv: ?js.TypedArray(u8) = null,

@@ -104,7 +104,13 @@
     \\          Defaults to no dump.
     \\          Allowed values:
     \\              html               Serialized HTML of the DOM.
-    \\              markdown           Converts content to Markdown.
+    \\              markdown           Converts content to Markdown. Asks
+    \\                                 the server for markdown first; when
+    \\                                 it sends some, that is dumped as-is
+    \\                                 (logged as "markdown served"). Not
+    \\                                 with --dump-selector, --wait-selector,
+    \\                                 --wait-script or --inject-script,
+    \\                                 which need the DOM.
     \\              pdf                Text-only rendering of the page as a
     \\                                 PDF file (base64 with --json).
     \\              png                Text-only rendering of the page as a
@@ -187,14 +193,26 @@
     \\          Wait for an element matching the CSS selector to appear. Checked after
     \\          --wait-until condition is met.
     \\  --wait-until <UNTIL>
-    \\          Wait until the specified event. Checked before other --wait-* options.
-    \\          Defaults to 'load'. If --wait-selector, --wait-script or
-    \\          --wait-script-file specified, defaults to none.
-    \\          Allowed values: "load", "domcontentloaded", "networkalmostidle",
-    \\          "networkidle", "done".
-    \\          'done' waits for full quiescence (no pending scripts or network);
-    \\          pages with constant background activity never reach it and run
-    \\          to --wait-ms.
+    \\          Wait until the specified event. Allowed values:
+    \\              domcontentloaded  The 'DOMContentLoaded' event. Often too early
+    \\                                for content to be reliably loaded. Pairs well
+    \\                                with another --wait-* (e.g. --wait-selector).
+    \\              done              Full quiescence, no pending scripts/network.
+    \\                                Polling, keepalive requests and telemetry can
+    \\                                hold it until --wait-ms.
+    \\              load              The 'load' event.
+    \\              networkalmostidle At most 2 requests in flight for the last
+    \\                                500ms.
+    \\              networkidle       No network activity for the last 500ms.
+    \\              settled           Experimental. Waits for load, then for the
+    \\                                requests and short timers that page-load work
+    \\                                started, ignoring intervals, long timeouts,
+    \\                                idle callbacks and WebSocket traffic.
+    \\                                Resolves at load when load started nothing.
+    \\          Defaults to 'load'.
+    \\          If --wait-selector, --wait-script or --wait-script-file is specified,
+    \\          this step is skipped unless explicitly specified. If both are
+    \\          specified, this step is run first.
     \\  --with-base
     \\          Add a <base> tag in dump.
     \\          Defaults to false.
@@ -475,11 +493,20 @@
     \\          Enable an experimental, unstable feature. Can be passed multiple times.
     \\          Behavior may change or be removed without notice.
     \\          Defaults to none enabled.
+    \\             privatecache  Let the HTTP cache (--http-cache-dir) store
+    \\                           responses with a Set-Cookie header, removing
+    \\                           the header. The cache and the cookie store
+    \\                           have different lifetimes and are shared
+    \\                           differently, so a cached response without its
+    \\                           Set-Cookie can make later requests fail.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to stylesheet for mcp and agent, and to none of them
     \\          otherwise. Passing it replaces the default.
     \\          Allowed values:
+    \\             beacon      Send navigator.sendBeacon requests. Page navigation
+    \\                         cancels inflight beacons.
+    \\
     \\             iframe      When enabled, <iframe> elements are fully loaded.
     \\
     \\             image       <img> sources, so that load/error reflects the real
@@ -529,8 +556,10 @@
     \\          perfectly well what you are doing.
     \\          Script set headers via CDP or JS can't override a CLI set header.
     \\  --http-max-concurrent <INT>
-    \\          Maximum number of concurrent HTTP requests.
-    \\          Defaults to 40.
+    \\          Maximum number of concurrent HTTP requests, shared by every
+    \\          session.
+    \\          Defaults to 40. For serve, defaults to 8 per
+    \\          --cdp-max-connections with a min of 40 and a max of 256.
     \\  --http-max-host-open <INT>
     \\          Maximum open connections to a given host:port.
     \\          Defaults to 6.
@@ -611,6 +640,12 @@
     \\          Unsupported escape hatch: V8 does not validate flags against the
     \\          prebuilt snapshot, so an incompatible flag can misbehave or
     \\          crash at any point.
+    \\  --v8-gc-hint-floor-mb <INT>
+    \\          Floor under which cleanup events (e.g. page teardown) does not
+    \\          notify V8 of memory pressure. Low numbers typically cost more
+    \\          CPU but can help keep memory usage down.
+    \\          Defaults to 1 (1MiB) in serve (CDP), mcp and agent mode.
+    \\          V8 GC hints are disabled by default with fetch.
     \\  --v8-max-heap-mb <INT>
     \\          Maximum V8 heap size in megabytes, per browser instance. Values
     \\          below ~16 are clamped by V8 and all behave the same.
@@ -624,6 +659,9 @@
     \\          Defaults to [a very generous] 30000, disable by setting to 0.
     \\  --web-bot-auth-domain <DOMAIN>
     \\          Your domain, e.g. yourdomain.com.
+    \\          Sends Signature-Agent: "https://<DOMAIN>". The key directory
+    \\          is served at /.well-known/http-message-signatures-directory
+    \\          on that origin.
     \\  --web-bot-auth-key-file <PATH>
     \\          Path to the Ed25519 private key PEM file.
     \\  --web-bot-auth-keyid <STRING>

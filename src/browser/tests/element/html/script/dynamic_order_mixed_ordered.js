@@ -1,0 +1,1 @@
+mixedList += (mixedList ? ',' : '') + 'ordered';

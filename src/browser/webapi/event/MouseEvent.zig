@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -217,11 +218,12 @@ fn getLayerY(self: *const MouseEvent) f64 {
 }
 
 fn getModifierState(self: *const MouseEvent, key: []const u8) bool {
-    if (std.mem.eql(u8, key, "Alt") or std.mem.eql(u8, key, "AltGraph")) return self._alt_key;
+    // AltGraph has its own init member (modifierAltGraph, not supported).
+    if (std.mem.eql(u8, key, "Alt")) return self._alt_key;
     if (std.mem.eql(u8, key, "Control")) return self._ctrl_key;
     if (std.mem.eql(u8, key, "Shift")) return self._shift_key;
     if (std.mem.eql(u8, key, "Meta")) return self._meta_key;
-    if (std.mem.eql(u8, key, "Accel")) return self._ctrl_key or self._meta_key;
+    if (std.mem.eql(u8, key, "Accel")) return if (builtin.os.tag == .macos) self._meta_key else self._ctrl_key;
     return false;
 }
 

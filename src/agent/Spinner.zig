@@ -266,7 +266,10 @@ fn workerLoop(self: *Spinner) void {
         self.renderLocked();
 
         self.frame = (self.frame + 1) % @as(u8, @intCast(braille.len));
-        lp.timedWait(&self.cv, &self.mu, interval_ns) catch {};
+        self.cv.waitTimeout(lp.io, &self.mu, .{ .duration = .{
+            .raw = .fromNanoseconds(interval_ns),
+            .clock = .awake,
+        } }) catch {};
     }
 }
 

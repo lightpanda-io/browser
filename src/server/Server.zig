@@ -3172,7 +3172,7 @@ test "server: get /json/protocol" {
     defer parsed.deinit();
 
     const domains = parsed.value.object.get("domains").?.array;
-    try testing.expectEqual(21, domains.items.len);
+    try testing.expectEqual(22, domains.items.len);
 
     var found_dom = false;
     var found_lp = false;

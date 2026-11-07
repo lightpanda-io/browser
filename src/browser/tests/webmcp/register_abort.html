@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=abort_before_resolve type=module>
+{
+  const state = await testing.async();
+  let changes = 0;
+  document.modelContext.addEventListener('toolchange', () => changes++);
+  const controller = new AbortController();
+  const p = document.modelContext.registerTool({ name: 'gone', description: 'd', execute: () => {} }, { signal: controller.signal });
+  controller.abort();
+  const rejected = await p.catch((e) => e.name);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  state.resolve([rejected, changes]);
+  await state.done((results) => testing.expectEqual(['AbortError', 1], results));
+}
+</script>

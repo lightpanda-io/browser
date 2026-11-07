@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Pure helpers behind the agent's `/save`: parsing the command, validating and
-//! picking filenames, writing script files, and shaping the synthesis prompt.
+//! picking filenames, and shaping the synthesis prompt.
 //! State-bearing orchestration (path resolution against the active session,
 //! LLM synthesis turns) lives on `Agent`.
 
@@ -81,7 +81,7 @@ pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
 /// Read a previously saved script back for revision. Returns null when there
 /// is nothing to feed the model: the file does not exist or is blank.
 pub fn readScript(arena: std.mem.Allocator, path: []const u8) !?[]const u8 {
-    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(1024 * 1024)) catch |err| switch (err) {
+    const content = lp.script_file.read(arena, path) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -95,22 +95,6 @@ pub fn fileExists(path: []const u8) !bool {
         else => return err,
     };
     return true;
-}
-
-pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void {
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = mode != .append });
-    defer file.close(lp.io);
-    var offset: u64 = 0;
-    if (mode == .append) {
-        offset = try file.length(lp.io);
-        if (offset > 0 and content.len > 0) {
-            try file.writePositionalAll(lp.io, "\n", offset);
-            offset += 1;
-        }
-    }
-    try file.writePositionalAll(lp.io, content, offset);
-    offset += content.len;
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writePositionalAll(lp.io, "\n", offset);
 }
 
 /// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model

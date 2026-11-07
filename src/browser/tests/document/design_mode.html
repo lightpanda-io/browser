@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<div id="host"><p id="p">text</p><span id="ce-false" contenteditable="false">fixed</span></div>
+
+<script id="designMode">
+  {
+    testing.expectEqual('off', document.designMode);
+    testing.expectEqual(false, $('#p').isContentEditable);
+    testing.expectEqual(0, document.querySelectorAll('p:read-write').length);
+
+    document.designMode = 'ON';
+    testing.expectEqual('on', document.designMode);
+    testing.expectEqual(true, $('#p').isContentEditable);
+    testing.expectEqual(true, document.documentElement.isContentEditable);
+    testing.expectEqual('inherit', $('#p').contentEditable);
+    testing.expectEqual(1, document.querySelectorAll('p:read-write').length);
+    testing.expectEqual(false, document.createElement('p').isContentEditable);
+    testing.diverges("Chrome treats contenteditable=false as editable in designMode", () => {
+      testing.expectEqual(false, $('#ce-false').isContentEditable);
+    });
+
+    // anything but on/off is ignored
+    document.designMode = 'yes';
+    testing.expectEqual('on', document.designMode);
+
+    document.designMode = 'off';
+    testing.expectEqual('off', document.designMode);
+    testing.expectEqual(false, $('#p').isContentEditable);
+
+    testing.expectEqual('off', document.implementation.createHTMLDocument('').designMode);
+  }
+</script>
+
+<style>#styled:read-write { display: none; }</style>
+<p id="styled">styled</p>
+
+<script id="computedStyle">
+  {
+    const styled = $('#styled');
+    testing.expectEqual('block', getComputedStyle(styled).display);
+    document.designMode = 'on';
+    testing.expectEqual('none', getComputedStyle(styled).display);
+    document.designMode = 'off';
+    testing.expectEqual('block', getComputedStyle(styled).display);
+  }
+</script>
+
+<script id="insertText">
+  {
+    document.designMode = 'on';
+    const text = $('#p').firstChild;
+    getSelection().collapse(text, 4);
+    testing.expectEqual(true, document.execCommand('insertText', false, '!'));
+    testing.expectEqual('text!', $('#p').textContent);
+
+    // contenteditable=false content can't be edited
+    getSelection().collapse($('#ce-false').firstChild, 0);
+    testing.expectEqual(false, document.execCommand('insertText', false, '?'));
+    testing.expectEqual('fixed', $('#ce-false').textContent);
+
+    getSelection().removeAllRanges();
+    document.designMode = 'off';
+  }
+</script>

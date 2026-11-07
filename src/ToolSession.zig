@@ -20,11 +20,15 @@
 //! (hence V8 isolate), Session, Notification and node Registry. `self` must
 //! not move after `init` — Browser registers self-pointers.
 
+const std = @import("std");
+
 const App = @import("App.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
 const NodeRegistry = @import("NodeRegistry.zig");
+const PageToolsSeen = @import("browser/tools.zig").PageToolsSeen;
+const TreeSeen = @import("browser/tools.zig").TreeSeen;
 
 const ToolSession = @This();
 
@@ -32,16 +36,23 @@ browser: Browser,
 session: *Session,
 notification: *Notification,
 registry: NodeRegistry,
+page_tools_seen: PageToolsSeen = .{},
+tree_seen: TreeSeen = .{},
 
 /// Leaves the browser's isolate entered, like `Browser.init`; callers
 /// sharing one thread between several isolates park it with
 /// `exitIsolate` afterwards.
 pub fn init(self: *ToolSession, app: *App) !void {
+    // `self` comes in undefined, so its field defaults don't apply.
+    self.page_tools_seen = .{};
+    self.tree_seen = .{};
+
     self.notification = try .init(app.allocator);
     errdefer self.notification.deinit();
 
     self.registry = .init(app.allocator);
     errdefer self.registry.deinit();
+    try self.notification.register(.frame_destroyed, &self.registry, NodeRegistry.onFrameDestroyed);
 
     try self.browser.init(app, .{});
     errdefer self.browser.deinit();
@@ -59,8 +70,9 @@ pub fn restartSession(self: *ToolSession) !void {
 /// The isolate must be current (`enterIsolate` if parked): Browser.deinit's
 /// Env.deinit exit has to balance against this context's isolate.
 pub fn deinit(self: *ToolSession) void {
-    self.registry.deinit();
+    self.tree_seen.deinit(self.browser.app.allocator);
     self.browser.deinit();
+    self.registry.deinit();
     self.notification.deinit();
 }
 
@@ -112,4 +124,24 @@ fn loadBlank(ts: *ToolSession) !void {
     try page.navigate("about:blank", .{});
     var runner = ts.session.runner(.{});
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+}
+
+test "ToolSession: a destroyed page takes its nodes out of the registry" {
+    const arena = testing.arena_allocator;
+
+    var ts: ToolSession = undefined;
+    try ts.init(testing.test_app);
+    defer ts.deinit();
+
+    const page = try ts.session.createPage();
+    try page.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{});
+    var runner = ts.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"selector\":\"#btn\"}", .{});
+    _ = try tools.call(arena, ts.session, &ts.registry, "waitForSelector", args, .{ .source = .mcp });
+    try testing.expectEqual(1, ts.registry.lookup_by_id.count());
+
+    ts.session.closePage(page.frame_id);
+    ts.session.processDestroyQueues();
+    try testing.expectEqual(0, ts.registry.lookup_by_id.count());
 }

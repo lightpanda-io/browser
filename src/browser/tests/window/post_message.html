@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=postMessageStructuredClone type=module>
@@ -37,5 +38,79 @@
         testing.expectEqual('DataCloneError', e.name);
     }
     testing.expectEqual(true, threw);
+}
+</script>
+
+<script id=postMessageTargetOrigin type=module>
+// A message is only delivered when the target window's origin matches
+// targetOrigin: "*" is any, "/" (and the options default) the sender's own.
+{
+    const state = await testing.async();
+    const received = [];
+    window.addEventListener('message', (e) => {
+        // Skip messages other blocks on this page post.
+        if (typeof e.data !== 'string') return;
+        received.push(e.data);
+        if (e.data === 'done') state.resolve();
+    });
+
+    window.postMessage('other-host', 'http://example.com');
+    window.postMessage('other-port', location.protocol + '//' + location.hostname + ':' + (Number(location.port) + 1));
+    window.postMessage('options-other', { targetOrigin: 'http://example.com' });
+    window.postMessage('ws-scheme', 'ws://' + location.host);
+    window.postMessage('own-origin', location.origin);
+    window.postMessage('own-url', location.href);
+    window.postMessage('slash', '/');
+    window.postMessage('options-default', {});
+    window.postMessage('no-target-origin');
+    window.postMessage('done', '*');
+
+    await state.done(() => {
+        testing.expectEqual('own-origin,own-url,slash,options-default,no-target-origin,done', received.join());
+    });
+}
+</script>
+
+<script id=postMessageInvalidTargetOrigin>
+{
+    testing.expectError('SyntaxError', () => window.postMessage('x', 'not a url'));
+    testing.expectError('SyntaxError', () => window.postMessage('x', { targetOrigin: 'example.com' }));
+    // An opaque origin can't be a target.
+    testing.expectError('SyntaxError', () => window.postMessage('x', 'data:text/plain,x'));
+    testing.expectError('SyntaxError', () => window.postMessage('x', 'about:blank'));
+    testing.expectError('SyntaxError', () => window.postMessage('x', 'blob:null/x'));
+}
+</script>
+
+<script id=postMessageOpaqueOrigin type=module>
+// An opaque origin is same-origin with itself: a data: document posting to
+// itself with "/" (or no targetOrigin) gets the message, but "/" from it
+// never matches this http document.
+{
+    const state = await testing.async();
+    const received = [];
+    window.addEventListener('message', (e) => {
+        if (typeof e.data !== 'string' || !e.data.startsWith('opaque:')) return;
+        received.push(e.data);
+        if (e.data === 'opaque:done') state.resolve();
+    });
+
+    const f = document.createElement('iframe');
+    f.src = "data:text/html,<script>" +
+        "const got = [];" +
+        "window.addEventListener('message', (e) => {" +
+        "  got.push(e.data);" +
+        "  if (e.data === 'end') { parent.postMessage('opaque:' + got.join(), '*'); parent.postMessage('opaque:done', '*'); }" +
+        "});" +
+        "window.postMessage('slash', '/');" +
+        "window.postMessage('noarg');" +
+        "parent.postMessage('opaque:to-parent', '/');" +
+        "window.postMessage('end', '*');" +
+        "<\/script>";
+    document.documentElement.appendChild(f);
+
+    await state.done(() => {
+        testing.expectEqual('opaque:slash,noarg,end,opaque:done', received.join());
+    });
 }
 </script>

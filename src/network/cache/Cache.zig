@@ -35,6 +35,8 @@ kind: union(enum) {
     noop: void,
     sqlite: SqliteCache,
 },
+/// Whether responses with a Set-Cookie are stored (with it stripped).
+set_cookie: bool = false,
 
 pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
     const cache_path = config.httpCacheDir() orelse {
@@ -56,6 +58,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
 
     return .{
         .kind = .{ .sqlite = sqlite },
+        .set_cookie = config.experimentalFeatures().privatecache,
     };
 }
 
@@ -73,17 +76,31 @@ pub fn active(self: *Cache) ?*Cache {
     };
 }
 
-pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
+pub fn get(self: *Cache, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     return switch (self.kind) {
         .noop => .miss,
-        inline else => |*c| c.get(arena, req),
+        inline else => |*c| c.get(arena, body_allocator, req),
     };
 }
 
-pub fn put(self: *Cache, req: CachePutRequest, body: []const u8) !void {
+/// Stores the response if it is cacheable; returns whether it did. The
+/// candidate's names and values only need to outlive the call.
+pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !bool {
+    switch (self.kind) {
+        .noop => return false,
+        inline else => |*c| {
+            const req = try tryCache(arena, candidate, self.set_cookie) orelse return false;
+            log.debug(.cache, "put", .{ .put = req });
+            try c.put(req, body);
+            return true;
+        },
+    }
+}
+
+pub fn putScriptCache(self: *Cache, url: []const u8, body: []const u8, bytes: []const u8) !void {
     return switch (self.kind) {
         .noop => {},
-        inline else => |*c| c.put(req, body),
+        inline else => |*c| c.putScriptCache(url, body, bytes),
     };
 }
 
@@ -95,10 +112,16 @@ pub fn evict(self: *Cache, url: []const u8) void {
 }
 
 pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewResponse) !void {
-    return switch (self.kind) {
+    switch (self.kind) {
         .noop => {},
-        inline else => |*c| c.renew(arena, req),
-    };
+        inline else => |*c| {
+            // The 304's headers replace the stored ones, so its Set-Cookie
+            // would be stored too.
+            var renewed = req;
+            renewed.headers = try withoutSetCookie(arena, req.headers);
+            return c.renew(arena, renewed);
+        },
+    }
 }
 
 pub fn clear(self: *Cache) !void {
@@ -120,7 +143,7 @@ pub fn maintenance(self: *Cache, now: u64) void {
 /// for freshness arithmetic and storage.
 const max_delta_seconds: u64 = 2147483648;
 
-pub fn parseDeltaSeconds(value: []const u8) ?u64 {
+fn parseDeltaSeconds(value: []const u8) ?u64 {
     const seconds = std.fmt.parseInt(u64, value, 10) catch |err| switch (err) {
         error.Overflow => return max_delta_seconds,
         error.InvalidCharacter => return null,
@@ -128,7 +151,7 @@ pub fn parseDeltaSeconds(value: []const u8) ?u64 {
     return @min(seconds, max_delta_seconds);
 }
 
-pub const CacheControl = struct {
+const CacheControl = struct {
     max_age: u64,
     must_revalidate: bool = false,
 };
@@ -192,8 +215,8 @@ pub const CachePutRequest = struct {
     cache_control: CacheControl,
     /// Response Headers
     headers: []const Http.Header,
-    /// These are Request Headers used by Vary.
-    vary_headers: []const Http.Header,
+    /// Request Headers, which the response's Vary may name.
+    request_headers: []const Http.Header,
 
     // Validators for conditional requests.
     etag: ?[]const u8 = null,
@@ -212,10 +235,11 @@ pub const CachePutRequest = struct {
         // Logging all headers gets pretty verbose...
         // so we just log the Vary ones that matter for caching.
 
-        if (self.vary_headers.len > 0) {
-            for (self.vary_headers, 0..) |hdr, i| {
-                if (i > 0) try writer.print(", ", .{});
-                try writer.print("{s}: {s}", .{ hdr.name, hdr.value });
+        var sep: []const u8 = "";
+        for (self.headers) |hdr| {
+            if (std.mem.eql(u8, hdr.name, "vary")) {
+                try writer.print("{s}{s}", .{ sep, hdr.value });
+                sep = ", ";
             }
         }
         try writer.print("]", .{});
@@ -226,6 +250,8 @@ pub const RenewResponse = struct {
     url: []const u8,
     timestamp: u64,
     headers: []const Http.Header,
+    /// Request Headers of the revalidation, which the merged Vary may name.
+    request_headers: []const Http.Header,
 
     // What a revalidation response tells us about the cache entry (a null
     // value means: we were told nothing, keep what we have)
@@ -256,11 +282,12 @@ pub const RenewResponse = struct {
 };
 
 const CachedData = union(enum) {
-    buffer: []const u8,
+    // Allocated with the `body_allocator` given to `get`.
+    buffer: []u8,
 
-    pub fn deinit(self: CachedData) void {
+    pub fn deinit(self: CachedData, body_allocator: std.mem.Allocator) void {
         switch (self) {
-            .buffer => {},
+            .buffer => |buf| body_allocator.free(buf),
         }
     }
 
@@ -289,6 +316,7 @@ pub const CachedResponse = struct {
     etag: ?[]const u8,
     last_modified: ?[]const u8,
     headers: []const Http.Header,
+    script_cache: ?[]const u8 = null,
     data: CachedData,
 
     pub fn format(self: *const CachedResponse, writer: *std.Io.Writer) !void {
@@ -358,7 +386,7 @@ const ResponseHeaders = struct {
     }
 };
 
-const CacheCandidate = struct {
+pub const CacheCandidate = struct {
     timestamp: u64,
     url: [:0]const u8,
     status: u16,
@@ -395,7 +423,7 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
+fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: bool) !?CachePutRequest {
     const url = candidate.url;
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
@@ -408,7 +436,7 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
         return null;
     }
 
-    if (response.has_set_cookie) {
+    if (response.has_set_cookie and set_cookie == false) {
         log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
         return null;
     }
@@ -471,11 +499,32 @@ pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutR
         .stored_at = candidate.timestamp,
         .age_at_store = if (response.age) |a| parseDeltaSeconds(a) orelse 0 else 0,
         .cache_control = cc,
-        .headers = candidate.headers,
-        .vary_headers = try varyHeaders(arena, response.vary, candidate.request_headers),
+        .headers = if (set_cookie) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
+        .request_headers = candidate.request_headers,
         .etag = if (response.etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (response.last_modified) |lm| try arena.dupe(u8, lm) else null,
     };
+}
+
+// Returns `headers` itself when it has no Set-Cookie.
+fn withoutSetCookie(arena: std.mem.Allocator, headers: []const Http.Header) ![]const Http.Header {
+    for (headers) |h| {
+        if (std.mem.eql(u8, h.name, "set-cookie")) {
+            break;
+        }
+    } else {
+        // doesn't have a set-cookie
+        return headers;
+    }
+
+    var kept: std.ArrayList(Http.Header) = try .initCapacity(arena, headers.len - 1);
+    for (headers) |h| {
+        // the index we found above could be just the first of many
+        if (std.mem.eql(u8, h.name, "set-cookie") == false) {
+            kept.appendAssumeCapacity(h);
+        }
+    }
+    return kept.items;
 }
 
 fn heuristicallyCacheable(status: u16) bool {
@@ -501,24 +550,6 @@ fn heuristicLifetime(last_modified: []const u8, now: u64) u64 {
 fn parseHttpDate(value: []const u8) ?i64 {
     const date_time = lp.datetime.DateTime.parse(value, .rfc822) catch return null;
     return date_time.unix(.seconds);
-}
-
-/// The request headers the Vary list names, which a later lookup has to match
-/// against. Names and values stay borrowed from the caller's headers.
-fn varyHeaders(arena: std.mem.Allocator, vary: ?[]const u8, request_headers: []const Http.Header) ![]const Http.Header {
-    const vary_value = vary orelse return &.{};
-
-    var headers: std.ArrayList(Http.Header) = .empty;
-    for (request_headers) |hdr| {
-        var iter = std.mem.splitScalar(u8, vary_value, ',');
-        while (iter.next()) |part| {
-            const name = std.mem.trim(u8, part, &std.ascii.whitespace);
-            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
-                try headers.append(arena, hdr);
-            }
-        }
-    }
-    return headers.items;
 }
 
 const testing = @import("../../testing.zig");
@@ -572,6 +603,8 @@ const TestResponse = struct {
     date: ?[]const u8 = null,
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
+    set_cookie: ?[]const u8 = null,
+    set_cookie_mode: bool = false,
 
     fn run(self: TestResponse, arena: std.mem.Allocator) !?CachePutRequest {
         var headers: std.ArrayList(Http.Header) = .empty;
@@ -581,6 +614,7 @@ const TestResponse = struct {
             .{ "date", self.date },
             .{ "etag", self.etag },
             .{ "last-modified", self.last_modified },
+            .{ "set-cookie", self.set_cookie },
         }) |field| {
             if (field[1]) |value| {
                 try headers.append(arena, .{ .name = field[0], .value = value });
@@ -594,7 +628,7 @@ const TestResponse = struct {
             .content_type = "text/html",
             .headers = headers.items,
             .request_headers = &.{},
-        });
+        }, self.set_cookie_mode);
     }
 };
 
@@ -715,22 +749,6 @@ test "Cache: tryCache vary headers" {
         .{ .name = "User-Agent", .value = "lightpanda" },
     };
 
-    const stored = try tryCache(arena.allocator(), .{
-        .timestamp = test_now,
-        .url = "https://example.com",
-        .status = 200,
-        .content_type = "text/html",
-        .headers = &.{
-            .{ .name = "cache-control", .value = "max-age=300" },
-            .{ .name = "vary", .value = "accept-encoding, accept-language" },
-        },
-        .request_headers = &request_headers,
-    });
-
-    try testing.expectEqual(1, stored.?.vary_headers.len);
-    try testing.expectString("Accept-Encoding", stored.?.vary_headers[0].name);
-    try testing.expectString("gzip", stored.?.vary_headers[0].value);
-
     // Vary: * is never stored
     const wildcard = try tryCache(arena.allocator(), .{
         .timestamp = test_now,
@@ -742,6 +760,74 @@ test "Cache: tryCache vary headers" {
             .{ .name = "vary", .value = "*" },
         },
         .request_headers = &request_headers,
-    });
+    }, false);
     try testing.expectEqual(null, wildcard);
+}
+
+test "Cache: tryCache with Set-Cookie" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const response: TestResponse = .{ .cache_control = "max-age=300", .set_cookie = "a=1" };
+    try testing.expectEqual(null, try response.run(arena.allocator()));
+
+    var strip = response;
+    strip.set_cookie_mode = true;
+    const stripped = (try strip.run(arena.allocator())).?;
+    try testing.expectEqual(1, stripped.headers.len);
+    try testing.expectEqual("cache-control", stripped.headers[0].name);
+
+    // private and no-store aren't stored either way
+    for ([_][]const u8{ "private, max-age=300", "no-store, max-age=300" }) |cc| {
+        var private: TestResponse = .{ .cache_control = cc, .set_cookie = "a=1", .set_cookie_mode = true };
+        try testing.expectEqual(null, try private.run(arena.allocator()));
+        private.set_cookie_mode = false;
+        try testing.expectEqual(null, try private.run(arena.allocator()));
+    }
+}
+
+test "Cache: renew strips a 304's Set-Cookie" {
+    for ([_]bool{ false, true }) |mode| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+
+        var cache: Cache = .{
+            .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0) },
+            .set_cookie = mode,
+        };
+        defer cache.deinit();
+
+        const stored = try cache.put(arena.allocator(), .{
+            .timestamp = test_now,
+            .url = "https://example.com",
+            .status = 200,
+            .content_type = "text/html",
+            .headers = &.{
+                .{ .name = "cache-control", .value = "no-cache" },
+                .{ .name = "etag", .value = "\"v1\"" },
+            },
+            .request_headers = &.{},
+        }, "hello");
+        try testing.expectEqual(true, stored);
+
+        try cache.renew(arena.allocator(), .{
+            .url = "https://example.com",
+            .timestamp = test_now + 10,
+            .headers = &.{
+                .{ .name = "cache-control", .value = "max-age=600" },
+                .{ .name = "set-cookie", .value = "a=1" },
+            },
+            .request_headers = &.{},
+        });
+
+        const result = try cache.get(arena.allocator(), arena.allocator(), .{
+            .url = "https://example.com",
+            .timestamp = test_now + 10,
+            .request_headers = &.{},
+        });
+        const has_set_cookie = for (result.hit.headers) |h| {
+            if (std.mem.eql(u8, h.name, "set-cookie")) break true;
+        } else false;
+        try testing.expectEqual(false, has_set_cookie);
+    }
 }

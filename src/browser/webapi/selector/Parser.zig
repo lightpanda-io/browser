@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
 const Attribute = @import("../element/Attribute.zig");
+const escape = @import("../../css/escape.zig");
 
 const Selector = @import("Selector.zig");
 
@@ -224,7 +225,7 @@ fn parsePart(self: *Parser, arena: Allocator) !Part {
             self.input = self.input[1..];
             break :blk .universal;
         },
-        '[' => .{ .attribute = try self.attribute(arena) },
+        '[' => try self.attribute(arena),
         ':' => if (self.isPseudoElementStart()) blk: {
             try self.pseudoElement();
             break :blk .pseudo_element;
@@ -1027,9 +1028,7 @@ fn consumeEscapedIdentTail(self: *Parser, arena: Allocator, prefix_len: usize, e
                 else => {},
             };
             j += 1;
-            const escape_result = try parseEscape(input[j..], arena);
-            try result.appendSlice(arena, escape_result.bytes);
-            j += escape_result.consumed;
+            j += try appendEscape(&result, arena, input[j..]);
             continue;
         }
 
@@ -1098,7 +1097,7 @@ fn tag(self: *Parser) ![]const u8 {
     return input[0..i];
 }
 
-fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
+fn attribute(self: *Parser, arena: Allocator) !Selector.Part {
     if (comptime lp.IS_DEBUG) {
         // should have been verified by caller
         std.debug.assert(self.peek() == '[');
@@ -1134,12 +1133,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         if (self.peek() == ']') {
             self.input = self.input[1..];
         }
-        return .{
+        return .{ .attribute = .{
             .name = name,
             .matcher = .presence,
             .original_name = .wrap(attr_name),
             .value_case = .sensitive,
-        };
+        } };
     }
 
     const matcher_type = try self.attributeMatcher();
@@ -1168,6 +1167,15 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         return error.InvalidAttributeSelector;
     }
 
+    const never = switch (matcher_type) {
+        .starts_with, .ends_with, .substring => value.len == 0,
+        .word => value.len == 0 or std.mem.findAny(u8, value, &std.ascii.whitespace) != null,
+        .exact, .prefix_dash, .presence => false,
+    };
+    if (never) {
+        return .never;
+    }
+
     const matcher: Selector.AttributeMatcher = switch (matcher_type) {
         .exact => .{ .exact = value },
         .word => .{ .word = value },
@@ -1178,12 +1186,12 @@ fn attribute(self: *Parser, arena: Allocator) !Selector.Attribute {
         .presence => unreachable,
     };
 
-    return .{
+    return .{ .attribute = .{
         .name = name,
         .matcher = matcher,
         .original_name = .wrap(attr_name),
         .value_case = value_case,
-    };
+    } };
 }
 
 // Attributes whose values match ASCII case-insensitively on HTML elements
@@ -1317,15 +1325,13 @@ fn attributeValue(self: *Parser, arena: Allocator) ![]const u8 {
                     // surface it as a missing closing quote.
                     return error.InvalidAttributeSelector;
                 }
-                const after = input[i + 1];
-                if (after == '\n') {
+                const newline = escape.newlineLen(input[i + 1 ..]);
+                if (newline > 0) {
                     // Escaped newline inside a string is a line continuation: drop both.
-                    i += 2;
+                    i += 1 + newline;
                     continue;
                 }
-                const escape = try parseEscape(input[i + 1 ..], arena);
-                try result.appendSlice(arena, escape.bytes);
-                i += 1 + escape.consumed;
+                i += 1 + try appendEscape(&result, arena, input[i + 1 ..]);
                 continue;
             }
             if (b == '\n') {
@@ -1357,72 +1363,14 @@ fn asUint(comptime string: anytype) @Int(
     return @bitCast(@as(*const [byteLength]u8, string).*);
 }
 
-const EscapeResult = struct {
-    bytes: []const u8,
-    consumed: usize, // how many bytes from input were consumed
-};
-
-// Parse CSS escape sequence starting after the backslash
-// Input should point to the character after '\'
-// Returns the UTF-8 bytes for the escaped character and how many input bytes were consumed
-fn parseEscape(input: []const u8, arena: Allocator) !EscapeResult {
-    if (input.len == 0) {
-        // EOF after backslash -> replacement character
-        return .{ .bytes = "\u{FFFD}", .consumed = 0 };
-    }
-
-    const first = input[0];
-
-    // Check if it's a hex escape (1-6 hex digits)
-    if (std.ascii.isHex(first)) {
-        var hex_value: u32 = 0;
-        var i: usize = 0;
-
-        // Parse up to 6 hex digits
-        while (i < 6 and i < input.len) : (i += 1) {
-            const c = input[i];
-            if (!std.ascii.isHex(c)) break;
-
-            const digit = if (c >= '0' and c <= '9')
-                c - '0'
-            else if (c >= 'a' and c <= 'f')
-                c - 'a' + 10
-            else if (c >= 'A' and c <= 'F')
-                c - 'A' + 10
-            else
-                unreachable;
-
-            hex_value = hex_value * 16 + digit;
-        }
-
-        var consumed = i;
-
-        // Consume one optional whitespace character (space, tab, CR, LF, FF)
-        if (i < input.len) {
-            const next = input[i];
-            if (next == ' ' or next == '\t' or next == '\r' or next == '\n' or next == '\x0C') {
-                consumed += 1;
-            }
-        }
-
-        // Validate the code point and convert to UTF-8
-        // Invalid: 0, > 0x10FFFF, or surrogate range 0xD800-0xDFFF
-        if (hex_value == 0 or hex_value > 0x10FFFF or (hex_value >= 0xD800 and hex_value <= 0xDFFF)) {
-            return .{ .bytes = "\u{FFFD}", .consumed = consumed };
-        }
-
-        // Encode as UTF-8
-        var buf = try arena.alloc(u8, 4);
-        const len = std.unicode.utf8Encode(@intCast(hex_value), buf) catch {
-            return .{ .bytes = "\u{FFFD}", .consumed = consumed };
-        };
-        return .{ .bytes = buf[0..len], .consumed = consumed };
-    }
-
-    // Simple escape - just the character itself
-    var buf = try arena.alloc(u8, 1);
-    buf[0] = first;
-    return .{ .bytes = buf, .consumed = 1 };
+/// Appends the code point of the escape `input` starts with, right after its
+/// backslash. Returns how many bytes of `input` the escape spans.
+fn appendEscape(result: *std.ArrayList(u8), arena: Allocator, input: []const u8) !usize {
+    const decoded = escape.decode(input);
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(decoded.codepoint, &buf) catch unreachable;
+    try result.appendSlice(arena, buf[0..len]);
+    return decoded.len;
 }
 
 const testing = @import("../../../testing.zig");
@@ -1916,8 +1864,8 @@ test "Selector: Parser.attributeValue" {
     }
 
     // Escaped newline inside a string is a line continuation (drops the newline).
-    {
-        var parser = Parser{ .input = "\"foo\\\nbar\"]" };
+    for ([_][]const u8{ "\"foo\\\nbar\"]", "\"foo\\\x0Cbar\"]", "\"foo\\\rbar\"]", "\"foo\\\r\nbar\"]" }) |input| {
+        var parser = Parser{ .input = input };
         try testing.expectEqual("foobar", try parser.attributeValue(arena));
         try testing.expectEqual("]", parser.input);
     }
@@ -2086,6 +2034,29 @@ test "Selector: Parser escaped newline ends an identifier" {
     }
 }
 
+test "Selector: Parser.attribute values that can never match" {
+    const arena = testing.arena_allocator;
+
+    const never = [_][]const u8{ "[a^=\"\"]", "[a$=\"\"]", "[a*=\"\" i]", "[a~=\"\"]", "[a~=\"b c\"]", "[a~=\"b\\9 c\"]" };
+    for (never) |input| {
+        var parser = Parser{ .input = input };
+        const part = try parser.attribute(arena);
+        try testing.expectEqual(.never, std.meta.activeTag(part));
+    }
+
+    // = and |= with an empty value can still match an empty attribute
+    const kept = [_]struct { []const u8, std.meta.Tag(Selector.AttributeMatcher) }{
+        .{ "[a=\"\"]", .exact },
+        .{ "[a|=\"\"]", .prefix_dash },
+        .{ "[a~=b]", .word },
+    };
+    for (kept) |case| {
+        var parser = Parser{ .input = case[0] };
+        const attr = (try parser.attribute(arena)).attribute;
+        try testing.expectEqual(case[1], std.meta.activeTag(attr.matcher));
+    }
+}
+
 test "Selector: Parser.attribute unquoted escaped values" {
     const arena = testing.arena_allocator;
 
@@ -2099,7 +2070,7 @@ test "Selector: Parser.attribute unquoted escaped values" {
     };
     for (cases) |case| {
         var parser = Parser{ .input = case[0] };
-        const attr = try parser.attribute(arena);
+        const attr = (try parser.attribute(arena)).attribute;
         try testing.expectEqual(case[1], std.meta.activeTag(attr.matcher));
         const value = switch (attr.matcher) {
             .presence => unreachable,

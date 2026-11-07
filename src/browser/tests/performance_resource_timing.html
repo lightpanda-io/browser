@@ -17,7 +17,8 @@
   testing.expectEqual(e.decodedBodySize, e.encodedBodySize);
   testing.expectEqual(true, e.transferSize > e.encodedBodySize);
   testing.expectEqual(1, performance.getEntriesByType('resource').length);
-  testing.expectEqual(e, performance.getEntries()[0]);
+  // [0] is the navigation entry
+  testing.expectEqual(e, performance.getEntries()[1]);
 </script>
 
 <script id=fetch_entry type=module>
@@ -183,8 +184,8 @@
 <script id=failed_fetch type=module>
   {
     const state = await testing.async();
-    // Nothing listens on port 1: the fetch fails without a response.
-    const url = 'http://127.0.0.1:1/nope';
+    // Nothing listens on port 65534: the fetch fails without a response.
+    const url = 'http://127.0.0.1:65534/nope';
     let failed = false;
     try {
       await fetch(url);

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<head></head>
+<meta name=lp-mode content=test>
 <body>
 <script src="../testing.js"></script>
 
@@ -103,8 +103,9 @@
   testing.onload(() => {
     const cw = $('#f1').contentWindow;
 
-    // The parent's dispatchEvent on the child's window: it dispatches in the
-    // child's frame, so the child's window.event is the event.
+    // window.event belongs to the listener's realm, not the target's
+    // (DOM "inner invoke"): a parent listener on the child's window sees the
+    // event on the parent's window.
     const e = new Event('wping');
     let child_event = null;
     let parent_event = null;
@@ -114,9 +115,18 @@
     };
     cw.addEventListener('wping', listener);
     EventTarget.prototype.dispatchEvent.call(cw, e);
-    testing.expectEqual(true, child_event === e);
-    testing.expectEqual(undefined, parent_event);
+    testing.expectEqual(undefined, child_event);
+    testing.expectEqual(true, parent_event === e);
     cw.removeEventListener('wping', listener);
+
+    // And a child-realm listener sees it on the child's window.
+    const child_listener = new cw.Function('e',
+      'window.__child = window.event === e; window.__parent = parent.event;');
+    cw.addEventListener('wping', child_listener);
+    EventTarget.prototype.dispatchEvent.call(cw, new Event('wping'));
+    testing.expectEqual(true, cw.__child);
+    testing.expectEqual(undefined, cw.__parent);
+    cw.removeEventListener('wping', child_listener);
   });
 </script>
 

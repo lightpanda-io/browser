@@ -16,8 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Stdio JSON-RPC writer for the browser-tools MCP server
-//! (`mcp/Server.zig`).
+//! JSON-RPC writer for the browser-tools MCP server (`mcp/Server.zig`).
 
 const std = @import("std");
 const lp = @import("lightpanda");
@@ -26,36 +25,51 @@ const protocol = @import("protocol.zig");
 const Self = @This();
 
 /// A screenshot response is hundreds of KB; don't keep that parked.
-pub const large_response = 256 * 1024;
+const large_response = 256 * 1024;
 
-writer: *std.Io.Writer,
+/// Where messages go; null drops them, as for an HTTP session between calls.
+/// The HTTP worker points it at each call's job in turn, on its one thread.
+sink: ?Sink,
 mutex: std.Io.Mutex = .init,
 aw: std.Io.Writer.Allocating,
 
-pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer) Self {
-    return .{ .writer = writer, .aw = .init(allocator) };
+pub const Kind = enum { response, notification };
+
+/// Takes each message: lines on a writer (stdio), or one HTTP call's channel.
+pub const Sink = struct {
+    context: *anyopaque,
+    /// `message` is one serialized JSON-RPC message, without a newline; borrowed.
+    push: *const fn (context: *anyopaque, kind: Kind, message: []const u8) error{WriteFailed}!void,
+
+    /// One message per line on `writer`, flushed after each.
+    pub fn lines(writer: *std.Io.Writer) Sink {
+        return .{ .context = writer, .push = pushLine };
+    }
+
+    fn pushLine(context: *anyopaque, _: Kind, message: []const u8) error{WriteFailed}!void {
+        const writer: *std.Io.Writer = @ptrCast(@alignCast(context));
+        try writer.writeAll(message);
+        try writer.writeByte('\n');
+        try writer.flush();
+    }
+};
+
+pub fn init(allocator: std.mem.Allocator, sink: ?Sink) Self {
+    return .{ .sink = sink, .aw = .init(allocator) };
 }
 
 pub fn deinit(self: *Self) void {
     self.aw.deinit();
 }
 
-/// Point subsequent responses at a different sink. The HTTP transport uses
-/// this to capture each request's response into its own buffer; safe because
-/// the browser worker retargets and writes on a single thread.
-pub fn retarget(self: *Self, writer: *std.Io.Writer) void {
-    self.writer = writer;
-}
-
-fn sendResponse(self: *Self, response: anytype) !void {
+fn send(self: *Self, kind: Kind, message: anytype) !void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
+    const sink = self.sink orelse return;
     self.aw.clearRetainingCapacity();
-    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &self.aw.writer);
-    try self.aw.writer.writeByte('\n');
-    try self.writer.writeAll(self.aw.writer.buffered());
-    try self.writer.flush();
+    try std.json.Stringify.value(message, .{ .emit_null_optional_fields = false }, &self.aw.writer);
+    try sink.push(sink.context, kind, self.aw.writer.buffered());
 
     if (self.aw.writer.buffer.len > large_response) {
         const allocator = self.aw.allocator;
@@ -70,11 +84,20 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
         id: std.json.Value,
         result: @TypeOf(result),
     };
-    try self.sendResponse(GenericResponse{ .id = id, .result = result });
+    try self.send(.response, GenericResponse{ .id = id, .result = result });
+}
+
+pub fn sendNotification(self: *Self, method: []const u8, params: anytype) !void {
+    const Notification = struct {
+        jsonrpc: []const u8 = "2.0",
+        method: []const u8,
+        params: @TypeOf(params),
+    };
+    try self.send(.notification, Notification{ .method = method, .params = params });
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.sendResponse(protocol.Response{
+    try self.send(.response, protocol.Response{
         .id = id,
         .@"error" = protocol.Error{
             .code = @backingInt(code),

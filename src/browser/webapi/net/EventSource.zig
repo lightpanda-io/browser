@@ -25,6 +25,7 @@ const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
 const Page = @import("../../Page.zig");
 const Transfer = @import("../../../network/HttpClient.zig").Transfer;
+const CorsGate = @import("../../../network/CorsGate.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -168,9 +169,8 @@ fn connect(self: *EventSource) !void {
         .request_mode = .cors,
         .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .resource_type = .eventsource,
-        .streaming = true,
         .header_callback = httpHeaderDoneCallback,
-        .data_callback = httpDataCallback,
+        .stream_callback = httpStreamCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -309,9 +309,11 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    if (!self._exec.isSameOrigin(self._url) and !self.corsAllowed(transfer)) {
-        self.failConnection();
-        return .abort;
+    if (!self._exec.isSameOrigin(self._url)) {
+        CorsGate.validateResponse(transfer) catch {
+            self.failConnection();
+            return .abort;
+        };
     }
 
     var ls: js.Local.Scope = undefined;
@@ -327,45 +329,13 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     return .proceed;
 }
 
-// The general http stack doesn't model CORS (fetch/XHR assume it passed),
-// but the EventSource WPTs require enforcement, and it's self-contained
-// enough to do here: the response must echo an acceptable
-// Access-Control-Allow-Origin (plus Allow-Credentials for credentialed
-// requests).
-fn corsAllowed(self: *const EventSource, transfer: *Transfer) bool {
-    var allow_origin: ?[]const u8 = null;
-    var allow_credentials: ?[]const u8 = null;
-    for (transfer.responseHeaders()) |hdr| {
-        if (std.mem.eql(u8, hdr.name, "access-control-allow-origin")) {
-            allow_origin = hdr.value;
-        } else if (std.mem.eql(u8, hdr.name, "access-control-allow-credentials")) {
-            allow_credentials = hdr.value;
-        }
-    }
-
-    const allowed = allow_origin orelse return false;
-    if (std.mem.eql(u8, allowed, "*")) {
-        // the wildcard is not valid for credentialed requests
-        return !self._with_credentials;
-    }
-    const origin = self._exec.origin() orelse "null";
-    if (!std.mem.eql(u8, allowed, origin)) {
-        return false;
-    }
-    if (self._with_credentials) {
-        const creds = allow_credentials orelse return false;
-        return std.mem.eql(u8, creds, "true");
-    }
-    return true;
-}
-
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpStreamCallback(transfer: *Transfer, data: []const u8) !void {
     const self: *EventSource = @ptrCast(@alignCast(transfer.req.ctx));
     try self.parse(data);
 }
 
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *EventSource = @ptrCast(@alignCast(ctx));
+fn httpDoneCallback(transfer: *Transfer) !void {
+    const self: *EventSource = @ptrCast(@alignCast(transfer.req.ctx));
     self._transfer = null;
     self.reestablish();
 }

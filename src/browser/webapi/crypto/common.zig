@@ -43,7 +43,7 @@ pub fn canonicalHash(name: []const u8) ?[]const u8 {
 }
 
 /// Maps a usage string to its `CryptoKey.Usages` bit, or null if unknown.
-pub fn usageBit(name: []const u8) ?u8 {
+fn usageBit(name: []const u8) ?u8 {
     const U = CryptoKey.Usages;
     const map = std.StaticStringMap(u8).initComptime(.{
         .{ "encrypt", U.encrypt },

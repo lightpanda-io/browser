@@ -31,7 +31,8 @@
   const a2 = document.querySelector('[href="amiibo/"]');
   const rect2 = a2.getBoundingClientRect();
 
-  testing.expectTrue(rect1.x != rect2.x)
+  // Each link starts its heading's line
+  testing.expectEqual(rect1.x, rect2.x);
   testing.expectTrue(rect1.y != rect2.y);
   testing.expectEqual(a1, document.elementFromPoint(rect1.x, rect1.y))
   testing.expectEqual(a2, document.elementFromPoint(rect2.x, rect2.y))

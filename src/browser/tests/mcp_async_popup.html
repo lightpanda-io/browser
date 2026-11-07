@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<head><title>async popups</title></head>
+<body>
+    <button id="sync" onclick="window.open('mcp_actions.html')">sync open</button>
+    <button id="delayed" onclick="setTimeout(function() { window.open('mcp_actions.html'); }, 50)">delayed open</button>
+    <button id="fetched" onclick="fetch('mcp_actions.html').then(function() { window.open('mcp_actions.html?f=1'); })">fetched open</button>
+    <button id="late_nav" onclick="setTimeout(function() { location.href = 'mcp_actions.html'; }, 50)">late navigation</button>
+</body>
+</html>

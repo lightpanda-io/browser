@@ -157,21 +157,8 @@ pub fn getPort(self: *URL) []const u8 {
     return std.mem.print(&self._port, "{d}", .{port}) catch unreachable;
 }
 
-/// Spec requires us to silently ignore errors of this setter.
-fn setPort(self: *URL, maybe_value: ?[]const u8) void {
-    // A null or empty value clears the port.
-    const value = maybe_value orelse {
-        _ = U.url_set_port_to_null(self._url);
-        return;
-    };
-    if (value.len == 0) {
-        _ = U.url_set_port_to_null(self._url);
-        return;
-    }
-
-    // Ignore invalid port numbers, leaving the port unchanged.
-    const port = std.fmt.parseInt(u16, value, 10) catch return;
-    _ = U.url_set_port(self._url, port);
+fn setPort(self: *URL, value: []const u8) void {
+    _ = U.url_set_port(self._url, value.ptr, value.len);
 }
 
 // searchParam pushes its mutations to URL, so self._url is always in sync

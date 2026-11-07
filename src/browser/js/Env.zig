@@ -26,6 +26,7 @@ const WasmStreaming = @import("WasmStreaming.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
+const Attribution = @import("Attribution.zig");
 
 const App = @import("../../App.zig");
 const string = @import("../../string.zig");
@@ -44,8 +45,6 @@ const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
-
-const GC_HINT_FLOOR = 1 * 1024 * 1024;
 
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
@@ -97,15 +96,13 @@ inspector: ?*Inspector,
 // which an be created once per isolate.
 private_symbols: PrivateSymbols,
 
-// Interned names for `hideServiceWorker`.
+// Interned names for `hideServiceWorker` and `hideSecureContextInterfaces`.
 disabled_api_names: DisabledApiNames,
 
 microtask_queues_are_running: bool,
 
-// Serializes V8 calls that race with TerminateExecution (which can fire from
-// the sighandler thread). Without this, a terminate landing between the
-// IsExecutionTerminating check and PerformCheckpoint trips a V8 debug assert.
-terminate_mutex: std.Io.Mutex = .init,
+// Task ids and the running task's tag (see Attribution.zig).
+attribution: Attribution,
 
 // Set from network thread, saying termination should happen. Read from worker
 // thread making sure terminate hasn't been canceled.
@@ -133,6 +130,8 @@ heap_limit_protected: bool = false,
 // Message for the next TypeError the bridge builds. Set by local.typeError.
 // Think of it as our own little global errno. How cute.
 error_message: ?[]const u8 = null,
+
+gc_hint_floor: ?u64,
 
 pub const InitOpts = struct {
     with_inspector: bool = false,
@@ -233,6 +232,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .allocator = allocator,
         .contexts = .empty,
         .isolate = isolate,
+        .attribution = .{ .isolate = isolate },
         .platform = &app.platform,
         .templates = templates,
         .isolate_params = params,
@@ -240,6 +240,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .private_symbols = private_symbols,
         .disabled_api_names = disabled_api_names,
         .microtask_queues_are_running = false,
+        .gc_hint_floor = app.config.v8GCHintFloor(),
         .eternal_function_templates = eternal_function_templates,
     };
 }
@@ -261,7 +262,7 @@ pub fn deinit(self: *Env) void {
     const allocator = app.allocator;
 
     if (self.inspector) |i| {
-        i.deinit(allocator);
+        i.deinit();
     }
 
     allocator.free(self.templates);
@@ -379,6 +380,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .identity = params.identity,
         .identity_arena = params.identity_arena,
         .execution = undefined,
+        .attribution = &self.attribution,
     };
 
     context.execution = .{
@@ -435,10 +437,23 @@ pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: 
     // A [Global] interface's members are on its prototype and mirrored onto the
     // global itself.
     self.deletePrototypeMember(v8_context, global_obj, if (comptime is_frame) "window" else "worker_global_scope", "caches");
+    self.deleteGlobal(v8_context, global_obj, "caches");
+}
+
+// [SecureContext] interfaces that a frame without a potentially trustworthy
+// origin must not see. Like serviceWorker, they're baked into the snapshot, so
+// they're deleted per context rather than never added.
+pub fn hideSecureContextInterfaces(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    inline for (.{ "payment_request", "payment_response", "payment_request_update_event", "payment_method_change_event" }) |name| {
+        self.deleteGlobal(v8_context, global_obj, name);
+    }
+}
+
+fn deleteGlobal(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime name: []const u8) void {
     var deleted: v8.MaybeBool = undefined;
-    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, "caches")), &deleted);
+    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, name)), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "experimental API not hidden", .{ .interface = "global", .member = "caches" });
+        log.warn(.js, "API not hidden", .{ .interface = "global", .member = name });
     }
 }
 
@@ -488,9 +503,6 @@ pub fn runMicrotasks(self: *Env) void {
     }
 
     if (self.microtask_queues_are_running == false) {
-        self.terminate_mutex.lockUncancelable(lp.io);
-        defer self.terminate_mutex.unlock(lp.io);
-
         const v8_isolate = self.isolate.handle;
 
         if (self.terminatePending()) {
@@ -499,6 +511,9 @@ pub fn runMicrotasks(self: *Env) void {
 
         self.microtask_queues_are_running = true;
         defer self.microtask_queues_are_running = false;
+
+        const task_scope = self.attribution.preserve();
+        defer task_scope.exit();
 
         // Re-read len/items each iteration: a checkpoint can run JS that creates
         // a new context (e.g. an iframe), appending to (and reallocating) the list.
@@ -690,8 +705,9 @@ pub fn runIdleTasks(self: *const Env) void {
 // any contexts which have been freed.
 // Skips if there's little to reclaim
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
+    const hint_floor = self.gc_hint_floor orelse return;
     const stats = self.isolate.getHeapStatistics();
-    if (stats.used_heap_size + stats.external_memory < GC_HINT_FLOOR) {
+    if (stats.used_heap_size + stats.external_memory < hint_floor) {
         return;
     }
     var handle_scope: js.HandleScope = undefined;
@@ -700,20 +716,13 @@ pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel
     self.isolate.memoryPressureNotification(level);
 }
 
-// The single "must not run JS" predicate. We're the only ones who ever call
-// TerminateExecution (here and in terminateInterrupt) and both set this flag,
+// The single "must not run JS" predicate. TerminateExecution is only ever
+// called from terminateInterrupt, on the isolate's thread, after this flag,
 // so it's always at least as true as v8__Isolate__IsExecutionTerminating —
 // and it stays true after V8 consumes the terminate on the JSEntry unwind,
 // which is what stops a fresh eval from re-entering mid-teardown.
 pub fn terminatePending(self: *const Env) bool {
     return self.terminate_requested.load(.acquire);
-}
-
-pub fn terminate(self: *Env) void {
-    self.terminate_mutex.lockUncancelable(lp.io);
-    defer self.terminate_mutex.unlock(lp.io);
-    self.terminate_requested.store(true, .release);
-    v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
 /// We need a stable pointer for `*Env`, so can't be setup in `init`.
@@ -877,8 +886,6 @@ fn logHeapLimit(self: *Env) void {
 /// unconditionally; a no-op if termination wasn't pending. Also clears the
 /// requestTerminate gate so any still-pending interrupt becomes a no-op.
 pub fn cancelTerminate(self: *Env) void {
-    self.terminate_mutex.lockUncancelable(lp.io);
-    defer self.terminate_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
     self.stall_report_requested_at.store(0, .release);
     self.heap_report_requested.store(false, .release);
@@ -887,11 +894,8 @@ pub fn cancelTerminate(self: *Env) void {
 
 /// Like `runMicrotasks`, but for the isolate-default queue used by contexts
 /// created outside `createContext` (the agent runtime's bare context), which
-/// aren't tracked in `contexts`. Guarded so a sighandler-thread terminate
-/// can't land mid-checkpoint.
+/// aren't tracked in `contexts`.
 pub fn performIsolateMicrotasks(self: *Env) void {
-    self.terminate_mutex.lockUncancelable(lp.io);
-    defer self.terminate_mutex.unlock(lp.io);
     if (self.terminatePending()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }
@@ -995,6 +999,10 @@ const DisabledApiNames = struct {
     prototype: v8.Eternal,
     service_worker: v8.Eternal,
     caches: v8.Eternal,
+    payment_request: v8.Eternal,
+    payment_response: v8.Eternal,
+    payment_request_update_event: v8.Eternal,
+    payment_method_change_event: v8.Eternal,
 
     fn init(isolate: *v8.Isolate) DisabledApiNames {
         var self: DisabledApiNames = undefined;
@@ -1004,6 +1012,10 @@ const DisabledApiNames = struct {
         intern(isolate, &self.prototype, "prototype");
         intern(isolate, &self.service_worker, "serviceWorker");
         intern(isolate, &self.caches, "caches");
+        intern(isolate, &self.payment_request, "PaymentRequest");
+        intern(isolate, &self.payment_response, "PaymentResponse");
+        intern(isolate, &self.payment_request_update_event, "PaymentRequestUpdateEvent");
+        intern(isolate, &self.payment_method_change_event, "PaymentMethodChangeEvent");
         return self;
     }
 

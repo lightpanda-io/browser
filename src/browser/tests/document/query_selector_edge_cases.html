@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="root">
@@ -198,5 +199,36 @@
 
   const mixedUniversal = document.querySelectorAll('* > * > p');
   testing.expectEqual(true, mixedUniversal.length >= 1);
+}
+</script>
+
+<script id=subsequentSiblingSharedAncestry>
+{
+  const make = (html) => {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return div;
+  };
+
+  // Every candidate sibling shares the parent, so the first one decides
+  const spaced = make('<div class=space><i>1</i><i hidden>2</i><i>3</i><i>4</i></div><div class=other><i>5</i><i>6</i></div>');
+  assertList(['3', '4'], spaced.querySelectorAll('.space > :not([hidden]) ~ :not([hidden])'));
+  assertList(['3', '4'], spaced.querySelectorAll('.space :not([hidden]) ~ :not([hidden])'));
+  assertList(['6'], spaced.querySelectorAll('.other > * ~ *'));
+  assertList([], spaced.querySelectorAll('.missing > * ~ *'));
+  assertList(['3', '4'], spaced.firstChild.querySelectorAll(':scope > :not([hidden]) ~ :not([hidden])'));
+
+  // A sibling hop to the left still needs every candidate tried: the
+  // nearest .b fails (its previous sibling isn't .a), an earlier one matches
+  const backtrack = make('<i class=a></i><i class=b>1</i><i class=b>2</i><i class=c>3</i>');
+  assertList(['3'], backtrack.querySelectorAll('.a + .b ~ .c'));
+
+  // A `~` hop to the left: the nearest candidate searched a superset of the
+  // siblings an earlier one would, wherever a `+` sits further left
+  const chained = make('<i class=x></i><i class=y></i><i class=b>1</i><i class=b>2</i><i class=c>3</i><i class=y></i><i class=b>4</i><i class=c>5</i>');
+  assertList(['2', '4'], chained.querySelectorAll('.y ~ .b ~ .b'));
+  assertList(['3', '5'], chained.querySelectorAll('.x + .y ~ .b ~ .c'));
+  assertList(['3', '5'], chained.querySelectorAll('div > .x ~ .b ~ .c'));
+  assertList([], chained.querySelectorAll('.missing > .x ~ .b ~ .c'));
 }
 </script>

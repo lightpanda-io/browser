@@ -32,7 +32,6 @@ const AbortSignal = @import("../AbortSignal.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
-const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
@@ -77,7 +76,7 @@ pub const InitOpts = struct {
     signal: ?*AbortSignal = null,
 };
 
-pub const ReferrerValue = union(enum) {
+const ReferrerValue = union(enum) {
     client,
     none,
     url: [:0]const u8,
@@ -205,6 +204,10 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         },
     };
 
+    if ((body != null or body_stream != null) and (method == .GET or method == .HEAD)) {
+        return exec.js.typeError("Request with GET/HEAD method cannot have body");
+    }
+
     const signal = if (opts.signal) |s|
         s
     else switch (input) {
@@ -330,11 +333,11 @@ fn getBodyUsed(self: *const Request) bool {
     return self._body_used;
 }
 
-pub fn bodyBytes(self: *Request) !?[]const u8 {
+pub fn bodyBytes(self: *Request, comptime chunks: ReadableStream.BodyChunks) !?[]const u8 {
     if (self._body) |body| {
         return body;
     } else if (self._body_stream) |stream| {
-        self._body = try stream.collectBodyBytes(self._arena.allocator());
+        self._body = try stream.collectBodyBytes(self._arena.allocator(), chunks);
         self._body_stream = null;
         // `body` keeps returning the original stream once it's drained.
         if (self._body_view == null) {
@@ -369,7 +372,7 @@ fn consume(self: *Request, exec: *const Execution) ![]const u8 {
     }
 
     try self.checkUnusable(local);
-    const body = self.bodyBytes() catch |err| switch (err) {
+    const body = self.bodyBytes(.uint8array) catch |err| switch (err) {
         error.TypeError => return local.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
@@ -398,7 +401,8 @@ pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
     }
 
     // This creates a new ReadableStream for the other types of body.
-    const body = try self.bodyBytes() orelse return null;
+    // Not a stream (handled above), so `chunks` doesn't apply.
+    const body = try self.bodyBytes(.uint8array) orelse return null;
     const stream = blk: {
         if (body.len == 0) {
             const stream = try ReadableStream.init(null, null, exec);
@@ -415,7 +419,7 @@ pub fn getBody(self: *Request, exec: *const Execution) !?*ReadableStream {
 }
 
 // Returns a ReadableStream that decodes the body as UTF-8.
-pub fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *Request, exec: *const Execution) !*ReadableStream {
     const local = exec.js.local.?;
     try self.checkUnusable(local);
 
@@ -485,7 +489,8 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn clone(self: *Request, exec: *const Execution) !*Request {
     // No stream tee: a stream body is drained so each copy owns its bytes.
-    const body = self.bodyBytes() catch |err| switch (err) {
+    // Lenient, since a tee wouldn't read the chunks.
+    const body = self.bodyBytes(.lenient) catch |err| switch (err) {
         error.TypeError => return exec.js.local.?.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
@@ -514,7 +519,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
     return request;
 }
 
-pub fn getReferrer(self: *Request) []const u8 {
+fn getReferrer(self: *Request) []const u8 {
     return switch (self._referrer) {
         .client => "about:client",
         .none => "",
@@ -522,7 +527,7 @@ pub fn getReferrer(self: *Request) []const u8 {
     };
 }
 
-pub fn getReferrerPolicy(self: *Request) []const u8 {
+fn getReferrerPolicy(self: *Request) []const u8 {
     const policy = self._referrer_policy orelse return "";
     return switch (policy) {
         .no_referrer => "no-referrer",

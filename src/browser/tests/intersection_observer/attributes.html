@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="root"></div>
 
@@ -38,8 +39,6 @@
   testing.expectEqual("10px 10px 10px 10px", margin("10PX"));
   testing.expectEqual("10px 10px 10px 10px", margin("1e1px"));
   testing.expectEqual("3px 3px 3px 3px", margin("+3px"));
-  // Serialized as given (Chrome truncates px values to integers, "1px").
-  testing.expectEqual("1.5px 1.5px 1.5px 1.5px", margin("1.50px"));
   testing.expectEqual("0px 0px 0px 0px", margin(""));
   testing.expectEqual("5.5% 5.5% 5.5% 5.5%", margin("5.5%"));
   testing.expectEqual("10px 20px 10px 20px", margin("10px/**/20px"));
@@ -61,8 +60,8 @@
   };
   const thresholds = (threshold) => outcome({ threshold }, (o) => o.thresholds.join());
   testing.expectEqual("0", thresholds([]));
-  // Kept as doubles (Chrome stores floats: 0.10000000149011612).
-  testing.expectEqual("0.1,0.3,0.3", thresholds([0.3, 0.1, 0.3]));
+  // Sorted, duplicates kept. Values exact as floats: Chrome stores floats.
+  testing.expectEqual("0.25,0.75,0.75", thresholds([0.75, 0.25, 0.75]));
   testing.expectEqual("0", thresholds(null));
   testing.expectEqual("RangeError", thresholds(-0.1));
   testing.expectEqual("RangeError", thresholds([0.5, 1.5]));
@@ -73,10 +72,6 @@
   testing.expectEqual("50 false", delay({ delay: 50 }));
   testing.expectEqual("1 false", delay({ delay: 1.7 }));
   testing.expectEqual("150 true", delay({ trackVisibility: true, delay: 150 }));
-  // Tracking visibility raises the delay to 100ms (Chrome throws a
-  // NotSupportedError instead, as an earlier draft did).
-  testing.expectEqual("100 true", delay({ trackVisibility: true }));
-  testing.expectEqual("100 true", delay({ trackVisibility: true, delay: 20 }));
   testing.expectEqual("TypeError", outcome({ root: document.createTextNode("x") }, (o) => o.root));
 
   // The options' conversion errors (a root of the wrong type, a non-finite
@@ -87,5 +82,31 @@
   testing.expectEqual("TypeError", margin({ threshold: NaN, rootMargin: "x" }));
   testing.expectEqual("SyntaxError", margin({ threshold: 2, rootMargin: "x" }));
   testing.expectEqual("0px 0px 0px 0px", margin({ rootMargin: "-0px" }));
+}
+</script>
+
+<script id="diverges">
+{
+  const outcome = (options, read) => {
+    try {
+      return read(new IntersectionObserver(() => {}, options));
+    } catch (err) {
+      return err.name;
+    }
+  };
+
+  testing.diverges("Chrome rounds px margins down to whole pixels", () => {
+    testing.expectEqual("1.5px 1.5px 1.5px 1.5px", outcome({ rootMargin: "1.50px" }, (o) => o.rootMargin));
+  });
+  testing.diverges("Chrome stores thresholds as floats (0.10000000149011612)", () => {
+    testing.expectEqual("0.1,0.3", outcome({ threshold: [0.3, 0.1] }, (o) => o.thresholds.join()));
+  });
+
+  // Tracking visibility raises the delay to 100ms.
+  const delay = (options) => outcome(options, (o) => `${o.delay} ${o.trackVisibility}`);
+  testing.diverges("Chrome throws NotSupportedError for trackVisibility with a delay under 100, as an earlier draft did", () => {
+    testing.expectEqual("100 true", delay({ trackVisibility: true }));
+    testing.expectEqual("100 true", delay({ trackVisibility: true, delay: 20 }));
+  });
 }
 </script>

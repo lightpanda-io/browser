@@ -64,7 +64,7 @@ fn EncodedChunk(comptime interface_name: [:0]const u8) type {
             const transfer: common.Transfer = .{ .buffers = init_.transfer };
             try transfer.check();
 
-            const self = try create(chunk_type, timestamp, duration, init_.data.bytes, exec.page);
+            const self = try create(chunk_type, timestamp, duration, init_.data.bytes(), exec.page);
             errdefer self.deinit(exec.page);
 
             try transfer.detach();
@@ -120,10 +120,11 @@ fn EncodedChunk(comptime interface_name: [:0]const u8) type {
         }
 
         fn copyTo(self: *const Self, destination: js.AllowSharedBufferSource) !void {
-            if (destination.bytes.len < self._data.len) {
+            const dest = destination.bytes();
+            if (dest.len < self._data.len) {
                 return error.TypeError;
             }
-            @memcpy(destination.bytes[0..self._data.len], self._data);
+            @memcpy(dest[0..self._data.len], self._data);
         }
 
         pub fn structuredSerialize(self: *const Self, writer: *js.StructuredWriter) !void {

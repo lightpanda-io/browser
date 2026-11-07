@@ -85,6 +85,7 @@ pub const Type = union(enum) {
     message_event: *@import("event/MessageEvent.zig"),
     progress_event: *@import("event/ProgressEvent.zig"),
     navigation_current_entry_change_event: *@import("event/NavigationCurrentEntryChangeEvent.zig"),
+    navigate_event: *@import("event/NavigateEvent.zig"),
     page_transition_event: *@import("event/PageTransitionEvent.zig"),
     pop_state_event: *@import("event/PopStateEvent.zig"),
     hash_change_event: *@import("event/HashChangeEvent.zig"),
@@ -105,7 +106,11 @@ pub const Type = union(enum) {
     idb_version_change_event: *@import("storage/idb/IDBVersionChangeEvent.zig"),
     toggle_event: *@import("event/ToggleEvent.zig"),
     task_priority_change_event: *@import("event/TaskPriorityChangeEvent.zig"),
+    security_policy_violation_event: *@import("event/SecurityPolicyViolationEvent.zig"),
     offline_audio_completion_event: *@import("webaudio/OfflineAudioCompletionEvent.zig"),
+    payment_request_update_event: *@import("payment/PaymentRequestUpdateEvent.zig"),
+    tool_activated_event: *@import("event/ToolEvent.zig").ToolActivatedEvent,
+    tool_cancel_event: *@import("event/ToolEvent.zig").ToolCancelEvent,
 };
 
 pub const Options = struct {
@@ -171,8 +176,28 @@ pub fn acquireRef(self: *Event) void {
     self._rc.acquire();
 }
 
-pub fn deinit(self: *Event, _: *Page) void {
+pub fn deinit(self: *Event, page: *Page) void {
+    deinitSubtypes(self, page);
     self._arena.release();
+}
+
+fn deinitSubtypes(value: anytype, page: *Page) void {
+    const T = @typeInfo(@TypeOf(value)).pointer.child;
+    if (T != Event and (@hasDecl(T, "acquireRef") or @hasDecl(T, "releaseRef"))) {
+        @compileError(@typeName(T) ++ " must not define acquireRef/releaseRef: the RC is Event's; put cleanup in deinit");
+    }
+    if (@hasField(T, "_type")) {
+        switch (value._type) {
+            inline else => |child| {
+                if (@typeInfo(@TypeOf(child)) == .pointer) {
+                    deinitSubtypes(child, page);
+                }
+            },
+        }
+    }
+    if (T != Event and @hasDecl(T, "deinit")) {
+        value.deinit(page);
+    }
 }
 
 pub fn releaseRef(self: *Event, page: *Page) void {
@@ -216,6 +241,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .message_event => |e| return if (T == @import("event/MessageEvent.zig")) e else null,
         .progress_event => |e| return if (T == @import("event/ProgressEvent.zig")) e else null,
         .navigation_current_entry_change_event => |e| return if (T == @import("event/NavigationCurrentEntryChangeEvent.zig")) e else null,
+        .navigate_event => |e| return if (T == @import("event/NavigateEvent.zig")) e else null,
         .page_transition_event => |e| return if (T == @import("event/PageTransitionEvent.zig")) e else null,
         .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
         .hash_change_event => |e| return if (T == @import("event/HashChangeEvent.zig")) e else null,
@@ -235,9 +261,18 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .idb_version_change_event => |e| return if (T == @import("storage/idb/IDBVersionChangeEvent.zig")) e else null,
         .toggle_event => |e| return if (T == @import("event/ToggleEvent.zig")) e else null,
         .task_priority_change_event => |e| return if (T == @import("event/TaskPriorityChangeEvent.zig")) e else null,
+        .security_policy_violation_event => |e| return if (T == @import("event/SecurityPolicyViolationEvent.zig")) e else null,
         .offline_audio_completion_event => |e| return if (T == @import("webaudio/OfflineAudioCompletionEvent.zig")) e else null,
+        .tool_activated_event => |e| return if (T == @import("event/ToolEvent.zig").ToolActivatedEvent) e else null,
+        .tool_cancel_event => |e| return if (T == @import("event/ToolEvent.zig").ToolCancelEvent) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
+                return e;
+            }
+            return e.is(T);
+        },
+        .payment_request_update_event => |e| {
+            if (T == @import("payment/PaymentRequestUpdateEvent.zig")) {
                 return e;
             }
             return e.is(T);
@@ -504,3 +539,21 @@ pub const JsApi = struct {
 };
 
 // tested in event_target
+
+const testing = @import("../../testing.zig");
+test "WebApi: Event subtype cleanup runs when dispatch drops the last ref" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // onerror gets the ErrorEvent's fields, not the event, so no JS wrapper
+    // ever holds the event: the Zig side drops the last reference.
+    _ = try ls.local.exec("window.onerror = () => true;", null);
+    const before = frame.page.globals.list.items.len;
+    _ = try ls.local.exec("for (let i = 0; i < 10; i++) reportError(new Error('x'));", null);
+    try testing.expectEqual(before, frame.page.globals.list.items.len);
+}

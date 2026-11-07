@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -519,12 +520,14 @@ fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
     const key = try Key.fromString(self._proto._proto._arena.allocator(), str);
 
     switch (key) {
-        .Alt, .AltGraph => return self._alt_key,
+        // AltGraph has its own init member (modifierAltGraph, not supported).
+        .Alt => return self._alt_key,
         .Shift => return self._shift_key,
         .Control => return self._ctrl_key,
         .Meta => return self._meta_key,
         .standard => |s| if (std.mem.eql(u8, s, "Accel")) {
-            return self._ctrl_key or self._meta_key;
+            // Command on macOS, Control elsewhere.
+            return if (builtin.os.tag == .macos) self._meta_key else self._ctrl_key;
         },
         else => {},
     }

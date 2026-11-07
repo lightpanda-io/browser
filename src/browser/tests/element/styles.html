@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="test-div"></div>
@@ -367,9 +368,12 @@
   document.body.appendChild(plainDiv);
   testing.expectEqual('block', window.getComputedStyle(plainDiv).getPropertyValue('display'));
 
-  // Repeated calls return the same object (as in Chrome); distinct per element.
-  testing.expectTrue(window.getComputedStyle(div) === window.getComputedStyle(div));
-  testing.expectTrue(window.getComputedStyle(div) === cs);
+  // We cache one object per element so pages polling getComputedStyle don't
+  // grow the page arena.
+  testing.diverges('Chrome returns a new object per getComputedStyle call', () => {
+    testing.expectTrue(window.getComputedStyle(div) === window.getComputedStyle(div));
+    testing.expectTrue(window.getComputedStyle(div) === cs);
+  });
   testing.expectFalse(window.getComputedStyle(div) === window.getComputedStyle(plainDiv));
   // The cached object stays a live view.
   div.style.setProperty('text-transform', 'lowercase');
@@ -379,19 +383,21 @@
   // the legacy single-colon form maps to the same entry as the double-colon
   // one, and a pseudoElt without a leading colon is ignored (CSSOM).
   const before = window.getComputedStyle(div, ':before');
-  testing.expectTrue(before === window.getComputedStyle(div, '::before'));
-  testing.expectTrue(before === window.getComputedStyle(div, ':BEFORE'));
+  testing.diverges('Chrome returns a new object per getComputedStyle call', () => {
+    testing.expectTrue(before === window.getComputedStyle(div, '::before'));
+    testing.expectTrue(before === window.getComputedStyle(div, ':BEFORE'));
+    testing.expectTrue(cs === window.getComputedStyle(div, 'before'));
+    testing.expectTrue(cs === window.getComputedStyle(div, ''));
+  });
   testing.expectFalse(before === cs);
   testing.expectFalse(before === window.getComputedStyle(div, '::after'));
-  testing.expectTrue(cs === window.getComputedStyle(div, 'before'));
-  testing.expectTrue(cs === window.getComputedStyle(div, ''));
 
   // A normal declaration must not override an earlier !important one, and the
   // computed and inline (el.style) paths must agree on the resolved value.
   const impDiv = document.createElement('div');
   impDiv.setAttribute('style', 'color: red !important; color: blue');
   document.body.appendChild(impDiv);
-  testing.expectEqual('red', window.getComputedStyle(impDiv).getPropertyValue('color'));
+  testing.expectEqual('rgb(255, 0, 0)', window.getComputedStyle(impDiv).getPropertyValue('color'));
   testing.expectEqual('red', impDiv.style.getPropertyValue('color'));
 }
 </script>
@@ -413,5 +419,124 @@
   testing.expectEqual('color: red; margin: 1px', div.getAttribute('style'));
   div.style.width = '50px';
   testing.expectEqual('50px', cs.getPropertyValue('width'));
+}
+</script>
+
+<script id=boxShorthands>
+{
+  // A four-side shorthand sets its longhands and reads back from them.
+  const d = document.createElement('div');
+  d.style.margin = '1px 2px 3px';
+  testing.expectEqual('2px', d.style.marginLeft);
+  testing.expectEqual('3px', d.style.marginBottom);
+  testing.expectEqual('1px 2px 3px', d.style.margin);
+  d.style.marginLeft = '4px';
+  testing.expectEqual('1px 2px 3px 4px', d.style.margin);
+  d.style.removeProperty('margin');
+  testing.expectEqual('', d.style.marginTop);
+
+  d.style.cssText = 'padding: 5px';
+  testing.expectEqual('5px', d.style.paddingRight);
+  testing.expectEqual('5px', d.style.padding);
+}
+</script>
+
+<script id=boxShorthandTopLevelValues>
+{
+  // Sides split at the top level, not inside a function.
+  const d = document.createElement('div');
+  d.style.borderColor = 'rgb(1, 2, 3) red';
+  testing.expectEqual('rgb(1, 2, 3)', d.style.borderTopColor);
+  testing.expectEqual('red', d.style.borderRightColor);
+  testing.expectEqual('rgb(1, 2, 3) red', d.style.borderColor);
+
+  // calc() terms in Chrome's order (em before px), so it serializes as written
+  d.style.margin = 'calc(1em + 1px) 3px';
+  testing.expectEqual('3px', d.style.marginLeft);
+  testing.expectEqual('calc(1em + 1px)', d.style.marginBottom);
+}
+</script>
+
+<script id=boxShorthandInvalidWritesNothing>
+{
+  const d = document.createElement('div');
+  d.style.borderColor = 'blue';
+  d.style.borderColor = 'red notacolor';
+  testing.expectEqual('blue', d.style.borderTopColor);
+  testing.expectEqual('blue', d.style.borderColor);
+
+  d.style.margin = '1px';
+  d.style.margin = '1px 2px 3px 4px 5px';
+  testing.expectEqual('1px', d.style.margin);
+
+  d.style.cssText = 'border-color: blue; border-color: red notacolor';
+  testing.expectEqual('blue', d.style.borderTopColor);
+}
+</script>
+
+<script id=boxShorthandVar>
+{
+  // A value with var() stays as written, in place of its sides.
+  const d = document.createElement('div');
+  d.style.margin = '1px';
+  d.style.margin = 'var(--x) 2px';
+  testing.expectEqual('var(--x) 2px', d.style.margin);
+  testing.expectEqual('', d.style.marginTop);
+  testing.expectEqual('margin: var(--x) 2px;', d.style.cssText);
+
+  d.style.margin = '3px';
+  testing.expectEqual('3px', d.style.margin);
+  testing.expectEqual('3px', d.style.marginTop);
+  testing.expectEqual('margin: 3px;', d.style.cssText);
+
+  d.style.setProperty('padding', 'var(--y)', 'important');
+  testing.expectEqual('important', d.style.getPropertyPriority('padding'));
+  d.style.removeProperty('padding');
+  testing.expectEqual('', d.style.padding);
+
+  d.style.cssText = 'padding: var(--y)';
+  testing.expectEqual('var(--y)', d.style.padding);
+}
+</script>
+
+<script id=boxShorthandSubstitutionThenSide>
+{
+  // A side set after a var() shorthand: the shorthand no longer reads back.
+  const d = document.createElement('div');
+  d.style.margin = 'var(--x)';
+  d.style.marginTop = '1px';
+  testing.expectEqual('', d.style.margin);
+  testing.expectEqual('', d.style.getPropertyPriority('margin'));
+
+  // All four sides override it.
+  d.style.marginRight = '1px';
+  d.style.marginBottom = '1px';
+  d.style.marginLeft = '1px';
+  testing.expectEqual('1px', d.style.margin);
+  testing.expectEqual('margin: 1px;', d.style.cssText);
+
+  // env() isn't split either.
+  d.style.padding = 'env(safe-area-inset-top) 2px';
+  testing.expectEqual('env(safe-area-inset-top) 2px', d.style.padding);
+  testing.expectEqual('', d.style.paddingTop);
+}
+</script>
+
+<script id=boxShorthandImportantPrecedence>
+{
+  // In a declaration block, a later normal declaration doesn't override an
+  // earlier !important one.
+  const d = document.createElement('div');
+  d.style.cssText = 'margin: 1px !important; margin: var(--x)';
+  testing.expectEqual('1px', d.style.margin);
+  testing.expectEqual('important', d.style.getPropertyPriority('margin'));
+
+  d.style.cssText = 'margin: var(--x) !important; margin: 1px';
+  testing.expectEqual('var(--x)', d.style.margin);
+  testing.expectEqual('important', d.style.getPropertyPriority('margin'));
+
+  d.style.cssText = 'margin-top: 5px !important; margin: 1px 2px';
+  testing.expectEqual('5px', d.style.marginTop);
+  testing.expectEqual('2px', d.style.marginLeft);
 }
 </script>

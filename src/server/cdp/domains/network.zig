@@ -110,6 +110,10 @@ pub const ErrorReason = enum {
 
 // Chrome's net error for an ErrorReason's error, else the error's name.
 pub fn errorText(err: anyerror) []const u8 {
+    if (err == error.UnsafePort) {
+        // Not a Fetch.failRequest reason, so not in ErrorReason.
+        return "net::ERR_UNSAFE_PORT";
+    }
     inline for (comptime std.enums.values(ErrorReason)) |reason| {
         if (err == reason.toError()) {
             return reason.netError();
@@ -188,7 +192,7 @@ fn enable(cmd: *CDP.Command) !void {
         maxPostDataSize: ?u32 = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
     var limits: BufferLimits = .{};
     if (params.maxTotalBufferSize) |max| {
@@ -201,13 +205,13 @@ fn enable(cmd: *CDP.Command) !void {
         // 0 is Chrome's "no limit".
         limits.post_data = if (max == 0) std.math.maxInt(usize) else max;
     }
-    try bc.networkEnable(limits);
+    try target.networkEnable(limits);
     return cmd.sendResult(null, .{});
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.networkDisable();
+    const target = try cmd.target();
+    target.networkDisable();
     return cmd.sendResult(null, .{});
 }
 
@@ -239,11 +243,11 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         headers: std.json.ArrayHashMap([]const u8),
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
-    // Copy the headers onto the browser context arena
-    const arena = bc.arena;
-    const extra_headers = &bc.extra_headers;
+    // Copy the headers onto the target's arena
+    const arena = target.arena.allocator();
+    const extra_headers = &target.extra_headers;
 
     extra_headers.clearRetainingCapacity();
     try extra_headers.ensureTotalCapacity(arena, params.headers.map.count());
@@ -280,20 +284,28 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
 
 const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
-// Only matches the cookie on provided parameters
-fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
-    if (!std.mem.eql(u8, cookie.name, name)) return false;
+// Only matches the cookie on provided parameters. We do not want to use
+// Cookie.appliesTo here, as a Cookie with a shorter path would match. Similar
+// to deduplicating with areCookiesEqual, except domain and path are optional.
+const CookieMatch = struct {
+    name: []const u8,
+    domain: ?[]const u8,
+    path: ?[]const u8,
 
-    if (domain) |domain_| {
-        const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
-        const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
-        if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+    fn matches(self: *const CookieMatch, cookie: *const Cookie) bool {
+        if (!std.mem.eql(u8, cookie.name, self.name)) return false;
+
+        if (self.domain) |domain_| {
+            const c_no_dot = if (std.mem.startsWith(u8, cookie.domain, ".")) cookie.domain[1..] else cookie.domain;
+            const d_no_dot = if (std.mem.startsWith(u8, domain_, ".")) domain_[1..] else domain_;
+            if (!std.mem.eql(u8, c_no_dot, d_no_dot)) return false;
+        }
+        if (self.path) |path_| {
+            if (!std.mem.eql(u8, cookie.path, path_)) return false;
+        }
+        return true;
     }
-    if (path) |path_| {
-        if (!std.mem.eql(u8, cookie.path, path_)) return false;
-    }
-    return true;
-}
+};
 
 fn deleteCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -311,21 +323,12 @@ fn deleteCookies(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const cookies = &bc.session.cookie_jar.cookies;
-
-    var index = cookies.items.len;
-    while (index > 0) {
-        index -= 1;
-        const cookie = &cookies.items[index];
-        const domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain);
-        const path = try Cookie.parsePath(cmd.arena, params.url, params.path);
-
-        // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
-        // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
-        if (cookieMatches(cookie, params.name, domain, path)) {
-            cookies.orderedRemove(index).deinit();
-        }
-    }
+    const match: CookieMatch = .{
+        .name = params.name,
+        .domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain),
+        .path = try Cookie.parsePath(cmd.arena, params.url, params.path),
+    };
+    bc.session.cookie_jar.removeWhere(&match, CookieMatch.matches);
     return cmd.sendResult(null, .{});
 }
 
@@ -391,7 +394,8 @@ fn getCookies(cmd: *CDP.Command) !void {
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
-    const frame_url = if (bc.mainFrame()) |frame| frame.url else null;
+    const target = cmd.target() catch null;
+    const frame_url = if (target) |t| if (t.mainFrame()) |frame| frame.url else null else null;
     const param_urls = params.urls orelse &[_][:0]const u8{frame_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayList(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
@@ -401,7 +405,7 @@ fn getCookies(cmd: *CDP.Command) !void {
 
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items, .urls = urls.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar, .urls = urls.items };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -413,7 +417,7 @@ fn getAllCookies(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
-    const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items };
+    const writer = CdpStorage.CookieWriter{ .jar = jar };
     try cmd.sendResult(.{ .cookies = writer }, .{});
 }
 
@@ -423,8 +427,8 @@ fn getResponseBody(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const key = try keyFromRequestId(params.requestId);
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const resp = bc.captured_responses.getPtr(key) orelse return error.RequestNotFound;
+    const target = try cmd.target();
+    const resp = target.captured_responses.getPtr(key) orelse return error.RequestNotFound;
     const data = resp.data orelse {
         return cmd.sendError(-32000, "Request content was evicted from inspector cache", .{});
     };
@@ -465,27 +469,27 @@ fn getRequestPostData(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const key = try keyFromRequestId(params.requestId);
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const body = bc.captured_requests.get(key) orelse return error.RequestNotFound;
+    const target = try cmd.target();
+    const body = target.captured_requests.get(key) orelse return error.RequestNotFound;
 
     return cmd.sendResult(.{ .postData = SafeString.wrap(body) }, .{});
 }
 
-pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(target: *CDP.Target, msg: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
-    // sent Target.closeTarget. In that case, bc.session_id will be cleared
+    // sent Target.closeTarget. In that case, target.session_id will be cleared
     // already, and we can skip sending these messages to the client.
-    const session_id = bc.session_id orelse return;
+    const session_id = target.session_id orelse return;
 
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a frame.
-    lp.assert(bc.session.hasPage(), "CDP.network.httpRequestFail null frame", .{});
+    lp.assert(target.session.hasPage(), "CDP.network.httpRequestFail null frame", .{});
 
     // Consumer-side cancel (stopLoading, xhr.abort, AbortController, ...):
     const canceled = msg.err == error.TransferCanceled;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try bc.cdp.sendEvent("Network.loadingFailed", .{
+    try target.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
@@ -496,31 +500,31 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(arena: Allocator, target: *CDP.Target, msg: *const Notification.RequestStart) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = bc.session_id orelse return;
+    const session_id = target.session_id orelse return;
 
     const transfer = msg.transfer;
     const req = &transfer.req;
     const frame_id = req.document_frame_id orelse req.frame_id;
-    const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
+    const frame = target.session.findFrameByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers: the .cdp layer overrides both
     // built-in defaults and script-set headers of the same name (Chrome
     // behavior), but never a .fixed header.
-    for (bc.extra_headers.items) |extra| {
+    for (target.extra_headers.items) |extra| {
         try transfer.setHeader(extra.name, extra.value, .{ .source = .cdp });
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
-    try bc.cdp.sendEvent("Network.requestWillBeSent", .{
+    try target.cdp.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
         .documentURL = frame.url,
-        .request = RequestWriter.init(arena, transfer, bc.network_limits.post_data),
+        .request = RequestWriter.init(arena, transfer, target.network_limits.post_data),
         .initiator = .{ .type = "other" },
         .redirectResponse = if (msg.redirect_response)
             ResponseWriter.init(arena, transfer)
@@ -533,16 +537,16 @@ pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const N
     }, .{ .session_id = session_id });
 }
 
-pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *const Notification.ResponseHeaderDone) !void {
+pub fn httpResponseHeaderDone(arena: Allocator, target: *CDP.Target, msg: *const Notification.ResponseHeaderDone) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = bc.session_id orelse return;
+    const session_id = target.session_id orelse return;
 
     const transfer = msg.transfer;
     const req = &transfer.req;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try bc.cdp.sendEvent("Network.responseReceived", .{
+    try target.cdp.sendEvent("Network.responseReceived", .{
         .frameId = &id.toFrameId(req.document_frame_id orelse req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
@@ -553,22 +557,22 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, msg: *c
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestDone(bc: *CDP.BrowserContext, msg: *const Notification.RequestDone) !void {
+pub fn httpRequestDone(target: *CDP.Target, msg: *const Notification.RequestDone) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = bc.session_id orelse return;
-    try bc.cdp.sendEvent("Network.loadingFinished", .{
+    const session_id = target.session_id orelse return;
+    try target.cdp.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
-        .encodedDataLength = msg.content_length,
+        .encodedDataLength = msg.encoded_data_length,
     }, .{ .session_id = session_id });
 }
 
-pub fn httpServedFromCache(bc: *CDP.BrowserContext, msg: *const Notification.RequestServedFromCache) !void {
-    const session_id = bc.session_id orelse return;
+pub fn httpServedFromCache(target: *CDP.Target, msg: *const Notification.RequestServedFromCache) !void {
+    const session_id = target.session_id orelse return;
     const transfer = msg.transfer;
 
-    try bc.cdp.sendEvent("Network.requestServedFromCache", .{
+    try target.cdp.sendEvent("Network.requestServedFromCache", .{
         .requestId = &id.toRequestId(transfer),
     }, .{ .session_id = session_id });
 }
@@ -791,9 +795,10 @@ const ResponseWriter = struct {
 
 fn initialPriority(resource_type: HttpClient.Request.ResourceType) []const u8 {
     return switch (resource_type) {
-        .document, .stylesheet => "VeryHigh",
+        .document, .stylesheet, .download => "VeryHigh",
         .script, .worker, .xhr, .fetch, .eventsource => "High",
         .image, .text_track => "Low",
+        .beacon => "VeryLow",
     };
 }
 
@@ -807,7 +812,7 @@ fn securityState(url: [:0]const u8) []const u8 {
     return "unknown";
 }
 
-fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedKey {
+fn keyFromRequestId(request_id: []const u8) !CDP.Target.CapturedKey {
     if (request_id.len < 4) {
         return error.InvalidParams;
     }
@@ -827,6 +832,8 @@ test "cdp.network: errorText" {
     try testing.expectEqualSlices(u8, "net::ERR_FAILED", errorText(ErrorReason.Failed.toError()));
     try testing.expectEqualSlices(u8, "net::ERR_NAME_NOT_RESOLVED", errorText(ErrorReason.NameNotResolved.toError()));
     try testing.expectEqualSlices(u8, "CouldntConnect", errorText(error.CouldntConnect));
+    // A destination on the Fetch bad-port list, like Chrome's ERR_UNSAFE_PORT.
+    try testing.expectEqualSlices(u8, "net::ERR_UNSAFE_PORT", errorText(error.UnsafePort));
 }
 
 test "cdp.network emulateNetworkConditions and setBypassServiceWorker" {
@@ -864,8 +871,8 @@ test "cdp.network setExtraHTTPHeaders" {
         .params = .{ .headers = .{ .food = "bars" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
@@ -885,9 +892,10 @@ test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
         } },
     });
 
-    try testing.expectEqual(bc.extra_headers.items.len, 1);
-    try testing.expectEqual("x-custom", bc.extra_headers.items[0].name);
-    try testing.expectEqual("hi", bc.extra_headers.items[0].value);
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(target.extra_headers.items.len, 1);
+    try testing.expectEqual("x-custom", target.extra_headers.items[0].name);
+    try testing.expectEqual("hi", target.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
@@ -904,8 +912,8 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
         .params = .{ .headers = .{ .@"User-Agent" = "Mozilla/5.0" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.extra_headers.items.len, 0);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
 }
 
 test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
@@ -920,8 +928,8 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
         .params = .{ .headers = .{ .@"User-Agent" = "CustomBot/2.0" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
@@ -941,8 +949,8 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via 
         .params = .{ .headers = .{ .@"User-Agent:Mozilla/5.0 (X" = "Y)" } },
     });
 
-    const bc = ctx.cdp().browser_context.?;
-    try testing.expectEqual(bc.extra_headers.items.len, 0);
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
@@ -964,9 +972,10 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
         } },
     });
 
-    try testing.expectEqual(bc.extra_headers.items.len, 1);
-    try testing.expectEqual("x-keep", bc.extra_headers.items[0].name);
-    try testing.expectEqual("ok", bc.extra_headers.items[0].value);
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(target.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep", target.extra_headers.items[0].name);
+    try testing.expectEqual("ok", target.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
@@ -988,9 +997,10 @@ test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
         } },
     });
 
-    try testing.expectEqual(bc.extra_headers.items.len, 1);
-    try testing.expectEqual("x-keep", bc.extra_headers.items[0].name);
-    try testing.expectEqual("ok", bc.extra_headers.items[0].value);
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(target.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep", target.extra_headers.items[0].name);
+    try testing.expectEqual("ok", target.extra_headers.items[0].value);
 }
 
 test "cdp.Network: cookies" {
@@ -1310,6 +1320,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .session_id = "SID-BLOCK",
     });
     const page = try bc.session.createPage();
+    const target = try testing.firstTarget(bc);
     const client = bc.session.http_client;
     defer client.setBlockedUrls(&.{}) catch unreachable;
 
@@ -1341,7 +1352,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .loader_id = 1,
         .method = .GET,
         .url = "https://blocked.test/script.js",
-        .origin = bc.security_origin,
+        .origin = target.security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .script,
@@ -1368,7 +1379,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .loader_id = 1,
         .method = .GET,
         .url = "http://127.0.0.1:9582/redirect-no-fragment",
-        .origin = bc.security_origin,
+        .origin = target.security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .script,
@@ -1384,6 +1395,94 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .blockedReason = "inspector",
     }, .{ .session_id = "SID-BLOCK" });
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+}
+
+test "cdp.Network: a bad port fails before connecting, redirect hop included" {
+    testing.silenceLog(&.{.http});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-PORT",
+        .session_id = "SID-PORT",
+    });
+    const page = try bc.session.createPage();
+    const client = bc.session.http_client;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+    });
+
+    const ErrorContext = struct {
+        err: ?anyerror = null,
+
+        fn callback(raw: *anyopaque, err: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.err = err;
+        }
+    };
+
+    // Nothing listens on 22 in tests either: UnsafePort, not CouldntConnect,
+    // shows the pipeline refused it.
+    for ([_][:0]const u8{ "http://127.0.0.1:22/", "http://127.0.0.1:9582/redirect-bad-port" }) |url| {
+        var error_context: ErrorContext = .{};
+        var request_id: [14]u8 = undefined;
+        _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+
+        try client.request(.{
+            .frame_id = page.frame_id,
+            .loader_id = 1,
+            .method = .GET,
+            .url = url,
+            .origin = (try testing.firstTarget(bc)).security_origin,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .fetch,
+            .notification = bc.session.notification,
+            .ctx = &error_context,
+            .error_callback = ErrorContext.callback,
+            .shutdown_callback = HttpClient.noopShutdown,
+        }, null);
+
+        try ctx.expectSentEvent("Network.loadingFailed", .{
+            .requestId = &request_id,
+            .errorText = "net::ERR_UNSAFE_PORT",
+        }, .{ .session_id = "SID-PORT" });
+        try testing.expectEqual(error.UnsafePort, error_context.err.?);
+    }
+}
+
+test "cdp.Network: loadingFinished reports the bytes received, not the decoded body" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-ED", .session_id = "SID-ED" });
+    const page = try bc.session.createPage();
+    const client = bc.session.http_client;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/raw/gzip",
+        .origin = (try testing.firstTarget(bc)).security_origin,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
+        .resource_type = .fetch,
+        .notification = bc.session.notification,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    // The header block and the 29 gzipped bytes, not the 1000 decoded ones.
+    const r = testing.base.raw_responses.gzip;
+    try ctx.expectSentEvent("Network.loadingFinished", .{
+        .encodedDataLength = r.head.len + r.body.len,
+    }, .{ .session_id = "SID-ED" });
 }
 
 test "cdp.Network: POST body exposed as postData" {
@@ -1409,7 +1508,7 @@ test "cdp.Network: POST body exposed as postData" {
         .loader_id = 1,
         .method = .POST,
         .url = "http://127.0.0.1:9582/echo_body",
-        .origin = bc.security_origin,
+        .origin = (try testing.firstTarget(bc)).security_origin,
         .body = body,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
@@ -1451,8 +1550,8 @@ const EchoDriver = struct {
     done: bool = false,
     err: ?anyerror = null,
 
-    fn doneCallback(raw: *anyopaque) !void {
-        const self: *EchoDriver = @ptrCast(@alignCast(raw));
+    fn doneCallback(transfer: *Transfer) !void {
+        const self: *EchoDriver = @ptrCast(@alignCast(transfer.req.ctx));
         self.done = true;
     }
 
@@ -1474,7 +1573,7 @@ const EchoDriver = struct {
             .url = "http://127.0.0.1:9582/echo_body",
             .body = body,
             .partial = partial,
-            .origin = bc.security_origin,
+            .origin = (try testing.firstTarget(bc)).security_origin,
             .request_mode = .no_cors,
             .credentials_mode = .same_origin,
             .resource_type = .fetch,
@@ -1525,7 +1624,8 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
         .params = .{ .requestId = &small },
     });
     try ctx.expectSentResult(.{ .body = "123", .base64Encoded = false }, .{ .id = 3 });
-    try testing.expectEqual(3, bc.captured_responses_size);
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(3, target.captured_responses_size);
 
     // Re-enabling with a tighter limit evicts what's already captured.
     try ctx.processMessage(.{
@@ -1540,7 +1640,7 @@ test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
         .params = .{ .requestId = &small },
     });
     try ctx.expectSentError(-32000, "Request content was evicted from inspector cache", .{ .id = 5 });
-    try testing.expectEqual(0, bc.captured_responses_size);
+    try testing.expectEqual(0, target.captured_responses_size);
 }
 
 test "cdp.Network: getResponseBody omits a partial body" {
@@ -1560,7 +1660,7 @@ test "cdp.Network: getResponseBody omits a partial body" {
         .params = .{ .requestId = &request_id },
     });
     try ctx.expectSentResult(.{ .body = "", .base64Encoded = false }, .{ .id = 2 });
-    try testing.expectEqual(0, bc.captured_responses_size);
+    try testing.expectEqual(0, (try testing.firstTarget(bc)).captured_responses_size);
 }
 
 test "cdp.Network: getResponseBody base64-encodes a non-UTF-8 body" {
@@ -1640,13 +1740,14 @@ test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
         .params = .{ .requestId = &second },
     });
     try ctx.expectSentResult(.{ .body = "bbbbbb", .base64Encoded = false }, .{ .id = 3 });
-    try testing.expectEqual(6, bc.captured_responses_size);
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(6, target.captured_responses_size);
 
     // Network.disable releases everything retained.
     try ctx.processMessage(.{ .id = 4, .method = "Network.disable" });
     try ctx.expectSentResult(null, .{ .id = 4 });
-    try testing.expectEqual(0, bc.captured_responses.count());
-    try testing.expectEqual(0, bc.captured_responses_size);
+    try testing.expectEqual(0, target.captured_responses.count());
+    try testing.expectEqual(0, target.captured_responses_size);
     try ctx.processMessage(.{
         .id = 5,
         .method = "Network.getResponseBody",
@@ -1717,14 +1818,11 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
         done: bool = false,
         err: ?anyerror = null,
 
-        fn dataCallback(transfer: *Transfer, data: []const u8) !void {
+        fn doneCallback(transfer: *Transfer) !void {
             const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
-            @memcpy(self.body[self.body_len..][0..data.len], data);
-            self.body_len += data.len;
-        }
-
-        fn doneCallback(raw: *anyopaque) !void {
-            const self: *@This() = @ptrCast(@alignCast(raw));
+            const data = transfer.responseBody();
+            @memcpy(self.body[0..data.len], data);
+            self.body_len = data.len;
             self.done = true;
         }
 
@@ -1745,13 +1843,12 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
         .loader_id = 7,
         .method = .GET,
         .url = start_url,
-        .origin = bc.security_origin,
+        .origin = (try testing.firstTarget(bc)).security_origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,
         .resource_type = .script,
         .notification = bc.session.notification,
         .ctx = &callback_context,
-        .data_callback = CallbackContext.dataCallback,
         .done_callback = CallbackContext.doneCallback,
         .error_callback = CallbackContext.errorCallback,
         .shutdown_callback = HttpClient.noopShutdown,
@@ -1824,8 +1921,8 @@ test "cdp.Network: worker requests emit network events" {
     _ = try cdp.createBrowserContext();
     var bc = &cdp.browser_context.?;
     bc.id = "BID-NW";
-    _ = try bc.attachPrimarySession("SID-NW");
-    bc.target_id = "TID-NW-0000000".*;
+    _ = try (try bc.createTarget()).attachPrimarySession("SID-NW");
+    (try testing.firstTarget(bc)).target_id = "TID-NW-0000000".*;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
     try ctx.expectSentResult(null, .{ .id = 1 });

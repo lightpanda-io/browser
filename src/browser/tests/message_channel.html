@@ -103,4 +103,187 @@
     }
 </script>
 
+<script id="transfer" type=module>
+  const state = await testing.async();
+
+  // a port nested in the message and listed in transfer arrives as the moved
+  // port, in both e.data and e.ports
+  const carrier = new MessageChannel();
+  const inner = new MessageChannel();
+  const received = await new Promise((resolve) => {
+    carrier.port2.onmessage = (e) => resolve(e);
+    carrier.port1.postMessage({ port: inner.port2 }, [inner.port2]);
+  });
+
+  // the moved port stays entangled with inner.port1
+  const echoed = await new Promise((resolve) => {
+    inner.port1.onmessage = (e) => resolve(e.data);
+    received.data.port.postMessage('through moved port');
+  });
+
+  // StructuredSerializeOptions form
+  const viaOptions = new MessageChannel();
+  const optionsEvent = await new Promise((resolve) => {
+    carrier.port2.onmessage = (e) => resolve(e);
+    carrier.port1.postMessage('opts', { transfer: [viaOptions.port1] });
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(1, received.ports.length);
+    testing.expectEqual(true, received.ports[0] === received.data.port);
+    testing.expectEqual(false, received.data.port === inner.port2);
+    testing.expectEqual('through moved port', echoed);
+
+    testing.expectEqual('opts', optionsEvent.data);
+    testing.expectEqual(1, optionsEvent.ports.length);
+  });
+</script>
+
+<script id="transfer-errors" type=module>
+  function dataCloneError(fn) {
+    try {
+      fn();
+    } catch (e) {
+      return e.name;
+    }
+    return 'no error';
+  }
+
+  const channel = new MessageChannel();
+  const other = new MessageChannel();
+
+  // a port in the message must be in the transfer list
+  testing.expectEqual('DataCloneError', dataCloneError(() => channel.port1.postMessage(other.port1)));
+  // a port can't transfer itself
+  testing.expectEqual('DataCloneError', dataCloneError(() => channel.port1.postMessage(null, [channel.port1])));
+  // duplicates
+  testing.expectEqual('DataCloneError', dataCloneError(() => channel.port1.postMessage(null, [other.port1, other.port1])));
+  // non-transferable
+  testing.expectEqual('DataCloneError', dataCloneError(() => channel.port1.postMessage(null, [{}])));
+
+  // once transferred, a port is detached and can't be transferred again
+  channel.port1.postMessage(null, [other.port1]);
+  testing.expectEqual('DataCloneError', dataCloneError(() => channel.port1.postMessage(null, [other.port1])));
+</script>
+
+<script id="window-transfer" type=module>
+  const state = await testing.async();
+
+  const channel = new MessageChannel();
+  const event = await new Promise((resolve) => {
+    window.addEventListener('message', function listener(e) {
+      if (e.data && e.data.port) {
+        window.removeEventListener('message', listener);
+        resolve(e);
+      }
+    });
+    window.postMessage({ port: channel.port2 }, '*', [channel.port2]);
+  });
+
+  const echoed = await new Promise((resolve) => {
+    channel.port1.onmessage = (e) => resolve(e.data);
+    event.data.port.postMessage('from window message');
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, event.ports[0] === event.data.port);
+    testing.expectEqual('from window message', echoed);
+  });
+</script>
+
+<script id="transfer-in-flight" type=module>
+  const state = await testing.async();
+
+  // port2 is started, so 'first' and 'second' are already scheduled for
+  // delivery when port2 is transferred: they follow it, ahead of 'third'
+  const channel = new MessageChannel();
+  const carrier = new MessageChannel();
+  const lost = [];
+  channel.port2.onmessage = (e) => lost.push(e.data);
+  channel.port1.postMessage('first');
+  channel.port1.postMessage('second');
+
+  const moved = await new Promise((resolve) => {
+    carrier.port2.onmessage = (e) => resolve(e.ports[0]);
+    carrier.port1.postMessage(null, [channel.port2]);
+  });
+  channel.port1.postMessage('third');
+
+  const received = [];
+  await new Promise((resolve) => {
+    moved.onmessage = (e) => {
+      received.push(e.data);
+      if (received.length === 3) resolve();
+    };
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, lost.length);
+    testing.expectEqual('first,second,third', received.join(','));
+  });
+</script>
+
+<script id="transfer-closed-port" type=module>
+  // a closed (disentangled) port still serializes: bad data throws and the
+  // transferred ports detach
+  const channel = new MessageChannel();
+  channel.port1.close();
+
+  let name = 'no error';
+  try {
+    channel.port1.postMessage(Symbol());
+  } catch (e) {
+    name = e.name;
+  }
+  testing.expectEqual('DataCloneError', name);
+
+  const other = new MessageChannel();
+  channel.port1.postMessage(null, [other.port1]);
+  name = 'no error';
+  try {
+    channel.port1.postMessage(null, [other.port1]);
+  } catch (e) {
+    name = e.name;
+  }
+  testing.expectEqual('DataCloneError', name);
+</script>
+
+<script id="window-transfer-forms" type=module>
+  const state = await testing.async();
+
+  // other scripts post to window too; only take the message that matches
+  function nextMessage(match) {
+    return new Promise((resolve) => {
+      window.addEventListener('message', function listener(e) {
+        if (match(e.data)) {
+          window.removeEventListener('message', listener);
+          resolve(e);
+        }
+      });
+    });
+  }
+
+  // an ArrayBuffer in the transfer list is accepted
+  const buffer = new Uint8Array([1, 2, 3]).buffer;
+  const bufferPromise = nextMessage((data) => data instanceof ArrayBuffer);
+  window.postMessage(buffer, '*', [buffer]);
+  const bufferEvent = await bufferPromise;
+
+  // the options form carries its transfer list
+  const channel = new MessageChannel();
+  const optionsPromise = nextMessage((data) => data === 'opts');
+  window.postMessage('opts', { targetOrigin: '*', transfer: [channel.port2] });
+  const optionsEvent = await optionsPromise;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(3, bufferEvent.data.byteLength);
+    testing.expectEqual('opts', optionsEvent.data);
+    testing.expectEqual(1, optionsEvent.ports.length);
+  });
+</script>
+
 </body>

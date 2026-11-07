@@ -50,13 +50,21 @@ pub fn structuredSerialize(self: *const FileList, writer: *js.StructuredWriter) 
     }
 }
 
-pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !FileList {
+// Like a file input's list, the clone holds a ref on each File. It's tracked
+// on the Page, which releases them, because another realm can hold the clone
+// after the deserializing frame navigates.
+pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*FileList {
     const count = try reader.readUint32();
-    const files = try reader.local.ctx.arena.alloc(*File, count);
-    for (files) |*file| {
+    const self = try page.factory.create(FileList{});
+    try page.trackFileList(self);
+
+    const files = try page.arena.alloc(*File, count);
+    for (files, 0..) |*file, i| {
         file.* = try File.structuredDeserialize(reader, page);
+        file.*._proto.acquireRef();
+        self._files = files[0 .. i + 1];
     }
-    return .{ ._files = files };
+    return self;
 }
 
 pub fn iterator(self: *FileList, exec: *const js.Execution) !*Iterator {

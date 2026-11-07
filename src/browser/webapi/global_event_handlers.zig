@@ -73,6 +73,8 @@ pub const Handler = enum {
     onloadstart,
     onlostpointercapture,
     onmousedown,
+    onmouseenter,
+    onmouseleave,
     onmousemove,
     onmouseout,
     onmouseover,
@@ -108,10 +110,6 @@ pub const Handler = enum {
     onsuspend,
     ontimeupdate,
     ontoggle,
-    ontouchcancel,
-    ontouchend,
-    ontouchmove,
-    ontouchstart,
     ontransitioncancel,
     ontransitionend,
     ontransitionrun,
@@ -122,7 +120,7 @@ pub const Handler = enum {
 };
 
 /// The WindowEventHandlers mixin: on Window, and on body/frameset elements.
-pub const WindowHandler = enum {
+const WindowHandler = enum {
     onafterprint,
     onbeforeprint,
     onbeforeunload,

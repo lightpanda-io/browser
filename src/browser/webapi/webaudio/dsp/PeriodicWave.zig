@@ -36,7 +36,14 @@ number_of_ranges: u32,
 lowest_fundamental: f32,
 // table index per sample of frequency: size / sample_rate
 rate_scale: f32,
-tables: []const []const f32,
+// 1 / the largest sample of range 0, or 0.5 unnormalized
+normalization: f32 = 0.5,
+// owns the coefficients and tables, which outlive the wave
+allocator: Allocator,
+real: ?[]const f32,
+imag: []const f32,
+// per range, built on first use
+tables: []?[]const f32,
 
 pub const Shape = enum { sine, square, sawtooth, triangle };
 
@@ -61,7 +68,9 @@ pub fn initBasic(allocator: Allocator, sample_rate: f32, shape: Shape) !Periodic
     return initCoefficients(allocator, sample_rate, null, imag, false);
 }
 
-// `real` null means all-zero cosine terms.
+// `real` null means all-zero cosine terms. Only range 0 (which sets the
+// normalization) is built here; waveData builds the others on first use, as
+// an oscillator rarely reads more than a few of them.
 pub fn initCoefficients(allocator: Allocator, sample_rate: f32, real: ?[]const f32, imag: []const f32, disable_normalization: bool) !PeriodicWave {
     const size = waveSize(sample_rate);
     const half = size / 2;
@@ -69,52 +78,71 @@ pub fn initCoefficients(allocator: Allocator, sample_rate: f32, real: ?[]const f
     const number_of_ranges: u32 = @intFromFloat(0.5 + octave_bands * math.log2f(@floatFromInt(size)));
     const components: u32 = @intCast(@min(imag.len, half));
 
-    const tables = try allocator.alloc([]const f32, number_of_ranges);
-    const work = try allocator.alloc(Complex, size);
-    defer allocator.free(work);
+    const tables = try allocator.alloc(?[]const f32, number_of_ranges);
+    @memset(tables, null);
 
-    var normalization: f32 = 0.5;
-    var previous_cutoff: ?u32 = null;
-    for (0..number_of_ranges) |range| {
-        // Bins [1, cutoff) survive; DC and Nyquist never do.
-        const cutoff = @min(components, partialsForRange(half, @intCast(range)) + 1);
-        if (previous_cutoff == cutoff) {
-            tables[range] = tables[range - 1];
-            continue;
-        }
-        previous_cutoff = cutoff;
-
-        @memset(work, .{ .re = 0, .im = 0 });
-        for (1..cutoff) |k| {
-            const a: f64 = if (real) |r| r[k] else 0;
-            const b: f64 = imag[k];
-            work[k] = .{ .re = a, .im = -b };
-            work[size - k] = .{ .re = a, .im = b };
-        }
-        inverseFft(work);
-
-        const table = try allocator.alloc(f32, size);
-        for (table, work) |*t, w| {
-            // x[n] = 2 * sum(a cos + b sin); the default (unnormalized)
-            // scale of 0.5 leaves the sum the spec defines.
-            t.* = @floatCast(w.re);
-        }
-        if (range == 0 and disable_normalization == false) {
-            var max: f32 = 0;
-            for (table) |t| max = @max(max, @abs(t));
-            if (max != 0) normalization = 1.0 / max;
-        }
-        for (table) |*t| t.* *= normalization;
-        tables[range] = table;
-    }
-
-    return .{
+    var self: PeriodicWave = .{
         .size = size,
         .number_of_ranges = number_of_ranges,
         .lowest_fundamental = nyquist / @as(f32, @floatFromInt(half)),
         .rate_scale = @as(f32, @floatFromInt(size)) / sample_rate,
+        .allocator = allocator,
+        .real = if (real) |r| try allocator.dupe(f32, r[0..components]) else null,
+        .imag = try allocator.dupe(f32, imag[0..components]),
         .tables = tables,
     };
+
+    const first = try self.buildTable(0);
+    if (disable_normalization == false) {
+        var max: f32 = 0;
+        for (first) |t| max = @max(max, @abs(t));
+        if (max != 0) self.normalization = 1.0 / max;
+    }
+    for (first) |*t| t.* *= self.normalization;
+    tables[0] = first;
+    return self;
+}
+
+// The unnormalized table for `range`.
+fn buildTable(self: *const PeriodicWave, range: u32) ![]f32 {
+    const size = self.size;
+    const half = size / 2;
+    const allocator = self.allocator;
+
+    const work = try allocator.alloc(Complex, size);
+    defer allocator.free(work);
+    const twiddles = try allocator.alloc(Complex, half);
+    defer allocator.free(twiddles);
+    initTwiddles(twiddles);
+
+    // Bins [1, cutoff) survive; DC and Nyquist never do.
+    const cutoff = @min(self.imag.len, partialsForRange(half, range) + 1);
+    @memset(work, .{ .re = 0, .im = 0 });
+    for (1..cutoff) |k| {
+        const a: f64 = if (self.real) |r| r[k] else 0;
+        const b: f64 = self.imag[k];
+        work[k] = .{ .re = a, .im = -b };
+        work[size - k] = .{ .re = a, .im = b };
+    }
+    inverseFft(work, twiddles);
+
+    const table = try allocator.alloc(f32, size);
+    for (table, work) |*t, w| {
+        // x[n] = 2 * sum(a cos + b sin); the default (unnormalized)
+        // scale of 0.5 leaves the sum the spec defines.
+        t.* = @floatCast(w.re);
+    }
+    return table;
+}
+
+fn rangeTable(self: *PeriodicWave, range: u32) ![]const f32 {
+    if (self.tables[range]) |t| {
+        return t;
+    }
+    const t = try self.buildTable(range);
+    for (t) |*v| v.* *= self.normalization;
+    self.tables[range] = t;
+    return t;
 }
 
 // Shorter tables at low rates keep the FFTs small; 4096 around 44.1kHz.
@@ -138,7 +166,7 @@ pub const WaveData = struct {
     factor: f32,
 };
 
-pub fn waveData(self: *const PeriodicWave, fundamental: f32) WaveData {
+pub fn waveData(self: *PeriodicWave, fundamental: f32) !WaveData {
     // negative frequencies alias to the positive one
     const frequency = @abs(fundamental);
     const ratio: f32 = if (frequency > 0) frequency / self.lowest_fundamental else 0.5;
@@ -151,18 +179,28 @@ pub fn waveData(self: *const PeriodicWave, fundamental: f32) WaveData {
     const index1: u32 = @intFromFloat(pitch_range);
     const index2 = if (index1 < self.number_of_ranges - 1) index1 + 1 else index1;
     return .{
-        .lower = self.tables[index2],
-        .higher = self.tables[index1],
+        .lower = try self.rangeTable(index2),
+        .higher = try self.rangeTable(index1),
         .factor = pitch_range - @as(f32, @floatFromInt(index1)),
     };
 }
 
 const Complex = struct { re: f64, im: f64 };
 
+// e^(2 pi i k / N) for k < N/2; computed once, the trig dominated the FFTs.
+fn initTwiddles(twiddles: []Complex) void {
+    const angle = std.math.pi / @as(f64, @floatFromInt(twiddles.len));
+    for (twiddles, 0..) |*w, k| {
+        const theta = angle * @as(f64, @floatFromInt(k));
+        w.* = .{ .re = @cos(theta), .im = @sin(theta) };
+    }
+}
+
 // In-place radix-2 inverse DFT, unscaled: x[n] = sum X[k] e^(2 pi i k n / N).
-fn inverseFft(data: []Complex) void {
+fn inverseFft(data: []Complex, twiddles: []const Complex) void {
     const n = data.len;
     std.debug.assert(std.math.isPowerOfTwo(n));
+    std.debug.assert(twiddles.len * 2 == n);
 
     var j: usize = 0;
     for (1..n) |i| {
@@ -178,13 +216,12 @@ fn inverseFft(data: []Complex) void {
 
     var len: usize = 2;
     while (len <= n) : (len <<= 1) {
-        const angle = 2 * std.math.pi / @as(f64, @floatFromInt(len));
         const half = len / 2;
+        const stride = n / len;
         var start: usize = 0;
         while (start < n) : (start += len) {
             for (0..half) |k| {
-                const theta = angle * @as(f64, @floatFromInt(k));
-                const w: Complex = .{ .re = @cos(theta), .im = @sin(theta) };
+                const w = twiddles[k * stride];
                 const a = data[start + k];
                 const b = data[start + k + half];
                 const t: Complex = .{ .re = b.re * w.re - b.im * w.im, .im = b.re * w.im + b.im * w.re };
@@ -204,7 +241,7 @@ test "PeriodicWave: sine table is a normalized sine" {
     const wave = try initBasic(arena.allocator(), 44100, .sine);
     try testing.expectEqual(4096, wave.size);
     try testing.expectEqual(36, wave.number_of_ranges);
-    const table = wave.tables[0];
+    const table = wave.tables[0].?;
     try testing.expectApproxEqAbs(@as(f32, 0), table[0], 1e-6);
     try testing.expectApproxEqAbs(@as(f32, 1), table[1024], 1e-6);
     try testing.expectApproxEqAbs(@as(f32, -1), table[3072], 1e-6);

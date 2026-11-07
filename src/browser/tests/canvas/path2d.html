@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=constructor>
+{
+  testing.expectEqual(true, new Path2D() instanceof Path2D);
+  testing.expectEqual(true, new Path2D("M10 10 h 80 v 80 h -80 Z") instanceof Path2D);
+  testing.expectEqual(true, new Path2D(new Path2D()) instanceof Path2D);
+  // An invalid SVG path builds an empty path rather than throwing.
+  testing.expectEqual(true, new Path2D("not a path") instanceof Path2D);
+  testing.expectError('TypeError', () => Path2D());
+}
+</script>
+
+<script id=methods>
+{
+  const p = new Path2D();
+  p.moveTo(0, 0);
+  p.lineTo(10, 10);
+  p.quadraticCurveTo(1, 2, 3, 4);
+  p.bezierCurveTo(1, 2, 3, 4, 5, 6);
+  p.arc(5, 5, 5, 0, Math.PI, true);
+  p.arcTo(0, 0, 10, 10, 5);
+  p.ellipse(5, 5, 2, 3, 0, 0, Math.PI);
+  p.rect(0, 0, 10, 10);
+  p.roundRect(0, 0, 10, 10, [2, 4]);
+  p.closePath();
+  p.addPath(new Path2D("M0 0"));
+  p.addPath(new Path2D(), { a: 2, d: 2 });
+  testing.expectError('TypeError', () => p.addPath({}));
+}
+</script>
+
+<script id=context>
+{
+  const path = new Path2D("M0 0 L10 10");
+  const contexts = [
+    document.createElement("canvas").getContext("2d"),
+    new OffscreenCanvas(10, 10).getContext("2d"),
+  ];
+  for (const ctx of contexts) {
+    ctx.fill(path);
+    ctx.fill(path, "evenodd");
+    ctx.stroke(path);
+    ctx.clip(path);
+    ctx.clip(path, "nonzero");
+    testing.expectEqual(false, ctx.isPointInPath(path, 5, 5));
+    testing.expectEqual(false, ctx.isPointInStroke(path, 5, 5));
+  }
+}
+</script>

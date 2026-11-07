@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<script>
+  // [lineno, colno] of each error, by the property it read on null.
+  const errors = {};
+  window.addEventListener('error', (e) => {
+    const key = e.error instanceof SyntaxError ? 'syntax' : e.message.match(/reading '(\w+)'/)?.[1];
+    if (key) {
+      errors[key] = [e.lineno, e.colno];
+      e.preventDefault();
+    }
+  });
+</script>
+
+<p>first line</p><script>null.first</script>
+<p>later line</p><script>null;
+  null.later</script>
+<p>syntax</p><script>var = 1;</script>
+<p>wide é😀</p><script>null.wide</script>
+<script
+  data-start-tag="on two lines">null.tag</script>
+<script id=classic>
+  testing.expectEqual([18, 31], errors.first);
+  testing.expectEqual([20, 8], errors.later);
+  testing.expectEqual([21, 26], errors.syntax);
+  testing.expectEqual([22, 29], errors.wide);
+  testing.expectEqual([24, 38], errors.tag);
+</script>
+
+<p>stack</p><script id=stack>testing.expectEqual(':33:60', new Error().stack.split('\n')[1].match(/:\d+:\d+$/)[0]);</script>
+
+<p>module</p><script type=module>null.module</script>
+<script id=module>
+  testing.onload(() => testing.expectEqual([35, 39], errors.module));
+</script>
+
+<script data-filled-later></script>
+<script id=not_run_by_the_parser>
+{
+  document.querySelector('script[data-filled-later]').textContent = 'null.filled';
+  testing.expectEqual([1, 6], errors.filled);
+
+  const script = document.createElement('script');
+  script.textContent = 'null.created';
+  document.head.appendChild(script);
+  testing.expectEqual([1, 6], errors.created);
+
+  document.write('<script>null.written<\/script>');
+  testing.expectEqual([1, 6], errors.written);
+}
+</script>

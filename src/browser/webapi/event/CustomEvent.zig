@@ -83,19 +83,10 @@ fn initCustomEvent(
     self._detail = detail_;
 }
 
-pub fn deinit(self: *CustomEvent, page: *Page) void {
+pub fn deinit(self: *CustomEvent, _: *Page) void {
     if (self._detail) |d| {
         d.release();
     }
-    self._proto.deinit(page);
-}
-
-pub fn releaseRef(self: *CustomEvent, page: *Page) void {
-    self._proto._rc.release(self, page);
-}
-
-pub fn acquireRef(self: *CustomEvent) void {
-    self._proto.acquireRef();
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {

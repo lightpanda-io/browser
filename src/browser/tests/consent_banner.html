@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Daily Chronicle</title>
+  </head>
+  <body>
+    <div id="banner" role="dialog" aria-label="Cookie notice">
+      <p>We and 437 partners store cookies on your device.</p>
+      <button id="accept">Accept all cookies</button>
+      <button id="reject">Reject non-essential</button>
+      <button id="settings">Cookie settings</button>
+      <a href="/privacy">Privacy policy</a>
+    </div>
+    <main>
+      <h1>Headline</h1>
+      <p>The story itself.</p>
+    </main>
+    <script>
+      for (const id of ["accept", "reject"]) {
+        document.getElementById(id).addEventListener("click", function () {
+          document.getElementById("banner").remove();
+        });
+      }
+    </script>
+  </body>
+</html>

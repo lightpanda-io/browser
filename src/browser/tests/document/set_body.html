@@ -1,80 +1,137 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
+<!-- the iframes replace their body while the parser is still inside it -->
 <iframe id=isimple src=set_body/simple.html></iframe>
 <script id=simple>
-  {
-    testing.onload(() => {
-      testing.expectEqual(
-        '<head></head><body><p>replaced</p></body>',
-        isimple.contentDocument.documentElement.innerHTML,
-      );
-      // The original body element is gone; a fresh one is in place.
-      testing.expectEqual(null, isimple.contentDocument.getElementById('orig'));
-      testing.expectEqual(true, isimple.contentDocument.body instanceof isimple.contentWindow.HTMLBodyElement);
-    });
-  }
+  testing.onload(() => {
+    const doc = isimple.contentDocument;
+    testing.expectEqual('<head></head><body><p>replaced</p></body>', doc.documentElement.innerHTML);
+    testing.expectEqual(null, doc.getElementById('orig'));
+    testing.expectEqual(true, doc.body instanceof isimple.contentWindow.HTMLBodyElement);
+  });
 </script>
 
 <iframe id=inone src=set_body/no_body.html></iframe>
 <script id=no_body>
-  {
-    testing.onload(() => {
-      // Document only had a <head>; setting body should append a fresh body.
-      testing.expectEqual(
-        '<head><title>no_body</title></head>\n<body><p>appended</p></body>',
-        inone.contentDocument.documentElement.innerHTML,
-      );
-    });
-  }
+  testing.onload(() => {
+    testing.expectEqual(
+      '<head><title>no_body</title></head>\n<body><p>appended</p></body>',
+      inone.contentDocument.documentElement.innerHTML,
+    );
+  });
 </script>
 
 <iframe id=iempty src=set_body/empty.html></iframe>
 <script id=empty>
-  {
-    testing.onload(() => {
-      // Setting body to the empty string yields an empty <body>.
-      testing.expectEqual(
-        '<head></head><body></body>',
-        iempty.contentDocument.documentElement.innerHTML,
-      );
-    });
-  }
+  testing.onload(() => {
+    testing.expectEqual('<head></head><body></body>', iempty.contentDocument.documentElement.innerHTML);
+  });
 </script>
 
 <iframe id=icomplex src=set_body/complex.html></iframe>
 <script id=complex>
-  {
-    testing.onload(() => {
-      const doc = icomplex.contentDocument;
-      // Multiple siblings + text node + attributes survive as body children.
-      testing.expectEqual(
-        '<body><h1>title</h1>text node<div id="d" class="x"><span>nested</span></div></body>',
-        doc.documentElement.querySelector('body').outerHTML,
-      );
-      // The replacement body can still be located via document.body.
-      testing.expectEqual('d', doc.body.querySelector('div').id);
-    });
-  }
+  testing.onload(() => {
+    const doc = icomplex.contentDocument;
+    testing.expectEqual(
+      '<body><h1>title</h1>text node<div id="d" class="x"><span>nested</span></div></body>',
+      doc.documentElement.querySelector('body').outerHTML,
+    );
+    testing.expectEqual('d', doc.body.querySelector('div').id);
+  });
 </script>
 
 <iframe id=iframeset src=set_body/frameset.html></iframe>
-<script id=html_wrapper_stripped>
+<script id=frameset>
+  testing.onload(() => {
+    const doc = iframeset.contentDocument;
+    testing.expectEqual('<head></head><frameset rows="50%,50%"></frameset>', doc.documentElement.innerHTML);
+    testing.expectEqual('FRAMESET', doc.body.tagName);
+    // the legacy color accessors only read a <body>
+    testing.expectEqual('', doc.bgColor);
+  });
+</script>
+
+<script id=replace>
   {
-    testing.onload(() => {
-      // Author wrapped content in <html><body>…</body></html>; the parser
-      // should unwrap those so the new body contains just the <p>.
-      testing.expectEqual(
-        '<body><p>unwrapped</p></body>',
-        iframeset.contentDocument.body.outerHTML,
-      );
-    });
+    const doc = document.implementation.createHTMLDocument('x');
+    const original = doc.body;
+    const body = doc.createElement('body');
+    body.innerHTML = '<span>new</span>';
+    doc.body = body;
+
+    testing.expectEqual(body, doc.body);
+    testing.expectEqual(null, original.parentNode);
+    testing.expectEqual('<span>new</span>', doc.body.innerHTML);
+    // head is untouched
+    testing.expectEqual('<title>x</title>', doc.head.innerHTML);
+
+    // setting the current body is a no-op
+    doc.body = body;
+    testing.expectEqual(body, doc.body);
+  }
+</script>
+
+<script id=append_when_missing>
+  {
+    const doc = document.implementation.createHTMLDocument('x');
+    doc.body.remove();
+    testing.expectEqual(null, doc.body);
+
+    const body = doc.createElement('body');
+    doc.body = body;
+    testing.expectEqual(body, doc.body);
+    testing.expectEqual(doc.documentElement, body.parentNode);
+    testing.expectEqual(body, doc.documentElement.lastChild);
+  }
+</script>
+
+<script id=moves_existing_body>
+  {
+    // a body from another document is adopted
+    const doc = document.implementation.createHTMLDocument('x');
+    const other = document.implementation.createHTMLDocument('y');
+    const body = other.body;
+    doc.body = body;
+    testing.expectEqual(body, doc.body);
+    testing.expectEqual(doc, body.ownerDocument);
+    testing.expectEqual(null, other.body);
+  }
+</script>
+
+<script id=type_error>
+  {
+    const doc = document.implementation.createHTMLDocument('x');
+    for (const value of ['<p>hi</p>', 1, {}, doc.createTextNode('t')]) {
+      let err = null;
+      try {
+        doc.body = value;
+      } catch (e) {
+        err = e;
+      }
+      testing.expectEqual(true, err instanceof TypeError);
+    }
+  }
+</script>
+
+<script id=hierarchy_request_error>
+  {
+    const doc = document.implementation.createHTMLDocument('x');
+    for (const value of [null, doc.createElement('div')]) {
+      let err = null;
+      try {
+        doc.body = value;
+      } catch (e) {
+        err = e;
+      }
+      testing.expectEqual(true, err instanceof DOMException);
+      testing.expectEqual('HierarchyRequestError', err.name);
+    }
   }
 </script>
 
 <script id=no_document_element>
-  // Build a detached HTMLDocument, strip its documentElement, and verify
-  // setting body throws HierarchyRequestError.
   {
     const doc = document.implementation.createHTMLDocument('x');
     doc.documentElement.remove();
@@ -82,7 +139,7 @@
 
     let err = null;
     try {
-      doc.body = '<p>hi</p>';
+      doc.body = doc.createElement('body');
     } catch (e) {
       err = e;
     }
@@ -91,17 +148,16 @@
   }
 </script>
 
-<script id=detached_html_document>
-  // Fresh HTMLDocument with both head and body: replacing body should leave
-  // head untouched and install a new body.
+<body>
+<script id=live_document>
   {
-    const doc = document.implementation.createHTMLDocument('x');
-    const originalBody = doc.body;
-    doc.body = '<span>new</span>';
-
-    testing.expectEqual(true, doc.body !== originalBody);
-    testing.expectEqual('<span>new</span>', doc.body.innerHTML);
-    // Head (including the auto-created <title>) is preserved.
-    testing.expectEqual('<title>x</title>', doc.head.innerHTML);
+    const original = document.body;
+    testing.expectEqual(true, original instanceof HTMLBodyElement);
+    const body = document.createElement('body');
+    body.id = 'replacement';
+    document.body = body;
+    testing.expectEqual('replacement', document.body.id);
+    document.body = original;
+    testing.expectEqual(original, document.body);
   }
 </script>

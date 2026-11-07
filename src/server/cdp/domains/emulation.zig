@@ -109,7 +109,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     }
 
     // The override is stored on the Browser so it persists across page
-    // navigations for the whole CDP connection.
+    // navigations. Browser.closeSession clears it with the context's session.
     const browser = &cmd.cdp.browser;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
@@ -169,7 +169,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     if (reserved) {
-        log.debug(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+        log.warn(.cdp, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla. The `userAgent` parameter was ignored." });
         return cmd.sendResult(null, .{});
     }
 
@@ -269,8 +269,8 @@ test "cdp.Emulation: locale, timezone and script execution stubs" {
 test "cdp.Emulation: viewport override fires matchMedia change events" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-MQL", .url = "hi.html", .target_id = "FID-0000000MQL".* });
-    const frame = bc.mainFrame() orelse unreachable;
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-MQL", .url = "hi.html", .target_id = "FID-0000000MQL".* });
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -301,7 +301,7 @@ test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach win
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-SCR", .url = "hi.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -345,7 +345,7 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -362,7 +362,7 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -415,12 +415,12 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
 }
 
 test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.languages" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
-    var bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
-    const frame = bc.mainFrame() orelse unreachable;
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
 
     // The default locale reaches both navigator and ICU.
     try expectJs(frame, "navigator.language === 'en-US' && navigator.languages.join() === 'en-US,en'");
@@ -497,7 +497,7 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM1" });
     _ = try bc.session.createPage();
-    const page = bc.mainPage().?;
+    const page = (try testing.firstTarget(bc)).mainPage().?;
 
     // Defaults to the compile-time viewport before any override.
     try testing.expectEqual(1920, page.getViewport().width);
@@ -526,6 +526,51 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+test "cdp.Emulation: context disposal clears viewport overrides" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-OLD", .url = "cdp/dom1.html" });
+    const browser = &ctx.cdp().browser;
+    const defaults = browser.getViewport();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 321, .height = 543, .deviceScaleFactor = 2, .screenWidth = 642, .screenHeight = 1086 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    const configured = browser.getViewport();
+    try testing.expectEqual(321, configured.width);
+    try testing.expectEqual(543, configured.height);
+    try testing.expectEqual(@as(f32, 2), configured.scale);
+    try testing.expectEqual(642, configured.screen_width.?);
+    try testing.expectEqual(1086, configured.screen_height.?);
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html" },
+    });
+    try testing.waitForPage(bc);
+    _ = try testing.sentResult(&ctx, 2);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html", (try testing.firstTarget(bc)).mainFrame().?.url);
+    try std.testing.expectEqualDeep(configured, browser.getViewport());
+    try expectJs((try testing.firstTarget(bc)).mainFrame().?, "innerWidth === 321 && innerHeight === 543 && devicePixelRatio === 2 && screen.width === 642 && screen.height === 1086");
+
+    try ctx.processMessage(.{ .id = 3, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-UNKNOWN" } });
+    try ctx.expectSentError(-32000, "Failed to find context with id BID-UNKNOWN", .{ .id = 3 });
+    try std.testing.expectEqualDeep(configured, browser.getViewport());
+
+    try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-EMULATION-OLD" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expectEqual(null, browser.viewport_override);
+    try std.testing.expectEqualDeep(defaults, browser.getViewport());
+
+    const fresh = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-NEW", .url = "cdp/dom1.html" });
+    try testing.expectEqual(null, browser.viewport_override);
+    try expectJs((try testing.firstTarget(fresh)).mainFrame().?, "innerWidth === 1920 && innerHeight === 1080 && devicePixelRatio === 1 && screen.width === innerWidth && screen.height === innerHeight");
 }
 
 test "cdp.Emulation: setGeolocationOverride and clear" {
@@ -580,7 +625,8 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         // Registers the callback synchronously; getCurrentPosition schedules
@@ -605,7 +651,7 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -643,7 +689,8 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -662,7 +709,7 @@ test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" 
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -707,7 +754,8 @@ test "cdp.Emulation: navigator.geolocation granted without an override is POSITI
 // Runs getCurrentPosition, pumps the scheduler, and returns the code the error
 // callback saw (0 if the success callback ran instead).
 fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
-    const frame = bc.mainFrame() orelse unreachable;
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         var ls: js.Local.Scope = undefined;
@@ -724,7 +772,7 @@ fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
     }
 
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -754,7 +802,8 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
 
-    const frame = bc.mainFrame() orelse unreachable;
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame() orelse unreachable;
 
     {
         // Registers the callback synchronously; getCurrentPosition schedules
@@ -778,7 +827,7 @@ test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permiss
     // for a loaded page, same primitive Runner.waitForSelector/waitForScript
     // use to pump pending scheduler work under a CDP-loaded page.
     var runner = bc.session.runner(.{});
-    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+    _ = try runner.tickForFrame(target.frame_id.?, 1000, .{ .until = .done });
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

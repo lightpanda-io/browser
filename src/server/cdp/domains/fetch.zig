@@ -95,16 +95,16 @@ const EnableParam = struct {
     handleAuthRequests: bool = false,
 };
 
-fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
-    if (cmd.input.session_id) |session_id| {
+fn commandSessionId(cmd: *CDP.Command, target: *CDP.Target) ![]const u8 {
+    if (cmd.routing_session_id) |session_id| {
         return cmd.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
     }
-    return bc.session_id orelse error.UnknownSessionId;
+    return target.session_id orelse error.UnknownSessionId;
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.fetchDisableForSession(try commandSessionId(cmd, bc));
+    const target = try cmd.target();
+    target.fetchDisableForSession(try commandSessionId(cmd, target));
     return cmd.sendResult(null, .{});
 }
 
@@ -115,17 +115,17 @@ fn enable(cmd: *CDP.Command) !void {
             return cmd.sendError(-32602, "Can't specify empty patterns with handleAuth set", .{});
         }
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.fetchEnable(params.patterns, params.handleAuthRequests, try commandSessionId(cmd, bc));
+    const target = try cmd.target();
+    try target.fetchEnable(params.patterns, params.handleAuthRequests, try commandSessionId(cmd, target));
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *const Notification.RequestIntercept) !void {
+pub fn requestIntercept(arena: Allocator, target: *CDP.Target, intercept: *const Notification.RequestIntercept) !void {
     // The session that enabled Fetch owns its interception events.
-    const session_id = bc.fetch_session_id orelse return;
+    const session_id = target.fetch_session_id orelse return;
 
     const transfer = intercept.transfer;
-    if (!bc.intercept_state.matches(.Request, transfer.req.url, transfer.req.resource_type)) {
+    if (!target.intercept_state.matches(.Request, transfer.req.url, transfer.req.resource_type)) {
         // Leaves wait_for_interception false: the request proceeds untouched.
         return;
     }
@@ -133,13 +133,13 @@ pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *c
     // We keep it around to wait for modifications to the request.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
-    const intercept_id = try bc.intercept_state.put(transfer.id);
-    errdefer _ = bc.intercept_state.remove(intercept_id);
+    const intercept_id = try target.intercept_state.put(transfer.id);
+    errdefer _ = target.intercept_state.remove(intercept_id);
 
-    try bc.cdp.sendEvent("Fetch.requestPaused", .{
+    try target.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(transfer.req.frame_id),
-        .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
+        .request = network.RequestWriter.init(arena, transfer, target.network_limits.post_data),
         .resourceType = fetchResourceType(transfer.req.resource_type),
         .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
@@ -154,37 +154,37 @@ pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *c
     intercept.wait_for_interception.* = true;
 }
 
-pub fn responseIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *const Notification.ResponseIntercept) !void {
-    const session_id = bc.fetch_session_id orelse return;
+pub fn responseIntercept(arena: Allocator, target: *CDP.Target, intercept: *const Notification.ResponseIntercept) !void {
+    const session_id = target.fetch_session_id orelse return;
 
     const transfer = intercept.transfer;
     // continueRequest's interceptResponse overrides the patterns for this hop.
-    const pause = transfer._intercept_response orelse bc.intercept_state.matches(.Response, transfer.req.url, transfer.req.resource_type);
+    const pause = transfer._intercept_response orelse target.intercept_state.matches(.Response, transfer.req.url, transfer.req.resource_type);
     if (pause == false) {
         // Leaves wait_for_interception false: the response is delivered untouched.
         return;
     }
 
-    const intercept_id = try bc.intercept_state.put(transfer.id);
-    errdefer _ = bc.intercept_state.remove(intercept_id);
+    const intercept_id = try target.intercept_state.put(transfer.id);
+    errdefer _ = target.intercept_state.remove(intercept_id);
 
     // The stage is told by the fields present: a network failure carries
     // responseErrorReason, a response (final or redirect) its status and headers.
     switch (transfer._response_pause) {
-        .failed => |failure| try bc.cdp.sendEvent("Fetch.requestPaused", .{
+        .failed => |failure| try target.cdp.sendEvent("Fetch.requestPaused", .{
             .requestId = &id.toInterceptId(intercept_id),
             .frameId = &id.toFrameId(transfer.req.frame_id),
-            .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
+            .request = network.RequestWriter.init(arena, transfer, target.network_limits.post_data),
             .resourceType = fetchResourceType(transfer.req.resource_type),
             .responseErrorReason = cdpErrorReason(failure.err),
             .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
         }, .{ .session_id = session_id }),
         .final, .cached, .redirect => {
             const head = transfer.res.header orelse return error.MissingResponseHead;
-            try bc.cdp.sendEvent("Fetch.requestPaused", .{
+            try target.cdp.sendEvent("Fetch.requestPaused", .{
                 .requestId = &id.toInterceptId(intercept_id),
                 .frameId = &id.toFrameId(transfer.req.frame_id),
-                .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
+                .request = network.RequestWriter.init(arena, transfer, target.network_limits.post_data),
                 .resourceType = fetchResourceType(transfer.req.resource_type),
                 .responseStatusCode = head.status,
                 .responseStatusText = SafeString.wrap(transfer.statusText() orelse ""),
@@ -227,10 +227,10 @@ const HeaderEntriesWriter = struct {
 // The transfer a response-stage intercept id holds, left in the intercept
 // state. Null when the id is unknown, the transfer is gone, or the pause is
 // not at the response stage.
-fn pausedResponse(bc: *CDP.BrowserContext, request_id: []const u8) !?*HttpClient.Transfer {
+fn pausedResponse(target: *CDP.Target, request_id: []const u8) !?*HttpClient.Transfer {
     const intercept_id = try idFromRequestId(request_id);
-    const transfer_id = bc.intercept_state.get(intercept_id) orelse return null;
-    const transfer = bc.session.http_client.findTransfer(transfer_id) orelse return null;
+    const transfer_id = target.intercept_state.get(intercept_id) orelse return null;
+    const transfer = target.session.http_client.findTransfer(transfer_id) orelse return null;
     if (transfer.state != .parked or transfer.state.parked != .intercept_response) {
         return null;
     }
@@ -238,7 +238,7 @@ fn pausedResponse(bc: *CDP.BrowserContext, request_id: []const u8) !?*HttpClient
 }
 
 fn continueResponse(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         responseCode: ?u16 = null,
@@ -252,10 +252,10 @@ fn continueResponse(cmd: *CDP.Command) !void {
         return error.NotImplemented;
     }
 
-    const transfer = (try pausedResponse(bc, params.requestId)) orelse {
+    const transfer = (try pausedResponse(target, params.requestId)) orelse {
         return cmd.sendError(-32000, "Invalid InterceptionId.", .{});
     };
-    _ = bc.intercept_state.remove(try idFromRequestId(params.requestId));
+    _ = target.intercept_state.remove(try idFromRequestId(params.requestId));
 
     log.debug(.cdp, "response intercept", .{
         .state = "continue",
@@ -263,23 +263,22 @@ fn continueResponse(cmd: *CDP.Command) !void {
         .url = transfer.req.url,
     });
 
-    try bc.session.http_client.continueInterceptedResponse(transfer);
+    try target.session.http_client.continueInterceptedResponse(transfer);
     return cmd.sendResult(null, .{});
 }
 
 fn getResponseBody(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
     })) orelse return error.InvalidParams;
 
     const no_body = "Can only get response body on requests captured after headers received.";
-    const transfer = (try pausedResponse(bc, params.requestId)) orelse {
+    const transfer = (try pausedResponse(target, params.requestId)) orelse {
         return cmd.sendError(-32000, no_body, .{});
     };
     const body = switch (transfer._response_pause) {
-        .final => transfer.res.buffer.items,
-        .cached => |cached| cached,
+        .final, .cached => transfer.res.buffer.items(),
         .redirect, .failed => return cmd.sendError(-32000, no_body, .{}),
     };
     // Like Chrome, always base64, whatever the body is.
@@ -290,7 +289,7 @@ fn getResponseBody(cmd: *CDP.Command) !void {
 }
 
 fn continueRequest(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const params = (try cmd.params(struct {
         requestId: []const u8, // INT-{d}"
         url: ?[]const u8 = null,
@@ -300,20 +299,20 @@ fn continueRequest(cmd: *CDP.Command) !void {
         interceptResponse: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    if (try pausedResponse(bc, params.requestId)) |transfer| {
+    if (try pausedResponse(target, params.requestId)) |transfer| {
         // The request has already been sent: like Chrome, its overrides are
         // ignored, except that a url on a redirect replaces its Location.
         if (params.url) |url| switch (transfer._response_pause) {
             .redirect => transfer._response_pause = .{ .redirect = try transfer.arena.dupe(u8, url) },
             else => {},
         };
-        _ = bc.intercept_state.remove(try idFromRequestId(params.requestId));
-        try bc.session.http_client.continueInterceptedResponse(transfer);
+        _ = target.intercept_state.remove(try idFromRequestId(params.requestId));
+        try target.session.http_client.continueInterceptedResponse(transfer);
         return cmd.sendResult(null, .{});
     }
 
-    const client = bc.session.http_client;
-    var intercept_state = &bc.intercept_state;
+    const client = target.session.http_client;
+    var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
     const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
@@ -369,7 +368,7 @@ const AuthChallengeResponse = enum {
 };
 
 fn continueWithAuth(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         authChallengeResponse: struct {
@@ -379,8 +378,8 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         },
     })) orelse return error.InvalidParams;
 
-    const client = bc.session.http_client;
-    var intercept_state = &bc.intercept_state;
+    const client = target.session.http_client;
+    var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
     const transfer_id = intercept_state.get(intercept_id) orelse return error.RequestNotFound;
@@ -429,7 +428,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
 }
 
 fn fulfillRequest(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
 
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
@@ -445,8 +444,8 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         return error.NotImplemented;
     }
 
-    const client = bc.session.http_client;
-    var intercept_state = &bc.intercept_state;
+    const client = target.session.http_client;
+    var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
     const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
@@ -476,14 +475,14 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
 }
 
 fn failRequest(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target = try cmd.target();
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         errorReason: network.ErrorReason,
     })) orelse return error.InvalidParams;
 
-    const client = bc.session.http_client;
-    var intercept_state = &bc.intercept_state;
+    const client = target.session.http_client;
+    var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
     const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
@@ -503,12 +502,12 @@ fn failRequest(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestAuthRequired(arena: Allocator, bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
-    const session_id = bc.fetch_session_id orelse return;
+pub fn requestAuthRequired(arena: Allocator, target: *CDP.Target, intercept: *const Notification.RequestAuthRequired) !void {
+    const session_id = target.fetch_session_id orelse return;
 
     // Auth challenges are only surfaced for requests the patterns select.
     const transfer = intercept.transfer;
-    if (!bc.intercept_state.matches(.Request, transfer.req.url, transfer.req.resource_type)) {
+    if (!target.intercept_state.matches(.Request, transfer.req.url, transfer.req.resource_type)) {
         return;
     }
 
@@ -516,16 +515,16 @@ pub fn requestAuthRequired(arena: Allocator, bc: *CDP.BrowserContext, intercept:
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
-    const intercept_id = try bc.intercept_state.put(transfer.id);
-    errdefer _ = bc.intercept_state.remove(intercept_id);
+    const intercept_id = try target.intercept_state.put(transfer.id);
+    errdefer _ = target.intercept_state.remove(intercept_id);
     const request = &transfer.req;
 
     const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
 
-    try bc.cdp.sendEvent("Fetch.authRequired", .{
+    try target.cdp.sendEvent("Fetch.authRequired", .{
         .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(request.frame_id),
-        .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
+        .request = network.RequestWriter.init(arena, transfer, target.network_limits.post_data),
         .resourceType = fetchResourceType(request.resource_type),
         .authChallenge = .{
             .origin = "", // TODO get origin, could be the proxy address for example.
@@ -688,6 +687,8 @@ pub const InterceptState = struct {
             .stylesheet => .Stylesheet,
             .image => .Image,
             .text_track => .TextTrack,
+            .beacon => .Ping,
+            .download => .Other,
         };
     }
 
@@ -747,6 +748,7 @@ pub const InterceptState = struct {
 };
 
 const testing = @import("../testing.zig");
+const js = @import("../../../browser/js/js.zig");
 const repeat = @import("../../../string.zig").repeat;
 test "cdp.Fetch: interception events belong to the enabling session" {
     var ctx = try testing.context();
@@ -755,14 +757,15 @@ test "cdp.Fetch: interception events belong to the enabling session" {
         .session_id = "SID-PRIMARY",
         .target_id = "TID-000000000B".*,
     });
-    _ = try bc.attachSession("SID-AUX", null);
+    const target = try testing.firstTarget(bc);
+    _ = try bc.attachSession(target, "SID-AUX", null);
 
     try ctx.processMessage(.{
         .id = 1,
         .method = "Fetch.enable",
         .sessionId = "SID-AUX",
     });
-    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.fetch_session_id.?));
+    try testing.expect(std.mem.eql(u8, "SID-AUX", target.fetch_session_id.?));
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
 
     try ctx.processMessage(.{
@@ -770,14 +773,14 @@ test "cdp.Fetch: interception events belong to the enabling session" {
         .method = "Fetch.disable",
         .sessionId = "SID-PRIMARY",
     });
-    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.fetch_session_id.?));
+    try testing.expect(std.mem.eql(u8, "SID-AUX", target.fetch_session_id.?));
 
     try ctx.processMessage(.{
         .id = 3,
         .method = "Fetch.disable",
         .sessionId = "SID-AUX",
     });
-    try testing.expectEqual(null, bc.fetch_session_id);
+    try testing.expectEqual(null, target.fetch_session_id);
 }
 
 test "cdp.Fetch: InterceptState issues a fresh id per pause" {
@@ -888,28 +891,29 @@ test "cdp.Fetch: enable compiles patterns, disable clears them" {
         .sessionId = "SID-P",
     });
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-P" });
-    try testing.expectEqual(2, bc.intercept_state.patterns.len);
-    try testing.expect(bc.intercept_state.matches(.Request, "http://h/json/a", .fetch));
-    try testing.expect(bc.intercept_state.matches(.Request, "http://h/json/a", .xhr));
-    try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/json/a", .script));
-    try testing.expect(bc.intercept_state.matches(.Request, "http://h/exact", .xhr));
-    try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/", .document));
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(2, target.intercept_state.patterns.len);
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/json/a", .fetch));
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/json/a", .xhr));
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/json/a", .script));
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/exact", .xhr));
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/", .document));
 
     // re-enable without patterns = catch-all
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.enable", .sessionId = "SID-P" });
     try ctx.expectSentResult(null, .{ .id = 2, .session_id = "SID-P" });
-    try testing.expect(bc.intercept_state.matches(.Request, "http://h/", .document));
+    try testing.expect(target.intercept_state.matches(.Request, "http://h/", .document));
 
     // explicit empty list = pause nothing; rejected when auth handling is on
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.enable", .params = .{ .patterns = .{} }, .sessionId = "SID-P" });
     try ctx.expectSentResult(null, .{ .id = 3, .session_id = "SID-P" });
-    try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/", .document));
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/", .document));
     try ctx.processMessage(.{ .id = 4, .method = "Fetch.enable", .params = .{ .patterns = .{}, .handleAuthRequests = true }, .sessionId = "SID-P" });
     try ctx.expectSentError(-32602, "Can't specify empty patterns with handleAuth set", .{ .id = 4 });
 
     try ctx.processMessage(.{ .id = 5, .method = "Fetch.disable", .sessionId = "SID-P" });
-    try testing.expectEqual(0, bc.intercept_state.patterns.len);
-    try testing.expectEqual(false, bc.intercept_state.matches(.Request, "http://h/", .document));
+    try testing.expectEqual(0, target.intercept_state.patterns.len);
+    try testing.expectEqual(false, target.intercept_state.matches(.Request, "http://h/", .document));
 }
 
 // Response-stage tests drive real requests against the test server and read
@@ -931,13 +935,16 @@ const ResponseStageProbe = struct {
         return .proceed;
     }
 
-    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    fn streamCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         const self: *ResponseStageProbe = @ptrCast(@alignCast(transfer.req.ctx));
         try self.body.appendSlice(testing.allocator, data);
     }
 
-    fn doneCallback(raw: *anyopaque) !void {
-        const self: *ResponseStageProbe = @ptrCast(@alignCast(raw));
+    fn doneCallback(transfer: *HttpClient.Transfer) !void {
+        const self: *ResponseStageProbe = @ptrCast(@alignCast(transfer.req.ctx));
+        if (!self.streaming) {
+            try self.body.appendSlice(testing.allocator, transfer.responseBody());
+        }
         self.done = true;
     }
 
@@ -953,15 +960,14 @@ const ResponseStageProbe = struct {
             .loader_id = 7,
             .method = .GET,
             .url = url,
-            .origin = bc.security_origin,
+            .origin = (try testing.firstTarget(bc)).security_origin,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .script,
-            .streaming = self.streaming,
             .notification = bc.session.notification,
             .ctx = self,
             .header_callback = headerCallback,
-            .data_callback = dataCallback,
+            .stream_callback = if (self.streaming) streamCallback else null,
             .done_callback = doneCallback,
             .error_callback = errorCallback,
             .shutdown_callback = HttpClient.noopShutdown,
@@ -1140,6 +1146,49 @@ test "cdp.Fetch: response stage fulfillRequest replaces the response" {
     try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
+test "cdp.Fetch: fulfillRequest stores the response's cookies" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FC", .session_id = "SID-FC", .target_id = "TID-FC-0000000".*, .url = "hi.html" });
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    {
+        const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.href = 'hi.html?fulfilled'", null);
+    }
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000001" }, .{});
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Fetch.fulfillRequest",
+        .params = .{
+            .requestId = "INT-0000000001",
+            .responseCode = 200,
+            .responseHeaders = &[_]http.Header{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Set-Cookie", .value = "a=1; Path=/" },
+                .{ .name = "Set-Cookie", .value = "b=2; Path=/; HttpOnly" },
+            },
+            // <script>window.atParse = document.cookie</script>
+            .body = "PHNjcmlwdD53aW5kb3cuYXRQYXJzZSA9IGRvY3VtZW50LmNvb2tpZTwvc2NyaXB0Pg==",
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.waitForPage(bc);
+
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const at_parse = try ls.local.exec("window.atParse", null);
+    try testing.expectEqual("a=1", try at_parse.toStringSlice());
+    try testing.expectEqual(2, bc.session.cookie_jar.len);
+}
+
 test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1152,11 +1201,9 @@ test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact
     try ResponseStageProbe.tickUntilPaused(bc, 1);
 
     // The bytes the test server sends for /images/small.png.
-    var png: [1024]u8 = undefined;
-    @memset(&png, 'x');
-    @memcpy(png[0..24], "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x01\x40\x00\x00\x00\xf0");
+    const png = @embedFile("../../../browser/tests/fixtures/images/320x240.png");
     var encoded: [std.base64.standard.Encoder.calcSize(png.len)]u8 = undefined;
-    _ = std.base64.standard.Encoder.encode(&encoded, &png);
+    _ = std.base64.standard.Encoder.encode(&encoded, png);
 
     try ctx.processMessage(.{ .id = 2, .method = "Fetch.getResponseBody", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(.{ .body = &encoded, .base64Encoded = true }, .{ .id = 2 });
@@ -1164,7 +1211,7 @@ test "cdp.Fetch: response stage getResponseBody returns a binary body byte-exact
     try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueResponse", .params = .{ .requestId = "INT-0000000001" } });
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
-    try testing.expectEqualSlices(u8, &png, probe.body.items);
+    try testing.expectEqualSlices(u8, png, probe.body.items);
 }
 
 test "cdp.Fetch: response stage pauses a redirect response, then the response it leads to" {
@@ -1243,7 +1290,7 @@ test "cdp.Fetch: response stage continueRequest ignores request overrides, but a
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
-    try testing.expectEqual(1024, probe.body.items.len);
+    try testing.expectEqual(@embedFile("../../../browser/tests/fixtures/images/320x240.png").len, probe.body.items.len);
     try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
@@ -1353,13 +1400,13 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
 
     var probe: ResponseStageProbe = .{};
     defer probe.deinit();
-    // Nothing listens on port 1: the connection is refused.
-    try probe.start(bc, "http://127.0.0.1:1/");
+    // Nothing listens on port 65534: the connection is refused.
+    try probe.start(bc, "http://127.0.0.1:65534/");
     try ResponseStageProbe.tickUntilPaused(bc, 1);
 
     try ctx.expectSentEvent("Fetch.requestPaused", .{
         .requestId = "INT-0000000001",
-        .request = .{ .url = "http://127.0.0.1:1/" },
+        .request = .{ .url = "http://127.0.0.1:65534/" },
         .responseErrorReason = "ConnectionFailed",
     }, .{ .session_id = "SID-RS" });
     const paused = try sentPausedParams(&ctx, "INT-0000000001");
@@ -1532,6 +1579,57 @@ test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry d
     try testing.expectEqual(401, probe.status);
     try testing.expectEqualSlices(u8, "No", probe.body.items);
     try testing.expectEqual(0, bc.session.http_client.intercepted);
+}
+
+// Answers the challenge on `url` with u:p and expects the redirect target to
+// see `expected` as its Authorization header.
+fn expectAuthThenRedirect(url: [:0]const u8, source: []const u8, expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-AU", .session_id = "SID-AU" });
+    // Only the challenged URL: the redirect hop goes straight to the network.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .params = .{ .patterns = .{.{ .urlPattern = "http://127.0.0.1:9582/auth/*" }}, .handleAuthRequests = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var probe: ResponseStageProbe = .{};
+    defer probe.deinit();
+    try probe.start(bc, url);
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.authRequired", .{
+        .requestId = "INT-0000000002",
+        .authChallenge = .{ .source = source },
+    }, .{ .session_id = "SID-AU" });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Fetch.continueWithAuth", .params = .{
+        .requestId = "INT-0000000002",
+        .authChallengeResponse = .{ .response = "ProvideCredentials", .username = "u", .password = "p" },
+    } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    try probe.tickUntilSettled(bc);
+    try testing.expectEqual(null, probe.err);
+    try testing.expectEqual(200, probe.status);
+    try testing.expectEqualSlices(u8, expected, probe.body.items);
+}
+
+test "cdp.Fetch: continueWithAuth proxy credentials never reach a server" {
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/proxy/same", "Proxy", "NONE");
+}
+
+test "cdp.Fetch: continueWithAuth server credentials follow a same-origin redirect only" {
+    // "dTpw" = base64("u:p"). Credentials are scoped to the origin; Chrome
+    // narrows Basic to the challenged directory and wouldn't send them to
+    // /echo-authorization up front.
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/server/same", "Server", "Basic dTpw");
+    try expectAuthThenRedirect("http://127.0.0.1:9582/auth/server/cross", "Server", "NONE");
 }
 
 test "cdp.Fetch: continueWithAuth on a request-stage pause is rejected and keeps the pause" {

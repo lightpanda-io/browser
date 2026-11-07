@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script>
@@ -40,18 +41,18 @@
 <script id=malformed type=module>
   {
     // Not well-formed: falls back to the HTML parser, scripts run once.
-    // Chrome fails this on purpose: it stops at the first error and shows
-    // the partial tree.
     const state = await testing.async();
     const f = await loadFrame('support/xhtml_malformed.xhtml');
     state.resolve(f);
     await state.done((f) => {
       const doc = f.contentDocument;
       testing.expectEqual('application/xhtml+xml', doc.contentType);
-      testing.expectEqual('unclosed bold', doc.getElementById('p').textContent);
-      // HTML parsing: <div/> stays open.
-      testing.expectEqual('d', doc.getElementById('s').parentNode.id);
-      testing.expectEqual(1, f.contentWindow.ran);
+      testing.diverges('Chrome stops at the first XML error and shows the partial tree', () => {
+        testing.expectEqual('unclosed bold', doc.getElementById('p').textContent);
+        // HTML parsing: <div/> stays open.
+        testing.expectEqual('d', doc.getElementById('s').parentNode.id);
+        testing.expectEqual(1, f.contentWindow.ran);
+      });
     });
   }
 </script>

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id=attr1 ClasS="sHow"></div>
@@ -434,7 +435,7 @@
   {
     const XLINK = 'http://www.w3.org/1999/xlink';
     const el = document.createElement('div');
-    el.setAttribute('xlink:href', '#a');
+    el.setAttributeNS(XLINK, 'xlink:href', '#a');
     el.setAttribute('title', 't');
 
     testing.expectEqual('#a', el.getAttributeNodeNS(XLINK, 'href').value);
@@ -450,6 +451,15 @@
 
     const attr = document.createAttribute('data-n');
     attr.value = '1';
+    testing.diverges('Chrome: setAttribute("xlink:href") has a null namespace; we match it by its xlink: prefix', () => {
+      const plain = document.createElement('div');
+      plain.setAttribute('xlink:href', '#b');
+      testing.expectEqual('#b', plain.getAttributeNodeNS(XLINK, 'href').value);
+      testing.expectEqual('#b', plain.getAttributeNS(XLINK, 'href'));
+      plain.removeAttributeNS(XLINK, 'href');
+      testing.expectEqual(false, plain.hasAttribute('xlink:href'));
+    });
+
     testing.expectEqual(null, el.setAttributeNodeNS(attr));
     testing.expectEqual(el, attr.ownerElement);
 

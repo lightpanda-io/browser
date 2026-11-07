@@ -27,61 +27,6 @@ const Sqlite = @This();
 
 pub const Blob = struct { data: []const u8 };
 
-pub const Migration = union(enum) {
-    sql: [:0]const u8,
-    func: struct {
-        ctx: *anyopaque,
-        func: *const fn (conn: Conn, ctx: *anyopaque) anyerror!void,
-    },
-};
-
-pub const Migrations = struct {
-    pub fn run(conn: Conn, migrations: []const Migration) !usize {
-        try conn.exec(
-            \\create table if not exists migrations (
-            \\  id integer primary key,
-            \\  applied_at integer not null
-            \\) strict
-        , .{});
-
-        const current = (try conn.scalar(
-            i64,
-            "select max(id) from migrations",
-            .{},
-        )) orelse 0;
-        const start: usize = @intCast(current);
-
-        if (start > migrations.len) {
-            log.err(.storage, "migrations removed", .{
-                .applied = start,
-                .defined = migrations.len,
-            });
-            return error.MigrationsRemoved;
-        }
-
-        if (start == migrations.len) {
-            return start;
-        }
-
-        try conn.begin(.immediate);
-        errdefer conn.rollback() catch {};
-
-        for (migrations[start..], start..) |migration, i| {
-            switch (migration) {
-                .sql => |sql| try conn.exec(sql, .{}),
-                .func => |f| try f.func(conn, f.ctx),
-            }
-            try conn.exec(
-                "insert into migrations (id, applied_at) values ($1, $2)",
-                .{ @as(i64, @intCast(i + 1)), std.Io.Clock.now(.real, lp.io).toSeconds() },
-            );
-        }
-
-        try conn.commit();
-        return migrations.len;
-    }
-};
-
 pub const Conn = struct {
     conn: *c.sqlite3,
 
@@ -630,46 +575,4 @@ test "Sqlite: exec, row and scalar" {
     {
         try testing.expectEqual(1, (try conn.scalar(i64, "select count(*) from test where id = 1", .{})).?);
     }
-}
-
-test "Sqlite: Migrations - basic" {
-    var conn = try Sqlite.Conn.open(":memory:");
-    defer conn.close();
-
-    const migrations: []const Migration = &.{
-        .{ .sql = "create table test (id integer primary key, name text)" },
-        .{ .sql = "alter table test add column email text" },
-    };
-
-    const v1 = try Migrations.run(conn, migrations);
-    try testing.expectEqual(@as(usize, 2), v1);
-
-    // idempotent - running again should return same version
-    const v2 = try Migrations.run(conn, migrations);
-    try testing.expectEqual(@as(usize, 2), v2);
-
-    // verify migrations table has correct entries
-    try testing.expectEqual(
-        @as(i64, 2),
-        (try conn.scalar(i64, "select count(*) from migrations", .{})).?,
-    );
-}
-
-test "Sqlite: Migrations - removed migration" {
-    testing.expectLog(&.{.storage});
-
-    var conn = try Sqlite.Conn.open(":memory:");
-    defer conn.close();
-
-    const m1: []const Migration = &.{
-        .{ .sql = "create table test (id integer primary key, name text)" },
-        .{ .sql = "alter table test add column email text" },
-    };
-    _ = try Migrations.run(conn, m1);
-
-    // fewer migrations than were applied
-    const m2: []const Migration = &.{
-        .{ .sql = "create table test (id integer primary key, name text)" },
-    };
-    try testing.expectError(error.MigrationsRemoved, Migrations.run(conn, m2));
 }

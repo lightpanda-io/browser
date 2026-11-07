@@ -33,6 +33,28 @@
   <input id="own_enabled" type="text">
 </form>
 
+<select id="sel_disabled_nested" disabled>
+  <optgroup id="og_in_disabled_select" label="i">
+    <option id="opt_in_og_in_disabled_select">e</option>
+  </optgroup>
+  <div><option id="opt_wrapped_in_disabled_select">f</option></div>
+  <datalist><option id="opt_in_datalist_in_disabled_select">g</option></datalist>
+</select>
+
+<fieldset id="fs_with_select" disabled>
+  <legend><select id="legend_select"><option id="opt_in_legend_select">h</option></select></legend>
+  <select id="fs_select_nested">
+    <optgroup id="og_in_fs_select" label="j">
+      <option id="opt_in_fs_select">k</option>
+    </optgroup>
+  </select>
+  <optgroup id="og_in_fs_no_select" label="l"></optgroup>
+</fieldset>
+
+<div>
+  <optgroup id="og_disabled_no_select" disabled label="m"><option id="opt_in_disabled_og_no_select">n</option></optgroup>
+</div>
+
 <div id="div_plain">x</div>
 <div id="div_with_disabled_attr" disabled>y</div>
 <span id="span_plain">z</span>
@@ -63,11 +85,24 @@
   testing.expectFalse($('#opt_in_enabled_optgroup').matches(':disabled'));
   testing.expectFalse($('#opt_loose').matches(':disabled'));
 
-  // <option> inside <select disabled> (no optgroup) does NOT match :disabled
-  // per HTML "concept-option-disabled" — only own attr or <optgroup disabled>
-  // parent contributes. <select disabled> itself matches, but does not
-  // propagate to its <option> children for selector purposes.
-  testing.expectFalse($('#opt_in_disabled_select').matches(':disabled'));
+  // A disabled owner <select> disables its options and optgroups
+  // (whatwg/html#12205), even through a wrapping <div>.
+  testing.expectTrue($('#opt_in_disabled_select').matches(':disabled'));
+  testing.expectTrue($('#og_in_disabled_select').matches(':disabled'));
+  testing.expectTrue($('#opt_in_og_in_disabled_select').matches(':disabled'));
+  testing.expectTrue($('#opt_wrapped_in_disabled_select').matches(':disabled'));
+  // A <datalist> keeps its options out of the select.
+  testing.expectFalse($('#opt_in_datalist_in_disabled_select').matches(':disabled'));
+
+  // A select disabled by its <fieldset> passes it on; one in the legend isn't.
+  testing.expectTrue($('#og_in_fs_select').matches(':disabled'));
+  testing.expectTrue($('#opt_in_fs_select').matches(':disabled'));
+  testing.expectFalse($('#opt_in_legend_select').matches(':disabled'));
+  // Without a select, a fieldset doesn't reach an optgroup.
+  testing.expectFalse($('#og_in_fs_no_select').matches(':disabled'));
+
+  // A disabled optgroup works without a select.
+  testing.expectTrue($('#opt_in_disabled_og_no_select').matches(':disabled'));
 }
 </script>
 
@@ -115,14 +150,14 @@
 {
   // querySelectorAll(':disabled') should find every disabled element.
   const ids = Array.from(document.querySelectorAll(':disabled')).map(e => e.id).sort();
-  // Expected (sorted):
-  //   fs, fs_button, fs_input, fs_select, fs_textarea,
-  //   og_disabled, opt_in_disabled_optgroup,
-  //   own_disabled, sel_disabled
   const expected = [
     'fs', 'fs_button', 'fs_input', 'fs_select', 'fs_textarea',
-    'og_disabled', 'opt_in_disabled_optgroup',
+    'og_disabled', 'opt_in_disabled_optgroup', 'opt_in_disabled_select',
     'own_disabled', 'sel_disabled',
+    'sel_disabled_nested', 'og_in_disabled_select', 'opt_in_og_in_disabled_select',
+    'opt_wrapped_in_disabled_select',
+    'fs_with_select', 'fs_select_nested', 'og_in_fs_select', 'opt_in_fs_select',
+    'og_disabled_no_select', 'opt_in_disabled_og_no_select',
   ].sort();
   testing.expectEqual(JSON.stringify(expected), JSON.stringify(ids));
 }

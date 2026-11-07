@@ -20,13 +20,13 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const URL = @import("../../URL.zig");
 const HttpClient = @import("../../../network/HttpClient.zig");
 
 const AbortSignal = @import("../AbortSignal.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const Headers = @import("Headers.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
@@ -38,7 +38,6 @@ const Fetch = @This();
 
 _exec: *const Execution,
 _url: []const u8,
-_buf: std.ArrayList(u8),
 _response: *Response,
 _owns_response: bool,
 _signal: ?*AbortSignal,
@@ -93,7 +92,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         }
     }
 
-    const body = request.bodyBytes() catch |err| switch (err) {
+    const body = request.bodyBytes(.uint8array) catch |err| switch (err) {
         error.TypeError => return exec.js.typeError("Failed to read ReadableStream body"),
         else => return err,
     };
@@ -103,7 +102,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 }
 
 pub fn start(request: *Request, completion: Completion, exec: *const Execution) !void {
-    const body = try request.bodyBytes();
+    const body = try request.bodyBytes(.uint8array);
     return submit(request, body, .{ .completion = completion }, exec);
 }
 
@@ -114,7 +113,6 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
     const fetch = try response._arena.create(Fetch);
     fetch.* = .{
         ._exec = exec,
-        ._buf = .empty,
         ._url = try response._arena.dupe(u8, request._url),
         ._sink = sink,
         ._response = response,
@@ -154,7 +152,6 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
         },
         .header_before_body_error = true,
         .header_callback = httpHeaderDoneCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -211,10 +208,6 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     const arena = self._response._arena;
-    if (self._null_body == false) {
-        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
-    }
-
     const res = self._response;
 
     if (comptime lp.IS_DEBUG) {
@@ -257,57 +250,48 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .proceed;
     }
 
-    // Determine response type based on origin comparison
     const exec = self._exec;
-    const requesting_origin = URL.getOrigin(arena.allocator(), exec.url.*) catch null;
-    const response_origin = URL.getOrigin(arena.allocator(), res._url) catch null;
-
-    if (requesting_origin) |fo| {
-        if (response_origin) |ro| {
-            if (std.mem.eql(u8, fo, ro)) {
-                res._type = .basic; // Same-origin
-            } else {
-                res._type = .cors; // Cross-origin (for simplicity, assume CORS passed)
-            }
-        } else {
-            res._type = .basic;
-        }
+    if (transfer.client.obey_cors) {
+        res._type = if (transfer._cors_cross_origin) .cors else .basic;
     } else {
         res._type = .basic;
     }
 
-    for (transfer.responseHeaders()) |hdr| {
-        try res._headers.append(hdr.name, hdr.value, exec);
+    if (res._type == .cors) {
+        const expose_headers = HttpClient.findHeader(transfer.responseHeaders(), "access-control-expose-headers");
+        const allow_wildcard = !transfer.req.credentialsAllowed();
+        for (transfer.responseHeaders()) |hdr| {
+            if (!Headers.isCorsExposedResponseHeaderName(hdr.name, expose_headers, allow_wildcard)) {
+                continue;
+            }
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
+    } else {
+        for (transfer.responseHeaders()) |hdr| {
+            try res._headers.append(hdr.name, hdr.value, exec);
+        }
     }
 
     self._headers_done = true;
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
+    var response = self._response;
+    const body: []const u8 = if (self._null_body) "" else try response._arena.allocator().dupe(u8, transfer.responseBody());
 
-    if (self._null_body) {
-        return;
-    }
-
-    try self._buf.appendSlice(self._response._arena.allocator(), data);
-}
-
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *Fetch = @ptrCast(@alignCast(ctx));
     const signal = self._signal;
     self.detachSignal();
 
-    var response = self._response;
     response._http_transfer = null;
-    response._body = if (self._null_body) .empty else .{ .bytes = self._buf.items };
+    response._body = if (self._null_body) .empty else .{ .bytes = body };
 
     log.info(.http, "request complete", .{
         .source = "fetch",
         .url = self._url,
         .status = response._status,
-        .len = self._buf.items.len,
+        .len = body.len,
     });
 
     const resolver = switch (self._sink) {

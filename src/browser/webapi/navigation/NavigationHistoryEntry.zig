@@ -74,16 +74,19 @@ pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
     return self._url;
 }
 
+// The serialized Navigation API state, not the History API's.
+pub fn navigationState(self: *const NavigationHistoryEntry) ?[]const u8 {
+    if (self._state.source == .navigation) {
+        return self._state.value;
+    }
+    return null;
+}
+
 const StateReturn = union(enum) { value: ?js.Value, undefined: void };
 
 pub fn getState(self: *const NavigationHistoryEntry, frame: *Frame) !StateReturn {
-    if (self._state.source == .navigation) {
-        if (self._state.value) |value| {
-            return .{ .value = try frame.js.local.?.parseJSON(value) };
-        }
-    }
-
-    return .undefined;
+    const state = self.navigationState() orelse return .undefined;
+    return .{ .value = try frame.js.local.?.parseJSON(state) };
 }
 
 pub fn fireDispose(self: *NavigationHistoryEntry, frame: *Frame) !void {

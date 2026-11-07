@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+import.meta in a function whose module realm is gone. V8 creates import.meta on
+first use, so the module's first import.meta can come after its realm is gone:
+here the support page hands its functions to us, then we re-navigate it in
+place or navigate it. Like Chrome, that import.meta is left empty.
+-->
+<script>
+  function deadRealmReady(key) {
+    return new Promise((resolve) => {
+      window.addEventListener('message', function onMessage(e) {
+        if (e.data && e.data.from === key) {
+          window.removeEventListener('message', onMessage);
+          resolve(window[key]);
+        }
+      });
+    });
+  }
+
+  function deadRealmUrl(key) {
+    return testing.BASE_URL + 'window/support/dead_realm.html?key=' + key;
+  }
+
+  function expectEmptyImportMeta(meta) {
+    testing.expectEqual('object', typeof meta);
+    testing.expectEqual(undefined, meta.url);
+    testing.expectEqual(undefined, meta.resolve);
+    testing.expectEqual(0, Object.keys(meta).length);
+  }
+</script>
+
+<script id=popup_renavigated type=module>
+  const state = await testing.async();
+
+  const ready = deadRealmReady('drm_popup');
+  testing.expectTrue(window.open(deadRealmUrl('drm_popup'), 'drm_popup') != null);
+  const dead = await ready;
+
+  // in-place re-navigation of the named popup
+  const next = deadRealmReady('drm_popup_next');
+  window.open(deadRealmUrl('drm_popup_next'), 'drm_popup');
+  await next;
+
+  const meta = dead.importMeta();
+  state.resolve();
+  await state.done(() => {
+    expectEmptyImportMeta(meta);
+    // the same object on every use
+    testing.expectTrue(meta === dead.importMeta());
+  });
+</script>
+
+<script id=iframe_navigated type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const ready = deadRealmReady('drm_iframe_nav');
+  iframe.src = deadRealmUrl('drm_iframe_nav');
+  document.body.appendChild(iframe);
+  const dead = await ready;
+
+  const next = deadRealmReady('drm_iframe_nav_next');
+  iframe.src = deadRealmUrl('drm_iframe_nav_next');
+  await next;
+
+  const meta = dead.importMeta();
+  state.resolve();
+  await state.done(() => {
+    expectEmptyImportMeta(meta);
+  });
+</script>
+</body>

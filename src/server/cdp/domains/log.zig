@@ -44,20 +44,21 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 // that enabled it. Without a page target there is nothing to report.
 fn attachedSession(cmd: *CDP.Command) ?*CDP.BrowserContext.AttachedSession {
     const bc = cmd.browser_context orelse return null;
-    const session_id = cmd.input.session_id orelse bc.session_id orelse return null;
+    const target = cmd.target() catch return null;
+    const session_id = cmd.routing_session_id orelse target.session_id orelse return null;
     return bc.attached_sessions.get(session_id);
 }
 
 fn enable(cmd: *CDP.Command) !void {
     if (attachedSession(cmd)) |attached| {
-        try attached.bc.logEnable(attached);
+        try attached.target.logEnable(attached);
     }
     return cmd.sendResult(null, .{});
 }
 
 fn disable(cmd: *CDP.Command) !void {
     if (attachedSession(cmd)) |attached| {
-        attached.bc.logDisable(attached);
+        attached.target.logDisable(attached);
     }
     return cmd.sendResult(null, .{});
 }
@@ -73,8 +74,8 @@ const Entry = struct {
     networkRequestId: []const u8,
 };
 
-fn send(bc: *CDP.BrowserContext, session_id: []const u8, transfer: *const Transfer, text: []const u8, url: []const u8) !void {
-    return bc.cdp.sendEvent("Log.entryAdded", .{ .entry = Entry{
+fn send(target: *CDP.Target, session_id: []const u8, transfer: *const Transfer, text: []const u8, url: []const u8) !void {
+    return target.cdp.sendEvent("Log.entryAdded", .{ .entry = Entry{
         .text = .wrap(text),
         .timestamp = lp.datetime.milliTimestamp(.real),
         .url = url,
@@ -86,7 +87,7 @@ fn send(bc: *CDP.BrowserContext, session_id: []const u8, transfer: *const Transf
 // FrameConsole::ReportResourceResponseReceived does. That includes a
 // document's: the error page the server sent is what the frame shows.
 // The status text is the server's, empty when it sent none (HTTP/2).
-pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, session_id: []const u8, msg: *const Notification.ResponseHeaderDone) !void {
+pub fn httpResponseHeaderDone(arena: Allocator, target: *CDP.Target, session_id: []const u8, msg: *const Notification.ResponseHeaderDone) !void {
     const transfer = msg.transfer;
     if (transfer.req.internal) {
         return;
@@ -101,11 +102,11 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: *CDP.BrowserContext, session
         .{ status, transfer.statusText() orelse "" },
     );
     const url = if (transfer.res.header) |header| std.mem.span(header.url) else transfer.req.url;
-    return send(bc, session_id, transfer, text, url);
+    return send(target, session_id, transfer, text, url);
 }
 
 // A request that failed, as Chrome's FrameConsole::DidFailLoading reports it.
-pub fn httpRequestFail(arena: Allocator, bc: *CDP.BrowserContext, session_id: []const u8, msg: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(arena: Allocator, target: *CDP.Target, session_id: []const u8, msg: *const Notification.RequestFail) !void {
     const transfer = msg.transfer;
     if (transfer.req.internal) {
         return;
@@ -123,7 +124,7 @@ pub fn httpRequestFail(arena: Allocator, bc: *CDP.BrowserContext, session_id: []
         return;
     }
     const text = try std.fmt.allocPrint(arena, "Failed to load resource: {s}", .{netError(msg.err)});
-    return send(bc, session_id, transfer, text, transfer.req.url);
+    return send(target, session_id, transfer, text, transfer.req.url);
 }
 
 // Chrome logs nothing for net::ERR_ABORTED: a request stopped by the page,
@@ -380,7 +381,7 @@ test "cdp.log: entries go to the sessions that enabled the domain" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-LOG", .target_id = "FID-0000000LOG".*, .session_id = "SID-LOG" });
-    _ = try bc.attachSession("SID-AUX", null);
+    _ = try bc.attachSession(try testing.firstTarget(bc), "SID-AUX", null);
     try ctx.processMessage(.{ .id = 1, .method = "Log.enable", .sessionId = "SID-AUX" });
     try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
 

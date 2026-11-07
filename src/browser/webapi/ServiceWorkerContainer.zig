@@ -169,7 +169,7 @@ fn track(self: *ServiceWorkerContainer, scope: *ServiceWorkerGlobalScope) !*Serv
 }
 
 // For now, always null: we never dispatch fetch events.
-pub fn getController(_: *ServiceWorkerContainer) ?*ServiceWorker {
+fn getController(_: *ServiceWorkerContainer) ?*ServiceWorker {
     return null;
 }
 
@@ -255,7 +255,7 @@ fn matchScope(self: *ServiceWorkerContainer, only_active: bool, client_url: []co
 }
 
 // Messages from a worker are delivered as soon as they're posted
-pub fn startMessages(_: *ServiceWorkerContainer) void {}
+fn startMessages(_: *ServiceWorkerContainer) void {}
 
 const ReadyCallback = struct {
     arena: *lp.Arena,

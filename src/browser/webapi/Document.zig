@@ -31,7 +31,6 @@ const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("Node.zig");
-const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
 const collections = @import("collections.zig");
@@ -43,9 +42,11 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+const ModelContext = @import("ModelContext.zig");
 const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
+const exec_command = @import("../frame/exec_command.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -85,12 +86,15 @@ _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _implementation: ?*DOMImplementation = null,
 _fonts: ?*FontFaceSet = null,
-_write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
+// an execCommand is running: a nested one is refused
+_exec_command_running: bool = false,
+_exec_command_settings: exec_command.Settings = .{},
+_design_mode: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
-// extent() cache, keyed on style version and viewport.
+// extent() cache, keyed on layout version and viewport.
 _extent: ?struct {
     version: usize,
     viewport_width: u32,
@@ -156,7 +160,7 @@ pub fn getLocation(self: *const Document) ?*Location {
 fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
     const frame = self._frame orelse return;
-    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
+    return frame.scheduleNavigation(url, .{ .reason = .script, .kind = Location.historyHandling(frame) }, .{ .script = frame });
 }
 
 // Approximation of quirks mode: an HTML document without a doctype is in quirks mode.
@@ -171,6 +175,25 @@ pub fn isQuirksMode(self: *const Document) bool {
         }
     }
     return true;
+}
+
+fn getDesignMode(self: *const Document) []const u8 {
+    return if (self._design_mode) "on" else "off";
+}
+
+// Values other than "on" and "off" are ignored.
+fn setDesignMode(self: *Document, value: []const u8, frame: *Frame) void {
+    const on = if (std.ascii.eqlIgnoreCase(value, "on"))
+        true
+    else if (std.ascii.eqlIgnoreCase(value, "off"))
+        false
+    else
+        return;
+    if (on != self._design_mode) {
+        self._design_mode = on;
+        // :read-write now matches differently
+        frame.styleChanged();
+    }
 }
 
 fn getCompatMode(self: *const Document) []const u8 {
@@ -378,7 +401,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     const options = options_ orelse return element;
     if (options.is) |is_value| {
         try element.setAttribute(comptime .wrap("is"), .wrap(is_value), frame);
-        try Element.Html.Custom.checkAndAttachBuiltIn(element, frame);
+        try Element.Html.Custom.initBuiltIn(element, frame);
     }
 
     return element;
@@ -475,7 +498,7 @@ pub const Extent = struct { width: f64, height: f64 };
 /// size.
 pub fn extent(self: *Document) Extent {
     const frame = self._frame orelse return .{ .width = 0, .height = 0 };
-    const version = frame.page.style_version;
+    const version = frame._style_manager.layoutVersion();
     const viewport = frame.page.getViewport();
     if (self._extent) |cached| {
         if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
@@ -505,8 +528,8 @@ pub fn extent(self: *Document) Extent {
     }
     size.height = @max(size.height, index * 5.0);
 
-    if (self.is(HTMLDocument)) |html_doc| {
-        if (html_doc.getBody()) |html_body| {
+    if (self.is(HTMLDocument) != null) {
+        if (self.getBody()) |html_body| {
             const body = html_body.asElement();
             size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
             size.width = style_manager.inlineSize(body, .width) orelse 0;
@@ -635,11 +658,6 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
         if (std.mem.eql(u8, normalized, "keyboardevent")) {
             const KeyboardEvent = @import("event/KeyboardEvent.zig");
             break :blk (try KeyboardEvent.init("", null, frame)).asEvent();
-        }
-
-        if (std.mem.eql(u8, normalized, "inputevent")) {
-            const InputEvent = @import("event/InputEvent.zig");
-            break :blk (try InputEvent.init("", null, frame)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
@@ -794,8 +812,8 @@ pub fn getActiveElement(self: *Document) ?*Element {
     }
 
     // Default to body if it exists
-    if (self.is(HTMLDocument)) |html_doc| {
-        if (html_doc.getBody()) |body| {
+    if (self.is(HTMLDocument) != null) {
+        if (self.getBody()) |body| {
             return body.asElement();
         }
     }
@@ -831,6 +849,12 @@ fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     fonts.acquireRef();
     self._fonts = fonts;
     return fonts;
+}
+
+/// Null for a document without a browsing context, like one from DOMParser.
+fn getModelContext(self: *const Document) !?*ModelContext {
+    const frame = self._frame orelse return null;
+    return frame.window.getModelContext();
 }
 
 fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
@@ -945,13 +969,42 @@ pub fn hitTest(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
 // document.elementFromPoint only sees the document's tree: a hit inside a
 // shadow tree reports its outermost host, as in Chrome.
 fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
-    const hit = (try self.hitTest(x, y, frame)) orelse return null;
-    return retargetToDocumentTree(hit);
+    return self.elementFromPointIn(self.asNode(), x, y, frame);
 }
 
-fn retargetToDocumentTree(element: *Element) *Element {
+/// DocumentOrShadowRoot.elementFromPoint for `scope`, this document or one of
+/// its shadow roots.
+pub fn elementFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) !?*Element {
+    const point = viewportPoint(x, y, frame) orelse return null;
+    const hit = (try self.hitTest(point.x, point.y, frame)) orelse return null;
+    return retarget(hit, scope);
+}
+
+const ViewportPoint = struct { x: f64, y: f64 };
+
+// elementFromPoint/elementsFromPoint find nothing outside the viewport
+fn viewportPoint(x: f64, y: f64, frame: *Frame) ?ViewportPoint {
+    const viewport = frame.page.getViewport();
+    const rx = @round(x);
+    const ry = @round(y);
+    const inside = rx >= 0 and ry >= 0 and
+        rx < @as(f64, @floatFromInt(viewport.width)) and
+        ry < @as(f64, @floatFromInt(viewport.height));
+    if (inside == false) {
+        return null;
+    }
+    return .{ .x = rx, .y = ry };
+}
+
+// The spec's retarget: climbs out of shadow trees until `element` is in a tree
+// that `scope` is in or inside of. A hit in a shadow tree nested in `scope`'s
+// reports its host in `scope`'s tree; a hit outside it is returned as is.
+fn retarget(element: *Element, scope: *Node) *Element {
     var current = element;
     while (current.asNode().containingShadowRoot()) |shadow| {
+        if (shadow.asNode().isHostIncludingInclusiveAncestorOf(scope)) {
+            break;
+        }
         current = shadow._host;
     }
     return current;
@@ -1038,16 +1091,33 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 }
 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
-    // Get topmost element
-    var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
+    return self.elementsFromPointIn(self.asNode(), x, y, frame);
+}
+
+/// DocumentOrShadowRoot.elementsFromPoint for `scope`, as Blink builds it: the
+/// hit and its flat-tree ancestors that can be hit, each retargeted against
+/// `scope` with repeats dropped, then the root element.
+pub fn elementsFromPointIn(self: *Document, scope: *Node, x: f64, y: f64, frame: *Frame) ![]const *Element {
+    const point = viewportPoint(x, y, frame) orelse return &.{};
+    const hit = (try self.hitTest(point.x, point.y, frame)) orelse return &.{};
     const style_manager = &(self.asNode().ownerFrame(frame) orelse return &.{})._style_manager;
     var result: std.ArrayList(*Element) = .empty;
-    while (current) |el| {
-        // Chrome always ends the list with the root element.
-        if (el.parentElement() == null or style_manager.isHitTestable(el)) {
-            try result.append(frame.local_arena, el);
+    var current: ?*Element = hit;
+    while (current) |el| : (current = el.asNode().flatTreeParentElement(frame)) {
+        if (style_manager.isHitTestable(el) == false) {
+            continue;
         }
-        current = el.parentElement();
+        const target = retarget(el, scope);
+        if (result.items.len > 0 and result.items[result.items.len - 1] == target) {
+            continue;
+        }
+        try result.append(frame.local_arena, target);
+    }
+    // Chrome always ends the list with the root element.
+    if (self.getDocumentElement()) |root| {
+        if (result.items.len == 0 or result.items[result.items.len - 1] != root) {
+            try result.append(frame.local_arena, root);
+        }
     }
     return result.items;
 }
@@ -1060,6 +1130,178 @@ fn getDocType(self: *Document) ?*Node {
         }
     }
     return null;
+}
+
+// The head is the first html-namespace child of the document element whose
+// local name is head, whatever its Zig element type (e.g. a createElementNS
+// "blah:head" is an HTMLUnknownElement but still qualifies).
+pub fn getHead(self: *Document) ?*Element {
+    const doc_el = self.getDocumentElement() orelse return null;
+    var it = doc_el.asNode().childrenIterator();
+    while (it.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (el._namespace == .html and std.mem.eql(u8, el.getLocalName(), "head")) {
+            return el;
+        }
+    }
+    return null;
+}
+
+// The body element: the first <body> or <frameset> child of <html>.
+pub fn getBody(self: *Document) ?*Element.Html {
+    const document_element = self.getDocumentElement() orelse return null;
+    return findBodyForDoc(document_element);
+}
+
+// https://html.spec.whatwg.org/multipage/dom.html#dom-document-body
+fn setBody(self: *Document, value: ?*Element.Html, frame: *Frame) !void {
+    const new_body = value orelse return error.HierarchyError;
+    if (isBodyElement(new_body) == false) {
+        return error.HierarchyError;
+    }
+
+    const document_element = self.getDocumentElement() orelse return error.HierarchyError;
+    const document_node = document_element.asNode();
+    if (findBodyForDoc(document_element)) |current| {
+        if (current == new_body) {
+            return;
+        }
+        _ = try document_node.replaceChild(new_body.asNode(), current.asNode(), frame);
+    } else {
+        _ = try document_node.appendChild(new_body.asNode(), frame);
+    }
+}
+
+fn findBodyForDoc(document_element: *Element) ?*Element.Html {
+    var child = document_element.asNode().firstChild();
+    while (child) |node| {
+        if (node.is(Element.Html)) |html| {
+            if (isBodyElement(html)) {
+                return html;
+            }
+        }
+        child = node.nextSibling();
+    }
+    return null;
+}
+
+fn isBodyElement(html: *Element.Html) bool {
+    return html.is(Element.Html.Body) != null or html.asElement().getTag() == .frameset;
+}
+
+pub fn getTitle(self: *Document, frame: *Frame) ![]const u8 {
+    // Search the entire document for the first <title> element
+    const root = self.getDocumentElement() orelse return "";
+    var walker = TreeWalker.Full.ElementsOf(Element.Html.Title).init(root.asNode(), .{});
+    const title_element = walker.next() orelse return "";
+
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    try title_element.asNode().getTextContent(&buf.writer);
+    const text = buf.written();
+
+    if (text.len == 0) {
+        return "";
+    }
+
+    var started = false;
+    var in_whitespace = false;
+    var result: std.ArrayList(u8) = .empty;
+    try result.ensureTotalCapacityPrecise(frame.local_arena, text.len);
+
+    for (text) |c| {
+        const is_ascii_ws = c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0C';
+
+        if (is_ascii_ws) {
+            if (started) {
+                in_whitespace = true;
+            }
+        } else {
+            if (in_whitespace) {
+                result.appendAssumeCapacity(' ');
+                in_whitespace = false;
+            }
+            result.appendAssumeCapacity(c);
+            started = true;
+        }
+    }
+
+    return result.items;
+}
+
+fn setTitle(self: *Document, title: []const u8, frame: *Frame) !void {
+    const head = self.getHead() orelse return;
+
+    // Find existing title element in head
+    var it = head.asNode().childrenIterator();
+    while (it.next()) |node| {
+        if (node.is(Element.Html.Title)) |title_element| {
+            // Replace children, but don't create text node for empty string
+            if (title.len == 0) {
+                return title_element.asElement().replaceChildren(.init(&.{}), frame);
+            } else {
+                return title_element.asElement().replaceChildren(.init(&.{.{ .text = title }}), frame);
+            }
+        }
+    }
+
+    // No title element found, create one
+    const title_node = try Frame.node_factory.createElementNS(self, .html, "title", null);
+    const title_element = title_node.as(Element);
+
+    // Only add text if non-empty
+    if (title.len > 0) {
+        try title_element.replaceChildren(.init(&.{.{ .text = title }}), frame);
+    }
+
+    _ = try head.asNode().appendChild(title_node, frame);
+}
+
+fn getImages(self: *Document, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .img, frame);
+}
+
+fn getScripts(self: *Document, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .script, frame);
+}
+
+fn getLinks(self: *Document, frame: *Frame) !collections.NodeLive(.links) {
+    return collections.NodeLive(.links).init(self.asNode(), {}, frame);
+}
+
+fn getAnchors(self: *Document, frame: *Frame) !collections.NodeLive(.anchors) {
+    return collections.NodeLive(.anchors).init(self.asNode(), {}, frame);
+}
+
+fn getForms(self: *Document, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .form, frame);
+}
+
+fn getEmbeds(self: *Document, frame: *Frame) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
+}
+
+fn getApplets(_: *const Document, frame: *Frame) !*collections.HTMLCollection {
+    return frame._factory.create(collections.HTMLCollection{ ._data = .empty });
+}
+
+fn getCurrentScript(self: *const Document) ?*Element.Html.Script {
+    return self._current_script;
+}
+
+fn getDir(self: *Document) []const u8 {
+    const el = self.getDocumentElement() orelse return "";
+    const html = el.is(Element.Html) orelse return "";
+    return html.getDir();
+}
+
+fn setDir(self: *Document, value: []const u8, frame: *Frame) !void {
+    const el = self.getDocumentElement() orelse return;
+    const html = el.is(Element.Html) orelse return;
+    try html.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
+}
+
+fn getAll(self: *Document, frame: *Frame) !*collections.HTMLAllCollection {
+    return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
 }
 
 // document.write is complicated and works differently based on the state of
@@ -1181,7 +1423,8 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
     // Collect all children to insert (to avoid iterator invalidation)
     var children_to_insert: std.ArrayList(*Node) = .empty;
 
-    var it = if (first.is(Element.Html.Html) == null) fragment_node.childrenIterator() else first.childrenIterator();
+    const container = if (first.is(Element.Html.Html) == null) fragment_node else first;
+    var it = container.childrenIterator();
     while (it.next()) |child| {
         try children_to_insert.append(arena.allocator(), child);
     }
@@ -1190,34 +1433,27 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         return;
     }
 
-    // Determine insertion point:
-    // - If _write_insertion_point is set and still parented correctly, continue from there
-    // - Otherwise, start after the script (first write, or previous insertion point was removed)
     // parseFragment above can synchronously execute a parser-blocking script
     // (e.g. <script src=...> with from_parser=true). That script's side
     // effects can detach `script` from `parent` — for instance, by writing
     // to parent.innerHTML — leaving us nowhere sensible to splice in.
-    var insert_after: ?*Node = blk: {
-        if (self._write_insertion_point) |wip| {
-            if (wip._parent == parent) {
-                break :blk wip;
-            }
-        }
-        if (script.asNode()._parent == parent) {
-            break :blk script.asNode();
-        }
+    if (script.asNode()._parent != parent) {
         return;
-    };
+    }
 
     for (children_to_insert.items) |child| {
+        if (child._parent != container) {
+            // JS run by an earlier insertion moved it out of the container
+            continue;
+        }
         // Clear parent pointer (child is currently parented to fragment/HTML wrapper)
         child._parent = null;
-        try frame.insertNodeRelative(parent, child, .{ .after = insert_after.? }, .{});
-        insert_after = child;
+
+        // always append, JS run earlier might have deatched the previous node
+        try frame.appendNode(parent, child, .{});
     }
 
     frame.domChanged();
-    self._write_insertion_point = children_to_insert.last().?;
 }
 
 pub fn open(self: *Document, call_frame: *Frame) !*Document {
@@ -1388,7 +1624,33 @@ fn exitFullscreen(_: *Document, frame: *Frame) js.Promise {
     return frame.js.local.?.rejectPromise(.{ .type_error = "Document not in fullscreen" });
 }
 
-pub fn hasFocus(self: *Document) bool {
+// See frame/exec_command.zig. A null value is "" rather than "null".
+fn execCommand(self: *Document, command: []const u8, _: ?bool, value: ?[]const u8) !bool {
+    return exec_command.exec(self, command, value orelse "");
+}
+
+fn queryCommandSupported(self: *const Document, command: []const u8) bool {
+    return exec_command.isSupported(self, command);
+}
+
+fn queryCommandEnabled(self: *Document, command: []const u8) bool {
+    return exec_command.isEnabled(self, command);
+}
+
+fn queryCommandIndeterm(_: *const Document, _: []const u8) bool {
+    // No supported command is ever indeterminate.
+    return false;
+}
+
+fn queryCommandState(self: *const Document, command: []const u8) bool {
+    return exec_command.queryState(self, command);
+}
+
+fn queryCommandValue(self: *const Document, command: []const u8) []const u8 {
+    return exec_command.queryValue(self, command);
+}
+
+fn hasFocus(self: *Document) bool {
     var top = self._frame orelse return false;
     while (top.parent) |parent| {
         top = parent;
@@ -1725,6 +1987,8 @@ pub const JsApi = struct {
     pub const onloadstart = EventTarget.handlerAccessor(Document, "loadstart");
     pub const onlostpointercapture = EventTarget.handlerAccessor(Document, "lostpointercapture");
     pub const onmousedown = EventTarget.handlerAccessor(Document, "mousedown");
+    pub const onmouseenter = EventTarget.handlerAccessor(Document, "mouseenter");
+    pub const onmouseleave = EventTarget.handlerAccessor(Document, "mouseleave");
     pub const onmousemove = EventTarget.handlerAccessor(Document, "mousemove");
     pub const onmouseout = EventTarget.handlerAccessor(Document, "mouseout");
     pub const onmouseover = EventTarget.handlerAccessor(Document, "mouseover");
@@ -1760,10 +2024,6 @@ pub const JsApi = struct {
     pub const onsuspend = EventTarget.handlerAccessor(Document, "suspend");
     pub const ontimeupdate = EventTarget.handlerAccessor(Document, "timeupdate");
     pub const ontoggle = EventTarget.handlerAccessor(Document, "toggle");
-    pub const ontouchcancel = EventTarget.handlerAccessor(Document, "touchcancel");
-    pub const ontouchend = EventTarget.handlerAccessor(Document, "touchend");
-    pub const ontouchmove = EventTarget.handlerAccessor(Document, "touchmove");
-    pub const ontouchstart = EventTarget.handlerAccessor(Document, "touchstart");
     pub const ontransitioncancel = EventTarget.handlerAccessor(Document, "transitioncancel");
     pub const ontransitionend = EventTarget.handlerAccessor(Document, "transitionend");
     pub const ontransitionrun = EventTarget.handlerAccessor(Document, "transitionrun");
@@ -1774,7 +2034,7 @@ pub const JsApi = struct {
     pub const onreadystatechange = EventTarget.handlerAccessor(Document, "readystatechange");
     pub const onvisibilitychange = EventTarget.handlerAccessor(Document, "visibilitychange");
     pub const URL = bridge.accessor(Document.getURL, null, .{});
-    pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{});
+    pub const location = bridge.accessor(Document.getLocation, Document.setLocation, .{ .unforgeable = true, .deletable = false });
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const scrollingElement = bridge.accessor(Document.getDocumentElement, null, .{});
@@ -1784,11 +2044,12 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
+    pub const modelContext = bridge.accessor(Document.getModelContext, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});
     pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});
-    pub const createElement = bridge.function(Document.createElement, .{});
-    pub const createElementNS = bridge.function(Document.createElementNS, .{});
+    pub const createElement = bridge.function(Document.createElement, .{ .ce_reactions = true });
+    pub const createElementNS = bridge.function(Document.createElementNS, .{ .ce_reactions = true });
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
@@ -1833,6 +2094,45 @@ pub const JsApi = struct {
     pub const writeln = bridge.function(Document.writeln, .{ .ce_reactions = true });
     pub const open = bridge.function(Document.open, .{ .ce_reactions = true });
     pub const close = bridge.function(Document.close, .{ .ce_reactions = true });
+    pub const dir = bridge.accessor(Document.getDir, Document.setDir, .{ .ce_reactions = true });
+    pub const fgColor = bodyColor("text");
+    pub const linkColor = bodyColor("link");
+    pub const vlinkColor = bodyColor("vlink");
+    pub const alinkColor = bodyColor("alink");
+    pub const bgColor = bodyColor("bgcolor");
+
+    // Legacy [LegacyNullToEmptyString] attributes that reflect an attribute of
+    // the body element ("" without one).
+    fn bodyColor(comptime attr: []const u8) js.bridge.Accessor {
+        const R = struct {
+            fn get(self: *Document) []const u8 {
+                const b = self.getBody() orelse return "";
+                if (b.is(Element.Html.Body) == null) return "";
+                return b.asElement().getAttributeSafe(comptime .wrap(attr)) orelse "";
+            }
+            fn set(self: *Document, value: js.Value, frame: *Frame) !void {
+                const b = self.getBody() orelse return;
+                if (b.is(Element.Html.Body) == null) return;
+                const str = if (value.isNull()) "" else try value.toStringSlice();
+                try b.asElement().setAttributeSafe(comptime .wrap(attr), .wrap(str), frame);
+            }
+        };
+        return bridge.accessor(R.get, R.set, .{ .ce_reactions = true });
+    }
+    pub const head = bridge.accessor(Document.getHead, null, .{});
+    pub const body = bridge.accessor(Document.getBody, Document.setBody, .{ .ce_reactions = true });
+    pub const title = bridge.accessor(Document.getTitle, Document.setTitle, .{ .ce_reactions = true });
+    pub const images = bridge.accessor(Document.getImages, null, .{});
+    pub const scripts = bridge.accessor(Document.getScripts, null, .{});
+    pub const links = bridge.accessor(Document.getLinks, null, .{});
+    pub const anchors = bridge.accessor(Document.getAnchors, null, .{});
+    pub const forms = bridge.accessor(Document.getForms, null, .{});
+    pub const embeds = bridge.accessor(Document.getEmbeds, null, .{});
+    pub const applets = bridge.accessor(Document.getApplets, null, .{});
+    pub const plugins = bridge.accessor(Document.getEmbeds, null, .{});
+    pub const currentScript = bridge.accessor(Document.getCurrentScript, null, .{});
+    pub const all = bridge.accessor(Document.getAll, null, .{});
+
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
     pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
@@ -1854,12 +2154,20 @@ pub const JsApi = struct {
     pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});
     pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
+    pub const execCommand = bridge.function(Document.execCommand, .{});
+
+    pub const queryCommandIndeterm = bridge.function(Document.queryCommandIndeterm, .{});
+    pub const queryCommandEnabled = bridge.function(Document.queryCommandEnabled, .{});
+    pub const queryCommandState = bridge.function(Document.queryCommandState, .{});
+    pub const queryCommandSupported = bridge.function(Document.queryCommandSupported, .{});
+    pub const queryCommandValue = bridge.function(Document.queryCommandValue, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});
     pub const charset = bridge.accessor(Document.getCharset, null, .{});
     pub const inputEncoding = bridge.accessor(Document.getCharset, null, .{});
     pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
+    pub const designMode = bridge.accessor(Document.getDesignMode, Document.setDesignMode, .{});
     pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
     pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
 };
@@ -1932,11 +2240,12 @@ test "Document: a non-secure document can't set or overwrite a Secure cookie" {
 
     frame.url = "http://victim.example/";
     _ = try doc.setCookie("s=1; Secure", frame);
-    try testing.expectEqual(0, jar.cookies.items.len);
+    try testing.expectEqual(0, jar.len);
 
     try jar.populateFromResponse("https://victim.example/", "s=1; Secure");
     _ = try doc.setCookie("s=2", frame);
-    try testing.expectEqual("1", jar.cookies.items[0].value);
+    var it = jar.iterator();
+    try testing.expectEqual("1", it.next().?.value);
 }
 
 test "Document: isRelaxableTo" {

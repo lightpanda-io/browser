@@ -649,6 +649,48 @@
   }
 </script>
 
+<script id=fetch_redirect_a_b_a type=module>
+  {
+    // A -> B -> A: the chain leaves and returns to the requesting origin,
+    // but the cross-origin hop through B must leave the response tainted
+    // as 'cors', not reset back to 'basic' just because the final URL
+    // matches the requesting origin. A 'basic' response wouldn't be
+    // header-filtered at all, so X-Hidden would wrongly leak through.
+    const state = await testing.async();
+    const response = await fetch('/redirect_a_b_a');
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(200, response.status);
+      testing.expectEqual('cors', response.type);
+      testing.expectEqual(true, response.redirected);
+      testing.expectEqual('http://127.0.0.1:9582/cors_expose_headers_listed', response.url);
+      testing.expectEqual('s3cr3t', response.headers.get('x-secret'));
+      testing.expectEqual(null, response.headers.get('x-hidden'));
+    });
+  }
+</script>
+
+<script id=fetch_cors_expose_headers type=module>
+  {
+    // Cross-origin response headers are hidden unless CORS-safelisted or
+    // listed in Access-Control-Expose-Headers.
+    const state = await testing.async();
+    const listed = await fetch('http://localhost:9582/cors_expose_headers_listed');
+    const unlisted = await fetch('http://localhost:9582/cors_expose_headers_unlisted');
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('cors', listed.type);
+      testing.expectEqual('s3cr3t', listed.headers.get('x-secret'));
+      testing.expectEqual(null, listed.headers.get('access-control-allow-origin'));
+
+      testing.expectEqual('cors', unlisted.type);
+      testing.expectEqual(null, unlisted.headers.get('x-secret'));
+    });
+  }
+</script>
+
 <script id=fetch_forbidden_response_header type=module>
   {
     const state = await testing.async();
@@ -720,6 +762,27 @@
         testing.expectEqual([true, true], err);
       }
       testing.expectEqual(true, stream_error !== null);
+    });
+  }
+</script>
+
+<script id=bad_port type=module>
+  {
+    const state = await testing.async();
+
+    // 110 (pop3) is on the Fetch bad-port list: the request is refused before
+    // any connection, so fetch() rejects like any other network error. The
+    // assertion is about the refusal, not about a listener being absent.
+    let error = null;
+    try {
+      await fetch('http://127.0.0.1:110/');
+    } catch (e) {
+      error = e instanceof TypeError;
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(true, error);
     });
   }
 </script>

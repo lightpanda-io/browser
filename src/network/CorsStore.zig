@@ -19,9 +19,10 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const ClockCache = @import("../ClockCache.zig").ClockCache;
+
 const http = @import("http.zig");
 const isSafelistedMethod = @import("CorsGate.zig").isSafelistedMethod;
-const ClockCache = @import("ClockCache.zig").ClockCache;
 
 const CorsStore = @This();
 
