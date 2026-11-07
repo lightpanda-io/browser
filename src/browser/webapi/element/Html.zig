@@ -788,12 +788,16 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
     // tab separators *between* them.
     var saw_cell = false;
 
-    // A nested table starts its own rows.
+    // Rows are counted per table; only row groups pass the count through.
+    const row_group = switch (self_tag) {
+        .tbody, .thead, .tfoot => true,
+        else => false,
+    };
     const parent_saw_row = state.saw_row;
-    defer if (self_tag == .table) {
+    defer if (!row_group) {
         state.saw_row = parent_saw_row;
     };
-    if (self_tag == .table) {
+    if (!row_group) {
         state.saw_row = false;
     }
 

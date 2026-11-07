@@ -217,6 +217,20 @@
   d1.innerHTML = '<table><tr><td>o<table><tr><td>i1</td></tr><tr><td>i2</td></tr></table></td><td>z</td></tr><tr><td>last</td></tr></table>';
   testing.expectEqual("o\ni1\ni2\n\tz\nlast", d1.innerText);
 
+  // A row outside a table (only possible through the DOM) doesn't carry over
+  // to a row in a sibling element.
+  d1.innerHTML = '';
+  for (const t of ['a', 'b']) {
+    const d = document.createElement('div');
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.textContent = t;
+    tr.appendChild(td);
+    d.appendChild(tr);
+    d1.appendChild(d);
+  }
+  testing.expectEqual("a\nb", d1.innerText);
+
   {
     const div = document.createElement('div');
     div.innerHTML = 'abc <span style=display:none> 123 </span> xyz';
