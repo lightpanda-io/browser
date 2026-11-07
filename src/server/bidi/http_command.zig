@@ -30,6 +30,7 @@ const Viewport = @import("../../browser/Viewport.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
 const Method = @import("../http.zig").Connection.Method;
+const json_input = @import("../json_input.zig");
 
 const BiDi = @import("BiDi.zig");
 const input = @import("input.zig");
@@ -322,7 +323,8 @@ fn parseBody(comptime T: type, arena: Allocator, body: []const u8) ParseError!T 
         // everything the command takes came from the path
         return .{};
     }
-    return std.json.parseFromSliceLeaky(T, arena, body, .{
+    var json = body;
+    return json_input.parseLeaky(T, arena, &json, .{
         .ignore_unknown_fields = true,
         // body is the connection's read buffer, if we park the connection, that
         // buffer will be re-used. Our result cannot point into it.
@@ -1107,6 +1109,11 @@ test "bidi.http_command: parse" {
         const command = try parse(arena, .POST, "/element/7/value", "{\"text\":\"ab\",\"value\":[\"a\",\"b\"]}");
         try testing.expectEqual("7", command.element_send_keys.id);
         try testing.expectEqual("ab", command.element_send_keys.text);
+    }
+    {
+        // a lone surrogate escape (e.g. a string cut mid-emoji) becomes U+FFFD
+        const command = try parse(arena, .POST, "/element/7/value", "{\"text\":\"a\\ud83d\"}");
+        try testing.expectEqual("a\u{FFFD}", command.element_send_keys.text);
     }
     try testing.expectEqual("7", (try parse(arena, .POST, "/element/7/click", "{}")).element_click.id);
     try testing.expectEqual("7", (try parse(arena, .POST, "/element/7/clear", "{}")).element_clear.id);

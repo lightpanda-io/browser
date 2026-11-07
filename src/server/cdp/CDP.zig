@@ -33,6 +33,7 @@ const Session = @import("../../browser/Session.zig");
 
 const WS = @import("../WS.zig");
 const Link = @import("../Link.zig");
+const json_input = @import("../json_input.zig");
 const Incrementing = @import("id.zig").Incrementing;
 pub const Target = @import("Target.zig");
 
@@ -186,10 +187,11 @@ pub fn sendJSON(self: *CDP, message: anytype, opts: SendJSONOpts) !void {
 // `target_session_id` routes a page command that has no sessionId of its own
 // (Target.sendMessageToTarget wraps one).
 pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, target_session_id: ?[]const u8) !void {
-    const input = json.parseFromSliceLeaky(InputMessage, arena, str, .{
+    var raw = str;
+    const input = json_input.parseLeaky(InputMessage, arena, &raw, .{
         .ignore_unknown_fields = true,
     }) catch return error.InvalidJSON;
-    return self.dispatchParsed(arena, sender, str, input, target_session_id);
+    return self.dispatchParsed(arena, sender, raw, input, target_session_id);
 }
 
 // Dispatch a pre-parsed CDP message. The caller is responsible for
@@ -1166,6 +1168,14 @@ test "cdp: invalid json" {
     try ctx.processMessage(.{
         .method = "Target.over9000",
     });
+    try ctx.expectSentError(-32601, "'Target.over9000' wasn't found", .{});
+}
+
+test "cdp: message with a lone surrogate escape" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage("{\"id\":1,\"method\":\"Target.over9000\",\"params\":{\"text\":\"\\ud800\"}}");
     try ctx.expectSentError(-32601, "'Target.over9000' wasn't found", .{});
 }
 
