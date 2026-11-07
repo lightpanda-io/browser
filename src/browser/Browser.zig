@@ -271,7 +271,7 @@ pub fn waitForBackgroundTasks(self: *Browser) void {
 }
 
 pub fn hasMacrotasks(self: *Browser) bool {
-    return self.env.hasMacrotasks();
+    return self.env.hasMacrotasks(null);
 }
 
 pub fn msToNextTask(self: *Browser) ?u64 {

@@ -256,7 +256,7 @@ fn _tick(self: *Runner, comptime is_cdp: bool, requested_timeout_ms: u32, condit
     const total_http_activity = activity.http;
 
     const network_idle = activity.idle();
-    const is_done = browser.hasMacrotasks() == false and network_idle;
+    const is_done = browser.env.hasMacrotasks(session) == false and network_idle;
 
     // Not Frame._notified_network_idle: that latches for CDP's one-shot
     // lifecycle event, so a frame idle once reads idle forever.
