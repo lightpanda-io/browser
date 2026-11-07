@@ -585,6 +585,112 @@
 }
 </script>
 
+<script id="delete_merge_nested">
+{
+  // one block in the other
+  testing.expectEqual([true, '<blockquote>abcd</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p></blockquote>', 0, 1, 0, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<blockquote>abcd</blockquote>', '#abcd@2'], fwd('<blockquote>ab<p>cd</p></blockquote>', 0, 0, 2));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<blockquote><p>abcd</p></blockquote>', '#abcd@2'], back('<blockquote><p>ab</p>cd</blockquote>', 0, 1, 0));
+  testing.expectEqual([true, '<blockquote><p>abcd</p></blockquote>', '#abcd@2'], fwd('<blockquote><p>ab</p>cd</blockquote>', 0, 0, 0, 2));
+  testing.expectEqual([true, '<blockquote>abcd<p>ef</p></blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p><p>ef</p></blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<blockquote><p>abcd</p><p>ef</p></blockquote>', '#abcd@2'], back('<blockquote><p>ab</p>cd<p>ef</p></blockquote>', 0, 1, 0));
+  testing.expectEqual([true, '<blockquote><p>ab<b>cd</b>ef</p>gh</blockquote>', '#ab@2'], back('<blockquote><p>ab</p><b>cd</b>ef<br>gh</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<div>abcd<p>ef</p></div>', '#abcd@2'], back('<div>ab<p>cd<br>ef</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<div><p>abcd</p>ef</div>', '#abcd@2'], back('<div><p>ab</p>cd<br>ef</div>', 0, 1, 0));
+
+  // what followed the inner block stays on its own line
+  testing.expectEqual([true, '<blockquote>abcd<br>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p>ef</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<blockquote>abcd<br>ef</blockquote>', '#abcd@2'], fwd('<blockquote>ab<p>cd</p>ef</blockquote>', 0, 0, 2));
+  testing.expectEqual([true, '<blockquote>abcd<br>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<div><p>cd</p></div>ef</blockquote>', 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<blockquote>abcd<br><br>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p><br>ef</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<blockquote>abcd<br><img>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p><img>ef</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'abcd<br>ef', '#abcd@2'], back('ab<p>cd</p>ef', 1, 0, 0));
+  testing.expectEqual([true, 'abcd<br><b>ef</b>', '#abcd@2'], back('ab<p>cd</p><b>ef</b>', 1, 0, 0));
+
+  // nested lists
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], fwd('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 0, 2));
+  testing.expectEqual([true, '<ul><li>abcd<ul><li>ef</li></ul></li></ul>', '#abcd@2'], back('<ul><li>ab<ul><li>cd</li><li>ef</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li><li>gh</li></ul>', '#abcd@2'], back('<ul><li>ab<ul><li>cd</li></ul></li><li>gh</li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<ul><li>ab<ol><li>cd</li></ol></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd<ul><li><ul><li>ef</li></ul></li></ul></li></ul>', '#abcd@2'],
+    back('<ul><li>ab<ul><li>cd<ul><li>ef</li></ul></li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab<ul><li>cdxy</li></ul></li></ul>', '#cdxy@2'], back('<ul><li>ab<ul><li>cd</li></ul>xy</li></ul>', 0, 0, 2, 0));
+  testing.expectEqual([true, '<ul><li><p>abcd</p></li></ul>', '#abcd@2'], back('<ul><li><p>ab</p><ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ol><li>ab</li></ol>', '#ab@2'], back('<ol><li>ab<ol><li><br></li></ol></li></ol>', 0, 0, 1, 0, 0));
+
+  // a selection
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, '<blockquote>ad</blockquote>', '#ad@1'], sel('<blockquote>ab<p>cd</p></blockquote>', [0, 0, 1], [0, 1, 0, 1]));
+  testing.expectEqual([true, '<ul><li>ad</li></ul>', '#ad@1'], sel('<ul><li>ab<ul><li>cd</li></ul></li></ul>', [0, 0, 0, 1], [0, 0, 1, 0, 0, 1]));
+}
+</script>
+
+<script id="delete_merge_redundant_div">
+{
+  // Like Blink, moving a whole paragraph unwraps the <div>s around it with no
+  // attributes that are the only child of their parent
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div>ab<p>cd</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], fwd('<div>ab<p>cd</p></div>', 0, 0, 2));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div>ab<h1>cd</h1></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div>ab<div><p>cd</p></div></div>', 0, 1, 0, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div><div>ab<p>cd</p></div></div>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<div><p>ab</p>cd</div>', 0, 1, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<div><p>ab</p><p>cd</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<p>x</p><p>abcd</p>', '#abcd@2'], back('<div><p>x</p><p>ab</p><p>cd</p></div>', 0, 2, 0, 0));
+  testing.expectEqual([true, '<div>abcd</div>', '#abcd@2'], back('<div><div>ab</div><div>cd</div></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<div><ul><li>ab</li><li>cd</li></ul></div>', 0, 0, 1, 0, 0));
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, 'ad', '#ad@1'], sel('<div>ab<p>cd</p></div>', [0, 0, 1], [0, 1, 0, 1]));
+  testing.expectEqual([true, '<p>ad</p>', '#ad@1'], sel('<div><p>ab</p><p>cd</p></div>', [0, 0, 0, 1], [0, 1, 0, 1]));
+
+  // not one with attributes, a sibling, or after a line ended by a <br>
+  testing.expectEqual([true, '<div class="x">abcd</div>', '#abcd@2'], back('<div class=x>ab<p>cd</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<div class="x"><p>abcd</p></div>', '#abcd@2'], back('<div class=x><p>ab</p>cd</div>', 0, 1, 0));
+  testing.expectEqual([true, '<p>z</p><div>abcd</div>', '#abcd@2'], back('<p>z</p><div>ab<p>cd</p></div>', 1, 1, 0, 0));
+  testing.expectEqual([true, '<div>abcd</div><p>z</p>', '#abcd@2'], back('<div>ab<p>cd</p></div><p>z</p>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'z<div>abcd</div>', '#abcd@2'], back('z<div>ab<p>cd</p></div>', 1, 1, 0, 0));
+  testing.expectEqual([true, '<p>z</p><div>abcd</div>', '#abcd@2'], back('<p>z</p><div><div>ab<p>cd</p></div></div>', 1, 0, 1, 0, 0));
+  testing.expectEqual([true, '<div>abcd</div>', '#abcd@2'], back('<div>ab</div><div>cd</div>', 1, 0, 0));
+  testing.expectEqual([true, '<div><p>abcd</p></div>', '#abcd@2'], back('<div><p>ab</p>cd<br></div>', 0, 1, 0));
+  testing.expectEqual([true, '<div><p>abcd</p><p>ef</p></div>', '#abcd@2'], back('<div><p>ab</p><p>cd<br>ef</p></div>', 0, 1, 0, 0));
+}
+</script>
+
+<script id="delete_merge_list_join">
+{
+  // Two lists of the same type, side by side, become one: the second, with
+  // the items of the first. The lines stay apart.
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], fwd('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 0, 0, 0, 2));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<ul><li>ab</li><li>xy</li><li>cd</li><li>ef</li></ul>', '#xy@2'],
+    back('<ul><li>ab</li><li>xy</li></ul><ul><li>cd</li><li>ef</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ol><li>ab</li><li>cd</li></ol>', '#ab@2'], back('<ol start=3><li>ab</li></ol><ol><li>cd</li></ol>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul class="b"><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul class=a><li>ab</li></ul><ul class=b><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul><li>ab</li></ul>\n<ul><li>cd</li></ul>', 2, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><p></p><ul><li>cd</li></ul>', 2, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li><p>cd</p></li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><ul><li><p>cd</p></li></ul>', 1, 0, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd<ul><li>ef</li></ul></li></ul>', '#ab@2'],
+    back('<ul><li>ab</li></ul><ul><li>cd<ul><li>ef</li></ul></li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li><br></li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><ul><li><br></li></ul>', 1, 0, 0));
+
+  // lists apart, or of different types: the lines merge
+  testing.expectEqual([true, '<ul><li>ab<ul><li>xycd</li></ul></li></ul>', '#xycd@2'],
+    back('<ul><li>ab<ul><li>xy</li></ul></li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<div><ul><li>abcd</li></ul></div>', '#abcd@2'], back('<div><ul><li>ab</li></ul></div><ul><li>cd</li></ul>', 1, 0, 0, 0));
+
+  // a selection: deleted, then the lists join
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, '<ul><li>a</li><li>d</li></ul>', '#a@1'], sel('<ul><li>ab</li></ul><ul><li>cd</li></ul>', [0, 0, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<ul><li>a</li><li>d</li><li>ef</li></ul>', '#a@1'], sel('<ul><li>ab</li></ul><ul><li>cd</li><li>ef</li></ul>', [0, 0, 0, 1], [1, 0, 0, 1]));
+}
+</script>
+
 <script id="delete_merge_nothing">
 {
   // at the start of the first block, the end of the last: succeeds, no event
@@ -801,15 +907,11 @@
   testing.diverges('no style kept for a moved line', () => {
     testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><p style="color:blue">cd</p>', 1, 0, 0));
   });
-  // Chrome drops the outer block: abcd
-  testing.diverges('no merging a block into one around it', () => {
-    testing.expectEqual([false, '<div>ab<p>cd</p></div>', '#cd@0'], back('<div>ab<p>cd</p></div>', 0, 1, 0, 0));
-    testing.expectEqual([false, '<div><p>ab</p>cd</div>', '#cd@0'], back('<div><p>ab</p>cd</div>', 0, 1, 0));
-    testing.expectEqual([false, '<ul><li>ab<ul><li>cd</li></ul></li></ul>', '#cd@0'], back('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
-  });
-  // Chrome: <ul><li>ab</li><li>cd</li></ul>
-  testing.diverges('no merging lists', () => {
-    testing.expectEqual([false, '<ul><li>ab</li></ul><ul><li>cd</li></ul>', '#cd@0'], back('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  // When it unwraps a <div> holding more than the moved line, Chrome adds a
+  // <br> at the end of what was in it: <p>abcd</p><p>ef<br></p>, abcdef<br>
+  testing.diverges('no stray <br> after unwrapping a <div>', () => {
+    testing.expectEqual([true, '<p>abcd</p><p>ef</p>', '#abcd@2'], back('<div><p>ab</p><p>cd</p><p>ef</p></div>', 0, 1, 0, 0));
+    testing.expectEqual([true, 'abcd<br>ef', '#abcd@2'], back('<div>ab<p>cd</p>ef</div>', 0, 1, 0, 0));
   });
   testing.diverges('no merging next to a table', () => {
     testing.expectEqual([false, '<table><tbody><tr><td>ab</td></tr></tbody></table><p>cd</p>', '#cd@0'],
@@ -1550,13 +1652,36 @@
 }
 </script>
 
-<script id="paragraph_not_yet_supported">
+<script id="paragraph_list_outdent">
 {
-  // Chrome: <ul><li>a</li><li><br></li></ul>, the item outdented
-  testing.diverges('no outdenting', () => {
-    testing.expectEqual([false, '<ul><li>a<ul><li><br></li></ul></li></ul>', 'LI@0'],
-      split('<ul><li>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
-  });
+  // an empty item of a list ending its outer item joins the outer list
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual(['input:host:insertParagraph:null'], events);
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ul><li></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ol><li><br></li></ol></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ul><li><p><br></p></li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li class="k">a</li><li><br></li></ul>', 'LI@0'], split('<ul><li class=k>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li><li>c</li></ul>', 'LI@0'], split('<ul><li>a<ul><li><br></li></ul></li><li>c</li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a\n</li><li><br></li>\n</ul>', 'LI@0'], split('<ul><li>a\n<ul>\n<li><br></li>\n</ul>\n</li></ul>', 0, 0, 1, 1, 0));
+  testing.expectEqual([true, '<ul><li>a<ul><li>b</li><li><br></li></ul></li></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li>b<ul><li><br></li></ul></li></ul></li></ul>', 0, 0, 1, 0, 1, 0, 0));
+
+  // the nested list split around it
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li><ul><li>b</li></ul></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li><br></li><li>b</li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><ul><li>x</li></ul><li><br></li></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li>x</li><li><br></li></ul></li></ul>', 0, 0, 1, 1, 0));
+  testing.expectEqual([true, '<ul><li>a</li><ul><li>x</li></ul><li><br></li><ul><li>y</li></ul></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li>x</li><li><br></li><li>y</li></ul></li></ul>', 0, 0, 1, 1, 0));
+
+  // a list right in a list
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a</li><ul><li><br></li></ul></ul>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li><ul><li>b</li></ul><li>c</li></ul>', 'LI@0'],
+    split('<ul><li>a</li><ul><li><br></li><li>b</li></ul><li>c</li></ul>', 0, 1, 0, 0));
+
+  // with more of the outer item after it: a line in the outer item
+  testing.expectEqual([true, '<ul><li>a<div><br></div>z</li></ul>', 'DIV@0'], split('<ul><li>a<ul><li><br></li></ul>z</li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li><div><br></div>z</li></ul>', 'DIV@0'], split('<ul><li><ul><li><br></li></ul>z</li></ul>', 0, 0, 0, 0, 0));
   getSelection().removeAllRanges();
 }
 </script>
