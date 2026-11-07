@@ -1606,9 +1606,9 @@ fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
 
 /// Objects/arrays serialize as JSON so `return obj` prints data, not
 /// `[object Object]`; errors and primitives keep their string form.
-fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]u8 {
+fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]const u8 {
     if (value.isObject() and !value.isFunction() and !value.isNativeError()) {
-        return value.toJson(arena);
+        return try value.toJson(arena) orelse "undefined";
     }
     return value.toStringSliceWithAlloc(arena);
 }

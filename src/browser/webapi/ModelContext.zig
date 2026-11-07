@@ -514,7 +514,7 @@ fn executionFailed(message: []const u8) DOMException {
 /// its string form.
 fn resultText(allocator: std.mem.Allocator, value: js.Value) ![]const u8 {
     const text = if (value.isObject())
-        try value.toJson(allocator)
+        try value.toJson(allocator) orelse "undefined"
     else
         try value.toStringSliceWithAlloc(allocator);
     return if (text.len == 0) "Operation succeeded" else text;
@@ -526,11 +526,7 @@ fn stringifyObject(allocator: std.mem.Allocator, value: js.Value) ![]const u8 {
     if (!value.isObject()) {
         return error.TypeError;
     }
-    const json = try value.toJson(allocator);
-    if (std.mem.eql(u8, json, "undefined")) {
-        return error.TypeError;
-    }
-    return json;
+    return try value.toJson(allocator) orelse error.TypeError;
 }
 
 fn definedValue(value: ?js.Value) ?js.Value {

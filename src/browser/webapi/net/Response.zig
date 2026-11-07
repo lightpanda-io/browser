@@ -229,10 +229,7 @@ fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Respon
     const json = data.toJson(arena.allocator()) catch |err| switch (err) {
         error.JsException => return error.TryCatchRethrow,
         else => return err,
-    };
-    if (std.mem.eql(u8, json, "undefined")) {
-        return error.TypeError;
-    }
+    } orelse return error.TypeError;
 
     const opts = opts_ orelse InitOpts{};
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";

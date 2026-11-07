@@ -760,7 +760,7 @@ fn returnPromises(committed: js.PromiseResolver, finished: js.PromiseResolver) !
 pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, frame: *Frame) !NavigationReturn {
     const arena = frame._session.arena;
     const opts = _opts orelse NavigateOptions{};
-    const json = if (opts.state) |state| state.toJson(arena.allocator()) catch return error.DataClone else null;
+    const json = if (opts.state) |state| try serializeState(state, arena.allocator()) else null;
 
     const kind: NavigationKind = if (opts.history) |history|
         if (std.mem.eql(u8, "replace", history)) .{ .replace = json } else .{ .push = json }
@@ -779,7 +779,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     const arena = frame._session.arena;
 
     const opts = _opts orelse ReloadOptions{};
-    const state = if (opts.state) |state| state.toJson(arena.allocator()) catch return error.DataClone else null;
+    const state = if (opts.state) |state| try serializeState(state, arena.allocator()) else null;
 
     return self.navigateInner(self.getCurrentEntry()._url, .reload, .{ .info = opts.info, .state = state }, frame);
 }
@@ -800,15 +800,29 @@ const UpdateCurrentEntryOptions = struct {
 };
 
 fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, frame: *Frame) !void {
+    // `state` is required, and undefined counts as missing.
+    if (options.state.isUndefined()) {
+        return error.TypeError;
+    }
     const arena = frame._session.arena;
 
     const previous = self.getCurrentEntry();
     self.getCurrentEntry()._state = .{
         .source = .navigation,
-        .value = options.state.toJson(arena.allocator()) catch return error.DataClone,
+        .value = try serializeState(options.state, arena.allocator()),
     };
 
     try self.fireCurrentEntryChangeEvent(previous, null, frame);
+}
+
+/// A history entry's state as JSON, null for undefined. JSON stands in for
+/// structured clone: what it can't encode is a DataCloneError.
+pub fn serializeState(state: js.Value, allocator: std.mem.Allocator) !?[]const u8 {
+    if (state.isUndefined()) {
+        return null;
+    }
+    const json = state.toJson(allocator) catch return error.DataClone;
+    return json orelse error.DataClone;
 }
 
 pub fn dispatch(self: *Navigation, event: *Event, frame: *Frame) !void {
