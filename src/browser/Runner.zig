@@ -472,7 +472,7 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
 const ScriptTruthy = struct {
     session: *Session,
     frame_id: u32,
-    compiled: *js.Script.Unbound.Global,
+    compiled: *const js.Script.Unbound.Global,
 
     fn met(self: *ScriptTruthy) !bool {
         const page = self.session.pendingOrLivePage(self.frame_id) orelse return error.FrameNotFound;
