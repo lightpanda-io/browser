@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<script type=importmap>{"imports": {"mapped": "./mapped.js"}}</script>
+<script type=module>
+  // Hand this module's import.meta.resolve to the opener, so it outlives this
+  // module's context once the opener re-navigates us.
+  window.opener.__import_meta_resolve = import.meta.resolve;
+  window.opener.postMessage({ from: 'import_meta_resolve' }, '*');
+</script>
