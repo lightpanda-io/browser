@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<button id="btn" disabled><span id="inner">inner</span></button>
+<fieldset id="fs" disabled><legend>legend</legend><span id="fsInner">fieldset content</span></fieldset>
+<script>
+  const events = [];
+  const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'];
+  const listeners = [window, document, document.getElementById('btn'), document.getElementById('inner'),
+    document.getElementById('fs'), document.getElementById('fsInner')];
+  for (const t of listeners) {
+    const name = t === window ? 'window' : t === document ? 'document' : t.id;
+    for (const type of types) {
+      t.addEventListener(type, () => events.push(type + '@' + name));
+    }
+  }
+  function take() {
+    const out = events.join(' ');
+    events.length = 0;
+    return out;
+  }
+</script>

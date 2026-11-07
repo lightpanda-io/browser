@@ -27,6 +27,7 @@ const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const Window = @import("webapi/Window.zig");
 const Element = @import("webapi/Element.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 
@@ -276,7 +277,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             // Per spec, only a MouseEvent "click" is an activation event, and
             // the activation target is the nearest inclusive ancestor with
             // activation behavior (ancestors only for bubbling events).
-            if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
+            if (event.is(MouseEvent) != null) {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
                     Frame.user_input.handleClick(frame, activation_target, target, event._is_trusted) catch |err| {
                         log.debug(.event, "frame.click", .{ .err = err });
@@ -295,8 +296,11 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     }
 
     const built = buildEventPath(target, event, frame, &path_buffer);
-    path_len = built.len;
+    path_len = cutAtDisabledFormControl(event, path_buffer[0..built.len]);
     node_path_len = path_len;
+    if (path_len == 0) {
+        return;
+    }
     if (built.crosses_shadow_root) {
         event._needs_retargeting = true;
     }
@@ -391,6 +395,29 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             }
         }
     }
+}
+
+/// Chrome stops a trusted mousedown, mouseup, click or dblclick at the first
+/// disabled form control on its path, the target included (Blink's
+/// EventPath::AdjustForDisabledFormControl). Returns the kept length.
+fn cutAtDisabledFormControl(event: *Event, path: []const *EventTarget) usize {
+    if (!event._is_trusted or event.is(MouseEvent) == null) {
+        return path.len;
+    }
+    const typ = event._type_string;
+    if (!typ.eql(comptime .wrap("click")) and !typ.eql(comptime .wrap("mousedown")) and
+        !typ.eql(comptime .wrap("mouseup")) and !typ.eql(comptime .wrap("dblclick")))
+    {
+        return path.len;
+    }
+    for (path, 0..) |et, i| {
+        const node = et.is(Node) orelse continue;
+        const el = node.is(Element) orelse continue;
+        if (el.isDisabledFormControl()) {
+            return i;
+        }
+    }
+    return path.len;
 }
 
 /// Whether a listener on the path could call preventDefault: any but a
