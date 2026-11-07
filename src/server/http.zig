@@ -563,6 +563,15 @@ const SESSION_PREFIX = "/session/";
 const SESSION_ID_LEN = 36;
 
 fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    // The WebSocket upgrade already rejects a Host that is not localhost, an
+    // IP literal or the operator's advertised name; these routes need the same
+    // gate, or a page that rebinds its own domain to this socket reads
+    // /json/list and drives /session as if it were same-origin.
+    if (server.unix_path == null and !hostAllowed(req.head, server.advertise_host)) {
+        log.warn(.serve, "rejected http host", .{ .note = "See `--advertise-host <host>` if this is a legitimate host" });
+        return serveHTTPResponse(server, conn, req, .{ .static = forbidden_host_response });
+    }
+
     var path = req.path;
     if (path.len > 1 and path[path.len - 1] == '/') {
         path = path[0 .. path.len - 1];
@@ -1202,6 +1211,22 @@ fn isAllowedHost(value: []const u8, advertise_host: ?[]const u8) bool {
     return name.len > 0 and std.ascii.eqlIgnoreCase(name, advertised);
 }
 
+// The Host that names the socket this request arrived on, put through the
+// same isAllowedHost the WebSocket upgrade uses. A head with no Host at all
+// fails too: the header is the only thing carrying that name, so accepting
+// its absence would leave the gate skippable.
+fn hostAllowed(head: []const u8, advertise_host: ?[]const u8) bool {
+    const method, _, const version, var it = header_parser.parseRequest(head) catch return false;
+    _ = method;
+    _ = version;
+    while (it.next() catch return false) |h| {
+        if (std.ascii.eqlIgnoreCase(h.key, "host")) {
+            return isAllowedHost(h.value, advertise_host);
+        }
+    }
+    return false;
+}
+
 const testing = @import("../testing.zig");
 
 test "http: isAllowedHost accepts IP literals and localhost, rejects other names" {
@@ -1221,6 +1246,17 @@ test "http: isAllowedHost accepts the explicitly advertised host" {
     try testing.expectEqual(false, isAllowedHost(":9222", "lightpanda"));
     // The explicit host never weakens the original rules.
     try testing.expectEqual(true, isAllowedHost("10.0.0.5:9222", "lightpanda"));
+}
+
+test "http: hostAllowed puts plain HTTP requests through isAllowedHost" {
+    try testing.expectEqual(true, hostAllowed("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:9222\r\n\r\n", null));
+    try testing.expectEqual(true, hostAllowed("GET /json/list HTTP/1.1\r\nHost: localhost:9222\r\n\r\n", null));
+    try testing.expectEqual(true, hostAllowed("GET /session HTTP/1.1\r\nHost: [::1]:9222\r\n\r\n", null));
+    try testing.expectEqual(false, hostAllowed("GET /json/list HTTP/1.1\r\nHost: attacker.example:9222\r\n\r\n", null));
+    try testing.expectEqual(false, hostAllowed("GET /json/list HTTP/1.1\r\nHost: lightpanda:9222\r\n\r\n", null));
+    try testing.expectEqual(true, hostAllowed("GET /json/list HTTP/1.1\r\nHost: lightpanda:9222\r\n\r\n", "lightpanda"));
+    // No Host at all fails closed.
+    try testing.expectEqual(false, hostAllowed("GET /json/list HTTP/1.1\r\n\r\n", null));
 }
 
 test "http: webSocketAccept honours the advertised host" {
