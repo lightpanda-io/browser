@@ -20,8 +20,9 @@ mod prescan;
 mod sink;
 mod types;
 mod url;
+mod xml;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::os::raw::{c_uchar, c_void};
 use types::*;
 
@@ -82,6 +83,7 @@ pub extern "C" fn html5ever_parse_document(
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
         input: None,
+        xml: None,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -153,6 +155,7 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
         input: None,
+        xml: None,
     };
 
     parse_document_text(sink, &decoded);
@@ -595,6 +598,7 @@ pub extern "C" fn html5ever_parse_fragment(
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
         input: None,
+        xml: None,
     };
 
     // Empty input still goes through the parser: in an <html> context it
@@ -751,6 +755,7 @@ pub extern "C" fn html5ever_streaming_parser_create(
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
         input: None,
+        xml: None,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing
@@ -843,6 +848,7 @@ pub extern "C" fn xml5ever_parse_document(
     parse_error_callback: ParseErrorCallback,
     pop_callback: PopCallback,
     create_comment_callback: CreateCommentCallback,
+    create_cdata_callback: CreateCDATASectionCallback,
     create_processing_instruction: CreateProcessingInstruction,
     append_doctype_to_document: AppendDoctypeToDocumentCallback,
     add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
@@ -859,6 +865,7 @@ pub extern "C" fn xml5ever_parse_document(
     }
 
     let arena = typed_arena::Arena::new();
+    let xml_state = xml::XmlState::new(Some(create_cdata_callback));
 
     let sink = sink::Sink {
         ctx: ctx,
@@ -881,21 +888,28 @@ pub extern "C" fn xml5ever_parse_document(
         attach_declarative_shadow_callback: attach_declarative_shadow_callback,
         allow_declarative_shadow: allow_declarative_shadow,
         input: None,
+        xml: Some(&xml_state),
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(xml, len) };
     let bytes = strip_doctype_internal_subset(bytes);
     let tb = xml5ever::tree_builder::XmlTreeBuilder::new(sink, Default::default());
     let tokenizer = xml5ever::tokenizer::XmlTokenizer::new(
-        UnclosedTagSink {
+        XmlTokenSink {
             tb,
             depth: Cell::new(0),
+            xml: &xml_state,
+            cdata: RefCell::new(None),
         },
-        Default::default(),
+        xml5ever::tokenizer::XmlTokenizerOpts {
+            discard_bom: false,
+            ..Default::default()
+        },
     );
     html5ever::tendril::stream::Utf8LossyDecoder::new(XmlDocumentParser {
         tokenizer,
         input_buffer: Default::default(),
+        text: StrTendril::new(),
     })
     .one(&*bytes);
 }
@@ -914,6 +928,7 @@ pub extern "C" fn xml5ever_validate_document(
         return ();
     }
 
+    let xml_state = xml::XmlState::new(None);
     let sink = ValidateSink {
         ctx: ctx,
         parse_error_callback: parse_error_callback,
@@ -924,15 +939,21 @@ pub extern "C" fn xml5ever_validate_document(
     let bytes = strip_doctype_internal_subset(bytes);
     let tb = xml5ever::tree_builder::XmlTreeBuilder::new(sink, Default::default());
     let tokenizer = xml5ever::tokenizer::XmlTokenizer::new(
-        UnclosedTagSink {
+        XmlTokenSink {
             tb,
             depth: Cell::new(0),
+            xml: &xml_state,
+            cdata: RefCell::new(None),
         },
-        Default::default(),
+        xml5ever::tokenizer::XmlTokenizerOpts {
+            discard_bom: false,
+            ..Default::default()
+        },
     );
     html5ever::tendril::stream::Utf8LossyDecoder::new(XmlDocumentParser {
         tokenizer,
         input_buffer: Default::default(),
+        text: StrTendril::new(),
     })
     .one(&*bytes);
 }
@@ -1078,13 +1099,17 @@ fn strip_doctype_internal_subset(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 // (`<root><a>text`) parses "cleanly". Browsers reject it. This sits between
 // the tokenizer and the tree builder, tracks tag nesting from the raw token
 // stream, and reports an error when EOF arrives with tags still open.
-struct UnclosedTagSink<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> {
+// It also preserves namespace declarations before binding discards them,
+// and collects character tokens while feeding a CDATA section.
+struct XmlTokenSink<'xml, H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> {
     tb: xml5ever::tree_builder::XmlTreeBuilder<H, S>,
     depth: Cell<u32>,
+    xml: &'xml xml::XmlState,
+    cdata: RefCell<Option<StrTendril>>,
 }
 
 impl<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> xml5ever::tokenizer::TokenSink
-    for UnclosedTagSink<H, S>
+    for XmlTokenSink<'_, H, S>
 {
     type Handle = H;
 
@@ -1093,14 +1118,25 @@ impl<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> xml5ever::tokeni
         token: xml5ever::tokenizer::Token,
     ) -> xml5ever::tokenizer::ProcessResult<H> {
         use xml5ever::tokenizer::{TagKind, Token};
+        if let Token::Characters(text) = &token {
+            if let Some(cdata) = self.cdata.borrow_mut().as_mut() {
+                cdata.push_tendril(text);
+                return xml5ever::tokenizer::ProcessResult::Continue;
+            }
+        }
         match &token {
-            Token::Tag(tag) => match tag.kind {
-                TagKind::StartTag => self.depth.set(self.depth.get() + 1),
-                TagKind::EndTag | TagKind::ShortTag => {
-                    self.depth.set(self.depth.get().saturating_sub(1))
+            Token::Tag(tag) => {
+                if matches!(tag.kind, TagKind::StartTag | TagKind::EmptyTag) {
+                    self.xml.preserve_namespaces(&tag.attrs);
                 }
-                TagKind::EmptyTag => {}
-            },
+                match tag.kind {
+                    TagKind::StartTag => self.depth.set(self.depth.get() + 1),
+                    TagKind::EndTag | TagKind::ShortTag => {
+                        self.depth.set(self.depth.get().saturating_sub(1))
+                    }
+                    TagKind::EmptyTag => {}
+                }
+            }
             Token::EndOfFile => {
                 if self.depth.get() > 0 {
                     self.tb
@@ -1153,20 +1189,33 @@ fn is_valid_xml_declaration(data: &str) -> bool {
 }
 
 // xml5ever::driver::XmlParser, minus the tree-builder-typed tokenizer so the
-// UnclosedTagSink can sit in between.
-struct XmlDocumentParser<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> {
-    tokenizer: xml5ever::tokenizer::XmlTokenizer<UnclosedTagSink<H, S>>,
+// XmlTokenSink can sit in between.
+struct XmlDocumentParser<'xml, H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> {
+    tokenizer: xml5ever::tokenizer::XmlTokenizer<XmlTokenSink<'xml, H, S>>,
     input_buffer: xml5ever::buffer_queue::BufferQueue,
+    text: StrTendril,
+}
+
+impl<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>> XmlDocumentParser<'_, H, S> {
+    fn feed(&self, start: usize, end: usize) {
+        if start == end {
+            return;
+        }
+        self.input_buffer
+            .push_back(self.text.subtendril(start as u32, (end - start) as u32));
+        while let xml5ever::TokenizerResult::Script(_) = self.tokenizer.feed(&self.input_buffer) {}
+    }
 }
 
 impl<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>>
-    TendrilSink<html5ever::tendril::fmt::UTF8> for XmlDocumentParser<H, S>
+    TendrilSink<html5ever::tendril::fmt::UTF8> for XmlDocumentParser<'_, H, S>
 {
     type Output = ();
 
     fn process(&mut self, t: StrTendril) {
-        self.input_buffer.push_back(t);
-        while let xml5ever::TokenizerResult::Script(_) = self.tokenizer.feed(&self.input_buffer) {}
+        // Decode the complete document before locating CDATA boundaries: a
+        // UTF-8 decoder chunk can end in the middle of a markup delimiter.
+        self.text.push_tendril(&t);
     }
 
     fn error(&mut self, desc: std::borrow::Cow<'static, str>) {
@@ -1174,6 +1223,36 @@ impl<H: Clone, S: xml5ever::tree_builder::TreeSink<Handle = H>>
     }
 
     fn finish(self) -> () {
+        use xml5ever::tokenizer::{Token, TokenSink};
+
+        // xml5ever discards a BOM at the start of every feed, so handle it
+        // once here and preserve U+FEFF after a CDATA section.
+        let mut offset = if self.text.starts_with('\u{FEFF}') {
+            3
+        } else {
+            0
+        };
+        while let Some((start, end)) = xml::next_cdata(&self.text, offset) {
+            self.feed(offset, start);
+            let sink = &self.tokenizer.sink;
+            sink.cdata.replace(Some(StrTendril::new()));
+            self.feed(start, end);
+            let data = sink.cdata.take().unwrap();
+            if sink.depth.get() == 0 {
+                sink.tb.sink.parse_error(std::borrow::Cow::Borrowed(
+                    "CDATA outside the document element",
+                ));
+            } else {
+                // TreeSink has no CDATA hook. Reuse the tree builder's comment
+                // insertion to reach the current parent, but create a CDATA
+                // node in our sink. This also preserves empty sections.
+                sink.xml.creating_cdata.set(true);
+                sink.tb.process_token(Token::Comment(data));
+                sink.xml.creating_cdata.set(false);
+            }
+            offset = end;
+        }
+        self.feed(offset, self.text.len());
         self.tokenizer.end();
     }
 }
