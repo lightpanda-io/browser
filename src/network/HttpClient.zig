@@ -86,6 +86,7 @@ heartbeat: Watchdog.Heartbeat = .{},
 session_source: ?*Client = null,
 wakeup_mutex: std.Io.Mutex = .init,
 polling_client: ?*Client = null,
+wakeup_pending: bool = false,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -223,12 +224,18 @@ pub fn wakeup(self: *Client) !void {
     const source = self.session_source orelse self;
     source.wakeup_mutex.lockUncancelable(lp.io);
     defer source.wakeup_mutex.unlock(lp.io);
+    source.wakeup_pending = true;
     try (source.polling_client orelse source).handles.wakeup();
 }
 
 fn poll(self: *Client, timeout_ms: u32) !void {
     const source = self.session_source orelse self;
     source.wakeup_mutex.lockUncancelable(lp.io);
+    if (source.wakeup_pending) {
+        source.wakeup_pending = false;
+        source.wakeup_mutex.unlock(lp.io);
+        return;
+    }
     lp.assert(source.polling_client == null, "Concurrent session client polls", .{});
     source.polling_client = self;
     source.wakeup_mutex.unlock(lp.io);
@@ -7094,6 +7101,13 @@ test "HttpClient: borrowed session clients follow driver attachment and wakeups"
     try testing.expect(client.currentDriver() != null);
     driver.detach();
     try testing.expectEqual(null, client.currentDriver());
+
+    driver.wakeup();
+    try testing.expect(browser.http_client.wakeup_pending);
+    const before_poll = lp.datetime.milliTimestamp(.boot);
+    try client.poll(10000);
+    try testing.expect(lp.datetime.milliTimestamp(.boot) - before_poll < 5000);
+    try testing.expectEqual(false, browser.http_client.wakeup_pending);
 
     const Poll = struct {
         client: *Client,
