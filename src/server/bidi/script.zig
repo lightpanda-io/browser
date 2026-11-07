@@ -575,6 +575,24 @@ test "bidi.script: evaluate primitives" {
     }
 }
 
+test "bidi.script: evaluate with a lone surrogate escape" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{ .url = "bidi/values.html" });
+
+    // JSON.stringify keeps a lone surrogate (a string cut mid-emoji) as an
+    // escape. It reaches the page as U+FFFD.
+    const msg = try std.fmt.allocPrint(testing.arena,
+        \\{{"id":1,"method":"script.evaluate","params":{{"expression":"'\ud83d'.charCodeAt(0)","target":{{"context":"{s}"}},"awaitPromise":false}}}}
+    , .{context_id});
+    try ctx.processMessage(msg);
+    try ctx.expectSentResult(.{
+        .type = "success",
+        .result = .{ .type = "number", .value = 0xFFFD },
+    }, .{ .id = 1 });
+}
+
 test "bidi.script: evaluate arrays and objects" {
     var ctx = try testing.context();
     defer ctx.deinit();

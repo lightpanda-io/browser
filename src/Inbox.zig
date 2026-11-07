@@ -185,7 +185,7 @@ pub const Message = struct {
     };
 
     pub const Cdp = struct {
-        raw: []u8,
+        raw: []const u8,
         input: CDP.InputMessage,
     };
 
