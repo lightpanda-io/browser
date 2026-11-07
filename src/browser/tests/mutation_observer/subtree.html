@@ -1,4 +1,7 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
 <div id="grandparent">
   <div id="parent">
     <div id="child" data-test="initial">Child</div>
@@ -15,8 +18,6 @@
   <div id="childlist-parent"></div>
 </div>
 
-<meta name=lp-mode content=test>
-<script src="../testing.js"></script>
 <script id="subtree_attributes" type=module>
   const state = await testing.async();
   const grandparent = document.getElementById('grandparent');
