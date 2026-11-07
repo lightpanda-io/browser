@@ -434,6 +434,7 @@ pub fn disposeBrowserContext(self: *CDP) void {
 }
 
 pub fn disposeContext(self: *CDP, bc: *BrowserContext) void {
+    if (self.app.config.cookieJarFile()) |path| lp.cookies.saveToFile(&bc.session.cookie_jar, path);
     // Dispatch can occur inside this client's tick. Retain the session and
     // client until every runner has unwound, not just the context allocation.
     self.retired_contexts.append(self.allocator, bc) catch @panic("retire context");
@@ -470,7 +471,8 @@ pub fn tick(self: *CDP) !void {
         var runner = bc.session.runner(.{ .pump_peers = false });
         try runner.tickCDP(0);
     }
-    _ = try self.browser.http_client.tick(if (self.browser_contexts.items.len == 0) 200 else 5);
+    const wait_ms: u32 = if (self.dispatch_depth > 0 or self.tick_depth > 1) 0 else if (self.browser_contexts.items.len == 0) 200 else 5;
+    _ = try self.browser.http_client.tick(wait_ms);
 }
 
 fn pumpPeers(ctx: *anyopaque) anyerror!void {
@@ -643,10 +645,6 @@ pub const BrowserContext = struct {
         self.targets.deinit(allocator);
 
         self.notification.unregisterAll(self);
-
-        if (self.cdp.app.config.cookieJarFile()) |cookie_jar_path| {
-            lp.cookies.saveToFile(&self.session.cookie_jar, cookie_jar_path);
-        }
 
         self.session.deinit();
         allocator.destroy(self.session);

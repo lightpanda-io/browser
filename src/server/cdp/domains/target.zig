@@ -1483,3 +1483,103 @@ test "cdp.target: setAutoAttach on a page session doesn't attach new pages" {
     try ctx.expectSentResult(.{ .sessionId = second.session_id.? }, .{ .id = 5 });
     try testing.expectEqual(2, bc.attached_sessions.count());
 }
+
+test "cdp.target: concurrent contexts route storage and preserve peer pages" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const cdp = ctx.cdp();
+    _ = try cdp.createBrowserContext();
+    const first = cdp.browser_contexts.items[0];
+    _ = try cdp.createBrowserContext();
+    const second = cdp.browser_contexts.items[1];
+    try ctx.processMessage(.{ .id = 1, .method = "Target.getBrowserContexts" });
+    try ctx.expectSentResult(.{ .browserContextIds = &[_][]const u8{ first.id, second.id } }, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank", .browserContextId = first.id } });
+    try ctx.processMessage(.{ .id = 3, .method = "Target.createTarget", .params = .{ .url = "about:blank", .browserContextId = second.id } });
+    const a = try testing.firstTarget(first);
+    const b = try testing.firstTarget(second);
+    try testing.expect(a.group_id != b.group_id);
+    try ctx.processMessage(.{ .id = 4, .method = "Target.getTargets" });
+    try ctx.expectSentResult(.{ .targetInfos = [_]TargetInfo{ targetInfo(a).?, targetInfo(b).? } }, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "Storage.setCookies", .params = .{ .browserContextId = first.id, .cookies = &.{.{ .name = "owner", .value = "first", .url = "https://example.test/" }} } });
+    try ctx.processMessage(.{ .id = 6, .method = "Storage.setCookies", .params = .{ .browserContextId = second.id, .cookies = &.{.{ .name = "owner", .value = "second", .url = "https://example.test/" }} } });
+    try std.testing.expectEqualStrings("first", first.session.cookie_jar.cookies.items[0].value);
+    try std.testing.expectEqualStrings("second", second.session.cookie_jar.cookies.items[0].value);
+    try ctx.processMessage(.{ .id = 7, .method = "Browser.grantPermissions", .params = .{ .browserContextId = second.id, .permissions = &[_][]const u8{"geolocation"} } });
+    try ctx.expectSentResult(null, .{ .id = 7 });
+    try testing.expectEqual(null, first.session.permissions.get("geolocation"));
+    try testing.expectEqual(.granted, second.session.permissions.get("geolocation").?);
+    try ctx.processMessage(.{ .id = 8, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = first.id } });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+    try testing.expectEqual(1, cdp.browser_contexts.items.len);
+    try testing.expect(cdp.browser_context.? == second);
+    try cdp.tick();
+    try testing.expect(b.mainFrame() != null);
+    try std.testing.expectEqualStrings("second", second.session.cookie_jar.cookies.items[0].value);
+}
+
+test "cdp.target: sessionId takes precedence over a peer targetId when detaching" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const cdp = ctx.cdp();
+    _ = try cdp.createBrowserContext();
+    const first = cdp.browser_contexts.items[0];
+    _ = try cdp.createBrowserContext();
+    const second = cdp.browser_contexts.items[1];
+    try ctx.processMessage(.{ .id = 1, .method = "Target.createTarget", .params = .{ .browserContextId = first.id } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .browserContextId = second.id } });
+    const a = try testing.firstTarget(first);
+    const b = try testing.firstTarget(second);
+    try ctx.processMessage(.{ .id = 3, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try testing.expect(a.session_id != null and b.session_id != null);
+    const a_sid = try testing.arena_allocator.dupe(u8, a.session_id.?);
+    const b_sid = try testing.arena_allocator.dupe(u8, b.session_id.?);
+    try ctx.processMessage(.{ .id = 4, .method = "Target.detachFromTarget", .params = .{ .targetId = &a.target_id.?, .sessionId = b_sid } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(first.attached_sessions.contains(a_sid));
+    try testing.expect(!second.attached_sessions.contains(b_sid));
+}
+
+test "cdp.target: a disposed context cannot run queued timer callbacks" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const cdp = ctx.cdp();
+    const first = try ctx.loadBrowserContext(.{ .id = "BID-TIMER", .url = "cdp/dom1.html" });
+    const frame = (try testing.firstTarget(first)).mainFrame().?;
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.exec("globalThis.ranAfterClose = false; setTimeout(() => ranAfterClose = true, 0)", null);
+    }
+    try ctx.processMessage(.{ .id = 1, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = first.id } });
+    try cdp.browser.runMacrotasks();
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        try testing.expect(!(try scope.local.exec("ranAfterClose", null)).toBool());
+    }
+    try cdp.tick();
+}
+
+test "cdp.target: a selector wait advances a peer context's response" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const cdp = ctx.cdp();
+    _ = try cdp.createBrowserContext();
+    const first = cdp.browser_contexts.items[0];
+    _ = try cdp.createBrowserContext();
+    const second = cdp.browser_contexts.items[1];
+    try ctx.processMessage(.{ .id = 1, .method = "Target.createTarget", .params = .{ .browserContextId = first.id } });
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .browserContextId = second.id, .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html" } });
+    try ctx.processMessage(.{ .id = 3, .method = "LP.waitForSelector", .params = .{ .selector = ".missing", .timeout = 1000, .browserContextId = first.id } });
+    const frame = (try testing.firstTarget(second)).mainFrame().?;
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        try testing.expect((try scope.local.exec("document.querySelector('p')?.textContent === '1'", null)).toBool());
+    }
+    try ctx.expectSentError(-31998, "InternalError", .{ .id = 3 });
+}
