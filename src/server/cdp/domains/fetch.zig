@@ -230,7 +230,7 @@ const HeaderEntriesWriter = struct {
 fn pausedResponse(target: *CDP.Target, request_id: []const u8) !?*HttpClient.Transfer {
     const intercept_id = try idFromRequestId(request_id);
     const transfer_id = target.intercept_state.get(intercept_id) orelse return null;
-    const transfer = target.cdp.browser.http_client.findTransfer(transfer_id) orelse return null;
+    const transfer = target.session.http_client.findTransfer(transfer_id) orelse return null;
     if (transfer.state != .parked or transfer.state.parked != .intercept_response) {
         return null;
     }
@@ -263,7 +263,7 @@ fn continueResponse(cmd: *CDP.Command) !void {
         .url = transfer.req.url,
     });
 
-    try target.cdp.browser.http_client.continueInterceptedResponse(transfer);
+    try target.session.http_client.continueInterceptedResponse(transfer);
     return cmd.sendResult(null, .{});
 }
 
@@ -307,11 +307,11 @@ fn continueRequest(cmd: *CDP.Command) !void {
             else => {},
         };
         _ = target.intercept_state.remove(try idFromRequestId(params.requestId));
-        try target.cdp.browser.http_client.continueInterceptedResponse(transfer);
+        try target.session.http_client.continueInterceptedResponse(transfer);
         return cmd.sendResult(null, .{});
     }
 
-    const client = &target.cdp.browser.http_client;
+    const client = target.session.http_client;
     var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
@@ -378,7 +378,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         },
     })) orelse return error.InvalidParams;
 
-    const client = &target.cdp.browser.http_client;
+    const client = target.session.http_client;
     var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
@@ -444,7 +444,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         return error.NotImplemented;
     }
 
-    const client = &target.cdp.browser.http_client;
+    const client = target.session.http_client;
     var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
@@ -481,7 +481,7 @@ fn failRequest(cmd: *CDP.Command) !void {
         errorReason: network.ErrorReason,
     })) orelse return error.InvalidParams;
 
-    const client = &target.cdp.browser.http_client;
+    const client = target.session.http_client;
     var intercept_state = &target.intercept_state;
     const intercept_id = try idFromRequestId(params.requestId);
 
@@ -955,7 +955,7 @@ const ResponseStageProbe = struct {
 
     fn start(self: *ResponseStageProbe, bc: *CDP.BrowserContext, url: [:0]const u8) !void {
         const page = try bc.session.createPage();
-        try bc.cdp.browser.http_client.request(.{
+        try bc.session.http_client.request(.{
             .frame_id = page.frame_id,
             .loader_id = 7,
             .method = .GET,
@@ -976,7 +976,7 @@ const ResponseStageProbe = struct {
 
     // Ticks the client until `count` transfers are parked for interception.
     fn tickUntilPaused(bc: *CDP.BrowserContext, count: usize) !void {
-        const client = &bc.cdp.browser.http_client;
+        const client = bc.session.http_client;
         for (0..100) |_| {
             if (client.intercepted >= count) return;
             _ = try client.tick(20);
@@ -986,7 +986,7 @@ const ResponseStageProbe = struct {
 
     // Ticks the client until the request's done or error callback has run.
     fn tickUntilSettled(self: *const ResponseStageProbe, bc: *CDP.BrowserContext) !void {
-        const client = &bc.cdp.browser.http_client;
+        const client = bc.session.http_client;
         for (0..100) |_| {
             if (self.done or self.err != null) return;
             _ = try client.tick(20);
@@ -1057,7 +1057,7 @@ test "cdp.Fetch: response stage pauses a final response and continueResponse del
     try testing.expectEqual(null, probe.err);
     try testing.expect(probe.done);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: response stage reports a non-UTF-8 status text and headers as strings" {
@@ -1114,7 +1114,7 @@ test "cdp.Fetch: response stage failRequest fails the request without delivering
     try testing.expectEqual(error.TransferCanceled, probe.err.?);
     try testing.expectEqual(false, probe.done);
     try testing.expectEqual(0, probe.body.items.len);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: response stage fulfillRequest replaces the response" {
@@ -1143,7 +1143,7 @@ test "cdp.Fetch: response stage fulfillRequest replaces the response" {
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, "fulfilled", probe.body.items);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: fulfillRequest stores the response's cookies" {
@@ -1256,7 +1256,7 @@ test "cdp.Fetch: response stage pauses a redirect response, then the response it
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: response stage continueRequest ignores request overrides, but a url replaces a redirect's Location" {
@@ -1291,7 +1291,7 @@ test "cdp.Fetch: response stage continueRequest ignores request overrides, but a
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
     try testing.expectEqual(@embedFile("../../../browser/tests/fixtures/images/320x240.png").len, probe.body.items.len);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: continueRequest interceptResponse pauses the response without a Response pattern" {
@@ -1324,7 +1324,7 @@ test "cdp.Fetch: continueRequest interceptResponse pauses the response without a
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: continueRequest interceptResponse covers one hop, its redirect included" {
@@ -1365,7 +1365,7 @@ test "cdp.Fetch: continueRequest interceptResponse covers one hop, its redirect 
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
     try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000004"));
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: continueRequest interceptResponse false skips a matching Response pattern" {
@@ -1389,7 +1389,7 @@ test "cdp.Fetch: continueRequest interceptResponse false skips a matching Respon
     try testing.expectEqual(null, probe.err);
     try testing.expectEqualSlices(u8, repeat("1234567890", 10), probe.body.items);
     try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000002"));
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: response stage pauses a network failure with responseErrorReason" {
@@ -1421,7 +1421,7 @@ test "cdp.Fetch: response stage pauses a network failure with responseErrorReaso
     try ctx.expectSentResult(null, .{ .id = 3 });
     try probe.tickUntilSettled(bc);
     try testing.expectEqual(error.CouldntConnect, probe.err.?);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: response stage does not pause a stream it already delivered" {
@@ -1437,7 +1437,7 @@ test "cdp.Fetch: response stage does not pause a stream it already delivered" {
 
     try testing.expectEqual(null, probe.err);
     try testing.expectEqual(73, probe.body.items.len);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
     try testing.expectEqual(error.PausedEventNotSent, sentPausedParams(&ctx, "INT-0000000001"));
 }
 
@@ -1495,7 +1495,7 @@ test "cdp.Fetch: a 401 without WWW-Authenticate is delivered, not an auth challe
     try testing.expect(probe.done);
     try testing.expectEqual(401, probe.status);
     try testing.expectEqual(0, sentEventCount(&ctx, "Fetch.authRequired"));
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 fn expectAuthDeclinedDeliversResponse(response: []const u8) !void {
@@ -1532,7 +1532,7 @@ fn expectAuthDeclinedDeliversResponse(response: []const u8) !void {
     try testing.expect(probe.done);
     try testing.expectEqual(401, probe.status);
     try testing.expectEqualSlices(u8, "No", probe.body.items);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 test "cdp.Fetch: continueWithAuth Default delivers the 401" {
@@ -1578,7 +1578,7 @@ test "cdp.Fetch: continueWithAuth ProvideCredentials retries, a declined retry d
     try testing.expect(probe.done);
     try testing.expectEqual(401, probe.status);
     try testing.expectEqualSlices(u8, "No", probe.body.items);
-    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(0, bc.session.http_client.intercepted);
 }
 
 // Answers the challenge on `url` with u:p and expects the redirect target to
@@ -1652,7 +1652,7 @@ test "cdp.Fetch: continueWithAuth on a request-stage pause is rejected and keeps
     }
     try testing.expectEqual(false, probe.done);
     try testing.expectEqual(null, probe.err);
-    try testing.expectEqual(1, bc.cdp.browser.http_client.intercepted);
+    try testing.expectEqual(1, bc.session.http_client.intercepted);
 
     // Still paused at the request stage: continueRequest resumes it.
     try ctx.processMessage(.{ .id = 4, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });

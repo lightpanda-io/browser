@@ -100,10 +100,10 @@ fn configureCDP(cmd: *CDP.Command) !void {
         cmd.cdp.disable_set_cache_disabled = value;
     }
     if (params.obeyRobots) |value| {
-        try cmd.cdp.browser.http_client.obeyRobots(value);
+        try cmd.httpClient().obeyRobots(value);
     }
     if (params.httpVersion) |value| {
-        cmd.cdp.browser.http_client.setHttpVersion(value);
+        cmd.httpClient().setHttpVersion(value);
     }
 
     return cmd.sendResult(null, .{});
@@ -313,7 +313,7 @@ fn getStructuredData(cmd: anytype) !void {
 fn getContentSignal(cmd: anytype) !void {
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
-    const network = target.cdp.browser.http_client.network;
+    const network = target.session.http_client.network;
 
     const empty: []const Robots.ContentSignal = &.{};
     const robots_url = lp.URL.getRobotsUrl(cmd.arena, frame.url) catch {
