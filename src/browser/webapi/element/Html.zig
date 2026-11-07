@@ -348,7 +348,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
     }
 
     const tag = el.getTag();
-    switch (innerTextDisplay(self, tag)) {
+    switch (innerTextDisplay(self, tag, style_manager)) {
         .skip, .replaced => return,
         else => {},
     }
@@ -874,7 +874,7 @@ fn handleChildElement(
         return;
     }
 
-    const display = innerTextDisplay(he, tag);
+    const display = innerTextDisplay(he, tag, state.style_manager);
     switch (display) {
         .skip, .replaced => return,
         else => {},
@@ -928,7 +928,7 @@ fn enterBlock(he: *HtmlElement, tag: Element.Tag, state: *InnerTextState) std.Io
     return he.collectInnerText(state);
 }
 
-fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag) Display {
+fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag, style_manager: *StyleManager) Display {
     return switch (he._type) {
         .br => .@"inline", // handled before this point
         .p => .block_p,
@@ -945,21 +945,27 @@ fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag) Display {
         .script, .style, .template, .head, .base, .link, .meta, .title, .source, .track, .param, .area, .datalist => .skip,
         else => if (tag.isHiddenByUaStylesheet())
             .skip
-        else if (isInnerTextBlockTag(tag))
+        else if (isInnerTextBlockBox(he.asElement(), style_manager))
             .block
         else
             .@"inline",
     };
 }
 
-fn isInnerTextBlockTag(tag: Element.Tag) bool {
-    if (tag.isBlock()) {
-        return true;
+// The line-break rule follows the used box rather than the element's tag:
+// e.g. display:block on a span, or display:inline on a div. Flex/grid items
+// are blockified, even when their own computed box remains inline-level.
+fn isInnerTextBlockBox(el: *Element, style_manager: *StyleManager) bool {
+    // display:contents has no box of its own, even inside flex/grid.
+    if (style_manager.hasDisplayContents(el)) return false;
+    if (style_manager.isBlockLevel(el)) return true;
+    if (style_manager.boxParent(el)) |parent| {
+        return switch (style_manager.display(parent)) {
+            .flex, .grid => true,
+            else => false,
+        };
     }
-    return switch (tag) {
-        .summary, .details, .dialog, .menu, .dd, .dt, .form, .li => true,
-        else => false,
-    };
+    return false;
 }
 
 fn isAllAsciiWhitespace(s: []const u8) bool {

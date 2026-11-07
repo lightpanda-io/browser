@@ -12,7 +12,7 @@
 <p id=d4><span>Hello</span>
   <span>World</span></p>
 
-<style>.ihide { display: none }</style>
+<style>.ihide { display: none } .innerBlock { display: block }</style>
 <div id=d5>a<span class=ihide>X</span>b<span style="display:none">Y</span>c</div>
 <div id=d6>before<div class=ihide>deep <span>nested</span></div>after</div>
 
@@ -199,6 +199,30 @@
 
   d1.innerHTML = '<span style="visibility:hidden">X</span>Y';
   testing.expectEqual("Y", d1.innerText);
+
+  // innerText line breaks follow rendered display, not tag defaults.
+  d1.innerHTML = 'x<span style="display:block">block span</span>y';
+  testing.expectEqual("x\nblock span\ny", d1.innerText);
+  d1.innerHTML = 'x<div style="display:inline">inline div</div>y';
+  testing.expectEqual("xinline divy", d1.innerText);
+  d1.innerHTML = 'x<span class=innerBlock>class block</span>y';
+  testing.expectEqual("x\nclass block\ny", d1.innerText);
+
+  // display:contents has no box; inline-block is atomic inline.
+  d1.innerHTML = 'x<span style="display:contents">content</span>y';
+  testing.expectEqual("xcontenty", d1.innerText);
+  d1.innerHTML = 'x<span style="display:inline-block">inline block</span>y';
+  testing.expectEqual("xinline blocky", d1.innerText);
+
+  // Flex/grid children are blockified when collecting rendered text.
+  d1.innerHTML = '<span style="display:flex"><i>f1</i><i>f2</i></span>';
+  testing.expectEqual("f1\nf2", d1.innerText);
+  d1.innerHTML = '<span style="display:grid"><i>g1</i><i>g2</i></span>';
+  testing.expectEqual("g1\ng2", d1.innerText);
+
+  // The special two-break rule for paragraphs still applies.
+  d1.innerHTML = 'x<p style="display:inline">para</p>y';
+  testing.expectEqual("x\n\npara\n\ny", d1.innerText);
 
   // A closed <details> shows only its summary, loose text included.
   d1.innerHTML = '<details><summary>Q</summary>answer<p>more</p></details>';
