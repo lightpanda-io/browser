@@ -1424,6 +1424,10 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
 fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
     transfer.setCachedResponse(cached, cache_state);
+    if (cachedCorsError(transfer)) |err| {
+        transfer.failAsync(err);
+        return;
+    }
     if (self.interceptResponse(transfer, .cached)) {
         return;
     }
@@ -1832,6 +1836,19 @@ fn enforceCorsResponse(self: *Client, msg: http.Handles.MultiMessage, transfer: 
         return true;
     };
     return false;
+}
+
+// enforceCorsResponse runs on every response that came off the wire, but a
+// cache hit never gets there — and the cache belongs to the Browser, not to a
+// page or an origin. The stored headers go through the same origin check
+// here, or a response saved for one origin is readable by any other origin
+// that hits the entry.
+fn cachedCorsError(transfer: *Transfer) ?anyerror {
+    if (!(transfer._cors_cross_origin and transfer.req.request_mode == .cors)) {
+        return null;
+    }
+    CorsGate.validateResponse(transfer) catch |err| return err;
+    return null;
 }
 
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
@@ -7014,6 +7031,50 @@ test "HttpClient: a Range request and a URL with userinfo skip the cache" {
         try testing.expectEqual(false, try client.cacheLookup(&transfer));
         try testing.expectEqual(case.intent, std.meta.activeTag(transfer._cache_intent));
     }
+}
+
+test "HttpClient: a cross-origin CORS request is checked against a cached response" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    const arena = try pool.acquire(.small, "test");
+    defer arena.release();
+    var transfer = testTransfer(arena);
+    transfer.client = &client;
+    transfer.req.request_mode = .cors;
+    transfer.req.origin = "http://app.example";
+    transfer._cors_cross_origin = true;
+
+    // The entry as some other origin stored it: no ACAO header at all.
+    transfer.res.headers = &.{.{ .name = "cache-control", .value = "public, max-age=60" }};
+    const missing = cachedCorsError(&transfer);
+    try testing.expect(missing != null and missing.? == error.CorsBlocked);
+
+    // An ACAO naming yet another origin keeps the body just as closed.
+    transfer.res.headers = &.{
+        .{ .name = "cache-control", .value = "public, max-age=60" },
+        .{ .name = "access-control-allow-origin", .value = "https://other.example" },
+    };
+    const mismatch = cachedCorsError(&transfer);
+    try testing.expect(mismatch != null and mismatch.? == error.CorsBlocked);
+
+    // The entry stays readable by the origin the response names...
+    transfer.res.headers = &.{
+        .{ .name = "cache-control", .value = "public, max-age=60" },
+        .{ .name = "access-control-allow-origin", .value = "http://app.example" },
+    };
+    try testing.expect(null == cachedCorsError(&transfer));
+
+    // ...and by anyone, when the response says so itself.
+    transfer.res.headers = &.{.{ .name = "access-control-allow-origin", .value = "*" }};
+    try testing.expect(null == cachedCorsError(&transfer));
+
+    // A request that never left its own origin is not a CORS read.
+    transfer.res.headers = &.{};
+    transfer._cors_cross_origin = false;
+    try testing.expect(null == cachedCorsError(&transfer));
 }
 
 test "HttpClient: Vary sees the jar's cookies" {
