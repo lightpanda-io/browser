@@ -24,6 +24,7 @@ const Page = @import("../Page.zig");
 const URL = @import("URL.zig");
 const U = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
+const NavigationKind = @import("navigation/root.zig").NavigationKind;
 
 const Location = @This();
 
@@ -86,12 +87,20 @@ pub fn getHash(self: *const Location) []const u8 {
     return self._url.getHash();
 }
 
+pub fn historyHandling(target: *const Frame) NavigationKind {
+    if (target.isCompletelyLoaded()) {
+        return .{ .push = null };
+    }
+    // if the document isn't completely loaded, a navigation replaces its entry.
+    return .{ .replace = null };
+}
+
 pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !void {
     const target = self._frame;
     const new_url = try U.setPathname(target.url, pathname, frame.call_arena);
     return target.scheduleNavigation(new_url, .{
         .reason = .script,
-        .kind = .{ .push = null },
+        .kind = historyHandling(target),
     }, .{ .script = target });
 }
 
@@ -100,7 +109,7 @@ fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
     const new_url = try U.setSearch(target.url, search, frame.call_arena);
     return target.scheduleNavigation(new_url, .{
         .reason = .script,
-        .kind = .{ .push = null },
+        .kind = historyHandling(target),
     }, .{ .script = target });
 }
 
@@ -136,7 +145,7 @@ fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
 
     return target.scheduleNavigation(target_url, .{
         .reason = .script,
-        .kind = .{ .replace = null },
+        .kind = historyHandling(target),
     }, .{ .script = target });
 }
 
@@ -145,21 +154,21 @@ fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
 // document when a script navigates another same-origin window, as in
 // iframe.contentWindow.location.href = "page.html". V8 only exposes the
 // incumbent context, which is the entry one for a call made by a script.
-fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) ![]const u8 {
-    const caller = frame.js.getIncumbent();
+fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) !?[]const u8 {
+    const caller = frame.js.getIncumbent() orelse return null;
     if (caller == self._frame) {
         return url;
     }
-    return U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
+    return try U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
 }
 
 pub fn assign(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    const target_url = try self.parseFromCaller(url, frame);
-    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
+    const target_url = try self.parseFromCaller(url, frame) orelse return;
+    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(self._frame) }, .{ .script = self._frame });
 }
 
 pub fn replace(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    const target_url = try self.parseFromCaller(url, frame);
+    const target_url = try self.parseFromCaller(url, frame) orelse return;
     return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = self._frame });
 }
 

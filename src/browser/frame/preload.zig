@@ -168,6 +168,8 @@ test "preload: prescan" {
         \\<script type="application/json" src="/serve-count/unit_data.js"></script>
         \\<script src="data:text/javascript,window.unit_data_url = 1;"></script>
         \\<script type="module" src="data:text/javascript,window.unit_data_module = 1;"></script>
+        \\<script src=" "></script>
+        \\<script type="module" src=" "></script>
         \\<script>var trap = "</scr" + "ipt><script src=/serve-count/unit_inline.js>";</script>
         \\<!-- <script src="/serve-count/unit_commented.js"></script> -->
         \\<template><script src="/serve-count/unit_templated.js"></script></template>

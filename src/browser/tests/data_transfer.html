@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <head>
   <title>Test DataTransfer Web API</title>
+  <meta name=lp-mode content=test>
   <script src="./testing.js"></script>
 </head>
 
@@ -11,7 +12,7 @@
   testing.expectEqual(0, dt.items.length);
   testing.expectEqual(0, dt.files.length);
   testing.expectEqual("none", dt.dropEffect);
-  testing.expectEqual("uninitialized", dt.effectAllowed);
+  testing.expectEqual("none", dt.effectAllowed);
   testing.expectEqual(true, dt.items instanceof DataTransferItemList);
   testing.expectEqual(true, dt.files instanceof FileList);
 }
@@ -20,14 +21,16 @@
 <script id=effects>
 {
   const dt = new DataTransfer();
-  dt.dropEffect = "copy";
-  testing.expectEqual("copy", dt.dropEffect);
-  dt.dropEffect = "bogus"; // invalid ignored
-  testing.expectEqual("copy", dt.dropEffect);
-  dt.effectAllowed = "copyMove";
-  testing.expectEqual("copyMove", dt.effectAllowed);
-  dt.effectAllowed = "nope"; // invalid ignored
-  testing.expectEqual("copyMove", dt.effectAllowed);
+  testing.diverges("Chrome ignores both setters outside a drag", () => {
+    dt.dropEffect = "copy";
+    testing.expectEqual("copy", dt.dropEffect);
+    dt.dropEffect = "bogus"; // invalid ignored
+    testing.expectEqual("copy", dt.dropEffect);
+    dt.effectAllowed = "copyMove";
+    testing.expectEqual("copyMove", dt.effectAllowed);
+    dt.effectAllowed = "nope"; // invalid ignored
+    testing.expectEqual("copyMove", dt.effectAllowed);
+  });
 }
 </script>
 
@@ -80,14 +83,24 @@
 }
 </script>
 
-<script id=get_as_string>
-{
+<script id=get_as_string type=module>
+  const state = await testing.async();
   const dt = new DataTransfer();
   dt.setData("text/plain", "world");
   let got = null;
-  dt.items[0].getAsString(function (s) { got = s; });
-  testing.expectEqual("world", got);
-}
+  // The callback runs in a queued task, not before.
+  dt.items[0].getAsString((s) => {
+    got = s;
+    state.resolve();
+  });
+  const sync = got;
+  await Promise.resolve();
+  const afterMicrotask = got;
+  await state.done(() => {
+    testing.expectEqual(null, sync);
+    testing.expectEqual(null, afterMicrotask);
+    testing.expectEqual("world", got);
+  });
 </script>
 
 <script id=remove_and_clear>
@@ -125,4 +138,40 @@
   }
   testing.expectEqual("text/a,text/b", kinds.join(","));
 }
+</script>
+
+<!--
+A structured-cloned FileList holds a ref on each of its Files: a File must
+outlive its JS wrapper while the list can still reach it.
+-->
+<script id=files_clone_holds_files type=module>
+  const state = await testing.async();
+
+  const dt = new DataTransfer();
+  for (let i = 0; i < 4; i++) {
+    dt.items.add(new File(['x'], 'kept' + i + '.txt'));
+  }
+  const fl = structuredClone(dt.files);
+  // wrap each File once, without keeping the wrapper
+  for (const file of fl) {
+    file.name;
+  }
+
+  // Fill the young generation a few times over so the File wrappers are
+  // collected, then make Blobs, which reuse the arena of any File that the
+  // collection freed.
+  for (let round = 0; round < 4; round++) {
+    const junk = [];
+    for (let i = 0; i < 200000; i++) {
+      junk.push({ a: i, b: [i, i] });
+    }
+  }
+  for (let i = 0; i < 64; i++) {
+    new Blob(['y'.repeat(100)]);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['kept0.txt', 'kept1.txt', 'kept2.txt', 'kept3.txt'], Array.from(fl, (f) => f.name));
+  });
 </script>

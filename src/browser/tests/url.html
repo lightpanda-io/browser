@@ -647,6 +647,20 @@
     url.host = '[::1.2.3.]';       // broken IPv6 literal
     testing.expectEqual('example.com', url.host);
   }
+
+  // The port is its leading digits; a bad port still sets the host and leaves
+  // the existing port alone.
+  {
+    const url = new URL('https://example.com:81/path');
+    url.host = 'a.com:8080abc';
+    testing.expectEqual('https://a.com:8080/path', url.href);
+    url.host = 'b.com:abc';
+    testing.expectEqual('https://b.com:8080/path', url.href);
+    url.host = 'c.com:65536';
+    testing.expectEqual('https://c.com:8080/path', url.href);
+    url.host = 'd.com:\t90\n';
+    testing.expectEqual('https://d.com:90/path', url.href);
+  }
 </script>
 
 <script id=port>
@@ -707,6 +721,37 @@
     url.port = '65535';
     testing.expectEqual('65535', url.port);
   }
+
+  // The port is its leading digits, after tab and newline removal.
+  {
+    const url = new URL('https://example.com/path');
+    url.port = '8080abc';
+    testing.expectEqual('8080', url.port);
+    url.port = '\t81\n';
+    testing.expectEqual('81', url.port);
+    url.port = '+82';
+    testing.expectEqual('81', url.port);
+    url.port = ' 82';
+    testing.expectEqual('81', url.port);
+    url.port = '\t';
+    testing.expectEqual('81', url.port);
+    url.port = '0443';
+    testing.expectEqual('', url.port);
+  }
+
+  // null is stringified to "null", which has no digits and is ignored.
+  {
+    const url = new URL('https://example.com:8080/path');
+    url.port = null;
+    testing.expectEqual('8080', url.port);
+  }
+
+  // A file URL can't have a port.
+  {
+    const url = new URL('file:///tmp/x');
+    url.port = '8080';
+    testing.expectEqual('file:///tmp/x', url.href);
+  }
 </script>
 
 <script id=protocol>
@@ -749,6 +794,13 @@
     url.protocol = 'ssh';
     testing.expectEqual('http:', url.protocol);
     testing.expectEqual('http://example.com/path', url.href);
+  }
+
+  // The scheme ends at the first ':'.
+  {
+    const url = new URL('https://example.com/path');
+    url.protocol = 'ftp:x';
+    testing.expectEqual('ftp://example.com/path', url.href);
   }
 </script>
 

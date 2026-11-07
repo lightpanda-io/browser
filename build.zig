@@ -43,6 +43,7 @@ pub fn build(b: *Build) !void {
     const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
 
     const prebuilt_v8_path_option = b.option([]const u8, "prebuilt_v8_path", "Path to a prebuilt libc_v8.a or libc_v8.so");
+    const prebuilt_rust_path = b.option([]const u8, "prebuilt_rust_path", "Path to a prebuilt liblightpanda_ffi.a (skips invoking cargo)");
 
     const dev_fast = b.option(bool, "dev_fast", "Linux debug builds: shared V8 + self-hosted backend. Implies -Dshared_v8, -Duse_llvm=false and a bundled-CRT target") orelse
         (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64 and
@@ -131,7 +132,7 @@ pub fn build(b: *Build) !void {
     const v8_for_link = if (orderfile != null and v8_archive != null and !shared_v8) markHotSections(b, v8_archive.?) else v8_archive;
     linkV8(b, lightpanda_module, enable_asan, enable_tsan, v8_for_link, shared_v8);
     linkCurl(b, lightpanda_module, deps, enable_tsan, orderfile != null);
-    linkRust(b, lightpanda_module, deps);
+    linkRust(b, lightpanda_module, deps, prebuilt_rust_path);
     linkZenai(b, lightpanda_module);
     linkIsocline(b, lightpanda_module);
     linkSqlite(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile != null);
@@ -186,6 +187,16 @@ pub fn build(b: *Build) !void {
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.addPassthruArgs();
         const run_step = b.step("snapshot_creator", "Generate a v8 snapshot");
+        run_step.dependOn(&run_cmd.step);
+    }
+
+    {
+        // fixture server, for opening src/browser/tests in another browser
+        const exe = addExe(b, exe_config, "lightpanda-test-server", "test_server_check", "src/main_test_server.zig");
+        const run_cmd = b.addRunArtifact(exe);
+        // fixtures are served relative to the cwd
+        run_cmd.setCwd(b.path("."));
+        const run_step = b.step("test-server", "Serve the test fixtures on 127.0.0.1:9582 (WebSocket 9584)");
         run_step.dependOn(&run_cmd.step);
     }
 
@@ -422,7 +433,12 @@ fn linkV8(
     mod.addImport("v8", dep.module("v8"));
 }
 
-fn linkRust(b: *Build, mod: *Build.Module, deps: Deps) void {
+fn linkRust(b: *Build, mod: *Build.Module, deps: Deps, prebuilt_rust_path: ?[]const u8) void {
+    if (prebuilt_rust_path) |path| {
+        mod.addObjectFile(.{ .cwd_relative = path });
+        return;
+    }
+
     // Cargo's "dev" profile writes to target/debug.
     const profile, const out_subdir = if (deps.optimize == .debug) .{ "dev", "debug" } else .{ "release", "release" };
 

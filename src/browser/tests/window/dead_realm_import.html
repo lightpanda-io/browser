@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+import() in a function whose module realm is gone. The function can outlive
+its realm in another window: here the support page hands its functions to us,
+then we re-navigate it in place or navigate it. Like Chrome, import() returns
+a promise of the dead realm that rejects, and nothing is fetched.
+-->
+<script>
+  function deadRealmReady(key) {
+    return new Promise((resolve) => {
+      window.addEventListener('message', function onMessage(e) {
+        if (e.data && e.data.from === key) {
+          window.removeEventListener('message', onMessage);
+          resolve(window[key]);
+        }
+      });
+    });
+  }
+
+  function deadRealmUrl(key) {
+    return testing.BASE_URL + 'window/support/dead_realm.html?key=' + key;
+  }
+
+  // Not `await promise`: that would go through the dead realm's then, as a
+  // job of the dead realm, and such jobs are dropped. Our own then queues our
+  // handlers as our jobs.
+  function settle(promise) {
+    return new Promise((resolve) => {
+      Promise.prototype.then.call(promise, (value) => resolve({ value }), (error) => resolve({ error }));
+    });
+  }
+
+  function expectInactiveRejection(result) {
+    testing.expectEqual(undefined, result.value);
+    testing.expectEqual('Error', result.error.name);
+    testing.expectEqual('Cannot import module from an inactive browsing context.', result.error.message);
+  }
+</script>
+
+<script id=popup_renavigated type=module>
+  const state = await testing.async();
+
+  const ready = deadRealmReady('dri_popup');
+  testing.expectTrue(window.open(deadRealmUrl('dri_popup'), 'dri_popup') != null);
+  const dead = await ready;
+
+  // in-place re-navigation of the named popup
+  const next = deadRealmReady('dri_popup_next');
+  window.open(deadRealmUrl('dri_popup_next'), 'dri_popup');
+  await next;
+
+  const result = await settle(dead.dynamicImport());
+  state.resolve();
+  await state.done(() => {
+    expectInactiveRejection(result);
+  });
+</script>
+
+<script id=iframe_navigated type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const ready = deadRealmReady('dri_iframe_nav');
+  iframe.src = deadRealmUrl('dri_iframe_nav');
+  document.body.appendChild(iframe);
+  const dead = await ready;
+
+  const next = deadRealmReady('dri_iframe_nav_next');
+  iframe.src = deadRealmUrl('dri_iframe_nav_next');
+  await next;
+
+  const result = await settle(dead.dynamicImport());
+  state.resolve();
+  await state.done(() => {
+    expectInactiveRejection(result);
+  });
+</script>
+</body>

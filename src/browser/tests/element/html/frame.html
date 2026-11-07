@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../testing.js"></script>
+
+<script id=frame_interface>
+{
+  const frame = document.createElement('frame');
+  testing.expectTrue(frame instanceof HTMLFrameElement);
+  testing.expectTrue(frame instanceof HTMLElement);
+  testing.expectEqual('FRAME', frame.tagName);
+  testing.expectEqual('[object HTMLFrameElement]', Object.prototype.toString.call(frame));
+
+  // zone.js patches the on* properties of every element prototype in turn.
+  testing.expectTrue(Object.getPrototypeOf(HTMLFrameElement.prototype) === HTMLElement.prototype);
+}
+</script>
+
+<script id=frame_reflection>
+{
+  const frame = document.createElement('frame');
+  testing.expectEqual('', frame.name);
+  testing.expectEqual('', frame.src);
+  testing.expectEqual(false, frame.noResize);
+  testing.expectEqual('', frame.marginHeight);
+
+  frame.name = 'top';
+  frame.scrolling = 'no';
+  frame.frameBorder = '0';
+  frame.noResize = true;
+  frame.marginWidth = '4';
+  frame.src = 'page.html';
+  frame.longDesc = 'about.html';
+  testing.expectEqual('top', frame.getAttribute('name'));
+  testing.expectEqual('no', frame.getAttribute('scrolling'));
+  testing.expectEqual('0', frame.getAttribute('frameborder'));
+  testing.expectEqual('', frame.getAttribute('noresize'));
+  testing.expectEqual('4', frame.getAttribute('marginwidth'));
+  testing.expectEqual(testing.BASE_URL + 'element/html/page.html', frame.src);
+  testing.expectEqual(testing.BASE_URL + 'element/html/about.html', frame.longDesc);
+
+  frame.marginHeight = null;
+  testing.expectEqual('', frame.getAttribute('marginheight'));
+}
+</script>

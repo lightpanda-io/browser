@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=while_parsing>
+  {
+    const list = performance.getEntriesByType('navigation');
+    testing.expectEqual(1, list.length);
+    const e = list[0];
+    testing.expectEqual(true, e instanceof PerformanceNavigationTiming);
+    testing.expectEqual(true, e instanceof PerformanceResourceTiming);
+    testing.expectEqual(true, e instanceof PerformanceEntry);
+    testing.expectEqual(location.href, e.name);
+    testing.expectEqual('navigation', e.entryType);
+    testing.expectEqual('navigation', e.initiatorType);
+    testing.expectEqual('navigate', e.type);
+    testing.expectEqual(0, e.redirectCount);
+    testing.expectEqual(0, e.startTime);
+    testing.expectEqual(200, e.responseStatus);
+    testing.expectEqual('text/html', e.contentType);
+    testing.expectEqual('http/1.1', e.nextHopProtocol);
+    testing.expectEqual(0, e.redirectStart);
+    testing.expectEqual(0, e.redirectEnd);
+    testing.expectEqual(0, e.unloadEventStart);
+    testing.expectEqual(0, e.unloadEventEnd);
+    testing.expectEqual(true, e.fetchStart >= 0);
+    testing.expectEqual(true, e.fetchStart <= e.domainLookupStart);
+    testing.expectEqual(true, e.domainLookupEnd <= e.connectStart);
+    testing.expectEqual(true, e.connectEnd <= e.requestStart);
+    testing.expectEqual(true, e.requestStart <= e.responseStart);
+    testing.expectEqual(true, e.responseStart <= e.responseEnd);
+    testing.expectEqual(true, e.responseEnd <= performance.now());
+    testing.expectEqual(true, e.decodedBodySize > 0);
+
+    // The document is still parsing and hasn't loaded.
+    testing.expectEqual(0, e.domInteractive);
+    testing.expectEqual(0, e.domContentLoadedEventStart);
+    testing.expectEqual(0, e.domComplete);
+    testing.expectEqual(0, e.loadEventEnd);
+    testing.expectEqual(0, e.duration);
+
+    testing.expectEqual(e, performance.getEntries()[0]);
+    testing.expectEqual(e, performance.getEntriesByName(location.href)[0]);
+    testing.expectEqual(1, performance.getEntriesByName(location.href, 'navigation').length);
+    testing.expectEqual(0, performance.getEntriesByName(location.href, 'resource').length);
+    // Not a resource of its own document.
+    testing.expectEqual(true, performance.getEntriesByType('resource').every((r) => r.name !== location.href));
+  }
+</script>
+
+<script id=dom_content_loaded>
+  {
+    let during = null;
+    document.addEventListener('DOMContentLoaded', () => {
+      const e = performance.getEntriesByType('navigation')[0];
+      during = {
+        domInteractive: e.domInteractive,
+        start: e.domContentLoadedEventStart,
+        end: e.domContentLoadedEventEnd,
+      };
+    });
+    testing.onload(() => {
+      testing.expectEqual(true, during.domInteractive > 0);
+      testing.expectEqual(true, during.start >= during.domInteractive);
+      // Still inside the handler.
+      testing.expectEqual(0, during.end);
+    });
+  }
+</script>
+
+<script id=after_load>
+  testing.async().then((state) => {
+    let during = null;
+    window.addEventListener('load', () => {
+      during = performance.getEntriesByType('navigation')[0].loadEventEnd;
+      setTimeout(() => state.resolve(), 0);
+    });
+    state.done(() => {
+      const e = performance.getEntriesByType('navigation')[0];
+      testing.expectEqual(0, during);
+      testing.expectEqual(true, e.domContentLoadedEventStart <= e.domContentLoadedEventEnd);
+      testing.expectEqual(true, e.domContentLoadedEventEnd <= e.domComplete);
+      testing.expectEqual(true, e.domComplete <= e.loadEventStart);
+      testing.expectEqual(true, e.loadEventStart <= e.loadEventEnd);
+      testing.expectEqual(true, e.responseEnd <= e.domInteractive);
+      testing.expectEqual(e.loadEventEnd, e.duration);
+
+      const json = e.toJSON();
+      testing.expectEqual(location.href, json.name);
+      testing.expectEqual('navigation', json.entryType);
+      testing.expectEqual('navigate', json.type);
+      testing.expectEqual(0, json.redirectCount);
+      testing.expectEqual(e.domComplete, json.domComplete);
+      testing.expectEqual(e.loadEventEnd, json.loadEventEnd);
+      testing.expectEqual(e.responseEnd, json.responseEnd);
+      testing.expectEqual(true, JSON.stringify(e).includes('"entryType":"navigation"'));
+    });
+  });
+</script>
+
+<script id=observer_buffered>
+  testing.async().then((state) => {
+    new PerformanceObserver((list, observer) => {
+      observer.disconnect();
+      state.resolve(list.getEntries());
+    }).observe({ type: 'navigation', buffered: true });
+    state.done((entries) => {
+      testing.expectEqual(1, entries.length);
+      testing.expectEqual(performance.getEntriesByType('navigation')[0], entries[0]);
+    });
+  });
+</script>
+
+<iframe id=redirected src="/redirect-no-fragment"></iframe>
+<script id=iframe_redirect>
+  testing.async().then((state) => {
+    const iframe = document.getElementById('redirected');
+    iframe.addEventListener('load', () => state.resolve());
+    state.done(() => {
+      const list = iframe.contentWindow.performance.getEntriesByType('navigation');
+      testing.expectEqual(1, list.length);
+      const e = list[0];
+      testing.expectEqual(testing.ORIGIN + '/redirect-target', e.name);
+      testing.expectEqual(iframe.contentWindow.location.href, e.name);
+      testing.expectEqual(1, e.redirectCount);
+      testing.expectEqual(true, e.redirectEnd > 0);
+      testing.expectEqual(true, e.redirectStart <= e.redirectEnd);
+      testing.expectEqual(true, e.redirectEnd <= e.fetchStart);
+      testing.expectEqual(true, e.loadEventEnd > 0);
+
+      // The parent sees the same fetch as an iframe resource.
+      const r = performance.getEntriesByName(testing.ORIGIN + '/redirect-no-fragment', 'resource');
+      testing.expectEqual(1, r.length);
+      testing.expectEqual('iframe', r[0].initiatorType);
+    });
+  });
+</script>

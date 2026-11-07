@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title id="title">ignored reasons</title>
+  </head>
+  <body>
+    <div id="ah" aria-hidden="true"><p id="ah-child">x</p></div>
+    <div id="ah-upper" aria-hidden="TRUE"><p>x</p></div>
+    <div aria-hidden="true"><div id="ah-false" aria-hidden="false"><button>b</button></div></div>
+    <div id="inert" inert><p id="inert-child">x</p></div>
+    <div id="vh" style="visibility: hidden"><p id="vh-child">x</p></div>
+    <div id="dn" style="display: none"><p id="dn-child">x</p></div>
+
+    <div aria-hidden="true" style="display: none"><p id="ah-over-dn">x</p></div>
+    <div style="display: none"><p id="dn-over-ah" aria-hidden="true">x</p></div>
+    <div aria-hidden="true"><p id="ah-over-inert" inert>x</p></div>
+    <div inert><p id="inert-over-ah" aria-hidden="true">x</p></div>
+    <div inert><div style="display: none"><p id="inert-over-dn">x</p></div></div>
+    <div style="display: none"><div inert><p id="dn-over-inert">x</p></div></div>
+    <div inert style="visibility: hidden"><p id="inert-over-vh">x</p></div>
+    <svg aria-hidden="true"><circle id="svg-child" r="1"></circle></svg>
+  </body>
+</html>

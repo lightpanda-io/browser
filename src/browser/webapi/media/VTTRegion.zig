@@ -65,7 +65,7 @@ pub fn getId(self: *const VTTRegion) []const u8 {
     return self._id;
 }
 
-pub fn setId(self: *VTTRegion, value: []const u8, frame: *Frame) !void {
+fn setId(self: *VTTRegion, value: []const u8, frame: *Frame) !void {
     self._id = try frame.dupeString(value);
 }
 
@@ -73,7 +73,7 @@ fn getWidth(self: *const VTTRegion) f64 {
     return self._width;
 }
 
-pub fn setWidth(self: *VTTRegion, value: f64) !void {
+fn setWidth(self: *VTTRegion, value: f64) !void {
     self._width = try percentage(value);
 }
 
@@ -81,7 +81,7 @@ fn getLines(self: *const VTTRegion) u32 {
     return self._lines;
 }
 
-pub fn setLines(self: *VTTRegion, value: u32) void {
+fn setLines(self: *VTTRegion, value: u32) void {
     self._lines = value;
 }
 
@@ -89,7 +89,7 @@ fn getRegionAnchorX(self: *const VTTRegion) f64 {
     return self._region_anchor_x;
 }
 
-pub fn setRegionAnchorX(self: *VTTRegion, value: f64) !void {
+fn setRegionAnchorX(self: *VTTRegion, value: f64) !void {
     self._region_anchor_x = try percentage(value);
 }
 
@@ -97,7 +97,7 @@ fn getRegionAnchorY(self: *const VTTRegion) f64 {
     return self._region_anchor_y;
 }
 
-pub fn setRegionAnchorY(self: *VTTRegion, value: f64) !void {
+fn setRegionAnchorY(self: *VTTRegion, value: f64) !void {
     self._region_anchor_y = try percentage(value);
 }
 
@@ -105,7 +105,7 @@ fn getViewportAnchorX(self: *const VTTRegion) f64 {
     return self._viewport_anchor_x;
 }
 
-pub fn setViewportAnchorX(self: *VTTRegion, value: f64) !void {
+fn setViewportAnchorX(self: *VTTRegion, value: f64) !void {
     self._viewport_anchor_x = try percentage(value);
 }
 
@@ -113,7 +113,7 @@ fn getViewportAnchorY(self: *const VTTRegion) f64 {
     return self._viewport_anchor_y;
 }
 
-pub fn setViewportAnchorY(self: *VTTRegion, value: f64) !void {
+fn setViewportAnchorY(self: *VTTRegion, value: f64) !void {
     self._viewport_anchor_y = try percentage(value);
 }
 

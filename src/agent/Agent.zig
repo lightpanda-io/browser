@@ -193,6 +193,7 @@ synthetic_tool_call_id: u32 = 0,
 /// and the navigation a read tool's `url` made.
 save_calls: std.ArrayList(SavedCall) = .empty,
 capturing_for_save: bool = false,
+prompt_target: ?PromptTarget = null,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
 /// (one-shot) mode so wrappers can capture per-task cost.
@@ -319,18 +320,18 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
-    browser_tools.search_engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
+    browser_tools.search.engine = opts.search_engine orelse settings.resolveSearchEngine(remembered);
     // A keyless engine over its cap fails every search; silence reads as a bad
     // agent rather than a missing key.
-    if (browser_tools.searchKeyStatus(browser_tools.search_engine)) |key| switch (key.state) {
+    if (browser_tools.search.keyStatus(browser_tools.search.engine)) |key| switch (key.state) {
         .set => {},
         .keyless => log.info(.app, "keyless search endpoint", .{ .env_var = key.env_var, .limit = "rate-limited per client IP" }),
-        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search_engine) }),
+        .missing => log.warn(.app, "search key missing", .{ .env_var = key.env_var, .engine = @tagName(browser_tools.search.engine) }),
     };
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
+            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search.engine }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -463,19 +464,17 @@ fn globalTools() []const ProviderTool {
 
 /// Called from the sighandler thread. Flips `cancel_requested` for the LLM
 /// streaming/HTTP probe and any code polling `Session.isCancelled`, then asks
-/// V8 to bail out of whatever JS is running. Both hooks are thread-safe
-/// (`Env.terminate` takes a mutex); no terminal touches from this context.
+/// V8 to bail out of whatever JS is running. No terminal touches from this
+/// context.
 fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
     self.http_interrupt.fire();
     {
         self.script_runtime_mutex.lockUncancelable(lp.io);
         defer self.script_runtime_mutex.unlock(lp.io);
-        if (self.active_script_runtime) |runtime| {
-            runtime.terminate();
-        }
+        if (self.active_script_runtime) |runtime| runtime.cancel();
     }
-    self.ts.browser.env.terminate();
+    self.ts.browser.env.requestTerminate();
 }
 
 /// Lives in main's stack so it can be registered with the sighandler before the
@@ -502,6 +501,10 @@ pub const SigBridge = struct {
 fn beforeTurnRequest(ctx: *anyopaque) void {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     self.conversation.compactForRequest();
+    // A delta builds on the full tree, so the model must still have it whole.
+    if (self.ts.tree_seen.key != null and !self.conversation.holdsResult("tree", self.ts.tree_seen.text.items)) {
+        self.ts.tree_seen.key = null;
+    }
     beforeRequest(ctx);
 }
 
@@ -671,6 +674,9 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         else
             self.terminal.printInfo("(no response from model)", .{});
     }
+    if (self.prompt_target) |target| {
+        if (target.data) |d| self.printData(target.cmd.tool, d);
+    }
     self.conversation.prune();
     return true;
 }
@@ -765,21 +771,68 @@ fn runRepl(self: *Agent) void {
         switch (cmd) {
             .comment => continue :repl,
             .llm => |lc| {
-                var label_buf: [32]u8 = undefined;
-                const label = std.mem.print(&label_buf, "/{s}", .{@tagName(lc)}) catch "/?";
-                if (!self.requireLlm(label)) continue :repl;
-                _ = self.runTurn(.{ .prompt = lc.prompt(), .record_comment = line, .capture_for_save = true, .label = label });
+                _ = self.runPromptTurn(aa, @tagName(lc), lc.prompt(), line);
             },
-            .tool_call => |tc| {
+            .prompt => |p| {
+                var label_buf: [32]u8 = undefined;
+                const label = std.mem.print(&label_buf, "/{s}", .{@tagName(p.tool)}) catch "/?";
+                if (self.credential == null) {
+                    self.terminal.printError("{s}: text without key=value is a prompt and needs an LLM. Pass the fields as key=value (/help {s}), or " ++ llm_setup_hint ++ ".", .{ label, @tagName(p.tool) });
+                    continue :repl;
+                }
+                const prompt = promptCommandText(aa, p) catch continue :repl;
+                self.prompt_target = .{ .cmd = p, .arena = aa };
+                defer self.prompt_target = null;
+                _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
+            },
+            .tool_call => |parsed| {
+                var tc = parsed;
+                if (tc.tool == .login and tc.args == null) {
+                    const names = browser_tools.lpEnvNames(aa) catch continue :repl;
+                    const has_key = zenai.typesafe.Client.envApiKey(lp.environ()) != null;
+                    switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
+                        .args => |args| tc.args = args,
+                        .prompt => |prompt| {
+                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                            _ = self.runPromptTurn(aa, tc.name(), prompt, line);
+                            continue :repl;
+                        },
+                        .usage => |message| {
+                            self.terminal.printError("{s}", .{message});
+                            continue :repl;
+                        },
+                    }
+                }
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
                 const result = self.runCommand(aa, tc);
                 self.terminal.endTool();
+
+                // Tried before checking the key: the replay path needs none.
+                if (result.failure == .missing_api_key) {
+                    // No prompt means no model may see this command (a literal
+                    // password), so it is not recorded into the conversation
+                    // either.
+                    const prompt = Command.fallbackPrompt(aa, tc) catch null orelse {
+                        self.printCommandResult(tc, result);
+                        continue :repl;
+                    };
+                    self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                    if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
+                        self.printCommandResult(tc, result);
+                    }
+                    continue :repl;
+                }
+
                 self.printCommandResult(tc, result);
                 if (!result.is_error) {
-                    const replayable = Command.fromToolCall(tc.tool, withSelector(aa, tc.args, result.selector));
+                    const replayable = Command.fromToolCall(tc.tool, replayArgs(aa, tc.args, .{
+                        .selector = result.selector,
+                        .replay_args = result.replay_args,
+                    }));
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args, result.navigated) orelse replayable);
                 }
-                self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
+                const seen = tc.forModel(aa, command_text) catch continue :repl;
+                self.recordSlashToolCall(seen.line, tc.name(), seen.args, result) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
             },
@@ -846,9 +899,9 @@ fn handleStream(self: *Agent, rest: []const u8) void {
 /// `/searchEngine`: bare prints the current engine; an argument sets and
 /// persists it, warning when the chosen engine's API key is unset.
 fn handleSearchEngine(self: *Agent, rest: []const u8) void {
-    self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
-    const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
-    const key = browser_tools.searchKeyStatus(selected) orelse return;
+    self.setEnumOption("searchEngine", &browser_tools.search.engine, rest);
+    const selected = std.meta.stringToEnum(browser_tools.search.Engine, rest) orelse return;
+    const key = browser_tools.search.keyStatus(selected) orelse return;
     switch (key.state) {
         .set => {},
         .keyless => self.terminal.printInfo("{s} is not set; using the keyless endpoint (rate-limited per client IP)", .{key.env_var}),
@@ -879,7 +932,8 @@ fn handleUsage(self: *Agent) void {
 
 /// Drop everything tied to the conversation: history (system prompt re-seeds
 /// lazily next turn), cumulative usage, the recorded action buffer and its save
-/// destination, and DOM node IDs. Shared by `/clear` and `/reset`.
+/// destination, DOM node IDs, and the tree the next `tree delta` diffs against.
+/// Shared by `/clear` and `/reset`.
 fn clearConversation(self: *Agent) void {
     self.conversation.rollback(0);
     self.save_buffer.reset();
@@ -887,6 +941,7 @@ fn clearConversation(self: *Agent) void {
     self.save_path = null;
     self.total_usage = .{};
     self.ts.registry.reset();
+    self.ts.tree_seen.key = null;
 }
 
 /// Forget the conversation while leaving the browser session live — loaded page
@@ -926,7 +981,16 @@ const provider_off_keyword = "null";
 
 /// Keyless local providers (placeholder key), so reachability needs a live probe.
 /// Parallel to `local_completable`.
-const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
+const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp, .llmd };
+
+/// Send a prebuilt prompt as a turn, the way `/logout` and the fallback for
+/// `/acceptCookies` and `/login` do. False when there is no model to send to.
+fn runPromptTurn(self: *Agent, arena: std.mem.Allocator, name: []const u8, prompt: []const u8, line: []const u8) bool {
+    const label = arena.print("/{s}", .{name}) catch "/?";
+    if (!self.requireLlm(label)) return false;
+    _ = self.runTurn(.{ .prompt = prompt, .record_comment = line, .capture_for_save = true, .label = label });
+    return true;
+}
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
     if (self.credential == null) {
@@ -967,7 +1031,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search_engine })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search.engine })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -1048,6 +1112,10 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     }
     if (provider == .llama_cpp and settings.detectLocalProvider(self.allocator, .llama_cpp, self.model_base_url) == null) {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
+        return;
+    }
+    if (provider == .llmd and settings.detectLocalProvider(self.allocator, .llmd, self.model_base_url) == null) {
+        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llmd_default_base_url});
         return;
     }
     self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {
@@ -1170,8 +1238,55 @@ const PathAndMode = struct { path: []const u8, mode: save.Mode };
 
 const SavedCall = struct {
     selector: ?[]const u8 = null,
+    replay_args: ?[]const u8 = null,
     navigated: bool = false,
+    /// Pinned prompt args as the call ran (conversation arena).
+    args: ?std.json.Value = null,
 };
+
+/// Active `/click the sign in…`-style turn: one target call, read-only tools only.
+const PromptTarget = struct {
+    cmd: Command.Prompt,
+    /// REPL line arena; outlives the turn.
+    arena: std.mem.Allocator,
+    done: bool = false,
+    data: ?[]const u8 = null,
+};
+
+fn urlArg(args: ?std.json.Value) ?std.json.Value {
+    const a = args orelse return null;
+    if (a != .object) return null;
+    const url = a.object.get("url") orelse return null;
+    if (url != .string or url.string.len == 0) return null;
+    return url;
+}
+
+/// A deep copy into `arena`: the model's args live in zenai's per-call arena,
+/// freed before the turn records the call.
+fn pinArgs(arena: std.mem.Allocator, args: ?std.json.Value, pinned: ?std.json.Value) error{OutOfMemory}!?std.json.Value {
+    const p = pinned orelse return args;
+    var obj: std.json.ObjectMap = if (args) |a| (if (a == .object) (try zenai.json.dupeValue(arena, a)).object else .empty) else .empty;
+    var it = p.object.iterator();
+    while (it.next()) |entry| try obj.put(arena, entry.key_ptr.*, entry.value_ptr.*);
+    return .{ .object = obj };
+}
+
+/// User turn for a prompt command. Names pinned fields but not their values
+/// (a `fill` value may be a literal secret).
+fn promptCommandText(arena: std.mem.Allocator, p: Command.Prompt) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    const name = @tagName(p.tool);
+    try w.print("Make exactly one successful `{s}` call for this request:\n\n{s}\n\n", .{ name, p.text });
+    if (p.args) |args| {
+        try w.writeAll("These fields are fixed and filled in for you, so leave them out:");
+        var it = args.object.iterator();
+        while (it.next()) |entry| try w.print(" `{s}`", .{entry.key_ptr.*});
+        try w.writeAll(".\n");
+    }
+    try w.print("Inspect the current page with the read-only tools if you need to; do not navigate. Once `{s}` succeeds, reply in one short sentence.", .{name});
+    return aw.written();
+}
 
 fn resolveSavePathAndMode(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8) ?PathAndMode {
     if (self.save_path) |saved| {
@@ -1224,7 +1339,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
     }
     const resolved = self.resolveSavePathAndMode(arena, parsed.filename) orelse return;
 
-    save.writeContentFile(resolved.path, self.save_buffer.bytes(), resolved.mode) catch |err| {
+    lp.script_file.write(resolved.path, self.save_buffer.bytes(), resolved.mode == .append) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ resolved.path, @errorName(err) });
         return;
     };
@@ -1406,7 +1521,7 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
 
-    save.writeContentFile(path, script, mode) catch |err| {
+    lp.script_file.write(path, script, mode == .append) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1452,6 +1567,36 @@ fn logSaveBufferError(self: *Agent, err: anyerror) void {
     self.terminal.printError("save buffer disabled: {s}", .{@errorName(err)});
 }
 
+/// The args a replay should use: the call's own, with any locators the tool
+/// resolved for itself merged over them, and an ephemeral `backendNodeId`
+/// swapped for the selector the tool layer resolved. A decision the tool made
+/// by asking a model — which control dismisses a banner, which field takes the
+/// password — is written into the script this way, so the script repeats the
+/// act instead of paying to decide it again.
+fn replayArgs(arena: std.mem.Allocator, args: ?std.json.Value, saved: SavedCall) ?std.json.Value {
+    return withSelector(arena, withResolved(arena, args, saved.replay_args), saved.selector);
+}
+
+/// `resolved` (a JSON object) put over `args`. Merged, not substituted: the
+/// call's own arguments include the `$LP_*` placeholders, which must stay
+/// placeholders in a recording.
+fn withResolved(arena: std.mem.Allocator, args: ?std.json.Value, resolved: ?[]const u8) ?std.json.Value {
+    const json = resolved orelse return args;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{}) catch return args;
+    if (parsed != .object) return args;
+
+    var merged: std.json.ObjectMap = blk: {
+        const original = args orelse break :blk .empty;
+        if (original != .object) return args;
+        break :blk original.object.clone(arena) catch return args;
+    };
+    var it = parsed.object.iterator();
+    while (it.next()) |entry| {
+        merged.put(arena, entry.key_ptr.*, entry.value_ptr.*) catch return args;
+    }
+    return .{ .object = merged };
+}
+
 /// Swap a call's ephemeral `backendNodeId` for the selector the tool layer
 /// resolved, so the call can be replayed.
 fn withSelector(arena: std.mem.Allocator, args: ?std.json.Value, selector: ?[]const u8) ?std.json.Value {
@@ -1475,10 +1620,7 @@ fn recordSaveCommand(self: *Agent, cmd: Command) void {
 /// `args`/`arena` — record it before either is freed.
 fn navigationGoto(arena: std.mem.Allocator, tool: BrowserTool, args: ?std.json.Value, navigated: bool) ?Command {
     if (!navigated or !tool.navigatesToUrl()) return null;
-    const a = args orelse return null;
-    if (a != .object) return null;
-    const url = a.object.get("url") orelse return null;
-    if (url != .string or url.string.len == 0) return null;
+    const url = urlArg(args) orelse return null;
     var obj: std.json.ObjectMap = .empty;
     obj.put(arena, "url", url) catch return null;
     return Command.fromToolCall(.goto, .{ .object = obj });
@@ -1555,8 +1697,8 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search_cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
-                .{ @tagName(browser_tools.search_engine), settings.remembered_path },
+                "/searchEngine " ++ Config.tagHint(browser_tools.search.Engine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search.cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                .{ @tagName(browser_tools.search.engine), settings.remembered_path },
             ),
         }
         return;
@@ -1578,11 +1720,12 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
         return;
     };
     self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
+    if (tool_schema.tool == .login) self.terminal.printInfo("{s}", .{Command.bare_login_help});
 }
 
 fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true, .source = .user }) catch |err| .{
+    return browser_tools.call(arena, self.ts.session, &self.ts.registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null, .record = true, .nav_note = true, .page_tools_seen = &self.ts.page_tools_seen, .tree_seen = &self.ts.tree_seen, .source = .user }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1622,16 +1765,13 @@ const ScriptOutput = struct {
 
     /// `Runtime.ConsoleObserver` callback: on the first line, clear the live
     /// spinner so output starts clean instead of colliding with the indicator.
-    fn observe(context: *anyopaque) void {
+    fn observe(context: *anyopaque, _: ScriptRuntime.ConsoleMethod, _: []const u8) void {
         const self: *ScriptOutput = @ptrCast(@alignCast(context));
         if (self.emitted) return;
         self.emitted = true;
         self.terminal.endTool();
     }
 };
-
-/// Upper bound on script source, whether read from a file or piped in.
-const max_script_bytes = 10 * 1024 * 1024;
 
 /// `lightpanda run -` reads the script from stdin.
 const stdin_script_path = "-";
@@ -1659,7 +1799,6 @@ fn runScript(self: *Agent, path: []const u8) bool {
         self.script_runtime_mutex.lockUncancelable(lp.io);
         self.active_script_runtime = null;
         self.script_runtime_mutex.unlock(lp.io);
-        runtime.cancelTerminate();
         self.ts.browser.env.cancelTerminate();
         self.cancel_requested.store(false, .release);
     }
@@ -1686,11 +1825,11 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
 fn readScriptSource(allocator: std.mem.Allocator, path: []const u8, from_stdin: bool) ![]u8 {
     if (!from_stdin) {
-        return std.Io.Dir.cwd().readFileAlloc(lp.io, path, allocator, .limited(max_script_bytes));
+        return lp.script_file.read(allocator, path);
     }
     var buf: [64 * 1024]u8 = undefined;
     var stdin = std.Io.File.stdin().readerStreaming(lp.io, &buf);
-    return stdin.interface.allocRemaining(allocator, .limited(max_script_bytes));
+    return stdin.interface.allocRemaining(allocator, .limited(lp.script_file.max_bytes));
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the
@@ -1823,6 +1962,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         ma,
         .{ .context = @ptrCast(self), .callFn = handleToolCall },
         .{
+            // The full list even in a prompt turn: a narrower one would change
+            // the cached prefix; `toolOutcome` refuses the rest.
             .tools = globalTools(),
             .before_request = .{ .context = @ptrCast(self), .callFn = beforeTurnRequest },
             .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
@@ -1874,11 +2015,12 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 if (tool == .extract and idx != i) continue;
             }
             const ca = self.conversation.arena.allocator();
-            const args = browser_tools.normalizeArgKeys(ca, tool, tc.arguments) catch tc.arguments;
+            const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
+            const call_args = saved.args orelse tc.arguments;
+            const args = browser_tools.normalizeArgs(ca, tool, call_args) catch call_args;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
-            const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
-            const replayable = withSelector(ca, args, saved.selector);
+            const replayable = replayArgs(ca, args, saved);
             const cmd = Command.fromToolCall(tool, replayable);
             const to_record = if (cmd.isRecorded())
                 cmd
@@ -2056,7 +2198,13 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         // turn that reads them; `allocator` here is zenai's per-call arena.
         const ca = self.conversation.arena.allocator();
         const kept = if (saved.selector) |sel| ca.dupe(u8, sel) catch null else null;
-        self.save_calls.append(self.allocator, .{ .selector = kept, .navigated = saved.navigated }) catch {};
+        const kept_replay = if (saved.replay_args) |json| ca.dupe(u8, json) catch null else null;
+        self.save_calls.append(self.allocator, .{
+            .selector = kept,
+            .replay_args = kept_replay,
+            .navigated = saved.navigated,
+            .args = saved.args,
+        }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
@@ -2066,13 +2214,40 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
 fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value, saved: *SavedCall) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
-    const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, arguments, .{
+    var args = arguments;
+    var is_target = false;
+    if (self.prompt_target) |t| {
+        if (t.done) return .{ .content = "Error: the request is already done. Reply without calling more tools.", .is_error = true };
+        const tool = std.meta.stringToEnum(BrowserTool, tool_name);
+        is_target = tool == t.cmd.tool;
+        if (is_target) {
+            if (t.cmd.args != null) {
+                args = try pinArgs(self.conversation.arena.allocator(), args, t.cmd.args);
+                saved.args = args;
+            }
+        } else if (tool == null or tool.?.group() != .reading) {
+            return .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.cmd.tool)}) catch "Error: tool not available", .is_error = true };
+        } else if (tool.?.navigatesToUrl() and urlArg(args) != null) {
+            return .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true };
+        }
+    }
+
+    const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, args, .{
         .inline_image = true,
         .record = self.capturing_for_save,
         .nav_note = true,
+        .page_tools_seen = &self.ts.page_tools_seen,
+        .tree_seen = &self.ts.tree_seen,
         .source = .llm,
     });
-    saved.* = .{ .selector = result.selector, .navigated = result.navigated };
+    saved.selector = result.selector;
+    saved.replay_args = result.replay_args;
+    saved.navigated = result.navigated;
+    if (is_target and !result.is_error) {
+        const t = &self.prompt_target.?;
+        t.done = true;
+        if (t.cmd.tool.producesData()) t.data = try t.arena.dupe(u8, result.text);
+    }
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,
@@ -2265,4 +2440,56 @@ test "capToolOutput: extract is exempt from the default cap" {
 
     try std.testing.expectEqual(extract_output_max_bytes, toolOutputCap("extract"));
     try std.testing.expectEqual(tool_output_max_bytes, toolOutputCap("html"));
+}
+
+test "pinArgs: the result outlives the model's args" {
+    var dst: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer dst.deinit();
+    const da = dst.allocator();
+
+    var src: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    const sa = src.allocator();
+    var model: std.json.ObjectMap = .empty;
+    try model.put(sa, try sa.dupe(u8, "selector"), .{ .string = try sa.dupe(u8, "#email") });
+    try model.put(sa, try sa.dupe(u8, "value"), .{ .string = try sa.dupe(u8, "guess") });
+
+    var pinned: std.json.ObjectMap = .empty;
+    try pinned.put(da, "value", .{ .string = "$LP_EMAIL" });
+
+    const out = (try pinArgs(da, .{ .object = model }, .{ .object = pinned })).?;
+    src.deinit();
+
+    try std.testing.expectEqualStrings("#email", out.object.get("selector").?.string);
+    try std.testing.expectEqualStrings("$LP_EMAIL", out.object.get("value").?.string);
+}
+
+test "replayArgs: the tool's own locators go over the call's args" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"password":"$LP_PASSWORD","username":"$LP_USERNAME"}
+    , .{});
+    const merged = replayArgs(aa, args, .{
+        .replay_args = "{\"passwordSelector\":\"#pass\",\"submitSelector\":\"#submit\"}",
+    }).?;
+
+    // The placeholders stay placeholders: the tool was handed the resolved
+    // secret, and a recording must not be.
+    try std.testing.expectEqualStrings("$LP_PASSWORD", merged.object.get("password").?.string);
+    try std.testing.expectEqualStrings("$LP_USERNAME", merged.object.get("username").?.string);
+    try std.testing.expectEqualStrings("#pass", merged.object.get("passwordSelector").?.string);
+    try std.testing.expectEqualStrings("#submit", merged.object.get("submitSelector").?.string);
+}
+
+test "replayArgs: a backendNodeId still becomes the resolved selector" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"backendNodeId\":7}", .{});
+    const rewritten = replayArgs(aa, args, .{ .selector = "#main" }).?;
+    try std.testing.expect(rewritten.object.get("backendNodeId") == null);
+    try std.testing.expectEqualStrings("#main", rewritten.object.get("selector").?.string);
 }

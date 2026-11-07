@@ -22,11 +22,10 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Transfer = @import("../../network/HttpClient.zig").Transfer;
 
-const EventTarget = @import("EventTarget.zig");
-const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
 
 const Worker = @import("Worker.zig");
+const EventTarget = @import("EventTarget.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const ServiceWorkerRegistration = @import("ServiceWorkerRegistration.zig");
@@ -44,7 +43,6 @@ pub const Proto = WorkerGlobalScope;
 
 const ScriptLoad = struct {
     arena: *lp.Arena,
-    buffer: std.ArrayList(u8) = .empty,
     transfer: ?*Transfer = null,
 };
 
@@ -112,7 +110,7 @@ fn init(
     const proto = self._proto;
     errdefer proto.deinit();
 
-    self._script_load = .{ .arena = try session.getArena(.large, "ServiceWorker.script") };
+    self._script_load = .{ .arena = try session.getArena(.small, "ServiceWorker.script") };
     errdefer self.releaseScriptLoad();
 
     const transfer = proto.newRequest(.{
@@ -124,7 +122,6 @@ fn init(
         .credentials_mode = .same_origin,
         .request_mode = .same_origin,
         .header_callback = httpHeaderCallback,
-        .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
@@ -226,20 +223,11 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    const load = &self._script_load.?;
-    try load.buffer.ensureTotalCapacityPrecise(load.arena.allocator(), transfer.bodyLen());
-
     return .proceed;
 }
 
-fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
+fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *ServiceWorkerGlobalScope = @ptrCast(@alignCast(transfer.req.ctx));
-    const load = &self._script_load.?;
-    try load.buffer.appendSlice(load.arena.allocator(), data);
-}
-
-fn httpDoneCallback(ctx: *anyopaque) !void {
-    const self: *ServiceWorkerGlobalScope = @ptrCast(@alignCast(ctx));
     // clear immediately, we 100% don't own this anymore
     self._script_load.?.transfer = null;
     defer self.releaseScriptLoad();
@@ -247,11 +235,12 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     if (comptime lp.IS_DEBUG) {
         log.info(.browser, "SWGS fetch done", .{
             .url = self._proto.url,
-            .len = self._script_load.?.buffer.items.len,
+            .len = transfer.bodyLen(),
         });
     }
 
-    try self.loadInitialScript(self._script_load.?.buffer.items);
+    // Evaluated synchronously, so borrowing the transfer's body is fine.
+    try self.loadInitialScript(transfer.responseBody());
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
@@ -295,7 +284,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
     const url = self._proto.url;
     var evaluated = true;
     if (self._proto._is_module) {
-        js_context.module(false, &ls.local, script, url, true) catch |err| {
+        js_context.module(false, &ls.local, script, url, .{}, true, null) catch |err| {
             if (js_context.env.terminatePending()) {
                 return;
             }
@@ -411,7 +400,7 @@ fn dispatchExtendable(
 fn releasePendingEvent(self: *ServiceWorkerGlobalScope) void {
     const event = self._pending_event orelse return;
     self._pending_event = null;
-    event.releaseRef(self._proto.page);
+    event.asEvent().releaseRef(self._proto.page);
 }
 
 fn setState(self: *ServiceWorkerGlobalScope, state: ServiceWorker.State) void {
@@ -545,14 +534,14 @@ pub fn getRegistration(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*S
     return r;
 }
 
-pub fn getServiceWorker(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*ServiceWorker {
+fn getServiceWorker(self: *ServiceWorkerGlobalScope, exec: *js.Execution) !*ServiceWorker {
     const registration = try self.getRegistration(exec);
     return registration.worker(self);
 }
 
 // TODO: Need an `ExtendableCookieChangeEvent` so that we can fire change
 // notifications (for now, reads work)
-pub fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
+fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
     if (self._cookie_store) |cs| {
         return cs;
     }

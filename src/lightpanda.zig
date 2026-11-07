@@ -41,9 +41,15 @@ pub const ToolSession = @import("ToolSession.zig");
 pub const Notification = @import("Notification.zig");
 pub const Server = @import("server/Server.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
+pub const LimitedWriter = @import("LimitedWriter.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const crash_handler = @import("crash_handler.zig");
+
+// for `zig build test-server`
+pub const test_routes = @import("test_routes.zig");
+pub const TestWSServer = @import("TestWSServer.zig");
+pub const TestHTTPServer = @import("TestHTTPServer.zig");
 
 pub const Network = @import("network/Network.zig");
 pub const HttpClient = @import("network/HttpClient.zig");
@@ -75,6 +81,7 @@ pub const skill = @import("script/skill.zig");
 pub const docs = @import("docs.zig");
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
+pub const script_file = @import("script/file.zig");
 pub const Schema = @import("script/Schema.zig");
 pub const Command = @import("script/command.zig").Command;
 
@@ -100,43 +107,6 @@ pub fn environ() std.process.Environ {
 /// environment regardless).
 pub fn environMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return environ().createMap(allocator);
-}
-
-/// Io.Condition has no timed wait (@ZIG16: delete when std grows one).
-/// Mirrors std's Condition.waitInner with a deadline-bounded futex wait.
-/// Not a cancelation point. Returns error.Timeout when no signal arrives.
-pub fn timedWait(cond: *std.Io.Condition, mutex: *std.Io.Mutex, timeout_ns: u64) error{Timeout}!void {
-    const deadline: std.Io.Clock.Timestamp = .fromNow(io, .{
-        .raw = .fromNanoseconds(@intCast(timeout_ns)),
-        .clock = .awake,
-    });
-
-    var epoch = cond.epoch.load(.acquire);
-    _ = cond.state.fetchAdd(.{ .waiters = 1, .signals = 0 }, .monotonic);
-
-    mutex.unlock(io);
-    defer mutex.lockUncancelable(io);
-
-    while (true) {
-        io.futexWaitTimeout(u32, &cond.epoch.raw, epoch, .{ .deadline = deadline }) catch {};
-        epoch = cond.epoch.load(.acquire);
-
-        // Consume a pending signal even after a timeout-shaped wake, so a
-        // signal never gets stuck in the state with no waiter (same race
-        // std's waitInner defends against).
-        var prev_state = cond.state.load(.monotonic);
-        while (prev_state.signals > 0) {
-            prev_state = cond.state.cmpxchgWeak(prev_state, .{
-                .waiters = prev_state.waiters - 1,
-                .signals = prev_state.signals - 1,
-            }, .acquire, .monotonic) orelse return;
-        }
-
-        if (deadline.compare(.lte, .now(io, .awake))) {
-            _ = cond.state.fetchSub(.{ .waiters = 1, .signals = 0 }, .monotonic);
-            return error.Timeout;
-        }
-    }
 }
 
 /// Drop-in for the removed std.Thread.WaitGroup (start/finish/wait subset).
@@ -212,6 +182,25 @@ pub const FetchOpts = struct {
     json: bool = false,
 };
 
+fn navigateOpts(opts: FetchOpts) Frame.NavigateOpts {
+    return .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+        .header = if (acceptsMarkdown(opts)) markdown_accept else null,
+    };
+}
+
+/// A markdown dump asks the server for markdown first, HTML second. A server
+/// that honors it sends a text/markdown document, which is dumped as-is. Not
+/// when an option needs the page's DOM, which a markdown response has none of.
+fn acceptsMarkdown(opts: FetchOpts) bool {
+    return opts.dump_mode == .markdown and opts.selector == null and
+        opts.wait_selector == null and opts.wait_script == null and
+        opts.inject_script.items.len == 0;
+}
+
+const markdown_accept = "Accept: text/markdown,text/html;q=0.9,application/xhtml+xml;q=0.9,application/xml;q=0.8,*/*;q=0.7";
+
 /// `.load`, not `.done`: pages with constant background activity never go
 /// quiescent, so `.done` just rides the `wait_ms` cap. A lone
 /// `wait_selector`/`wait_script` is itself the wait, so no level applies
@@ -265,10 +254,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         const frame = page.frame().?;
         // not guaranteed to be valid after navigate
         const encoded_url = try URL.resolveNavigation(frame.call_arena, url, .{});
-        _ = try frame.navigate(encoded_url, .{
-            .reason = .address_bar,
-            .kind = .{ .push = null },
-        });
+        _ = try frame.navigate(encoded_url, navigateOpts(opts));
         pages.appendAssumeCapacity(page);
     }
 
@@ -364,6 +350,9 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         };
         if (err.* == null) {
             err.* = frame._last_navigate_error;
+        }
+        if (acceptsMarkdown(opts) and std.mem.eql(u8, frame.document.getContentType(), "text/markdown")) {
+            log.info(.app, "markdown served", .{ .url = frame.url });
         }
         if (err.* == null) {
             if (frame._bot_challenge) |challenge| {
@@ -794,6 +783,14 @@ test "dumpContent: structured_data" {
     try dumpContent(testing.test_app, .structured_data, .{ .dump = .{} }, page.frame().?, false, &aw.writer);
     try testing.expectJson(.{
         .jsonLd = &.{"{\"@type\":\"Product\",\"name\":\"Blue Kettle\"}"},
+        .microdata = &.{.{
+            .type = &.{"https://schema.org/Product"},
+            .properties = .{
+                .name = &.{"Blue Kettle"},
+                .image = &.{"http://127.0.0.1:9582/img/kettle.jpg"},
+                .price = &.{"25"},
+            },
+        }},
         .openGraph = .{ .type = "product" },
         .meta = .{ .language = "en", .title = "Blue Kettle" },
         .links = .{ .canonical = "http://127.0.0.1:9582/products/blue-kettle" },
@@ -838,6 +835,33 @@ test "fetch: followMarkdownAlternates swaps in a page's markdown alternate" {
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, pages[3].frame().?, true, &aw.writer);
     try testing.expectString(@embedFile("browser/tests/markdown_source.txt"), aw.written());
+}
+
+test "fetch: a markdown dump asks the server for markdown" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    const url = "http://127.0.0.1:9582/markdown-negotiated";
+    const asked = try session.createPage();
+    try asked.navigate(url, navigateOpts(.{ .dump = .{}, .dump_mode = .markdown }));
+    // A markdown response has no DOM for the selector to match.
+    const not_asked = try session.createPage();
+    try not_asked.navigate(url, navigateOpts(.{ .dump = .{}, .dump_mode = .markdown, .selector = "h1" }));
+    var runner = session.runner(.{});
+    try runner.waitForAll(2000, .{ .until = .load });
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, asked.frame().?, false, &aw.writer);
+    try testing.expectString("# Negotiated\n\nSent as *markdown*.\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try dumpContent(testing.test_app, .markdown, .{ .dump = .{} }, not_asked.frame().?, false, &aw.writer);
+    try testing.expectString("\n# Negotiated\n\nSent as HTML.\n", aw.written());
+
+    // Injected scripts run against the DOM too.
+    var scripts: std.ArrayList([]const u8) = .empty;
+    try scripts.append(testing.arena_allocator, "1");
+    try testing.expect(!acceptsMarkdown(.{ .dump = .{}, .dump_mode = .markdown, .inject_script = scripts }));
 }
 
 test "fetch: followMarkdownAlternates keeps a page that failed" {

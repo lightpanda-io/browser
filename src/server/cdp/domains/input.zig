@@ -25,17 +25,21 @@ const dom_button = Frame.user_input.mouse_button;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
+        dispatchDragEvent,
         dispatchKeyEvent,
         dispatchMouseEvent,
         dispatchTouchEvent,
         insertText,
+        setInterceptDrags,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .dispatchDragEvent => return dispatchDragEvent(cmd),
         .dispatchKeyEvent => return dispatchKeyEvent(cmd),
         .dispatchMouseEvent => return dispatchMouseEvent(cmd),
         .dispatchTouchEvent => return dispatchTouchEvent(cmd),
         .insertText => return insertText(cmd),
+        .setInterceptDrags => return setInterceptDrags(cmd),
     }
 }
 
@@ -61,9 +65,9 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    const bc = cmd.browser_context orelse return;
+    const target = cmd.target() catch return;
     // Keys go to the focused frame, which is an iframe's when one has focus.
-    const frame = Frame.user_input.focusedFrame(bc.mainFrame() orelse return);
+    const frame = Frame.user_input.focusedFrame(target.mainFrame() orelse return);
 
     // Chrome types text only for an event carrying it: a keyDown with `text`
     // (Puppeteer, Playwright) or a `char` (chromedp, after a text-less keyDown).
@@ -86,7 +90,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
         .keyDown, .rawKeyDown => {
             const event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), opts, frame);
             const prevented = try Frame.user_input.triggerKeyDown(frame, event, text);
-            bc.suppress_next_char = prevented and text == null;
+            target.suppress_next_char = prevented and text == null;
         },
         .keyUp => {
             const event = try KeyboardEvent.initTrusted(comptime .wrap("keyup"), opts, frame);
@@ -94,13 +98,13 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
         },
         .char => {
             const t = text orelse return;
-            if (bc.suppress_next_char) {
-                bc.suppress_next_char = false;
+            if (target.suppress_next_char) {
+                target.suppress_next_char = false;
                 return;
             }
-            const target = Frame.user_input.focusedElement(frame) orelse return;
+            const element = Frame.user_input.focusedElement(frame) orelse return;
             const event = try KeyboardEvent.initTrusted(comptime .wrap("keypress"), opts, frame);
-            try Frame.user_input.typeChar(frame, target, event, t);
+            try Frame.user_input.typeChar(frame, element, event, t);
         },
     }
 }
@@ -137,8 +141,8 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    const bc = cmd.browser_context orelse return;
-    const frame = bc.mainFrame() orelse return;
+    const target = cmd.target() catch return;
+    const frame = target.mainFrame() orelse return;
 
     // Map the CDP button name to the DOM MouseEvent.button value.
     // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button
@@ -186,11 +190,11 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
         .touchCancel => if (params.touchPoints.len != 0) return error.InvalidParams,
     }
 
-    const bc = cmd.browser_context orelse {
+    const target = cmd.target() catch {
         try cmd.sendResult(null, .{});
         return;
     };
-    const frame = bc.mainFrame() orelse {
+    const frame = target.mainFrame() orelse {
         try cmd.sendResult(null, .{});
         return;
     };
@@ -220,6 +224,55 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     }
 }
 
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchDragEvent
+//
+// A drag from outside the page. DragData.files is not implemented.
+fn dispatchDragEvent(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        type: Type,
+        x: f64,
+        y: f64,
+        data: Frame.user_input.DragData,
+        modifiers: u4 = 0,
+
+        const Type = enum {
+            dragEnter,
+            dragOver,
+            drop,
+            dragCancel,
+        };
+    })) orelse return error.InvalidParams;
+
+    try cmd.sendResult(null, .{});
+
+    const target = cmd.target() catch return;
+    const frame = target.mainFrame() orelse return;
+
+    const typ: Frame.user_input.DragType = switch (params.type) {
+        .dragEnter => .enter,
+        .dragOver => .over,
+        .drop => .drop,
+        .dragCancel => .cancel,
+    };
+    try Frame.user_input.triggerDrag(frame, typ, params.x, params.y, params.data, cdpModifiers(params.modifiers));
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-setInterceptDrags
+//
+// Playwright enables this around every mouse move with the left button down.
+// Mouse input never starts a drag here, so there is no Input.dragIntercepted
+// to send, as in Chrome when the press is not on a draggable element.
+fn setInterceptDrags(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        enabled: bool,
+    })) orelse return error.InvalidParams;
+
+    if (cmd.target()) |target| {
+        target.intercept_drags = params.enabled;
+    } else |_| {}
+    try cmd.sendResult(null, .{});
+}
+
 fn cdpModifiers(bits: u4) Frame.user_input.Modifiers {
     return .{
         .alt = bits & 1 != 0,
@@ -235,8 +288,8 @@ fn insertText(cmd: *CDP.Command) !void {
         text: []const u8, // The text to insert
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return;
-    const frame = Frame.user_input.focusedFrame(bc.mainFrame() orelse return);
+    const target = cmd.target() catch return;
+    const frame = Frame.user_input.focusedFrame(target.mainFrame() orelse return);
 
     try Frame.user_input.insertText(frame, params.text);
 
@@ -802,13 +855,17 @@ test "cdp.input: dispatchMouseEvent mouseWheel chains once the container is satu
     const chained = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 100", null);
     try testing.expect(chained.isTrue());
 
+    // The viewport moved the leaf up. The container's content below its box
+    // isn't clipped from hit-testing, so aim at the leaf again.
+    const moved_y = try (try ls.local.compileAndRun("document.getElementById('innerleaf').getBoundingClientRect().y", null)).toF64();
+
     // overscroll-behavior keeps the latch on a container that can't move, so
     // nothing scrolls at all.
     _ = try ls.local.compileAndRun("document.getElementById('outerscroll').style.overscrollBehavior = 'contain'", null);
     try ctx.processMessage(.{
         .id = 3,
         .method = "Input.dispatchMouseEvent",
-        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = 100 },
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = moved_y, .deltaY = 100 },
     });
     const contained = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 400 && window.scrollY === 100", null);
     try testing.expect(contained.isTrue());
@@ -819,7 +876,7 @@ test "cdp.input: dispatchMouseEvent mouseWheel chains once the container is satu
     try ctx.processMessage(.{
         .id = 4,
         .method = "Input.dispatchMouseEvent",
-        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = leaf_y, .deltaY = -500 },
+        .params = .{ .type = "mouseWheel", .x = leaf_x, .y = moved_y, .deltaY = -500 },
     });
     const upward = try ls.local.compileAndRun("document.getElementById('outerscroll').scrollTop === 0 && window.scrollY === 100", null);
     try testing.expect(upward.isTrue());
@@ -1383,7 +1440,7 @@ test "cdp.input: dispatchTouchEvent reports the client's radius, angle and force
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1436,7 +1493,7 @@ test "cdp.input: dispatchTouchEvent touchStart populates touches/targetTouches/c
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1487,7 +1544,7 @@ test "cdp.input: dispatchTouchEvent preserves each event's modifier keys" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1594,7 +1651,7 @@ test "cdp.input: dispatchTouchEvent a touchStart past every element still opens 
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     try ctx.processMessage(.{
         .id = 1,
@@ -1682,7 +1739,7 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1758,7 +1815,7 @@ test "cdp.input: dispatchTouchEvent a second touchStart while a contact is activ
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1809,7 +1866,7 @@ test "cdp.input: dispatchTouchEvent a touchEnd carrying the released point is ac
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1863,7 +1920,7 @@ test "cdp.input: dispatchTouchEvent rejects populated touchCancel without liftin
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -1917,7 +1974,7 @@ test "cdp.input: dispatchTouchEvent a multi-point touchEnd/touchCancel is Invali
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2233,7 +2290,7 @@ test "cdp.input: dispatchKeyEvent Ctrl+A selects the whole value" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2304,7 +2361,7 @@ test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2364,7 +2421,7 @@ test "cdp.input: a readonly textarea fires beforeinput for typed text only, a di
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2400,7 +2457,7 @@ test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2441,7 +2498,7 @@ test "cdp.input: dispatchKeyEvent legacy keyCode, which and charCode" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2503,7 +2560,7 @@ test "cdp.input: dispatchKeyEvent cancelled keyDown suppresses its char" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2542,7 +2599,7 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2607,7 +2664,7 @@ test "cdp.input: dispatchKeyEvent Enter in a field submits through the default b
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2671,7 +2728,7 @@ test "cdp.input: typed text fires change on blur and Enter" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2749,7 +2806,7 @@ test "cdp.input: dispatchKeyEvent Enter on a checkbox, radio or select" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -2814,7 +2871,7 @@ test "cdp.input: touch tap emits pointer and compatibility activation in order" 
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -2855,7 +2912,7 @@ test "cdp.input: touch tap cancellation distinguishes touch pointer and mouse de
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -2970,7 +3027,7 @@ test "cdp.input: touch slop, scroll and touch-action" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3027,7 +3084,7 @@ test "cdp.input: consecutive taps count up" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3070,7 +3127,7 @@ test "cdp.input: passive prevention and finger jitter do not suppress repeated t
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3106,7 +3163,7 @@ test "cdp.input: touch tap respects disabled controls across compatibility handl
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3150,7 +3207,7 @@ test "cdp.input: touch tap revalidates targets between compatibility events" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3191,7 +3248,7 @@ test "cdp.input: touch cancellation retains last contact geometry through pointe
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3219,7 +3276,7 @@ test "cdp.input: re-navigating an iframe drops the pointer state on its elements
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
-    const main = bc.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     const page = main.page;
     const child = main.child_frames.items[0];
     const text = child.document.getElementById("text") orelse unreachable;
@@ -3244,7 +3301,7 @@ test "cdp.input: a rejected touchEnd keeps the touch contact and an empty touchE
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
-    const frame = bc.mainFrame().?;
+    const frame = (try testing.firstTarget(bc)).mainFrame().?;
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -3286,7 +3343,7 @@ test "cdp.input: navigating an iframe clears a touch contact on its child docume
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
-    const main = bc.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     const child = main.child_frames.items[0];
     const target = child.document.getElementById("text") orelse unreachable;
     // CDP currently hit-tests only the main frame; seed the child contact
@@ -3318,7 +3375,7 @@ test "cdp.input: navigating an iframe keeps a touch contact on the parent docume
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .url = "cdp/input_iframe.html" });
-    const main = bc.mainFrame().?;
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
     const target = main.document.getDocumentElement().?;
     try Frame.user_input.touchStart(main, target, .{ .x = 300, .y = 300, .id = 7 }, .{});
     var ls: lp.js.Local.Scope = undefined;
@@ -3544,5 +3601,790 @@ test "cdp.input: a missed release preserves held buttons and mouse suppression" 
         \\'pointerdown:0:1:0:mouse:true', 'pointermove:2:3:0',
         \\'pointermove:1:5:0', 'pointermove:1:1:0', 'auxclick:1:1:2',
         \\'pointerup:0:0:0:mouse:true'
+    );
+}
+
+const EditingHostInput = union(enum) {
+    key: []const u8,
+    insert_text: []const u8,
+    // a keyDown with no text, like Backspace or Ctrl+A
+    raw_key: struct { key: []const u8, code: []const u8, modifiers: u4 = 0 },
+    // Enter, with its "\r" text, and these modifiers
+    enter: u4,
+};
+
+// Loads a page, runs `setup` (which builds an editing host and a selection),
+// sends `input` to the focused element and checks `expected`, a JS expression.
+// Every test records the events the document sees in `window.seen` as
+// `type:target id:inputType or key:data:cancelable:composed:bubbles:isTrusted`;
+// `window.types()` lists only `type:target id`.
+fn expectEditingHostInput(setup: []const u8, input: EditingHostInput, expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.seen = [];
+        \\for (const t of ['keypress', 'beforeinput', 'textInput', 'input', 'selectstart']) {
+        \\  document.addEventListener(t, (e) => window.seen.push(
+        \\    `${t}:${e.target.id}:${e.inputType || e.key}:${e.data}:${e.cancelable}:${e.composed}:${e.bubbles}:${e.isTrusted}`));
+        \\}
+        \\window.types = () => window.seen.map((s) => s.split(':', 2).join(':')).join(',');
+    , null);
+    _ = try ls.local.compileAndRun(setup, null);
+
+    switch (input) {
+        .key => |text| try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = text, .text = text },
+        }),
+        .insert_text => |text| try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.insertText",
+            .params = .{ .text = text },
+        }),
+        .raw_key => |k| try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = k.key, .code = k.code, .modifiers = k.modifiers },
+        }),
+        .enter => |modifiers| try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchKeyEvent",
+            .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter", .text = "\r", .modifiers = modifiers },
+        }),
+    }
+
+    try testing.expect((try ls.local.compileAndRun(expected, null)).isTrue());
+}
+
+test "cdp.input: typing into an editing host without a selection inserts at its start" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable="true">ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().removeAllRanges();
+    , .{ .key = "c" },
+        \\host.innerHTML === 'cab' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'keypress:host:c:undefined:true:true:true:true',
+        \\  'beforeinput:host:insertText:c:true:true:true:true',
+        \\  'textInput:host:undefined:c:true:false:true:true',
+        \\  'input:host:insertText:c:false:true:true:true',
+        \\]) &&
+        \\getSelection().isCollapsed &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: typing into a focused editing host goes into its first paragraph" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p">hello</p><p>x</p></div>');
+        \\const host = document.getElementById('host');
+        \\const p = document.getElementById('p');
+        \\host.focus();
+    , .{ .key = "c" },
+        \\host.innerHTML === '<p id="p">chello</p><p>x</p>' &&
+        \\window.types() === 'keypress:host,beforeinput:host,textInput:host,input:host' &&
+        \\getSelection().anchorNode === p.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: the first caret position of an editing host skips whitespace and descends" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>\n  <!--c--><p>\n<b id="b">bold</b> rest</p></div>');
+        \\const host = document.getElementById('host');
+        \\const b = document.getElementById('b');
+        \\host.focus();
+    , .{ .insert_text = "X" },
+        \\b.textContent === 'Xbold' &&
+        \\getSelection().anchorNode === b.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: the first caret position of an editing host stops at a void element" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><img>t</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+    , .{ .insert_text = "X" },
+        \\host.innerHTML === 'X<img>t'
+    );
+}
+
+test "cdp.input: text typed into an editing host's descendant targets the host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><span id="s" tabindex="0">ab</span></div>');
+        \\const host = document.getElementById('host');
+        \\const s = document.getElementById('s');
+        \\s.focus();
+        \\getSelection().collapse(s.firstChild, 1);
+    , .{ .key = "c" },
+        \\document.activeElement === s && s.textContent === 'acb' &&
+        \\window.types() === 'keypress:s,beforeinput:host,textInput:host,input:host'
+    );
+}
+
+test "cdp.input: insertText into an editing host inserts at the caret" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>abcd</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 2);
+    , .{ .insert_text = "XY" },
+        \\host.innerHTML === 'abXYcd' &&
+        \\window.types() === 'beforeinput:host,textInput:host,input:host' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 4
+    );
+}
+
+test "cdp.input: insertText into an editing host counts the caret in UTF-16 code units" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>abcd</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 2);
+    , .{ .insert_text = "é😀" },
+        \\host.textContent === 'abé😀cd' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 5
+    );
+}
+
+test "cdp.input: typing after non-ASCII text in an editing host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>é😀x</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 3);
+    , .{ .key = "Z" },
+        \\host.textContent === 'é😀Zx' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 4
+    );
+}
+
+test "cdp.input: a caret inside a surrogate pair inserts before the pair" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>a😀b</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 2);
+    , .{ .insert_text = "X" },
+        \\host.textContent === 'aX😀b' &&
+        \\window.types() === 'beforeinput:host,textInput:host,input:host' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 2
+    );
+}
+
+test "cdp.input: typing into an empty editing element creates a text node" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p"></p></div>');
+        \\const host = document.getElementById('host');
+        \\const p = document.getElementById('p');
+        \\host.focus();
+        \\getSelection().collapse(p, 0);
+    , .{ .key = "z" },
+        \\host.innerHTML === '<p id="p">z</p>' &&
+        \\getSelection().anchorNode === p.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: text before a text node in an editing host joins it" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><b>x</b>tail</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host, 1);
+    , .{ .insert_text = "Y" },
+        \\host.innerHTML === '<b>x</b>Ytail' && host.childNodes.length === 2 &&
+        \\getSelection().anchorNode === host.lastChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: a caret in a comment of an editing host inserts after the comment" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<!--c--><b>cd</b></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.childNodes[1], 1);
+    , .{ .insert_text = "X" },
+        \\host.innerHTML === 'ab<!--c-->X<b>cd</b>' &&
+        \\getSelection().anchorNode === host.childNodes[2] && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: insertText into an editing host replaces a non-collapsed selection" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\const range = document.createRange();
+        \\range.setStart(host.firstChild, 1);
+        \\range.setEnd(host.lastChild, 1);
+        \\getSelection().removeAllRanges();
+        \\getSelection().addRange(range);
+    , .{ .insert_text = "Z" },
+        \\host.textContent === 'aZf' &&
+        \\getSelection().isCollapsed &&
+        \\getSelection().anchorNode.data.slice(0, getSelection().anchorOffset) === 'aZ'
+    );
+}
+
+test "cdp.input: a cancelled beforeinput leaves an editing host unchanged" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', (e) => e.preventDefault());
+    , .{ .key = "c" },
+        \\host.innerHTML === 'ab' &&
+        \\window.types() === 'keypress:host,beforeinput:host'
+    );
+}
+
+test "cdp.input: a beforeinput listener that ends editing leaves an editing host unchanged" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', () => host.removeAttribute('contenteditable'));
+    , .{ .insert_text = "c" },
+        \\host.innerHTML === 'ab' &&
+        \\window.types() === 'beforeinput:host,textInput:host'
+    );
+}
+
+test "cdp.input: a beforeinput listener that removes an editing host leaves it unchanged" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', () => host.remove());
+    , .{ .insert_text = "c" },
+        \\host.innerHTML === 'ab' && !host.isConnected &&
+        \\!window.seen.some((s) => s.startsWith('input:'))
+    );
+}
+
+test "cdp.input: a cancelled keypress fires no beforeinput on an editing host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('keypress', (e) => e.preventDefault());
+    , .{ .key = "c" },
+        \\host.innerHTML === 'ab' &&
+        \\window.types() === 'keypress:host'
+    );
+}
+
+test "cdp.input: text for an editing host stays out of a contenteditable=false island" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><span id="island" contenteditable="false">lock</span>tail</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('island').firstChild, 2);
+    , .{ .insert_text = "X" },
+        \\document.getElementById('island').textContent === 'lock' &&
+        \\host.textContent === 'Xlocktail' && host.firstChild.data === 'X'
+    );
+}
+
+const backspace: EditingHostInput = .{ .raw_key = .{ .key = "Backspace", .code = "Backspace" } };
+const delete: EditingHostInput = .{ .raw_key = .{ .key = "Delete", .code = "Delete" } };
+const ctrl_a: EditingHostInput = .{ .raw_key = .{ .key = "a", .code = "KeyA", .modifiers = 2 } };
+
+test "cdp.input: Backspace in an editing host deletes before the caret" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , backspace,
+        \\host.innerHTML === 'b<b>cd</b>ef' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'beforeinput:host:deleteContentBackward:null:true:true:true:true',
+        \\  'input:host:deleteContentBackward:null:false:true:true:true',
+        \\]) &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 0
+    );
+}
+
+test "cdp.input: Delete in an editing host deletes after the caret" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , delete,
+        \\host.innerHTML === 'a<b>cd</b>ef' &&
+        \\window.types() === 'beforeinput:host,input:host' &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: Backspace in an editing host deletes the selection" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().setBaseAndExtent(host.firstChild, 1, host.lastChild, 1);
+    , backspace,
+        \\host.innerHTML === 'af' && window.types() === 'beforeinput:host,input:host'
+    );
+}
+
+test "cdp.input: Backspace at the start of an editing host fires only beforeinput" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 0);
+    , backspace,
+        \\host.innerHTML === 'ab' && window.types() === 'beforeinput:host'
+    );
+}
+
+test "cdp.input: a cancelled beforeinput keeps Backspace from editing a host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('beforeinput', (e) => e.preventDefault());
+    , backspace,
+        \\host.innerHTML === 'ab' && window.types() === 'beforeinput:host'
+    );
+}
+
+test "cdp.input: a cancelled keydown keeps Backspace from editing a host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\host.addEventListener('keydown', (e) => e.preventDefault());
+    , backspace,
+        \\host.innerHTML === 'ab' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Backspace at the start of a block merges it into the one before" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>one</p><p id="p">two</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 0);
+    , backspace,
+        \\host.innerHTML === '<p>onetwo</p>' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'beforeinput:host:deleteContentBackward:null:true:true:true:true',
+        \\  'input:host:deleteContentBackward:null:false:true:true:true',
+        \\]) &&
+        \\getSelection().anchorNode === host.firstChild.firstChild && getSelection().anchorOffset === 3
+    );
+}
+
+test "cdp.input: Delete at the end of a block merges the next one into it" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p">one</p><ul><li>two</li><li>three</li></ul></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 3);
+    , delete,
+        \\host.innerHTML === '<p id="p">onetwo</p><ul><li>three</li></ul>' &&
+        \\window.types() === 'beforeinput:host,input:host'
+    );
+}
+
+test "cdp.input: Backspace at the start of the first block fires only beforeinput" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p id="p">one</p><p>two</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 0);
+    , backspace,
+        \\host.innerHTML === '<p id="p">one</p><p>two</p>' && window.types() === 'beforeinput:host'
+    );
+}
+
+test "cdp.input: Ctrl+Backspace in an editing host does nothing" {
+    // Chrome deletes a word (deleteWordBackward)
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab cd</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 5);
+    , .{ .raw_key = .{ .key = "Backspace", .code = "Backspace", .modifiers = 2 } },
+        \\host.innerHTML === 'ab cd' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Backspace on a non-editable focused element deletes nothing" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" tabindex="0">ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , backspace,
+        \\host.innerHTML === 'ab' && window.seen.length === 0
+    );
+}
+
+test "cdp.input: Enter in an editing host splits the paragraph" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>a<b>bc</b>d</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.querySelector('b').firstChild, 1);
+    , .{ .enter = 0 },
+        \\host.innerHTML === '<p>a<b>b</b></p><p><b>c</b>d</p>' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'keypress:host:Enter:undefined:true:true:true:true',
+        \\  'beforeinput:host:insertParagraph:null:true:true:true:true',
+        \\  'textInput:host:undefined:\n:true:false:true:true',
+        \\  'input:host:insertParagraph:null:false:true:true:true',
+        \\]) &&
+        \\getSelection().anchorNode === host.lastChild.firstChild.firstChild && getSelection().anchorOffset === 0
+    );
+}
+
+test "cdp.input: Shift+Enter in an editing host inserts a line break" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>abc</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild.firstChild, 1);
+    , .{ .enter = 8 },
+        \\host.innerHTML === '<p>a<br>bc</p>' &&
+        \\JSON.stringify(window.seen) === JSON.stringify([
+        \\  'keypress:host:Enter:undefined:true:true:true:true',
+        \\  'beforeinput:host:insertLineBreak:null:true:true:true:true',
+        \\  'textInput:host:undefined:\n:true:false:true:true',
+        \\  'input:host:insertLineBreak:null:false:true:true:true',
+        \\])
+    );
+}
+
+test "cdp.input: Enter in an inline editing host inserts a <br>" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<span id="host" contenteditable>abc</span>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , .{ .enter = 0 },
+        \\host.innerHTML === 'a<br>bc' &&
+        \\window.types() === 'keypress:host,beforeinput:host,textInput:host,input:host' &&
+        \\window.seen[3].startsWith('input:host:insertParagraph:')
+    );
+}
+
+test "cdp.input: Enter in an editing host without a selection does nothing" {
+    // no beforeinput either, as in Chrome (WPT no-beforeinput-when-no-selection)
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>abc</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().removeAllRanges();
+    , .{ .enter = 0 },
+        \\host.innerHTML === '<p>abc</p>' && window.types() === 'keypress:host'
+    );
+}
+
+test "cdp.input: a cancelled beforeinput keeps Enter from editing a host" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable><p>abc</p></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild.firstChild, 1);
+        \\host.addEventListener('beforeinput', (e) => e.preventDefault());
+    , .{ .enter = 0 },
+        \\host.innerHTML === '<p>abc</p>' && window.types() === 'keypress:host,beforeinput:host'
+    );
+}
+
+test "cdp.input: Ctrl+A in an editing host selects its contents" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<p>before</p><div id="host" contenteditable>ab<b>cd</b>ef</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , ctrl_a,
+        \\getSelection().toString() === 'abcdef' &&
+        \\JSON.stringify(window.seen) === JSON.stringify(['selectstart:host:undefined:undefined:true:false:true:true'])
+    );
+}
+
+test "cdp.input: Ctrl+A with nothing focused selects the body" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\document.activeElement.blur();
+        \\getSelection().removeAllRanges();
+    , ctrl_a,
+        \\window.types() === 'selectstart:' && document.activeElement === document.body &&
+        \\getSelection().containsNode(document.getElementById('host'), true) &&
+        \\getSelection().anchorNode === document.body
+    );
+}
+
+test "cdp.input: Ctrl+A on a focused checkbox selects the body" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<input id="cb" type="checkbox"><div id="host" contenteditable>ab</div>');
+        \\document.getElementById('cb').focus();
+    , ctrl_a,
+        \\window.types() === 'selectstart:' && getSelection().anchorNode === document.body
+    );
+}
+
+test "cdp.input: Ctrl+A in a text input fires selectstart" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<input id="field" value="hello">');
+        \\const field = document.getElementById('field');
+        \\field.focus();
+        \\field.setSelectionRange(2, 2);
+    , ctrl_a,
+        \\window.types() === 'selectstart:field' && field.selectionStart === 0 && field.selectionEnd === 5
+    );
+}
+
+test "cdp.input: a cancelled selectstart keeps Ctrl+A from selecting" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable>ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+        \\document.addEventListener('selectstart', (e) => e.preventDefault());
+    , ctrl_a,
+        \\window.types() === 'selectstart:host' && getSelection().isCollapsed &&
+        \\getSelection().anchorNode === host.firstChild && getSelection().anchorOffset === 1
+    );
+}
+
+test "cdp.input: typing into a non-editable focused element inserts nothing" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" tabindex="0">ab</div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\getSelection().collapse(host.firstChild, 1);
+    , .{ .key = "c" },
+        \\host.innerHTML === 'ab' && window.types() === 'keypress:host'
+    );
+}
+
+test "cdp.input: setInterceptDrags keeps a held-button mouse move a plain mouse move" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.moves = [];
+        \\for (const t of ['pointermove', 'mousemove', 'dragstart']) document.addEventListener(t, e => moves.push(e.type + ':' + e.buttons));
+    , null);
+    const x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x + 1", null)).toF64();
+    const y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y + 1", null)).toF64();
+
+    // Playwright's sequence for page.mouse.down() then page.mouse.move().
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .clickCount = 1 } });
+    try ctx.processMessage(.{ .id = 2, .method = "Input.setInterceptDrags", .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect((try testing.firstTarget(bc)).intercept_drags);
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseMoved", .x = x + 5, .y = y, .button = "left" } });
+    try ctx.processMessage(.{ .id = 4, .method = "Input.setInterceptDrags", .params = .{ .enabled = false } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(!(try testing.firstTarget(bc)).intercept_drags);
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchMouseEvent", .params = .{ .type = "mouseReleased", .x = x + 5, .y = y, .button = "left", .clickCount = 1 } });
+
+    try testing.expect((try ls.local.compileAndRun("moves.join(',') === 'pointermove:1,mousemove:1'", null)).isTrue());
+    for (ctx.received_raw.items) |msg| {
+        try testing.expect(std.mem.indexOf(u8, msg, "dragIntercepted") == null);
+    }
+}
+
+const DragStep = struct {
+    type: []const u8,
+    over: enum { a, b, outside } = .b,
+    mask: u32 = 1,
+    modifiers: u4 = 0,
+};
+
+/// Dispatches `steps` as Input.dispatchDragEvent, carrying text/plain "hello"
+/// and a text/uri-list, over #a or #b, and checks the drag events that
+/// reached the document (each `type|target|relatedTarget|cancelable|isTrusted|
+/// shiftKey|types|getData('text/plain')|dropEffect|effectAllowed`) against
+/// `expected`. `accept` is the id whose dragenter/dragover/drop listeners
+/// call preventDefault().
+fn expectDragSequence(accept: []const u8, steps: []const DragStep, comptime expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<div id="a">A</div><div id="b">B</div>';
+        \\window.drags = [];
+        \\for (const t of ['dragenter', 'dragover', 'dragleave', 'drop']) document.addEventListener(t, e => {
+        \\  const dt = e.dataTransfer;
+        \\  // Only a dragstart may change the items.
+        \\  dt.setData('text/x-added', 'x');
+        \\  drags.push([e.type, e.target.id, e.relatedTarget?.id ?? '-', e.cancelable, e.isTrusted, e.shiftKey,
+        \\    dt.types.join('+'), dt.getData('text/plain'), dt.dropEffect, dt.effectAllowed].join('|'));
+        \\  if (e.type !== 'dragleave' && e.target.id === window.accept) e.preventDefault();
+        \\}, true);
+    , null);
+    const accept_js = try std.fmt.allocPrint(testing.arena_allocator, "window.accept = '{s}'", .{accept});
+    _ = try ls.local.compileAndRun(accept_js, null);
+
+    const ax = try (try ls.local.compileAndRun("document.getElementById('a').getBoundingClientRect().x + 1", null)).toF64();
+    const ay = try (try ls.local.compileAndRun("document.getElementById('a').getBoundingClientRect().y + 1", null)).toF64();
+    const bx = try (try ls.local.compileAndRun("document.getElementById('b').getBoundingClientRect().x + 1", null)).toF64();
+    const by = try (try ls.local.compileAndRun("document.getElementById('b').getBoundingClientRect().y + 1", null)).toF64();
+
+    for (steps, 1..) |step, id| {
+        const x: f64, const y: f64 = switch (step.over) {
+            .a => .{ ax, ay },
+            .b => .{ bx, by },
+            .outside => .{ -1000, -1000 },
+        };
+        try ctx.processMessage(.{
+            .id = @as(i32, @intCast(id)),
+            .method = "Input.dispatchDragEvent",
+            .params = .{
+                .type = step.type,
+                .x = x,
+                .y = y,
+                .modifiers = step.modifiers,
+                .data = .{
+                    .items = &.{
+                        .{ .mimeType = "text/plain", .data = "hello" },
+                        .{ .mimeType = "text/uri-list", .data = "http://example.com/" },
+                    },
+                    .dragOperationsMask = step.mask,
+                },
+            },
+        });
+        try ctx.expectSentResult(null, .{ .id = id });
+    }
+
+    const result = try ls.local.compileAndRun("JSON.stringify(drags) === JSON.stringify([" ++ expected ++ "])", null);
+    if (!result.isTrue()) {
+        const actual = try ls.local.compileAndRun("JSON.stringify(drags)", null);
+        std.debug.print("drag events: {s}\n", .{try actual.toStringSlice()});
+    }
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchDragEvent enters, moves between targets and drops" {
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "dragOver", .over = .a },
+        .{ .type = "dragOver", .over = .b },
+        .{ .type = "drop", .over = .b },
+    },
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragover|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragover|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragenter|b|a|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragleave|a|b|false|true|false|text/plain+text/uri-list||none|copy',
+        \\'dragover|b|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'drop|b|-|true|true|false|text/plain+text/uri-list|hello|copy|copy'
+    );
+}
+
+test "cdp.input: dispatchDragEvent drop runs a dragover at the target first" {
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .mask = 17, .modifiers = 8 },
+        .{ .type = "drop", .mask = 17, .modifiers = 8 },
+    },
+        \\'dragenter|b|-|true|true|true|text/plain+text/uri-list||move|copyMove',
+        \\'dragover|b|-|true|true|true|text/plain+text/uri-list||move|copyMove',
+        \\'drop|b|-|true|true|true|text/plain+text/uri-list|hello|move|copyMove'
+    );
+    // Dropped on a new target: its dragenter decides.
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "drop", .over = .b },
+    },
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragenter|b|a|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragleave|a|b|false|true|false|text/plain+text/uri-list||none|copy',
+        \\'drop|b|-|true|true|false|text/plain+text/uri-list|hello|copy|copy'
+    );
+}
+
+test "cdp.input: dispatchDragEvent a drop nobody accepted" {
+    // Ignored by the page: nothing fires.
+    try expectDragSequence("a", &.{
+        .{ .type = "dragEnter", .over = .a },
+        .{ .type = "dragOver", .over = .b },
+        .{ .type = "drop", .over = .b },
+    },
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragenter|b|a|true|true|false|text/plain+text/uri-list||copy|copy',
+        \\'dragleave|a|b|false|true|false|text/plain+text/uri-list||none|copy',
+        \\'dragover|b|-|true|true|false|text/plain+text/uri-list||copy|copy'
+    );
+    // Accepted, but with no operation the source allows: dragleave.
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .mask = 0 },
+        .{ .type = "drop", .mask = 0 },
+    },
+        \\'dragenter|b|-|true|true|false|text/plain+text/uri-list||none|none',
+        \\'dragover|b|-|true|true|false|text/plain+text/uri-list||none|none',
+        \\'dragleave|b|-|false|true|false|text/plain+text/uri-list||none|none'
+    );
+}
+
+test "cdp.input: dispatchDragEvent dragCancel ends the drag without events" {
+    try expectDragSequence("b", &.{
+        .{ .type = "dragEnter", .mask = 65535 },
+        .{ .type = "dragCancel", .mask = 65535 },
+        .{ .type = "dragOver", .mask = 65535 },
+        .{ .type = "drop", .mask = 65535 },
+        .{ .type = "dragCancel", .mask = 65535 },
+        .{ .type = "dragEnter", .over = .a, .mask = 2 },
+        .{ .type = "dragOver", .over = .outside, .mask = 2 },
+        .{ .type = "drop", .over = .outside, .mask = 2 },
+        .{ .type = "dragOver", .over = .a, .mask = 2 },
+    },
+        \\'dragenter|b|-|true|true|false|text/plain+text/uri-list||copy|all',
+        \\'dragenter|a|-|true|true|false|text/plain+text/uri-list||link|link',
+        \\'dragleave|a|-|false|true|false|text/plain+text/uri-list||none|link'
     );
 }

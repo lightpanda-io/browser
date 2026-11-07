@@ -63,8 +63,13 @@ _owner_node: std.DoublyLinkedList.Node = .{},
 _send_queue: std.ArrayList(Message) = .empty,
 _send_offset: usize = 0,
 
-// buffered incoming frame
+// incoming data message, accumulated across its fragments
 _recv_buffer: std.ArrayList(u8) = .empty,
+_recv_fragmented: bool = false,
+// incoming control frame, kept apart since one can arrive between the
+// fragments of a data message (RFC 6455 §5.4)
+_control_buffer: [125]u8 = undefined,
+_control_len: usize = 0,
 
 // Incoming events, buffered and delivered by HttpClient's dispatcher. We never
 // run JS inside a libcurl callback. Too many things can go wrong.
@@ -95,7 +100,10 @@ _close_reason: []const u8 = "",
 // negotiated protocol
 _protocol: []const u8 = "",
 
-// Event handlers
+/// Subprotocols offered by the client at construction (RFC 6455 §4.1).
+_subprotocols: []const u8 = "",
+
+_task: js.Attribution.Tag,
 
 const ReadyState = enum(u8) {
     connecting = 0,
@@ -153,9 +161,17 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
             // Fragments are not allowed in WebSocket URLs.
             return error.SyntaxError;
         }
-        for (protocols) |protocol| {
+        for (protocols, 0..) |protocol, i| {
             if (!isValidProtocol(protocol)) {
                 return error.SyntaxError;
+            }
+            // The WebSocket constructor rejects a list where a value occurs
+            // more than once, so `new WebSocket(url, ['a', 'a'])` throws
+            // instead of sending a duplicated Sec-WebSocket-Protocol entry.
+            for (protocols[0..i]) |seen| {
+                if (std.mem.eql(u8, seen, protocol)) {
+                    return error.SyntaxError;
+                }
             }
         }
     }
@@ -196,6 +212,10 @@ pub fn init(url: []const u8, protocols_: ?Protocols, exec: *const Execution) !*W
         ._proto = undefined,
         ._url = resolved_url,
         ._http_client = http_client,
+        ._task = exec.js.attribution.begin(.request, .{
+            .label = resolved_url,
+            .detail = "WebSocket",
+        }),
     });
 
     // This ensures that if we fail to connect, we have at least 1 event slot
@@ -230,8 +250,8 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     const resolved_url = self._url;
     const http_client = self._http_client;
 
-    if (isBlockedPort(resolved_url)) {
-        return error.BlockedPort;
+    if (http.isBadPortUrl(resolved_url)) {
+        return error.UnsafePort;
     }
 
     const conn = http_client.network.newConnection() orelse {
@@ -242,6 +262,9 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
 
     try conn.setURL(resolved_url);
     try conn.setConnectOnly(false);
+    // receivedHeaderCallback reads the first status line as the upgrade's,
+    // so a proxy's CONNECT response must not reach it.
+    try conn.setSuppressConnectHeaders();
 
     try conn.setReadCallback(sendDataCallback, true);
     try conn.setWriteCallback(receivedDataCallback);
@@ -252,7 +275,9 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
         try conn.addHeader(allocator, hdr.name, hdr.value);
     }
     if (protocols.len > 0) {
-        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
+        const subprotocols = try std.mem.join(allocator, ", ", protocols);
+        self._subprotocols = subprotocols;
+        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", subprotocols);
     }
 
     {
@@ -285,15 +310,6 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
     try http_client.trackConn(conn);
 
     self._conn = conn;
-}
-
-fn isBlockedPort(url: [:0]const u8) bool {
-    const port = URL.getPort(url);
-    if (port.len == 0) {
-        // the default port for ws/wss is never blocked
-        return false;
-    }
-    return http.isBadPort(std.fmt.parseInt(u16, port, 10) catch return false);
 }
 
 pub fn deinit(self: *WebSocket, page: *Page) void {
@@ -366,7 +382,15 @@ pub fn deliverEvents(self: *WebSocket) void {
             // a terminal event or a re-entrant kill got us; drop the rest
             break;
         }
-        switch (self._events.items[i]) {
+        const event = self._events.items[i];
+        const task_scope = self._exec.js.attribution.enterNew(.message, .{
+            .parent = self._task,
+            .label = "WebSocket",
+            .detail = @tagName(event),
+            .cut = event != .open,
+        });
+        defer task_scope.exit();
+        switch (event) {
             .open => {
                 self._ready_state = .open;
                 self.dispatchOpenEvent() catch |err| {
@@ -579,7 +603,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                     .data = try str.toSliceWithAlloc(arena.allocator()),
                 } });
             } else {
-                const buffer = (try js_val.toZig(js.BufferSource)).bytes;
+                const buffer = (try js_val.toZig(js.BufferSource)).bytes();
 
                 const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
                 errdefer arena.release();
@@ -829,48 +853,76 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
         return error.NoFrameMeta;
     };
 
-    if (meta.offset == 0) {
-        if (comptime lp.IS_DEBUG) {
-            log.debug(.websocket, "incoming message", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type });
+    if (comptime lp.IS_DEBUG) {
+        if (meta.offset == 0) {
+            log.debug(.websocket, "incoming frame", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type, .fin = meta.fin });
         }
-        // Start of new frame. Pre-allocate buffer
-        self._recv_buffer.clearRetainingCapacity();
-        if (meta.len > self._http_client.max_response_size) {
+    }
+
+    switch (meta.frame_type) {
+        .text, .binary, .cont => try self.receivedData(meta, data),
+        .close, .ping, .pong => try self.receivedControl(meta, data),
+    }
+}
+
+fn receivedData(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !void {
+    if (meta.offset == 0) {
+        if (!self._recv_fragmented) {
+            self._recv_buffer.clearRetainingCapacity();
+        }
+        const message_len = std.math.add(usize, self._recv_buffer.items.len, meta.len) catch return error.MessageTooLarge;
+        if (message_len > self._http_client.max_response_size) {
             return error.MessageTooLarge;
         }
-        try self._recv_buffer.ensureTotalCapacityPrecise(self._arena.allocator(), meta.len);
+        try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
     }
 
     try self._recv_buffer.appendSlice(self._arena.allocator(), data);
 
     if (meta.bytes_left > 0) {
-        // still more data waiting for this frame
+        return;
+    }
+    if (!meta.fin) {
+        self._recv_fragmented = true;
+        return;
+    }
+    self._recv_fragmented = false;
+
+    // libcurl repeats the message type on every fragment.
+    try self.bufferMessage(self._recv_buffer.items, meta.frame_type);
+}
+
+fn receivedControl(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !void {
+    if (meta.offset == 0) {
+        self._control_len = 0;
+    }
+    if (data.len > self._control_buffer.len - self._control_len) {
+        return error.ControlFrameTooLarge;
+    }
+    @memcpy(self._control_buffer[self._control_len..][0..data.len], data);
+    self._control_len += data.len;
+
+    if (meta.bytes_left > 0 or meta.frame_type != .close) {
         return;
     }
 
-    const message = self._recv_buffer.items;
-    switch (meta.frame_type) {
-        .text, .binary => try self.bufferMessage(message, meta.frame_type),
-        .close => {
-            // Parse close frame: 2-byte code (big-endian) + optional reason
-            const received_code = if (message.len >= 2)
-                @as(u16, message[0]) << 8 | message[1]
-            else
-                1005; // No status code received
+    const message = self._control_buffer[0..self._control_len];
+    // Parse close frame: 2-byte code (big-endian) + optional reason
+    const received_code = if (message.len >= 2)
+        @as(u16, message[0]) << 8 | message[1]
+    else
+        1005; // No status code received
 
-            if (self._ready_state != .closing) {
-                // Server-initiated: stash for the close event. (When we
-                // initiated, _close_code/_close_reason hold what close()
-                // sent, and handleCloseFrame completes the handshake.)
-                self._close_code = received_code;
-                if (message.len > 2) {
-                    self._close_reason = try self._arena.dupe(u8, message[2..]);
-                }
-            }
-            try self.bufferEvent(.close_frame);
-        },
-        .ping, .pong, .cont => {},
+    if (self._ready_state != .closing) {
+        // Server-initiated: stash for the close event. (When we
+        // initiated, _close_code/_close_reason hold what close()
+        // sent, and handleCloseFrame completes the handshake.)
+        self._close_code = received_code;
+        if (message.len > 2) {
+            self._close_reason = try self._arena.dupe(u8, message[2..]);
+        }
     }
+    try self.bufferEvent(.close_frame);
 }
 
 // libcurl has no mechanism to signal that the connection is established. The
@@ -896,6 +948,12 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             return 0;
         }
 
+        // When the client offered subprotocols, the server has to pick one of them.
+        if (self._subprotocols.len != 0 and self._protocol.len == 0) {
+            log.warn(.websocket, "no subprotocol in response", .{});
+            return 0;
+        }
+
         log.info(.websocket, "connected", .{ .url = self._url });
 
         // readyState flips to .open and onopen fires at delivery
@@ -916,7 +974,27 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
             self._got_upgrade = true;
         }
     } else if (std.ascii.eqlIgnoreCase(header_name, "sec-websocket-protocol")) {
-        // TODO, we should validate this against our sent list.
+        // RFC 6455 §4.1 / WHATWG WebSocket: The server's selected protocol must
+        // match one of the subprotocols offered by the client, and the server
+        // MUST NOT send multiple subprotocol headers or select an unrequested
+        // protocol.
+        if (self._protocol.len != 0) {
+            log.warn(.websocket, "duplicate SecWebSocketProtocol", .{ .protocol = value });
+            self._protocol = "";
+            return 0;
+        }
+        var matched = false;
+        var it = std.mem.tokenizeSequence(u8, self._subprotocols, ", ");
+        while (it.next()) |subprotocol| {
+            if (std.mem.eql(u8, subprotocol, value)) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            log.warn(.websocket, "picked unrequested subprotocol", .{ .protocol = value });
+            return 0;
+        }
         self._protocol = self._arena.dupe(u8, value) catch |err| {
             log.err(.websocket, "dupe protocol", .{ .err = err });
             return 0;
@@ -977,6 +1055,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: WebSocket" {
+    testing.expectLog(&.{ .websocket, .websocket, .websocket, .websocket, .websocket });
     try testing.htmlRunner("net/websocket.html", .{});
 }
 

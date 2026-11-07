@@ -19,17 +19,20 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const HttpClient = @import("../../network/HttpClient.zig");
+
+const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
+const ImportMap = @import("../ImportMap.zig");
+const ScriptManagerBase = @import("../ScriptManagerBase.zig");
+
 const js = @import("js.zig");
 const Env = @import("Env.zig");
 const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
+const Attribution = @import("Attribution.zig");
 const Execution = @import("Execution.zig");
 const WasmStreaming = @import("WasmStreaming.zig");
-
-const Frame = @import("../Frame.zig");
-const Page = @import("../Page.zig");
-const ScriptManagerBase = @import("../ScriptManagerBase.zig");
-const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 
 const v8 = js.v8;
 const log = lp.log;
@@ -111,6 +114,9 @@ wasm_streams: std.ArrayList(*WasmStreaming) = .empty,
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
 
+// Modules compiled from an HTTP cache entry without (usable) cached bytes.
+pending_code_caches: std.ArrayList(PendingCodeCache) = .empty,
+
 // Module => Path. The key is the module hashcode (module.getIdentityHash)
 // and the value is the full path to the module. We need to capture this
 // so that when we're asked to resolve a dependent module, and all we're
@@ -134,7 +140,24 @@ rejected_promises: std.ArrayList(js.Promise.Global) = .empty,
 // interface that works in both Page and Worker contexts.
 execution: Execution,
 
+// borrowed from Env
+attribution: *Attribution,
+
 unknown_properties: (if (lp.IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (lp.IS_DEBUG) .{} else {},
+
+const PendingCodeCache = struct {
+    // module_cache key
+    url: []const u8,
+    // Owned (env.allocator): a static import's source is freed as soon as
+    // it's compiled.
+    key: []const u8,
+    text: []const u8,
+
+    fn deinit(self: PendingCodeCache, allocator: Allocator) void {
+        allocator.free(self.key);
+        allocator.free(self.text);
+    }
+};
 
 const ModuleEntry = struct {
     // Can be null if we're asynchronously loading the module, in
@@ -156,6 +179,12 @@ const ModuleEntry = struct {
 
 fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
+}
+
+/// The Context an object was created in, or null if that Context is gone.
+pub fn fromObject(handle: *const v8.Object) ?*Context {
+    const c_context = v8.v8__Object__GetCreationContext(handle) orelse return null;
+    return fromC(c_context);
 }
 
 /// Returns the Context and v8::Context for the given isolate.
@@ -216,6 +245,11 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
+    for (self.pending_code_caches.items) |pending| {
+        pending.deinit(env.allocator);
+    }
+    self.pending_code_caches.deinit(env.allocator);
+
     while (self.wasm_streams.pop()) |stream| {
         stream.abort(null);
     }
@@ -263,10 +297,14 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
         const token_local = v8.v8__Global__Get(&origin.security_token, isolate.handle);
         v8.v8__Context__SetSecurityToken(ls.local.handle, token_local);
 
-        // navigator.serviceWorker is [SecureContext]. With the feature
-        // disabled, Env.createContext has already removed it.
-        if (self.global == .frame and self.page.session.experimental_features.serviceworker and self.execution.isSecureContext() == false) {
-            env.hideServiceWorker(true, ls.local.handle, v8.v8__Context__Global(ls.local.handle).?);
+        if (self.global == .frame and self.execution.isSecureContext() == false) {
+            const global_obj = v8.v8__Context__Global(ls.local.handle).?;
+            // navigator.serviceWorker is [SecureContext]. With the feature
+            // disabled, Env.createContext has already removed it.
+            if (self.page.session.experimental_features.serviceworker) {
+                env.hideServiceWorker(true, ls.local.handle, global_obj);
+            }
+            env.hideSecureContextInterfaces(ls.local.handle, global_obj);
         }
     }
 }
@@ -319,29 +357,22 @@ pub fn globalObject(self: *Context, local: *const js.Local) js.Object {
     };
 }
 
-pub fn getIncumbent(self: *Context) *Frame {
-    const ctx = fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).?;
+pub fn getIncumbent(self: *Context) ?*Frame {
+    const v8_incumbent = v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle) orelse return null;
+    const ctx = fromC(v8_incumbent) orelse return null;
     return switch (ctx.global) {
         .frame => |frame| frame,
         .worker => unreachable,
     };
 }
 
-pub fn stringToPersistedFunction(
-    self: *Context,
-    function_body: []const u8,
-    comptime parameter_names: []const []const u8,
-    extensions: []const *const v8.Object,
-) !js.Function.Global {
-    var ls: js.Local.Scope = undefined;
-    self.localScope(&ls);
-    defer ls.deinit();
+// `cacheable` is about our module map. `script_cache` is the HTTP cache entry
+// the source came from, see compileModule.
+pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, position: js.Local.SourcePosition, cacheable: bool, script_cache: ?HttpClient.ScriptCache) !(if (want_result) ModuleEntry else void) {
+    // Evaluating this module evaluates its static imports, which
+    // compileModule queued along with it.
+    defer self.flushModuleCodeCaches(local);
 
-    const js_function = try ls.local.compileFunction(function_body, parameter_names, extensions);
-    return js_function.persist();
-}
-
-pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
     const mod, const owned_url = blk: {
         const arena = self.arena;
 
@@ -381,7 +412,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         if (cacheable and !gop.found_existing) {
             gop.key_ptr.* = owned_url;
         }
-        const m = try compileModule(local, src, owned_url);
+        const m = try self.compileModule(local, src, owned_url, position, script_cache);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
@@ -483,13 +514,89 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
     return if (comptime want_result) entry.* else {};
 }
 
-fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.Module {
+// Compiles a module, consuming the cached bytes of `script_cache` if it has
+// any, and queuing fresh ones if it doesn't (or if V8 rejected them).
+fn compileModule(self: *Context, local: *const js.Local, src: []const u8, name: []const u8, position: js.Local.SourcePosition, script_cache: ?HttpClient.ScriptCache) !js.Module {
+    const sc = script_cache orelse {
+        const result = try compileModuleSource(local, src, name, position, null);
+        return result.module;
+    };
+
+    const result = try compileModuleSource(local, src, name, position, sc.bytes);
+    const mod = result.module;
+
+    if (sc.bytes != null) {
+        log.debug(.browser, "module script cache", .{ .url = name, .rejected = result.cache_rejected });
+        if (result.cache_rejected == false) {
+            return mod;
+        }
+    }
+
+    // we queue, rather than cache immediately so that the snapshot we take
+    // has, hopefully, compiled more of the code by having been run.
+    // (We _could_ cache here, and it would work, but most of win comes from
+    // waiting after the run).
+    self.queueModuleCodeCache(name, sc, src) catch |err| {
+        log.debug(.browser, "queue module script cache", .{ .url = name, .err = err });
+    };
+    return mod;
+}
+
+fn queueModuleCodeCache(self: *Context, url: []const u8, sc: HttpClient.ScriptCache, src: []const u8) !void {
+    const allocator = self.env.allocator;
+
+    const key = try allocator.dupe(u8, sc.key);
+    errdefer allocator.free(key);
+
+    const text = try allocator.dupe(u8, src);
+    errdefer allocator.free(text);
+
+    try self.pending_code_caches.append(allocator, .{ .url = url, .key = key, .text = text });
+}
+
+fn flushModuleCodeCaches(self: *Context, local: *const js.Local) void {
+    const allocator = self.env.allocator;
+    defer self.pending_code_caches.clearRetainingCapacity();
+
+    if (self.env.terminatePending()) {
+        for (self.pending_code_caches.items) |pending| {
+            pending.deinit(allocator);
+        }
+        return;
+    }
+
+    for (self.pending_code_caches.items) |pending| {
+        defer pending.deinit(allocator);
+
+        // null when the module failed after compiling (e.g. postCompileModule)
+        const entry = self.module_cache.get(pending.url) orelse continue;
+        const global = entry.module orelse continue;
+
+        const code_cache = local.toLocal(global).createCodeCache() catch |err| {
+            log.debug(.browser, "create module script cache", .{ .url = pending.url, .err = err });
+            continue;
+        };
+        defer code_cache.deinit();
+
+        self.script_manager.client.cache.putScriptCache(pending.key, pending.text, code_cache.bytes()) catch |err| {
+            log.warn(.cache, "put module script cache", .{ .url = pending.url, .err = err });
+        };
+    }
+}
+
+const ModuleCompileResult = struct {
+    module: js.Module,
+    // see Local.CompileResult.cache_rejected
+    cache_rejected: bool,
+};
+
+fn compileModuleSource(local: *const js.Local, src: []const u8, name: []const u8, position: js.Local.SourcePosition, cached_data: ?[]const u8) !ModuleCompileResult {
     var origin_handle: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT2(
         &origin_handle,
         try local.isolate.initStringHandle(name),
-        0, // resource_line_offset
-        0, // resource_column_offset
+        std.math.lossyCast(c_int, position.line),
+        std.math.lossyCast(c_int, position.column),
         false, // resource_is_shared_cross_origin
         -1, // script_id
         null, // source_map_url
@@ -499,11 +606,18 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
         null, // host_defined_options
     );
 
+    // The Source takes ownership of the CachedData pointer, Source__DESTRUCT
+    // deletes it.
+    const cached: ?*v8.ScriptCompilerCachedData = if (cached_data) |bytes|
+        v8.v8__ScriptCompiler__CachedData__NEW(bytes.ptr, @intCast(bytes.len))
+    else
+        null;
+
     var source_handle: v8.ScriptCompilerSource = undefined;
     v8.v8__ScriptCompiler__Source__CONSTRUCT2(
         try local.isolate.initStringHandle(src),
         &origin_handle,
-        null, // cached data
+        cached,
         &source_handle,
     );
 
@@ -512,15 +626,15 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
     const module_handle = v8.v8__ScriptCompiler__CompileModule(
         local.isolate.handle,
         &source_handle,
-        v8.kNoCompileOptions,
+        if (cached != null) v8.kConsumeCodeCache else v8.kNoCompileOptions,
         v8.kNoCacheNoReason,
     ) orelse {
         return error.JsException;
     };
 
     return .{
-        .local = local,
-        .handle = module_handle,
+        .module = .{ .local = local, .handle = module_handle },
+        .cache_rejected = if (cached) |c| c.*.rejected else false,
     };
 }
 
@@ -622,7 +736,8 @@ pub fn dynamicModuleCallback(
     _ = host_defined_options;
     _ = import_attrs;
 
-    const self = fromC(c_context.?).?;
+    // If the calling realm gone, reject.
+    const self = fromC(c_context.?) orelse return rejectInactiveImport(c_context.?);
 
     // prevent running a microtask checkpoint mid-script: import() is called
     // from running JS, and every reject below would otherwise drain the queue
@@ -674,8 +789,18 @@ pub fn dynamicModuleCallback(
     return @constCast(promise.handle);
 }
 
+fn rejectInactiveImport(c_context: *const v8.Context) ?*v8.Promise {
+    const isolate = js.Isolate{ .handle = v8.v8__Isolate__GetCurrent().? };
+    // On failure, V8 has an exception pending, which import() throws.
+    const resolver = v8.v8__Promise__Resolver__New(c_context) orelse return null;
+    const err = isolate.createError("Cannot import module from an inactive browsing context.");
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Reject(resolver, c_context, err, &out);
+    return @constCast(v8.v8__Promise__Resolver__GetPromise(resolver));
+}
+
 pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
-    const self = fromC(c_context.?).?;
+    const self = fromC(c_context.?) orelse return;
     var local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -703,26 +828,20 @@ pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta
 
     // import.meta.resolve(specifier) resolves against this module's URL,
     // applying the document's importmap. The base is bound per-module so the
-    // function keeps working even when detached from import.meta.
+    // function keeps working even when detached from `import.meta`. Another
+    // realm can hold the function after this context is gone (e.g. once this
+    // frame navigates away), so it mustn't point into our arena.
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/import.meta/resolve
-    const resolve_data = self.arena.create(ImportMetaResolveData) catch {
-        log.err(.js, "import meta", .{ .err = error.OutOfMemory });
+    const resolve_fn = v8.v8__Function__New__DEFAULT2(local.handle, importMetaResolveCallback, js_value.handle) orelse {
+        log.err(.js, "import meta", .{ .err = error.FailedToCreateFunction });
         return;
     };
-    resolve_data.* = .{ .context = self, .base = url };
-
-    const resolve_fn = newFunctionWithData(&local, importMetaResolveCallback, @ptrCast(resolve_data));
-    const resolve_value = js.Value{ .local = &local, .handle = @ptrCast(resolve_fn.handle) };
+    const resolve_value = js.Value{ .local = &local, .handle = @ptrCast(resolve_fn) };
     const resolve_res = meta.defineOwnProperty("resolve", resolve_value, 0) orelse false;
     if (!resolve_res) {
         log.err(.js, "import meta", .{ .err = error.FailedToSet });
     }
 }
-
-const ImportMetaResolveData = struct {
-    context: *Context,
-    base: [:0]const u8,
-};
 
 // Implements import.meta.resolve(specifier): resolves the specifier against the
 // module's base URL (applying the document's importmap) and returns the
@@ -735,10 +854,8 @@ fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) c
     defer c.deinit();
 
     const l = &c.local;
+    const isolate = l.isolate;
     const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
-    const data: *ImportMetaResolveData = @ptrCast(@alignCast(info.getData() orelse return));
-    const ctx = data.context;
-    const isolate = ctx.isolate;
 
     if (info.length() == 0) {
         _ = isolate.throwException(isolate.createTypeError("import.meta.resolve requires a specifier"));
@@ -750,7 +867,16 @@ fn importMetaResolveCallback(callback_handle: ?*const v8.FunctionCallbackInfo) c
         return;
     };
 
-    const resolved = ctx.script_manager.resolveSpecifier(ctx.local_arena, data.base, specifier) catch {
+    const data = v8.v8__FunctionCallbackInfo__Data(callback_handle) orelse return;
+    const base = (js.String{ .local = l, .handle = @ptrCast(data) }).toSliceZ() catch {
+        _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
+        return;
+    };
+
+    const realm: ?*Context = if (v8.v8__Isolate__GetCurrentContext(isolate.handle)) |current| fromC(current) else null;
+    const importmap: *const ImportMap = if (realm) |ctx| &ctx.script_manager.importmap else &ImportMap.empty;
+
+    const resolved = (importmap.resolve(l.ctx.local_arena, base, specifier) catch null) orelse {
         _ = isolate.throwException(isolate.createTypeError("failed to resolve module specifier"));
         return;
     };
@@ -798,7 +924,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
     try_catch.init(local);
     defer try_catch.deinit();
 
-    const mod = try compileModule(local, source.src(), normalized_specifier);
+    const mod = try self.compileModule(local, source.src(), normalized_specifier, .{}, source.script.script_cache);
     try self.postCompileModule(mod, normalized_specifier, local);
     // waitForImport can cause module_cache to be mutated (via HttpClient.tick),
     // so we need to refetch this incase the hashmap changed
@@ -910,10 +1036,14 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                         .status = @tagName(mod.getStatus()),
                         .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
                     });
-                } else if (comptime lp.IS_DEBUG) {
+                    _ = resolver.reject("module evaluation", "Module evaluation failed");
+                    return promise;
+                }
+                if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
-                _ = resolver.reject("module evaluation", "Module evaluation failed");
+                // e.g. it threw when a module script imported it statically
+                resolver.reject("module evaluation", mod.getException());
                 return promise;
             };
             lp.assert(evaluated.isPromise(), "Context._dynamicModuleCallback non-promise", .{});
@@ -939,6 +1069,15 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     var self = state.context;
 
     if (self.env.terminatePending()) {
+        // we can't do anything with this, the best we can doit drop it from
+        // the cache entry, so that if the terminate is canceled AND there's
+        // another request, it'll fetch it again
+        if (self.module_cache.getPtr(state.specifier)) |entry| {
+            if (entry.resolver_promise) |rp| {
+                rp.release();
+                entry.resolver_promise = null;
+            }
+        }
         var module_source = module_source_ catch return;
         module_source.deinit();
         return;
@@ -966,13 +1105,35 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         try_catch.init(local);
         defer try_catch.deinit();
 
-        break :blk self.module(true, local, ms.src(), state.specifier, true) catch |err| {
+        break :blk self.module(true, local, ms.src(), state.specifier, .{}, true, ms.script.script_cache) catch |err| {
             const caught = try_catch.caughtOrError(self.local_arena, err);
             log.debug(.js, "module compilation failed", .{
                 .caught = caught,
                 .specifier = state.specifier,
             });
-            _ = local.toLocal(state.resolver).reject("dynamic compilation failure", caught.exception orelse "");
+            // Reject with what the module threw.
+            const thrown: ?js.Value = thrown: {
+                if (self.env.terminatePending()) {
+                    break :thrown null;
+                }
+                if (try_catch.exceptionValue()) |exception| {
+                    // Either parse or link error.
+                    break :thrown exception;
+                }
+                if (err == error.EvaluationError) {
+                    // Evaluating doesn't throw! V8 keeps what the module (or
+                    // one of its dependencies) threw on the module.
+                    const mod = self.module_cache.get(state.specifier).?.module.?;
+                    break :thrown local.toLocal(mod).getException();
+                }
+                break :thrown null;
+            };
+            const resolver = local.toLocal(state.resolver);
+            if (thrown) |exception| {
+                resolver.reject("dynamic module failure", exception);
+            } else {
+                resolver.reject("dynamic compilation failure", caught.exception orelse "");
+            }
             return;
         };
     };
@@ -1040,10 +1201,8 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
             }
 
             defer l.runMicrotasks();
-            _ = l.toLocal(s.resolver).reject("catch callback", js.Value{
-                .local = l,
-                .handle = v8.v8__FunctionCallbackInfo__Data(callback_handle).?,
-            });
+            // the rejection reason, e.g. what the module's top-level await threw
+            _ = l.toLocal(s.resolver).reject("catch callback", info.getArg(0, l));
         }
     }.callback, @ptrCast(state));
 
@@ -1079,14 +1238,22 @@ test "Context: terminated async module completion does not re-enter V8" {
         .resolver = resolver_global,
     };
 
+    // As _dynamicModuleCallback leaves it while the fetch is in flight.
+    try frame.js.module_cache.put(frame.js.arena.allocator(), state.specifier, .{
+        .module = null,
+        .module_promise = null,
+        .resolver_promise = try promise.persist(),
+    });
+
     const env = frame.js.env;
-    env.terminate();
-    js.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    env.terminate_requested.store(true, .release);
     defer env.cancelTerminate();
 
     dynamicModuleSourceCallback(&state, error.Abort);
 
     try testing.expectEqual(js.Promise.State.pending, promise.state());
+    // The abandoned promise is no longer handed to later imports.
+    try testing.expectEqual(null, frame.js.module_cache.get(state.specifier).?.resolver_promise);
 }
 
 // Used to make temporarily enter and exit a context, updating and restoring
@@ -1182,6 +1349,17 @@ pub fn queueResizeDelivery(self: *Context) !void {
         fn run(ctx: *Context) void {
             switch (ctx.global) {
                 .frame => |frame| Frame.observers.deliverResizes(frame),
+                .worker => unreachable,
+            }
+        }
+    }.run);
+}
+
+pub fn queueNavigateSuccess(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            switch (ctx.global) {
+                .frame => |frame| frame._session.navigationFor(frame).finishSameDocument(frame),
                 .worker => unreachable,
             }
         }

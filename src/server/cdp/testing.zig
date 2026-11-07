@@ -86,26 +86,32 @@ pub const TestContext = struct {
         c.disposeBrowserContext();
 
         _ = try c.createBrowserContext();
-        var bc = c.browser_context.?;
+        const bc = c.browser_context.?;
 
         if (opts.id) |id| {
             bc.id = id;
         }
 
+        if (opts.target_id == null and opts.session_id == null and opts.url == null) {
+            return bc;
+        }
+
+        // Not bound to a page yet: the first page the test creates gets it.
+        const target = try bc.createTarget();
         if (opts.target_id) |tid| {
-            bc.target_id = tid;
+            target.target_id = tid;
         }
 
         if (opts.session_id) |sid| {
-            _ = try bc.attachPrimarySession(sid);
+            _ = try target.attachPrimarySession(sid);
         }
 
         if (opts.url) |url| {
-            if (bc.session_id == null) {
-                _ = try bc.attachPrimarySession("SID-X");
+            if (target.session_id == null) {
+                _ = try target.attachPrimarySession("SID-X");
             }
-            if (bc.target_id == null) {
-                bc.target_id = "TID-000000000Z".*;
+            if (target.target_id == null) {
+                target.target_id = "TID-000000000Z".*;
             }
             const page = try bc.session.createPage();
             const full_url = try base.arena_allocator.printSentinel(
@@ -248,7 +254,7 @@ pub const TestContext = struct {
         if (self.cdp_.browser_context) |bc| {
             if (bc.session.hasPage()) {
                 var runner = bc.session.runner(.{});
-                switch (try runner.tickForFrame(bc.page_handle.?.frame_id, 20, .{ .until = .done })) {
+                switch (try runner.tickForFrame((try firstTarget(bc)).frame_id.?, 20, .{ .until = .done })) {
                     .ok => return,
                     .done => {},
                 }
@@ -345,7 +351,30 @@ pub fn context() !TestContext {
     };
 }
 
+// The oldest target of `bc`.
+pub fn firstTarget(bc: *const CDP.BrowserContext) !*CDP.Target {
+    return if (bc.targets.items.len > 0) bc.targets.items[0] else error.TargetNotLoaded;
+}
+
 pub fn waitForPage(bc: *CDP.BrowserContext) !void {
     var runner = bc.session.runner(.{});
-    try runner.waitForFrame(bc.page_handle.?.frame_id, 2000, .{ .until = .done });
+    try runner.waitForFrame((try firstTarget(bc)).frame_id.?, 2000, .{ .until = .done });
+}
+
+// The result of the response to `msg_id`.
+pub fn sentResult(ctx: *TestContext, msg_id: i64) !std.json.ObjectMap {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = switch (msg) {
+            .object => |o| o,
+            else => continue,
+        };
+        const id_value = obj.get("id") orelse continue;
+        if (id_value != .integer or id_value.integer != msg_id) {
+            continue;
+        }
+        const result = obj.get("result") orelse return error.NoResult;
+        return result.object;
+    }
+    return error.MessageNotFound;
 }

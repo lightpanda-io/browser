@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Daily Chronicle</title>
+  </head>
+  <body>
+    <!-- Accepting asks for a confirmation first, in controls that did not
+         exist when the banner was first read. -->
+    <div id="banner" role="dialog" aria-label="Cookie notice">
+      <p>We and 437 partners store cookies on your device.</p>
+      <button id="accept">Accept all cookies</button>
+      <button id="reject">Reject non-essential</button>
+    </div>
+    <main>
+      <h1>Headline</h1>
+      <p>The story itself.</p>
+    </main>
+    <script>
+      const banner = document.getElementById("banner");
+      document.getElementById("accept").addEventListener("click", function () {
+        banner.innerHTML =
+          "<p>Share your data with all 437 partners?</p>" +
+          '<button id="back">Go back</button>' +
+          '<button id="confirm">Yes, accept them</button>';
+        document.getElementById("confirm").addEventListener("click", function () {
+          banner.remove();
+        });
+      });
+      document.getElementById("reject").addEventListener("click", function () {
+        banner.remove();
+      });
+    </script>
+  </body>
+</html>

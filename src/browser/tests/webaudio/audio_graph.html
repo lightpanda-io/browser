@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=connect>
@@ -135,9 +136,12 @@
     const near = (expected, actual) => Math.abs(expected - actual) < 1e-6;
     testing.expectEqual(0, data[0]);
     testing.expectEqual(true, near(1 - Math.exp(-1), data[256]));
-    testing.expectEqual(true, near(1 - Math.exp(-2), data[512]));
-    // held from the cancel on; the later setValueAtTime was cancelled
-    testing.expectEqual(true, near(1 - Math.exp(-2), data[1000]));
+    // Chrome holds the value one frame after the cancel time
+    testing.diverges("Chrome's cancelAndHoldAtTime holds the next frame's value", () => {
+      testing.expectEqual(true, near(1 - Math.exp(-2), data[512]));
+      // held from the cancel on; the later setValueAtTime was cancelled
+      testing.expectEqual(true, near(1 - Math.exp(-2), data[1000]));
+    });
   });
 </script>
 

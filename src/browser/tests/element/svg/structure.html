@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <svg id=root width="200" height="100">
@@ -72,9 +73,9 @@
 
 <script id=structuralBoundaries>
 {
-  // Like <defs>, <symbol> and <switch> contribute no resolvable geometry, so
-  // they answer with an empty box rather than an error.
-  testing.expectEqual(0, $('#symbol').getBBox().width);
+  // A <symbol> isn't rendered but still measures its children. <switch>
+  // contributes no resolvable geometry, so it answers with an empty box.
+  testing.expectEqual(5, $('#symbol').getBBox().width);
   testing.expectEqual(0, $('#switch').getBBox().width);
   testing.expectEqual(true, $('#switch').requiredExtensions instanceof SVGStringList);
   testing.expectEqual('urn:svg', $('#switch').requiredExtensions.getItem(0));

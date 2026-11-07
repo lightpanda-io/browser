@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=abortControllerBasic>
@@ -316,9 +317,8 @@
   {
     const state = await testing.async();
     var s3 = AbortSignal.timeout(10);
-    window.setTimeout(() => {
-      state.resolve()
-    }, 11);
+    // A timer of our own isn't ordered against the signal's: wait for abort.
+    s3.addEventListener('abort', () => state.resolve());
 
     await state.done(() => {
       testing.expectEqual(true, s3.aborted);
@@ -360,7 +360,9 @@
     timeout.addEventListener('abort', () => {
       throw new DOMException('nope', 'SyntaxError');
     });
-    window.setTimeout(() => state.resolve(), 5);
+    // The dependents' abort events fire after timeout's listeners, in the
+    // same task.
+    timeout.addEventListener('abort', () => window.setTimeout(() => state.resolve(), 0));
 
     await state.done(() => {
       window.removeEventListener('error', onError);

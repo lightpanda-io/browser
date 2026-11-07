@@ -36,7 +36,7 @@ pub const AxisShorthand = struct {
 // The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
 // CSSOM object and the cascade store these expanded: setting one sets both
 // longhands, reading or serializing it recombines them.
-pub const axis_shorthands = [_]AxisShorthand{
+const axis_shorthands = [_]AxisShorthand{
     .{ .name = "overflow", .x = "overflow-x", .y = "overflow-y" },
     .{ .name = "overscroll-behavior", .x = "overscroll-behavior-x", .y = "overscroll-behavior-y" },
 };
@@ -85,6 +85,80 @@ pub fn splitAxisPair(value: []const u8) ?AxisPair {
         return null;
     }
     return .{ .x = x, .y = y };
+}
+
+/// A four-side shorthand such as `margin`: its longhands in top, right,
+/// bottom, left order.
+pub const BoxShorthand = struct {
+    name: []const u8,
+    sides: [4][]const u8,
+};
+
+pub const box_shorthands = [_]BoxShorthand{
+    .{ .name = "margin", .sides = .{ "margin-top", "margin-right", "margin-bottom", "margin-left" } },
+    .{ .name = "padding", .sides = .{ "padding-top", "padding-right", "padding-bottom", "padding-left" } },
+    .{ .name = "inset", .sides = .{ "top", "right", "bottom", "left" } },
+    .{ .name = "border-width", .sides = .{ "border-top-width", "border-right-width", "border-bottom-width", "border-left-width" } },
+    .{ .name = "border-style", .sides = .{ "border-top-style", "border-right-style", "border-bottom-style", "border-left-style" } },
+    .{ .name = "border-color", .sides = .{ "border-top-color", "border-right-color", "border-bottom-color", "border-left-color" } },
+};
+
+pub fn boxShorthand(name: []const u8) ?BoxShorthand {
+    for (box_shorthands) |shorthand| {
+        if (std.ascii.eqlIgnoreCase(name, shorthand.name)) {
+            return shorthand;
+        }
+    }
+    return null;
+}
+
+/// The index in `box_shorthands` of the shorthand `name` is a side of.
+pub fn boxLonghandIndex(name: []const u8) ?usize {
+    for (box_shorthands, 0..) |shorthand, i| {
+        for (shorthand.sides) |side| {
+            if (std.ascii.eqlIgnoreCase(name, side)) {
+                return i;
+            }
+        }
+    }
+    return null;
+}
+
+/// One to four values for top, right, bottom and left, filled in the CSS way:
+/// a missing left takes right, a missing bottom takes top, a missing right
+/// takes top. Values split at the top level, so `rgb(1, 2, 3)` stays one value.
+/// More than four values is invalid and null, as is an empty declaration.
+pub fn splitBoxSides(value: []const u8) ?[4][]const u8 {
+    var parts: [4][]const u8 = undefined;
+    var count: usize = 0;
+    var stream = TokenStream.init(value);
+    var depth: usize = 0;
+    var start: ?usize = null;
+    while (stream.next()) |span| {
+        if (depth == 0 and isWhitespaceOrComment(span.token)) {
+            if (start) |s| {
+                if (count == parts.len) return null;
+                parts[count] = value[s..span.start];
+                count += 1;
+                start = null;
+            }
+            continue;
+        }
+        if (start == null) start = span.start;
+        updateDepth(span.token, &depth);
+    }
+    if (start) |s| {
+        if (count == parts.len) return null;
+        parts[count] = value[s..];
+        count += 1;
+    }
+    return switch (count) {
+        1 => .{ parts[0], parts[0], parts[0], parts[0] },
+        2 => .{ parts[0], parts[1], parts[0], parts[1] },
+        3 => .{ parts[0], parts[1], parts[2], parts[1] },
+        4 => parts,
+        else => null,
+    };
 }
 
 const TokenSpan = struct {
@@ -570,7 +644,7 @@ fn consumeNestedRule(stream: *TokenStream, input: []const u8) ?StyleRule {
 /// whole parent, so `& &` nested N deep doubles the text N times: a hostile
 /// stylesheet would reach gigabytes well within MAX_AT_RULE_NESTING. A rule
 /// whose selector would outgrow this is dropped instead.
-pub const MAX_NESTED_SELECTOR_LEN: usize = 64 * 1024;
+const MAX_NESTED_SELECTOR_LEN: usize = 64 * 1024;
 
 /// Resolve the selector list of a style rule nested in `parent` (CSS Nesting
 /// §3): each `&` becomes `:is(<parent>)`, and a relative selector (one that
@@ -676,6 +750,25 @@ pub fn resolveNestedSelector(allocator: std.mem.Allocator, parent: []const u8, n
 }
 
 const testing = std.testing;
+
+test "splitBoxSides" {
+    const expectSides = struct {
+        fn check(expected: [4][]const u8, value: []const u8) !void {
+            const sides = splitBoxSides(value) orelse return error.TestUnexpectedResult;
+            for (expected, sides) |e, side| {
+                try std.testing.expectEqualStrings(e, side);
+            }
+        }
+    }.check;
+    try expectSides(.{ "1px", "1px", "1px", "1px" }, "1px");
+    try expectSides(.{ "1px", "2px", "1px", "2px" }, " 1px  2px ");
+    try expectSides(.{ "1px", "2px", "3px", "2px" }, "1px 2px 3px");
+    try expectSides(.{ "1px", "2px", "3px", "4px" }, "1px 2px/* c */3px 4px");
+    try expectSides(.{ "rgb(1, 2, 3)", "red", "rgb(1, 2, 3)", "red" }, "rgb(1, 2, 3) red");
+    try expectSides(.{ "calc(1px + (2px * 3))", "0", "calc(1px + (2px * 3))", "0" }, "calc(1px + (2px * 3)) 0");
+    try std.testing.expect(splitBoxSides("1px 2px 3px 4px 5px") == null);
+    try std.testing.expect(splitBoxSides("  ") == null);
+}
 
 test "RulesIterator: single rule" {
     var it = RulesIterator.init(".test { color: red; }");

@@ -148,14 +148,11 @@ fn setSelectedness(self: *Option, selected: bool) void {
     }
 }
 
-/// The <select> this option belongs to, directly or through an <optgroup>.
+/// The <select> whose list of options holds this option.
 pub fn ownerSelect(self: *Option) ?*Select {
-    var node = self.asNode().parentNode();
-    while (node) |n| : (node = n.parentNode()) {
-        if (n.is(Select)) |select| return select;
-        if (n.is(Element.Html.OptGroup) == null) return null;
-    }
-    return null;
+    const parent = self.asNode().parentNode() orelse return null;
+    const pos = Select.listPosition(parent) orelse return null;
+    return pos.select;
 }
 
 fn getDefaultSelected(self: *const Option) bool {

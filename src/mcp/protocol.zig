@@ -118,6 +118,18 @@ const ServerCapabilities = struct {
 };
 
 const LoggingCapability = struct {};
+
+/// Syslog severities, least severe first.
+pub const LogLevel = enum {
+    debug,
+    info,
+    notice,
+    warning,
+    @"error",
+    critical,
+    alert,
+    emergency,
+};
 const PromptsCapability = struct {
     listChanged: ?bool = null,
 };

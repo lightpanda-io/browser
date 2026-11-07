@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <form id=f><input name=i1><select id=s><option>a</option><option>b</option></select></form>
 <div id=d class="x y" data-a=1></div>
@@ -24,7 +25,10 @@
       const desc = Object.getOwnPropertyDescriptor(obj, 0);
       const writable = name === 'HTMLOptionsCollection';
       testing.expectEqual([name, true, true, writable].join(' '), [name, desc.enumerable, desc.configurable, desc.writable].join(' '));
-      testing.expectEqual(name + ' true', name + ' ' + obj.propertyIsEnumerable(0));
+      testing.diverges("Chrome's indexed interceptors have no query callback, so V8 reports DONT_ENUM", () => {
+        // Firefox and the spec agree with us
+        testing.expectEqual(name + ' true', name + ' ' + obj.propertyIsEnumerable(0));
+      });
       testing.expectEqual(name + ' true', name + ' ' + (0 in obj));
       testing.expectEqual(name + ' false', name + ' ' + (9999 in obj));
       testing.expectEqual(name + ' true', name + ' ' + (Object.getOwnPropertyDescriptor(obj, 9999) === undefined));

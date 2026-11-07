@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <script id="sheet">
@@ -72,23 +73,55 @@
 <script id="blocking">
   {
     const style = document.createElement('style');
-    testing.expectEqual('', style.blocking);
+    testing.expectEqual(true, style.blocking instanceof DOMTokenList);
+    testing.expectEqual(true, style.blocking === style.blocking);
+    testing.expectEqual('', style.blocking.value);
+    testing.expectEqual(true, style.blocking.supports('render'));
+    testing.expectEqual(false, style.blocking.supports('parser'));
 
     style.blocking = 'render';
-    testing.expectEqual('render', style.blocking);
+    testing.expectEqual('render', style.blocking.value);
+    testing.expectEqual('render', style.getAttribute('blocking'));
+
+    style.blocking.add('other');
+    testing.expectEqual('render other', style.getAttribute('blocking'));
   }
 </script>
 
 <script id="disabled">
   {
+    // No associated sheet: reads false, writes are ignored.
+    const detached = document.createElement('style');
+    testing.expectEqual(false, detached.disabled);
+    detached.disabled = true;
+    testing.expectEqual(false, detached.disabled);
+
     const style = document.createElement('style');
+    style.textContent = '#disabled-target { display: none; }';
+    document.head.appendChild(style);
+    const target = document.createElement('div');
+    target.id = 'disabled-target';
+    document.documentElement.appendChild(target);
     testing.expectEqual(false, style.disabled);
+    testing.expectEqual('none', getComputedStyle(target).display);
 
     style.disabled = true;
     testing.expectEqual(true, style.disabled);
+    testing.expectEqual(true, style.sheet.disabled);
+    testing.expectEqual(false, style.hasAttribute('disabled'));
+    testing.expectEqual('block', getComputedStyle(target).display);
 
-    style.disabled = false;
+    // A rule inserted into a disabled sheet doesn't apply either.
+    style.sheet.insertRule('#disabled-target { visibility: hidden; }', 1);
+    testing.expectEqual('visible', getComputedStyle(target).visibility);
+
+    style.sheet.disabled = false;
     testing.expectEqual(false, style.disabled);
+    testing.expectEqual('none', getComputedStyle(target).display);
+    testing.expectEqual('hidden', getComputedStyle(target).visibility);
+
+    target.remove();
+    style.remove();
   }
 </script>
 
@@ -102,8 +135,9 @@
     style.setAttribute('type', 'text/less');
     testing.expectEqual('text/less', style.type);
 
+    // disabled isn't a reflected attribute.
     style.setAttribute('disabled', '');
-    testing.expectEqual(true, style.disabled);
+    testing.expectEqual(false, style.disabled);
   }
 </script>
 
@@ -138,5 +172,47 @@
   testing.expectEqual(1, sheet.cssRules.length);
   testing.expectEqual('.content-test', sheet.cssRules[0].selectorText);
   testing.expectEqual('5px', sheet.cssRules[0].style.padding);
+}
+</script>
+
+<div id="text-change-target" class="text-change">x</div>
+<script id="text-change-updates-cascade">
+{
+  const target = document.getElementById('text-change-target');
+  const style = document.createElement('style');
+  style.textContent = '.text-change { display: none; }';
+  document.head.appendChild(style);
+  testing.expectEqual(false, target.checkVisibility());
+
+  // textContent replaces the children
+  style.textContent = '.text-change { display: block; }';
+  testing.expectEqual(true, target.checkVisibility());
+
+  // a materialized cssRules is rebuilt from the new text, not kept
+  testing.expectEqual('block', style.sheet.cssRules[0].style.display);
+  style.textContent = '.text-change { display: none; }';
+  testing.expectEqual(false, target.checkVisibility());
+  testing.expectEqual(1, style.sheet.cssRules.length);
+  testing.expectEqual('none', style.sheet.cssRules[0].style.display);
+
+  // text child's data
+  style.firstChild.data = '.text-change { color: red; }';
+  testing.expectEqual(true, target.checkVisibility());
+
+  // appended text node
+  style.appendChild(document.createTextNode('#text-change-target { display: none; }'));
+  testing.expectEqual(false, target.checkVisibility());
+  testing.expectEqual(2, style.sheet.cssRules.length);
+
+  // removed text node
+  style.removeChild(style.lastChild);
+  testing.expectEqual(true, target.checkVisibility());
+
+  // innerHTML
+  style.innerHTML = '.text-change { display: none; }';
+  testing.expectEqual(false, target.checkVisibility());
+
+  style.remove();
+  testing.expectEqual(true, target.checkVisibility());
 }
 </script>

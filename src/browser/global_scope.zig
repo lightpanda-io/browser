@@ -143,6 +143,28 @@ pub const GlobalScope = union(enum) {
         };
     }
 
+    pub const TaskScope = JS.Attribution.Scope;
+
+    // A new Attribution task for a request this global is making.
+    pub fn beginRequestTask(self: GlobalScope, request_url: []const u8, resource_type: HttpClient.Request.ResourceType) JS.Attribution.Tag {
+        const attribution = self.getJs().attribution;
+        return attribution.begin(.request, .{
+            .label = request_url,
+            .detail = resource_type.string(),
+            .root = resource_type == .document,
+        });
+    }
+
+    pub fn settle(self: GlobalScope) *JS.Attribution.Settle {
+        return switch (self) {
+            inline else => |g| &g.page.settle,
+        };
+    }
+
+    pub fn enterTask(self: GlobalScope, task: ?JS.Attribution.Tag) TaskScope {
+        return self.getJs().attribution.enter(task);
+    }
+
     pub fn getBroadcastChannels(self: GlobalScope) *std.DoublyLinkedList {
         return switch (self) {
             inline else => |g| &g._broadcast_channels,
@@ -201,6 +223,7 @@ pub const GlobalScope = union(enum) {
                 .parent = if (frame.parent) |p| &p._http_owner else null,
                 .frame_id = frame._frame_id,
                 .document_frame_id = frame._frame_id,
+                .root_frame_id = frame.page.frame._frame_id,
                 .loader_id = frame._loader_id,
                 .log_page = &frame.page.log_context,
             },
@@ -210,6 +233,7 @@ pub const GlobalScope = union(enum) {
                 .parent = &worker._frame._http_owner,
                 .frame_id = worker._frame_id,
                 .document_frame_id = worker._frame._frame_id,
+                .root_frame_id = worker.page.frame._frame_id,
                 .loader_id = worker._loader_id,
                 .log_page = &worker.page.log_context,
             },

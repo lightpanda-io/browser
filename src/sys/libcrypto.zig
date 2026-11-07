@@ -39,7 +39,6 @@ pub extern fn EVP_sha384() *const EVP_MD;
 pub extern fn EVP_sha512() *const EVP_MD;
 
 pub const EVP_MAX_MD_SIZE = 64;
-pub const EVP_MAX_MD_BLOCK_SIZE = 128;
 
 pub extern fn EVP_MD_size(md: ?*const EVP_MD) usize;
 pub extern fn EVP_MD_block_size(md: ?*const EVP_MD) usize;
@@ -80,9 +79,6 @@ pub extern fn HKDF(
     info: [*c]const u8,
     info_len: usize,
 ) c_int;
-
-pub const X25519_PRIVATE_KEY_LEN = 32;
-pub const X25519_PUBLIC_VALUE_LEN = 32;
 
 pub extern fn X25519_keypair(out_public_value: *[32]u8, out_private_key: *[32]u8) void;
 
@@ -172,7 +168,7 @@ pub extern fn EC_POINT_point2oct(group: *const EC_GROUP, point: *const EC_POINT,
 
 // ECDSA over a digest, with the signature as an (r, s) pair.
 const struct_ecdsa_sig_st = opaque {};
-pub const ECDSA_SIG = struct_ecdsa_sig_st;
+const ECDSA_SIG = struct_ecdsa_sig_st;
 pub extern fn ECDSA_do_sign(digest: [*]const u8, digest_len: usize, key: *const EC_KEY) ?*ECDSA_SIG;
 /// Returns 1 for a valid signature, 0 otherwise (on the error queue).
 pub extern fn ECDSA_do_verify(digest: [*]const u8, digest_len: usize, sig: *const ECDSA_SIG, key: *const EC_KEY) c_int;
@@ -234,7 +230,7 @@ pub extern fn RSA_new_private_key(
 // it with OPENSSL_free) and stores it in `*outp`. Returns the length, or a
 // negative value on error.
 const struct_pkcs8_priv_key_info_st = opaque {};
-pub const PKCS8_PRIV_KEY_INFO = struct_pkcs8_priv_key_info_st;
+const PKCS8_PRIV_KEY_INFO = struct_pkcs8_priv_key_info_st;
 pub extern fn i2d_PUBKEY(pkey: *const EVP_PKEY, outp: *[*c]u8) c_int;
 pub extern fn EVP_PKEY2PKCS8(pkey: *const EVP_PKEY) ?*PKCS8_PRIV_KEY_INFO;
 pub extern fn i2d_PKCS8_PRIV_KEY_INFO(key: *const PKCS8_PRIV_KEY_INFO, outp: *[*c]u8) c_int;
@@ -320,7 +316,7 @@ pub extern fn SSL_CTX_free(ctx: *SSL_CTX) void;
 pub extern fn SSL_CTX_set1_curves_list(ctx: *SSL_CTX, curves: [*:0]const u8) c_int;
 
 const struct_ssl_method_st = opaque {};
-pub const SSL_METHOD = struct_ssl_method_st;
+const SSL_METHOD = struct_ssl_method_st;
 pub extern fn TLS_method() *const SSL_METHOD;
 
 /// Returns the desired digest by its name.

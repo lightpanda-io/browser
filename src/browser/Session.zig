@@ -37,6 +37,7 @@ const Viewport = @import("Viewport.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 const Geolocation = @import("webapi/geolocation/Geolocation.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
+const PermissionOverrides = @import("PermissionOverrides.zig");
 pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
@@ -55,7 +56,7 @@ const Session = @This();
 
 browser: *Browser,
 http_client: *HttpClient,
-permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
+permissions: PermissionOverrides = .{},
 geolocation_override: ?Geolocation.Override = null,
 viewport_override: ?Viewport = null,
 arena: *lp.Arena,
@@ -102,9 +103,11 @@ _nav_cursor: usize = 0,
 // `commitPendingPage`).
 _tool_frame_override: ?u32 = null,
 
-// A popup the last tool action opened (target=_blank). Tools act on it, as
-// a user whose click opened a tab would, until it goes away.
-_followed_popup: ?u32 = null,
+// A popup the last action opened, or one `popups {follow}` chose; tools act
+// on it until it closes. Only an explicit follow outranks
+// `_tool_frame_override`, and only on that page: the Runtime re-arms the
+// override every call, and a click's popup must not move a script's handle.
+_followed_popup: ?FollowedPopup = null,
 
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
@@ -149,6 +152,9 @@ pub const DownloadBehavior = enum {
     // The CDP `default` behavior is mapped to `deny`: we don't write downloads
     // to disk unless the driver explicitly opts in with `allow`/`allowAndName`.
     deny,
+    /// LP extension to `DownloadBehavior`; instead of writing files to disk,
+    /// they are streamed over CDP.
+    stream,
 };
 
 const CancelHook = struct {
@@ -198,32 +204,30 @@ pub fn setViewportOverride(self: *Session, viewport: ?Viewport) void {
 
 // The client is borrowed and must outlive the session. Install it before
 // creating pages: their script managers retain the same client pointer.
+// A custom client is exclusive to this session until teardown releases it.
 pub fn setHttpClient(self: *Session, client: *HttpClient) void {
     lp.assert(self.pages.items.len == 0, "Session.setHttpClient with live pages", .{});
-    client.heartbeat_override = self.browser.http_client.watchdogHeartbeat();
-    client.driver = self.browser.http_client.driver;
+    if (self.http_client == client) return;
+    if (self.http_client != &self.browser.http_client) self.http_client.session_source = null;
+    if (client != &self.browser.http_client) {
+        lp.assert(client.session_source == null, "Client already installed in a session", .{});
+        client.session_source = &self.browser.http_client;
+    }
     self.http_client = client;
 }
 
 pub fn setPermission(self: *Session, name: []const u8, state: PermissionState) !void {
-    const allocator = self.browser.allocator;
-    const gop = try self.permissions.getOrPut(allocator, name);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = allocator.dupe(u8, name) catch |err| {
-            _ = self.permissions.remove(name);
-            return err;
-        };
-    }
-    gop.value_ptr.* = state;
+    try self.permissions.set(self.browser.allocator, name, state);
 }
 
 pub fn clearPermissions(self: *Session) void {
-    var it = self.permissions.keyIterator();
-    while (it.next()) |key| self.browser.allocator.free(key.*);
-    self.permissions.clearRetainingCapacity();
+    self.permissions.clear(self.browser.allocator);
 }
 
 pub fn deinit(self: *Session) void {
+    defer {
+        if (self.http_client != &self.browser.http_client) self.http_client.session_source = null;
+    }
     if (self._console_capture) {
         self.notification.unregister(.console_message, self);
     }
@@ -244,7 +248,6 @@ pub fn deinit(self: *Session) void {
     }
 
     self.cookie_jar.deinit();
-    self.clearPermissions();
     self.permissions.deinit(self.browser.allocator);
 
     {
@@ -400,7 +403,7 @@ fn removePageFromList(self: *Session, page: *Page) void {
 // which interleaves the OLD-page teardown with the pending-page promotion
 // in a specific order.
 fn tearDownPage(self: *Session, page: *Page) void {
-    self.notification.dispatch(.frame_remove, .{});
+    self.notification.dispatch(.frame_remove, .{ .frame_id = page.frame._frame_id });
     self.retire(page);
 }
 
@@ -596,10 +599,16 @@ pub fn primaryPage(self: *Session) ?PageHandle {
 pub fn currentFrame(self: *Session) ?*Frame {
     if (self._tool_frame_override) |frame_id| {
         // No pages[0] fallthrough: the override targets one specific page.
-        return self.findFrameByFrameId(frame_id);
+        const override_frame = self.findFrameByFrameId(frame_id) orelse return null;
+        // Not cleared on a mismatch: a follow on a sibling page applies again
+        // when the Runtime calls into it.
+        const followed = self._followed_popup orelse return override_frame;
+        if (!followed.explicit) return override_frame;
+        const popup = override_frame.page.findFrameByFrameId(followed.frame_id) orelse return override_frame;
+        return if (popup.parent == null) popup else override_frame;
     }
-    if (self._followed_popup) |frame_id| {
-        if (self.findFrameByFrameId(frame_id)) |frame| {
+    if (self._followed_popup) |followed| {
+        if (self.findFrameByFrameId(followed.frame_id)) |frame| {
             return frame;
         }
         self._followed_popup = null;
@@ -619,9 +628,14 @@ pub fn setToolFrameOverride(self: *Session, frame_id: ?u32) void {
     self._tool_frame_override = frame_id;
 }
 
+pub const FollowedPopup = struct {
+    frame_id: u32,
+    explicit: bool,
+};
+
 /// See `_followed_popup`.
-pub fn followPopup(self: *Session, frame_id: u32) void {
-    self._followed_popup = frame_id;
+pub fn followPopup(self: *Session, popup: FollowedPopup) void {
+    self._followed_popup = popup;
 }
 
 // Multi-page aware: frame ids are globally unique (monotonic on `Browser`).
@@ -633,6 +647,17 @@ pub fn findFrameByFrameId(self: *Session, frame_id: u32) ?*Frame {
     }
     for (self.pages.items) |page| {
         if (page.findFrameByFrameId(frame_id)) |frame| {
+            return frame;
+        }
+    }
+    return null;
+}
+
+/// The frame showing the document with this loader id, which a navigation
+/// replaces even though the frame keeps its id.
+pub fn findFrameByLoaderId(self: *Session, loader_id: u32) ?*Frame {
+    for (self.pages.items) |page| {
+        if (page.findFrameByLoaderId(loader_id)) |frame| {
             return frame;
         }
     }
@@ -1073,7 +1098,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
     // Step 1: clear the OLD page's CDP / V8 inspector state while it is still
     // walkable (node_registry, inspector context group, isolated worlds). OLD
     // is still the live page (index 0); its memory stays alive until step 4.
-    self.notification.dispatch(.frame_remove, .{});
+    self.notification.dispatch(.frame_remove, .{ .frame_id = old.frame._frame_id });
 
     // Step 2: register the new page with CDP. `replacement.replaces` is still
     // set, so the session still reports an in-flight nav and CDP's frameCreated
@@ -1320,15 +1345,91 @@ test "Session: navigator reads its own network client" {
     try session.init(browser, notification);
     defer session.deinit();
     session.setHttpClient(&client);
-    const frame = (try session.createPage()).frame().?;
+    const page = try session.createPage();
+    const frame = page.frame().?;
     const js = @import("js/js.zig");
-    var scope: js.Local.Scope = undefined;
-    frame.js.localScope(&scope);
-    defer scope.deinit();
-    try testing.expect((try scope.local.exec("navigator.userAgent === 'SessionBot/1.0' && navigator.language === 'fr-FR'", null)).toBool());
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        try testing.expect((try scope.local.exec("navigator.userAgent === 'SessionBot/1.0' && navigator.language === 'fr-FR'", null)).toBool());
+    }
     try testing.expect(!std.mem.eql(u8, browser.http_client.getUserAgent(), "SessionBot/1.0"));
     try testing.expect(client.watchdogHeartbeat() == browser.http_client.watchdogHeartbeat());
     var page_runner = session.runner(.{});
     _ = try page_runner.tickForFrame(frame._frame_id, 0, .{ .until = .done });
     try testing.expect(client.watchdogHeartbeat().last_activity.load(.acquire) > 0);
+    const default_requests = browser.http_client.next_request_id;
+    try page.navigate("http://127.0.0.1:9582/src/browser/tests/hi.html", .{});
+    try page_runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+    try testing.expect(client.next_request_id > 0);
+    try testing.expectEqual(default_requests, browser.http_client.next_request_id);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", page.frame().?.url);
+}
+
+test "Session: pages share permission overrides only within their session" {
+    const js = @import("js/js.zig");
+    const browser = testing.test_session.browser;
+    const first_notification = try Notification.init(testing.allocator);
+    defer first_notification.deinit();
+    const second_notification = try Notification.init(testing.allocator);
+    defer second_notification.deinit();
+    var first: Session = undefined;
+    try first.init(browser, first_notification);
+    defer first.deinit();
+    var second: Session = undefined;
+    try second.init(browser, second_notification);
+    defer second.deinit();
+
+    const a = try first.createPage();
+    const b = try first.createPage();
+    const other = try second.createPage();
+    const expectPermission = struct {
+        fn check(page: PageHandle, expected: []const u8) !void {
+            var ls: js.Local.Scope = undefined;
+            page.frame().?.js.localScope(&ls);
+            defer ls.deinit();
+            _ = try ls.local.exec(
+                "globalThis.permissionState = null; navigator.permissions.query({name: 'geolocation'}).then(p => permissionState = p.state)",
+                null,
+            );
+            ls.local.runMicrotasks();
+            const state = try ls.local.exec("permissionState", null);
+            try testing.expectEqual(expected, try state.toStringSlice());
+        }
+    }.check;
+
+    try expectPermission(a, "prompt");
+    try expectPermission(b, "prompt");
+    try first.setPermission("geolocation", .granted);
+    try expectPermission(a, "granted");
+    try expectPermission(b, "granted");
+    try expectPermission(other, "prompt");
+    try second.setPermission("geolocation", .denied);
+    try expectPermission(other, "denied");
+    try expectPermission(b, "granted");
+
+    a.close();
+    try expectPermission(b, "granted");
+    try expectPermission(try first.createPage(), "granted");
+    first.clearPermissions();
+    try expectPermission(b, "prompt");
+    try expectPermission(other, "denied");
+}
+
+test "Session: releasing a borrowed client removes its browser binding" {
+    const browser = testing.test_session.browser;
+    const notification = try Notification.init(testing.allocator);
+    defer notification.deinit();
+    var client: HttpClient = undefined;
+    try client.init(browser.app);
+    defer client.deinit();
+    var session: Session = undefined;
+    try session.init(browser, notification);
+    session.setHttpClient(&client);
+    try testing.expectEqual(&browser.http_client, client.session_source.?);
+    session.deinit();
+    try testing.expectEqual(null, client.session_source);
+    try testing.expect(client.watchdogHeartbeat() == &client.heartbeat);
+    _ = try client.tick(0);
 }

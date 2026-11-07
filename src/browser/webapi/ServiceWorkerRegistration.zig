@@ -81,11 +81,11 @@ pub fn asEventTarget(self: *ServiceWorkerRegistration) *EventTarget {
     return self._proto;
 }
 
-pub fn getScope(self: *const ServiceWorkerRegistration) []const u8 {
+fn getScope(self: *const ServiceWorkerRegistration) []const u8 {
     return self._scope_url;
 }
 
-pub fn getInstalling(self: *ServiceWorkerRegistration) !?*ServiceWorker {
+fn getInstalling(self: *ServiceWorkerRegistration) !?*ServiceWorker {
     const scope = self._scope orelse return null;
     return switch (scope._state) {
         .parsed, .installing => try self.worker(scope),
@@ -93,7 +93,7 @@ pub fn getInstalling(self: *ServiceWorkerRegistration) !?*ServiceWorker {
     };
 }
 
-pub fn getWaiting(self: *ServiceWorkerRegistration) !?*ServiceWorker {
+fn getWaiting(self: *ServiceWorkerRegistration) !?*ServiceWorker {
     const scope = self._scope orelse return null;
     return switch (scope._state) {
         .installed => try self.worker(scope),
@@ -101,7 +101,7 @@ pub fn getWaiting(self: *ServiceWorkerRegistration) !?*ServiceWorker {
     };
 }
 
-pub fn getActive(self: *ServiceWorkerRegistration) !?*ServiceWorker {
+fn getActive(self: *ServiceWorkerRegistration) !?*ServiceWorker {
     const scope = self._scope orelse return null;
     return switch (scope._state) {
         .activating, .activated => try self.worker(scope),
@@ -109,7 +109,7 @@ pub fn getActive(self: *ServiceWorkerRegistration) !?*ServiceWorker {
     };
 }
 
-pub fn getUpdateViaCache(_: *const ServiceWorkerRegistration) []const u8 {
+fn getUpdateViaCache(_: *const ServiceWorkerRegistration) []const u8 {
     // this is all we implement right now, and it still goes through the HTTP
     // cache like anything else for now.
     return "imports";

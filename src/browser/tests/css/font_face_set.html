@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id="document_fonts_exists">
@@ -57,24 +58,43 @@
 }
 </script>
 
-<script id="document_fonts_addEventListener">
+<script id="document_fonts_load">
 {
-    let loading = false;
-    document.fonts.addEventListener('loading', function() {
-        loading = true;
+    // Nothing starts loading, so neither event fires.
+    const events = [];
+    document.fonts.addEventListener('loading', () => events.push('loading'));
+    document.fonts.addEventListener('loadingdone', () => {
+        events.push('loadingdone');
+        document.fonts.load("16px Roboto");
     });
 
-    let loadingdone = false;
-    document.fonts.addEventListener('loadingdone', function() {
-        loadingdone = true;
-    });
-
-    document.fonts.load("italic bold 16px Roboto");
+    let loaded = null;
+    document.fonts.load("italic bold 16px Roboto").then((fonts) => loaded = fonts);
+    let generic = null;
+    document.fonts.load("16px sans-serif").then((fonts) => generic = fonts);
+    testing.expectEqual(0, events.length);
 
     testing.onload(() => {
-      testing.expectEqual(true, loading);
-      testing.expectEqual(true, loadingdone);
+      testing.expectEqual(0, events.length);
+      testing.expectEqual(true, Array.isArray(loaded));
+      // A generic family never matches a font face.
+      testing.expectEqual(0, generic.length);
+      testing.diverges('Chrome resolves an undeclared family with []; we resolve with a loaded stand-in face', () => {
+        testing.expectEqual(1, loaded.length);
+        testing.expectEqual('Roboto', loaded[0]?.family);
+      });
     });
-    testing.expectEqual(true, true);
+}
+</script>
+
+<script id="document_fonts_add_size">
+{
+    const before = document.fonts.size;
+    const face = new FontFace("SizeFont", "url(size.woff)");
+    document.fonts.add(face);
+    testing.expectEqual(before + 1, document.fonts.size);
+    // Adding the same face again doesn't grow the set.
+    document.fonts.add(face);
+    testing.expectEqual(before + 1, document.fonts.size);
 }
 </script>

@@ -20,6 +20,8 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 
+const AbortSignal = @import("../AbortSignal.zig");
+const NavigateEvent = @import("../event/NavigateEvent.zig");
 const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 
 pub const NavigationType = enum {
@@ -50,4 +52,27 @@ pub const NavigationTransition = struct {
     finished: js.Promise.Global,
     from: NavigationHistoryEntry,
     navigation_type: NavigationType,
+};
+
+// Frame._ongoing_navigate. Aborted by a new navigation, window.stop() or
+// canceling the event.
+pub const OngoingNavigation = struct {
+    signal: *AbortSignal,
+    // Only set while the event is being dispatched
+    event: ?*NavigateEvent = null,
+    // Promises of navigation.navigate()/reload()/traverseTo()/back()/forward()
+    committed: ?js.PromiseResolver.Global = null,
+    finished: ?js.PromiseResolver.Global = null,
+    committed_same_document: bool = false,
+
+    pub fn releasePromises(self: *OngoingNavigation) void {
+        if (self.committed) |c| {
+            c.release();
+            self.committed = null;
+        }
+        if (self.finished) |f| {
+            f.release();
+            self.finished = null;
+        }
+    }
 };

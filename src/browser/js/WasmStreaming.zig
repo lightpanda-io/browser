@@ -101,8 +101,8 @@ fn onResponse(self: *WasmStreaming, value: js.Value, exec: *js.Execution) void {
     ) catch |err| self.abortZigError(local, err);
 }
 
-fn onBytes(self: *WasmStreaming, bytes: []const u8) void {
-    v8.v8__WasmStreaming__OnBytesReceived(&self.handle, bytes.ptr, bytes.len);
+fn onBytes(self: *WasmStreaming, bytes: js.TypedArray(u8)) void {
+    v8.v8__WasmStreaming__OnBytesReceived(&self.handle, bytes.values.ptr, bytes.values.len);
     v8.v8__WasmStreaming__Finish(&self.handle);
     self.release();
 }

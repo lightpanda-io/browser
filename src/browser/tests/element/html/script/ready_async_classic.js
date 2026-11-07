@@ -1,0 +1,1 @@
+readyAsyncOrder.push('classic');

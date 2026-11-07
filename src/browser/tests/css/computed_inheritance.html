@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<head>
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  getComputedStyle for properties only inline styles declare: initial values,
+  inheritance up the tree and the CSS-wide keywords. Values match Chrome.
+-->
+
+<div id=grand><div id=container><span id=target></span></div></div>
+<a id=link href="#"><span id=in-link></span></a>
+<a id=not-link><span id=in-not-link></span></a>
+
+<script id=initial_values>
+{
+  const target = $('#target');
+  const cs = getComputedStyle(target);
+  testing.expectEqual('auto', cs.isolation);
+  testing.expectEqual('normal', cs.backgroundBlendMode);
+  testing.expectEqual('none', cs.float);
+  testing.expectEqual('none', cs.cssFloat);
+  testing.expectEqual('normal', cs.wordWrap);
+  testing.expectEqual('none', cs.webkitTransform);
+  testing.expectEqual('rgb(0, 0, 0)', cs.color);
+  testing.expectEqual('0px', cs.minWidth);
+  testing.expectEqual('0px', cs.margin);
+  testing.expectEqual(undefined, cs.notARealProperty);
+}
+</script>
+
+<script id=inherited>
+{
+  const grand = $('#grand');
+  const container = $('#container');
+  const target = $('#target');
+
+  grand.style.fontStyle = 'italic';
+  testing.expectEqual('italic', getComputedStyle(target).fontStyle);
+
+  container.style.fontStyle = 'oblique';
+  testing.expectEqual('oblique', getComputedStyle(target).fontStyle);
+
+  // canonicalized like a declared color
+  container.style.color = 'red';
+  testing.expectEqual('rgb(255, 0, 0)', getComputedStyle(target).color);
+
+  container.style.cssText = '';
+  grand.style.cssText = '';
+  testing.expectEqual('normal', getComputedStyle(target).fontStyle);
+}
+</script>
+
+<script id=not_inherited>
+{
+  const container = $('#container');
+  const target = $('#target');
+
+  container.style.isolation = 'isolate';
+  testing.expectEqual('isolate', getComputedStyle(container).isolation);
+  testing.expectEqual('auto', getComputedStyle(target).isolation);
+
+  target.style.isolation = 'inherit';
+  testing.expectEqual('isolate', getComputedStyle(target).isolation);
+
+  target.style.isolation = 'unset';
+  testing.expectEqual('auto', getComputedStyle(target).isolation);
+
+  container.style.cssText = '';
+  target.style.cssText = '';
+}
+</script>
+
+<script id=keywords>
+{
+  const container = $('#container');
+  const target = $('#target');
+
+  container.style.fontStyle = 'italic';
+  target.style.fontStyle = 'initial';
+  testing.expectEqual('normal', getComputedStyle(target).fontStyle);
+  target.style.fontStyle = 'unset';
+  testing.expectEqual('italic', getComputedStyle(target).fontStyle);
+  target.style.fontStyle = 'INHERIT';
+  testing.expectEqual('italic', getComputedStyle(target).fontStyle);
+
+  // initial is the property's initial value, not the element's UA default
+  container.style.display = 'initial';
+  testing.expectEqual('inline', getComputedStyle(container).display);
+  container.style.display = '';
+  testing.expectEqual('block', getComputedStyle(container).display);
+
+  container.style.paddingBlockStart = 'initial';
+  testing.expectEqual('0px', getComputedStyle(container).paddingBlockStart);
+
+  container.style.cssText = '';
+  target.style.cssText = '';
+}
+</script>
+
+<script id=ua_default_color>
+{
+  testing.expectEqual('rgb(0, 0, 238)', getComputedStyle($('#link')).color);
+  testing.expectEqual('rgb(0, 0, 238)', getComputedStyle($('#in-link')).color);
+
+  $('#link').style.color = 'initial';
+  testing.expectEqual('rgb(0, 0, 0)', getComputedStyle($('#in-link')).color);
+  $('#link').style.color = '';
+
+  testing.expectEqual('rgb(0, 0, 0)', getComputedStyle($('#not-link')).color);
+  testing.expectEqual('rgb(0, 0, 0)', getComputedStyle($('#in-not-link')).color);
+}
+</script>

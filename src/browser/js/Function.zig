@@ -156,10 +156,6 @@ pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *
     return self._tryCallWithThis(T, self.getThis(), args, caught, .{});
 }
 
-pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
-    return self._tryCallWithThis(T, this, args, caught, .{});
-}
-
 const CallOpts = struct {
     rethrow: bool = false,
 };
@@ -200,6 +196,10 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
     const call_depth = ctx.call_depth;
     ctx.call_depth = call_depth + 1;
     defer ctx.call_depth = call_depth;
+
+    // Event dispatch and timers enter their own task; this catches the rest.
+    const task_scope = if (call_depth == 0) ctx.attribution.enterIfUntagged(.callback, "") else null;
+    defer if (task_scope) |ts| ts.exit();
 
     const js_this = blk: {
         if (@TypeOf(this) == js.Object) {
@@ -282,11 +282,6 @@ pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
 
 pub fn persist(self: *const Function) !Global {
     return .{ .slot = try js.newTrackedSlot(self.local.ctx, self.handle) };
-}
-
-pub fn persistWithThis(self: *const Function, value: anytype) !Global {
-    const with_this = try self.withThis(value);
-    return with_this.persist();
 }
 
 const testing = @import("../../testing.zig");

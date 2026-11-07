@@ -19,10 +19,15 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const CssParser = @import("../../css/Parser.zig");
-
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const color = @import("../../color.zig");
+const CssParser = @import("../../css/Parser.zig");
+const Tokenizer = @import("../../css/Tokenizer.zig");
+const escape = @import("../../css/escape.zig");
+const properties = @import("../../css/properties.zig");
+const StyleManager = @import("../../StyleManager.zig");
+
 const Element = @import("../Element.zig");
 const DOMMatrixReadOnly = @import("../DOMMatrixReadOnly.zig");
 
@@ -78,20 +83,102 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const wrapped = String.wrap(normalized);
     const value = self.propertyValue(normalized, wrapped, frame);
 
-    // The resolved transform is always a matrix: animation libraries
-    // (popmotion) regex it as matrix()/matrix3d() and crash on anything else.
-    if (self._is_computed and wrapped.eql(comptime .wrap("transform"))) {
+    if (self._is_computed == false) {
+        return value;
+    }
+
+    if (wrapped.eql(comptime .wrap("transform"))) {
+        // The resolved transform is always a matrix: animation libraries
+        // (popmotion) regex it as matrix()/matrix3d() and crash on anything
+        // else.
         return resolvedTransform(value, frame);
     }
+
+    if (isColorProperty(normalized)) {
+        return computedColor(value, frame);
+    }
+
     return value;
+}
+
+/// `content` serialized as Chrome computes it: strings in double quotes, one
+/// space between components and none inside parentheses, keywords and
+/// function names in lowercase.
+fn computedContent(value: []const u8, frame: *Frame) []const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    writeComputedContent(&buf.writer, value) catch return value;
+    return buf.written();
+}
+
+fn writeComputedContent(writer: *std.Io.Writer, value: []const u8) !void {
+    var tokenizer: Tokenizer = .{ .input = value };
+    var start: usize = 0;
+    var depth: usize = 0;
+    var spaced = false;
+    while (tokenizer.next()) |token| : (start = tokenizer.position) {
+        switch (token) {
+            .white_space, .comment => continue,
+            .bad_string, .bad_url => return error.Invalid,
+            .close_parenthesis => {
+                depth -|= 1;
+                try writer.writeByte(')');
+                spaced = true;
+                continue;
+            },
+            .comma => {
+                try writer.writeByte(',');
+                spaced = true;
+                continue;
+            },
+            else => {},
+        }
+        if (spaced) {
+            try writer.writeByte(' ');
+        }
+        spaced = true;
+        switch (token) {
+            .string => |raw| try escape.writeString(writer, raw),
+            .function => |name| {
+                try writeLowercase(writer, name);
+                try writer.writeByte('(');
+                depth += 1;
+                spaced = false;
+            },
+            .parenthesis_block => {
+                try writer.writeByte('(');
+                depth += 1;
+                spaced = false;
+            },
+            // A counter's name keeps its case.
+            .ident => |name| if (depth == 0) try writeLowercase(writer, name) else try writer.writeAll(name),
+            else => try writer.writeAll(tokenizer.input[start..tokenizer.position]),
+        }
+    }
+}
+
+fn writeLowercase(writer: *std.Io.Writer, text: []const u8) !void {
+    for (text) |c| {
+        try writer.writeByte(std.ascii.toLower(c));
+    }
+}
+
+fn computedColor(value: []const u8, frame: *Frame) []const u8 {
+    const parsed = switch (color.parse(value)) {
+        .value => |v| v,
+        .invalid, .unsupported => return value,
+    };
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    parsed.writeComputed(&buf.writer) catch return value;
+    return buf.written();
 }
 
 fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapped: String, frame: *Frame) []const u8 {
 
     // Computed styles must reflect stylesheet rules, not just the element's
     // inline `style=` attribute. Limited to display/visibility — what aria
-    // tree builders (Playwright ariaSnapshot) consult on every element — and
-    // pointer-events and text-transform, which innerText applies.
+    // tree builders (Playwright ariaSnapshot) consult on every element —
+    // pointer-events and text-transform, which innerText applies, and
+    // position, which offsetParent consults.
     if (self._is_computed) {
         if (self._element) |element| {
             if (element.ownerFrame(frame)) |owner| {
@@ -99,6 +186,9 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                 if (wrapped.eql(comptime .wrap("display"))) {
                     if (style_manager.hasDisplayNone(element)) {
                         return "none";
+                    }
+                    if (style_manager.hasDisplayContents(element)) {
+                        return "contents";
                     }
                 } else if (wrapped.eql(comptime .wrap("visibility"))) {
                     if (style_manager.hasVisibilityHiddenInherited(element)) {
@@ -111,6 +201,8 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                 } else if (wrapped.eqlSlice("text-transform")) {
                     // Inherited: the nearest declaration up the tree wins.
                     return style_manager.textTransform(element).keyword();
+                } else if (wrapped.eqlSlice("position")) {
+                    return style_manager.position(element).keyword();
                 }
             }
         }
@@ -132,6 +224,10 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                 return style_manager.customPropertyValue(element, wrapped) orelse "";
             }
 
+            if (wrapped.eql(comptime .wrap("content"))) {
+                return cascadedContent(style_manager, element, owner, frame);
+            }
+
             // Resolved in pixels, as the synthetic text metrics measure it.
             if (wrapped.eql(comptime .wrap("font-size"))) {
                 return frame.local_arena.print("{d}px", .{style_manager.computedFontSize(element)}) catch "16px";
@@ -141,7 +237,9 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
             // parsed inline style, so computed values match `el.style`. One
             // an !important rule beats falls through to the values below.
             if (style_manager.inlineStyleValue(element, wrapped)) |value| {
-                return value;
+                if (CssWideKeyword.parse(value) == null) {
+                    return value;
+                }
             }
 
             // Computed width/height must agree with the synthetic layout
@@ -156,15 +254,90 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
             if (wrapped.eql(comptime .wrap("height"))) {
                 return resolvedDimension(element, .height, frame);
             }
+            return inlineCascadedValue(style_manager, element, wrapped, owner);
         }
     }
-    return getDefaultPropertyValue(self, wrapped);
+    const element = self._element orelse return initialValue(wrapped);
+    return uaDefaultValue(element, wrapped) orelse initialValue(wrapped);
+}
+
+const CssWideKeyword = enum {
+    initial,
+    inherit,
+    unset,
+    revert,
+
+    fn parse(value: []const u8) ?CssWideKeyword {
+        const map = std.StaticStringMap(CssWideKeyword).initComptime(.{
+            .{ "initial", .initial },
+            .{ "inherit", .inherit },
+            .{ "unset", .unset },
+            .{ "revert", .revert },
+            .{ "revert-layer", .revert },
+        });
+        var buf: [16]u8 = undefined;
+        if (value.len > buf.len) {
+            return null;
+        }
+        return map.get(std.ascii.lowerString(&buf, value));
+    }
+};
+
+/// The computed `content`. It doesn't inherit, so only an explicit `inherit`
+/// reads the parent's. No UA style sets it on an element, so `revert` reads
+/// like `unset`: the initial `normal`.
+fn cascadedContent(style_manager: *StyleManager, element: *Element, owner: *Frame, frame: *Frame) []const u8 {
+    var current = element;
+    while (true) {
+        const value = style_manager.contentValue(current) orelse return "normal";
+        // On an element, `none` computes to `normal`.
+        if (std.ascii.eqlIgnoreCase(value, "none")) {
+            return "normal";
+        }
+        const keyword = CssWideKeyword.parse(value) orelse return computedContent(value, frame);
+        switch (keyword) {
+            .initial, .unset, .revert => return "normal",
+            .inherit => current = current.asNode().flatTreeParentElement(owner) orelse return "normal",
+        }
+    }
+}
+
+/// The computed value inline styles
+fn inlineCascadedValue(style_manager: *StyleManager, element: *Element, name: String, frame: *Frame) []const u8 {
+    const inherited = if (properties.get(name.str())) |p| p.inherited else false;
+    var current = element;
+    while (true) {
+        // Nothing declared reads like `revert`: the UA default, or else what
+        // the property does by default.
+        const keyword: CssWideKeyword = blk: {
+            const value = style_manager.inlineStyleValue(current, name) orelse break :blk .revert;
+            break :blk CssWideKeyword.parse(value) orelse return value;
+        };
+        switch (keyword) {
+            .initial => return initialValue(name),
+            .inherit => {},
+            .unset => if (inherited == false) return initialValue(name),
+            .revert => {
+                if (uaDefaultValue(current, name)) |value| {
+                    return value;
+                }
+                if (inherited == false) {
+                    return initialValue(name);
+                }
+            },
+        }
+        current = current.asNode().flatTreeParentElement(frame) orelse return initialValue(name);
+    }
 }
 
 /// The value of a declared property, or null when it isn't declared. An axis
-/// shorthand reads as its longhands when both are present with the same
-/// priority, the way the CSSOM serializes a shorthand.
+/// or four-side shorthand reads as its longhands when all are present with the
+/// same priority, the way the CSSOM serializes a shorthand.
 pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Frame) ?[]const u8 {
+    if (CssParser.boxShorthand(name.str())) |shorthand| {
+        if (self.storedBox(shorthand)) |stored| return stored._value.str();
+        return self.boxValue(shorthand, frame);
+    }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
         const x = self.findProperty(.wrap(shorthand.x)) orelse return null;
         const pair = self.axisPair(x) orelse return null;
@@ -174,6 +347,72 @@ pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Fra
     }
     const prop = self.findProperty(name) orelse return null;
     return prop._value.str();
+}
+
+/// A four-side shorthand kept as written because its value uses var(), while
+/// none of its sides has been declared since.
+fn storedBox(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) ?*const Property {
+    const stored = self.findProperty(.wrap(shorthand.name)) orelse return null;
+    for (shorthand.sides) |side| {
+        if (self.findProperty(.wrap(side)) != null) return null;
+    }
+    return stored;
+}
+
+/// Whether any side of a four-side shorthand is declared !important.
+fn boxSideImportant(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) bool {
+    for (shorthand.sides) |side| {
+        const prop = self.findProperty(.wrap(side)) orelse continue;
+        if (prop._important) return true;
+    }
+    return false;
+}
+
+/// The four longhands of a four-side shorthand, when all are declared with the
+/// same priority.
+fn boxSides(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) ?[4]*const Property {
+    var sides: [4]*const Property = undefined;
+    for (shorthand.sides, 0..) |side, i| {
+        sides[i] = self.findProperty(.wrap(side)) orelse return null;
+        if (sides[i]._important != sides[0]._important) return null;
+    }
+    return sides;
+}
+
+/// The side values of a four-side shorthand, or null if any is invalid: an
+/// invalid declaration writes none of them.
+fn boxSideValues(shorthand: CssParser.BoxShorthand, value: []const u8) ?[4][]const u8 {
+    const values = CssParser.splitBoxSides(value) orelse return null;
+    for (shorthand.sides, values) |side, side_value| {
+        if (isColorProperty(side) and color.parse(side_value) == .invalid) {
+            return null;
+        }
+    }
+    return values;
+}
+
+/// A four-side shorthand in its shortest form: "1px", "1px 2px", "1px 2px 3px"
+/// or all four.
+fn formatBoxValue(sides: [4]*const Property, writer: *std.Io.Writer) !void {
+    const count: usize = if (!sides[3]._value.eql(sides[1]._value))
+        4
+    else if (!sides[2]._value.eql(sides[0]._value))
+        3
+    else if (!sides[1]._value.eql(sides[0]._value))
+        2
+    else
+        1;
+    for (sides[0..count], 0..) |side, i| {
+        if (i > 0) try writer.writeByte(' ');
+        try side._value.format(writer);
+    }
+}
+
+fn boxValue(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand, frame: *Frame) ?[]const u8 {
+    const sides = self.boxSides(shorthand) orelse return null;
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    formatBoxValue(sides, &buf.writer) catch return null;
+    return buf.written();
 }
 
 /// Both longhands of an axis shorthand, declared with the same priority: the
@@ -282,6 +521,11 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
 
 /// Whether a declared property is !important; false when it isn't declared.
 pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
+    if (CssParser.boxShorthand(name.str())) |shorthand| {
+        if (self.storedBox(shorthand)) |stored| return stored._important;
+        const sides = self.boxSides(shorthand) orelse return false;
+        return sides[0]._important;
+    }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
         const x = self.findProperty(.wrap(shorthand.x)) orelse return false;
         const pair = self.axisPair(x) orelse return false;
@@ -306,7 +550,7 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
     } else false;
 
     if (try self.setPropertyImpl(property_name, value, important, frame)) {
-        try self.syncStyleAttribute(frame);
+        try self.syncStyleAttribute(property_name, frame);
     }
 }
 
@@ -315,6 +559,24 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
     const normalized = normalizePropertyName(frame.local_arena, declaration.name);
+    if (CssParser.boxShorthand(normalized)) |shorthand| {
+        if (!declaration.important) {
+            if (self.findProperty(.wrap(shorthand.name))) |stored| {
+                if (stored._important) return;
+            }
+        }
+        if (color.usesSubstitution(declaration.value)) {
+            // Its sides aren't known, so an !important side keeps it out whole
+            if (!declaration.important and self.boxSideImportant(shorthand)) return;
+        } else {
+            const values = boxSideValues(shorthand, declaration.value) orelse return;
+            _ = try self.removeDeclared(shorthand.name, frame);
+            for (shorthand.sides, values) |side, value| {
+                try self.applyParsedDeclaration(.{ .name = side, .value = value, .important = declaration.important }, frame);
+            }
+            return;
+        }
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(declaration.value) orelse return;
         try self.applyParsedDeclaration(.{ .name = shorthand.x, .value = values.x, .important = declaration.important }, frame);
@@ -341,6 +603,25 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     }
 
     const normalized = normalizePropertyName(frame.local_arena, property_name);
+    // A declaration of a property we don't know is dropped, as in Chrome.
+    if (isCustomProperty(normalized) == false and properties.isKnown(normalized) == false) {
+        return false;
+    }
+    if (CssParser.boxShorthand(normalized)) |shorthand| {
+        if (color.usesSubstitution(value)) {
+            // Stored as written, below: its sides aren't known yet.
+            for (shorthand.sides) |side| {
+                _ = try self.removeDeclared(side, frame);
+            }
+        } else {
+            const values = boxSideValues(shorthand, value) orelse return false;
+            var changed = (try self.removeDeclared(shorthand.name, frame)) != null;
+            for (shorthand.sides, values) |side, side_value| {
+                changed = try self.setPropertyImpl(side, side_value, important, frame) or changed;
+            }
+            return changed;
+        }
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const values = CssParser.splitAxisPair(value) orelse return false;
         const x = try self.setPropertyImpl(shorthand.x, values.x, important, frame);
@@ -349,7 +630,21 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     }
 
     // Normalize the value for canonical serialization
-    const normalized_value = try normalizePropertyValue(frame.local_arena, normalized, value);
+    const normalized_value = blk: {
+        if (isColorProperty(normalized)) {
+            switch (color.parse(value)) {
+                // An invalid value leaves the declaration as it was.
+                .invalid => return false,
+                .value => |parsed| {
+                    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+                    try parsed.writeSpecified(&buf.writer);
+                    break :blk buf.written();
+                },
+                .unsupported => {},
+            }
+        }
+        break :blk try normalizePropertyValue(frame.local_arena, normalized, value);
+    };
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
@@ -378,12 +673,22 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
         return error.NoModificationAllowed;
     }
     const result = (try self.removePropertyImpl(property_name, frame)) orelse return "";
-    try self.syncStyleAttribute(frame);
+    try self.syncStyleAttribute(property_name, frame);
     return result;
 }
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(frame.local_arena, property_name);
+    if (CssParser.boxShorthand(normalized)) |shorthand| {
+        const declared = self.declaredValue(.wrap(shorthand.name), frame) orelse "";
+        // the stored shorthand's value is freed with it
+        const old_value = try frame.call_arena.dupe(u8, declared);
+        var removed = (try self.removeDeclared(shorthand.name, frame)) != null;
+        for (shorthand.sides) |side| {
+            removed = (try self.removePropertyImpl(side, frame)) != null or removed;
+        }
+        return if (removed) old_value else null;
+    }
     if (CssParser.axisShorthand(normalized)) |shorthand| {
         const old_value = self.declaredValue(.wrap(shorthand.name), frame) orelse "";
         const x = try self.removePropertyImpl(shorthand.x, frame);
@@ -393,7 +698,12 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, fra
         }
         return old_value;
     }
-    const prop = self.findProperty(.wrap(normalized)) orelse return null;
+    return self.removeDeclared(normalized, frame);
+}
+
+/// Removes the declaration of exactly `name`, without expanding a shorthand.
+fn removeDeclared(self: *CSSStyleDeclaration, name: []const u8, frame: *Frame) !?[]const u8 {
+    const prop = self.findProperty(.wrap(name)) orelse return null;
 
     // the value might not be on the heap (it could be inlined in the small string
     // optimization), so we need to dupe it.
@@ -406,11 +716,20 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 // Serialize current properties back to the element's style attribute so that
 // DOM serialization (outerHTML, getAttribute) reflects JS-modified styles.
-fn syncStyleAttribute(self: *CSSStyleDeclaration, frame: *Frame) !void {
+// `changed` is the one property written, when that's all that changed.
+fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?[]const u8, frame: *Frame) !void {
     const element = self._element orelse return;
     const css_text = try self.getCssText(frame);
     self._syncing = true;
     defer self._syncing = false;
+    if (changed) |name| {
+        // Carousels write a transform or an opacity on every slide each
+        // frame: one doesn't need every cached style and width recomputed.
+        const style_manager = &(element.ownerFrame(frame) orelse frame)._style_manager;
+        if (style_manager.inlineStyleWritten(element, name)) {
+            return element._attributes.putInertStyle(.wrap(css_text), element, frame);
+        }
+    }
     try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), frame);
 }
 
@@ -444,12 +763,14 @@ fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
     return self.getPropertyValue("float", frame);
 }
 
-fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+fn setFloat(self: *CSSStyleDeclaration, value: js.Value, frame: *Frame) !void {
     if (self._is_computed) {
         return error.NoModificationAllowed;
     }
-    if (try self.setPropertyImpl("float", value_ orelse "", false, frame)) {
-        try self.syncStyleAttribute(frame);
+    // `[LegacyNullToEmptyString] CSSOMString`: null becomes "", undefined becomes "undefined".
+    const str = if (value.isNull()) "" else try value.toZig([]const u8);
+    if (try self.setPropertyImpl("float", str, false, frame)) {
+        try self.syncStyleAttribute(null, frame);
     }
 }
 
@@ -477,23 +798,40 @@ fn replaceDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Decla
     self.clearProperties(frame);
 
     try self.applyDeclarations(declarations, frame);
-    try self.syncStyleAttribute(frame);
+    try self.syncStyleAttribute(null, frame);
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     var first = true;
     // An axis pair serializes once, where its first longhand sits.
     var skip: ?*const Property = null;
+    // As does a four-side shorthand with all four sides declared.
+    var boxes_written: std.StaticBitSet(CssParser.box_shorthands.len) = .empty;
     var it = self.iterator();
     while (it.next()) |prop| {
         if (prop == skip) {
             continue;
         }
+        // A shorthand kept as written is overridden once all four sides are set.
+        if (CssParser.boxShorthand(prop._name.str())) |shorthand| {
+            if (self.boxSides(shorthand) != null) continue;
+        }
+        const box = if (CssParser.boxLonghandIndex(prop._name.str())) |i| blk: {
+            const sides = self.boxSides(CssParser.box_shorthands[i]) orelse break :blk null;
+            if (boxes_written.isSet(i)) continue;
+            boxes_written.set(i);
+            break :blk .{ .index = i, .sides = sides };
+        } else null;
         if (!first) {
             try writer.writeByte(' ');
         }
         first = false;
-        if (self.axisPair(prop)) |pair| {
+        if (box) |b| {
+            try writer.writeAll(CssParser.box_shorthands[b.index].name);
+            try writer.writeAll(": ");
+            try formatBoxValue(b.sides, writer);
+            try formatDeclarationEnd(b.sides[0]._important, writer);
+        } else if (self.axisPair(prop)) |pair| {
             try pair.format(writer);
             skip = if (pair.x == prop) pair.y else pair.x;
         } else {
@@ -516,7 +854,7 @@ pub const Iterator = struct {
     }
 };
 
-pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
+fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     var node = self._properties.first;
     while (node) |n| {
         const prop = Property.fromNodeLink(n);
@@ -540,6 +878,29 @@ fn normalizePropertyName(allocator: Allocator, name: []const u8) []const u8 {
         return name;
     }
     return std.ascii.allocLowerString(allocator, name) catch name;
+}
+
+fn isColorProperty(name: []const u8) bool {
+    const color_properties: std.StaticStringMap(void) = .initComptime(.{
+        .{ "background-color", {} },
+        .{ "border-block-end-color", {} },
+        .{ "border-block-start-color", {} },
+        .{ "border-bottom-color", {} },
+        .{ "border-inline-end-color", {} },
+        .{ "border-inline-start-color", {} },
+        .{ "border-left-color", {} },
+        .{ "border-right-color", {} },
+        .{ "border-top-color", {} },
+        .{ "color", {} },
+        .{ "column-rule-color", {} },
+        .{ "flood-color", {} },
+        .{ "lighting-color", {} },
+        .{ "outline-color", {} },
+        .{ "stop-color", {} },
+        .{ "text-decoration-color", {} },
+        .{ "text-emphasis-color", {} },
+    });
+    return color_properties.has(name);
 }
 
 fn isCustomProperty(name: []const u8) bool {
@@ -1032,107 +1393,44 @@ fn isLengthProperty(name: []const u8) bool {
     return length_properties.has(name);
 }
 
-// Computed values of properties nothing declares: their CSS initial values, as
-// Chrome reports them for a plain element. Measuring code parses many of these
-// (parseFloat, keyword checks), so '' would read as NaN or as no value at all.
-// Border widths compute to zero while border-style is its initial `none`.
-const initial_values = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "margin", "0px" },
-    .{ "margin-top", "0px" },
-    .{ "margin-right", "0px" },
-    .{ "margin-bottom", "0px" },
-    .{ "margin-left", "0px" },
-    .{ "padding", "0px" },
-    .{ "padding-top", "0px" },
-    .{ "padding-right", "0px" },
-    .{ "padding-bottom", "0px" },
-    .{ "padding-left", "0px" },
-    .{ "border-width", "0px" },
-    .{ "border-top-width", "0px" },
-    .{ "border-right-width", "0px" },
-    .{ "border-bottom-width", "0px" },
-    .{ "border-left-width", "0px" },
-    .{ "border-style", "none" },
-    .{ "border-top-style", "none" },
-    .{ "border-right-style", "none" },
-    .{ "border-bottom-style", "none" },
-    .{ "border-left-style", "none" },
-    .{ "border-radius", "0px" },
-    .{ "border-top-left-radius", "0px" },
-    .{ "border-top-right-radius", "0px" },
-    .{ "border-bottom-right-radius", "0px" },
-    .{ "border-bottom-left-radius", "0px" },
-    .{ "font-weight", "400" },
-    .{ "line-height", "normal" },
-    .{ "letter-spacing", "normal" },
-    .{ "word-spacing", "0px" },
-    .{ "text-indent", "0px" },
-    .{ "top", "auto" },
-    .{ "right", "auto" },
-    .{ "bottom", "auto" },
-    .{ "left", "auto" },
-    .{ "z-index", "auto" },
-    .{ "box-sizing", "content-box" },
-    .{ "min-width", "0px" },
-    .{ "min-height", "0px" },
-    .{ "max-width", "none" },
-    .{ "max-height", "none" },
-    .{ "flex-grow", "0" },
-    .{ "flex-shrink", "1" },
-    .{ "flex-basis", "auto" },
-    .{ "transform", "none" },
-    .{ "gap", "normal" },
-    .{ "row-gap", "normal" },
-    .{ "column-gap", "normal" },
-});
+/// Computed value of `initial` or '' for a name we don't know
+fn initialValue(name: String) []const u8 {
+    if (properties.get(name.str())) |property| {
+        if (property.initial) |value| {
+            return value;
+        }
+    }
 
-fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []const u8 {
-    if (initial_values.get(name.str())) |value| {
-        return value;
+    // shorthand initial value
+    const shorthand_initial_values = std.StaticStringMap([]const u8).initComptime(.{
+        .{ "margin", "0px" },
+        .{ "padding", "0px" },
+        .{ "border-width", "0px" },
+        .{ "border-style", "none" },
+        .{ "border-radius", "0px" },
+        .{ "gap", "normal" },
+    });
+
+    return shorthand_initial_values.get(name.str()) orelse "";
+}
+
+/// The UA stylesheet's value for `element`, when it isn't the initial value.
+fn uaDefaultValue(element: *const Element, name: String) ?[]const u8 {
+    if (name.eql(comptime .wrap("display"))) {
+        return getDefaultDisplay(element);
     }
-    switch (name.len) {
-        5 => {
-            if (name.eql(comptime .wrap("color"))) {
-                const element = self._element orelse return "";
-                return getDefaultColor(element);
-            }
-        },
-        7 => {
-            if (name.eql(comptime .wrap("opacity"))) {
-                return "1";
-            }
-            if (name.eql(comptime .wrap("display"))) {
-                const element = self._element orelse return "";
-                return getDefaultDisplay(element);
-            }
-        },
-        10 => {
-            if (name.eql(comptime .wrap("visibility"))) {
-                return "visible";
-            }
-        },
-        14 => {
-            if (name.eqlSlice("pointer-events")) {
-                return "auto";
-            }
-        },
-        16 => {
-            if (name.eqlSlice("background-color")) {
-                // transparent
-                return "rgba(0, 0, 0, 0)";
-            }
-        },
-        else => {},
+    if (name.eql(comptime .wrap("color"))) {
+        return getDefaultColor(element);
     }
-    return "";
+    return null;
 }
 
 fn getDefaultDisplay(element: *const Element) []const u8 {
     switch (element._type) {
         .html => {
             return switch (element.subtype(Element.Html)._type) {
-                .anchor, .br, .span, .label, .time, .font, .mod, .quote => "inline",
-                .body, .div, .dl, .p, .heading, .form, .button, .canvas, .details, .dialog, .embed, .head, .html, .hr, .iframe, .img, .input, .li, .link, .meta, .ol, .option, .script, .select, .slot, .style, .template, .textarea, .title, .ul, .media, .area, .base, .datalist, .directory, .fieldset, .frameset, .legend, .map, .marquee, .meter, .object, .optgroup, .output, .param, .picture, .pre, .progress, .source, .table, .table_caption, .table_cell, .table_col, .table_row, .table_section, .track => "block",
+                .anchor, .br, .span, .label, .time, .font, .mod, .quote, .source, .track => "inline",
+                .body, .div, .dl, .p, .heading, .form, .button, .canvas, .details, .dialog, .embed, .head, .html, .hr, .iframe, .img, .input, .li, .link, .meta, .ol, .option, .script, .select, .slot, .style, .template, .textarea, .title, .ul, .media, .area, .base, .datalist, .directory, .fieldset, .frame, .frameset, .legend, .map, .marquee, .meter, .object, .optgroup, .output, .param, .picture, .pre, .progress, .table, .table_caption, .table_cell, .table_col, .table_row, .table_section => "block",
                 .generic, .custom, .unknown, .data => blk: {
                     const tag = element.getTagNameLower();
                     if (isInlineTag(tag)) break :blk "inline";
@@ -1160,15 +1458,16 @@ fn isInlineTag(tag_name: []const u8) bool {
     return false;
 }
 
-fn getDefaultColor(element: *const Element) []const u8 {
+fn getDefaultColor(element: *const Element) ?[]const u8 {
     switch (element._type) {
         .html => {
             return switch (element.subtype(Element.Html)._type) {
-                .anchor => "rgb(0, 0, 238)", // blue
-                else => "rgb(0, 0, 0)",
+                // a:link, blue; an anchor without href isn't a link
+                .anchor => if (element.hasAttributeInterned("href")) "rgb(0, 0, 238)" else null,
+                else => null,
             };
         },
-        .svg => return "rgb(0, 0, 0)",
+        .svg => return null,
     }
 }
 
@@ -1218,7 +1517,11 @@ pub const JsApi = struct {
 
     pub const getPropertyValue = bridge.function(CSSStyleDeclaration.getPropertyValue, .{});
     pub const getPropertyPriority = bridge.function(CSSStyleDeclaration.getPropertyPriority, .{});
-    pub const setProperty = bridge.function(CSSStyleDeclaration.setProperty, .{ .ce_reactions = true });
+    pub const setProperty = bridge.function(_setProperty, .{ .ce_reactions = true });
+    fn _setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: js.Value, priority_: ?[]const u8, frame: *Frame) !void {
+        // `[LegacyNullToEmptyString] CSSOMString value`: a JS null becomes "", not "null".
+        return self.setProperty(property_name, if (value.isNull()) "" else try value.toZig([]const u8), priority_, frame);
+    }
     pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{ .ce_reactions = true });
     pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{ .ce_reactions = true });
 };
@@ -1226,6 +1529,14 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: CSSStyleDeclaration computed transform" {
     try testing.htmlRunner("css/computed_transform.html", .{});
+}
+
+test "WebApi: CSSStyleDeclaration computed content" {
+    try testing.htmlRunner("css/computed_content.html", .{});
+}
+
+test "WebApi: CSSStyleDeclaration computed inheritance" {
+    try testing.htmlRunner("css/computed_inheritance.html", .{});
 }
 
 test "writeCssNumber: six significant digits" {

@@ -75,7 +75,7 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
-_model_context: ModelContext = .init,
+_model_context: ?*ModelContext = null,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: *Performance,
@@ -268,8 +268,13 @@ fn getScheduler(self: *Window) *Scheduler {
     return &self._scheduler;
 }
 
-pub fn getModelContext(self: *Window) *ModelContext {
-    return &self._model_context;
+pub fn getModelContext(self: *Window) !*ModelContext {
+    if (self._model_context) |mc| {
+        return mc;
+    }
+    const mc = try ModelContext.init(self);
+    self._model_context = mc;
+    return mc;
 }
 
 fn getScreen(self: *Window) *Screen {
@@ -377,7 +382,7 @@ fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
     return self._location.assign(url, frame);
 }
 
-pub fn getHistory(self: *Window) *History {
+fn getHistory(self: *Window) *History {
     return &self._history;
 }
 
@@ -557,6 +562,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 // Runtime.exceptionThrown.
 pub fn notifyExceptionThrown(err: js.Value, location: js.Value.ErrorLocation, kind: @FieldType(Notification.ExceptionThrown, "kind"), frame: *Frame) void {
     frame._session.notification.dispatch(.exception_thrown, &.{
+        .frame_id = frame._frame_id,
         .timestamp = lp.datetime.timestamp(.boot),
         .value = err,
         .location = location,
@@ -689,42 +695,45 @@ pub fn stop(self: *Window) void {
     self._frame.stopLoading();
 }
 
-pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
-    // For now, we ignore targetOrigin checking and just dispatch the message
-    // In a full implementation, we would validate the origin
-    _ = target_origin;
+// postMessage(message, targetOrigin, transfer) or postMessage(message, options).
+pub fn postMessage(self: *Window, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
+    // postMessage(message, targetOrigin, transfer) or
+    // postMessage(message, { targetOrigin, transfer }), where an absent
+    // targetOrigin is "/".
+    var transfer_arg = transfer;
+    var target_origin_arg: ?js.Value = null;
+    if (target_origin_or_options) |arg| {
+        if (arg.isObject()) {
+            transfer_arg = arg;
+            const value = try arg.toObject().get("targetOrigin");
+            if (!value.isUndefined()) {
+                target_origin_arg = value;
+            }
+        } else if (!arg.isNullOrUndefined()) {
+            target_origin_arg = arg;
+        }
+    }
 
     const target_frame = self._frame;
-    const source_window = target_frame.js.getIncumbent().window;
+    // If the sender's realm gone, like Chrome, the message is still delivered
+    // but without a source.
+    const maybe_incumbent = target_frame.js.getIncumbent();
+    const source_window: ?*Window = if (maybe_incumbent) |sender| sender.window else null;
+    const target_origin = try parseTargetOrigin(target_origin_arg, maybe_incumbent, target_frame, frame);
+
+    const ports = try MessagePort.transferList(transfer_arg);
 
     const arena = try target_frame.getArena(.medium, "Window.postMessage");
     errdefer arena.release();
 
-    // StructuredSerialize runs synchronously (per spec): clone the message into
-    // the target window's realm now. The receiver gets a fresh, independent copy
-    // minted in its own realm (not the source realm's object), an unserializable
-    // value throws a DataCloneError to the caller, and the source-realm temp
-    // doesn't leak into the destination context. Mirrors Worker.postMessage.
-    const cloned = blk: {
-        var ls: js.Local.Scope = undefined;
-        target_frame.js.localScope(&ls);
-        defer ls.deinit();
-
-        // Contain any V8 exception from a failed serialization so it surfaces as
-        // a clean DataCloneError; deinit() (no rethrow) clears it.
-        var try_catch: js.TryCatch = undefined;
-        try_catch.init(&ls.local);
-        defer try_catch.deinit();
-
-        const c = message.structuredCloneTo(&ls.local) catch {
-            return error.DataClone;
-        };
-        break :blk try c.persist();
-    };
+    // Clone the message into the target window's realm now: the receiver gets
+    // a fresh copy minted in its own realm, and the transferred ports move
+    // there. Mirrors Worker.postMessage.
+    const cloned = try MessagePort.cloneMessage(message, ports, &target_frame.js.execution);
     errdefer cloned.release();
 
-    // Origin should be the source window's origin (where the message came from)
-    const origin = try source_window._location.getOrigin(&frame.js.execution);
+    // Origin should be the source window's origin (where the message came from).
+    const origin = if (source_window) |source| try source._location.getOrigin(&frame.js.execution) else "null";
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
         .arena = arena,
@@ -732,13 +741,70 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
         .frame = target_frame,
         .source = source_window,
         .origin = try arena.dupe(u8, origin),
-        .ports = if (transfer) |t| try arena.dupe(*MessagePort, t) else &.{},
+        .target_origin = switch (target_origin) {
+            .any => .any,
+            .origin => |o| .{ .origin = if (o) |v| try arena.dupe(u8, v) else null },
+        },
+        .hold = target_frame.page.settle.hold(cloned.task),
     };
+    errdefer callback.hold.release();
 
     try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .finalizer = PostMessageCallback.cancelled,
     });
+}
+
+// The origin a postMessage is for: "*" is any, "/" the sender's own,
+// anything else the origin of that absolute URL (SyntaxError if it isn't
+// one, or if its origin is opaque, as in Chrome). A null origin matches no
+// window.
+// https://html.spec.whatwg.org/multipage/web-messaging.html#window-post-message-steps
+const TargetOrigin = union(enum) {
+    any,
+    origin: ?[]const u8,
+};
+
+fn parseTargetOrigin(value: ?js.Value, maybe_incumbent: ?*const Frame, target: *const Frame, frame: *Frame) !TargetOrigin {
+    const target_origin = if (value) |v| try v.toStringSlice() else "/";
+    if (std.mem.eql(u8, target_origin, "*")) {
+        return .any;
+    }
+    if (std.mem.eql(u8, target_origin, "/")) {
+        // The sender's realm is gone and its origin with it, so "/" can't
+        // match anything.
+        const incumbent = maybe_incumbent orelse return .{ .origin = null };
+        if (incumbent.origin == null and incumbent == target) {
+            // An opaque origin is only same-origin with itself. We represent
+            // every opaque origin as null (can't tell them apart), so the only
+            // window it can match is the sender's own.
+            return .any;
+        }
+        return .{ .origin = incumbent.origin };
+    }
+    var url = try parseTargetOriginURL(frame.call_arena, target_origin);
+    if (std.mem.eql(u8, URL.getProtocol(url), "blob:")) {
+        // A blob: URL's origin is its inner URL's.
+        url = try parseTargetOriginURL(frame.call_arena, url["blob:".len..]);
+    }
+
+    // Schemes whose URLs have a tuple origin. getOrigin only knows http(s),
+    // so the others never match a window, but they aren't an error.
+    const tuple_schemes = [_][]const u8{ "http:", "https:", "ws:", "wss:", "ftp:", "file:" };
+    const protocol = URL.getProtocol(url);
+    for (tuple_schemes) |scheme| {
+        if (std.mem.eql(u8, protocol, scheme)) {
+            return .{ .origin = try URL.getOrigin(frame.call_arena, url) };
+        }
+    }
+    return error.SyntaxError;
+}
+
+fn parseTargetOriginURL(arena: std.mem.Allocator, raw: []const u8) ![:0]const u8 {
+    return URL.resolve(arena, "", raw, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.SyntaxError,
+    };
 }
 
 const base64 = @import("encoding/base64.zig");
@@ -791,14 +857,26 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
-fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().width;
+fn getInnerWidth(self: *const Window, frame: *Frame) u32 {
+    return self.iframeViewport(.width) orelse frame.page.getViewport().width;
 }
 
 // Faux-layout viewport height, used to decide whether an element is already
 // within view (e.g. scrollIntoViewIfNeeded).
-pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
-    return frame.page.getViewport().height;
+pub fn getInnerHeight(self: *const Window, frame: *Frame) u32 {
+    return self.iframeViewport(.height) orelse frame.page.getViewport().height;
+}
+
+// The viewport of a window inside an iframe is the iframe's box.
+fn iframeViewport(self: *const Window, comptime axis: Element.Axis) ?u32 {
+    const iframe = self._frame.iframe orelse return null;
+    const parent = self._frame.parent orelse return null;
+    const el = iframe.asElement();
+    if (!el.isVisible(parent)) {
+        return 0;
+    }
+    // lossyCast saturates: a `width=1e10` or `inf` attribute is out of u32 range
+    return std.math.lossyCast(u32, el.boxAxis(parent, axis));
 }
 
 fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
@@ -960,11 +1038,12 @@ pub const Access = union(enum) {
 
 const PostMessageCallback = struct {
     frame: *Frame,
-    source: *Window,
+    source: ?*Window,
     arena: *lp.Arena,
     origin: []const u8,
-    message: js.Value.Global,
-    ports: []const *MessagePort,
+    target_origin: TargetOrigin,
+    message: MessagePort.Message,
+    hold: js.Attribution.Hold,
 
     fn deinit(self: *PostMessageCallback) void {
         self.arena.release();
@@ -974,6 +1053,7 @@ const PostMessageCallback = struct {
     // `cancelled` are mutually exclusive, so the temp is released exactly once.
     fn cancelled(ctx: *anyopaque) void {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        self.hold.release();
         self.message.release();
         self.deinit();
     }
@@ -981,24 +1061,60 @@ const PostMessageCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+        defer self.message.releasePorts();
+
+        self.hold.release();
 
         const frame = self.frame;
         const window = frame.window;
 
+        const task_scope = frame.js.attribution.enterNew(.message, .{ .parent = self.message.task, .label = "window.postMessage" });
+        defer task_scope.exit();
+
         const event_target = window.asEventTarget();
+
+        // Checked on delivery, as in the spec. A navigation away cancels this
+        // task (Frame.neuter resets the scheduler), so frame.origin is the
+        // origin the target had when the message was posted.
+        switch (self.target_origin) {
+            .any => {},
+            .origin => |expected| {
+                const actual = frame.origin;
+                if (expected == null or actual == null or !std.mem.eql(u8, expected.?, actual.?)) {
+                    if (self.message.data) |data| {
+                        data.release();
+                    }
+                    return null;
+                }
+            },
+        }
+
+        const data = self.message.data orelse {
+            if (frame._event_manager.hasDirectListeners(event_target, "messageerror")) {
+                const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
+                    .origin = self.origin,
+                    .source = if (self.source) |source| .{ .window = source } else null,
+                    .ports = self.message.ports,
+                    .bubbles = false,
+                    .cancelable = false,
+                }, frame.page)).asEvent();
+                try frame._event_manager.dispatchDirect(event_target, event, .{ .context = "window.postMessage" });
+            }
+            return null;
+        };
 
         // The MessageEvent takes ownership of the cloned temp and releases it on
         // teardown; if there are no listeners, release it here so it doesn't leak.
         if (!frame._event_manager.hasDirectListeners(event_target, "message")) {
-            self.message.release();
+            data.release();
             return null;
         }
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = .{ .value = self.message },
+            .data = .{ .value = data },
             .origin = self.origin,
-            .source = .{ .window = self.source },
-            .ports = self.ports,
+            .source = if (self.source) |source| .{ .window = source } else null,
+            .ports = self.message.ports,
             .bubbles = false,
             .cancelable = false,
         }, frame.page)).asEvent();
@@ -1102,6 +1218,8 @@ pub const JsApi = struct {
     pub const onloadstart = EventTarget.handlerAccessor(Window, "loadstart");
     pub const onlostpointercapture = EventTarget.handlerAccessor(Window, "lostpointercapture");
     pub const onmousedown = EventTarget.handlerAccessor(Window, "mousedown");
+    pub const onmouseenter = EventTarget.handlerAccessor(Window, "mouseenter");
+    pub const onmouseleave = EventTarget.handlerAccessor(Window, "mouseleave");
     pub const onmousemove = EventTarget.handlerAccessor(Window, "mousemove");
     pub const onmouseout = EventTarget.handlerAccessor(Window, "mouseout");
     pub const onmouseover = EventTarget.handlerAccessor(Window, "mouseover");
@@ -1221,6 +1339,7 @@ pub const JsApi = struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "alert",
@@ -1234,6 +1353,7 @@ pub const JsApi = struct {
         fn confirm(_: *const Window, message: ?[]const u8, frame: *Frame) bool {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "confirm",
@@ -1246,6 +1366,7 @@ pub const JsApi = struct {
         fn prompt(_: *const Window, message: ?[]const u8, default_text: ?[]const u8, frame: *Frame) ?[]const u8 {
             var response: Notification.DialogResponse = .{};
             frame._session.notification.dispatch(.javascript_dialog_opening, &.{
+                .frame_id = frame._frame_id,
                 .url = frame.url,
                 .message = message orelse "",
                 .dialog_type = "prompt",
@@ -1267,8 +1388,8 @@ pub const JsApi = struct {
 const CrossOriginWindow = struct {
     window: *Window,
 
-    pub fn postMessage(self: *CrossOriginWindow, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
-        return self.window.postMessage(message, target_origin, transfer, frame);
+    pub fn postMessage(self: *CrossOriginWindow, message: js.Value, target_origin_or_options: ?js.Value, transfer: ?js.Value, frame: *Frame) !void {
+        return self.window.postMessage(message, target_origin_or_options, transfer, frame);
     }
 
     pub fn getTop(self: *CrossOriginWindow, frame: *Frame) Access {

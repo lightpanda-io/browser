@@ -36,6 +36,13 @@
   /* Nearest ancestor wins over a more specific rule further up. */
   #outer.outer.outer { --nearest: far; }
   .inner { --nearest: near; }
+
+  /* !important outranks order, specificity and a normal inline declaration. */
+  .imp-order { --imp: first !important; }
+  .imp-order { --imp: later; }
+  #imp-specific { --imp: specific; }
+  .imp-specific { --imp: important !important; }
+  .imp-sheet { --imp: sheet !important; }
 </style>
 
 <body>
@@ -47,6 +54,10 @@
   <div id="alias">alias</div>
   <div id="outer" class="outer"><div class="inner"><span id="nearest">nearest</span></div></div>
   <div id="plain">plain</div>
+  <div id="imp-order" class="imp-order">imp-order</div>
+  <div id="imp-specific" class="imp-specific">imp-specific</div>
+  <div id="imp-sheet" class="imp-sheet" style="--imp: inline">imp-sheet</div>
+  <div id="imp-inline" class="imp-sheet" style="--imp: inline !important">imp-inline</div>
   <style id="dyn"></style>
 </body>
 
@@ -70,6 +81,16 @@
   // Undeclared names resolve to the empty string.
   testing.expectEqual('', card.getPropertyValue('--nope'));
   testing.expectEqual('', getComputedStyle($('#plain')).getPropertyValue('--nope'));
+}
+</script>
+
+<script id=custom_property_important>
+{
+  const imp = (id) => getComputedStyle($('#' + id)).getPropertyValue('--imp');
+  testing.expectEqual('first', imp('imp-order'));
+  testing.expectEqual('important', imp('imp-specific'));
+  testing.expectEqual('sheet', imp('imp-sheet'));
+  testing.expectEqual('inline', imp('imp-inline'));
 }
 </script>
 

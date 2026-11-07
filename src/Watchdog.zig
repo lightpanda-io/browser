@@ -108,7 +108,10 @@ fn run(self: *Watchdog) void {
     defer self.mutex.unlock(lp.io);
 
     while (true) {
-        lp.timedWait(&self.cond, &self.mutex, CHECK_INTERVAL_NS) catch {};
+        self.cond.waitTimeout(lp.io, &self.mutex, .{ .duration = .{
+            .raw = .fromNanoseconds(CHECK_INTERVAL_NS),
+            .clock = .awake,
+        } }) catch {};
         if (self.shutdown) {
             return;
         }

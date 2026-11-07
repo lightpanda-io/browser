@@ -105,7 +105,6 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
-    frame.styleChanged();
 
     // Upgrade any undefined custom elements with this name
     var idx: usize = 0;
@@ -127,6 +126,10 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         };
 
         _ = frame._undefined_custom_elements.swapRemove(idx);
+    }
+
+    if (definition.isCustomizedBuiltIn()) {
+        try Custom.upgradeBuiltIns(definition, frame);
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
@@ -191,7 +194,7 @@ fn upgradeNode(self: *CustomElementRegistry, node: *Node, frame: *Frame) !void {
 
 fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame) !void {
     const custom = element.is(Custom) orelse {
-        return Custom.checkAndAttachBuiltIn(element, frame);
+        return Custom.tryUpgradeBuiltIn(element, frame);
     };
 
     if (custom._definition != null or custom._upgrade_failed) {
@@ -212,16 +215,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     custom._disconnected_callback_invoked = false;
 
     const node = custom.asNode();
-    const element = custom.asElement();
-    for (element.attributeEntries()) |*attr| {
-        const name = lp.String.wrap(attr.name());
-        if (definition.isAttributeObserved(name)) {
-            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
-        }
-    }
-    if (node.isConnected()) {
-        try Custom.enqueueConnectedCallbackOnElement(false, element, frame);
-    }
+    try Custom.enqueueUpgradeReactions(custom.asElement(), definition, frame);
 
     // During construction the element is precustomized, not yet custom.
     custom._upgrade_in_progress = true;
@@ -274,6 +268,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     // Insertions and removals during construction queue nothing, so the
     // dedup flags must reflect where the constructor left the element.
     const connected = node.isConnected();
+    frame.styleChanged(); // the element now matches :defined
     custom._connected_callback_invoked = connected;
     custom._disconnected_callback_invoked = connected == false;
 
@@ -290,16 +285,23 @@ fn upgradeFailed(custom: *Custom) void {
 }
 
 fn validateName(name: []const u8) !void {
-    if (name.len == 0) {
+    if (!isValidName(name)) {
         return error.SyntaxError;
+    }
+}
+
+/// https://html.spec.whatwg.org/#valid-custom-element-name
+pub fn isValidName(name: []const u8) bool {
+    if (name.len == 0) {
+        return false;
     }
 
     if (std.mem.find(u8, name, "-") == null) {
-        return error.SyntaxError;
+        return false;
     }
 
     if (name[0] < 'a' or name[0] > 'z') {
-        return error.SyntaxError;
+        return false;
     }
 
     const reserved_names = [_][]const u8{
@@ -315,22 +317,23 @@ fn validateName(name: []const u8) !void {
 
     for (reserved_names) |reserved| {
         if (std.mem.eql(u8, name, reserved)) {
-            return error.SyntaxError;
+            return false;
         }
     }
 
     for (name) |c| {
         if (std.ascii.isUpper(c)) {
-            return error.SyntaxError;
+            return false;
         }
 
         // Reject control characters and specific invalid characters
         // per elementLocalNameRegex: [^\0\t\n\f\r\u0020/>]*
         switch (c) {
-            0, '\t', '\n', '\r', 0x0C, ' ', '/', '>' => return error.SyntaxError,
+            0, '\t', '\n', '\r', 0x0C, ' ', '/', '>' => return false,
             else => {},
         }
     }
+    return true;
 }
 
 pub const JsApi = struct {

@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <svg id=root width="200" height="100">
@@ -215,7 +216,9 @@
 {
   const circle = document.querySelector('#transformed > g > circle');
   const m = circle.getCTM();
-  testing.expectEqual(true, m instanceof DOMMatrix);
+  testing.diverges('SVG 2 makes SVGMatrix an alias of DOMMatrix; Chrome keeps the legacy interface', () => {
+    testing.expectEqual(true, m instanceof DOMMatrix);
+  });
   testing.expectEqual(2, m.a);
   testing.expectEqual(0, m.b);
   testing.expectEqual(0, m.c);
@@ -233,6 +236,15 @@
   testing.expectEqual(rect.x + 10, s.e);
   testing.expectEqual(rect.y + 20, s.f);
 
-  testing.expectEqual(null, document.createElementNS('http://www.w3.org/2000/svg', 'rect').getCTM());
+  // A disconnected element gets the identity, whatever its transforms
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  const g = svg.appendChild(document.createElementNS(NS, 'g'));
+  g.setAttribute('transform', 'translate(100, 0)');
+  const detached = g.appendChild(document.createElementNS(NS, 'rect'));
+  detached.setAttribute('transform', 'translate(5, 6) scale(2)');
+  for (const d of [detached.getCTM(), detached.getScreenCTM(), document.createElementNS(NS, 'rect').getCTM()]) {
+    testing.expectEqual([1, 0, 0, 1, 0, 0], [d.a, d.b, d.c, d.d, d.e, d.f]);
+  }
 }
 </script>

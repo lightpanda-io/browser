@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <body></body>
 
@@ -194,14 +195,12 @@
 <script id="ua_unrendered_tags_are_display_none">
   {
     // Per HTML Rendering §15.3.1 "Hidden elements", these tags get
-    // display:none from the UA stylesheet:
-    //   area, base, datalist, head, link, meta, noscript, param, script,
-    //   source, style, template, title, track
+    // display:none from the UA stylesheet.
     // (basefont/noembed/noframes/rp are obsolete and not represented in
     // Lightpanda's Element.Tag enum.)
     const tags = [
-      'area', 'base', 'datalist', 'link', 'meta', 'noscript', 'param',
-      'script', 'source', 'style', 'template', 'title', 'track',
+      'area', 'base', 'datalist', 'link', 'meta', 'param',
+      'script', 'style', 'template', 'title',
     ];
     for (const t of tags) {
       const el = document.createElement(t);
@@ -210,6 +209,26 @@
       testing.expectEqual(false, el.checkVisibility());
       el.remove();
     }
+
+    // <noscript> isn't rendered while scripting is on, but Chrome does that
+    // without the UA stylesheet, so its computed display stays inline.
+    const noscript = document.createElement('noscript');
+    document.body.appendChild(noscript);
+    testing.expectEqual(false, noscript.checkVisibility());
+    testing.diverges('Chrome: noscript computes display:inline', () => {
+      testing.expectEqual('none', window.getComputedStyle(noscript).display);
+    });
+    noscript.remove();
+
+    // The spec doesn't hide source/track (WPT hidden-elements.html).
+    for (const t of ['source', 'track']) {
+      const el = document.createElement(t);
+      document.body.appendChild(el);
+      testing.expectEqual('inline', window.getComputedStyle(el).display);
+      testing.expectEqual(true, el.checkVisibility());
+      el.remove();
+    }
+
     // <head> itself
     testing.expectEqual('none', window.getComputedStyle(document.head).display);
     testing.expectEqual(false, document.head.checkVisibility());
@@ -252,7 +271,9 @@
     // Closed: <summary> visible, body child hidden
     testing.expectEqual(true, summary.checkVisibility());
     testing.expectEqual(false, child.checkVisibility());
-    testing.expectEqual('none', window.getComputedStyle(child).display);
+    testing.diverges('Chrome hides closed details content via ::details-content, child keeps display:block', () => {
+      testing.expectEqual('none', window.getComputedStyle(child).display);
+    });
 
     // Open: child visible
     details.setAttribute('open', '');
@@ -268,6 +289,23 @@
     testing.expectEqual(false, grandchild.checkVisibility());
 
     details.remove();
+  }
+</script>
+
+<script id="ua_closed_details_rule_is_html_only">
+  {
+    // An SVG element named "details" isn't an HTMLDetailsElement, so the UA
+    // rule doesn't apply to its children.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const details = document.createElementNS('http://www.w3.org/2000/svg', 'details');
+    const child = document.createElement('p');
+    details.appendChild(child);
+    svg.appendChild(details);
+    document.body.appendChild(svg);
+
+    testing.expectEqual('block', window.getComputedStyle(child).display);
+
+    svg.remove();
   }
 </script>
 
@@ -899,6 +937,57 @@
     hidden.assign(child);
     testing.expectEqual(false, child.checkVisibility({ visibilityProperty: true }));
     testing.expectEqual("hidden", getComputedStyle(child).visibility);
+
+    host.remove();
+  }
+</script>
+
+<script id="outside_flat_tree_is_not_rendered">
+  {
+    const host = document.createElement("div");
+    host.innerHTML = '<span id="title" slot="title">Title</span><span id="lost" slot="nope"><b>Lost</b></span><span id="body">Body</span>';
+    document.body.appendChild(host);
+    const title = host.querySelector("#title");
+    const lost = host.querySelector("#lost");
+    const body = host.querySelector("#body");
+    testing.expectEqual(true, body.checkVisibility());
+
+    // No slots yet: attaching takes every child out of the flat tree
+    const shadow = host.attachShadow({ mode: "open" });
+    testing.expectEqual(false, body.checkVisibility());
+    testing.expectEqual(false, lost.firstChild.checkVisibility());
+    testing.expectEqual(0, body.getBoundingClientRect().width);
+
+    shadow.innerHTML = '<h2><slot name="title"></slot></h2><slot id="def"><i>Fallback</i></slot>';
+    const fallback = shadow.querySelector("i");
+    testing.expectEqual(true, title.checkVisibility());
+    testing.expectEqual(true, body.checkVisibility());
+    // a slot name nothing matches
+    testing.expectEqual(false, lost.checkVisibility());
+    testing.expectEqual(false, lost.firstChild.checkVisibility());
+    // the default slot has assigned nodes, so its fallback isn't rendered
+    testing.expectEqual(false, fallback.checkVisibility());
+
+    body.remove();
+    testing.expectEqual(true, fallback.checkVisibility());
+
+    host.remove();
+  }
+</script>
+
+<script id="manual_slot_unassigned_is_not_rendered">
+  {
+    const host = document.createElement("div");
+    const child = document.createElement("span");
+    host.appendChild(child);
+    document.body.appendChild(host);
+
+    const shadow = host.attachShadow({ mode: "open", slotAssignment: "manual" });
+    shadow.innerHTML = "<slot></slot>";
+    testing.expectEqual(false, child.checkVisibility());
+
+    shadow.querySelector("slot").assign(child);
+    testing.expectEqual(true, child.checkVisibility());
 
     host.remove();
   }

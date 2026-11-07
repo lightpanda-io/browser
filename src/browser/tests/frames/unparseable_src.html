@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id="unparseable_src" type=module>
@@ -15,7 +16,10 @@
     ifr.onload = () => state.resolve();
     ifr.src = 'https://';
     await state.done(() => {
-      testing.expectEqual('about:blank', ifr.contentWindow.location.href);
+      // Spec: a src that fails to parse leaves the URL at about:blank.
+      testing.diverges('Chrome navigates to about:blank#blocked', () => {
+        testing.expectEqual('about:blank', ifr.contentWindow.location.href);
+      });
     });
   }
 </script>

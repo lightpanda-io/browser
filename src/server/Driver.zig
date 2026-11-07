@@ -77,12 +77,12 @@ pub fn connectionScoped(self: *const Driver) bool {
 // server loop. The loop shuts the link's read side itself (Server.Worker
 // owns that pointer); this only stops the JS.
 pub fn shutdown(self: *const Driver) void {
-    self.browser.env.terminate();
+    self.browser.env.requestTerminate();
 }
 
 // server loop. Something was pushed to the inbox; wake the worker from its poll.
 pub fn wakeup(self: *const Driver) void {
-    self.browser.http_client.handles.wakeup() catch |err| {
+    self.browser.http_client.wakeup() catch |err| {
         log.err(self.scope, "wakeup", .{ .err = err });
     };
 }
@@ -265,9 +265,13 @@ const PageWait = struct {
 fn pageWait(self: *const Driver) ?PageWait {
     switch (self.impl) {
         .cdp => |cdp| {
+            // Any page: the runner ticks every page of the session.
             const bc = cdp.browser_context orelse return null;
-            const page = bc.page_handle orelse return null;
-            return .{ .session = bc.session, .frame_id = page.frame_id };
+            for (bc.targets.items) |target| {
+                const page = target.pageHandle() orelse continue;
+                return .{ .session = bc.session, .frame_id = page.frame_id };
+            }
+            return null;
         },
         .bidi => |bidi| {
             const context = bidi.browsing_context orelse return null;

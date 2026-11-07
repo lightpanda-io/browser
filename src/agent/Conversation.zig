@@ -85,6 +85,17 @@ pub fn compactForRequest(self: *Conversation) void {
     }
 }
 
+/// Whether a `name` result still ends with `text`: not truncated, stubbed,
+/// pruned or rolled back since. Notes go in front of a result.
+pub fn holdsResult(self: *const Conversation, name: []const u8, text: []const u8) bool {
+    for (self.messages.items) |msg| {
+        for (msg.tool_results orelse continue) |res| {
+            if (std.mem.eql(u8, res.name, name) and std.mem.endsWith(u8, res.content, text)) return true;
+        }
+    }
+    return false;
+}
+
 fn expireImages(self: *Conversation) void {
     _ = self.forStale(image_keep, hasImage, dropImage);
 }
@@ -233,6 +244,21 @@ test "compactForRequest keeps small and extract results, and doesn't count them 
     for (1..4) |i| try std.testing.expect(std.mem.startsWith(u8, contentOf(&conv, i), "[html result"));
     for (4..7) |i| try std.testing.expectEqual(20 * 1024, contentOf(&conv, i).len);
     for (7..10) |i| try std.testing.expectEqual(100, contentOf(&conv, i).len);
+}
+
+test "holdsResult stops finding a result once it is stubbed" {
+    var conv: Conversation = .init(std.testing.allocator, "sys");
+    defer conv.deinit();
+
+    try appendResult(&conv, "tree", 18 * 1024);
+    const tree = try std.testing.allocator.dupe(u8, contentOf(&conv, 0));
+    defer std.testing.allocator.free(tree);
+    try std.testing.expect(conv.holdsResult("tree", tree));
+    try std.testing.expect(!conv.holdsResult("markdown", tree));
+
+    for (0..6) |_| try appendResult(&conv, "markdown", 18 * 1024);
+    conv.compactForRequest();
+    try std.testing.expect(!conv.holdsResult("tree", tree));
 }
 
 test "expireImages keeps the newest images and annotates the rest" {

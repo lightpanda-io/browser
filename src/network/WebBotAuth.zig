@@ -27,7 +27,7 @@ const WebBotAuth = @This();
 
 pkey: *crypto.EVP_PKEY,
 keyid: []const u8,
-directory_url: [:0]const u8,
+signature_agent: [:0]const u8,
 
 pub const Config = struct {
     key_file: []const u8,
@@ -73,18 +73,18 @@ pub fn fromConfig(allocator: std.mem.Allocator, config: *const Config) !WebBotAu
     const pkey = try parsePemPrivateKey(pem);
     errdefer crypto.EVP_PKEY_free(pkey);
 
-    const directory_url = try allocator.printSentinel(
-        "https://{s}/.well-known/http-message-signatures-directory",
+    const signature_agent = try allocator.printSentinel(
+        "\"https://{s}\"",
         .{config.domain},
         0,
     );
-    errdefer allocator.free(directory_url);
+    errdefer allocator.free(signature_agent);
 
     return .{
         .pkey = pkey,
         // Owned by the Config so it's okay.
         .keyid = config.keyid,
-        .directory_url = directory_url,
+        .signature_agent = signature_agent,
     };
 }
 
@@ -97,16 +97,23 @@ pub fn signRequest(
     const now = lp.datetime.timestamp(.real);
     const expires = now + 60;
 
+    // Use fresh system entropy for every request, including redirect hops.
+    var nonce_bytes: [64]u8 = undefined;
+    try lp.io.randomSecure(&nonce_bytes);
+    // Match Cloudflare's reference signer: standard padded base64.
+    var nonce_encoded: [std.base64.standard.Encoder.calcSize(nonce_bytes.len)]u8 = undefined;
+    const nonce = std.base64.standard.Encoder.encode(&nonce_encoded, &nonce_bytes);
+
     // build the signature-input value (without the sig1= label)
     const sig_input_value = try arena.print(
-        "(\"@authority\" \"signature-agent\");created={d};expires={d};keyid=\"{s}\";alg=\"ed25519\";tag=\"web-bot-auth\"",
-        .{ now, expires, self.keyid },
+        "(\"@authority\" \"signature-agent\");created={d};expires={d};keyid=\"{s}\";alg=\"ed25519\";nonce=\"{s}\";tag=\"web-bot-auth\"",
+        .{ now, expires, self.keyid, nonce },
     );
 
     // build the canonical string to sign
     const canonical = try arena.print(
-        "\"@authority\": {s}\n\"signature-agent\": \"{s}\"\n\"@signature-params\": {s}",
-        .{ authority, self.directory_url, sig_input_value },
+        "\"@authority\": {s}\n\"signature-agent\": {s}\n\"@signature-params\": {s}",
+        .{ authority, self.signature_agent, sig_input_value },
     );
 
     // sign it
@@ -118,14 +125,14 @@ pub fn signRequest(
     const encoded = try arena.alloc(u8, encoded_len);
     _ = std.base64.standard.Encoder.encode(encoded, &sig);
 
-    try transfer.setHeader("Signature-Agent", try arena.print("\"{s}\"", .{self.directory_url}), .{});
+    try transfer.setHeader("Signature-Agent", self.signature_agent, .{});
     try transfer.setHeader("Signature-Input", try arena.print("sig1={s}", .{sig_input_value}), .{});
     try transfer.setHeader("Signature", try arena.print("sig1=:{s}:", .{encoded}), .{});
 }
 
 pub fn deinit(self: WebBotAuth, allocator: std.mem.Allocator) void {
     crypto.EVP_PKEY_free(self.pkey);
-    allocator.free(self.directory_url);
+    allocator.free(self.signature_agent);
 }
 
 test "parsePemPrivateKey: valid Ed25519 PKCS#8 PEM" {
@@ -207,29 +214,29 @@ test "signEd25519: same key + diff message produces different signature (determi
     try std.testing.expect(!std.mem.eql(u8, &sig1, &sig2));
 }
 
-test "signRequest: adds headers with correct names" {
+test "signRequest: origin, fresh nonces and verifiable signatures" {
     const allocator = std.testing.allocator;
 
+    // Published Ed25519 test key from RFC 8037, Appendix A.1.
     const pem =
         \\-----BEGIN PRIVATE KEY-----
-        \\MC4CAQAwBQYDK2VwBCIEIBuCRBIEFNtXcMBsyOOkFBFTJcEWTkbgSwKExhOjKFHT
+        \\MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g
         \\-----END PRIVATE KEY-----
         \\
     ;
-    const pkey = try parsePemPrivateKey(pem);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(lp.io, .{ .sub_path = "key.pem", .data = pem });
+    const key_file = try tmp.dir.realPathFileAlloc(lp.io, "key.pem", allocator);
+    defer allocator.free(key_file);
 
-    const directory_url = try allocator.dupeSentinel(
-        u8,
-        "https://example.com/.well-known/http-message-signatures-directory",
-        0,
-    );
-
-    var auth = WebBotAuth{
-        .pkey = pkey,
+    const auth = try WebBotAuth.fromConfig(allocator, &.{
+        .key_file = key_file,
         .keyid = "test-key-id",
-        .directory_url = directory_url,
-    };
+        .domain = "example.com",
+    });
     defer auth.deinit(allocator);
+    try std.testing.expectEqualStrings("\"https://example.com\"", auth.signature_agent);
 
     var pool = ArenaPool.init(allocator, .{});
     defer pool.deinit();
@@ -254,16 +261,74 @@ test "signRequest: adds headers with correct names" {
     };
 
     try auth.signRequest(&transfer, "example.com");
+    const first_nonce = try testSignedRequest(&transfer, "example.com");
+    const first_signature = transfer.req_headers.items[2].value;
 
+    // Even the same authority and timestamps must produce a fresh signature.
+    try auth.signRequest(&transfer, "example.com");
+    const second_nonce = try testSignedRequest(&transfer, "example.com");
+    const second_signature = transfer.req_headers.items[2].value;
+    try std.testing.expect(!std.mem.eql(u8, first_nonce, second_nonce));
+    try std.testing.expect(!std.mem.eql(u8, first_signature, second_signature));
+
+    // Re-signing a transfer replaces the headers and covers the new authority.
+    try auth.signRequest(&transfer, "localhost:8989");
+    const third_nonce = try testSignedRequest(&transfer, "localhost:8989");
+    try std.testing.expect(!std.mem.eql(u8, second_nonce, third_nonce));
+    try std.testing.expectError(error.SignatureVerificationFailed, testSignedRequest(&transfer, "example.com"));
+}
+
+fn testSignedRequest(transfer: *const Transfer, authority: []const u8) ![]const u8 {
     const headers = transfer.req_headers.items;
     try std.testing.expectEqual(3, headers.len);
     try std.testing.expectEqualStrings("Signature-Agent", headers[0].name);
-    try std.testing.expectEqualStrings(
-        "\"https://example.com/.well-known/http-message-signatures-directory\"",
-        headers[0].value,
-    );
+    try std.testing.expectEqualStrings("\"https://example.com\"", headers[0].value);
     try std.testing.expectEqualStrings("Signature-Input", headers[1].name);
-    try std.testing.expect(std.mem.startsWith(u8, headers[1].value, "sig1=(\"@authority\" \"signature-agent\")"));
+    const input = headers[1].value;
+    try std.testing.expect(std.mem.startsWith(u8, input, "sig1=(\"@authority\" \"signature-agent\");created="));
+    const nonce_start = (std.mem.find(u8, input, ";nonce=\"") orelse return error.MissingNonce) + ";nonce=\"".len;
+    const nonce_end = std.mem.findPos(u8, input, nonce_start, "\"") orelse return error.MissingNonce;
+    const nonce = input[nonce_start..nonce_end];
+    try std.testing.expectEqual(88, nonce.len);
+    try std.testing.expect(std.mem.endsWith(u8, nonce, "=="));
+    try std.testing.expectEqualStrings("\";tag=\"web-bot-auth\"", input[nonce_end..]);
+    try std.testing.expectEqual(64, try std.base64.standard.Decoder.calcSizeForSlice(nonce));
+    var nonce_bytes: [64]u8 = undefined;
+    try std.base64.standard.Decoder.decode(&nonce_bytes, nonce);
+    var nonce_encoded: [88]u8 = undefined;
+    try std.testing.expectEqualStrings(nonce, std.base64.standard.Encoder.encode(&nonce_encoded, &nonce_bytes));
+
+    var params = std.mem.splitScalar(u8, input, ';');
+    _ = params.next();
+    const created_param = params.next().?;
+    const expires_param = params.next().?;
+    try std.testing.expect(std.mem.startsWith(u8, created_param, "created="));
+    try std.testing.expect(std.mem.startsWith(u8, expires_param, "expires="));
+    const created = try std.fmt.parseInt(i64, created_param["created=".len..], 10);
+    const expires = try std.fmt.parseInt(i64, expires_param["expires=".len..], 10);
+    try std.testing.expectEqual(created + 60, expires);
+    try std.testing.expectEqualStrings("keyid=\"test-key-id\"", params.next().?);
+    try std.testing.expectEqualStrings("alg=\"ed25519\"", params.next().?);
+
     try std.testing.expectEqualStrings("Signature", headers[2].name);
     try std.testing.expect(std.mem.startsWith(u8, headers[2].value, "sig1=:"));
+    try std.testing.expect(std.mem.endsWith(u8, headers[2].value, ":"));
+    const encoded_signature = headers[2].value["sig1=:".len .. headers[2].value.len - 1];
+    try std.testing.expectEqual(64, try std.base64.standard.Decoder.calcSizeForSlice(encoded_signature));
+    var signature_bytes: [64]u8 = undefined;
+    try std.base64.standard.Decoder.decode(&signature_bytes, encoded_signature);
+
+    // Reconstruct RFC 9421's signature base from the actual header values.
+    // Verify independently of the libcrypto signing implementation.
+    const canonical = try std.testing.allocator.print(
+        "\"@authority\": {s}\n\"signature-agent\": {s}\n\"@signature-params\": {s}",
+        .{ authority, headers[0].value, input["sig1=".len..] },
+    );
+    defer std.testing.allocator.free(canonical);
+    var public_key_bytes: [32]u8 = undefined;
+    try std.base64.url_safe_no_pad.Decoder.decode(&public_key_bytes, "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo");
+    const Ed25519 = std.crypto.sign.Ed25519;
+    const public_key = try Ed25519.PublicKey.fromBytes(public_key_bytes);
+    try Ed25519.Signature.fromBytes(signature_bytes).verify(canonical, public_key);
+    return nonce;
 }

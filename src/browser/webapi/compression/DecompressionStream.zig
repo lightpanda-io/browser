@@ -18,8 +18,6 @@
 
 const js = @import("../../js/js.zig");
 
-const brotli = @import("brotli.zig");
-const zlib = @import("zlib.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
 const WritableStream = @import("../streams/WritableStream.zig");
 const TransformStream = @import("../streams/TransformStream.zig");

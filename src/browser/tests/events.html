@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="testing.js"></script>
 
 <div id=parent><p id=child></p></div>
@@ -905,6 +906,79 @@
     window.removeEventListener('win_throw', b);
     window.removeEventListener('win_throw', c);
   }
+</script>
+
+<script id=directDispatchEventPhase>
+  // Non-DOM targets have no path: listeners run at the target.
+  for (const target of [new EventTarget(), window]) {
+    const ev = new Event('direct_phase');
+    let phase = null;
+    const listener = (e) => phase = e.eventPhase;
+    target.addEventListener('direct_phase', listener);
+    target.dispatchEvent(ev);
+    target.removeEventListener('direct_phase', listener);
+
+    testing.expectEqual(Event.AT_TARGET, phase);
+    testing.expectEqual(Event.NONE, ev.eventPhase);
+  }
+</script>
+
+<script id=directDispatchIsDispatching>
+  {
+    const target = new EventTarget();
+    const ev = new Event('direct_busy');
+    let redispatch = null;
+    target.addEventListener('direct_busy', (e) => {
+      try {
+        target.dispatchEvent(e);
+      } catch (err) {
+        redispatch = err.name;
+      }
+      // Ignored while the event is being dispatched.
+      e.initEvent('renamed', true, true);
+    });
+    target.dispatchEvent(ev);
+
+    testing.expectEqual('InvalidStateError', redispatch);
+    testing.expectEqual('direct_busy', ev.type);
+    testing.expectEqual(false, ev.bubbles);
+  }
+</script>
+
+<script id=directDispatchClearsStopPropagation>
+  // Fails in Chrome, which doesn't clear the stop flags after dispatching to a
+  // non-Node target (it does for Nodes). The spec and Firefox clear them for
+  // every target.
+  {
+    const target = new EventTarget();
+    const ev = new Event('direct_stop');
+    let calls = 0;
+    target.addEventListener('direct_stop', (e) => {
+      calls += 1;
+      e.stopImmediatePropagation();
+    });
+    target.addEventListener('direct_stop', () => calls += 100);
+
+    target.dispatchEvent(ev);
+    testing.expectEqual(1, calls);
+
+    // The flags are cleared once dispatch ends.
+    target.dispatchEvent(ev);
+    testing.diverges("Chrome doesn't clear the stop flags after dispatching", () => {
+      testing.expectEqual(2, calls);
+    });
+  }
+</script>
+
+<script id=directDispatchEventPhaseNative type=module>
+{
+  const state = await testing.async();
+  window.addEventListener('message', (e) => state.resolve(e.eventPhase), { once: true });
+  window.postMessage('phase', '*');
+  await state.done((phase) => {
+    testing.expectEqual(Event.AT_TARGET, phase);
+  });
+}
 </script>
 
 <div id=return_false_parent><span id=return_false_child></span></div>

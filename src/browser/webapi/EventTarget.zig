@@ -33,9 +33,12 @@ const Window = @import("Window.zig");
 const FileReader = @import("FileReader.zig");
 const AbortSignal = @import("AbortSignal.zig");
 const MessagePort = @import("MessagePort.zig");
+const ModelContext = @import("ModelContext.zig");
 const Performance = @import("Performance.zig");
 const Permissions = @import("Permissions.zig");
 const Notification = @import("Notification.zig");
+const PaymentRequest = @import("payment/PaymentRequest.zig");
+const PaymentResponse = @import("payment/PaymentResponse.zig");
 const SharedWorker = @import("SharedWorker.zig");
 const ServiceWorker = @import("ServiceWorker.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
@@ -98,10 +101,13 @@ pub const Type = enum(u8) {
     idb_transaction,
     media_query_list,
     message_port,
+    model_context,
     navigation,
     navigation_history_entry,
     node,
     notification,
+    payment_request,
+    payment_response,
     performance,
     permission_status,
     screen,
@@ -144,10 +150,13 @@ pub fn Subtype(comptime tag: Type) type {
         .idb_transaction => IDBTransaction,
         .media_query_list => MediaQueryList,
         .message_port => MessagePort,
+        .model_context => ModelContext,
         .navigation => Navigation,
         .navigation_history_entry => NavigationHistoryEntry,
         .node => Node,
         .notification => Notification,
+        .payment_request => PaymentRequest,
+        .payment_response => PaymentResponse,
         .performance => Performance,
         .permission_status => Permissions.PermissionStatus,
         .screen => Screen,
@@ -403,6 +412,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .video_encoder => writer.writeAll("<VideoEncoder>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
+        .model_context => writer.writeAll("<ModelContext>"),
         .broadcast_channel => writer.writeAll("<BroadcastChannel>"),
         .text_track => writer.writeAll("<TextTrack>"),
         .text_track_cue => writer.writeAll("<TextTrackCue>"),
@@ -420,6 +430,8 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .idb_database => writer.writeAll("<IDBDatabase>"),
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
+        .payment_request => writer.writeAll("<PaymentRequest>"),
+        .payment_response => writer.writeAll("<PaymentResponse>"),
         .permission_status => writer.writeAll("<PermissionStatus>"),
         .navigation_history_entry => writer.writeAll("<NavigationHistoryEntry>"),
     };
@@ -444,10 +456,13 @@ pub fn toString(self: *EventTarget) []const u8 {
         .idb_transaction => return "[object IDBTransaction]",
         .media_query_list => return "[object MediaQueryList]",
         .message_port => return "[object MessagePort]",
+        .model_context => return "[object ModelContext]",
         .navigation => return "[object Navigation]",
         .navigation_history_entry => return "[object NavigationHistoryEntry]",
         .node => return "[object Node]",
         .notification => return "[object Notification]",
+        .payment_request => return "[object PaymentRequest]",
+        .payment_response => return "[object PaymentResponse]",
         .performance => return "[object Performance]",
         .permission_status => return "[object PermissionStatus]",
         .screen => return "[object Screen]",
@@ -493,4 +508,6 @@ test "WebApi: EventTarget" {
     // (fine to go up to 8, since it'll always be padded to that)
     try testing.expectEqual(1, @sizeOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
+    try testing.htmlRunner("event/listener_removal.html", .{});
+    try testing.htmlRunner("event/message_multiple_listeners.html", .{});
 }

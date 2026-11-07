@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../../testing.js"></script>
 
 <!-- Test fixtures for form.name -->
@@ -719,9 +720,10 @@
   // a duplicated name is still one present property, backed by a RadioNodeList
   testing.expectEqual('RadioNodeList', els.choice.constructor.name);
 
-  // [LegacyUnenumerableNamedProperties]
-  testing.expectEqual(false, Object.keys(els).includes('user'));
-  testing.expectEqual(false, Object.getOwnPropertyDescriptor(els, 'user').enumerable);
+  testing.diverges('Chrome: redeclared named getter loses [LegacyUnenumerableNamedProperties]', () => {
+    testing.expectEqual(false, Object.keys(els).includes('user'));
+    testing.expectEqual(false, Object.getOwnPropertyDescriptor(els, 'user').enumerable);
+  });
 }
 </script>
 
