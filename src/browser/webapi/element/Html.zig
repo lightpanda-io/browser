@@ -357,7 +357,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
         .writer = writer,
         .scratch = .init(frame.local_arena),
         .style_manager = style_manager,
-        .preserve = tag == .pre,
+        .preserve = !style_manager.whiteSpace(el).collapse,
         .transform = style_manager.textTransform(el),
     };
     defer state.scratch.deinit();
@@ -723,7 +723,8 @@ const InnerTextState = struct {
     // Trim leading whitespace of the next text run.
     trim_left: bool = true,
 
-    // preserve whitespace (pre tag, in the future white-space: pre)
+    // preserve whitespace: computed white-space that keeps spaces (pre,
+    // pre-wrap, break-spaces), from a <pre> or from CSS
     preserve: bool = false,
 
     // text-transform of the element whose text is being written
@@ -872,12 +873,16 @@ fn handleChildElement(
         state.transform = own_transform;
     }
 
+    const parent_preserve = state.preserve;
+    defer state.preserve = parent_preserve;
+    state.preserve = !state.style_manager.whiteSpace(el).collapse;
+
     switch (display) {
         .skip, .replaced => unreachable,
         .@"inline", .transparent => try he.collectInnerText(state),
         .block => {
             state.requireBreaks(1);
-            try enterBlock(he, tag, state);
+            try he.collectInnerText(state);
             state.requireBreaks(1);
         },
         .block_p => {
@@ -900,16 +905,6 @@ fn handleChildElement(
             try he.collectInnerText(state);
         },
     }
-}
-
-// Recurse into a block, enabling whitespace preservation for <pre> subtrees.
-fn enterBlock(he: *HtmlElement, tag: Element.Tag, state: *InnerTextState) std.Io.Writer.Error!void {
-    if (tag == .pre and !state.preserve) {
-        state.preserve = true;
-        defer state.preserve = false;
-        return he.collectInnerText(state);
-    }
-    return he.collectInnerText(state);
 }
 
 fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag) Display {
@@ -986,6 +981,9 @@ fn writeRenderedText(c: *Node.CData, state: *InnerTextState) !void {
             return;
         }
         try state.flushBreaks();
+        if (state.pre_w) {
+            try writer.writeByte(' ');
+        }
         // Preserve whitespace verbatim, normalising CR / CRLF to LF.
         var i: usize = 0;
         while (i < s.len) : (i += 1) {
