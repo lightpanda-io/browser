@@ -159,7 +159,7 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
             _ = std.c.execve(argv[0].?, &argv, std.c.environ);
             // execve only returns on failure, so this is the "curl never
             // ran" path: exit 0 would report it as a success it wasn't.
-            std.c.exit(1);
+            std.c._exit(1);
         },
         else => return,
     }
