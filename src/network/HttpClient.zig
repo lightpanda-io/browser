@@ -84,7 +84,7 @@ handles: http.Handles,
 // with App.watchdog by Browser.init.
 heartbeat: Watchdog.Heartbeat = .{},
 session_source: ?*Client = null,
-wakeup_mutex: std.Thread.Mutex = .{},
+wakeup_mutex: std.Io.Mutex = .init,
 polling_client: ?*Client = null,
 
 // Use to generate the next request ID
@@ -221,21 +221,21 @@ fn currentDriver(self: *Client) ?*Driver {
 // Hold the lock through wakeup so the selected client's handles stay alive.
 pub fn wakeup(self: *Client) !void {
     const source = self.session_source orelse self;
-    source.wakeup_mutex.lock();
-    defer source.wakeup_mutex.unlock();
+    source.wakeup_mutex.lockUncancelable(lp.io);
+    defer source.wakeup_mutex.unlock(lp.io);
     try (source.polling_client orelse source).handles.wakeup();
 }
 
 fn poll(self: *Client, timeout_ms: u32) !void {
     const source = self.session_source orelse self;
-    source.wakeup_mutex.lock();
+    source.wakeup_mutex.lockUncancelable(lp.io);
     lp.assert(source.polling_client == null, "Concurrent session client polls", .{});
     source.polling_client = self;
-    source.wakeup_mutex.unlock();
+    source.wakeup_mutex.unlock(lp.io);
     defer {
-        source.wakeup_mutex.lock();
+        source.wakeup_mutex.lockUncancelable(lp.io);
         source.polling_client = null;
-        source.wakeup_mutex.unlock();
+        source.wakeup_mutex.unlock(lp.io);
     }
     try self.handles.poll(&.{}, @intCast(timeout_ms));
 }
@@ -7111,9 +7111,9 @@ test "HttpClient: borrowed session clients follow driver attachment and wakeups"
     defer if (!joined) thread.join();
     var ready = false;
     while (lp.datetime.milliTimestamp(.boot) - started < 5000) {
-        browser.http_client.wakeup_mutex.lock();
+        browser.http_client.wakeup_mutex.lockUncancelable(lp.io);
         ready = browser.http_client.polling_client == &client;
-        browser.http_client.wakeup_mutex.unlock();
+        browser.http_client.wakeup_mutex.unlock(lp.io);
         if (ready) break;
         std.Thread.yield() catch {};
     }
