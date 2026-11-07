@@ -93,6 +93,12 @@ fn classLanguage(el: *Element) ?[]const u8 {
     return null;
 }
 
+/// The number of an `<ol>`'s first item: its `start` attribute, or 1.
+fn listStart(ol: *Element) usize {
+    const start = ol.getAttributeSafe(comptime .wrap("start")) orelse return 1;
+    return std.fmt.parseInt(usize, std.mem.trim(u8, start, &std.ascii.whitespace), 10) catch 1;
+}
+
 fn longestBacktickRun(text: []const u8) usize {
     var longest: usize = 0;
     var run: usize = 0;
@@ -238,7 +244,7 @@ const Context = struct {
             },
             .ol => {
                 if (self.state.list_depth < self.state.list_stack.len) {
-                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = 1 };
+                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = listStart(el) };
                     self.state.list_depth += 1;
                 }
             },
@@ -704,6 +710,12 @@ test "browser.markdown: ordered list" {
     try testMarkdownHTML(
         \\<ol><li>First</li><li>Second</li></ol>
     , "1. First\n2. Second\n");
+}
+
+test "browser.markdown: ordered list start" {
+    try testMarkdownHTML(
+        \\<ol start="3"><li>Third</li><li>Fourth</li></ol>
+    , "3. Third\n4. Fourth\n");
 }
 
 test "browser.markdown: table" {
