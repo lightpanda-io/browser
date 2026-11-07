@@ -178,7 +178,7 @@ fn onForegroundTaskPosted(ctx: ?*anyopaque, delay_in_seconds: f64) callconv(.c) 
     }
 
     // wakeup is thread-safe
-    self.http_client.handles.wakeup() catch |err| {
+    self.http_client.wakeup() catch |err| {
         log.err(.browser, "foreground task wakeup", .{ .err = err });
     };
 }

@@ -193,10 +193,15 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 
 // The client is borrowed and must outlive the session. Install it before
 // creating pages: their script managers retain the same client pointer.
+// A custom client is exclusive to this session until teardown releases it.
 pub fn setHttpClient(self: *Session, client: *HttpClient) void {
     lp.assert(self.pages.items.len == 0, "Session.setHttpClient with live pages", .{});
-    client.heartbeat_override = self.browser.http_client.watchdogHeartbeat();
-    client.driver = self.browser.http_client.driver;
+    if (self.http_client == client) return;
+    if (self.http_client != &self.browser.http_client) self.http_client.session_source = null;
+    if (client != &self.browser.http_client) {
+        lp.assert(client.session_source == null, "Client already installed in a session", .{});
+        client.session_source = &self.browser.http_client;
+    }
     self.http_client = client;
 }
 
@@ -209,6 +214,9 @@ pub fn clearPermissions(self: *Session) void {
 }
 
 pub fn deinit(self: *Session) void {
+    defer {
+        if (self.http_client != &self.browser.http_client) self.http_client.session_source = null;
+    }
     if (self._console_capture) {
         self.notification.unregister(.console_message, self);
     }
@@ -1396,4 +1404,21 @@ test "Session: pages share permission overrides only within their session" {
     first.clearPermissions();
     try expectPermission(b, "prompt");
     try expectPermission(other, "denied");
+}
+
+test "Session: releasing a borrowed client removes its browser binding" {
+    const browser = testing.test_session.browser;
+    const notification = try Notification.init(testing.allocator);
+    defer notification.deinit();
+    var client: HttpClient = undefined;
+    try client.init(browser.app);
+    defer client.deinit();
+    var session: Session = undefined;
+    try session.init(browser, notification);
+    session.setHttpClient(&client);
+    try testing.expectEqual(&browser.http_client, client.session_source.?);
+    session.deinit();
+    try testing.expectEqual(null, client.session_source);
+    try testing.expect(client.watchdogHeartbeat() == &client.heartbeat);
+    _ = try client.tick(0);
 }
