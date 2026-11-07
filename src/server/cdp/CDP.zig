@@ -82,6 +82,8 @@ browser_context: ?*BrowserContext,
 browser_contexts: std.ArrayList(*BrowserContext) = .empty,
 retired_contexts: std.ArrayList(*BrowserContext) = .empty,
 next_group_id: js.Inspector.GroupId = 1,
+tick_depth: usize = 0,
+dispatch_depth: usize = 0,
 // Permission commands can precede the first context. Transfer this store to
 // its Session without creating a context as a side effect of granting access.
 pending_permissions: PermissionOverrides = .{},
@@ -157,6 +159,11 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
         return;
     }
 
+    if (self.dispatch_depth > 0) {
+        var nested: std.heap.ArenaAllocator = .init(self.allocator);
+        defer nested.deinit();
+        return self.dispatchParsed(nested.allocator(), .{ .cdp = self }, c.raw, c.input, null);
+    }
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input, null);
@@ -166,6 +173,11 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
 // don't go through the Network thread / inbox pipeline) and by any
 // caller that has bytes rather than a pre-parsed InputMessage.
 pub fn processMessage(self: *CDP, msg: []const u8) !void {
+    if (self.dispatch_depth > 0) {
+        var nested: std.heap.ArenaAllocator = .init(self.allocator);
+        defer nested.deinit();
+        return self.dispatch(nested.allocator(), .{ .cdp = self }, msg, null);
+    }
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return self.dispatch(arena.allocator(), .{ .cdp = self }, msg, null);
@@ -204,6 +216,8 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
 // keeping `str` and the backing storage for `input`'s string slices
 // alive for the duration of the call.
 fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage, target_session_id: ?[]const u8) !void {
+    self.dispatch_depth += 1;
+    defer self.dispatch_depth -= 1;
     lp.metrics.serve_commands.incr(.cdp);
 
     var command = Command{
@@ -224,17 +238,17 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
     if (command.routing_session_id) |sid| {
         if (self.contextForSession(sid)) |bc| command.browser_context = bc;
     }
-    if (try command.params(struct { browserContextId: ?[]const u8 = null, targetId: ?[]const u8 = null, sessionId: ?[]const u8 = null })) |params| {
+    if (command.params(struct { browserContextId: ?[]const u8 = null, targetId: ?[]const u8 = null, sessionId: ?[]const u8 = null }) catch null) |params| {
         if (params.browserContextId) |bid| {
             if (self.findBrowserContext(bid)) |bc| {
                 command.browser_context = bc;
             } else if (!std.mem.eql(u8, input.method, "Target.disposeBrowserContext")) {
                 return command.sendError(-31998, if (self.browser_context == null) "BrowserContextNotLoaded" else "UnknownBrowserContextId", .{});
             }
-        } else if (params.targetId) |tid| {
-            if (self.contextForTarget(tid)) |bc| command.browser_context = bc;
         } else if (params.sessionId) |sid| {
             if (self.contextForSession(sid)) |bc| command.browser_context = bc;
+        } else if (params.targetId) |tid| {
+            if (self.contextForTarget(tid)) |bc| command.browser_context = bc;
         }
     }
 
@@ -443,16 +457,25 @@ fn reapContexts(self: *CDP) void {
 }
 
 pub fn tick(self: *CDP) !void {
-    defer self.reapContexts();
+    self.tick_depth += 1;
+    defer {
+        self.tick_depth -= 1;
+        if (self.tick_depth == 0 and self.dispatch_depth == 0) self.reapContexts();
+    }
     const contexts = try self.allocator.dupe(*BrowserContext, self.browser_contexts.items);
     defer self.allocator.free(contexts);
     for (contexts) |bc| {
         if (!bc.active) continue;
         bc.session.processDestroyQueues();
-        var runner = bc.session.runner(.{});
+        var runner = bc.session.runner(.{ .pump_peers = false });
         try runner.tickCDP(0);
     }
     _ = try self.browser.http_client.tick(if (self.browser_contexts.items.len == 0) 200 else 5);
+}
+
+fn pumpPeers(ctx: *anyopaque) anyerror!void {
+    const self: *CDP = @ptrCast(@alignCast(ctx));
+    try self.tick();
 }
 
 const SendEventOpts = struct {
@@ -580,6 +603,7 @@ pub const BrowserContext = struct {
         self.http_client.obey_robots = cdp.browser.http_client.obey_robots;
         self.http_client.tls_verify = cdp.browser.http_client.tls_verify;
         session.setHttpClient(&self.http_client);
+        session.peer_pump = .{ .context = cdp, .run = pumpPeers };
         errdefer session.setHttpClient(&cdp.browser.http_client);
         errdefer notification.unregisterAll(self);
 

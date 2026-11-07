@@ -1268,10 +1268,10 @@ test "cdp.Network: canClearBrowserCache" {
 test "cdp.Network: setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
 
     var cache: Cache = undefined;
-    const client = &ctx.cdp().browser.http_client;
+    const client = bc.session.http_client;
     client.cache = &cache;
 
     try ctx.processMessage(.{
@@ -1286,10 +1286,10 @@ test "cdp.Network: setCacheDisabled" {
 test "cdp.Network: configured CDP ignores setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
 
     var cache: Cache = undefined;
-    const client = &ctx.cdp().browser.http_client;
+    const client = bc.session.http_client;
     client.cache = &cache;
     defer client.cache = &testing.base.test_app.network.cache;
 

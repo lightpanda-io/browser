@@ -59,6 +59,7 @@ http_client: *HttpClient,
 permissions: PermissionOverrides = .{},
 geolocation_override: ?Geolocation.Override = null,
 viewport_override: ?Viewport = null,
+peer_pump: ?Runner.PeerPump = null,
 arena: *lp.Arena,
 // Session history, one per top-level browsing context, keyed by its root
 // frame id. Outlives the Page: a root navigation's replacement Page reuses the

@@ -113,10 +113,7 @@ fn createBrowserContext(cmd: *CDP.Command) !void {
         }
     }
 
-    const bc = cmd.createBrowserContext() catch |err| switch (err) {
-        error.AlreadyExists => return cmd.sendError(-32000, "Cannot have more than one browser context at a time", .{}),
-        else => return err,
-    };
+    const bc = try cmd.createBrowserContext();
 
     if (params) |p| {
         if (p.proxyServer) |proxy| {
@@ -166,10 +163,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         // forTab: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse cmd.createBrowserContext() catch |err| switch (err) {
-        error.AlreadyExists => unreachable,
-        else => return err,
-    };
+    const bc = cmd.browser_context orelse try cmd.createBrowserContext();
 
     if (params.browserContextId) |param_browser_context_id| {
         if (std.mem.eql(u8, param_browser_context_id, bc.id) == false) {

@@ -568,6 +568,7 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
 
     const fresh = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-NEW", .url = "cdp/dom1.html" });
     try testing.expectEqual(null, fresh.session.viewport_override);
+    try std.testing.expectEqualDeep(defaults, fresh.session.getViewport());
     try expectJs((try testing.firstTarget(fresh)).mainFrame().?, "innerWidth === 1920 && innerHeight === 1080 && devicePixelRatio === 1 && screen.width === innerWidth && screen.height === innerHeight");
 }
 

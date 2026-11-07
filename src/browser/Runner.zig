@@ -36,16 +36,19 @@ const Runner = @This();
 session: *Session,
 browser: *Browser,
 http_client: *HttpClient,
+pump_peers: bool,
 
 const network_idle_hold_ms = 500;
 
-pub const Opts = struct {};
+pub const PeerPump = struct { context: *anyopaque, run: *const fn (*anyopaque) anyerror!void };
+pub const Opts = struct { pump_peers: bool = true };
 
-pub fn init(session: *Session, _: Opts) Runner {
+pub fn init(session: *Session, opts: Opts) Runner {
     return .{
         .session = session,
         .browser = session.browser,
         .http_client = session.http_client,
+        .pump_peers = opts.pump_peers,
     };
 }
 
@@ -223,6 +226,9 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const session = self.session;
     const browser = self.browser;
     const http_client = self.http_client;
+    if (self.pump_peers) {
+        if (session.peer_pump) |pump| try pump.run(pump.context);
+    }
     defer {
         browser.flushArenaMemory();
         browser.sampleJsHeap();
