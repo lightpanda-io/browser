@@ -126,6 +126,9 @@ const Context = struct {
         block_anchor: struct { href: []const u8, label: ?[]const u8 },
         inline_anchor: struct { href: []const u8, standalone: bool },
         inline_code: struct { ticks: usize, href: ?[]const u8 },
+        // The quote's content goes to its own buffer, then every line of it
+        // gets the `> ` marker.
+        blockquote: struct { parent: *std.Io.Writer, buf: *std.Io.Writer.Allocating },
     };
 
     fn deinit(self: *Context) void {
@@ -269,8 +272,12 @@ const Context = struct {
                 try self.writer.writeByte(' ');
             },
             .blockquote => {
-                try self.writer.writeAll("> ");
-                self.state.last_char_was_newline = false;
+                const buf = try self.frame.local_arena.create(std.Io.Writer.Allocating);
+                buf.* = .init(self.frame.local_arena);
+                const parent = self.writer;
+                self.writer = &buf.writer;
+                self.state.last_char_was_newline = true;
+                return self.open(.init(self.tree.content(el, boxed)), .{ .blockquote = .{ .parent = parent, .buf = buf } });
             },
             .pre => {
                 try self.writer.writeAll("```");
@@ -428,6 +435,17 @@ const Context = struct {
                 self.state.last_char_was_newline = false;
                 return;
             },
+            .blockquote => |quote| {
+                self.writer = quote.parent;
+                var lines = std.mem.splitScalar(u8, std.mem.trim(u8, quote.buf.written(), "\n"), '\n');
+                while (lines.next()) |line| {
+                    try self.writer.writeAll(if (line.len == 0) ">" else "> ");
+                    try self.writer.writeAll(line);
+                    try self.writer.writeByte('\n');
+                }
+                self.state.last_char_was_newline = true;
+                return;
+            },
         };
 
         switch (tag) {
@@ -448,7 +466,6 @@ const Context = struct {
                 try self.writer.writeAll("~~");
                 self.state.last_char_was_newline = false;
             },
-            .blockquote => {},
             .ul, .ol => {
                 if (self.state.list_depth > 0) self.state.list_depth -= 1;
             },
@@ -761,6 +778,12 @@ test "browser.markdown: nested lists" {
 
 test "browser.markdown: blockquote" {
     try testMarkdownHTML("<blockquote>Hello world</blockquote>", "\n> Hello world\n");
+}
+
+test "browser.markdown: blockquote with paragraphs" {
+    try testMarkdownHTML(
+        \\<blockquote><p>One</p><p>Two</p></blockquote><p>After</p>
+    , "\n> One\n>\n> Two\n\nAfter\n");
 }
 
 test "browser.markdown: links" {
