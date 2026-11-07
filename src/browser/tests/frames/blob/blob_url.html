@@ -65,7 +65,16 @@
   {
     // A parser-inserted <script src> is fetched synchronously (syncRequest);
     // the parent-minted blob URL must resolve through the iframe's owner.
-    const blobUrl = URL.createObjectURL(new Blob(["window.blobScriptRan = 'yes';"], { type: 'text/javascript' }));
+    // Chrome fetches a document.write'd script asynchronously, so the script
+    // reports back instead of being checked right after close().
+    const state = await testing.async();
+    window.addEventListener('message', function handler(e) {
+      if (!e.data || e.data.t !== 'blob_script') return;
+      window.removeEventListener('message', handler);
+      state.resolve(e.data.v);
+    });
+
+    const blobUrl = URL.createObjectURL(new Blob(["parent.postMessage({ t: 'blob_script', v: 'yes' }, '*');"], { type: 'text/javascript' }));
 
     const iframe = document.createElement('iframe');
     document.documentElement.appendChild(iframe);
@@ -73,8 +82,10 @@
     doc.write('<!DOCTYPE html><html><body><script src="' + blobUrl + '"><\/script></body></html>');
     doc.close();
 
-    testing.expectEqual('yes', iframe.contentWindow.blobScriptRan);
-    URL.revokeObjectURL(blobUrl);
+    await state.done((data) => {
+      testing.expectEqual('yes', data);
+      URL.revokeObjectURL(blobUrl);
+    });
   }
 </script>
 

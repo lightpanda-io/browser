@@ -1,11 +1,14 @@
 <!DOCTYPE html>
+
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
 <div id="parent"><div id="child1">Child 1</div></div>
 <div id="empty-parent"></div>
 <div id="remove-parent"><div id="only-child">Only</div></div>
 <div id="text-parent"></div>
 <div id="middle-parent"><div id="first">First</div><div id="middle">Middle</div><div id="last">Last</div></div>
 
-<script src="../testing.js"></script>
 <script id="childlist" type=module>
   const state = await testing.async();
   const parent = document.getElementById('parent');
@@ -265,7 +268,8 @@
 
   // Replacing a child with its immediate previous sibling: the combined
   // record's previousSibling is captured before newChild is removed from
-  // its old position, so it is newChild itself.
+  // its old position (spec "replace" step 4, before "adopt"), so it is
+  // newChild itself.
   parent.replaceChild(newChild, oldChild);
 
   await state.done((mutations) => {
@@ -285,7 +289,9 @@
     testing.expectEqual(newChild, mutations[1].addedNodes[0]);
     testing.expectEqual(1, mutations[1].removedNodes.length);
     testing.expectEqual(oldChild, mutations[1].removedNodes[0]);
-    testing.expectEqual(newChild, mutations[1].previousSibling);
+    testing.diverges("Chrome removes newChild before capturing previousSibling", () => {
+      testing.expectEqual(newChild, mutations[1].previousSibling);
+    });
     testing.expectEqual(b, mutations[1].nextSibling);
   });
 </script>

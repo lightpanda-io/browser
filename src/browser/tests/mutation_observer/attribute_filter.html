@@ -1,12 +1,14 @@
 <!DOCTYPE html>
+
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
 <div id="test-element-1" data-status="active" data-username="john" data-role="admin">Test</div>
 <div id="test-element-2" class="initial">Test</div>
 <div id="test-element-3">
   <div id="child-element" data-foo="bar" data-baz="qux">Child</div>
 </div>
 
-<meta name=lp-mode content=test>
-<script src="../testing.js"></script>
 <script id="attribute_filter_single" type=module>
   const state = await testing.async();
   const element = document.getElementById('test-element-1');
