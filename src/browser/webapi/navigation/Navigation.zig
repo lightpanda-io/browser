@@ -390,10 +390,15 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         std.mem.eql(u8, frame.url, params.url) == false;
 
     const signal = try AbortSignal.init(&frame.js.execution);
+    // Same-origin navigations are interceptable whether or not they're
+    // same-document — that's what lets a listener turn a cross-document
+    // link click into client-side routing.
+    const can_intercept = frame.isSameOrigin(params.url);
     const event = try NavigateEvent.initTrusted(.{
         // A traversal to another document can't be canceled.
         .cancelable = params.navigation_type != .traverse or params.same_document,
         .navigationType = @tagName(params.navigation_type),
+        .canIntercept = can_intercept,
         .destination = destination,
         .userInitiated = params.user_initiated,
         .hashChange = hash_change,
@@ -426,6 +431,13 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
     if (event.asEvent().getDefaultPrevented()) {
         try self.abortOngoing(frame);
         return .canceled;
+    }
+
+    if (event._handlers.items.len > 0) {
+        const handlers = try frame.page_arena.alloc(js.Function.Global, event._handlers.items.len);
+        @memcpy(handlers, event._handlers.items);
+        ongoing.intercept_handlers = handlers;
+        event._handlers.clearRetainingCapacity();
     }
 
     if (params.same_document == false) {
@@ -469,7 +481,7 @@ pub fn abortOngoing(self: *Navigation, frame: *Frame) !void {
     const local = &ls.local;
 
     const err = try local.zigValueToJs(dom, .{});
-    try self.fireNavigateError(err, frame);
+    try self.fireNavigateError(err, "AbortError: Navigation was aborted", frame);
 
     if (ongoing.committed) |c| {
         c.local(local).rejectValue(err) catch |e| {
@@ -511,12 +523,24 @@ fn resolveCommitted(signal: *AbortSignal, frame: *Frame) void {
 
 // The microtask queued by commitSameDocument.
 pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
-    var ongoing = frame._ongoing_navigate orelse return;
-    if (ongoing.committed_same_document == false) {
-        // A newer navigation replaced it
-        return;
+    // Claim the handler (without touching committed/finished) before taking
+    // any copy: a newer navigation replacing this one invalidates the
+    // pointer this gives us, so this check has to happen first.
+    {
+        const ongoing_ptr = if (frame._ongoing_navigate) |*o| o else return;
+        if (ongoing_ptr.committed_same_document == false) {
+            // A newer navigation replaced it.
+            return;
+        }
+        if (ongoing_ptr.intercept_handlers.len > 0) {
+            const handlers = ongoing_ptr.intercept_handlers;
+            ongoing_ptr.intercept_handlers = &.{};
+            self.runInterceptHandlers(handlers, ongoing_ptr.signal, frame);
+            return;
+        }
     }
 
+    var ongoing = frame._ongoing_navigate.?;
     frame._ongoing_navigate = null;
     defer ongoing.releasePromises();
 
@@ -529,6 +553,158 @@ pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
         frame.js.localScope(&ls);
         defer ls.deinit();
         f.local(&ls.local).resolve("navigation finished", {});
+    }
+}
+
+// The spec's "wait for all" settles as soon as any handler's result
+// rejects -- it doesn't wait for the rest to settle -- and only settles as
+// a success once every handler has fulfilled (a non-promise return counts
+// as an already-fulfilled one).
+const WaitAllHandlers = struct {
+    navigation: *Navigation,
+    signal: *AbortSignal,
+    frame: *Frame,
+    pending: usize,
+    done: bool,
+
+    fn settleOne(ctx: *WaitAllHandlers, index: usize, reason: ?js.Value) void {
+        _ = index;
+        if (ctx.done) {
+            return;
+        }
+
+        if (reason) |r| {
+            ctx.done = true;
+            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = r });
+            return;
+        }
+
+        ctx.pending -= 1;
+        if (ctx.pending > 0) {
+            return;
+        }
+
+        ctx.done = true;
+        ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
+    }
+};
+
+fn runInterceptHandlers(
+    self: *Navigation,
+    handlers: []js.Function.Global,
+    signal: *AbortSignal,
+    frame: *Frame,
+) void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const ctx = frame.page_arena.create(WaitAllHandlers) catch {
+        for (handlers) |handler| {
+            handler.release();
+        }
+        self.settleIntercept(signal, frame, .success);
+        return;
+    };
+    ctx.* = .{
+        .navigation = self,
+        .signal = signal,
+        .frame = frame,
+        .pending = handlers.len,
+        .done = false,
+    };
+
+    for (handlers, 0..) |handler, i| {
+        defer handler.release();
+        const handler_fn = handler.local(local);
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const ret = handler_fn.callRethrow(js.Value, .{}) catch |err| {
+            if (err == error.TryCatchRethrow) {
+                if (try_catch.exceptionValue()) |exc| {
+                    ctx.settleOne(i, exc);
+                } else {
+                    const reason: ?js.Value = local.zigValueToJs(js.Undefined{}, .{}) catch null;
+                    ctx.settleOne(i, reason);
+                }
+                continue;
+            }
+            if (err == error.ExecutionTerminated) {
+                // Unwinding the whole call stack; don't settle anything.
+                return;
+            }
+            log.debug(.event, "Navigation.intercept handler", .{ .err = err });
+            ctx.settleOne(i, null);
+            continue;
+        };
+
+        if (!ret.isPromise()) {
+            ctx.settleOne(i, null);
+            continue;
+        }
+
+        const HandlerContext = struct { ctx: *WaitAllHandlers, index: usize };
+        const handler_ctx = frame.page_arena.create(HandlerContext) catch {
+            ctx.settleOne(i, null);
+            continue;
+        };
+        handler_ctx.* = .{ .ctx = ctx, .index = i };
+
+        const on_fulfilled = local.newCallback(struct {
+            fn f(c: *HandlerContext, _: ?js.Value) void {
+                c.ctx.settleOne(c.index, null);
+            }
+        }.f, handler_ctx);
+
+        const on_rejected = local.newCallback(struct {
+            fn f(c: *HandlerContext, reason: ?js.Value) void {
+                c.ctx.settleOne(c.index, reason);
+            }
+        }.f, handler_ctx);
+
+        _ = ret.toPromise().thenAndCatch(on_fulfilled, on_rejected) catch {
+            ctx.settleOne(i, null);
+        };
+    }
+}
+
+const InterceptResult = union(enum) { success, failure: js.Value };
+
+fn settleIntercept(self: *Navigation, signal: *AbortSignal, frame: *Frame, result: InterceptResult) void {
+    const ongoing_ptr = ongoingFor(signal, frame) orelse return;
+    var ongoing = ongoing_ptr.*;
+    frame._ongoing_navigate = null;
+    defer ongoing.releasePromises();
+
+    switch (result) {
+        .success => {
+            self.fireNavigateSuccess(frame) catch |err| {
+                log.debug(.event, "Navigation.navigatesuccess", .{ .err = err });
+            };
+            if (ongoing.finished) |f| {
+                var ls: js.Local.Scope = undefined;
+                frame.js.localScope(&ls);
+                defer ls.deinit();
+                f.local(&ls.local).resolve("navigation finished", {});
+            }
+        },
+        .failure => |reason| {
+            self.fireNavigateError(reason, "Error: a navigate event handler rejected", frame) catch |err| {
+                log.debug(.event, "Navigation.navigateerror", .{ .err = err });
+            };
+            if (ongoing.finished) |f| {
+                var ls: js.Local.Scope = undefined;
+                frame.js.localScope(&ls);
+                defer ls.deinit();
+                f.local(&ls.local).rejectValue(reason) catch |err| {
+                    log.debug(.event, "Navigation.intercept reject", .{ .err = err });
+                };
+            }
+        },
     }
 }
 
@@ -549,14 +725,14 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
     try self.dispatch(event, frame);
 }
 
-fn fireNavigateError(self: *Navigation, err: js.Value, frame: *Frame) !void {
+fn fireNavigateError(self: *Navigation, err: js.Value, message: []const u8, frame: *Frame) !void {
     if (!frame.hasDirectListeners(self.asEventTarget(), "navigateerror")) {
         return;
     }
 
     const event = try ErrorEvent.initTrusted(.wrap("navigateerror"), .{
         .@"error" = try err.persist(),
-        .message = "AbortError: Navigation was aborted",
+        .message = message,
         .filename = frame.url,
     }, frame.page);
 
