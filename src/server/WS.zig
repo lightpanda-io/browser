@@ -30,6 +30,7 @@ pub const CLOSE_NORMAL = [_]u8{ 136, 2, 3, 232 }; // code: 1000
 pub const CLOSE_GOING_AWAY = [_]u8{ 136, 2, 3, 233 }; // code: 1001
 const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
 const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
+const CLOSE_INVALID_PAYLOAD = [_]u8{ 136, 2, 3, 239 }; // 1007
 
 const Fragments = struct {
     type: Message.Type,
@@ -264,6 +265,9 @@ fn ReaderM(comptime EXPECT_MASK: bool) type {
                     }
 
                     // this continuation is done!
+                    if (fragments.type == .text and std.unicode.utf8ValidateSlice(fragments.message.items) == false) {
+                        return error.InvalidUTF8;
+                    }
                     return .{
                         .type = fragments.type,
                         .data = fragments.message.items,
@@ -290,6 +294,9 @@ fn ReaderM(comptime EXPECT_MASK: bool) type {
                     continue :LOOP;
                 }
 
+                if (message_type == .text and std.unicode.utf8ValidateSlice(payload) == false) {
+                    return error.InvalidUTF8;
+                }
                 return .{
                     .data = payload,
                     .type = message_type,
@@ -408,6 +415,7 @@ fn ReaderM(comptime EXPECT_MASK: bool) type {
 pub fn errorReply(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.TooLarge, error.InboxBacklog => &CLOSE_TOO_BIG,
+        error.InvalidUTF8 => &CLOSE_INVALID_PAYLOAD,
         error.Masked,
         error.NotMasked,
         error.ReservedFlags,
@@ -433,6 +441,7 @@ const NextError = error{
     ControlTooLarge,
     InvalidContinuation,
     NestedFragmentation,
+    InvalidUTF8,
     OutOfMemory,
 };
 
@@ -618,4 +627,70 @@ test "reader: control frame arriving in pieces" {
     const msg = (try reader.next()) orelse return error.NoMessage;
     try testing.expectEqual(.ping, msg.type);
     try testing.expectEqual(114, msg.data.len);
+}
+
+test "reader: rejects invalid UTF-8 text frames" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    var frame: std.ArrayList(u8) = .empty;
+    defer frame.deinit(allocator);
+    try writeFrame(&frame, allocator, "ok");
+    // rewrite the payload to contain a bare 0xFF byte
+    frame.items[frame.items.len - 2] = 0xFF;
+
+    try testing.expectError(error.InvalidUTF8, feedAndDrain(&reader, frame.items));
+}
+
+test "reader: rejects invalid UTF-8 across fragmented text messages" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    var parts: std.ArrayList(u8) = .empty;
+    defer parts.deinit(allocator);
+    try parts.append(allocator, 1); // text, not FIN
+    try parts.append(allocator, 2);
+    try parts.appendSlice(allocator, "ab");
+    try parts.append(allocator, 128 | 0); // continuation, FIN
+    try parts.append(allocator, 3);
+    try parts.appendSlice(allocator, &.{ 'c', 0xFF, 'd' });
+
+    try testing.expectError(error.InvalidUTF8, feedAndDrain(&reader, parts.items));
+}
+
+test "reader: accepts multibyte UTF-8 text frames" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    var frame: std.ArrayList(u8) = .empty;
+    defer frame.deinit(allocator);
+    try writeFrame(&frame, allocator, "héllo → ✅");
+
+    @memcpy(reader.readBuf()[0..frame.items.len], frame.items);
+    reader.len += frame.items.len;
+    const msg = (try reader.next()) orelse return error.NoMessage;
+    try testing.expectEqual(.text, msg.type);
+    try testing.expectEqualSlices(u8, "héllo → ✅", msg.data);
+}
+
+test "reader: binary frames may contain invalid UTF-8" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    const frame = [_]u8{ 128 | 2, 3, 'a', 0xFF, 'b' };
+    @memcpy(reader.readBuf()[0..frame.len], &frame);
+    reader.len += frame.len;
+    const msg = (try reader.next()) orelse return error.NoMessage;
+    try testing.expectEqual(.binary, msg.type);
+    try testing.expectEqualSlices(u8, frame[2..], msg.data);
+}
+
+test "errorReply maps InvalidUTF8 to close 1007" {
+    const reply = errorReply(error.InvalidUTF8) orelse return error.NoReply;
+    try testing.expectEqualSlices(u8, &CLOSE_INVALID_PAYLOAD, reply);
+    try testing.expectEqual(@as(u16, 1007), std.mem.readInt(u16, CLOSE_INVALID_PAYLOAD[2..4], .big));
 }
