@@ -878,7 +878,14 @@ fn receivedData(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !voi
         if (message_len > self._http_client.max_response_size) {
             return error.MessageTooLarge;
         }
-        try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
+
+        if (meta.fin) {
+            // single-frame message or last fragment: the final size is known
+            try self._recv_buffer.ensureTotalCapacityPrecise(self._arena.allocator(), message_len);
+        } else {
+            // more fragments follow: amortize so many small fragments don't regrow each time
+            try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
+        }
     }
 
     try self._recv_buffer.appendSlice(self._arena.allocator(), data);
@@ -903,10 +910,15 @@ fn receivedControl(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !
     if (data.len > self._control_buffer.len - self._control_len) {
         return error.ControlFrameTooLarge;
     }
+    if (meta.frame_type != .close) {
+        // we don't do anything with these
+        return;
+    }
+
     @memcpy(self._control_buffer[self._control_len..][0..data.len], data);
     self._control_len += data.len;
 
-    if (meta.bytes_left > 0 or meta.frame_type != .close) {
+    if (meta.bytes_left > 0) {
         return;
     }
 
