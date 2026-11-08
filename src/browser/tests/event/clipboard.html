@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=default>
+{
+  const event = new ClipboardEvent('paste');
+  testing.expectEqual('paste', event.type);
+  testing.expectEqual(true, event instanceof ClipboardEvent);
+  testing.expectEqual(true, event instanceof Event);
+  // ClipboardEvent inherits from Event directly, not UIEvent.
+  testing.expectEqual(false, event instanceof UIEvent);
+  testing.expectEqual(false, event.bubbles);
+  testing.expectEqual(false, event.cancelable);
+  // ClipboardEventInit.clipboardData defaults to null.
+  testing.expectEqual(null, event.clipboardData);
+}
+</script>
+
+<script id=event_init>
+{
+  const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true, composed: true });
+  testing.expectEqual(true, event.bubbles);
+  testing.expectEqual(true, event.cancelable);
+  testing.expectEqual(true, event.composed);
+  testing.expectEqual(false, event.isTrusted);
+  testing.expectEqual(null, event.clipboardData);
+}
+</script>
+
+<script id=carries_data_transfer>
+{
+  const dt = new DataTransfer();
+  dt.setData('text/plain', 'hello');
+  dt.setData('text/html', '<b>hello</b>');
+
+  const event = new ClipboardEvent('paste', { clipboardData: dt });
+  testing.expectEqual(dt, event.clipboardData);
+  testing.expectEqual('hello', event.clipboardData.getData('text/plain'));
+  testing.expectEqual('<b>hello</b>', event.clipboardData.getData('text/html'));
+
+  // The event exposes the caller's store, not a copy: writes through the
+  // event are visible on the original DataTransfer.
+  event.clipboardData.setData('text/plain', 'changed');
+  testing.expectEqual('changed', dt.getData('text/plain'));
+}
+</script>
+
+<script id=dispatched_paste>
+{
+  const dt = new DataTransfer();
+  dt.setData('text/plain', 'pasted text');
+
+  const parent = document.createElement('div');
+  const el = document.createElement('div');
+  parent.appendChild(el);
+
+  let seen = null;
+  let bubbled = false;
+  parent.addEventListener('paste', function (e) {
+    bubbled = true;
+    // A listener cancels the default paste and reads the payload instead,
+    // the way rich-text editors handle paste.
+    e.preventDefault();
+  });
+  el.addEventListener('paste', function (e) {
+    testing.expectEqual(true, e instanceof ClipboardEvent);
+    seen = e.clipboardData.getData('text/plain');
+  });
+
+  const notCanceled = el.dispatchEvent(new ClipboardEvent('paste', {
+    bubbles: true,
+    cancelable: true,
+    clipboardData: dt,
+  }));
+  testing.expectEqual('pasted text', seen);
+  testing.expectEqual(true, bubbled);
+  testing.expectEqual(false, notCanceled);
+}
+</script>
+
+<script id=refcount_balance>
+{
+  // A ClipboardEvent holds a ref on its DataTransfer so the store outlives the
+  // event even if the JS wrapper is dropped first. Build many event/store pairs
+  // and retain none: at teardown every acquire must be matched by a release, or
+  // the leak-checking test runner fails.
+  let last = '';
+  for (let i = 0; i < 25; i++) {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'payload' + i);
+    const ev = new ClipboardEvent('copy', { clipboardData: dt });
+    last = ev.clipboardData.getData('text/plain');
+  }
+  testing.expectEqual('payload24', last);
+}
+</script>
