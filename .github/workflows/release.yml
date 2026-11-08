@@ -129,13 +129,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-14 runs on arm CPU. see
+          # macos-15 runs on arm CPU. see
           # https://github.com/actions/runner-images?tab=readme-ov-file
           - arch: aarch64
-            runner: macos-14
+            runner: macos-15
             cpu_flag: ''
           - arch: x86_64
-            runner: macos-14-large
+            runner: macos-15-large
             cpu_flag: -Dcpu=x86_64
 
     env:
