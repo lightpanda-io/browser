@@ -447,6 +447,112 @@ const Cancel = struct {
     resolver: ?js.PromiseResolver.Global = null,
 };
 
+/// tee() — returns two branches which each receive every chunk of this stream.
+/// The source is read through its own reader (it becomes locked) and each
+/// chunk is enqueued into both branches. A branch stops receiving chunks once
+/// it is cancelled or errored; once neither branch is readable, the source is
+/// cancelled too.
+pub fn tee(self: *ReadableStream, exec: *const Execution) ![]*ReadableStream {
+    if (self._disturbed or self._state != .readable or self.getLocked()) {
+        return exec.js.typeError("ReadableStream is locked, disturbed or closed");
+    }
+
+    const branch1 = try ReadableStream.init(null, null, exec);
+    const branch2 = try ReadableStream.init(null, null, exec);
+
+    const state = try exec.page_arena.create(TeeState);
+    state.* = .{
+        .execution = exec,
+        .source = self,
+        .reader = try self.getReader(exec),
+        .branch1 = branch1,
+        .branch2 = branch2,
+    };
+    try state.pump();
+
+    const branches = try exec.call_arena.alloc(*ReadableStream, 2);
+    branches[0] = branch1;
+    branches[1] = branch2;
+    return branches;
+}
+
+/// State for an in-flight tee: reads the source and enqueues each chunk into
+/// both branches.
+const TeeState = struct {
+    execution: *const Execution,
+    source: *ReadableStream,
+    reader: *ReadableStreamDefaultReader,
+    branch1: *ReadableStream,
+    branch2: *ReadableStream,
+
+    fn pump(self: *TeeState) !void {
+        const exec = self.execution;
+        const local = exec.js.local.?;
+
+        const read_promise = try self.reader.read(exec);
+        const then_fn = local.newCallback(onReadFulfilled, self);
+        const catch_fn = local.newCallback(onReadRejected, self);
+
+        _ = read_promise.thenAndCatch(then_fn, catch_fn) catch {
+            self.closeBranches();
+        };
+    }
+
+    const ReadData = struct {
+        done: bool,
+        value: js.Value,
+    };
+
+    fn onReadFulfilled(self: *TeeState, data_: ?ReadData) void {
+        const exec = self.execution;
+        const data = data_ orelse {
+            return self.closeBranches();
+        };
+
+        if (data.done) {
+            return self.closeBranches();
+        }
+
+        const value = data.value;
+        if (value.isUndefined()) {
+            return self.closeBranches();
+        }
+
+        // A branch which was cancelled or errored stops receiving chunks.
+        self.branch1._controller.enqueueValue(value) catch {};
+        self.branch2._controller.enqueueValue(value) catch {};
+
+        if (self.branch1._state != .readable and self.branch2._state != .readable) {
+            // neither branch wants more data
+            self.reader.releaseLock();
+            _ = self.source.cancel(null, exec) catch {};
+            return;
+        }
+
+        self.pump() catch {
+            self.closeBranches();
+        };
+    }
+
+    fn onReadRejected(self: *TeeState) void {
+        const exec = self.execution;
+        const local = exec.js.local.?;
+
+        const reason: ?js.Value = if (self.source._stored_error) |stored|
+            local.toLocal(stored)
+        else
+            null;
+        self.branch1._controller.doError(reason) catch {};
+        self.branch2._controller.doError(reason) catch {};
+    }
+
+    fn closeBranches(self: *TeeState) void {
+        self.branch1._controller.close() catch {};
+        self.branch2._controller.close() catch {};
+        self.reader.releaseLock();
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ReadableStream);
 
@@ -460,6 +566,7 @@ pub const JsApi = struct {
     pub const getReader = bridge.function(ReadableStream.getReader, .{});
     pub const pipeThrough = bridge.function(ReadableStream.pipeThrough, .{});
     pub const pipeTo = bridge.function(ReadableStream.pipeTo, .{});
+    pub const tee = bridge.function(ReadableStream.tee, .{});
     pub const locked = bridge.accessor(ReadableStream.getLocked, null, .{});
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };

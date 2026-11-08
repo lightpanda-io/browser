@@ -512,3 +512,60 @@
     testing.expectEqual(['err!', 'err!', undefined, 'err!', 'TypeError', 'TypeError', 'err!'], results);
   });
 </script>
+
+<script id=readable_stream_tee type=module>
+  {
+    const state = await testing.async();
+    const enc = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    async function readAll(stream) {
+      const reader = stream.getReader();
+      let out = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        out += decoder.decode(value);
+      }
+      return out;
+    }
+
+    const source = new ReadableStream({
+      start(controller) {
+        controller.enqueue(enc.encode('chunk1'));
+        controller.enqueue(enc.encode('chunk2'));
+        controller.close();
+      },
+    });
+
+    const [branch1, branch2] = source.tee();
+    testing.expectEqual(true, source.locked);
+
+    const [b1, b2] = await Promise.all([readAll(branch1), readAll(branch2)]);
+    state.resolve();
+
+    await state.done(() => {
+      // both branches receive every chunk
+      testing.expectEqual('chunk1chunk2', b1);
+      testing.expectEqual('chunk1chunk2', b2);
+    });
+  }
+</script>
+
+<script id=readable_stream_tee_rejects type=module>
+  {
+    // a locked stream cannot be teed
+    testing.expectError('TypeError', () => {
+      const locked = new ReadableStream();
+      locked.getReader();
+      locked.tee();
+    });
+
+    // a cancelled (disturbed) stream cannot be teed
+    testing.expectError('TypeError', () => {
+      const cancelled = new ReadableStream();
+      cancelled.cancel();
+      cancelled.tee();
+    });
+  }
+</script>
