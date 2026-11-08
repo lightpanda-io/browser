@@ -58,6 +58,20 @@ V8_CACHE   := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/$(V8_ARCHIVE)
 V8_SO_ASSET := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).so
 V8_SO_CACHE := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/libc_v8.so
 
+# SHA-256 digests of the zig-v8-fork release assets we download, keyed by
+# $(OS)_$(ARCH) (and _SO for the shared flavor). They pin the archive to the
+# exact bytes published for $(ZIG_V8_TAG), so a corrupted or truncated
+# download fails here instead of at link time. Bump these together with
+# ZIG_V8_TAG / V8_VERSION; the check fails loudly when an asset has no pin.
+V8_SHA256_linux_x86_64 := 0ac4bf50f87cf0885c66d1049ae30289fbe6264e408b3245b348213f7097001f
+V8_SHA256_linux_aarch64 := 647ec2dc4ddbd035dd6c76f423afe1de74b875554f2212588af21b63093bb9ad
+V8_SHA256_macos_x86_64 := 9e8ce092c419735e59a79fe52c5e4299546ef386f112e36cf3f86fe7b88f62b8
+V8_SHA256_macos_aarch64 := 1b4ebbcb950df0c08058d42bfefb39c10dc6f30cd7bb3676c95947fd0d1bf63f
+V8_SHA256_SO_linux_x86_64 := d3e5453d7e15d0b45d4c9f947e529f91711936748d9654a4112452ddc3294d3f
+
+# macOS ships shasum, not sha256sum; Git Bash and Linux ship both.
+SHA256TOOL := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
+
 
 # Infos
 # -----
@@ -88,6 +102,10 @@ download-v8:
 		curl -fL --progress-bar -o $(V8_CACHE) \
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_ARCHIVE) \
 		|| (rm -f $(V8_CACHE); printf "\033[31mDownload ERROR\033[0m\n"; exit 1) )
+	@expected_sha256="$(V8_SHA256_$(OS)_$(ARCH))"; \
+	test -n "$$expected_sha256" || { printf "\033[31mNo pinned SHA-256 for $(V8_ARCHIVE); add one to the V8_SHA256_* table above\033[0m\n"; exit 1; }; \
+	actual_sha256="$$($(SHA256TOOL) $(V8_CACHE) | cut -d' ' -f1)"; \
+	test "$$actual_sha256" = "$$expected_sha256" || { rm -f $(V8_CACHE); printf "\033[31mPrebuilt V8 checksum mismatch for $(V8_ARCHIVE)\033[0m\nexpected: $$expected_sha256\ngot:      $$actual_sha256\n"; exit 1; }
 	@printf "\033[32mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
 ifeq ($(OS)_$(ARCH),linux_x86_64)
 	@test -f $(V8_SO_CACHE) || ( \
@@ -95,6 +113,10 @@ ifeq ($(OS)_$(ARCH),linux_x86_64)
 		curl -fL --progress-bar -o $(V8_SO_CACHE) \
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_SO_ASSET) \
 		|| (rm -f $(V8_SO_CACHE); printf "\033[31mDownload ERROR\033[0m\n"; exit 1) )
+	@expected_sha256="$(V8_SHA256_SO_$(OS)_$(ARCH))"; \
+	test -n "$$expected_sha256" || { printf "\033[31mNo pinned SHA-256 for $(V8_SO_ASSET); add one to the V8_SHA256_* table above\033[0m\n"; exit 1; }; \
+	actual_sha256="$$($(SHA256TOOL) $(V8_SO_CACHE) | cut -d' ' -f1)"; \
+	test "$$actual_sha256" = "$$expected_sha256" || { rm -f $(V8_SO_CACHE); printf "\033[31mPrebuilt V8 checksum mismatch for $(V8_SO_ASSET)\033[0m\nexpected: $$expected_sha256\ngot:      $$actual_sha256\n"; exit 1; }
 	@printf "\033[32mShared V8 ready: %s\033[0m\n" "$(V8_SO_CACHE)"
 endif
 
