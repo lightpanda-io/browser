@@ -131,9 +131,11 @@ jobs:
         include:
           # macos-15 runs on arm CPU. see
           # https://github.com/actions/runner-images?tab=readme-ov-file
+          # Pin the CPU: the runner's chip is newer than M1, and a native
+          # build crashes with SIGILL on M1 Macs.
           - arch: aarch64
             runner: macos-15
-            cpu_flag: ''
+            cpu_flag: -Dcpu=apple_m1
           - arch: x86_64
             runner: macos-15-large
             cpu_flag: -Dcpu=x86_64
