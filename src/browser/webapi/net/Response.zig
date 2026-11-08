@@ -624,7 +624,12 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
     const body: Body = switch (self._body) {
         .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
         .empty => .empty,
-        .stream => .empty, // TODO: implement stream tee for proper cloning
+        // An undisturbed stream body needs a tee to clone, and tee() isn't
+        // implemented yet. Failing loudly beats returning a clone whose body
+        // silently reads as empty.
+        .stream => return exec.js.local.?.typeError(
+            "Failed to execute 'clone' on 'Response': ReadableStream bodies are not supported",
+        ),
         .errored => .errored,
     };
     const status_text = try arena.dupe(u8, self._status_text);

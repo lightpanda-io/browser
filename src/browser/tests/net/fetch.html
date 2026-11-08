@@ -293,6 +293,34 @@
   }
 </script>
 
+<script id=response_clone_stream_body type=module>
+  {
+    const state = await testing.async();
+    const enc = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(enc.encode('chunk'));
+        controller.close();
+      },
+    });
+    const response = new Response(stream);
+
+    // clone() cannot tee a stream body yet; it must fail loudly instead of
+    // returning a clone whose body silently reads as empty.
+    let thrown = null;
+    try {
+      response.clone();
+    } catch (err) {
+      thrown = err;
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(true, thrown instanceof TypeError);
+    });
+  }
+</script>
+
 <script id=fetch_blob_url type=module>
   {
     const state = await testing.async();
