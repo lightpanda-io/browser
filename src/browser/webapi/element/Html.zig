@@ -723,8 +723,7 @@ const InnerTextState = struct {
     // Trim leading whitespace of the next text run.
     trim_left: bool = true,
 
-    // preserve whitespace: computed white-space that keeps spaces (pre,
-    // pre-wrap, break-spaces), from a <pre> or from CSS
+    // computed white-space keeps spaces (pre, pre-wrap, break-spaces)
     preserve: bool = false,
 
     // text-transform of the element whose text is being written
@@ -889,9 +888,12 @@ fn handleChildElement(
         state.transform = own_transform;
     }
 
+    // just like text-transform, white-space also inherits
     const parent_preserve = state.preserve;
     defer state.preserve = parent_preserve;
-    state.preserve = !state.style_manager.whiteSpace(el).collapse;
+    if (state.style_manager.ownKeepsSpaces(el)) |keeps| {
+        state.preserve = keeps;
+    }
 
     switch (display) {
         .skip, .replaced => unreachable,
