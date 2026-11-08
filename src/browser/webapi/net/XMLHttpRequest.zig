@@ -56,6 +56,9 @@ _http_transfer: ?*Transfer = null,
 // send from the onload callback
 _active_requests: u8 = 0,
 _send_flag: bool = false,
+// The spec's upload listener flag with its upload complete flag unset: send()
+// had a body and upload listeners, and the upload hasn't finished yet.
+_upload_pending: bool = false,
 
 _url: [:0]const u8 = "",
 _method: http.Method = .GET,
@@ -228,6 +231,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
         self._http_transfer = null;
     }
     self._send_flag = false;
+    self._upload_pending = false;
 
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
@@ -330,9 +334,25 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
 
+    self._send_flag = true;
+
+    // https://xhr.spec.whatwg.org/#the-send()-method step 11.5: the upload
+    // loadstart is fired from send() itself, and only for an async request.
+    self._upload_pending = self._async and self._request_body != null and self.hasUploadListeners();
+    if (self._upload_pending) {
+        const total = self._request_body.?.len;
+        self._upload.?._proto.dispatch(.load_start, .{ .total = total, .length_computable = total != 0 }, exec) catch |err| {
+            self._send_flag = false;
+            return err;
+        };
+        // A loadstart handler can abort() or open() again.
+        if (self._ready_state != .opened or !self._send_flag) {
+            return;
+        }
+    }
+
     self.acquireRef();
     self._active_requests += 1;
-    self._send_flag = true;
 
     const transfer = exec.newRequest(.{
         .ctx = self,
@@ -456,6 +476,18 @@ fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
     );
     self._upload = upload;
     return upload;
+}
+
+// https://xhr.spec.whatwg.org/#upload-listener-flag
+fn hasUploadListeners(self: *XMLHttpRequest) bool {
+    const upload = self._upload orelse return false;
+    const target = upload.asEventTarget();
+    inline for (.{ "loadstart", "progress", "abort", "error", "load", "timeout", "loadend" }) |typ| {
+        if (self._exec.hasDirectListeners(target, typ)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn getReadyState(self: *const XMLHttpRequest) u32 {
@@ -726,6 +758,29 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         });
     }
 
+    const exec = self._exec;
+
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+
+    // https://xhr.spec.whatwg.org/#the-send()-method step 11.8: the request
+    // body is handed to the connection whole, so a response means it was
+    // sent: the upload is complete, before the response is processed.
+    if (self._upload_pending) {
+        self._upload_pending = false;
+        const sent = self._request_body.?.len;
+        const progress: XMLHttpRequestEventTarget.Progress = .{ .loaded = sent, .total = sent, .length_computable = sent != 0 };
+        const upload = self._upload.?._proto;
+        try upload.dispatch(.progress, progress, exec);
+        try upload.dispatch(.load, progress, exec);
+        try upload.dispatch(.load_end, progress, exec);
+        if (transfer.isAborted()) {
+            // An upload handler called abort() or open().
+            return .proceed;
+        }
+    }
+
     if (transfer.contentType()) |ct| {
         self.applyContentType(ct) catch |e| {
             log.info(.http, "invalid content type", .{
@@ -745,12 +800,6 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         self._response_status_text = try self._arena.dupe(u8, st);
     }
     self._response_url = try self._arena.dupeSentinel(u8, transfer.req.url, 0);
-
-    const exec = self._exec;
-
-    var ls: js.Local.Scope = undefined;
-    exec.js.localScope(&ls);
-    defer ls.deinit();
 
     try self.stateChanged(.headers_received, exec);
     try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = transfer.getContentLength() orelse 0 }, exec);
@@ -851,14 +900,13 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         const exec = self._exec;
 
         try self.stateChanged(new_state, exec);
-        if (is_abort) {
-            try self._proto.dispatch(.abort, null, exec);
-        } else if (is_timeout) {
-            try self._proto.dispatch(.timeout, null, exec);
-        } else {
-            try self._proto.dispatch(.err, null, exec);
+        // https://xhr.spec.whatwg.org/#request-error-steps: an unfinished
+        // upload gets the error first.
+        if (self._upload_pending) {
+            self._upload_pending = false;
+            try dispatchError(self._upload.?._proto, is_abort, is_timeout, exec);
         }
-        try self._proto.dispatch(.load_end, null, exec);
+        try dispatchError(self._proto, is_abort, is_timeout, exec);
     }
 
     log.debug(.http, "error", .{
@@ -866,6 +914,17 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         .err = err,
         .source = "xhr.handleError",
     });
+}
+
+fn dispatchError(target: *XMLHttpRequestEventTarget, is_abort: bool, is_timeout: bool, exec: *const Execution) !void {
+    if (is_abort) {
+        try target.dispatch(.abort, null, exec);
+    } else if (is_timeout) {
+        try target.dispatch(.timeout, null, exec);
+    } else {
+        try target.dispatch(.err, null, exec);
+    }
+    try target.dispatch(.load_end, null, exec);
 }
 
 fn stateChanged(self: *XMLHttpRequest, state: ReadyState, exec: *const Execution) !void {
