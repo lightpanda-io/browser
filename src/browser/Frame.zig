@@ -2291,6 +2291,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     }
     new_frame.iframe = iframe;
     iframe._blank_only = !loading;
+    new_frame._http_owner.block_all = !loading;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
 

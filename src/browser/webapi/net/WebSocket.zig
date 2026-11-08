@@ -254,6 +254,10 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
         return error.UnsafePort;
     }
 
+    if (exec.httpOwner().block_all) {
+        return error.UrlBlocked;
+    }
+
     const conn = http_client.network.newConnection() orelse {
         return error.NoFreeConnection;
     };
