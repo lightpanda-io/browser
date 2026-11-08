@@ -437,9 +437,20 @@ pub fn blocksUrl(self: *const Client, url: []const u8) bool {
 /// so that no call site can apply one without the other.
 fn isUrlBlocked(self: *const Client, transfer: *const Transfer) bool {
     const req = &transfer.req;
-    if (req.internal) return false;
+    if (req.internal) {
+        return false;
+    }
+
+    if (transfer.owner) |owner| {
+        if (owner.block_all) {
+            return true;
+        }
+    }
+
     if (self.url_blocklist) |*blocklist| {
-        if (blocklist.isBlocked(req.url)) return true;
+        if (blocklist.isBlocked(req.url)) {
+            return true;
+        }
     }
     return if (self.network.adblocker) |*blocker| blocker.isBlocked(transfer) else false;
 }
@@ -2567,6 +2578,11 @@ pub const Owner = struct {
 
     // Entered around delivery, so the consumer's callbacks log as its page.
     log_page: ?*log.PageContext = null,
+
+    // Refuse every request made through this owner. Weird, right? Currently
+    // only used when `--load-resources iframe` isn't on.  Let's the iframe
+    // window load, but doesn't let the iframe make requests.
+    block_all: bool = false,
 
     fn logScope(self: *const Owner) log.PageScope {
         return log.enterPage(self.log_page);

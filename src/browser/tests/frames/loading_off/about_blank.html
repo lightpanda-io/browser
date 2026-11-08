@@ -148,3 +148,76 @@
     });
   }
 </script>
+
+<script id=blank_requests_fail type=module>
+  {
+    // Requests made from inside the blank frame fail like an ad blocker's:
+    // script onerror, fetch rejects, XHR errors, WebSocket errors.
+    const state = await testing.async();
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    const w = f.contentWindow;
+    const d = f.contentDocument;
+
+    const results = {};
+    const s = d.createElement('script');
+    s.src = '../../testing.js';
+    const scriptDone = new Promise((r) => {
+      s.onload = () => r('load');
+      s.onerror = () => r('error');
+    });
+    d.head.appendChild(s);
+
+    const fetchDone = w.fetch('../support/page.html').then(() => 'ok', (e) => e.name);
+
+    const xhrDone = new Promise((r) => {
+      const xhr = new w.XMLHttpRequest();
+      xhr.onload = () => r('load');
+      xhr.onerror = () => r('error');
+      xhr.open('GET', '../support/page.html');
+      xhr.send();
+    });
+
+    const wsDone = new Promise((r) => {
+      const ws = new w.WebSocket('ws://127.0.0.1:9584/');
+      ws.onopen = () => { ws.close(); r('open'); };
+      ws.onerror = () => r('error');
+    });
+
+    // The parent's own requests are untouched.
+    const parentFetch = fetch('../support/page.html').then((r) => r.status, (e) => e.name);
+
+    results.script = await scriptDone;
+    results.fetch = await fetchDone;
+    results.xhr = await xhrDone;
+    results.ws = await wsDone;
+    results.parent = await parentFetch;
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('error', results.script);
+      testing.expectEqual('TypeError', results.fetch);
+      testing.expectEqual('error', results.xhr);
+      testing.expectEqual('error', results.ws);
+      testing.expectEqual(200, results.parent);
+    });
+  }
+</script>
+
+<script id=blank_worker_requests_fail type=module>
+  {
+    // A worker the blank frame creates can't reach the network either; its
+    // script never loads.
+    const state = await testing.async();
+    const f = document.createElement('iframe');
+    document.body.appendChild(f);
+    let result = null;
+    const worker = new f.contentWindow.Worker('../../crypto-worker.js');
+    worker.onerror = () => { result = 'error'; state.resolve(); };
+    worker.onmessage = () => { result = 'message'; state.resolve(); };
+    worker.postMessage('ping');
+    setTimeout(() => state.resolve(), 500);
+    await state.done(() => {
+      testing.expectEqual('error', result);
+    });
+  }
+</script>
