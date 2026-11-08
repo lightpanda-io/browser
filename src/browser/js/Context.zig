@@ -950,14 +950,72 @@ const DynamicModuleResolveState = struct {
 };
 
 fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8, local: *const js.Local) !js.Promise {
+    const resolver = local.createPromiseResolver();
+    if (self.hasSettledDynamicImport(specifier) == false) {
+        try self.startDynamicImport(specifier, referrer, resolver, local);
+        return resolver.promise();
+    }
+
+    // The module is already fetched (or evaluated, or failed): settling now
+    // would resolve import() within the current task's microtasks, ahead of
+    // a setTimeout(fn, 0) queued before it. Browsers deliver a module map
+    // hit in a later task (Chromium: ModuleMap::Entry::AddClient), so queue
+    // the rest of the import behind what's already scheduled.
+    const queued = try self.arena.create(QueuedDynamicImport);
+    queued.* = .{
+        .context = self,
+        .specifier = specifier,
+        .referrer = try self.arena.dupe(u8, referrer),
+        .resolver = try resolver.persist(),
+    };
+    try self.scheduler.add(queued, QueuedDynamicImport.run, 0, .{ .name = "dynamic import" });
+    return resolver.promise();
+}
+
+fn hasSettledDynamicImport(self: *Context, specifier: [:0]const u8) bool {
+    if (self.module_cache.get(specifier)) |entry| {
+        if (entry.module != null or entry.resolver_promise != null) {
+            return true;
+        }
+    }
+    return self.script_manager.hasSettledImport(specifier);
+}
+
+const QueuedDynamicImport = struct {
+    context: *Context,
+    specifier: [:0]const u8,
+    referrer: []const u8,
+    resolver: js.PromiseResolver.Global,
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *QueuedDynamicImport = @ptrCast(@alignCast(ctx));
+        defer self.resolver.release();
+        const context = self.context;
+
+        var ls: js.Local.Scope = undefined;
+        context.localScope(&ls);
+        defer ls.deinit();
+
+        const local = &ls.local;
+        const resolver = local.toLocal(self.resolver);
+        context.startDynamicImport(self.specifier, self.referrer, resolver, local) catch |err| {
+            _ = resolver.reject("queued dynamic import", @errorName(err));
+        };
+        return null;
+    }
+};
+
+// Settles `resolver` with the namespace of `specifier`, now or once its
+// source has loaded.
+fn startDynamicImport(self: *Context, specifier: [:0]const u8, referrer: []const u8, resolver: js.PromiseResolver, local: *const js.Local) !void {
     const gop = try self.module_cache.getOrPut(self.arena.allocator(), specifier);
     if (gop.found_existing) {
         if (gop.value_ptr.resolver_promise) |rp| {
-            return local.toLocal(rp);
+            resolver.resolve("dynamic module in progress", local.toLocal(rp));
+            return;
         }
     }
 
-    const resolver = local.createPromiseResolver();
     const state = try self.arena.create(DynamicModuleResolveState);
 
     state.* = .{
@@ -992,7 +1050,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
 
         // For now, we're done. but this will be continued in
         // `dynamicModuleSourceCallback`, once the source for the module is loaded.
-        return promise;
+        return;
     }
 
     // we might update the map, so we might need to re-fetch this.
@@ -1025,7 +1083,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
             if (status == .kUninstantiated) {
                 if (try mod.instantiate(resolveModuleCallback) == false) {
                     _ = resolver.reject("module instantiation", "Module instantiation failed");
-                    return promise;
+                    return;
                 }
             }
 
@@ -1037,14 +1095,14 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                         .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
                     });
                     _ = resolver.reject("module evaluation", "Module evaluation failed");
-                    return promise;
+                    return;
                 }
                 if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 // e.g. it threw when a module script imported it statically
                 resolver.reject("module evaluation", mod.getException());
-                return promise;
+                return;
             };
             lp.assert(evaluated.isPromise(), "Context._dynamicModuleCallback non-promise", .{});
             // mod.evaluate can invalidate or gop
@@ -1061,7 +1119,6 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // But we can skip directly to `resolveDynamicModule` which is
     // what the above callback will eventually do.
     self.resolveDynamicModule(state, entry.*, local);
-    return promise;
 }
 
 fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManagerBase.ModuleSource) void {
