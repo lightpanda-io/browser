@@ -35,6 +35,7 @@ const EventManager = @import("../EventManager.zig");
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
 const Range = @import("../webapi/Range.zig");
+const StaticRange = @import("../webapi/StaticRange.zig");
 const Element = @import("../webapi/Element.zig");
 const Document = @import("../webapi/Document.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
@@ -508,7 +509,7 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
 /// no mouse events, click or focus, as in Chrome.
 fn mouseDown(frame: *Frame, target: *Element, g: Gesture) !void {
     if (!target.isDisabledFormControl() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
-        focusForMouseDown(frame, target) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
+        focusForMouseDown(frame, target, g.modifiers.shift) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
     }
 }
 
@@ -1373,9 +1374,10 @@ pub fn outermostEditingHost(target: *Element) ?*Element {
 
 /// Mousedown default action. A mousedown outside any focusable element moves
 /// focus to the body.
-fn focusForMouseDown(frame: *Frame, target: *Element) !void {
+fn focusForMouseDown(frame: *Frame, target: *Element, shift: bool) !void {
     if (outermostEditingHost(target)) |host| {
-        try host.focus(frame);
+        try host.focusWith(.none, frame);
+        try caretForMouseDown(frame, host, target, shift);
         return;
     }
 
@@ -1395,6 +1397,73 @@ fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     if (owner.window._closed) return;
     if (owner.document._active_element) |active| {
         try active.blur(owner);
+    }
+}
+
+/// Mousedown in editable content, after focus. The caret goes where the press was.
+/// IF shift is pressed, the selection is extended to that point. We don't have
+/// proper layout, so we can't tell the exact position, so we put it at the end
+/// of the pressed element.
+fn caretForMouseDown(frame: *Frame, host: *Element, target: *Element, shift: bool) !void {
+    const owner = target.ownerFrame(frame) orelse return;
+    const event = try Event.initTrusted(comptime .wrap("selectstart"), .{ .bubbles = true, .cancelable = true }, owner.page);
+    const canceled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event);
+
+    // a focus or selectstart listener can move or remove either
+    if (!host.asNode().isConnected() or !host.asNode().contains(target.asNode())) {
+        return;
+    }
+    if (canceled) {
+        return caretOnFocus(host, owner);
+    }
+    const doc = owner.document;
+    const container, const offset = lastCaretPosition(target.asNode());
+    if (shift and selectionEditableIn(host, doc)) {
+        return doc._selection.extend(container, offset, owner);
+    }
+    try doc._selection.collapse(container, offset, owner);
+}
+
+/// Focusing an editing host the way focus() and Tab do. Put the caret at its
+/// first position, unless the selection is already in its editable content.
+pub fn caretOnFocus(el: *Element, frame: *Frame) !void {
+    if (outermostEditingHost(el) != el or selectionEditableIn(el, frame.document)) {
+        return;
+    }
+    const container, const offset = firstCaretPosition(el.asNode());
+    try frame.document._selection.collapse(container, offset, frame);
+}
+
+// The end of `root`'s content: after its last text, before a trailing <br>
+// (a line's placeholder or end), after a void or non-editable element.
+fn lastCaretPosition(root: *Node) struct { *Node, u32 } {
+    var container = root;
+    descend: while (true) {
+        var child = container.lastChild();
+        while (child) |c| : (child = c.previousSibling()) {
+            if (c.is(Node.CData.Text)) |t| {
+                if (isBlank(t.asCData().getData().str())) {
+                    continue;
+                }
+                return .{ c, @intCast(t.asCData().getLength()) };
+            }
+            const el = c.is(Element) orelse continue;
+            const index = container.getChildIndex(c).?;
+            if (el.getTag() == .br) {
+                if (c.previousSibling()) |prev| {
+                    if (prev.is(Node.CData.Text)) |t| {
+                        return .{ prev, @intCast(t.asCData().getLength()) };
+                    }
+                }
+                return .{ container, index };
+            }
+            if (el.isEditable() == false or dump.isVoidElement(el)) {
+                return .{ container, index + 1 };
+            }
+            container = c;
+            continue :descend;
+        }
+        return .{ container, 0 };
     }
 }
 
@@ -1853,7 +1922,8 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
         .line_break => .{ null, "\n", "insertLineBreak" },
         .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
     };
-    if (!try allowEdit(frame, el, data, text, input_type)) {
+    // Like Chrome, a text control's beforeinput has no target range.
+    if (!try allowEdit(frame, el, data, text, input_type, null)) {
         return false;
     }
     if (!editable) {
@@ -1879,7 +1949,7 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
 /// happened.
 fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !bool {
     const host_el = outermostEditingHost(target) orelse return false;
-    if (!try allowEdit(frame, host_el, text, text, "insertText")) {
+    if (!try allowEdit(frame, host_el, text, text, "insertText", insertTarget(host_el, frame.document))) {
         return false;
     }
     // a beforeinput or textInput listener can make it non-editable or remove it
@@ -1894,7 +1964,7 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
 fn deleteInEditingHost(frame: *Frame, target: *Element, forward: bool) !void {
     const host_el = outermostEditingHost(target) orelse return;
     const input_type = if (forward) "deleteContentForward" else "deleteContentBackward";
-    if (!try allowEdit(frame, host_el, null, null, input_type)) {
+    if (!try allowEdit(frame, host_el, null, null, input_type, deleteTarget(frame, host_el, forward))) {
         return;
     }
 
@@ -1917,7 +1987,7 @@ fn breakInEditingHost(frame: *Frame, target: *Element, line_break: bool) !void {
         return;
     }
     const input_type = if (line_break) "insertLineBreak" else "insertParagraph";
-    if (!try allowEdit(frame, host_el, null, "\n", input_type)) {
+    if (!try allowEdit(frame, host_el, null, "\n", input_type, insertTarget(host_el, frame.document))) {
         return;
     }
     // a beforeinput or textInput listener can make it non-editable or remove it
@@ -4177,16 +4247,110 @@ fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
     };
 }
 
+const TargetRange = struct {
+    start: *Node,
+    start_offset: u32,
+    end: *Node,
+    end_offset: u32,
+
+    fn caret(node: *Node, offset: u32) TargetRange {
+        return .{ .start = node, .start_offset = offset, .end = node, .end_offset = offset };
+    }
+
+    fn around(node: *Node) TargetRange {
+        const parent = node.parentNode().?;
+        const index = parent.getChildIndex(node).?;
+        return .{ .start = parent, .start_offset = index, .end = parent, .end_offset = index + 1 };
+    }
+};
+
+// What text or a break typed into `host_el` replaces: the selection, or the
+// host's first position, where insertAtSelection falls back to.
+fn insertTarget(host_el: *Element, doc: *Document) TargetRange {
+    if (selectionEditableIn(host_el, doc)) {
+        const range = doc._selection._range.?.asAbstractRange();
+        return .{
+            .start = range.getStartContainer(),
+            .start_offset = range.getStartOffset(),
+            .end = range.getEndContainer(),
+            .end_offset = range.getEndOffset(),
+        };
+    }
+    const container, const offset = firstCaretPosition(host_el.asNode());
+    return .caret(container, offset);
+}
+
+// What a delete in `host_el` removes, as Chrome reports it before the edit:
+// the selection, the character, the <br> or image, or, when two lines join,
+// from the end of the earlier one to the start of the later block. Nothing to
+// delete gives the caret. Follows deleteAtSelection and deleteBeyondText
+// without editing.
+fn deleteTarget(frame: *Frame, host_el: *Element, forward: bool) TargetRange {
+    const target = insertTarget(host_el, frame.document);
+    if (target.start != target.end or target.start_offset != target.end_offset) {
+        return target;
+    }
+    const host = host_el.asNode();
+    const style_manager = &frame._style_manager;
+    const container = target.start;
+    const offset = target.start_offset;
+    const root = lineRoot(style_manager, host, container);
+    const found = if (forward)
+        charAfter(style_manager, root, container, offset)
+    else
+        charBefore(style_manager, root, container, offset);
+    switch (found) {
+        .char => |c| {
+            const text = c.text.asCData().asNode();
+            return .{ .start = text, .start_offset = c.offset, .end = text, .end_offset = c.offset + c.len };
+        },
+        .edge, .unsupported => {},
+    }
+
+    const next = switch (neighbor(style_manager, host, container, offset, forward)) {
+        .none => return target,
+        .node => |n| n,
+    };
+    const node = next.node;
+    if (node.is(Element)) |el| {
+        if (style_manager.isBlockLevel(el)) {
+            return if (el.getTag() == .hr) .around(node) else target;
+        }
+    }
+    if (!next.crossed) {
+        // a <br>, an image, a non-editable inline on the caret's line
+        return .around(node);
+    }
+    if (forward) {
+        const block = lineRoot(style_manager, host, node.parentNode().?);
+        return .{ .start = container, .start_offset = offset, .end = block, .end_offset = 0 };
+    }
+    const block = lineRoot(style_manager, host, container);
+    const start: TargetRange = if (node.is(Node.CData.Text)) |t|
+        .caret(node, @intCast(t.asCData().getLength()))
+    else
+        .caret(node.parentNode().?, node.parentNode().?.getChildIndex(node).? + 1);
+    return .{ .start = start.start, .start_offset = start.start_offset, .end = block, .end_offset = 0 };
+}
+
 // pre-edit events for a trusted key's default action, can cancel the edit
-// (i.e. by returning false)
-fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8) !bool {
+// (i.e. by returning false). `target_range` is what the edit replaces, for
+// beforeinput's getTargetRanges().
+fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8, target_range: ?TargetRange) !bool {
     {
+        var ranges: [1]*StaticRange = undefined;
+        var target_ranges: []const *StaticRange = &.{};
+        if (target_range) |r| {
+            ranges[0] = try StaticRange.create(r.start, r.start_offset, r.end, r.end_offset, frame);
+            target_ranges = &ranges;
+        }
         const before = (try InputEvent.initTrusted(comptime .wrap("beforeinput"), .{
             .bubbles = true,
             .cancelable = true,
             .composed = true,
             .data = before_data,
             .inputType = input_type,
+            .targetRanges = target_ranges,
         }, frame)).asEvent();
         if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), before)) {
             return false;
@@ -4412,6 +4576,31 @@ test "user_input: dispatchTouchEvent a passive-only touchstart listener is not c
     const target = try ls.local.jsValueToZig(*Element, value);
     _ = try dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
+}
+
+test "user_input: Shift+click in an editing host extends the selection" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    const value = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p id="one">abc</p><p id="two">defgh</p></div>');
+        \\document.getElementById('host').focus();
+        \\getSelection().collapse(document.getElementById('one').firstChild, 1);
+        \\document.getElementById('two');
+    , null);
+    const target = try ls.local.jsValueToZig(*Element, value);
+    try triggerClick(frame, target, .{ .shift = true });
+    try testing.expect((try ls.local.compileAndRun(
+        \\const s = getSelection();
+        \\s.anchorNode.data === 'abc' && s.anchorOffset === 1 && s.focusNode.data === 'defgh' && s.focusOffset === 5
+    , null)).isTrue());
 }
 
 test "user_input: dispatchTouchEvent a non-passive listener makes touchstart cancelable" {

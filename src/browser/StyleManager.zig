@@ -2004,7 +2004,7 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
                 .important = declaration.important,
             };
         } else if (Animation.Property.parse(name)) |animation_property| {
-            lazy_animation.declare(animation_property, try arena.dupe(u8, property._value.str()), property._important);
+            lazy_animation.declare(animation_property, try arena.dupe(u8, declaration.value), declaration.important);
         }
     }
     return .{ .customs = customs.items, .content = content, .animation = lazy_animation };
@@ -3431,14 +3431,14 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
     var inline_declared: LazyAnimation = .{};
     if (el.inlineStyle(self.frame)) |style| {
         var it = style.asCSSStyleDeclaration().iterator();
-        while (it.next()) |property| {
-            const animation_property = Animation.Property.parse(property._name.str()) orelse continue;
-            const value = property._value.str();
+        while (it.next()) |declaration| {
+            const animation_property = Animation.Property.parse(declaration.name) orelse continue;
+            const value = declaration.value;
             if (std.ascii.eqlIgnoreCase(value, "revert-layer")) {
                 // Back to the rules, every one of them in an earlier layer
                 continue;
             }
-            inline_declared.declare(animation_property, value, property._important);
+            inline_declared.declare(animation_property, value, declaration.important);
         }
     }
 
