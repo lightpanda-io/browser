@@ -83,6 +83,7 @@ pub const resource_load = @import("frame/resource_load.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
+pub const css_animations = @import("frame/css_animations.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -172,6 +173,8 @@ _message_ports: std.DoublyLinkedList = .{},
 _resize: observers.Resize = .{},
 _mutation: observers.Mutation = .{},
 _intersection: observers.Intersection = .{},
+
+_css_animations: css_animations.State = .{},
 
 // Slots that need slotchange events to be fired, in signal order. Delivered
 // by deliverMutations because there is specific timing with for these events
@@ -3454,6 +3457,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                     }
                 }
                 if (rootIsConnected(root)) {
+                    css_animations.documentChanged(self);
                     // Build.connected, parser side (JS side is in nodeIsReady).
                     // Called here, not on pop, so void elements get it too.
                     // The document may have no frame (DOMParser).
@@ -3469,6 +3473,11 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
 
     const parent_root = parent.getRootNode(.{});
     const parent_is_connected = rootIsConnected(parent_root);
+    if (parent_is_connected) {
+        if (child.is(Element)) |el| {
+            css_animations.elementChanged(self, el);
+        }
+    }
 
     // Mutation records queue synchronously at insertion, before any script
     // runs: an inserted script can observe its own record via takeRecords.
@@ -3565,6 +3574,7 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     }
 
     observers.notifyAttributeChange(self, element, name, old_value);
+    css_animations.elementChanged(self, element);
 
     // Handle slot assignment changes
     if (name.eql(comptime .wrap("slot"))) {
@@ -3604,6 +3614,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
     }
 
     observers.notifyAttributeChange(self, element, name, old_value);
+    css_animations.elementChanged(self, element);
 
     // Handle slot assignment changes
     if (name.eql(comptime .wrap("slot"))) {

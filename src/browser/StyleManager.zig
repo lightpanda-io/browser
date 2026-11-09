@@ -26,6 +26,7 @@ const text_measure = @import("text_measure.zig");
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
+const Animation = @import("css/Animation.zig");
 const Element = @import("webapi/Element.zig");
 const popover = @import("webapi/element/popover.zig");
 
@@ -73,6 +74,16 @@ custom_rules: std.StringHashMapUnmanaged(LazyRules) = .empty,
 // scripts reading it back, often from a probe element. @ant-design/cssinjs reads
 // which styles a static CSS file already ships from a `content` rule.
 content_rules: LazyRules = .{},
+
+// The rules declaring each animation property, the shorthand apart from the
+// longhands. frame/css_animations.zig reads them to fire the animation events.
+animation_rules: std.enums.EnumArray(Animation.Property, LazyRules) = .initFill(.{}),
+
+// The @keyframes names. An animation-name without keyframes runs nothing.
+keyframes: std.StringHashMapUnmanaged(void) = .empty,
+
+// Whether a sheet's text says "keyframes", until the next sheetModified().
+keyframes_mentioned: ?bool = null,
 
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
@@ -142,6 +153,7 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
                 // when its query matches the viewport.
                 .media => try self.applyMediaAtRule(build_arena, rule._text, 0, NO_LAYER, null),
                 .layer => try self.applyLayerAtRule(build_arena, rule._text, 0, NO_LAYER, null),
+                .keyframes => try self.addKeyframes(rule._text),
                 else => {},
             }
         }
@@ -162,14 +174,35 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
 }
 
 /// Apply an at-rule that takes part in the cascade. Only `@media` and `@layer`
-/// do here. Other at-rules (`@keyframes`, `@supports`, `@font-face`, …) don't
-/// carry declarations relevant to the visibility filter and are skipped.
+/// do here, and `@keyframes` registers its name. Other at-rules (`@supports`,
+/// `@font-face`, …) don't carry declarations relevant to the visibility filter
+/// and are skipped.
 fn applyAtRule(self: *StyleManager, build_arena: Allocator, keyword: []const u8, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
     if (std.ascii.eqlIgnoreCase(keyword, "media")) {
         return self.applyMediaAtRule(build_arena, text, depth, layer, nest);
     }
     if (std.ascii.eqlIgnoreCase(keyword, "layer")) {
         return self.applyLayerAtRule(build_arena, text, depth, layer, nest);
+    }
+    // Any prefix, as CSSStyleSheet types the rule.
+    if (std.ascii.endsWithIgnoreCase(keyword, "keyframes")) {
+        return self.addKeyframes(text);
+    }
+}
+
+/// `text` is the whole `@keyframes <name> { … }` rule; the name can be a string.
+fn addKeyframes(self: *StyleManager, text: []const u8) Allocator.Error!void {
+    const open = std.mem.findScalar(u8, text, '{') orelse return;
+    const keyword_end = std.mem.findAny(u8, text[0..open], &std.ascii.whitespace) orelse return;
+    const name = std.mem.trim(u8, text[keyword_end..open], " \t\r\n\x0c\"'");
+    if (name.len == 0) {
+        return;
+    }
+    const arena = self.arena.allocator();
+    const gop = try self.keyframes.getOrPut(arena, name);
+    if (gop.found_existing == false) {
+        // A CSSOM rule's text goes with the rule
+        gop.key_ptr.* = try arena.dupe(u8, name);
     }
 }
 
@@ -475,6 +508,9 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
         property.stampRules(self);
     }
     self.content_rules.stampRules(self);
+    for (&self.animation_rules.values) |*rules| {
+        rules.stampRules(self);
+    }
 }
 
 /// The rank finalizeLayerRanks still has to stamp for a packed priority, via
@@ -537,10 +573,11 @@ fn addSelectorRules(
     layer: u16,
 ) !bool {
     var lazy = declared;
-    if (lazy.content != null and selectsOnlyPseudoElements(selector_text)) {
-        // Icon fonts declare it on hundreds of `::before` rules, and no element
-        // matches one.
+    if ((lazy.content != null or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
+        // Icon fonts declare `content` on hundreds of `::before` rules, spinners
+        // an animation, and no element matches one.
         lazy.content = null;
+        lazy.animation = .{};
     }
 
     const relevant = props.isRelevant() or important.isRelevant();
@@ -563,6 +600,15 @@ fn addSelectorRules(
         }
         if (lazy.content) |content| {
             try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
+        }
+        for (std.enums.values(Animation.Property)) |property| {
+            const rules = self.animation_rules.getPtr(property);
+            if (lazy.animation.normal.get(property)) |value| {
+                try rules.append(arena, selector_text, value, priority);
+            }
+            if (lazy.animation.important.get(property)) |value| {
+                try rules.append(arena, selector_text, value, important_priority);
+            }
         }
     }
 
@@ -803,7 +849,9 @@ fn startsPseudoElement(after_colon: []const u8) bool {
 
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
+    self.keyframes_mentioned = null;
     self.cascadeChanged();
+    Frame.css_animations.documentChanged(self.frame);
 }
 
 fn cascadeChanged(self: *StyleManager) void {
@@ -852,6 +900,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.custom_rules = .empty;
     try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
     self.content_rules = .{};
+    self.animation_rules = .initFill(.{});
+    self.keyframes = .empty;
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
@@ -1892,9 +1942,13 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
         return self.sheetModified();
     }
     const before = self.next_doc_order;
+    const animations = self.animationRuleCount();
     const changed = self.addRule(style_rule) catch return self.sheetModified();
     if (self.next_doc_order != before) {
         self.last_rule_sheet = sheet;
+    }
+    if (self.animationRuleCount() != animations) {
+        Frame.css_animations.documentChanged(self.frame);
     }
     if (!changed) {
         // Nothing tracked changed, so every memoized answer still holds.
@@ -1933,6 +1987,7 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
 
     var customs: std.ArrayList(LazyDeclaration) = .empty;
     var content: ?LazyDeclaration = null;
+    var lazy_animation: LazyAnimation = .{};
     var it = style.asCSSStyleDeclaration().iterator();
     while (it.next()) |property| {
         const name = property._name.str();
@@ -1948,9 +2003,11 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
                 .value = try arena.dupe(u8, property._value.str()),
                 .important = property._important,
             };
+        } else if (Animation.Property.parse(name)) |animation_property| {
+            lazy_animation.declare(animation_property, try arena.dupe(u8, property._value.str()), property._important);
         }
     }
-    return .{ .customs = customs.items, .content = content };
+    return .{ .customs = customs.items, .content = content, .animation = lazy_animation };
 }
 
 const BucketKey = union(enum) {
@@ -3080,9 +3137,34 @@ const LazyDeclaration = struct {
 const LazyDeclarations = struct {
     customs: []const LazyDeclaration = &.{},
     content: ?LazyDeclaration = null,
+    animation: LazyAnimation = .{},
 
     fn isEmpty(self: LazyDeclarations) bool {
-        return self.customs.len == 0 and self.content == null;
+        return self.customs.len == 0 and self.content == null and self.animation.isEmpty();
+    }
+};
+
+/// A block's animation declarations, normal and !important ones apart. The
+/// last of a property wins, and a shorthand drops the longhands before it.
+const LazyAnimation = struct {
+    normal: std.enums.EnumArray(Animation.Property, ?[]const u8) = .initFill(null),
+    important: std.enums.EnumArray(Animation.Property, ?[]const u8) = .initFill(null),
+
+    fn declare(self: *LazyAnimation, property: Animation.Property, value: []const u8, important: bool) void {
+        const values = if (important) &self.important else &self.normal;
+        if (property == .shorthand) {
+            values.* = .initFill(null);
+        }
+        values.set(property, value);
+    }
+
+    fn isEmpty(self: *const LazyAnimation) bool {
+        for (self.normal.values, self.important.values) |normal, important| {
+            if (normal != null or important != null) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -3154,9 +3236,10 @@ const LazySink = struct {
     allocator: Allocator,
     customs: std.StringArrayHashMapUnmanaged(LazyDeclaration) = .empty,
     content: ?LazyDeclaration = null,
+    animation: LazyAnimation = .{},
 
     fn declarations(self: *const LazySink) LazyDeclarations {
-        return .{ .customs = self.customs.values(), .content = self.content };
+        return .{ .customs = self.customs.values(), .content = self.content, .animation = self.animation };
     }
 };
 
@@ -3164,8 +3247,8 @@ const LazySink = struct {
 // materialized object was built from: a normal declaration never overrides an
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
-// case-sensitive. Custom properties and `content` go to `lazy` when there is
-// one.
+// case-sensitive. Custom properties, `content` and the animation properties go
+// to `lazy` when there is one.
 fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, lazy: ?*LazySink) !Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = declarations;
@@ -3187,6 +3270,11 @@ fn foldDeclarations(comptime Declared: type, declarations: CssParser.Declaration
                 }
             }
             sink.content = .{ .name = "content", .value = declaration.value, .important = declaration.important };
+            continue;
+        }
+        if (Animation.Property.parse(declaration.name)) |property| {
+            const sink = lazy orelse continue;
+            sink.animation.declare(property, declaration.value, declaration.important);
             continue;
         }
         slots.apply(declaration.name, declaration.value, declaration.important);
@@ -3331,10 +3419,159 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
     return null;
 }
 
+/// The animation longhands `el` ends up with. One rule can set the name and
+/// another the duration, so each longhand takes its own winner, the shorthand's
+/// or its own declaration's.
+pub fn animation(self: *StyleManager, el: *Element) Animation {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+
+    // The style attribute, folded like a rule block: in order, the -webkit-
+    // names aliased, and a shorthand dropping the longhands before it.
+    var inline_declared: LazyAnimation = .{};
+    if (el.inlineStyle(self.frame)) |style| {
+        var it = style.asCSSStyleDeclaration().iterator();
+        while (it.next()) |property| {
+            const animation_property = Animation.Property.parse(property._name.str()) orelse continue;
+            const value = property._value.str();
+            if (std.ascii.eqlIgnoreCase(value, "revert-layer")) {
+                // Back to the rules, every one of them in an earlier layer
+                continue;
+            }
+            inline_declared.declare(animation_property, value, property._important);
+        }
+    }
+
+    var result: Animation = .{};
+    const shorthand = self.animationWinner(el, .shorthand, &inline_declared);
+    for (std.enums.values(Animation.Longhand)) |longhand| {
+        const own = self.animationWinner(el, switch (longhand) {
+            .name => .name,
+            .duration => .duration,
+            .delay => .delay,
+            .iteration_count => .iteration_count,
+        }, &inline_declared);
+        // Equal priorities are one block, where the longhand came last: a
+        // shorthand after it dropped it.
+        if (own) |winner| {
+            if (shorthand == null or winner.priority >= shorthand.?.priority) {
+                result.sources.set(longhand, .{ .list = winner.value });
+                continue;
+            }
+        }
+        if (shorthand) |winner| {
+            result.sources.set(longhand, .{ .shorthand = winner.value });
+        }
+    }
+    return result;
+}
+
+/// `inline_declared` is `el`'s style attribute: lazyWinner reads it by the
+/// standard name alone, missing the -webkit- names and the shorthand's order.
+fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Property, inline_declared: *const LazyAnimation) ?LazyWinner {
+    // Nothing beats an !important inline declaration
+    if (inline_declared.important.get(property)) |value| {
+        return .{ .value = value, .layer = INLINE_LAYER, .priority = INLINE_IMPORTANT_PRIORITY };
+    }
+
+    const rules = self.parsedRules(self.animation_rules.getPtr(property)) catch |err| blk: {
+        log.err(.browser, "StyleManager animation", .{ .err = err });
+        break :blk &.{};
+    };
+    var winner: ?LazyWinner = null;
+    // Stopping at INLINE_LAYER keeps lazyWinner off the style attribute
+    var before: ?u16 = INLINE_LAYER;
+    while (self.lazyWinner(el, .wrap(property.cssName()), rules, before)) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate.value, "revert-layer") == false) {
+            winner = candidate;
+            break;
+        }
+        before = candidate.layer;
+    }
+
+    // A normal inline declaration beats every normal rule
+    if (inline_declared.normal.get(property)) |value| {
+        if (winner == null or winner.?.priority < INLINE_PRIORITY) {
+            return .{ .value = value, .layer = INLINE_LAYER, .priority = INLINE_PRIORITY };
+        }
+    }
+    return winner;
+}
+
+fn animationRuleCount(self: *const StyleManager) usize {
+    var n: usize = 0;
+    for (self.animation_rules.values) |rules| {
+        n += rules.rules.items.len;
+    }
+    return n;
+}
+
+/// Whether a @keyframes rule has `name`.
+pub fn hasKeyframes(self: *StyleManager, name: []const u8) bool {
+    if (self.rebuildForKeyframes() == false) {
+        return false;
+    }
+    return self.keyframes.contains(name);
+}
+
+pub fn hasAnyKeyframes(self: *StyleManager) bool {
+    if (self.rebuildForKeyframes() == false) {
+        return false;
+    }
+    return self.keyframes.count() > 0;
+}
+
+/// False when no sheet can hold keyframes. The animation check asks on every
+/// page: one without keyframes would pay a rebuild nothing else may need.
+fn rebuildForKeyframes(self: *StyleManager) bool {
+    if (self.dirty and !self.sheetsMentionKeyframes()) {
+        return false;
+    }
+    self.rebuildIfDirty() catch return false;
+    return true;
+}
+
+/// The sheets `parseSheet` reads, searched as text.
+fn sheetsMentionKeyframes(self: *StyleManager) bool {
+    if (self.keyframes_mentioned) |mentioned| {
+        return mentioned;
+    }
+    const mentioned = self.searchSheetsForKeyframes() catch true;
+    self.keyframes_mentioned = mentioned;
+    return mentioned;
+}
+
+fn searchSheetsForKeyframes(self: *StyleManager) !bool {
+    const sheets = self.frame.document._style_sheets orelse return false;
+    const arena = try self.frame.getArena(.small, "StyleManager.sheetsMentionKeyframes");
+    defer arena.release();
+    for (sheets._sheets.items) |sheet| {
+        if (sheet._disabled) {
+            continue;
+        }
+        if (sheet._css_rules) |css_rules| {
+            for (css_rules._rules.items) |rule| {
+                if (std.ascii.findIgnoreCase(rule._text, "keyframes") != null) {
+                    return true;
+                }
+            }
+            continue;
+        }
+        const owner_node = sheet.getOwnerNode() orelse continue;
+        const style = owner_node.is(Element.Html.Style) orelse continue;
+        const text = try style.asNode().getTextContentAlloc(arena.allocator());
+        if (std.ascii.findIgnoreCase(text, "keyframes") != null) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const LazyWinner = struct {
     value: []const u8,
     // Where it is in the layer order; see layerOrder.
     layer: u16,
+    priority: u64,
 };
 
 /// The style attribute cascades after every layer, unlayered rules included.
@@ -3368,7 +3605,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
         if (matchesSelector(el, rule.selector, self.frame) == false) {
             continue;
         }
-        winner = .{ .value = rule.value, .layer = layer };
+        winner = .{ .value = rule.value, .layer = layer, .priority = rule.priority };
         priority = rule.priority;
     }
 
@@ -3378,7 +3615,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
             if (declaration.declaredValue(property_name, self.frame)) |value| {
                 const inline_priority = if (declaration.declaredImportant(property_name)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
                 if (inline_priority > priority) {
-                    winner = .{ .value = value, .layer = INLINE_LAYER };
+                    winner = .{ .value = value, .layer = INLINE_LAYER, .priority = inline_priority };
                 }
             }
         }
@@ -3542,6 +3779,38 @@ test "StyleManager: position" {
 
 test "StyleManager: inline style writes" {
     try testing.htmlRunner("css/inline_style_writes.html", .{});
+}
+
+test "StyleManager: animation events" {
+    try testing.htmlRunner("css/animation_events.html", .{});
+}
+
+test "StyleManager: hasKeyframes rebuilds only when a sheet mentions keyframes" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { color: red }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(false, sm.hasAnyKeyframes());
+    try testing.expectEqual(true, sm.dirty);
+
+    try style_el.asNode().setTextContent("@keyframes fade { to { opacity: 0 } }", frame);
+    try testing.expectEqual(true, sm.hasKeyframes("fade"));
+    try testing.expectEqual(false, sm.dirty);
+
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    _ = try sheet.insertRule("@-webkit-keyframes spin { to { opacity: 1 } }", 0, frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(true, sm.hasKeyframes("spin"));
 }
 
 test "StyleManager: text-transform without rules skips the memo" {
@@ -4233,6 +4502,32 @@ test "StyleManager: content rules no element matches aren't kept" {
 
     try testing.expectString("\"probe\"", sm.contentValue(probe).?);
     try testing.expectEqual(1, sm.content_rules.rules.items.len);
+}
+
+test "StyleManager: animation rules no element matches aren't kept" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.spinner::before { animation: spin 1s infinite }
+        \\.dot-a:after, .dot-b::after { animation-name: pulse }
+        \\.probe { animation: fade 1s }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    try testing.expectEqual(1, sm.animation(probe).count());
+    try testing.expectEqual(1, sm.animation_rules.get(.shorthand).rules.items.len);
+    try testing.expectEqual(0, sm.animation_rules.get(.name).rules.items.len);
 }
 
 test "StyleManager: ruleInserted: a content rule keeps the memos" {
