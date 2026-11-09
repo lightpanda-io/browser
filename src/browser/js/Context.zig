@@ -968,7 +968,10 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         .referrer = try self.arena.dupe(u8, referrer),
         .resolver = try resolver.persist(),
     };
-    try self.scheduler.add(queued, QueuedDynamicImport.run, 0, .{ .name = "dynamic import" });
+    try self.scheduler.add(queued, QueuedDynamicImport.run, 0, .{
+        .name = "dynamic import",
+        .finalizer = QueuedDynamicImport.dropped,
+    });
     return resolver.promise();
 }
 
@@ -986,6 +989,13 @@ const QueuedDynamicImport = struct {
     specifier: [:0]const u8,
     referrer: []const u8,
     resolver: js.PromiseResolver.Global,
+
+    // The scheduler was reset before the task ran (e.g. the frame navigated
+    // away). The promise stays pending, as in a browser.
+    fn dropped(ctx: *anyopaque) void {
+        const self: *QueuedDynamicImport = @ptrCast(@alignCast(ctx));
+        self.resolver.release();
+    }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *QueuedDynamicImport = @ptrCast(@alignCast(ctx));
@@ -1311,6 +1321,36 @@ test "Context: terminated async module completion does not re-enter V8" {
     try testing.expectEqual(js.Promise.State.pending, promise.state());
     // The abandoned promise is no longer handed to later imports.
     try testing.expectEqual(null, frame.js.module_cache.get(state.specifier).?.resolver_promise);
+}
+
+test "Context: a queued dynamic import dropped with its scheduler stays pending" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    // A module an earlier import() is still fetching: another import() of it
+    // settles from a task, not from the call.
+    const specifier = "https://example.com/in-flight-module.js";
+    const in_flight = local.createPromiseResolver();
+    try frame.js.module_cache.put(frame.js.arena.allocator(), specifier, .{
+        .module = null,
+        .module_promise = null,
+        .resolver_promise = try in_flight.promise().persist(),
+    });
+
+    const value = try local.exec("import('" ++ specifier ++ "')", "https://example.com/page.html");
+    try testing.expectEqual(true, value.isPromise());
+    const promise = value.toPromise();
+    try testing.expectEqual(true, frame.js.scheduler.hasReadyTasks());
+
+    // The frame navigated away before the task ran.
+    frame.js.scheduler.reset();
+    try frame.js.scheduler.run();
+    try testing.expectEqual(js.Promise.State.pending, promise.state());
 }
 
 // Used to make temporarily enter and exit a context, updating and restoring
