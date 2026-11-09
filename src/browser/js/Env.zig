@@ -376,7 +376,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .local_arena = params.local_arena,
         .microtask_queue = microtask_queue,
         .script_manager = if (comptime is_frame) &global._script_manager.base else &global._script_manager,
-        .scheduler = .init(context_arena.allocator()),
+        .scheduler = .init(context_arena.allocator(), &self.attribution, &page.settle),
         .identity = params.identity,
         .identity_arena = params.identity_arena,
         .execution = undefined,

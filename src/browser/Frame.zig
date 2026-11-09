@@ -143,9 +143,6 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
-// Held while a dispatch of queued events is pending.
-_queued_events_hold: JS.Attribution.Hold = .{},
-
 _image_decodes: Element.Html.Image.Decodes = .{},
 
 _focus_fixup_pending: bool = false,
@@ -2608,15 +2605,7 @@ fn queueEvent(self: *Frame, event: QueuedEvent) !void {
                 try f.dispatchQueuedEvents();
                 return null;
             }
-        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents", .finalizer = struct {
-            fn dropped(ctx: *anyopaque) void {
-                const f: *Frame = @ptrCast(@alignCast(ctx));
-                f._queued_events_hold.release();
-            }
-        }.dropped });
-    }
-    if (self._queued_events_hold.settle == null) {
-        self._queued_events_hold = self.page.settle.hold(queued.task);
+        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
     }
 }
 
@@ -2840,9 +2829,6 @@ fn fireElementEvent(self: *Frame, el: *Element, name: String, opts: Event.Option
 
 fn dispatchQueuedEvents(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
-
-    // Events queued during this dispatch take a new hold for the next one.
-    self._queued_events_hold.release();
 
     // Swap buffers - new additions during dispatch go to the other buffer
     const to_process = self._queued_events;

@@ -61,6 +61,8 @@ _callbacks: CallbackHashMap = .{},
 // a short timeout (often of 0ms).
 _nesting_level: u8 = 0,
 
+_in_animation_frame: bool = false,
+
 const Key = u32;
 const CallbackHashMap = std.HashMapUnmanaged(
     Key,
@@ -131,7 +133,6 @@ pub fn schedule(
     }
     errdefer _ = self._callbacks.remove(timer_id);
 
-    const parent_task = exec.js.attribution.current();
     const callback = try arena.create(ScheduleCallback);
     callback.* = .{
         .cb = cb,
@@ -144,18 +145,21 @@ pub fn schedule(
         .timer_id = timer_id,
         .params = persisted_params,
         .repeat_ms = if (opts.repeat) if (delay == 0) 1 else delay else null,
-        .delay_ms = delay,
-        .parent_task = parent_task,
-        .hold = if (opts.repeat == false and opts.mode == .normal and delay < js.Attribution.short_timeout_ms and nesting <= BLOCKING_NESTING)
-            exec.page.settle.hold(parent_task)
-        else
-            .{},
     };
-    errdefer callback.hold.release();
     gop.value_ptr.* = callback;
+
+    const kind: js.Attribution.Kind = switch (opts.mode) {
+        .idle => .idle,
+        .animation_frame => .animation_frame,
+        .normal => if (opts.repeat) .interval else .timeout,
+    };
 
     try exec.js.scheduler.add(callback, ScheduleCallback.run, delay, .{
         .name = opts.name,
+        .kind = kind,
+        // We cut on a deep nested, or a RAF calling a RAF (which we assume is a
+        // render loop, not a polling loop)
+        .cut = (nesting > BLOCKING_NESTING) or (opts.mode == .animation_frame and self._in_animation_frame),
         .blocks_done = opts.blocks_done and nesting <= BLOCKING_NESTING,
         .finalizer = ScheduleCallback.cancelled,
     });
@@ -215,14 +219,6 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, removed after first invocation.
     repeat_ms: ?u32,
 
-    delay_ms: u32,
-
-    // The task that scheduled this one.
-    parent_task: ?js.Attribution.Tag,
-
-    // Noop for timers that don't hold the settle
-    hold: js.Attribution.Hold,
-
     // The nesting of this task. When it executes, this nesting will become
     // the Timer's _nesting_level so that any new timers will become nesting + 1
     nesting: u8,
@@ -238,7 +234,6 @@ const ScheduleCallback = struct {
 
     fn cancelled(ptr: *anyopaque) void {
         var self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
-        self.hold.release();
         self.deinit();
     }
 
@@ -276,9 +271,6 @@ const ScheduleCallback = struct {
 
     fn run(ptr: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ptr));
-        // Settled is only checked between tasks, and work this run starts
-        // takes its own holds.
-        self.hold.release();
         if (self.removed) {
             self.deinit();
             return null;
@@ -287,21 +279,6 @@ const ScheduleCallback = struct {
         var ls: js.Local.Scope = undefined;
         self.exec.js.localScope(&ls);
         defer ls.deinit();
-
-        const attribution = self.exec.js.attribution;
-        const kind: js.Attribution.Kind = switch (self.mode) {
-            .idle => .idle,
-            .animation_frame => .animation_frame,
-            .normal => if (self.repeat_ms == null) .timeout else .interval,
-        };
-        const task = attribution.begin(kind, .{
-            .label = self.name,
-            .delay_ms = self.delay_ms,
-            .parent = self.parent_task,
-            .cut = self.nesting > BLOCKING_NESTING,
-        });
-        const task_scope = attribution.enter(task);
-        defer task_scope.exit();
 
         const timers = self.timers;
         const prev_nesting = timers._nesting_level;
@@ -318,6 +295,9 @@ const ScheduleCallback = struct {
                     .frame => |frame| frame.window._performance.now(),
                     .worker => |worker| worker._performance.now(),
                 };
+                const was_in_animation_frame = timers._in_animation_frame;
+                timers._in_animation_frame = true;
+                defer timers._in_animation_frame = was_in_animation_frame;
                 self.invoke(&ls.local, .{now}, "RAF");
             },
             .normal => self.invoke(&ls.local, self.params, "timer"),
