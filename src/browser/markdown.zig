@@ -93,6 +93,16 @@ fn classLanguage(el: *Element) ?[]const u8 {
     return null;
 }
 
+/// CommonMark allows at most nine digits in a list marker.
+const max_list_start = 999_999_999;
+
+/// The number of an `<ol>`'s first item: its `start` attribute, or 1.
+fn listStart(ol: *Element) usize {
+    const start = ol.getAttributeSafe(comptime .wrap("start")) orelse return 1;
+    const value = std.fmt.parseInt(u32, std.mem.trim(u8, start, &std.ascii.whitespace), 10) catch return 1;
+    return @min(value, max_list_start);
+}
+
 fn longestBacktickRun(text: []const u8) usize {
     var longest: usize = 0;
     var run: usize = 0;
@@ -294,7 +304,7 @@ const Context = struct {
             },
             .ol => {
                 if (self.state.list_depth < self.state.list_stack.len) {
-                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = 1 };
+                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = listStart(el) };
                     self.state.list_depth += 1;
                 }
             },
@@ -774,6 +784,21 @@ test "browser.markdown: ordered list" {
     try testMarkdownHTML(
         \\<ol><li>First</li><li>Second</li></ol>
     , "1. First\n2. Second\n");
+}
+
+test "browser.markdown: ordered list start" {
+    try testMarkdownHTML(
+        \\<ol start="3"><li>Third</li><li>Fourth</li></ol>
+    , "3. Third\n4. Fourth\n");
+}
+
+test "browser.markdown: ordered list start out of range" {
+    try testMarkdownHTML(
+        \\<ol start="18446744073709551615"><li>a</li><li>b</li></ol>
+    , "1. a\n2. b\n");
+    try testMarkdownHTML(
+        \\<ol start="1234567890"><li>a</li></ol>
+    , "999999999. a\n");
 }
 
 test "browser.markdown: table" {
