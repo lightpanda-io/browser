@@ -1235,19 +1235,13 @@ test "http: isAllowedHost accepts the explicitly advertised host" {
     try testing.expectEqual(true, isAllowedHost("10.0.0.5:9222", "lightpanda"));
 }
 
-test "http: webSocketAccept honours the advertised host" {
+test "http: checkHost honours the advertised host" {
     testing.expectLog(&.{.serve});
-    const head = "GET / HTTP/1.1\r\n" ++
-        "Host: lightpanda:9222\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "Connection: Upgrade\r\n" ++
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
-        "Sec-WebSocket-Version: 13\r\n\r\n";
-    var out: [28]u8 = undefined;
-    try testing.expectError(error.ForbiddenHost, webSocketAccept(head, &out, .{}));
-    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .host = "lightpanda" }));
-    // Over a unix socket any Host is fine.
-    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .check_host = false }));
+    const headers: Connection.Headers = .{ .host = "lightpanda:9222" };
+    try testing.expectError(error.ForbiddenHost, checkHost(&headers, null));
+    try checkHost(&headers, "lightpanda");
+    // A browser always sends one, so a request without it isn't a rebound page.
+    try checkHost(&.{}, null);
 }
 
 test "http: isAllowedOrigin" {
@@ -1261,20 +1255,76 @@ test "http: isAllowedOrigin" {
     try testing.expectEqual(false, isAllowedOrigin("http://a.test.evil.com", &.{"http://a.test"}));
 }
 
-test "http: webSocketAccept honours the allowed origins" {
+test "http: checkOrigin honours the allowed origins" {
     testing.expectLog(&.{ .serve, .serve });
-    const head = "GET / HTTP/1.1\r\n" ++
-        "Host: 127.0.0.1:9222\r\n" ++
-        "Origin: http://127.0.0.1:9222\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "Connection: Upgrade\r\n" ++
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
-        "Sec-WebSocket-Version: 13\r\n\r\n";
+    const headers: Connection.Headers = .{ .host = "127.0.0.1:9222", .origin = "http://127.0.0.1:9222" };
+    try testing.expectError(error.ForbiddenOrigin, checkOrigin(&headers, &.{}));
+    try testing.expectError(error.ForbiddenOrigin, checkOrigin(&headers, &.{"http://localhost:9222"}));
+    try checkOrigin(&headers, &.{"http://127.0.0.1:9222"});
+    try checkOrigin(&headers, &.{"*"});
+    try checkOrigin(&.{}, &.{});
+}
+
+test "http: webSocketAccept" {
+    const headers: Connection.Headers = .{
+        .upgrade = "websocket",
+        .connection = "keep-alive, Upgrade",
+        .websocket_key = "dGhlIHNhbXBsZSBub25jZQ==",
+        .websocket_version = "13",
+    };
     var out: [28]u8 = undefined;
-    try testing.expectError(error.ForbiddenOrigin, webSocketAccept(head, &out, .{}));
-    try testing.expectError(error.ForbiddenOrigin, webSocketAccept(head, &out, .{ .origins = &.{"http://localhost:9222"} }));
-    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .origins = &.{"http://127.0.0.1:9222"} }));
-    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(head, &out, .{ .origins = &.{"*"} }));
+    try testing.expectString("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", try webSocketAccept(.@"1.1", &headers, &out));
+    try testing.expectError(error.InvalidProtocol, webSocketAccept(.@"1.0", &headers, &out));
+
+    var missing = headers;
+    missing.websocket_key = null;
+    try testing.expectError(error.MissingHeader, webSocketAccept(.@"1.1", &missing, &out));
+    var wrong = headers;
+    wrong.websocket_version = "8";
+    try testing.expectError(error.MissingHeader, webSocketAccept(.@"1.1", &wrong, &out));
+}
+
+test "http: the headers the server acts on are read in one pass" {
+    var state: Connection.State = .header;
+    var request = ("POST /session?x=1 HTTP/1.1\r\n" ++
+        "HOST: 127.0.0.1:9222\r\n" ++
+        "User-Agent: test\r\n" ++
+        "origin: http://localhost:3000\r\n" ++
+        "Content-Length: 2\r\n\r\n{}").*;
+    switch (try state.parseHeader(testing.allocator, &request)) {
+        .complete => {},
+        .need => return error.UnexpectedlyIncomplete,
+    }
+
+    const req = state.request;
+    try testing.expectEqual(.POST, req.method);
+    try testing.expectString("/session", req.path);
+    try testing.expectEqual(true, req.keepalive);
+    try testing.expectString("{}", req.body);
+    try testing.expectString("127.0.0.1:9222", req.headers.host.?);
+    try testing.expectString("http://localhost:3000", req.headers.origin.?);
+    try testing.expectEqual(null, req.headers.upgrade);
+}
+
+test "http: a request whose Content-Length, Host or Origin is ambiguous is invalid" {
+    const cases = [_][]const u8{
+        // a second value would otherwise go unchecked
+        "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:9222\r\nHost: rebind.evil.com:9222\r\n\r\n",
+        "GET / HTTP/1.1\r\nOrigin: http://localhost:3000\r\nOrigin: https://evil.com\r\n\r\n",
+        // or leave the body's length to whichever one we kept, even when
+        // they agree
+        "POST /session HTTP/1.1\r\nContent-Length: 0\r\nContent-Length: 2\r\n\r\n{}",
+        "POST /session HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+        // as would one behind a blank line that only the header parser
+        // takes for the end of the head
+        "GET /json/version HTTP/1.1\n\nHost: rebind.evil.com:9222\r\n\r\n",
+    };
+    for (cases) |case| {
+        var state: Connection.State = .header;
+        const request = try testing.allocator.dupe(u8, case);
+        defer testing.allocator.free(request);
+        try testing.expectError(error.InvalidHeader, state.parseHeader(testing.allocator, request));
+    }
 }
 
 test "http: the read buffer grows with the request and gives the space back" {
@@ -1369,7 +1419,7 @@ fn expectSplitRequest(head: []const u8, body: []const u8, splits: []const usize)
     const req = state.request;
     try testing.expectEqual(.POST, req.method);
     try testing.expectString("/session", req.path);
-    try testing.expectString(head, req.head);
+    try testing.expectEqual(body.len, req.headers.content_length.?);
     try testing.expectString(body, req.body);
 }
 
