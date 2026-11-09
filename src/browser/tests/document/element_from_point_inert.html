@@ -63,5 +63,16 @@
   const r = svg.getBoundingClientRect();
   testing.expectEqual(svg, document.elementFromPoint(r.x + 1, r.y + 1));
   svg.remove();
+
+  // Foreign elements can share the implementation's HTML wrapper types.
+  const foreign = document.createElementNS('urn:test', 'container');
+  foreign.setAttribute('inert', '');
+  const button = document.createElement('button');
+  button.textContent = 'Active';
+  foreign.appendChild(button);
+  document.body.appendChild(foreign);
+  const b = button.getBoundingClientRect();
+  testing.expectEqual(button, document.elementFromPoint(b.x + 1, b.y + 1));
+  foreign.remove();
 }
 </script>

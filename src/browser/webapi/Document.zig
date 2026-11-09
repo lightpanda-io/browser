@@ -1060,8 +1060,8 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         preorder_index += 1;
         if (node.is(Element)) |element| {
             hidden = hidden or style_manager.hasDisplayNone(element);
-            if (element.is(Element.Html)) |html| {
-                hidden = hidden or html.getInert();
+            if (element._namespace == .html) {
+                hidden = hidden or element.hasAttributeSafe(comptime .wrap("inert"));
             }
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
