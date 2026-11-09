@@ -48,6 +48,8 @@
 <div id=inline></div>
 <div id=inline-longhand></div>
 <div id=reverted></div>
+<div id=inline-webkit></div>
+<div id=inline-order></div>
 <div id=cssom></div>
 <div id=cssom-late class=late></div>
 
@@ -354,6 +356,33 @@
     const log = record(el);
     untilEvent(el, 'animationend').then(state.resolve);
     el.className = 'reverted';
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], log);
+    });
+  }
+</script>
+
+<script id=inline_webkit type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('inline-webkit');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.setAttribute('style', '-webkit-animation: fadeIn .01s');
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], log);
+    });
+  }
+</script>
+
+<script id=inline_order type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('inline-order');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    // The shorthand after the longhand resets the duration
+    el.setAttribute('style', 'animation-duration: .5s; animation: fadeIn .01s');
     await state.done(() => {
       testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], log);
     });

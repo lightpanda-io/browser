@@ -3425,15 +3425,31 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{};
 
+    // The style attribute, folded like a rule block: in order, the -webkit-
+    // names aliased, and a shorthand dropping the longhands before it.
+    var inline_declared: LazyAnimation = .{};
+    if (el.inlineStyle(self.frame)) |style| {
+        var it = style.asCSSStyleDeclaration().iterator();
+        while (it.next()) |property| {
+            const animation_property = Animation.Property.parse(property._name.str()) orelse continue;
+            const value = property._value.str();
+            if (std.ascii.eqlIgnoreCase(value, "revert-layer")) {
+                // Back to the rules, every one of them in an earlier layer
+                continue;
+            }
+            inline_declared.declare(animation_property, value, property._important);
+        }
+    }
+
     var result: Animation = .{};
-    const shorthand = self.animationWinner(el, .shorthand);
+    const shorthand = self.animationWinner(el, .shorthand, &inline_declared);
     for (std.enums.values(Animation.Longhand)) |longhand| {
         const own = self.animationWinner(el, switch (longhand) {
             .name => .name,
             .duration => .duration,
             .delay => .delay,
             .iteration_count => .iteration_count,
-        });
+        }, &inline_declared);
         // Equal priorities are one block, where the longhand came last: a
         // shorthand after it dropped it.
         if (own) |winner| {
@@ -3449,19 +3465,36 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
     return result;
 }
 
-fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Property) ?LazyWinner {
+/// `inline_declared` is `el`'s style attribute: lazyWinner reads it by the
+/// standard name alone, missing the -webkit- names and the shorthand's order.
+fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Property, inline_declared: *const LazyAnimation) ?LazyWinner {
+    // Nothing beats an !important inline declaration
+    if (inline_declared.important.get(property)) |value| {
+        return .{ .value = value, .layer = INLINE_LAYER, .priority = INLINE_IMPORTANT_PRIORITY };
+    }
+
     const rules = self.parsedRules(self.animation_rules.getPtr(property)) catch |err| blk: {
         log.err(.browser, "StyleManager animation", .{ .err = err });
         break :blk &.{};
     };
-    var before: ?u16 = null;
-    while (self.lazyWinner(el, .wrap(property.cssName()), rules, before)) |winner| {
-        if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
-            return winner;
+    var winner: ?LazyWinner = null;
+    // Stopping at INLINE_LAYER keeps lazyWinner off the style attribute
+    var before: ?u16 = INLINE_LAYER;
+    while (self.lazyWinner(el, .wrap(property.cssName()), rules, before)) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate.value, "revert-layer") == false) {
+            winner = candidate;
+            break;
         }
-        before = winner.layer;
+        before = candidate.layer;
     }
-    return null;
+
+    // A normal inline declaration beats every normal rule
+    if (inline_declared.normal.get(property)) |value| {
+        if (winner == null or winner.?.priority < INLINE_PRIORITY) {
+            return .{ .value = value, .layer = INLINE_LAYER, .priority = INLINE_PRIORITY };
+        }
+    }
+    return winner;
 }
 
 fn animationRuleCount(self: *const StyleManager) usize {
