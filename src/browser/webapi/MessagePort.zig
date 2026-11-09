@@ -326,16 +326,16 @@ fn scheduleDelivery(self: *MessagePort, message: Message) !void {
     const callback = try exec._factory.create(DeliverCallback{
         .port = self,
         .message = message,
-        .hold = exec.page.settle.hold(message.task),
     });
     errdefer exec._factory.destroy(callback);
-    errdefer callback.hold.release();
 
     self._in_flight.append(&callback.node);
     errdefer self._in_flight.remove(&callback.node);
 
     try exec.js.scheduler.add(callback, DeliverCallback.run, 0, .{
         .name = "MessagePort.postMessage",
+        .kind = .message,
+        .parent = message.task,
         .finalizer = DeliverCallback.cancelled,
     });
 }
@@ -345,14 +345,12 @@ const DeliverCallback = struct {
     // null once a transfer has taken it to the port's new incarnation (and
     // unlinked this callback from _in_flight).
     message: ?Message,
-    hold: js.Attribution.Hold,
     node: std.DoublyLinkedList.Node = .{},
 
     // Called by the scheduler if the task is dropped before it runs. `run` and
     // `cancelled` are mutually exclusive, so the temp is released exactly once.
     fn cancelled(ctx: *anyopaque) void {
         const self: *DeliverCallback = @ptrCast(@alignCast(ctx));
-        self.hold.release();
         if (self.message) |message| {
             self.port._in_flight.remove(&self.node);
             message.release();
@@ -368,17 +366,12 @@ const DeliverCallback = struct {
         const self: *DeliverCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
 
-        self.hold.release();
-
         const port = self.port;
         const exec = port._exec;
 
         const message = self.message orelse return null;
         port._in_flight.remove(&self.node);
         defer message.releasePorts();
-
-        const task_scope = exec.js.attribution.enterNew(.message, .{ .parent = message.task, .label = "MessagePort" });
-        defer task_scope.exit();
 
         // The MessageEvent takes ownership of the cloned temp and releases it on
         // teardown; on any path where we don't hand it over, release it here so

@@ -806,6 +806,44 @@ test "Runner: settled releases a port delivery its frame dropped" {
     try testing.expectEqual(0, frame.page.settle.pending);
 }
 
+test "Runner: a task from tracked work holds settled until it runs" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    {
+        var ls: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        const attribution = frame.js.attribution;
+        const task_scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+        _ = try ls.local.exec(
+            \\setTimeout(() => scheduler.postTask(() => {}), 0);
+            \\requestAnimationFrame(() => requestAnimationFrame(() => {}));
+            \\setTimeout(() => {}, 500);
+            \\setInterval(() => {}, 10);
+        , null);
+        task_scope.exit();
+        // the short timeout and the animation frame; not the long timeout or
+        // the interval
+        try testing.expectEqual(2, frame.page.settle.pending);
+
+        // untracked work holds nothing
+        _ = try ls.local.exec("setTimeout(() => {}, 0);", null);
+        try testing.expectEqual(2, frame.page.settle.pending);
+    }
+
+    // The timer released its hold before running, and the task it queued
+    // takes its own: settled is checked between runs. The frame isn't due.
+    try frame.js.scheduler.run();
+    try testing.expectEqual(2, frame.page.settle.pending);
+
+    // The frame requested from the frame callback is a render loop: no hold.
+    lp.io.sleep(.fromMilliseconds(6), .awake) catch {};
+    try frame.js.scheduler.run();
+    try testing.expectEqual(0, frame.page.settle.pending);
+}
+
 test "Runner: fresh initial about blank advances timers and promise continuations" {
     const page = try testing.test_session.createPage();
     defer page.close();
