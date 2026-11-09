@@ -807,8 +807,9 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     var skip: ?*const Property = null;
     // As does a four-side shorthand with all four sides declared.
     var boxes_written: std.StaticBitSet(CssParser.box_shorthands.len) = .empty;
-    var it = self.iterator();
-    while (it.next()) |prop| {
+    var node = self._properties.first;
+    while (node) |n| : (node = n.next) {
+        const prop = Property.fromNodeLink(n);
         if (prop == skip) {
             continue;
         }
@@ -844,13 +845,20 @@ pub fn iterator(self: *const CSSStyleDeclaration) Iterator {
     return .{ .node = self._properties.first };
 }
 
+/// The declarations in declared order. Their strings belong to the
+/// declaration: any write to it can free them.
 pub const Iterator = struct {
     node: ?*std.DoublyLinkedList.Node,
 
-    pub fn next(self: *Iterator) ?*Property {
+    pub fn next(self: *Iterator) ?CssParser.Declaration {
         const node = self.node orelse return null;
         self.node = node.next;
-        return Property.fromNodeLink(node);
+        const prop = Property.fromNodeLink(node);
+        return .{
+            .name = prop._name.str(),
+            .value = prop._value.str(),
+            .important = prop._important,
+        };
     }
 };
 
@@ -1471,7 +1479,7 @@ fn getDefaultColor(element: *const Element) ?[]const u8 {
     }
 }
 
-pub const Property = struct {
+const Property = struct {
     _name: String,
     _value: String,
     _important: bool = false,
