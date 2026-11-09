@@ -153,6 +153,30 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
 
             server.run();
         },
+        .crawl => |opts| {
+            const crawl_opts = lp.crawl.Opts{
+                .seeds = opts.url.items,
+                .max_pages = opts.max_pages,
+                .concurrency = opts.concurrency,
+                .wait_until = opts.wait_until orelse .load,
+                .wait_ms = opts.wait_ms,
+                .output = opts.output,
+                .recycle_every = opts.recycle_every,
+                .content = opts.content,
+                .max_content_bytes = opts.max_content_bytes,
+                .max_depth = opts.max_depth,
+                .scope = opts.scope,
+                .include = opts.include.items,
+                .exclude = opts.exclude.items,
+            };
+            log.debug(.app, "startup", .{
+                .mode = "crawl",
+                .seeds = crawl_opts.seeds.len,
+                .concurrency = crawl_opts.concurrency,
+                .max_pages = crawl_opts.max_pages,
+            });
+            try lp.crawl.run(app, crawl_opts);
+        },
         .fetch => |opts| {
             const urls = opts.url.items;
 

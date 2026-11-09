@@ -127,6 +127,55 @@ Twitter card, meta and link tags as JSON, like the MCP `structuredData` tool.
 `--wait-until`, `--wait-ms`, `--wait-selector` and `--wait-script` are
 available to adjust waiting time before dump.
 
+### Crawl a site
+
+```console
+./lightpanda crawl https://example.com --max-pages 1000 --concurrency 8 --output crawl.jsonl
+```
+
+The crawler lives in the browser. The pages are loaded by the engine itself,
+the links come from the DOM it built, and there is no protocol between the
+crawler and the pages: no round trip to fetch the links, no script injected
+to find them, and no cookies moved between the tabs - the session is the
+engine's.
+
+One JSON record per page, one object per line:
+
+```json
+{"crawl_id":"5573a4f6","fetched_at":1794165671,"url":"https://www.python.org/","final_url":"https://www.python.org/","depth":0,"status":200,"title":"Welcome to Python.org","content":null,"links":135,"ms":254,"timed_out":false,"skipped":null,"error":null,"bot_challenge":false}
+```
+
+The record is a row: flat, typed, and the same every time. It is what a
+database table would hold later - the file is in ClickHouse's `JSONEachRow`
+format as it is.
+
+| option | what it does |
+| :---- | :---- |
+| `--max-pages`, `--max-depth` | how many pages, and how deep |
+| `--concurrency` | how many browsers over the shared frontier. They share the process's cookies and localStorage: the crawl is one visitor |
+| `--scope host\|domain\|any` | how far from the seeds |
+| `--include`, `--exclude` | which URLs to follow |
+| `--content html\|markdown` | the page itself, in the record |
+| `--wait-until`, `--wait-ms` | when to read the page |
+| `--obey-robots` | the site's robots.txt |
+
+Measured on a local static site of 20000 pages, one worker, on an Apple
+M-series machine:
+
+| | |
+| :---- | :---- |
+| 20000 pages | 17.3s (1156 pages/s) |
+| peak memory | 28.7 MB, and flat over the crawl |
+| the same crawl over CDP | 43% slower |
+
+The memory stays flat because the session is recycled every 100 pages: the
+navigation history of the pages before it goes back to the pool it came
+from, and the cookies and the localStorage live in the process, not in the
+session.
+
+On a real site the network is most of the time, and the crawl is as fast as
+the same crawl over CDP (523ms a page against 519ms on python.org).
+
 ### Start a CDP server
 
 ```console

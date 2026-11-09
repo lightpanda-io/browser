@@ -6,6 +6,7 @@
     \\The commands are:
     \\  agent       starts an interactive AI agent that can browse the web
     \\  completion  prints a shell completion script (bash, fish, zsh)
+    \\  crawl       crawls a site, from the engine itself
     \\  fetch       fetches the specified URL
     \\  help        displays this message
     \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
@@ -82,6 +83,63 @@
     \\          Listen on this Unix-domain socket (mode 0600) instead of TCP.
     \\          Must be absolute. Cannot be combined with --host, --port or
     \\          --advertise-host.
+    ,
+    .crawl =
+    \\usage: {0s} crawl <url>... [OPTIONS] [COMMON_OPTIONS]
+    \\
+    \\Crawls a site. The pages are loaded by the engine itself: no protocol
+    \\between the crawler and the pages, the links come from the DOM, and the
+    \\session is the engine's.
+    \\
+    \\options:
+    \\  --concurrency <INT>
+    \\          How many browsers to run at the same time. Each has an
+    \\          isolate of its own, and its own session unless the process
+    \\          shares one.
+    \\          Defaults to 1.
+    \\  --content <FORMAT>
+    \\          What to put in the content field of each record: html or
+    \\          markdown. Nothing when the option is not given.
+    \\  --max-content-bytes <INT>
+    \\          How many bytes of content to keep, at most.
+    \\  --max-depth <INT>
+    \\          How deep to go from the seeds. A page deeper than this is
+    \\          not fetched. Nothing limits the depth when the option is not
+    \\          given.
+    \\  --exclude <REGEX>
+    \\          The URLs that match this pattern are not followed. Can be
+    \\          passed multiple times.
+    \\  --include <REGEX>
+    \\          Only the URLs that match this pattern are followed. Can be
+    \\          passed multiple times.
+    \\  --max-pages <INT>
+    \\          How many pages to fetch, at most.
+    \\          Defaults to 1000.
+    \\  --metrics
+    \\          Prints the metrics at the end of the crawl.
+    \\          Defaults to false.
+    \\  --output <PATH>
+    \\          Where the records go, one JSON object per line.
+    \\          Defaults to standard output.
+    \\  --scope <SCOPE>
+    \\          How far the crawl may go from its seeds: host (the seeds' own
+    \\          host), domain (that host and its subdomains), or any (every
+    \\          host).
+    \\          Defaults to host.
+    \\  --recycle-every <INT>
+    \\          Start a new session every this many pages, so the session's
+    \\          arena gives back the navigation history of the pages before it
+    \\          and the memory of the crawl stays flat. The cookies and the
+    \\          localStorage of the crawl are not affected: they live in the
+    \\          process, not in the session.
+    \\          Defaults to 100.
+    \\  --wait-until <UNTIL>
+    \\          When to read the page: load, domcontentloaded,
+    \\          networkalmostidle, networkidle, settled or done.
+    \\          Defaults to load.
+    \\  --wait-ms <INT>
+    \\          How long to wait for a page, in milliseconds.
+    \\          Defaults to 5000.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]

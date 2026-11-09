@@ -317,6 +317,12 @@ fn bucketForOrigin(self: *Window) *storage.Bucket {
 }
 
 fn getLocalStorage(self: *Window) *storage.Lookup {
+    // The localStorage belongs to the browser, not to the session: the tabs
+    // of a browser share theirs, and so do the workers of a crawl.
+    const app = self._frame._session.browser.app;
+    if (app.sharedStorage()) |shared| {
+        return shared.getOrPut(self._frame.js.origin.key);
+    }
     return &self.bucketForOrigin().local;
 }
 

@@ -31,6 +31,7 @@ pub const Regex = @import("Regex.zig");
 pub const Config = @import("Config.zig");
 pub const completion = @import("completion.zig");
 pub const cookies = @import("cookies.zig");
+pub const crawl = @import("crawl.zig");
 pub const datetime = @import("datetime.zig");
 pub const core_dump = @import("core_dump.zig");
 pub const malloc_tuning = @import("malloc_tuning.zig");
@@ -538,6 +539,12 @@ fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
     const sel = selector orelse return document;
     const element = try Selector.querySelector(document, sel, frame);
     return (element orelse return error.SelectorNotFound).asNode();
+}
+
+/// The content of a page, as text or as markdown. The crawler uses it to
+/// put the page itself in its records.
+pub fn dumpPageContent(app: *App, mode: Config.DumpFormat, max_bytes: ?u32, frame: *Frame, writer: *std.Io.Writer) !void {
+    return dumpContent(app, mode, .{ .dump = .{ .max_bytes = max_bytes } }, frame, false, writer);
 }
 
 fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, alternate: bool, writer: *std.Io.Writer) !void {

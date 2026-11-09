@@ -28,6 +28,7 @@ const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const screenshot = @import("browser/screenshot.zig");
 const Sanitizer = @import("browser/webapi/Sanitizer.zig");
+const Storage = @import("browser/webapi/storage/storage.zig");
 
 const Network = @import("network/Network.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
@@ -52,6 +53,10 @@ regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
+// The localStorage the sessions of the process share, when the run shares
+// it. The tabs of a browser share their storage, and so do the workers of
+// a crawl: the crawl is one visitor.
+shared_storage: ?Storage.Shared,
 /// Clients for asking Jev, pooled so concurrent calls each get their own and
 /// keep its connection warm. It reads the API key from the environment on
 /// every ask. Usable from any thread: it touches no browser state.
@@ -96,6 +101,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
             .retry_policy = .disabled,
             .request_timeout_ms = 10_000,
         }),
+        .shared_storage = if (config.sharedStorage()) Storage.Shared.init(allocator) else null,
     };
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
@@ -137,7 +143,19 @@ pub fn deinit(self: *App) void {
 
     self.typesafe.deinit();
 
+    if (self.shared_storage) |*shared| {
+        shared.deinit();
+        self.shared_storage = null;
+    }
+
     allocator.destroy(self);
+}
+
+/// The localStorage the sessions of the process share, when the run shares
+/// it.
+pub fn sharedStorage(self: *App) ?*Storage.Shared {
+    if (self.shared_storage) |*shared| return shared;
+    return null;
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {

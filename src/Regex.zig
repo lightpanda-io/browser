@@ -29,7 +29,7 @@ const repeat = @import("string.zig").repeat;
 
 const Allocator = std.mem.Allocator;
 
-const Regex = @This();
+pub const Regex = @This();
 
 code: *pcre2.pcre2_code_8,
 context: *const Context,

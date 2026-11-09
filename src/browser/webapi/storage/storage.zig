@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const lp = @import("lightpanda");
 
 const Allocator = std.mem.Allocator;
 
@@ -26,6 +27,54 @@ pub fn registerTypes() []const type {
 }
 
 pub const Cookie = @import("Cookie.zig");
+
+/// The localStorage of every origin of the process, shared by the
+/// sessions of the process: the tabs of a browser share theirs, and so do
+/// the workers of a crawl.
+///
+/// The sessionStorage stays with the session - it belongs to one tab, in
+/// every browser.
+pub const Shared = struct {
+    allocator: Allocator,
+    /// The keys and the values live here, and they stay until the store
+    /// dies. A value a page read has to stay valid after the lock is
+    /// released, and an arena is what gives that.
+    arena: std.heap.ArenaAllocator,
+    mutex: std.Io.Mutex = .init,
+    origins: std.StringHashMapUnmanaged(*Lookup) = .empty,
+
+    pub fn init(allocator: Allocator) Shared {
+        return .{ .allocator = allocator, .arena = .init(allocator) };
+    }
+
+    pub fn deinit(self: *Shared) void {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+        var it = self.origins.iterator();
+        while (it.next()) |kv| {
+            self.allocator.destroy(kv.value_ptr.*);
+        }
+        self.origins.deinit(self.allocator);
+        self.arena.deinit();
+    }
+
+    /// The localStorage of an origin. The store is shared, so the lookup
+    /// it returns is guarded by the store's mutex.
+    pub fn getOrPut(self: *Shared, origin: []const u8) *Lookup {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+
+        const gop = self.origins.getOrPut(self.allocator, origin) catch @panic("OOM");
+        if (gop.found_existing) return gop.value_ptr.*;
+
+        const lookup = self.allocator.create(Lookup) catch @panic("OOM");
+        lookup.* = .{ ._allocator = self.arena.allocator(), ._mutex = &self.mutex };
+
+        gop.key_ptr.* = self.allocator.dupe(u8, origin) catch @panic("OOM");
+        gop.value_ptr.* = lookup;
+        return lookup;
+    }
+};
 
 pub const Shed = struct {
     _origins: std.StringHashMapUnmanaged(*Bucket) = .empty,
@@ -76,10 +125,24 @@ pub const Lookup = struct {
     _data: std.StringHashMapUnmanaged([]const u8) = .empty,
     _size: usize = 0,
     _allocator: Allocator,
+    /// The mutex that guards the lookup, when it is shared between the
+    /// sessions of a process. A lookup of a session's own has none, and
+    /// does not need one.
+    _mutex: ?*std.Io.Mutex = null,
 
     const max_size = 5 * 1024 * 1024;
 
+    fn lock(self: *const Lookup) void {
+        if (self._mutex) |m| m.lockUncancelable(lp.io);
+    }
+
+    fn unlock(self: *const Lookup) void {
+        if (self._mutex) |m| m.unlock(lp.io);
+    }
+
     pub fn deinit(self: *Lookup) void {
+        self.lock();
+        defer self.unlock();
         var it = self._data.iterator();
         while (it.next()) |entry| {
             self._allocator.free(entry.key_ptr.*);
@@ -90,10 +153,14 @@ pub const Lookup = struct {
     }
 
     pub fn getItem(self: *const Lookup, k: []const u8) ?[]const u8 {
+        self.lock();
+        defer self.unlock();
         return self._data.get(k);
     }
 
     pub fn setItem(self: *Lookup, k: []const u8, value: []const u8) !void {
+        self.lock();
+        defer self.unlock();
         const old_len = if (self._data.get(k)) |old| old.len else 0;
         std.debug.assert(old_len <= self._size);
         if (self._size - old_len + value.len > max_size) {
@@ -118,6 +185,8 @@ pub const Lookup = struct {
     }
 
     pub fn removeItem(self: *Lookup, k: []const u8) void {
+        self.lock();
+        defer self.unlock();
         const kv = self._data.fetchRemove(k) orelse return;
         self._size -= kv.value.len;
         self._allocator.free(kv.key);
@@ -125,6 +194,8 @@ pub const Lookup = struct {
     }
 
     pub fn clear(self: *Lookup) void {
+        self.lock();
+        defer self.unlock();
         var it = self._data.iterator();
         while (it.next()) |entry| {
             self._allocator.free(entry.key_ptr.*);
@@ -135,6 +206,8 @@ pub const Lookup = struct {
     }
 
     pub fn key(self: *const Lookup, index: u32) ?[]const u8 {
+        self.lock();
+        defer self.unlock();
         var it = self._data.keyIterator();
         var i: u32 = 0;
         while (it.next()) |k| {
@@ -147,14 +220,20 @@ pub const Lookup = struct {
     }
 
     pub fn getLength(self: *const Lookup) u32 {
+        self.lock();
+        defer self.unlock();
         return @intCast(self._data.count());
     }
 
     fn hasItem(self: *const Lookup, k: []const u8) bool {
+        self.lock();
+        defer self.unlock();
         return self._data.contains(k);
     }
 
     pub fn keys(self: *const Lookup, exec: *const js.Execution) !js.Array {
+        self.lock();
+        defer self.unlock();
         const local = exec.js.local.?;
         var arr = local.newArray(self.getLength());
         var it = self._data.keyIterator();

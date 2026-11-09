@@ -520,7 +520,7 @@ test "completion: fish" {
         "complete -c lp -n '__fish_seen_subcommand_from agent' -l attach -s a -r -F -d ",
         "complete -c lp -n '__fish_seen_subcommand_from run' -F\n",
         "complete -c lp -n '__fish_seen_subcommand_from completion' -a 'bash fish zsh'\n",
-        "complete -c lp -n '__fish_seen_subcommand_from help' -a 'serve fetch ",
+        "complete -c lp -n '__fish_seen_subcommand_from help' -a 'serve crawl fetch ",
     };
     for (expected) |line| {
         if (std.mem.indexOf(u8, script, line) == null) {
