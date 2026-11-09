@@ -114,11 +114,18 @@ fn check(ctx: *anyopaque) !?u32 {
     state.pending.clearRetainingCapacity();
     state.whole_document = false;
 
+    const resets = frame.js.scheduler.resets;
     for (state.cancelled.items) |animation| {
         if (animation.phase != .finished) {
             animation.dispatch(.wrap("animationcancel"), animation.elapsed()) catch |err| {
                 log.warn(.frame, "animationcancel", .{ .err = err });
             };
+            if (frame.js.scheduler.resets != resets) {
+                // A handler tore the frame down (e.g. removed its iframe): the
+                // reset's finalizers freed the animations that had a task, so
+                // none of these can be touched. The rest go with the page arena.
+                break;
+            }
         }
         animation.release();
     }
