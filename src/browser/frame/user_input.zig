@@ -30,6 +30,7 @@ const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const StyleManager = @import("../StyleManager.zig");
+const EventManager = @import("../EventManager.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
@@ -1399,20 +1400,22 @@ fn focusForMouseDown(frame: *Frame, target: *Element) !void {
 
 // Per the DOM dispatch algorithm, a click's activation target is the event
 // target itself when it has activation behavior, otherwise — for bubbling
-// events only — the nearest ancestor that has one.
-pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
-    if (isEditingHost(target)) {
+// events only — the nearest ancestor that has one. It never lies past where
+// the event path stops at a disabled form control.
+pub fn findClickActivationTarget(target: *Node, event: *Event) ?*Node {
+    const stop_at_disabled = EventManager.stopsAtDisabledFormControl(event);
+    if (isEditingHost(target) or (stop_at_disabled and EventManager.isDisabledFormControl(target))) {
         return null;
     }
     if (hasClickActivationBehavior(target)) {
         return target;
     }
-    if (!bubbles) {
+    if (!event._bubbles) {
         return null;
     }
     var node = target._parent;
     while (node) |n| : (node = n._parent) {
-        if (isEditingHost(n)) {
+        if (isEditingHost(n) or (stop_at_disabled and EventManager.isDisabledFormControl(n))) {
             return null;
         }
         if (hasClickActivationBehavior(n)) {
@@ -4928,8 +4931,8 @@ test "user_input: trusted mouse events stop at a disabled form control" {
         // Mouse events stop at the disabled button; pointer events don't.
         .{ "inner", pointer_bubbles },
         // A disabled fieldset is not a disabled control itself.
-        .{ "fsInner", try std.fmt.allocPrint(frame.local_arena, full, .{ "fsInner", "pointerdown@fs ", "mousedown@fs ", "pointerup@fs ", "mouseup@fs ", "click@fs " }) },
-        .{ "fs", try std.fmt.allocPrint(frame.local_arena, full, .{ "fs", "", "", "", "", "" }) },
+        .{ "fsInner", try std.fmt.allocPrint(testing.arena_allocator, full, .{ "fsInner", "pointerdown@fs ", "mousedown@fs ", "pointerup@fs ", "mouseup@fs ", "click@fs " }) },
+        .{ "fs", try std.fmt.allocPrint(testing.arena_allocator, full, .{ "fs", "", "", "", "", "" }) },
     }) |case| {
         const id, const expected = case;
         try triggerClick(frame, frame.document.getElementById(id).?, .{});
@@ -4945,6 +4948,15 @@ test "user_input: trusted mouse events stop at a disabled form control" {
     }
     const dbl = try (try ls.local.compileAndRun("take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
     try testing.expectString(pointer_bubbles ++ " " ++ pointer_bubbles ++ " dblclick@inner", dbl);
+
+    // composedPath() reports the cut path.
+    const composed = try (try ls.local.compileAndRun("innerClickPath", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString("inner", composed);
+
+    // A disabled form-associated custom element has no activation behavior,
+    // but the click still can't reach the label around it.
+    try triggerClick(frame, frame.document.getElementById("faceInner").?, .{});
+    try testing.expect(!(try ls.local.compileAndRun("take(); faceBox.checked", null)).toBool());
 
     // An untrusted click propagates as usual.
     const synthetic = try (try ls.local.compileAndRun("inner.click(); take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
