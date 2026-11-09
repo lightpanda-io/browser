@@ -573,10 +573,11 @@ fn addSelectorRules(
     layer: u16,
 ) !bool {
     var lazy = declared;
-    if (lazy.content != null and selectsOnlyPseudoElements(selector_text)) {
-        // Icon fonts declare it on hundreds of `::before` rules, and no element
-        // matches one.
+    if ((lazy.content != null or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
+        // Icon fonts declare `content` on hundreds of `::before` rules, spinners
+        // an animation, and no element matches one.
         lazy.content = null;
+        lazy.animation = .{};
     }
 
     const relevant = props.isRelevant() or important.isRelevant();
@@ -4501,6 +4502,32 @@ test "StyleManager: content rules no element matches aren't kept" {
 
     try testing.expectString("\"probe\"", sm.contentValue(probe).?);
     try testing.expectEqual(1, sm.content_rules.rules.items.len);
+}
+
+test "StyleManager: animation rules no element matches aren't kept" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.spinner::before { animation: spin 1s infinite }
+        \\.dot-a:after, .dot-b::after { animation-name: pulse }
+        \\.probe { animation: fade 1s }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    try testing.expectEqual(1, sm.animation(probe).count());
+    try testing.expectEqual(1, sm.animation_rules.get(.shorthand).rules.items.len);
+    try testing.expectEqual(0, sm.animation_rules.get(.name).rules.items.len);
 }
 
 test "StyleManager: ruleInserted: a content rule keeps the memos" {
