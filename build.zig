@@ -66,6 +66,16 @@ pub fn build(b: *Build) !void {
         }
     }
 
+    // linkRust derives cargo's triple from Zig's arch name, which matches
+    // Rust's only for these (Rust calls x86 i686, for example).
+    if (requested_target.result.abi.isMusl()) switch (requested_target.result.cpu.arch) {
+        .x86_64, .aarch64 => {},
+        else => |arch| {
+            std.debug.print("musl builds support x86_64 and aarch64 (got {t})\n", .{arch});
+            return error.MuslArchUnsupported;
+        },
+    };
+
     const target = if (dev_fast) b.resolveTargetQuery(.{
         .cpu_arch = .x86_64,
         .os_tag = .linux,
