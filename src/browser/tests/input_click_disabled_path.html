@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<button id="btn" disabled><span id="inner">inner</span></button>
+<fieldset id="fs" disabled><legend>legend</legend><span id="fsInner">fieldset content</span></fieldset>
+<label><input type="checkbox" id="faceBox"><face-el disabled><span id="faceInner">face content</span></face-el></label>
+<script>
+  customElements.define('face-el', class extends HTMLElement { static formAssociated = true; });
+  const events = [];
+  const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'];
+  const listeners = [window, document, document.getElementById('btn'), document.getElementById('inner'),
+    document.getElementById('fs'), document.getElementById('fsInner')];
+  for (const t of listeners) {
+    const name = t === window ? 'window' : t === document ? 'document' : t.id;
+    for (const type of types) {
+      t.addEventListener(type, () => events.push(type + '@' + name));
+    }
+  }
+  let innerClickPath = null;
+  document.getElementById('inner').addEventListener('click', e => {
+    innerClickPath = e.composedPath().map(n => n.id || n.nodeName).join(' ');
+  });
+  function take() {
+    const out = events.join(' ');
+    events.length = 0;
+    return out;
+  }
+</script>
