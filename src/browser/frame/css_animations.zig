@@ -36,6 +36,11 @@ const AnimationEvent = @import("../webapi/event/AnimationEvent.zig");
 const log = lp.log;
 const String = lp.String;
 
+// An event task waiting longer than this is scheduled with blocks_done = false:
+// a page waits on short animations (Microsoft's login slides for 250ms), not on
+// long or endless ones.
+const BLOCKING_MS = 250;
+
 pub const State = struct {
     // Per element, one per animation-name it has, finished ones included: an
     // animation restarts only once its name goes away and comes back.
@@ -231,8 +236,7 @@ const CssAnimation = struct {
         const wait = std.math.lossyCast(u32, @ceil(ms));
         try self.frame.js.scheduler.add(self, run, wait, .{
             .name = "css_animations.event",
-            // A page waits on short animations, not on long or endless ones
-            .blocks_done = wait <= 250,
+            .blocks_done = wait <= BLOCKING_MS,
             .finalizer = cancelled,
         });
         self.scheduled = true;
