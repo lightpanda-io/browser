@@ -415,12 +415,7 @@ const PipeState = struct {
             return;
         }
 
-        const value = data.value;
-        if (value.isUndefined()) {
-            return self.finish(local);
-        }
-
-        self.writable.writeChunk(value, exec) catch {
+        self.writable.writeChunk(data.value, exec) catch {
             return self.finish(local);
         };
 
