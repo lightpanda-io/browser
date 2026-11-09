@@ -293,6 +293,42 @@
   }
 </script>
 
+<script id=response_clone_stream_body type=module>
+  {
+    const state = await testing.async();
+    const enc = new TextEncoder();
+    const streamOf = (...chunks) => new ReadableStream({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(c));
+        controller.close();
+      },
+    });
+
+    const source = streamOf('chunk1', 'chunk2');
+    const response = new Response(source);
+    const copy = response.clone();
+    const before = [response.body === source, source.locked, response.bodyUsed, copy.bodyUsed];
+    const texts = [await response.text(), await copy.text()];
+
+    // a used or locked stream body can't be cloned
+    const used = new Response(streamOf('x'));
+    await used.text();
+    testing.expectError('TypeError', () => used.clone());
+
+    const lockedSource = streamOf('x');
+    const locked = new Response(lockedSource);
+    lockedSource.getReader();
+    testing.expectError('TypeError', () => locked.clone());
+    state.resolve();
+
+    await state.done(() => {
+      // like a tee: the original gets a new body and the source stays locked
+      testing.expectEqual([false, true, false, false], before);
+      testing.expectEqual(['chunk1chunk2', 'chunk1chunk2'], texts);
+    });
+  }
+</script>
+
 <script id=fetch_blob_url type=module>
   {
     const state = await testing.async();
