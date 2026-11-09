@@ -103,7 +103,6 @@ fn longestBacktickRun(text: []const u8) usize {
     return longest;
 }
 
-// Iterative else large trees will stackoverflow
 /// Passes a blockquote's content on as it is written, with the `> ` marker on
 /// every line. Newlines wait for the next text, so the ones at either end of
 /// the quote are dropped.
@@ -159,6 +158,7 @@ const QuoteWriter = struct {
     }
 };
 
+// Iterative else large trees will stackoverflow
 const Context = struct {
     state: State,
     writer: *std.Io.Writer,
