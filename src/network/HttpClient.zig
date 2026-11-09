@@ -2943,6 +2943,17 @@ pub const Transfer = struct {
         self.state = .created;
     }
 
+    fn leaveGate(self: *Transfer) void {
+        if (self.state != .parked) {
+            return;
+        }
+        switch (self.state.parked) {
+            .cors => self.client.cors.remove(self),
+            .robots => self.client.robots.remove(self),
+            .intercept_auth, .intercept_request, .intercept_response => {},
+        }
+    }
+
     // Decrement the interception counter iff this transfer is currently
     // parked for CDP interception.
     fn leaveIntercept(self: *Transfer) void {
@@ -3100,15 +3111,7 @@ pub const Transfer = struct {
             self._dispatch_queued = false;
         }
 
-        // And for the robots gate: RobotsGate.pending holds a raw *Transfer
-        // while we're parked.
-        if (self.state == .parked) {
-            switch (self.state.parked) {
-                .cors => self.client.cors.remove(self),
-                .robots => self.client.robots.remove(self),
-                .intercept_auth, .intercept_request, .intercept_response => {},
-            }
-        }
+        self.leaveGate();
 
         // A pending revalidation entry owns cache resources (possibly an
         // open file). It's resolved at completion; if we die first, release.
@@ -3193,6 +3196,11 @@ pub const Transfer = struct {
 
         const page_scope = self.logScope();
         defer page_scope.exit();
+
+        // the error_callback can run JS which could pump the network
+        // and resolve whatever gate we're parked on. Leave it so the gate
+        // doesn't resume a dying transfer.
+        self.leaveGate();
 
         // error_callback can run JS that tears this transfer down again
         // (e.g. an XHR abort handler navigates -> abortRequests -> kill).
