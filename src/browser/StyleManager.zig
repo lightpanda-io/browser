@@ -36,6 +36,7 @@ const SelectorList = @import("webapi/selector/List.zig");
 
 const CSSRule = @import("webapi/css/CSSRule.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
+const GenericRule = @import("webapi/css/GenericRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
 
@@ -144,17 +145,23 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
     if (sheet._css_rules) |css_rules| {
         for (css_rules._rules.items) |rule| {
             switch (rule._type) {
-                .style => |sr| {
+                .style => {
+                    const sr = rule.as(CSSStyleRule);
                     _ = try self.addRule(sr);
                     try self.addNestedCssomRules(build_arena, sr, sr._selector_text, 0);
                 },
-                // Re-parse the stored source so an `@media` rule inserted via
-                // `insertRule` / `replaceSync` participates in the cascade
-                // when its query matches the viewport.
-                .media => try self.applyMediaAtRule(build_arena, rule._text, 0, NO_LAYER, null),
-                .layer => try self.applyLayerAtRule(build_arena, rule._text, 0, NO_LAYER, null),
-                .keyframes => try self.addKeyframes(rule._text),
-                else => {},
+                .generic => {
+                    const generic = rule.as(GenericRule);
+                    switch (generic._kind) {
+                        // Re-parse the stored source so an `@media` rule inserted via
+                        // `insertRule` / `replaceSync` participates in the cascade
+                        // when its query matches the viewport.
+                        .media => try self.applyMediaAtRule(build_arena, generic._text, 0, NO_LAYER, null),
+                        .layer => try self.applyLayerAtRule(build_arena, generic._text, 0, NO_LAYER, null),
+                        .keyframes => try self.addKeyframes(generic._text),
+                        else => {},
+                    }
+                },
             }
         }
         return;
@@ -1912,15 +1919,21 @@ fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSS
     }
     for (nested_rules._rules.items) |rule| {
         switch (rule._type) {
-            .style => |sr| {
+            .style => {
+                const sr = rule.as(CSSStyleRule);
                 // The arena, as in addRawRule.
                 const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, sr._selector_text) orelse continue;
                 _ = try self.addRuleAs(sr, selector);
                 try self.addNestedCssomRules(build_arena, sr, selector, depth + 1);
             },
-            .media => try self.applyMediaAtRule(build_arena, rule._text, depth + 1, NO_LAYER, parent_selector),
-            .layer => try self.applyLayerAtRule(build_arena, rule._text, depth + 1, NO_LAYER, parent_selector),
-            else => {},
+            .generic => {
+                const generic = rule.as(GenericRule);
+                switch (generic._kind) {
+                    .media => try self.applyMediaAtRule(build_arena, generic._text, depth + 1, NO_LAYER, parent_selector),
+                    .layer => try self.applyLayerAtRule(build_arena, generic._text, depth + 1, NO_LAYER, parent_selector),
+                    else => {},
+                }
+            },
         }
     }
 }
@@ -1933,10 +1946,7 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
         // The pending rebuild reads the sheet's rules and picks it up.
         return;
     }
-    const style_rule = switch (rule._type) {
-        .style => |s| s,
-        else => return self.sheetModified(),
-    };
+    const style_rule = rule.is(CSSStyleRule) orelse return self.sheetModified();
     // A rule with nested rules takes the rebuild path, which adds them.
     if (style_rule._rules != null or !self.appendable(sheet, rule)) {
         return self.sheetModified();
@@ -3551,7 +3561,8 @@ fn searchSheetsForKeyframes(self: *StyleManager) !bool {
         }
         if (sheet._css_rules) |css_rules| {
             for (css_rules._rules.items) |rule| {
-                if (std.ascii.findIgnoreCase(rule._text, "keyframes") != null) {
+                const generic = rule.is(GenericRule) orelse continue;
+                if (std.ascii.findIgnoreCase(generic._text, "keyframes") != null) {
                     return true;
                 }
             }

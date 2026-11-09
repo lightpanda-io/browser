@@ -1,3 +1,21 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
 const lp = @import("lightpanda");
 
@@ -10,6 +28,7 @@ const Element = @import("../Element.zig");
 
 const CSSRuleList = @import("CSSRuleList.zig");
 const CSSRule = @import("CSSRule.zig");
+const GenericRule = @import("GenericRule.zig");
 const CSSStyleRule = @import("CSSStyleRule.zig");
 
 const log = lp.log;
@@ -102,11 +121,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
 
     const inserted: *CSSRule = switch (parsed_rule) {
         .style => |s| try initStyleRule(s.selector, s.block, 0, frame),
-        // Opaque placeholder for at-rules. The CSS engine doesn't apply
-        // these (`@keyframes`, `@media`, ...) but JS-side reads must see
-        // them via `cssRules` so CSS-in-JS libraries don't fall back to
-        // per-render `<style>` injection. See #2459.
-        .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
+        .at_rule => |a| try initAtRule(a.keyword, a.text, frame),
     };
 
     const rules = try self.getCssRules(frame);
@@ -140,27 +155,32 @@ fn initStyleRule(selector: []const u8, block: []const u8, depth: u8, frame: *Fra
     try style.replaceStyleBlock(block, frame);
 
     if (depth >= StyleManager.MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block, '{') == null) {
-        return style_rule._proto;
+        return style_rule.asCSSRule();
     }
     var it = Parser.parseStyleBlock(block);
     while (it.nextItem()) |item| {
         const nested: *CSSRule = switch (item) {
             .declaration => continue,
             .rule => |r| try initStyleRule(r.selector, r.block, depth + 1, frame),
-            .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
+            .at_rule => |a| try initAtRule(a.keyword, a.text, frame),
         };
         // Created on the first nested rule: `_rules` stays null without one.
         const rules = try style_rule.getCssRules(frame);
         try rules.insert(rules.length(), nested, frame);
     }
-    return style_rule._proto;
+    return style_rule.asCSSRule();
 }
 
-/// Map an at-rule keyword (without `@`) to the matching `CSSRule.Type`
-/// variant. Vendor prefixes are stripped before matching
-/// (`-webkit-keyframes` -> `keyframes`). Unrecognized keywords fall back
-/// to `.unknown`: which maps to 0 for rule.type.
-fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
+fn initAtRule(keyword: []const u8, text: []const u8, frame: *Frame) CSSError!*CSSRule {
+    const rule = try GenericRule.init(atRuleKindFor(keyword), text, frame);
+    return rule.asCSSRule();
+}
+
+/// Map an at-rule keyword (without `@`) to its `GenericRule.Kind`. Vendor
+/// prefixes are stripped before matching (`-webkit-keyframes` ->
+/// `keyframes`). Unrecognized keywords fall back to `.unknown`: which maps
+/// to 0 for rule.type.
+fn atRuleKindFor(keyword_with_prefix: []const u8) GenericRule.Kind {
     var keyword = keyword_with_prefix;
     inline for (.{ "-webkit-", "-moz-", "-ms-", "-o-" }) |prefix| {
         if (std.ascii.startsWithIgnoreCase(keyword, prefix)) {
@@ -177,7 +197,7 @@ fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
     if (eql(keyword, "import")) return .import;
     if (eql(keyword, "charset")) return .charset;
     if (eql(keyword, "namespace")) return .namespace;
-    if (eql(keyword, "page")) return .frame;
+    if (eql(keyword, "page")) return .page;
     if (eql(keyword, "counter-style")) return .counter_style;
     if (eql(keyword, "font-feature-values")) return .font_feature_values;
     if (eql(keyword, "viewport")) return .viewport;
@@ -228,7 +248,7 @@ fn parseInto(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!voi
     while (it.next()) |parsed_rule| {
         const inserted: *CSSRule = switch (parsed_rule) {
             .style => |s| try initStyleRule(s.selector, s.block, 0, frame),
-            .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),
+            .at_rule => |a| try initAtRule(a.keyword, a.text, frame),
         };
 
         try rules.insert(index, inserted, frame);

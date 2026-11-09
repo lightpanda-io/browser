@@ -994,6 +994,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/css/CSSRuleList.zig"),
     @import("../webapi/css/CSSStyleDeclaration.zig"),
     @import("../webapi/css/CSSStyleRule.zig"),
+    @import("../webapi/css/GenericRule.zig"),
     @import("../webapi/css/CSSStyleSheet.zig"),
     @import("../webapi/css/CSSStyleProperties.zig"),
     @import("../webapi/css/FontFace.zig"),
