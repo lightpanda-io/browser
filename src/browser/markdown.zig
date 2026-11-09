@@ -61,7 +61,7 @@ const State = struct {
 
 fn shouldAddSpacing(tag: Element.Tag) bool {
     return switch (tag) {
-        .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table => true,
+        .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table, .hr => true,
         else => false,
     };
 }
@@ -757,6 +757,10 @@ test "browser.markdown: nested lists" {
         \\  - Child
         \\
     );
+}
+
+test "browser.markdown: hr after a paragraph" {
+    try testMarkdownHTML("<p>Intro</p><hr><p>Next</p>", "\nIntro\n\n---\n\nNext\n");
 }
 
 test "browser.markdown: blockquote" {
