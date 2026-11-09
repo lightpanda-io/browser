@@ -78,3 +78,9 @@
     testing.expectEqual('https://u:p@z.org:7/p', a.href);
   }
 </script>
+
+<map><area id=area_empty_hash href="foo?#"></map>
+<script id=area_empty_hash_and_search>
+  testing.expectEqual('', $('#area_empty_hash').search);
+  testing.expectEqual('', $('#area_empty_hash').hash);
+</script>
