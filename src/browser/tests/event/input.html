@@ -63,3 +63,93 @@
   }
 
 </script>
+
+<script id=targetRanges>
+
+  {
+    const p = document.createElement('p');
+    p.textContent = 'abc';
+    const text = p.firstChild;
+    const range = new StaticRange({startContainer: text, startOffset: 0, endContainer: text, endOffset: 1});
+
+    testing.expectEqual(0, new InputEvent('beforeinput').getTargetRanges().length);
+
+    const evt = new InputEvent('beforeinput', {targetRanges: [range]});
+    const ranges = evt.getTargetRanges();
+    testing.expectEqual(true, Array.isArray(ranges));
+    testing.expectEqual(1, ranges.length);
+    testing.expectEqual(false, ranges === evt.getTargetRanges());
+    // the same boundaries; whether it's the same object differs (Chrome makes
+    // a new one per call)
+    testing.expectEqual(true, ranges[0] instanceof StaticRange);
+    testing.expectEqual(text, ranges[0].startContainer);
+    testing.expectEqual(0, ranges[0].startOffset);
+    testing.expectEqual(text, ranges[0].endContainer);
+    testing.expectEqual(1, ranges[0].endOffset);
+
+    // any type keeps them until dispatched
+    testing.expectEqual(1, new InputEvent('input', {targetRanges: [range]}).getTargetRanges().length);
+
+    // StaticRanges only, in a sequence
+    testing.expectError('TypeError', () => new InputEvent('beforeinput', {targetRanges: [document.createRange()]}));
+    testing.expectError('TypeError', () => new InputEvent('beforeinput', {targetRanges: [range, null]}));
+    testing.expectError('TypeError', () => new InputEvent('beforeinput', {targetRanges: range}));
+  }
+
+</script>
+
+<script id=targetRangesAfterDispatch>
+
+  {
+    // Like Chrome, a listener sees them; once dispatched, they're gone.
+    const p = document.createElement('p');
+    p.textContent = 'abc';
+    const text = p.firstChild;
+    const range = new StaticRange({startContainer: text, startOffset: 0, endContainer: text, endOffset: 1});
+    const evt = new InputEvent('beforeinput', {targetRanges: [range]});
+    let during = -1;
+    p.addEventListener('beforeinput', (e) => { during = e.getTargetRanges().length; });
+    p.dispatchEvent(evt);
+    testing.expectEqual(1, during);
+    testing.expectEqual(0, evt.getTargetRanges().length);
+  }
+
+</script>
+
+<script id=targetRangesShadow>
+
+  {
+    // A range into a shadow tree is only seen by listeners inside it.
+    const host = document.createElement('div');
+    document.documentElement.appendChild(host);
+    const shadow = host.attachShadow({mode: 'open'});
+    const inner = document.createElement('span');
+    shadow.appendChild(inner);
+    const innerShadow = inner.attachShadow({mode: 'open'});
+    innerShadow.textContent = 'text';
+    const text = innerShadow.firstChild;
+    const range = new StaticRange({startContainer: text, startOffset: 0, endContainer: text, endOffset: 4});
+
+    const seen = {};
+    const record = (name) => (e) => { seen[name] = e.getTargetRanges().length; };
+    innerShadow.addEventListener('input', record('innerShadow'));
+    inner.addEventListener('input', record('innerHost'));
+    shadow.addEventListener('input', record('outerShadow'));
+    host.addEventListener('input', record('outerHost'));
+    document.addEventListener('input', record('document'));
+    window.addEventListener('input', record('window'));
+
+    text.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, targetRanges: [range]}));
+    testing.expectEqual(1, seen.innerShadow);
+    testing.expectEqual(0, seen.innerHost);
+    testing.expectEqual(0, seen.outerShadow);
+    testing.expectEqual(0, seen.outerHost);
+    testing.expectEqual(0, seen.document);
+    testing.expectEqual(0, seen.window);
+
+    // like Chrome, outside a dispatch too: there's no listener inside it
+    testing.expectEqual(0, new InputEvent('input', {targetRanges: [range]}).getTargetRanges().length);
+    host.remove();
+  }
+
+</script>

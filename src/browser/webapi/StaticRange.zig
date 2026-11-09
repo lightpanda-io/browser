@@ -48,16 +48,20 @@ pub fn init(opts: StaticRangeInit, frame: *Frame) !*StaticRange {
     if (isInvalidContainer(opts.startContainer) or isInvalidContainer(opts.endContainer)) {
         return error.InvalidNodeType;
     }
+    return create(opts.startContainer, opts.startOffset, opts.endContainer, opts.endOffset, frame);
+}
 
+/// A range the browser makes, like a beforeinput's target range.
+pub fn create(start: *Node, start_offset: u32, end: *Node, end_offset: u32, frame: *Frame) !*StaticRange {
     const arena = try frame.getArena(.medium, "StaticRange");
     errdefer arena.release();
 
     const static_range = try frame._factory.abstractRange(arena, StaticRange{ ._proto = undefined }, frame);
     const proto = static_range._proto;
-    proto._start_container = opts.startContainer;
-    proto._start_offset = opts.startOffset;
-    proto._end_container = opts.endContainer;
-    proto._end_offset = opts.endOffset;
+    proto._start_container = start;
+    proto._start_offset = start_offset;
+    proto._end_container = end;
+    proto._end_offset = end_offset;
     return static_range;
 }
 
