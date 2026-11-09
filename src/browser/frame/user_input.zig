@@ -5404,7 +5404,7 @@ test "user_input: shadow mouse rects are viewport relative and native clicks rea
     const host_rect = host.boundingClientRectValues(frame);
     const rect = inner.boundingClientRectValues(frame);
     try testing.expectEqual(host_rect.x + 20, rect.x);
-    try testing.expectEqual(host_rect.y + 5, rect.y);
+    try testing.expectEqual(host_rect.y, rect.y);
     const x = rect.x + 1;
     const y = rect.y + 1;
     try testing.expect((try mouseHitTest(frame, x, y)).target == inner);
@@ -5462,7 +5462,7 @@ test "user_input: shadow mouse nested closed roots and window scroll share coord
     const host_rect = host.boundingClientRectValues(frame);
     const before = target.boundingClientRectValues(frame);
     try testing.expectEqual(host_rect.x + 25, before.x);
-    try testing.expectEqual(host_rect.y + 10, before.y);
+    try testing.expectEqual(host_rect.y, before.y);
     _ = try ls.local.compileAndRun("document.body.style.width = '3000px'; document.body.style.height = '3000px'; window.scrollTo(30, 10)", null);
     const rect = target.boundingClientRectValues(frame);
     try testing.expectEqual(before.x - 30, rect.x);

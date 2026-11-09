@@ -141,12 +141,14 @@
   lane.innerHTML += lane.innerHTML;
   testing.expectEqual(before * 2, lane.scrollWidth);
 
+  // Each pass doubles the lane: a low guard keeps a regression from eating
+  // the memory.
   let guard = 0;
-  while (lane.scrollWidth < track.offsetWidth * 2 && guard < 50) {
+  while (lane.scrollWidth < track.offsetWidth * 2 && guard < 12) {
     lane.innerHTML += lane.innerHTML;
     guard++;
   }
-  testing.expectTrue(guard < 50);
+  testing.expectTrue(guard < 12);
 }
 </script>
 
@@ -1091,8 +1093,12 @@
 <script id="scrollHeightMarqueeLoop">
 {
   // The vertical counterpart of scrollWidthMarqueeLoop: a ticker that grows
-  // its lane until it is twice the height of its container.
+  // its lane until it is twice the height of its container. The track needs
+  // its own height: an auto one grows with the lane, and the loop never ends
+  // (in Chrome too).
   const track = document.createElement('div');
+  track.style.height = '40px';
+  track.style.overflow = 'hidden';
   const lane = document.createElement('div');
   lane.innerHTML = '<div>item</div>';
   track.appendChild(lane);
@@ -1104,11 +1110,13 @@
   testing.expectEqual(before * 2, lane.scrollHeight);
 
   let guard = 0;
-  while (lane.scrollHeight < track.offsetHeight * 2 && guard < 50) {
+  // Each pass doubles the lane: a low guard keeps a regression from eating
+  // the memory.
+  while (lane.scrollHeight < track.offsetHeight * 2 && guard < 12) {
     lane.innerHTML += lane.innerHTML;
     guard++;
   }
-  testing.expectTrue(guard < 50);
+  testing.expectTrue(guard < 12);
 }
 </script>
 <script id="scrollPosition">
