@@ -1978,10 +1978,10 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
 /// The CSSOM counterpart to foldDeclarations' lazy branches. Names within one
 /// declaration block are already unique, so there is nothing to dedup here.
 ///
-/// Unlike the selector text, both strings have to be copied: they can point
-/// into the Property itself (small string optimization), and setProperty /
-/// removeProperty destroy it without going through sheetModified(). We'd be
-/// left reading freed memory rather than something merely stale.
+/// Unlike the selector text, both strings have to be copied: they belong to
+/// the declaration, and setProperty / removeProperty free them without going
+/// through sheetModified(). We'd be left reading freed memory rather than
+/// something merely stale.
 fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !LazyDeclarations {
     const arena = self.arena.allocator();
 
@@ -1989,19 +1989,19 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
     var content: ?LazyDeclaration = null;
     var lazy_animation: LazyAnimation = .{};
     var it = style.asCSSStyleDeclaration().iterator();
-    while (it.next()) |property| {
-        const name = property._name.str();
+    while (it.next()) |declaration| {
+        const name = declaration.name;
         if (isCustomProperty(name)) {
             try customs.append(arena, .{
                 .name = try arena.dupe(u8, name),
-                .value = try arena.dupe(u8, property._value.str()),
-                .important = property._important,
+                .value = try arena.dupe(u8, declaration.value),
+                .important = declaration.important,
             });
         } else if (std.ascii.eqlIgnoreCase(name, "content")) {
             content = .{
                 .name = "content",
-                .value = try arena.dupe(u8, property._value.str()),
-                .important = property._important,
+                .value = try arena.dupe(u8, declaration.value),
+                .important = declaration.important,
             };
         } else if (Animation.Property.parse(name)) |animation_property| {
             lazy_animation.declare(animation_property, try arena.dupe(u8, property._value.str()), property._important);
@@ -2125,8 +2125,8 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
 fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties) Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = style.asCSSStyleDeclaration().iterator();
-    while (it.next()) |property| {
-        slots.apply(property._name.str(), property._value.str(), property._important);
+    while (it.next()) |declaration| {
+        slots.apply(declaration.name, declaration.value, declaration.important);
     }
     return slots;
 }
