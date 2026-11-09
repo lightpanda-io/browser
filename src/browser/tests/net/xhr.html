@@ -980,3 +980,25 @@ handler runs, abort() cancels the re-send and no load is delivered.
     testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
   }
 </script>
+
+<script id=reopen_while_preflighting>
+  {
+    // A cross-origin XHR with an authored header waits on its CORS preflight.
+    // open() again cancels it; that cancel fires `abort` synchronously, and a
+    // sync XHR in that handler pumps the network, resolving the preflight.
+    const a = new XMLHttpRequest();
+    a.open('GET', 'http://localhost:9582/echo_headers');
+    a.setRequestHeader('x-hop', '1');
+    a.send();
+
+    let sync_status = 0;
+    a.onabort = () => {
+      const s = new XMLHttpRequest();
+      s.open('GET', 'http://127.0.0.1:9582/xhr/slow', false);
+      s.send();
+      sync_status = s.status;
+    };
+    a.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual(200, sync_status);
+  }
+</script>
