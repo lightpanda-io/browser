@@ -585,6 +585,112 @@
 }
 </script>
 
+<script id="delete_merge_nested">
+{
+  // one block in the other
+  testing.expectEqual([true, '<blockquote>abcd</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p></blockquote>', 0, 1, 0, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<blockquote>abcd</blockquote>', '#abcd@2'], fwd('<blockquote>ab<p>cd</p></blockquote>', 0, 0, 2));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<blockquote><p>abcd</p></blockquote>', '#abcd@2'], back('<blockquote><p>ab</p>cd</blockquote>', 0, 1, 0));
+  testing.expectEqual([true, '<blockquote><p>abcd</p></blockquote>', '#abcd@2'], fwd('<blockquote><p>ab</p>cd</blockquote>', 0, 0, 0, 2));
+  testing.expectEqual([true, '<blockquote>abcd<p>ef</p></blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p><p>ef</p></blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<blockquote><p>abcd</p><p>ef</p></blockquote>', '#abcd@2'], back('<blockquote><p>ab</p>cd<p>ef</p></blockquote>', 0, 1, 0));
+  testing.expectEqual([true, '<blockquote><p>ab<b>cd</b>ef</p>gh</blockquote>', '#ab@2'], back('<blockquote><p>ab</p><b>cd</b>ef<br>gh</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<div>abcd<p>ef</p></div>', '#abcd@2'], back('<div>ab<p>cd<br>ef</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<div><p>abcd</p>ef</div>', '#abcd@2'], back('<div><p>ab</p>cd<br>ef</div>', 0, 1, 0));
+
+  // what followed the inner block stays on its own line
+  testing.expectEqual([true, '<blockquote>abcd<br>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p>ef</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<blockquote>abcd<br>ef</blockquote>', '#abcd@2'], fwd('<blockquote>ab<p>cd</p>ef</blockquote>', 0, 0, 2));
+  testing.expectEqual([true, '<blockquote>abcd<br>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<div><p>cd</p></div>ef</blockquote>', 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<blockquote>abcd<br><br>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p><br>ef</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<blockquote>abcd<br><img>ef</blockquote>', '#abcd@2'], back('<blockquote>ab<p>cd</p><img>ef</blockquote>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'abcd<br>ef', '#abcd@2'], back('ab<p>cd</p>ef', 1, 0, 0));
+  testing.expectEqual([true, 'abcd<br><b>ef</b>', '#abcd@2'], back('ab<p>cd</p><b>ef</b>', 1, 0, 0));
+
+  // nested lists
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], fwd('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 0, 2));
+  testing.expectEqual([true, '<ul><li>abcd<ul><li>ef</li></ul></li></ul>', '#abcd@2'], back('<ul><li>ab<ul><li>cd</li><li>ef</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li><li>gh</li></ul>', '#abcd@2'], back('<ul><li>ab<ul><li>cd</li></ul></li><li>gh</li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<ul><li>ab<ol><li>cd</li></ol></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd<ul><li><ul><li>ef</li></ul></li></ul></li></ul>', '#abcd@2'],
+    back('<ul><li>ab<ul><li>cd<ul><li>ef</li></ul></li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab<ul><li>cdxy</li></ul></li></ul>', '#cdxy@2'], back('<ul><li>ab<ul><li>cd</li></ul>xy</li></ul>', 0, 0, 2, 0));
+  testing.expectEqual([true, '<ul><li><p>abcd</p></li></ul>', '#abcd@2'], back('<ul><li><p>ab</p><ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ol><li>ab</li></ol>', '#ab@2'], back('<ol><li>ab<ol><li><br></li></ol></li></ol>', 0, 0, 1, 0, 0));
+
+  // a selection
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, '<blockquote>ad</blockquote>', '#ad@1'], sel('<blockquote>ab<p>cd</p></blockquote>', [0, 0, 1], [0, 1, 0, 1]));
+  testing.expectEqual([true, '<ul><li>ad</li></ul>', '#ad@1'], sel('<ul><li>ab<ul><li>cd</li></ul></li></ul>', [0, 0, 0, 1], [0, 0, 1, 0, 0, 1]));
+}
+</script>
+
+<script id="delete_merge_redundant_div">
+{
+  // Like Blink, moving a whole paragraph unwraps the <div>s around it with no
+  // attributes that are the only child of their parent
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div>ab<p>cd</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], fwd('<div>ab<p>cd</p></div>', 0, 0, 2));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div>ab<h1>cd</h1></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div>ab<div><p>cd</p></div></div>', 0, 1, 0, 0, 0));
+  testing.expectEqual([true, 'abcd', '#abcd@2'], back('<div><div>ab<p>cd</p></div></div>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<div><p>ab</p>cd</div>', 0, 1, 0));
+  testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<div><p>ab</p><p>cd</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<p>x</p><p>abcd</p>', '#abcd@2'], back('<div><p>x</p><p>ab</p><p>cd</p></div>', 0, 2, 0, 0));
+  testing.expectEqual([true, '<div>abcd</div>', '#abcd@2'], back('<div><div>ab</div><div>cd</div></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>abcd</li></ul>', '#abcd@2'], back('<div><ul><li>ab</li><li>cd</li></ul></div>', 0, 0, 1, 0, 0));
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, 'ad', '#ad@1'], sel('<div>ab<p>cd</p></div>', [0, 0, 1], [0, 1, 0, 1]));
+  testing.expectEqual([true, '<p>ad</p>', '#ad@1'], sel('<div><p>ab</p><p>cd</p></div>', [0, 0, 0, 1], [0, 1, 0, 1]));
+
+  // not one with attributes, a sibling, or after a line ended by a <br>
+  testing.expectEqual([true, '<div class="x">abcd</div>', '#abcd@2'], back('<div class=x>ab<p>cd</p></div>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<div class="x"><p>abcd</p></div>', '#abcd@2'], back('<div class=x><p>ab</p>cd</div>', 0, 1, 0));
+  testing.expectEqual([true, '<p>z</p><div>abcd</div>', '#abcd@2'], back('<p>z</p><div>ab<p>cd</p></div>', 1, 1, 0, 0));
+  testing.expectEqual([true, '<div>abcd</div><p>z</p>', '#abcd@2'], back('<div>ab<p>cd</p></div><p>z</p>', 0, 1, 0, 0));
+  testing.expectEqual([true, 'z<div>abcd</div>', '#abcd@2'], back('z<div>ab<p>cd</p></div>', 1, 1, 0, 0));
+  testing.expectEqual([true, '<p>z</p><div>abcd</div>', '#abcd@2'], back('<p>z</p><div><div>ab<p>cd</p></div></div>', 1, 0, 1, 0, 0));
+  testing.expectEqual([true, '<div>abcd</div>', '#abcd@2'], back('<div>ab</div><div>cd</div>', 1, 0, 0));
+  testing.expectEqual([true, '<div><p>abcd</p></div>', '#abcd@2'], back('<div><p>ab</p>cd<br></div>', 0, 1, 0));
+  testing.expectEqual([true, '<div><p>abcd</p><p>ef</p></div>', '#abcd@2'], back('<div><p>ab</p><p>cd<br>ef</p></div>', 0, 1, 0, 0));
+}
+</script>
+
+<script id="delete_merge_list_join">
+{
+  // Two lists of the same type, side by side, become one: the second, with
+  // the items of the first. The lines stay apart.
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], fwd('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 0, 0, 0, 2));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<ul><li>ab</li><li>xy</li><li>cd</li><li>ef</li></ul>', '#xy@2'],
+    back('<ul><li>ab</li><li>xy</li></ul><ul><li>cd</li><li>ef</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ol><li>ab</li><li>cd</li></ol>', '#ab@2'], back('<ol start=3><li>ab</li></ol><ol><li>cd</li></ol>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul class="b"><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul class=a><li>ab</li></ul><ul class=b><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul><li>ab</li></ul>\n<ul><li>cd</li></ul>', 2, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd</li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><p></p><ul><li>cd</li></ul>', 2, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li><p>cd</p></li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><ul><li><p>cd</p></li></ul>', 1, 0, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li>cd<ul><li>ef</li></ul></li></ul>', '#ab@2'],
+    back('<ul><li>ab</li></ul><ul><li>cd<ul><li>ef</li></ul></li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li>ab</li><li><br></li></ul>', '#ab@2'], back('<ul><li>ab</li></ul><ul><li><br></li></ul>', 1, 0, 0));
+
+  // lists apart, or of different types: the lines merge
+  testing.expectEqual([true, '<ul><li>ab<ul><li>xycd</li></ul></li></ul>', '#xycd@2'],
+    back('<ul><li>ab<ul><li>xy</li></ul></li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  testing.expectEqual([true, '<div><ul><li>abcd</li></ul></div>', '#abcd@2'], back('<div><ul><li>ab</li></ul></div><ul><li>cd</li></ul>', 1, 0, 0, 0));
+
+  // a selection: deleted, then the lists join
+  const sel = (html, at, to) => delIn(html, false, at, to);
+  testing.expectEqual([true, '<ul><li>a</li><li>d</li></ul>', '#a@1'], sel('<ul><li>ab</li></ul><ul><li>cd</li></ul>', [0, 0, 0, 1], [1, 0, 0, 1]));
+  testing.expectEqual(['input:host:deleteContentBackward:null'], events);
+  testing.expectEqual([true, '<ul><li>a</li><li>d</li><li>ef</li></ul>', '#a@1'], sel('<ul><li>ab</li></ul><ul><li>cd</li><li>ef</li></ul>', [0, 0, 0, 1], [1, 0, 0, 1]));
+}
+</script>
+
 <script id="delete_merge_nothing">
 {
   // at the start of the first block, the end of the last: succeeds, no event
@@ -657,21 +763,155 @@
 }
 </script>
 
+<script id="insert_text_spaces">
+{
+  // Types `value` in #host set to `html`, the caret at a path of child
+  // indexes ending in an offset (or the selection from `at` to `to`).
+  function typeIn(html, value, at, to) {
+    const host = $('#host');
+    host.innerHTML = html;
+    host.focus();
+    const nodeAt = path => path.slice(0, -1).reduce((n, i) => n.childNodes[i], host);
+    if (to) {
+      getSelection().setBaseAndExtent(nodeAt(at), at.at(-1), nodeAt(to), to.at(-1));
+    } else {
+      getSelection().collapse(nodeAt(at), at.at(-1));
+    }
+    const result = exec(value);
+    return [result, host.innerHTML, caret()];
+  }
+  const type = (html, value, ...at) => typeIn(html, value, at);
+
+  // a space that would collapse is a no-break one: at the end or start of
+  // a line, or next to another space
+  testing.expectEqual([true, '<p>ab&nbsp;</p>', '#ab\u00a0@3'], type('<p>ab</p>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<p>&nbsp;ab</p>', '#\u00a0ab@1'], type('<p>ab</p>', ' ', 0, 0, 0));
+  testing.expectEqual([true, '<p>a b</p>', '#a b@2'], type('<p>ab</p>', ' ', 0, 0, 1));
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@3'], type('<p>a b</p>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@2'], type('<p>a b</p>', ' ', 0, 0, 1));
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@3'], type('<p>a&nbsp;b</p>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<p>ab&nbsp;&nbsp;</p>', '#ab\u00a0\u00a0@4'], type('<p>ab&nbsp;</p>', ' ', 0, 0, 3));
+  testing.expectEqual([true, '<p>a b&nbsp;</p>', '#a b\u00a0@4'], type('<p>a b</p>', ' ', 0, 0, 3));
+  testing.expectEqual(['input:host:insertText: '], events);
+
+  // runs take turns, starting with a no-break space
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@3'], type('<p>ab</p>', '  ', 0, 0, 1));
+  testing.expectEqual([true, '<p>a&nbsp; &nbsp;b</p>', '#a\u00a0 \u00a0b@4'], type('<p>ab</p>', '   ', 0, 0, 1));
+  testing.expectEqual([true, '<p>ab&nbsp;&nbsp;</p>', '#ab\u00a0\u00a0@4'], type('<p>ab</p>', '  ', 0, 0, 2));
+  testing.expectEqual([true, '<p>ab&nbsp; &nbsp;</p>', '#ab\u00a0 \u00a0@5'], type('<p>ab</p>', '   ', 0, 0, 2));
+  testing.expectEqual([true, '<p>&nbsp; ab</p>', '#\u00a0 ab@2'], type('<p>ab</p>', '  ', 0, 0, 0));
+
+  // a no-break space with text next to it again becomes a plain one
+  testing.expectEqual([true, '<p>ab c</p>', '#ab c@4'], type('<p>ab&nbsp;</p>', 'c', 0, 0, 3));
+  testing.expectEqual([true, '<p>c ab</p>', '#c ab@1'], type('<p>&nbsp;ab</p>', 'c', 0, 0, 0));
+  testing.expectEqual([true, '<p>ab&nbsp; c</p>', '#ab\u00a0 c@5'], type('<p>ab&nbsp;&nbsp;</p>', 'c', 0, 0, 4));
+  testing.expectEqual([true, '<p>a c b</p>', '#a c b@3'], type('<p>a&nbsp;&nbsp;b</p>', 'c', 0, 0, 2));
+  testing.expectEqual([true, '<p>a b</p>', '#a b@2'], type('<p>ab</p>', '\u00a0', 0, 0, 1));
+  // only the spaces at the edit
+  testing.expectEqual([true, '<p>x&nbsp;y c</p>', '#x\u00a0y c@5'], type('<p>x&nbsp;y&nbsp;</p>', 'c', 0, 0, 4));
+  testing.expectEqual([true, '<p>abc&nbsp;</p>', '#abc\u00a0@4'], type('<p>ab</p>', 'c ', 0, 0, 2));
+  testing.expectEqual([true, '<p>abc  d</p>', '#abc  d@6'], type('<p>ab</p>', 'c  d', 0, 0, 2));
+
+  // spaces that don't show go
+  testing.expectEqual([true, '<p>a cb</p>', '#a cb@3'], type('<p>a  b</p>', 'c', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab&nbsp;</p>', '#ab\u00a0@3'], type('<p>ab </p>', ' ', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab c</p>', '#ab c@4'], type('<p>ab&nbsp; </p>', 'c', 0, 0, 4));
+
+  // a space at the edge of its text node, which what's next could swallow
+  testing.expectEqual([true, '<p><b>ab&nbsp;</b>cd</p>', '#ab\u00a0@3'], type('<p><b>ab</b>cd</p>', ' ', 0, 0, 0, 2));
+  testing.expectEqual([true, '<p>ab&nbsp;<b>cd</b></p>', '#ab\u00a0@3'], type('<p>ab<b>cd</b></p>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<p>ab<br>&nbsp;cd</p>', '#\u00a0cd@1'], type('<p>ab<br>cd</p>', ' ', 0, 2, 0));
+  testing.expectEqual([true, '<p>ab<img>&nbsp;</p>', '#\u00a0@1'], type('<p>ab<img></p>', ' ', 0, 2));
+
+  // where spaces collapse, newlines kept or not
+  testing.expectEqual([true, '<p style="white-space:pre-line">ab&nbsp;</p>', '#ab\u00a0@3'], type('<p style="white-space:pre-line">ab</p>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<p style="white-space:nowrap">ab&nbsp;</p>', '#ab\u00a0@3'], type('<p style="white-space:nowrap">ab</p>', ' ', 0, 0, 2));
+  // where they don't, as typed
+  testing.expectEqual([true, '<p style="white-space:pre-wrap">a  b</p>', '#a  b@3'], type('<p style="white-space:pre-wrap">a b</p>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<pre>ab </pre>', '#ab @3'], type('<pre>ab</pre>', ' ', 0, 0, 2));
+  testing.expectEqual([true, '<p style="white-space:pre-wrap">ab&nbsp;c</p>', '#ab\u00a0c@4'], type('<p style="white-space:pre-wrap">ab&nbsp;</p>', 'c', 0, 0, 3));
+
+  // a replaced selection
+  testing.expectEqual([true, '<p>a x d</p>', '#a x d@3'], typeIn('<p>a bc d</p>', 'x', [0, 0, 2], [0, 0, 4]));
+  testing.expectEqual([true, '<p>a d</p>', '#a d@2'], typeIn('<p>abcd</p>', ' ', [0, 0, 1], [0, 0, 3]));
+  testing.expectEqual([true, '<p>a x</p>', '#a x@3'], typeIn('<p>a bc</p>', 'x', [0, 0, 2], [0, 0, 4]));
+
+  // Chrome: <p>ab<span style="white-space:pre">\t</span></p>
+  testing.diverges('a tab is text', () => {
+    testing.expectEqual([true, '<p>ab\t</p>', '#ab\t@3'], type('<p>ab</p>', '\t', 0, 0, 2));
+  });
+
+  // typing on an empty line drops the <br> holding it open
+  testing.expectEqual([true, '<p>&nbsp;</p>', '#\u00a0@1'], type('<p><br></p>', ' ', 0, 0));
+  testing.expectEqual([true, '<p>x</p>', '#x@1'], type('<p><br></p>', 'x', 0, 0));
+  testing.expectEqual([true, '<p>ab<br>x</p>', '#x@1'], type('<p>ab<br><br></p>', 'x', 0, 2));
+  testing.expectEqual([true, '<p>xab<br><br></p>', '#xab@1'], type('<p>ab<br><br></p>', 'x', 0, 0, 0));
+  testing.expectEqual([true, '<p>x<br>ab</p>', '#x@1'], type('<p><br>ab</p>', 'x', 0, 0));
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="delete_spaces">
+{
+  // the spaces on either side of what goes keep showing
+  testing.expectEqual([true, '<p>a&nbsp;</p>', '#a\u00a0@2'], back('<p>a b</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>a&nbsp;</p>', '#a\u00a0@2'], fwd('<p>a b</p>', 0, 0, 2));
+  testing.expectEqual(['input:host:deleteContentForward:null'], events);
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@2'], back('<p>a x b</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@2'], fwd('<p>a x b</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>&nbsp;b</p>', '#\u00a0b@0'], fwd('<p>x b</p>', 0, 0, 0));
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@2'], back('<p>a x&nbsp;b</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>a&nbsp;&nbsp;</p>', '#a\u00a0\u00a0@3'], back('<p>a &nbsp;b</p>', 0, 0, 4));
+  testing.expectEqual([true, '<p>a&nbsp;</p>', '#a\u00a0@2'], back('<p>a <b>x</b></p>', 0, 1, 0, 1));
+  testing.expectEqual([true, '<p>a<b>&nbsp;</b></p>', '#\u00a0@1'], back('<p>a<b> x</b></p>', 0, 1, 0, 2));
+  // only the ones that showed
+  testing.expectEqual([true, '<p>a&nbsp;</p>', '#a\u00a0@2'], back('<p>a  b</p>', 0, 0, 4));
+  testing.expectEqual([true, '<p>abc&nbsp;<br></p>', '#abc\u00a0@4'], back('<p>abc d<br></p>', 0, 0, 5));
+
+  // a no-break space with text next to it again becomes a plain one
+  testing.expectEqual([true, '<p>a y</p>', '#a y@2'], back('<p>a&nbsp;xy</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>a b</p>', '#a b@2'], back('<p>a&nbsp; b</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>a b</p>', '#a b@2'], back('<p>a &nbsp;b</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p>ab</p>', '#ab@2'], back('<p>ab&nbsp;</p>', 0, 0, 3));
+
+  // a selection
+  testing.expectEqual([true, '<p>a&nbsp; d</p>', '#a\u00a0 d@2'], delIn('<p>a bc d</p>', false, [0, 0, 2], [0, 0, 4]));
+  testing.expectEqual([true, '<p>&nbsp;cd</p>', '#\u00a0cd@0'], delIn('<p>ab cd</p>', false, [0, 0, 0], [0, 0, 2]));
+  testing.expectEqual([true, '<p>ab&nbsp;</p>', '#ab\u00a0@3'], delIn('<p>ab cd</p>', false, [0, 0, 3], [0, 0, 5]));
+
+  // blocks joining
+  testing.expectEqual([true, '<p>a b</p>', '#a b@2'], back('<p>a&nbsp;</p><p>b</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>a b</p>', '#a b@2'], fwd('<p>a&nbsp;</p><p>b</p>', 0, 0, 2));
+  testing.expectEqual([true, '<p>a b</p>', '#a b@1'], back('<p>a</p><p>&nbsp;b</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>a&nbsp; b</p>', '#a\u00a0 b@2'], back('<p>a&nbsp;</p><p>&nbsp;b</p>', 1, 0, 0));
+  testing.expectEqual([true, '<p>a&nbsp;</p>', '#a\u00a0@2'], back('<p>a&nbsp;</p><p><br></p>', 1, 0));
+  testing.expectEqual([true, '<p>a&nbsp; d</p>', '#a\u00a0 d@2'], delIn('<p>a b</p><p>c d</p>', false, [0, 0, 2], [1, 0, 1]));
+  testing.expectEqual([true, '<p>a d</p>', '#a d@1'], delIn('<p>ab</p><p>c d</p>', false, [0, 0, 1], [1, 0, 1]));
+  testing.expectEqual([true, '<p>a d</p>', '#a d@2'], delIn('<p>a b</p><p>cd</p>', false, [0, 0, 2], [1, 0, 1]));
+
+  // where spaces don't collapse, as they are
+  testing.expectEqual([true, '<p style="white-space:pre-wrap">a </p>', '#a @2'], back('<p style="white-space:pre-wrap">a b</p>', 0, 0, 3));
+  testing.expectEqual([true, '<p style="white-space:pre-line">a b</p>', '#a b@2'], back('<p style="white-space:pre-line">a&nbsp; b</p>', 0, 0, 3));
+
+  // in two text nodes, only the later one's change
+  testing.expectEqual([true, '<p>a &nbsp;c</p>', '#a @2'], back('<p>a <b>x</b> c</p>', 0, 1, 0, 1));
+  testing.expectEqual([true, '<p>a c</p>', '#a @2'], back('<p>a <b>x</b>c</p>', 0, 1, 0, 1));
+  testing.expectEqual([true, '<p>a&nbsp;&nbsp;&nbsp;b</p>', '#a\u00a0\u00a0\u00a0@4'], back('<p>a&nbsp;&nbsp;&nbsp;<img>b</p>', 0, 2));
+  getSelection().removeAllRanges();
+}
+</script>
+
 <script id="delete_contenteditable_not_yet_supported">
 {
   // Chrome keeps the look of the moved line: <p>ab<span style="color: blue;">cd</span></p>
   testing.diverges('no style kept for a moved line', () => {
     testing.expectEqual([true, '<p>abcd</p>', '#abcd@2'], back('<p>ab</p><p style="color:blue">cd</p>', 1, 0, 0));
   });
-  // Chrome drops the outer block: abcd
-  testing.diverges('no merging a block into one around it', () => {
-    testing.expectEqual([false, '<div>ab<p>cd</p></div>', '#cd@0'], back('<div>ab<p>cd</p></div>', 0, 1, 0, 0));
-    testing.expectEqual([false, '<div><p>ab</p>cd</div>', '#cd@0'], back('<div><p>ab</p>cd</div>', 0, 1, 0));
-    testing.expectEqual([false, '<ul><li>ab<ul><li>cd</li></ul></li></ul>', '#cd@0'], back('<ul><li>ab<ul><li>cd</li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
-  });
-  // Chrome: <ul><li>ab</li><li>cd</li></ul>
-  testing.diverges('no merging lists', () => {
-    testing.expectEqual([false, '<ul><li>ab</li></ul><ul><li>cd</li></ul>', '#cd@0'], back('<ul><li>ab</li></ul><ul><li>cd</li></ul>', 1, 0, 0, 0));
+  // When it unwraps a <div> holding more than the moved line, Chrome adds a
+  // <br> at the end of what was in it: <p>abcd</p><p>ef<br></p>, abcdef<br>
+  testing.diverges('no stray <br> after unwrapping a <div>', () => {
+    testing.expectEqual([true, '<p>abcd</p><p>ef</p>', '#abcd@2'], back('<div><p>ab</p><p>cd</p><p>ef</p></div>', 0, 1, 0, 0));
+    testing.expectEqual([true, 'abcd<br>ef', '#abcd@2'], back('<div>ab<p>cd</p>ef</div>', 0, 1, 0, 0));
   });
   testing.diverges('no merging next to a table', () => {
     testing.expectEqual([false, '<table><tbody><tr><td>ab</td></tr></tbody></table><p>cd</p>', '#cd@0'],
@@ -680,11 +920,6 @@
   // Chrome: <p>abcd</p><pre>ef</pre>
   testing.diverges('no splitting a line out of preformatted text', () => {
     testing.expectEqual([false, '<p>ab</p><pre>cd\nef</pre>', '#cd\nef@0'], back('<p>ab</p><pre>cd\nef</pre>', 1, 0, 0));
-  });
-  // Chrome: a&nbsp; for the first, ab cd for the second
-  testing.diverges('no nbsp fixup', () => {
-    testing.expectEqual([true, 'a ', '#a @2'], back('a b', 0, 3));
-    testing.expectEqual([true, '<p>ab&nbsp;cd</p>', '#ab\u00a0cd@2'], back('<p>ab</p><p>&nbsp;cd</p>', 1, 0, 0));
   });
   getSelection().removeAllRanges();
 }
@@ -1003,6 +1238,32 @@
   testing.expectEqual([], events);
 
   host.style.whiteSpace = '';
+  getSelection().removeAllRanges();
+}
+</script>
+
+<script id="line_break_spaces">
+{
+  // a space starting the new line would collapse: a no-break one, as in
+  // Chrome; the one ending the line before stays
+  const host = $('#host');
+  function run(html, offset) {
+    host.innerHTML = html;
+    host.focus();
+    getSelection().collapse(host.firstChild.firstChild, offset);
+    const result = lineBreak();
+    return [result, host.innerHTML, caret()];
+  }
+  testing.expectEqual([true, '<p>a<br>&nbsp;b</p>', '#\u00a0b@0'], run('<p>a b</p>', 1));
+  testing.expectEqual([true, '<p>a<br>&nbsp;b</p>', '#\u00a0b@0'], run('<p>a  b</p>', 1));
+  testing.expectEqual([true, '<p>a <br>b</p>', '#b@0'], run('<p>a b</p>', 2));
+  testing.expectEqual([true, '<p>a&nbsp;<br>b</p>', '#b@0'], run('<p>a&nbsp;b</p>', 2));
+  testing.expectEqual([true, '<p>a&nbsp;b<br>c&nbsp;d</p>', '#c\u00a0d@0'], run('<p>a&nbsp;bc&nbsp;d</p>', 3));
+  // Chrome: <br>&nbsp;a and a <br>&nbsp;b, a space that didn't show does
+  testing.diverges('a hidden space stays hidden', () => {
+    testing.expectEqual([true, '<p><br> a</p>', '# a@0'], run('<p> a</p>', 0));
+    testing.expectEqual([true, '<p>a <br> b</p>', '# b@0'], run('<p>a  b</p>', 2));
+  });
   getSelection().removeAllRanges();
 }
 </script>
@@ -1391,13 +1652,36 @@
 }
 </script>
 
-<script id="paragraph_not_yet_supported">
+<script id="paragraph_list_outdent">
 {
-  // Chrome: <ul><li>a</li><li><br></li></ul>, the item outdented
-  testing.diverges('no outdenting', () => {
-    testing.expectEqual([false, '<ul><li>a<ul><li><br></li></ul></li></ul>', 'LI@0'],
-      split('<ul><li>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
-  });
+  // an empty item of a list ending its outer item joins the outer list
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual(['input:host:insertParagraph:null'], events);
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ul><li></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ol><li><br></li></ol></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a<ul><li><p><br></p></li></ul></li></ul>', 0, 0, 1, 0, 0, 0));
+  testing.expectEqual([true, '<ul><li class="k">a</li><li><br></li></ul>', 'LI@0'], split('<ul><li class=k>a<ul><li><br></li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li><li>c</li></ul>', 'LI@0'], split('<ul><li>a<ul><li><br></li></ul></li><li>c</li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a\n</li><li><br></li>\n</ul>', 'LI@0'], split('<ul><li>a\n<ul>\n<li><br></li>\n</ul>\n</li></ul>', 0, 0, 1, 1, 0));
+  testing.expectEqual([true, '<ul><li>a<ul><li>b</li><li><br></li></ul></li></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li>b<ul><li><br></li></ul></li></ul></li></ul>', 0, 0, 1, 0, 1, 0, 0));
+
+  // the nested list split around it
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li><ul><li>b</li></ul></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li><br></li><li>b</li></ul></li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><ul><li>x</li></ul><li><br></li></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li>x</li><li><br></li></ul></li></ul>', 0, 0, 1, 1, 0));
+  testing.expectEqual([true, '<ul><li>a</li><ul><li>x</li></ul><li><br></li><ul><li>y</li></ul></ul>', 'LI@0'],
+    split('<ul><li>a<ul><li>x</li><li><br></li><li>y</li></ul></li></ul>', 0, 0, 1, 1, 0));
+
+  // a list right in a list
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li></ul>', 'LI@0'], split('<ul><li>a</li><ul><li><br></li></ul></ul>', 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li>a</li><li><br></li><ul><li>b</li></ul><li>c</li></ul>', 'LI@0'],
+    split('<ul><li>a</li><ul><li><br></li><li>b</li></ul><li>c</li></ul>', 0, 1, 0, 0));
+
+  // with more of the outer item after it: a line in the outer item
+  testing.expectEqual([true, '<ul><li>a<div><br></div>z</li></ul>', 'DIV@0'], split('<ul><li>a<ul><li><br></li></ul>z</li></ul>', 0, 0, 1, 0, 0));
+  testing.expectEqual([true, '<ul><li><div><br></div>z</li></ul>', 'DIV@0'], split('<ul><li><ul><li><br></li></ul>z</li></ul>', 0, 0, 0, 0, 0));
   getSelection().removeAllRanges();
 }
 </script>

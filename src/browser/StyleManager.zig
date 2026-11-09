@@ -1046,16 +1046,24 @@ pub fn whiteSpace(self: *StyleManager, el: *Element) text_measure.WhiteSpace {
         }
     }
     return .{
-        .collapse = switch (collapse) {
-            .inherit, .collapse, .preserve_breaks => true,
-            .preserve, .preserve_spaces, .break_spaces => false,
-        },
+        .collapse = !collapse.keepsSpaces(),
         .newlines = switch (collapse) {
             .preserve, .preserve_breaks, .break_spaces => true,
             .inherit, .collapse, .preserve_spaces => false,
         },
         .wrap = wrap != .nowrap,
     };
+}
+
+/// For tree walks that already know the parent's value, this returns null
+/// when it takes its parent value.
+pub fn ownKeepsSpaces(self: *StyleManager, el: *Element) ?bool {
+    self.rebuildIfDirty() catch return null;
+    const collapse = self.ownWhiteSpace(el).collapse;
+    if (collapse == .inherit) {
+        return null;
+    }
+    return collapse.keepsSpaces();
 }
 
 fn ownWhiteSpace(self: *StyleManager, el: *Element) WhiteSpace {
@@ -2349,6 +2357,13 @@ const SpaceCollapse = enum(u3) {
             return .break_spaces;
         }
         return null;
+    }
+
+    fn keepsSpaces(self: SpaceCollapse) bool {
+        return switch (self) {
+            .inherit, .collapse, .preserve_breaks => false,
+            .preserve, .preserve_spaces, .break_spaces => true,
+        };
     }
 };
 

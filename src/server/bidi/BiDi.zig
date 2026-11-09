@@ -33,6 +33,7 @@ const Session = @import("../../browser/Session.zig");
 const http = @import("../http.zig");
 const Link = @import("../Link.zig");
 const Server = @import("../Server.zig");
+const json_input = @import("../json_input.zig");
 
 const script = @import("script.zig");
 const http_command = @import("http_command.zig");
@@ -301,7 +302,10 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
     defer _ = self.message_arena.reset(.{ .retain_with_limit = 4096 });
     const arena = self.message_arena.allocator();
 
-    const input = std.json.parseFromSliceLeaky(InputMessage, arena, data, .{
+    // Command.params re-parses the message, so it gets the bytes this was
+    // parsed from.
+    var json = data;
+    const input = json_input.parseLeaky(InputMessage, arena, &json, .{
         .ignore_unknown_fields = true,
     }) catch {
         return self.sendError(null, "invalid argument", "invalid JSON message");
@@ -313,7 +317,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
     var cmd: Command = .{
         .bidi = self,
         .arena = arena,
-        .input = .{ .bidi = .{ .id = id, .json = data } },
+        .input = .{ .bidi = .{ .id = id, .json = json } },
     };
 
     const method = input.method orelse {

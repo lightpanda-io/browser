@@ -25,55 +25,51 @@ const protocol = @import("protocol.zig");
 const Self = @This();
 
 /// A screenshot response is hundreds of KB; don't keep that parked.
-pub const large_response = 256 * 1024;
+const large_response = 256 * 1024;
 
-writer: *std.Io.Writer,
+/// Where messages go; null drops them, as for an HTTP session between calls.
+/// The HTTP worker points it at each call's job in turn, on its one thread.
+sink: ?Sink,
 mutex: std.Io.Mutex = .init,
 aw: std.Io.Writer.Allocating,
-notify: Notify = .writer,
 
-/// Where notifications go: between the responses on `writer` (stdio), into
-/// the HTTP call's event stream, or nowhere for a client that can't take one.
-pub const Notify = union(enum) {
-    writer,
-    drop,
-    sink: Sink,
-};
+pub const Kind = enum { response, notification };
 
+/// Takes each message: lines on a writer (stdio), or one HTTP call's channel.
 pub const Sink = struct {
     context: *anyopaque,
-    /// `message` is one serialized notification, without a newline; borrowed.
-    push: *const fn (context: *anyopaque, message: []const u8) void,
+    /// `message` is one serialized JSON-RPC message, without a newline; borrowed.
+    push: *const fn (context: *anyopaque, kind: Kind, message: []const u8) error{WriteFailed}!void,
+
+    /// One message per line on `writer`, flushed after each.
+    pub fn lines(writer: *std.Io.Writer) Sink {
+        return .{ .context = writer, .push = pushLine };
+    }
+
+    fn pushLine(context: *anyopaque, _: Kind, message: []const u8) error{WriteFailed}!void {
+        const writer: *std.Io.Writer = @ptrCast(@alignCast(context));
+        try writer.writeAll(message);
+        try writer.writeByte('\n');
+        try writer.flush();
+    }
 };
 
-pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer) Self {
-    return .{ .writer = writer, .aw = .init(allocator) };
+pub fn init(allocator: std.mem.Allocator, sink: ?Sink) Self {
+    return .{ .sink = sink, .aw = .init(allocator) };
 }
 
 pub fn deinit(self: *Self) void {
     self.aw.deinit();
 }
 
-/// Point subsequent messages at one HTTP call's buffer and stream; safe
-/// because the browser worker binds and writes on a single thread.
-pub fn bind(self: *Self, writer: *std.Io.Writer, notify: Notify) void {
-    self.writer = writer;
-    self.notify = notify;
-}
-
-fn send(self: *Self, message: anytype, sink: ?Sink) !void {
+fn send(self: *Self, kind: Kind, message: anytype) !void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
+    const sink = self.sink orelse return;
     self.aw.clearRetainingCapacity();
     try std.json.Stringify.value(message, .{ .emit_null_optional_fields = false }, &self.aw.writer);
-    if (sink) |s| {
-        s.push(s.context, self.aw.writer.buffered());
-    } else {
-        try self.aw.writer.writeByte('\n');
-        try self.writer.writeAll(self.aw.writer.buffered());
-        try self.writer.flush();
-    }
+    try sink.push(sink.context, kind, self.aw.writer.buffered());
 
     if (self.aw.writer.buffer.len > large_response) {
         const allocator = self.aw.allocator;
@@ -88,7 +84,7 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
         id: std.json.Value,
         result: @TypeOf(result),
     };
-    try self.send(GenericResponse{ .id = id, .result = result }, null);
+    try self.send(.response, GenericResponse{ .id = id, .result = result });
 }
 
 pub fn sendNotification(self: *Self, method: []const u8, params: anytype) !void {
@@ -97,20 +93,15 @@ pub fn sendNotification(self: *Self, method: []const u8, params: anytype) !void 
         method: []const u8,
         params: @TypeOf(params),
     };
-    const notification: Notification = .{ .method = method, .params = params };
-    switch (self.notify) {
-        .writer => try self.send(notification, null),
-        .drop => {},
-        .sink => |sink| try self.send(notification, sink),
-    }
+    try self.send(.notification, Notification{ .method = method, .params = params });
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.send(protocol.Response{
+    try self.send(.response, protocol.Response{
         .id = id,
         .@"error" = protocol.Error{
             .code = @backingInt(code),
             .message = message,
         },
-    }, null);
+    });
 }

@@ -1,11 +1,12 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
 <div id="test-element-1" class="initial">Test</div>
 <div id="test-element-2">Test</div>
 <div id="test-element-3">Test</div>
 <div id="test-element-4">Test</div>
 
-<meta name=lp-mode content=test>
-<script src="../testing.js"></script>
 <script id="mutation_observer" type=module>
   const state = await testing.async();
   const element = document.getElementById('test-element-1');

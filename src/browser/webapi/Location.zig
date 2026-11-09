@@ -154,21 +154,21 @@ fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
 // document when a script navigates another same-origin window, as in
 // iframe.contentWindow.location.href = "page.html". V8 only exposes the
 // incumbent context, which is the entry one for a call made by a script.
-fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) ![]const u8 {
-    const caller = frame.js.getIncumbent();
+fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) !?[]const u8 {
+    const caller = frame.js.getIncumbent() orelse return null;
     if (caller == self._frame) {
         return url;
     }
-    return U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
+    return try U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
 }
 
 pub fn assign(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    const target_url = try self.parseFromCaller(url, frame);
+    const target_url = try self.parseFromCaller(url, frame) orelse return;
     return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(self._frame) }, .{ .script = self._frame });
 }
 
 pub fn replace(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    const target_url = try self.parseFromCaller(url, frame);
+    const target_url = try self.parseFromCaller(url, frame) orelse return;
     return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = self._frame });
 }
 

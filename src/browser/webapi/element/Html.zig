@@ -357,7 +357,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
         .writer = writer,
         .scratch = .init(frame.local_arena),
         .style_manager = style_manager,
-        .preserve = tag == .pre,
+        .preserve = !style_manager.whiteSpace(el).collapse,
         .transform = style_manager.textTransform(el),
     };
     defer state.scratch.deinit();
@@ -723,11 +723,16 @@ const InnerTextState = struct {
     // Trim leading whitespace of the next text run.
     trim_left: bool = true,
 
-    // preserve whitespace (pre tag, in the future white-space: pre)
+    // computed white-space keeps spaces (pre, pre-wrap, break-spaces)
     preserve: bool = false,
 
     // text-transform of the element whose text is being written
     transform: TextTransform = .none,
+
+    // A row of the current table has been written, so the next one is
+    // preceded by a newline. Kept per table rather than per row group, so the
+    // rows of <thead>, <tbody> and <tfoot> are separated from each other too.
+    saw_row: bool = false,
 
     fn requireBreaks(self: *InnerTextState, n: u8) void {
         if (n > self.pending_breaks) {
@@ -779,10 +784,22 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
         else => false,
     };
 
-    // Track whether we've already emitted a cell/row in this parent so we can
-    // insert tab/newline separators *between* them.
-    var saw_row = false;
+    // Track whether we've already emitted a cell in this row so we can insert
+    // tab separators *between* them.
     var saw_cell = false;
+
+    // Rows are counted per table; only row groups pass the count through.
+    const row_group = switch (self_tag) {
+        .tbody, .thead, .tfoot => true,
+        else => false,
+    };
+    const parent_saw_row = state.saw_row;
+    defer if (!row_group) {
+        state.saw_row = parent_saw_row;
+    };
+    if (!row_group) {
+        state.saw_row = false;
+    }
 
     // The text of an invisible element isn't included, but we still walk all
     // its children, since they can make themeselves visible again.
@@ -805,7 +822,7 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                             .select => if (tag != .option and tag != .optgroup) continue,
                             .optgroup => if (tag != .option) continue,
                         }
-                        try handleChildElement(e.subtype(HtmlElement), tag, state, &saw_cell, &saw_row);
+                        try handleChildElement(e.subtype(HtmlElement), tag, state, &saw_cell);
                     },
                 }
             },
@@ -838,7 +855,6 @@ fn handleChildElement(
     tag: Element.Tag,
     state: *InnerTextState,
     saw_cell: *bool,
-    saw_row: *bool,
 ) !void {
     // doesn't use StyleManger's isHidden, because we don't care if the element
     // is hidden through its parent. If you can el.innerText on an element, the
@@ -872,12 +888,19 @@ fn handleChildElement(
         state.transform = own_transform;
     }
 
+    // just like text-transform, white-space also inherits
+    const parent_preserve = state.preserve;
+    defer state.preserve = parent_preserve;
+    if (state.style_manager.ownKeepsSpaces(el)) |keeps| {
+        state.preserve = keeps;
+    }
+
     switch (display) {
         .skip, .replaced => unreachable,
         .@"inline", .transparent => try he.collectInnerText(state),
         .block => {
             state.requireBreaks(1);
-            try enterBlock(he, tag, state);
+            try he.collectInnerText(state);
             state.requireBreaks(1);
         },
         .block_p => {
@@ -893,23 +916,13 @@ fn handleChildElement(
             try he.collectInnerText(state);
         },
         .table_row => {
-            if (saw_row.*) {
+            if (state.saw_row) {
                 try state.writeSeparator('\n');
             }
-            saw_row.* = true;
+            state.saw_row = true;
             try he.collectInnerText(state);
         },
     }
-}
-
-// Recurse into a block, enabling whitespace preservation for <pre> subtrees.
-fn enterBlock(he: *HtmlElement, tag: Element.Tag, state: *InnerTextState) std.Io.Writer.Error!void {
-    if (tag == .pre and !state.preserve) {
-        state.preserve = true;
-        defer state.preserve = false;
-        return he.collectInnerText(state);
-    }
-    return he.collectInnerText(state);
 }
 
 fn innerTextDisplay(he: *HtmlElement, tag: Element.Tag) Display {
@@ -986,6 +999,9 @@ fn writeRenderedText(c: *Node.CData, state: *InnerTextState) !void {
             return;
         }
         try state.flushBreaks();
+        if (state.pre_w) {
+            try writer.writeByte(' ');
+        }
         // Preserve whitespace verbatim, normalising CR / CRLF to LF.
         var i: usize = 0;
         while (i < s.len) : (i += 1) {

@@ -397,26 +397,22 @@ pub fn toStringSliceWithAlloc(self: Value, allocator: Allocator) ![]u8 {
     return (try self.toString()).toSliceWithAlloc(allocator);
 }
 
-pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
+/// `JSON.stringify(self)`, or null where that returns undefined: undefined, a
+/// function, a symbol, or a `toJSON` that returns one of those.
+pub fn toJson(self: Value, allocator: Allocator) !?[]u8 {
     const local = self.local;
     const str_handle = v8.v8__JSON__Stringify(local.handle, self.handle, null) orelse return error.JsException;
-    return js.String.toSliceWithAlloc(.{ .local = local, .handle = str_handle }, allocator);
+    const json = try js.String.toSliceWithAlloc(.{ .local = local, .handle = str_handle }, allocator);
+    // V8 coerces JSON.stringify's undefined to the string "undefined", which
+    // no JSON text can be.
+    return if (std.mem.eql(u8, json, "undefined")) null else json;
 }
 
 pub fn jsonStringify(self: Value, jws: anytype) !void {
     const local = self.local;
-    const v = self.toJson(local.call_arena) catch return error.WriteFailed;
-    // V8's JSON::Stringify finishes by calling Object::ToString on whatever
-    // i::JsonStringify returns. For values that JSON.stringify treats as
-    // non-serializable at the top level (undefined, functions, symbols),
-    // i::JsonStringify yields the undefined sentinel, and ToString coerces
-    // it to the JS string "undefined". Writing those 9 bytes raw embeds a
-    // bare `undefined` token into the JSON stream — invalid per RFC 8259.
-    // Map that case to `null`, matching what JSON.stringify emits when an
-    // unserializable value sits in an array slot.
-    if (std.mem.eql(u8, v, "undefined")) {
-        return jws.write(null);
-    }
+    // Unserializable at the top level: write what JSON.stringify emits for
+    // one in an array slot.
+    const v = (self.toJson(local.call_arena) catch return error.WriteFailed) orelse return jws.write(null);
     jws.beginWriteRaw() catch return error.WriteFailed;
     jws.writer.writeAll(v) catch return error.WriteFailed;
     jws.endWriteRaw();

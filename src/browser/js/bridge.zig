@@ -1194,6 +1194,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/PromiseRejectionEvent.zig"),
     @import("../webapi/event/SubmitEvent.zig"),
     @import("../webapi/event/FormDataEvent.zig"),
+    @import("../webapi/event/ClipboardEvent.zig"),
     @import("../webapi/event/ToggleEvent.zig"),
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),

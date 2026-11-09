@@ -379,6 +379,67 @@
   }
 </script>
 
+<script id=xhr_abort_in_progress type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    let abortFired = false;
+    let loadFired = false;
+    let loadEndCount = 0;
+
+    req.onabort = () => { abortFired = true; };
+    req.onload = () => { loadFired = true; };
+    req.onloadend = () => {
+      loadEndCount += 1;
+      // let a (wrong) load/loadend still queue up before checking
+      setTimeout(() => state.resolve(), 10);
+    };
+    req.onprogress = () => { req.abort(); };
+
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(true, abortFired);
+      testing.expectEqual(false, loadFired);
+      testing.expectEqual(1, loadEndCount);
+      testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
+    });
+  }
+</script>
+
+<script id=xhr_reopen_in_progress type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    let progressCount = 0;
+    let loadCount = 0;
+
+    req.onprogress = () => {
+      progressCount += 1;
+      if (progressCount === 1) {
+        // restart from inside the first request's progress
+        req.open('GET', 'http://127.0.0.1:9582/xhr');
+        req.send();
+      }
+    };
+    req.onload = () => {
+      loadCount += 1;
+      setTimeout(() => state.resolve(), 10);
+    };
+
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(2, progressCount);
+      testing.expectEqual(1, loadCount);
+      testing.expectEqual(XMLHttpRequest.DONE, req.readyState);
+      testing.expectEqual(200, req.status);
+    });
+  }
+</script>
+
 <script id=xhr_blob_url type=module>
   {
     const state = await testing.async();
@@ -917,5 +978,27 @@ handler runs, abort() cancels the re-send and no load is delivered.
     testing.expectEqual(200, req.status);
     testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
     testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+  }
+</script>
+
+<script id=reopen_while_preflighting>
+  {
+    // A cross-origin XHR with an authored header waits on its CORS preflight.
+    // open() again cancels it; that cancel fires `abort` synchronously, and a
+    // sync XHR in that handler pumps the network, resolving the preflight.
+    const a = new XMLHttpRequest();
+    a.open('GET', 'http://localhost:9582/echo_headers');
+    a.setRequestHeader('x-hop', '1');
+    a.send();
+
+    let sync_status = 0;
+    a.onabort = () => {
+      const s = new XMLHttpRequest();
+      s.open('GET', 'http://127.0.0.1:9582/xhr/slow', false);
+      s.send();
+      sync_status = s.status;
+    };
+    a.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual(200, sync_status);
   }
 </script>

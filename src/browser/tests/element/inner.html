@@ -206,6 +206,52 @@
   d1.firstChild.open = true;
   testing.expectEqual("Q\nanswer\n\nmore", d1.innerText);
 
+  // Rows are separated by a newline across <thead>, <tbody> and <tfoot>, and
+  // a nested table keeps its own rows.
+  d1.innerHTML = '<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>';
+  testing.expectEqual("h\na\tb\nc\nf", d1.innerText);
+  d1.innerHTML = '<table><caption>cap</caption><tbody><tr><td>1</td></tr></tbody><tbody><tr><td>2</td></tr></tbody></table>';
+  testing.expectEqual("cap\n1\n2", d1.innerText);
+  d1.innerHTML = '<table><tr><td><div>x</div></td></tr><tr><td>y</td></tr></table>';
+  testing.expectEqual("x\n\ny", d1.innerText);
+  d1.innerHTML = '<table><tr><td>o<table><tr><td>i1</td></tr><tr><td>i2</td></tr></table></td><td>z</td></tr><tr><td>last</td></tr></table>';
+  testing.expectEqual("o\ni1\ni2\n\tz\nlast", d1.innerText);
+
+  // A row outside a table (only possible through the DOM) doesn't carry over
+  // to a row in a sibling element.
+  d1.innerHTML = '';
+  for (const t of ['a', 'b']) {
+    const d = document.createElement('div');
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.textContent = t;
+    tr.appendChild(td);
+    d.appendChild(tr);
+    d1.appendChild(d);
+  }
+  testing.expectEqual("a\nb", d1.innerText);
+
+  // CSS white-space that keeps spaces is honored, not only <pre>.
+  d1.innerHTML = 'x<span style="white-space:pre">  a   b  </span>y';
+  testing.expectEqual("x  a   b  y", d1.innerText);
+  d1.innerHTML = '<div style="white-space:pre">  k\n l</div>';
+  testing.expectEqual("  k\n l", d1.innerText);
+  testing.expectEqual("  k\n l", d1.firstChild.innerText);
+  d1.innerHTML = '<span style="white-space:break-spaces"> m  n </span>';
+  testing.expectEqual(" m  n ", d1.innerText);
+  {
+    const style = document.createElement('style');
+    style.textContent = '.cw { white-space: pre-wrap } .nm { white-space: normal }';
+    document.head.appendChild(style);
+    d1.innerHTML = '<div class="cw">  c   d  </div>';
+    testing.expectEqual("  c   d  ", d1.innerText);
+    d1.innerHTML = '<pre>  e\n  f</pre>';
+    testing.expectEqual("  e\n  f", d1.innerText);
+    d1.innerHTML = '<pre>  g <span class="nm">  h   i  </span> j</pre>';
+    testing.expectEqual("  g  h i  j", d1.innerText);
+    style.remove();
+  }
+
   {
     const div = document.createElement('div');
     div.innerHTML = 'abc <span style=display:none> 123 </span> xyz';

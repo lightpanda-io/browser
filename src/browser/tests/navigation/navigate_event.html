@@ -156,7 +156,8 @@
       navigation.reload().committed.catch(() => {});
     }, true);
     testing.expectEqual({s: 7}, state);
-    navigation.updateCurrentEntry({state: before});
+    // undefined is a TypeError, as in Chrome.
+    navigation.updateCurrentEntry({state: before ?? null});
   }
 </script>
 

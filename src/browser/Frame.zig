@@ -945,7 +945,6 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .request_mode = .navigate,
         .credentials_mode = .include,
         .header_callback = frameHeaderDoneCallback,
-        .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
         .error_callback = frameErrorCallback,
         // The frame tracks its navigation by id (_req_id), never by pointer.
@@ -1844,12 +1843,19 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     return .proceed;
 }
 
-fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-    var self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
+fn frameDoneCallback(transfer: *HttpClient.Transfer) !void {
+    const self: *Frame = @ptrCast(@alignCast(transfer.req.ctx));
+    const body = transfer.responseBody();
+    if (body.len > 0) {
+        try self.processBody(transfer, body);
+    }
+    return self.frameDone();
+}
 
+fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !void {
     if (self._parse_state == .pre) {
-        // we lazily do this, because we might need the first chunk of data
-        // to sniff the content type
+        // done here rather than in the header callback because sniffing the
+        // content type needs the body
         var mime: Mime = blk: {
             if (transfer.contentType()) |ct| {
                 // A Content-Type we can't parse must not fail the navigation;
@@ -1874,7 +1880,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         }
 
         if (comptime lp.IS_DEBUG) {
-            log.debug(.frame, "navigate first chunk", .{
+            log.debug(.frame, "navigate body", .{
                 .content_type = mime.content_type,
                 .len = data.len,
                 .type = self._type,
@@ -1975,9 +1981,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     }
 }
 
-fn frameDoneCallback(ctx: *anyopaque) !void {
-    var self: *Frame = @ptrCast(@alignCast(ctx));
-
+fn frameDone(self: *Frame) !void {
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate done", .{ .type = self._type, .url = self.url });
     }
@@ -2133,7 +2137,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     // In case of error, we want to complete the frame with a custom HTML
     // containing the error.
-    frameDoneCallback(ctx) catch |e| {
+    self.frameDone() catch |e| {
         log.err(.browser, "frameErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
@@ -2290,6 +2294,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     }
     new_frame.iframe = iframe;
     iframe._blank_only = !loading;
+    new_frame._http_owner.block_all = !loading;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
 
@@ -4102,8 +4107,9 @@ const SubmitFormOpts = struct {
 pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
-    if (submit_opts.fire_event and form.asNode().isConnected() == false) {
-        // interactive submission (e.g. submit button) noop if the form is disconnected
+    if (form.asNode().isConnected() == false) {
+        // "If form cannot navigate, then return": a disconnected form can't,
+        // whether submitted interactively or by form.submit().
         return;
     }
 

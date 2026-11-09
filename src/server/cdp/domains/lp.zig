@@ -118,6 +118,7 @@ fn configureLoading(cmd: *CDP.Command) !void {
         worker: ?bool = null,
         externalStylesheets: ?bool = null,
         images: ?bool = null,
+        beacon: ?bool = null,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
@@ -125,6 +126,7 @@ fn configureLoading(cmd: *CDP.Command) !void {
     if (params.worker) |v| bc.session.load_resources.worker = v;
     if (params.subFrame) |v| bc.session.load_resources.iframe = v;
     if (params.externalStylesheets) |v| bc.session.load_resources.stylesheet = v;
+    if (params.beacon) |v| bc.session.load_resources.beacon = v;
     return cmd.sendResult(null, .{});
 }
 
@@ -1225,6 +1227,39 @@ test "cdp.lp: configureLoading toggles externalStylesheets independently" {
         .params = .{ .externalStylesheets = false },
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(false, bc.session.load_resources.stylesheet);
+    try testing.expectEqual(true, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
+}
+
+test "cdp.lp: configureLoading toggles beacon independently" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    // Default is opt-in: off unless the CLI flag or CDP toggle enables it.
+    try testing.expectEqual(false, bc.session.load_resources.beacon);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.configureLoading",
+        .params = .{ .beacon = true },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(true, bc.session.load_resources.beacon);
+    try testing.expectEqual(false, bc.session.load_resources.stylesheet);
+    try testing.expectEqual(true, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.configureLoading",
+        .params = .{ .beacon = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(false, bc.session.load_resources.beacon);
     try testing.expectEqual(false, bc.session.load_resources.stylesheet);
     try testing.expectEqual(true, bc.session.load_resources.iframe);
     try testing.expectEqual(true, bc.session.load_resources.worker);

@@ -460,6 +460,8 @@ pub const CallOpts = struct {
     /// Set by model-facing callers so results report the page's WebMCP
     /// tools whenever the set changes.
     page_tools_seen: ?*PageToolsSeen = null,
+    /// Set by model-facing callers so `tree` can answer `delta`.
+    tree_seen: ?*TreeSeen = null,
     source: TelemetryTool.Source,
 };
 
@@ -488,6 +490,44 @@ pub const PageToolsSeen = struct {
         self.* = .{ .frame_id = frame._frame_id, .loader_id = frame._loader_id, .generation = generation, .any = tools.len > 0 };
         if (!had_any and tools.len == 0) return null;
         return tools;
+    }
+};
+
+/// The last tree a model was given whole, so a `delta` read can answer with
+/// what changed since. Deltas leave it: each one tells everything since that
+/// tree, and the model never has to fold one onto another.
+pub const TreeSeen = struct {
+    key: ?Key = null,
+    text: std.ArrayList(u8) = .empty,
+
+    /// What shapes the output besides the DOM. The frame and loader ids name
+    /// the document, as in `PageToolsSeen`, and node ids are only stable
+    /// within one.
+    const Key = struct {
+        frame_id: u32,
+        loader_id: u32,
+        root: NodeRegistry.Id,
+        max_depth: ?u32,
+        max_bytes: ?u32,
+    };
+
+    pub fn deinit(self: *TreeSeen, allocator: std.mem.Allocator) void {
+        self.text.deinit(allocator);
+    }
+
+    /// Null when the model needs the full tree.
+    fn delta(self: *const TreeSeen, arena: std.mem.Allocator, key: Key, text: []const u8) !?[]const u8 {
+        const last = self.key orelse return null;
+        if (!std.meta.eql(last, key)) return null;
+        if (std.mem.eql(u8, self.text.items, text)) return "[unchanged since the last full tree]\n";
+        return treeDelta(arena, self.text.items, text);
+    }
+
+    fn store(self: *TreeSeen, allocator: std.mem.Allocator, key: Key, text: []const u8) error{OutOfMemory}!void {
+        self.key = null;
+        self.text.clearRetainingCapacity();
+        try self.text.appendSlice(allocator, text);
+        self.key = key;
     }
 };
 
@@ -664,7 +704,7 @@ fn dispatch(
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
         .screenshot => try execScreenshot(arena, session, registry, substituted, opts.inline_image),
         .links => .{ .text = try execLinks(arena, session, registry, substituted) },
-        .tree => .{ .text = try execTree(arena, session, registry, substituted) },
+        .tree => .{ .text = try execTree(arena, session, registry, substituted, opts.tree_seen) },
         .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, substituted) },
         .interactiveElements => .{ .text = try execInteractiveElements(arena, session, registry, substituted) },
         .structuredData => .{ .text = try execStructuredData(arena, session, registry, substituted) },
@@ -1060,13 +1100,14 @@ fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegi
     return renderJson(arena, links_list, .{});
 }
 
-fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value, seen: ?*TreeSeen) ToolError![]const u8 {
     const TreeParams = struct {
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,
         maxDepth: ?u32 = null,
         maxBytes: ?u32 = null,
         timeout: ?u32 = null,
+        delta: bool = false,
     };
     const args = try parseArgsOrDefault(TreeParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
@@ -1079,7 +1120,123 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     st.textStringify(&aw.writer) catch return ToolError.InternalError;
+    const text = aw.written();
+
+    const key: TreeSeen.Key = .{
+        .frame_id = page._frame_id,
+        .loader_id = page._loader_id,
+        .root = args.backendNodeId orelse 0,
+        .max_depth = args.maxDepth,
+        .max_bytes = args.maxBytes,
+    };
+    // A caller that keeps no baseline gets the first-call answer.
+    const none: TreeSeen = .{};
+    const last: *const TreeSeen = seen orelse &none;
+    if (args.delta) {
+        if (last.delta(arena, key, text) catch return ToolError.OutOfMemory) |changes| return changes;
+    }
+    if (seen) |s| try s.store(session.browser.app.allocator, key, text);
+    if (!args.delta) return text;
+    return arena.print("[full tree]\n{s}", .{text}) catch return ToolError.OutOfMemory;
+}
+
+/// A `tree` line, split up for `treeDelta`.
+const TreeLine = struct {
+    id: NodeRegistry.Id,
+    /// 0 for the walk root: registry ids start at 1.
+    parent: NodeRegistry.Id,
+    depth: usize,
+    /// Without the indent.
+    text: []const u8,
+};
+
+/// Null when a line doesn't lead with a backendNodeId, as `maxBytes`
+/// markers don't, or an id repeats.
+fn parseTreeLines(arena: std.mem.Allocator, text: []const u8, index: *std.AutoHashMapUnmanaged(NodeRegistry.Id, u32)) !?[]const TreeLine {
+    var lines: std.ArrayList(TreeLine) = .empty;
+    var open: std.ArrayList(u32) = .empty;
+    var it = std.mem.tokenizeScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trimStart(u8, raw, " ");
+        const depth = raw.len - line.len;
+        const digits = std.mem.findNone(u8, line, "0123456789") orelse line.len;
+        const id = std.fmt.parseInt(NodeRegistry.Id, line[0..digits], 10) catch return null;
+        while (open.getLastOrNull()) |p| {
+            if (lines.items[p].depth < depth) break;
+            _ = open.pop();
+        }
+        const gop = try index.getOrPut(arena, id);
+        if (gop.found_existing) return null;
+        gop.value_ptr.* = @intCast(lines.items.len);
+        const parent = if (open.getLastOrNull()) |p| lines.items[p].id else 0;
+        try open.append(arena, @intCast(lines.items.len));
+        try lines.append(arena, .{ .id = id, .parent = parent, .depth = depth, .text = line });
+    }
+    return lines.items;
+}
+
+/// `new_text` as changes to `old_text`, two renderings of the same tree. Null
+/// when that isn't shorter than half the tree, or can't be said exactly: kept
+/// nodes that swapped places would need moves.
+fn treeDelta(arena: std.mem.Allocator, old_text: []const u8, new_text: []const u8) !?[]const u8 {
+    var old_index: std.AutoHashMapUnmanaged(NodeRegistry.Id, u32) = .empty;
+    var new_index: std.AutoHashMapUnmanaged(NodeRegistry.Id, u32) = .empty;
+    const old = (try parseTreeLines(arena, old_text, &old_index)) orelse return null;
+    const new = (try parseTreeLines(arena, new_text, &new_index)) orelse return null;
+
+    var o: usize = 0;
+    for (new) |line| {
+        if (!old_index.contains(line.id)) continue;
+        while (!new_index.contains(old[o].id)) o += 1;
+        if (old[o].id != line.id) return null;
+        o += 1;
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    try w.writeAll("[changes since the last full tree: - removed with its subtree, ~ changed, + added]\n");
+    var changes: usize = 0;
+    for (old) |line| {
+        if (new_index.contains(line.id)) continue;
+        if (line.parent != 0 and !new_index.contains(line.parent)) continue;
+        try w.print("- {d}\n", .{line.id});
+        changes += 1;
+    }
+    // Added lines that follow each other indent from the first, which alone
+    // says where it goes.
+    var run_depth: ?usize = null;
+    for (new, 0..) |line, i| {
+        const was = old_index.get(line.id) orelse {
+            const first = if (run_depth) |d| line.depth < d else true;
+            if (first) run_depth = line.depth;
+            try w.writeAll("+ ");
+            try w.splatByteAll(' ', line.depth - run_depth.?);
+            try w.writeAll(line.text);
+            if (first) try writePlacement(w, new, i);
+            try w.writeByte('\n');
+            changes += 1;
+            continue;
+        };
+        run_depth = null;
+        const moved = old[was].parent != line.parent;
+        if (!moved and std.mem.eql(u8, old[was].text, line.text)) continue;
+        try w.print("~ {s}", .{line.text});
+        if (moved) try writePlacement(w, new, i);
+        try w.writeByte('\n');
+        changes += 1;
+    }
+    if (changes == 0 or aw.written().len * 2 > new_text.len) return null;
     return aw.written();
+}
+
+/// Where `lines[i]` sits: after the sibling before it, or first in its parent.
+fn writePlacement(w: *std.Io.Writer, lines: []const TreeLine, i: usize) !void {
+    var j = i;
+    while (j > 0) {
+        j -= 1;
+        if (lines[j].depth == lines[i].depth) return w.print(" (after {d})", .{lines[j].id});
+        if (lines[j].depth < lines[i].depth) return w.print(" (first in {d})", .{lines[j].id});
+    }
 }
 
 fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1418,40 +1575,26 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
 fn waitForPromise(page: *lp.Frame, promise: lp.js.Promise) ?ToolResult {
     promise.markAsHandled();
 
+    const PromiseSettled = struct {
+        promise: lp.js.Promise,
+        pub fn met(self: @This()) !bool {
+            return self.promise.state() != .pending;
+        }
+    };
     var runner = page._session.runner(.{});
-    const timer: std.Io.Timestamp = .now(lp.io, .boot);
-    while (promise.state() == .pending) {
-        // The tick doesn't poll the cancel hook; the Runner wait* loops check it too.
-        if (page._session.isCancelled()) {
-            return .{ .text = "promise: cancelled", .is_error = true };
-        }
-        const elapsed_ms: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-        if (elapsed_ms >= eval_promise_timeout_ms) {
-            return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
-        }
-        const budget = @min(eval_promise_timeout_ms - elapsed_ms, 50);
-        const tick = runner.tickForFrame(page._frame_id, budget, .{ .until = .done }) catch |err| switch (err) {
-            error.Cancelled => return .{ .text = "promise: cancelled", .is_error = true },
-            else => return .{ .text = "promise: tick failed", .is_error = true },
-        };
-        if (promise.state() != .pending) break;
-        // Idle or between timers: sleep, or a promise nothing settles spins the CPU.
-        const sleep_ms = switch (tick) {
-            .done => budget,
-            .ok => |next_ms| @min(next_ms, budget),
-        };
-        if (sleep_ms > 0) {
-            lp.io.sleep(.fromMilliseconds(sleep_ms), .awake) catch {};
-        }
-    }
+    runner.waitUntil(page._frame_id, eval_promise_timeout_ms, PromiseSettled{ .promise = promise }) catch |err| return switch (err) {
+        error.Cancelled => .{ .text = "promise: cancelled", .is_error = true },
+        error.Timeout => .{ .text = "promise: timed out waiting for resolution", .is_error = true },
+        else => .{ .text = "promise: tick failed", .is_error = true },
+    };
     return null;
 }
 
 /// Objects/arrays serialize as JSON so `return obj` prints data, not
 /// `[object Object]`; errors and primitives keep their string form.
-fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]u8 {
+fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]const u8 {
     if (value.isObject() and !value.isFunction() and !value.isNativeError()) {
-        return value.toJson(arena);
+        return try value.toJson(arena) orelse "undefined";
     }
     return value.toStringSliceWithAlloc(arena);
 }
@@ -2723,6 +2866,140 @@ test "tools: tree exposes Chrome-matched custom ARIA states" {
         if (!found) return error.IgnoredNodeMissing;
     }
     try std.testing.expect(std.mem.find(u8, result.text, "'Hidden terms'") == null);
+}
+
+test "tools: tree delta returns what changed since the last full tree" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    const session = testing.test_session;
+    defer if (session.primaryPage()) |page| page.close();
+    var seen: TreeSeen = .{};
+    defer seen.deinit(session.browser.app.allocator);
+
+    const aa = testing.arena_allocator;
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    _ = try call(aa, session, &registry, "goto", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"url\":\"" ++ url ++ "\"}", .{}), .{ .source = .user });
+    const delta = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"delta\":true}", .{});
+    const opts: CallOpts = .{ .tree_seen = &seen, .source = .user };
+
+    const plain = try call(aa, session, &registry, "tree", null, .{ .source = .user });
+    const first = try call(aa, session, &registry, "tree", delta, opts);
+    try std.testing.expectEqualStrings(try aa.print("[full tree]\n{s}", .{plain.text}), first.text);
+    const again = try call(aa, session, &registry, "tree", delta, opts);
+    try std.testing.expectEqualStrings("[unchanged since the last full tree]\n", again.text);
+    // Without `delta`, keeping a baseline changes nothing in the output.
+    try std.testing.expectEqualStrings(plain.text, (try call(aa, session, &registry, "tree", null, opts)).text);
+
+    const frame = session.currentFrame().?;
+    const btn = (try registry.register(frame.document.getElementById("btn").?.asNode())).id;
+    const hover = (try registry.register(frame.document.getElementById("hoverTarget").?.asNode())).id;
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.getElementById('btn').textContent = 'Clicked'; document.getElementById('hoverTarget').remove(); const b = document.createElement('button'); b.textContent = 'Added'; document.getElementById('btn').after(b); 1"}
+    , .{}), .{ .source = .user });
+    const added = (try registry.register((try frame.document.querySelector(.wrap("button + button"), frame)).?.asNode())).id;
+    const changed = try call(aa, session, &registry, "tree", delta, opts);
+    try std.testing.expectEqualStrings(try aa.print(
+        \\[changes since the last full tree: - removed with its subtree, ~ changed, + added]
+        \\- {d}
+        \\~ {d} [i] button 'Clicked'
+        \\+ {d} [i] button 'Added' (after {d})
+        \\
+    , .{ hover, btn, added, btn }), changed.text);
+
+    // Still against the full tree: the next delta repeats the earlier changes.
+    _ = try call(aa, session, &registry, "evaluate", try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"script":"document.getElementById('btn').textContent = 'Clicked twice'; 1"}
+    , .{}), .{ .source = .user });
+    const twice = try call(aa, session, &registry, "tree", delta, opts);
+    try std.testing.expectEqualStrings(try aa.print(
+        \\[changes since the last full tree: - removed with its subtree, ~ changed, + added]
+        \\- {d}
+        \\~ {d} [i] button 'Clicked twice'
+        \\+ {d} [i] button 'Added' (after {d})
+        \\
+    , .{ hover, btn, added, btn }), twice.text);
+
+    // A navigation, or other options, start over with the full tree.
+    const moved = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"delta\":true,\"url\":\"" ++ url ++ "?again\"}", .{}), opts);
+    try std.testing.expect(std.mem.startsWith(u8, moved.text, "[full tree]\n"));
+    const shallow = try call(aa, session, &registry, "tree", try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"delta\":true,\"maxDepth\":2}", .{}), opts);
+    try std.testing.expect(std.mem.startsWith(u8, shallow.text, "[full tree]\n"));
+
+    // A caller that keeps no baseline gets the first-call answer.
+    const unseen = try call(aa, session, &registry, "tree", delta, .{ .source = .user });
+    try std.testing.expect(std.mem.startsWith(u8, unseen.text, "[full tree]\n"));
+}
+
+test "tools: TreeSeen diffs only against the same document, root and options" {
+    const allocator = std.testing.allocator;
+    var seen: TreeSeen = .{};
+    defer seen.deinit(allocator);
+
+    const aa = testing.arena_allocator;
+    const key: TreeSeen.Key = .{ .frame_id = 1, .loader_id = 1, .root = 1, .max_depth = null, .max_bytes = null };
+    try seen.store(allocator, key, "1 x\n");
+    try std.testing.expectEqualStrings("[unchanged since the last full tree]\n", (try seen.delta(aa, key, "1 x\n")).?);
+
+    // Same text, so only the key can tell.
+    var others: [5]TreeSeen.Key = @splat(key);
+    others[0].frame_id = 2;
+    others[1].loader_id = 2;
+    others[2].root = 2;
+    others[3].max_depth = 2;
+    others[4].max_bytes = 100;
+    for (others) |other| {
+        try std.testing.expectEqual(null, try seen.delta(aa, other, "1 x\n"));
+    }
+}
+
+test "tools: treeDelta places added and moved nodes, and gives up on a reorder" {
+    const aa = testing.arena_allocator;
+    var filler: std.Io.Writer.Allocating = .init(aa);
+    for (100..120) |id| try filler.writer.print(" {d} paragraph 'A paragraph that stays the same'\n", .{id});
+    const old = try aa.print(
+        \\1 RootWebArea 'Shop'
+        \\ 2 navigation
+        \\  3 link 'Home'
+        \\  4 link 'Cart'
+        \\ 5 main
+        \\  6 heading 'Products'
+        \\  7 list
+        \\   8 listitem 'Apples'
+        \\   9 listitem 'Pears'
+        \\   10 listitem 'Plums'
+        \\  11 [i] button 'Load more'
+        \\{s}
+    , .{filler.written()});
+    const new = try aa.print(
+        \\1 RootWebArea 'Shop'
+        \\ 5 main
+        \\  14 region 'Deals'
+        \\   15 link 'Sale'
+        \\   6 heading 'Products'
+        \\  7 list
+        \\   8 listitem 'Apples'
+        \\   10 listitem 'Plums'
+        \\   13 listitem 'Figs'
+        \\  11 [i] button 'Loading'
+        \\{s}
+    , .{filler.written()});
+    try std.testing.expectEqualStrings(
+        \\[changes since the last full tree: - removed with its subtree, ~ changed, + added]
+        \\- 2
+        \\- 9
+        \\+ 14 region 'Deals' (first in 5)
+        \\+  15 link 'Sale'
+        \\~ 6 heading 'Products' (after 15)
+        \\+ 13 listitem 'Figs' (after 10)
+        \\~ 11 [i] button 'Loading'
+        \\
+    , (try treeDelta(aa, old, new)).?);
+
+    const swapped = try std.mem.replaceOwned(u8, aa, old, "   8 listitem 'Apples'\n   9 listitem 'Pears'\n", "   9 listitem 'Pears'\n   8 listitem 'Apples'\n");
+    try std.testing.expect(try treeDelta(aa, old, swapped) == null);
+    try std.testing.expect(try treeDelta(aa, old, try aa.print("{s}[+3 more @7]\n", .{new})) == null);
+    try std.testing.expect(try treeDelta(aa, old, "1 RootWebArea 'Shop'\n") == null);
 }
 
 test "tools: goto flags an error status instead of reporting success" {
