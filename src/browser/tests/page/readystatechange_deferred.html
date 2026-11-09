@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script id=deferred_readystatechange>
+  const order = [];
+  document.addEventListener('readystatechange', () => {
+    order.push('readystatechange:' + document.readyState);
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    order.push('DOMContentLoaded:' + document.readyState);
+  });
+
+  testing.onload(() => {
+    testing.expectEqual([
+      'parser:loading',
+      'readystatechange:interactive',
+      'module-before:interactive',
+      'defer:interactive',
+      'module-after:interactive',
+      'DOMContentLoaded:interactive',
+      'readystatechange:complete',
+    ], order);
+    testing.expectEqual('complete', document.readyState);
+  });
+</script>
+<script id=module_before_defer type=module>
+  order.push('module-before:' + document.readyState);
+  testing.expectEqual('interactive', document.readyState);
+</script>
+<!-- Keep a deferred script in flight while the first inline module is ready. -->
+<script id=delayed_defer defer src="readystatechange_deferred.js?delay_ms=50"></script>
+<script id=module_after_defer type=module>
+  order.push('module-after:' + document.readyState);
+  testing.expectEqual('interactive', document.readyState);
+</script>
+<script id=parser_still_loading>
+  order.push('parser:' + document.readyState);
+  testing.expectEqual('loading', document.readyState);
+</script>

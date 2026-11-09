@@ -1428,7 +1428,7 @@ pub fn stopLoading(self: *Frame) void {
 // A cross-document navigation has been scheduled (or started) for this frame:
 // its current document is superseded and must never fire DOMContentLoaded or
 // load, even if the replacement is discarded or fails. Deliberately does NOT
-// touch _load_state — the parser can still be on the stack, and open/write/
+// touch _load_state — the parser can still be on the stack, and write/
 // maybeCheckpoint key off it.
 pub fn abortDocumentLoad(self: *Frame) void {
     self.document._load_aborted = true;
@@ -1437,7 +1437,7 @@ pub fn abortDocumentLoad(self: *Frame) void {
 // The navigation parser is on the stack, i.e. an inline script is running from
 // inside parser.parse(). Narrower than `_load_state == .parsing`, which stays
 // true through deferred and async scripts.
-fn parserIsRunning(self: *const Frame) bool {
+pub fn parserIsRunning(self: *const Frame) bool {
     return switch (self._parse_state) {
         .html => true,
         else => false,
@@ -1507,8 +1507,6 @@ pub fn documentIsLoaded(self: *Frame) void {
     }
 
     self._load_state = .load;
-    self.document._ready_state = .interactive;
-    self.window._performance.markNavigation(.dom_interactive);
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
         // logged by whatever requested the terminate (watchdog, runaway loop)
@@ -1517,8 +1515,18 @@ pub fn documentIsLoaded(self: *Frame) void {
     };
 }
 
-fn _documentIsLoaded(self: *Frame) !void {
+fn documentIsInteractive(self: *Frame) !void {
+    if (self.document._ready_state != .loading or self.loadEventsAborted()) return;
+
+    self.document._ready_state = .interactive;
+    self.window._performance.markNavigation(.dom_interactive);
     try self.dispatchReadyStateChange();
+}
+
+fn _documentIsLoaded(self: *Frame) !void {
+    // Non-HTML documents and document.close() can reach this without the
+    // navigation parser's readiness transition.
+    try self.documentIsInteractive();
     if (self.loadEventsAborted()) return;
 
     const perf = self.window._performance;
@@ -2032,7 +2040,14 @@ fn frameDone(self: *Frame) !void {
                     parser.parseWithEncoding(raw_html, self.charset);
                 }
             }
-            self._script_manager.staticScriptsDone();
+            // Parsing has finished, but deferred and module scripts have not.
+            // Their execution must observe interactive, before DOMContentLoaded.
+            try self.documentIsInteractive();
+            // A readiness handler can open and close a new document, which
+            // already completes the script manager's initial parse.
+            if (!self._script_manager.base.static_scripts_done) {
+                self._script_manager.staticScriptsDone();
+            }
         },
         .text => |*buf| {
             try buf.appendSlice(self.page_arena, "</pre></body></html>");

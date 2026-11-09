@@ -1467,7 +1467,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         return error.InvalidStateError;
     }
 
-    if (self._active_parser_aborted or self._navigated_away or frame._load_state == .parsing) {
+    if (self._active_parser_aborted or self._navigated_away or frame.parserIsRunning()) {
         return self;
     }
 
