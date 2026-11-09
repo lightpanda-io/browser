@@ -1028,8 +1028,8 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
     //
-    // Hidden subtrees still count towards the index so positions agree with
-    // getBoundingClientRect; the hidden verdict just rides down the stack.
+    // Hidden and inert subtrees still count towards the index so positions
+    // agree with getBoundingClientRect; the exclusion rides down the stack.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1060,6 +1060,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         preorder_index += 1;
         if (node.is(Element)) |element| {
             hidden = hidden or style_manager.hasDisplayNone(element);
+            if (element.is(Element.Html)) |html| {
+                hidden = hidden or html.getInert();
+            }
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
             if (!hidden and style_manager.isHitTestable(element)) {
