@@ -2977,6 +2977,7 @@ test "cdp.input: touch pointer retains its target while compatibility events hit
     _ = try ls.local.compileAndRun(
         \\const startTarget = document.getElementById('btn');
         \\const releaseTarget = document.getElementById('inp');
+        \\startTarget.style.width = '70px';
         \\window.tapEvents = [];
         \\for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'click']) {
         \\  document.addEventListener(type, e => tapEvents.push(e.type + ':' + e.target.id), {passive: false});

@@ -1679,12 +1679,13 @@ test "cdp.dom: getBoxModel" {
         .method = "DOM.getBoxModel",
         .params = .{ .nodeId = 3 },
     });
-    // A block in normal flow is as wide as the body.
+    // A block in normal flow is as wide as the body, and the first block
+    // starts at its parent's top.
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 0.0, 25.0, 1920.0, 25.0, 1920.0, 30.0, 0.0, 30.0 },
-        .padding = Quad{ 0.0, 25.0, 1920.0, 25.0, 1920.0, 30.0, 0.0, 30.0 },
-        .border = Quad{ 0.0, 25.0, 1920.0, 25.0, 1920.0, 30.0, 0.0, 30.0 },
-        .margin = Quad{ 0.0, 25.0, 1920.0, 25.0, 1920.0, 30.0, 0.0, 30.0 },
+        .content = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
+        .padding = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
+        .border = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
+        .margin = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
         .width = 1920,
         .height = 5,
     } }, .{ .id = 5 });
