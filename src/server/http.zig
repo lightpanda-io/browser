@@ -105,13 +105,10 @@ pub const Connection = struct {
         method: Method,
         // origin-form, query string stripped, always starts with '/'
         path: []const u8,
+        version: header_parser.HttpVersion,
         keepalive: bool,
         body: []const u8,
-
-        // The raw request head (request line + headers, through the final
-        // CRLF CRLF); a slice into the read buffer. Upgrade handlers re-parse
-        // it for the WebSocket headers.
-        head: []const u8,
+        headers: Headers,
 
         // Filled in by the router for /session/{id}[/...] routes; points
         // into the read buffer like path does.
@@ -119,6 +116,50 @@ pub const Connection = struct {
 
         // valid for handling a single request up to sending the response
         arena: Allocator,
+    };
+
+    // The request headers the server acts on, collected in the single pass.
+    pub const Headers = struct {
+        content_length: ?usize = null,
+        host: ?[]const u8 = null,
+        origin: ?[]const u8 = null,
+
+        // Only a WebSocket upgrade reads these.
+        upgrade: ?[]const u8 = null,
+        connection: ?[]const u8 = null,
+        websocket_key: ?[]const u8 = null,
+        websocket_version: ?[]const u8 = null,
+
+        fn parse(it: *header_parser.Header.Iterator) !Headers {
+            var self: Headers = .{};
+            while (it.next() catch return error.InvalidHeader) |h| {
+                if (std.ascii.eqlIgnoreCase(h.key, "content-length")) {
+                    if (self.content_length != null) {
+                        return error.InvalidHeader;
+                    }
+                    self.content_length = std.fmt.parseInt(usize, h.value, 10) catch return error.InvalidHeader;
+                } else if (std.ascii.eqlIgnoreCase(h.key, "host")) {
+                    if (self.host != null) {
+                        return error.InvalidHeader;
+                    }
+                    self.host = h.value;
+                } else if (std.ascii.eqlIgnoreCase(h.key, "origin")) {
+                    if (self.origin != null) {
+                        return error.InvalidHeader;
+                    }
+                    self.origin = h.value;
+                } else if (std.ascii.eqlIgnoreCase(h.key, "upgrade")) {
+                    self.upgrade = h.value;
+                } else if (std.ascii.eqlIgnoreCase(h.key, "connection")) {
+                    self.connection = h.value;
+                } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-key")) {
+                    self.websocket_key = h.value;
+                } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-version")) {
+                    self.websocket_version = h.value;
+                }
+            }
+            return self;
+        }
     };
 
     pub const Method = enum {
@@ -143,15 +184,35 @@ pub const Connection = struct {
                 return .{ .need = 0 };
             };
 
-            // include the last line's \r\n so every line, including the request
-            // line of a header-less request, is terminated
-            const header = data[0 .. header_index + 2];
-            const method, const path, const keepalive, const line_1_end = try parseRequestLine(header);
-
-            _ = line_1_end;
             const body_start = header_index + 4;
+            const parsed_method, const target, const version, var it = header_parser.parseRequest(data[0..body_start]) catch {
+                return error.InvalidHeader;
+            };
+            const method: Method = switch (parsed_method) {
+                .get => .GET,
+                .post => .POST,
+                .put => .PUT,
+                .delete => .DELETE,
+                else => return error.InvalidHTTPMethod,
+            };
+
+            // Only the origin-form request-target is accepted; nothing we serve
+            // reads the query string, so it's dropped here.
+            if (target[0] != '/') {
+                return error.InvalidHeader;
+            }
+            const path = target[0 .. std.mem.findScalar(u8, target, '?') orelse target.len];
+
+            const headers = try Headers.parse(&it);
+            // The parser also ends the headers at a bare LF blank line. The
+            // body starts after the first CRLF CRLF, so anything it left
+            // unread would be a header we never looked at.
+            if (it.cursor.remaining().len != 0) {
+                return error.InvalidHeader;
+            }
+
             // large content lenghts will saturate to max(usize) -> 413
-            const total = body_start +| try contentLength(header);
+            const total = body_start +| (headers.content_length orelse 0);
             if (data.len < total) {
                 // the body is still arriving
                 return .{ .need = total };
@@ -166,48 +227,14 @@ pub const Connection = struct {
             self.* = .{ .request = .{
                 .method = method,
                 .path = path,
-                .keepalive = keepalive,
+                .version = version,
+                .keepalive = version == .@"1.1",
                 .body = data[body_start..total],
-                .head = data[0..body_start],
+                .headers = headers,
                 .arena = arena,
             } };
 
             return .complete;
-        }
-
-        fn contentLength(header: []const u8) !usize {
-            const key = "\r\ncontent-length:";
-            const at = std.ascii.findIgnoreCase(header, key) orelse return 0;
-            const start = at + key.len;
-            const end = std.mem.findPos(u8, header, start, "\r\n") orelse return error.InvalidHeader;
-            const value = std.mem.trim(u8, header[start..end], " \t");
-            return std.fmt.parseInt(usize, value, 10) catch error.InvalidHeader;
-        }
-
-        fn parseRequestLine(header: []const u8) !struct { Method, []const u8, bool, usize } {
-            const l1 = std.mem.findScalar(u8, header, '\r') orelse return error.InvalidHeader;
-            if (l1 == header.len) {
-                return error.InvalidHeader;
-            }
-            if (header[l1 + 1] != '\n') {
-                return error.InvalidHeader;
-            }
-
-            var it = std.mem.tokenizeScalar(u8, header[0..l1], ' ');
-            const method = std.meta.stringToEnum(Method, it.next() orelse return error.InvalidHeader) orelse return error.InvalidHTTPMethod;
-
-            // Only the origin-form request-target is accepted; nothing we serve
-            // reads the query string, so it's dropped here.
-            const target = it.next() orelse return error.InvalidHeader;
-            if (target[0] != '/') {
-                return error.InvalidHeader;
-            }
-            const path = target[0 .. std.mem.findScalar(u8, target, '?') orelse target.len];
-
-            const protocol = it.next() orelse return error.InvalidHeader;
-            const keepalive = std.mem.find(u8, protocol, "1.0") == null;
-
-            return .{ method, path, keepalive, l1 };
         }
     };
 
@@ -563,6 +590,10 @@ const SESSION_PREFIX = "/session/";
 const SESSION_ID_LEN = 36;
 
 fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    if (server.unix_path == null) {
+        try checkHost(&req.headers, server.advertise_host);
+    }
+
     var path = req.path;
     if (path.len > 1 and path[path.len - 1] == '/') {
         path = path[0 .. path.len - 1];
@@ -608,6 +639,8 @@ fn writeError(conn: *Connection, err: anyerror) void {
         error.ConnectionClosed, error.ConnectionResetByPeer, error.BrokenPipe => return,
         error.InvalidHeader, error.InvalidHTTPMethod, error.BodyNotSupported => invalid_request_response,
         error.RequestTooLarge => request_too_large_response,
+        error.ForbiddenOrigin => forbidden_origin_response,
+        error.ForbiddenHost => forbidden_host_response,
         else => blk: {
             log.warn(.serve, "serve error", .{ .err = err });
             break :blk internal_error_response;
@@ -1069,18 +1102,13 @@ const Upgrade = union(enum) {
 // Shared upgrade path: validate the WebSocket headers, write the 101, and
 // hand the fd to its worker (spawning one for a new connection).
 fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target: Upgrade) !Served {
+    try checkOrigin(&req.headers, server.remote_allow_origins);
+
     var accept_buf: [28]u8 = undefined;
-    const accept_key = webSocketAccept(req.head, &accept_buf, .{
-        .host = server.advertise_host,
-        .origins = server.remote_allow_origins,
-        .check_host = server.unix_path == null,
-    }) catch |err| {
+    const accept_key = webSocketAccept(req.version, &req.headers, &accept_buf) catch |err| {
         const response: []const u8 = switch (err) {
-            error.ForbiddenOrigin => forbidden_origin_response,
-            error.ForbiddenHost => forbidden_host_response,
             error.InvalidProtocol => invalid_protocol_response,
             error.MissingHeader => missing_header_response,
-            else => invalid_request_response,
         };
         return serveHTTPResponse(server, conn, req, .{ .static = response });
     };
@@ -1104,63 +1132,26 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     return .upgraded;
 }
 
-// Validate an incoming WebSocket upgrade request head and, on success, write
-// the Sec-WebSocket-Accept value into `out`. Mirrors the origin/host defenses
-// from the old Handshake path. `allow` holds the explicit --advertise-host and
-// --remote-allow-origins, if any.
-const Allow = struct {
-    // DNS rebinding needs a TCP connection: a browser can't reach a unix
-    // socket, and its clients send a bare `Host: localhost`.
-    check_host: bool = true,
-    host: ?[]const u8 = null,
-    origins: []const []const u8 = &.{},
-};
-
-fn webSocketAccept(head: []const u8, out: *[28]u8, allow: Allow) ![]const u8 {
-    const FOUND_UPGRADE: u8 = 1 << 0;
-    const FOUND_VERSION: u8 = 1 << 1;
-    const FOUND_CONNECTION: u8 = 1 << 2;
-    const FOUND_KEY: u8 = 1 << 3;
-    const FOUND_ALL = FOUND_UPGRADE | FOUND_VERSION | FOUND_CONNECTION | FOUND_KEY;
-
-    const method, _, const version, var it = header_parser.parseRequest(head) catch return error.InvalidRequest;
-    if (method != .get or version != .@"1.1") {
+// Validate a WebSocket upgrade request and, on success, write the
+// Sec-WebSocket-Accept value into `out`.
+fn webSocketAccept(version: header_parser.HttpVersion, headers: *const Connection.Headers, out: *[28]u8) error{ InvalidProtocol, MissingHeader }![]const u8 {
+    if (version != .@"1.1") {
         return error.InvalidProtocol;
     }
 
-    var found: u8 = 0;
-    var key: []const u8 = "";
-    while (it.next() catch return error.InvalidRequest) |h| {
-        if (std.ascii.eqlIgnoreCase(h.key, "upgrade")) {
-            if (!std.ascii.eqlIgnoreCase("websocket", h.value)) return error.MissingHeader;
-            found |= FOUND_UPGRADE;
-        } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-version")) {
-            if (h.value.len != 2 or h.value[0] != '1' or h.value[1] != '3') return error.MissingHeader;
-            found |= FOUND_VERSION;
-        } else if (std.ascii.eqlIgnoreCase(h.key, "connection")) {
-            if (std.ascii.findIgnoreCase(h.value, "upgrade") == null) return error.MissingHeader;
-            found |= FOUND_CONNECTION;
-        } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-key")) {
-            key = h.value;
-            found |= FOUND_KEY;
-        } else if (std.ascii.eqlIgnoreCase(h.key, "origin")) {
-            // A browser has no business driving CDP/BiDi: it's cross-origin
-            // to us by definition. But non-browser clients (e.g. Python's
-            // websocket-client) send one too, so the operator can allow it.
-            if (isAllowedOrigin(h.value, allow.origins) == false) {
-                log.warn(.serve, "rejected websocket origin", .{ .origin = h.value[0..@min(h.value.len, 64)], .note = "See `--remote-allow-origins <origins>` if this is a legitimate origin" });
-                return error.ForbiddenOrigin;
-            }
-        } else if (allow.check_host and std.ascii.eqlIgnoreCase(h.key, "host")) {
-            if (isAllowedHost(h.value, allow.host) == false) {
-                log.warn(.serve, "rejected websocket host", .{ .host = h.value[0..@min(h.value.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
-                return error.ForbiddenHost;
-            }
-        }
-    }
-    if (found != FOUND_ALL) {
+    const upgrade_to = headers.upgrade orelse return error.MissingHeader;
+    if (!std.ascii.eqlIgnoreCase(upgrade_to, "websocket")) {
         return error.MissingHeader;
     }
+    const websocket_version = headers.websocket_version orelse return error.MissingHeader;
+    if (!std.mem.eql(u8, websocket_version, "13")) {
+        return error.MissingHeader;
+    }
+    const connection = headers.connection orelse return error.MissingHeader;
+    if (std.ascii.findIgnoreCase(connection, "upgrade") == null) {
+        return error.MissingHeader;
+    }
+    const key = headers.websocket_key orelse return error.MissingHeader;
 
     var sha: [20]u8 = undefined;
     var hasher = std.crypto.hash.Sha1.init(.{});
@@ -1169,6 +1160,27 @@ fn webSocketAccept(head: []const u8, out: *[28]u8, allow: Allow) ![]const u8 {
     hasher.final(&sha);
     _ = std.base64.standard.Encoder.encode(out, &sha);
     return out;
+}
+
+// Every request goes through this, not only the upgrades: the WebDriver
+// endpoints drive the browser as fully as a WebSocket does. A page that
+// rebinds its own name to our address leaves that name in Host; the browser
+// sets that header and a page can't change or drop it, so a request without
+// one isn't a page's. `advertise_host` is the explicit --advertise-host.
+fn checkHost(headers: *const Connection.Headers, advertise_host: ?[]const u8) error{ForbiddenHost}!void {
+    const host = headers.host orelse return;
+    if (isAllowedHost(host, advertise_host) == false) {
+        log.warn(.serve, "rejected websocket host", .{ .host = host[0..@min(host.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
+        return error.ForbiddenHost;
+    }
+}
+
+fn checkOrigin(headers: *const Connection.Headers, allowed: []const []const u8) error{ForbiddenOrigin}!void {
+    const origin = headers.origin orelse return;
+    if (isAllowedOrigin(origin, allowed) == false) {
+        log.warn(.serve, "rejected websocket origin", .{ .origin = origin[0..@min(origin.len, 64)], .note = "See `--remote-allow-origins <origins>` if this is a legitimate origin" });
+        return error.ForbiddenOrigin;
+    }
 }
 
 // Exact (case-insensitive) match against a --remote-allow-origins value, or
