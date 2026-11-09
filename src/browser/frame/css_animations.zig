@@ -26,7 +26,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
-const StyleManager = @import("../StyleManager.zig");
+const Animation = @import("../css/Animation.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
@@ -100,7 +100,7 @@ fn check(ctx: *anyopaque) !?u32 {
         animation.release();
     }
 
-    if (state.animations.items.len > 0 or frame._style_manager.hasKeyframes(null)) {
+    if (state.animations.items.len > 0 or frame._style_manager.hasAnyKeyframes()) {
         if (state.whole_document) {
             updateSubtree(frame, frame.document.asNode());
         } else {
@@ -143,7 +143,7 @@ fn update(frame: *Frame, element: *Element) !void {
     const state = &frame._css_animations;
     const sm = &frame._style_manager;
     // display:none, here or above, runs no animation
-    const declared: StyleManager.Animation = if (sm.isHidden(element, .{})) .{} else sm.animation(element);
+    const declared: Animation = if (sm.isHidden(element, .{})) .{} else sm.animation(element);
 
     var i: usize = 0;
     while (i < state.animations.items.len) {
@@ -165,7 +165,7 @@ fn update(frame: *Frame, element: *Element) !void {
     }
 }
 
-fn hasName(declared: StyleManager.Animation, name: []const u8) bool {
+fn hasName(declared: Animation, name: []const u8) bool {
     for (0..declared.count()) |index| {
         const timing = declared.timing(index) orelse continue;
         if (std.mem.eql(u8, timing.name, name)) {
@@ -198,15 +198,13 @@ const CssAnimation = struct {
     // Out of State.animations while a task still holds it: the task frees it.
     released: bool = false,
 
-    fn start(frame: *Frame, element: *Element, timing: StyleManager.Animation.Timing) !void {
+    fn start(frame: *Frame, element: *Element, timing: Animation.Timing) !void {
         const allocator = frame._factory.storageAllocator();
-        const self = try allocator.create(CssAnimation);
-        errdefer allocator.destroy(self);
         // Its own copy: the rule text goes with the next stylesheet change
         const name = try allocator.dupe(u8, timing.name);
         errdefer allocator.free(name);
 
-        self.* = .{
+        const self = try frame._factory.create(CssAnimation{
             .frame = frame,
             .element = element,
             .name = name,
@@ -214,7 +212,8 @@ const CssAnimation = struct {
             // A zero duration is over at once, even repeated forever
             .active = if (timing.duration == 0) 0 else timing.duration * timing.iterations,
             .started_at = lp.datetime.milliTimestamp(.boot),
-        };
+        });
+        errdefer frame._factory.destroy(self);
         const state = &frame._css_animations;
         try state.animations.append(frame.page_arena, self);
         errdefer _ = state.animations.pop();
@@ -222,8 +221,24 @@ const CssAnimation = struct {
     }
 
     fn schedule(self: *CssAnimation, ms: f64) !void {
-        try self.frame.js.scheduler.add(self, run, std.math.lossyCast(u32, @ceil(ms)), .{ .name = "css_animations.event" });
+        const wait = std.math.lossyCast(u32, @ceil(ms));
+        try self.frame.js.scheduler.add(self, run, wait, .{
+            .name = "css_animations.event",
+            // A page waits on short animations, not on long or endless ones
+            .blocks_done = wait <= 250,
+            .finalizer = cancelled,
+        });
         self.scheduled = true;
+    }
+
+    /// The scheduler dropped the task: the frame is going away.
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *CssAnimation = @ptrCast(@alignCast(ctx));
+        const animations = &self.frame._css_animations.animations;
+        if (std.mem.findScalar(*CssAnimation, animations.items, self)) |index| {
+            _ = animations.swapRemove(index);
+        }
+        self.destroy();
     }
 
     fn run(ctx: *anyopaque) !?u32 {
@@ -253,7 +268,7 @@ const CssAnimation = struct {
             },
             .active => {
                 self.phase = .finished;
-                try self.dispatch(.wrap("animationend"), self.active);
+                try self.dispatch(comptime .wrap("animationend"), self.active);
             },
             .finished => {},
         }
@@ -286,8 +301,7 @@ const CssAnimation = struct {
     }
 
     fn destroy(self: *CssAnimation) void {
-        const allocator = self.frame._factory.storageAllocator();
-        allocator.free(self.name);
-        allocator.destroy(self);
+        self.frame._factory.storageAllocator().free(self.name);
+        self.frame._factory.destroy(self);
     }
 };

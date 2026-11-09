@@ -24,6 +24,9 @@
   .quoted { animation: "quoted" .01s }
   .gone { display: none }
   .webkit-only { -webkit-animation: webkit-only .01s }
+  @layer base, top;
+  @layer base { .reverted { animation: fadeIn .01s } }
+  @layer top { .reverted { animation: revert-layer; animation-duration: revert-layer } }
 </style>
 
 <div id=shorthand></div>
@@ -43,6 +46,8 @@
 <div id=refire></div>
 <div id=quoted></div>
 <div id=inline></div>
+<div id=inline-longhand></div>
+<div id=reverted></div>
 <div id=cssom></div>
 <div id=cssom-late class=late></div>
 
@@ -323,6 +328,34 @@
     el.style.animation = 'pulse .02s 2';
     await state.done(() => {
       testing.expectEqual(['start pulse 0', 'end pulse 0.04'], log);
+    });
+  }
+</script>
+
+<script id=inline_longhand type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('inline-longhand');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    // The inline duration beats the class's shorthand, which keeps the name
+    el.style.animationDuration = '.01s';
+    el.className = 'fade';
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], log);
+    });
+  }
+</script>
+
+<script id=revert_layer type=module>
+  {
+    const state = await testing.async();
+    const el = document.getElementById('reverted');
+    const log = record(el);
+    untilEvent(el, 'animationend').then(state.resolve);
+    el.className = 'reverted';
+    await state.done(() => {
+      testing.expectEqual(['start fadeIn 0', 'end fadeIn 0.01'], log);
     });
   }
 </script>

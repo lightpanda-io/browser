@@ -64,9 +64,9 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
         typ,
         AnimationEvent{
             ._proto = undefined,
-            ._animation_name = if (opts.animationName.len > 0) try arena.dupe(u8, opts.animationName) else "",
+            ._animation_name = try arena.dupe(u8, opts.animationName),
             ._elapsed_time = opts.elapsedTime,
-            ._pseudo_element = if (opts.pseudoElement.len > 0) try arena.dupe(u8, opts.pseudoElement) else "",
+            ._pseudo_element = try arena.dupe(u8, opts.pseudoElement),
         },
     );
 

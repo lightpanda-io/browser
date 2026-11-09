@@ -26,7 +26,7 @@ const text_measure = @import("text_measure.zig");
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
-const Tokenizer = @import("css/Tokenizer.zig");
+const Animation = @import("css/Animation.zig");
 const Element = @import("webapi/Element.zig");
 const popover = @import("webapi/element/popover.zig");
 
@@ -75,13 +75,15 @@ custom_rules: std.StringHashMapUnmanaged(LazyRules) = .empty,
 // which styles a static CSS file already ships from a `content` rule.
 content_rules: LazyRules = .{},
 
-// The rules declaring an animation property, each holding its whole block: the
-// shorthand and the longhands set each other, so animation() folds the blocks.
-// frame/css_animations.zig reads them to fire the animation events.
-animation_rules: LazyRules = .{},
+// The rules declaring each animation property, the shorthand apart from the
+// longhands. frame/css_animations.zig reads them to fire the animation events.
+animation_rules: std.enums.EnumArray(Animation.Property, LazyRules) = .initFill(.{}),
 
 // The @keyframes names. An animation-name without keyframes runs nothing.
 keyframes: std.StringHashMapUnmanaged(void) = .empty,
+
+// Whether a sheet's text says "keyframes", until the next sheetModified().
+keyframes_mentioned: ?bool = null,
 
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
@@ -506,7 +508,9 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
         property.stampRules(self);
     }
     self.content_rules.stampRules(self);
-    self.animation_rules.stampRules(self);
+    for (&self.animation_rules.values) |*rules| {
+        rules.stampRules(self);
+    }
 }
 
 /// The rank finalizeLayerRanks still has to stamp for a packed priority, via
@@ -531,7 +535,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     if (selector_text.len == 0) {
         return;
     }
-    var sink: LazySink = .{ .allocator = build_arena, .animation = .{ .block = block_text } };
+    var sink: LazySink = .{ .allocator = build_arena };
     const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &sink);
     _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), sink.declarations(), layer);
 
@@ -596,11 +600,14 @@ fn addSelectorRules(
         if (lazy.content) |content| {
             try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
         }
-        if (lazy.animation.normal) {
-            try self.animation_rules.append(arena, selector_text, lazy.animation.block, priority);
-        }
-        if (lazy.animation.important) {
-            try self.animation_rules.append(arena, selector_text, lazy.animation.block, important_priority);
+        for (std.enums.values(Animation.Property)) |property| {
+            const rules = self.animation_rules.getPtr(property);
+            if (lazy.animation.normal.get(property)) |value| {
+                try rules.append(arena, selector_text, value, priority);
+            }
+            if (lazy.animation.important.get(property)) |value| {
+                try rules.append(arena, selector_text, value, important_priority);
+            }
         }
     }
 
@@ -841,6 +848,7 @@ fn startsPseudoElement(after_colon: []const u8) bool {
 
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
+    self.keyframes_mentioned = null;
     self.cascadeChanged();
     Frame.css_animations.documentChanged(self.frame);
 }
@@ -891,7 +899,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.custom_rules = .empty;
     try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
     self.content_rules = .{};
-    self.animation_rules = .{};
+    self.animation_rules = .initFill(.{});
     self.keyframes = .empty;
 
     const sheets = self.frame.document._style_sheets orelse return;
@@ -1933,12 +1941,12 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
         return self.sheetModified();
     }
     const before = self.next_doc_order;
-    const animations = self.animation_rules.rules.items.len;
+    const animations = self.animationRuleCount();
     const changed = self.addRule(style_rule) catch return self.sheetModified();
     if (self.next_doc_order != before) {
         self.last_rule_sheet = sheet;
     }
-    if (self.animation_rules.rules.items.len != animations) {
+    if (self.animationRuleCount() != animations) {
         Frame.css_animations.documentChanged(self.frame);
     }
     if (!changed) {
@@ -1979,7 +1987,6 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
     var customs: std.ArrayList(LazyDeclaration) = .empty;
     var content: ?LazyDeclaration = null;
     var lazy_animation: LazyAnimation = .{};
-    var animation_block: std.ArrayList(u8) = .empty;
     var it = style.asCSSStyleDeclaration().iterator();
     while (it.next()) |property| {
         const name = property._name.str();
@@ -1995,17 +2002,10 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
                 .value = try arena.dupe(u8, property._value.str()),
                 .important = property._important,
             };
-        } else if (Animation.longhands(name) != null) {
-            // Serialized for the block parser animation() runs on every rule
-            try animation_block.print(arena, "{s}:{s}{s};", .{ name, property._value.str(), if (property._important) " !important" else "" });
-            if (property._important) {
-                lazy_animation.important = true;
-            } else {
-                lazy_animation.normal = true;
-            }
+        } else if (Animation.Property.parse(name)) |animation_property| {
+            lazy_animation.declare(animation_property, try arena.dupe(u8, property._value.str()), property._important);
         }
     }
-    lazy_animation.block = animation_block.items;
     return .{ .customs = customs.items, .content = content, .animation = lazy_animation };
 }
 
@@ -3139,15 +3139,32 @@ const LazyDeclarations = struct {
     animation: LazyAnimation = .{},
 
     fn isEmpty(self: LazyDeclarations) bool {
-        return self.customs.len == 0 and self.content == null and !self.animation.normal and !self.animation.important;
+        return self.customs.len == 0 and self.content == null and self.animation.isEmpty();
     }
 };
 
-/// A block declaring animation properties, as normal and/or !important ones.
+/// A block's animation declarations, normal and !important ones apart. The
+/// last of a property wins, and a shorthand drops the longhands before it.
 const LazyAnimation = struct {
-    block: []const u8 = "",
-    normal: bool = false,
-    important: bool = false,
+    normal: std.enums.EnumArray(Animation.Property, ?[]const u8) = .initFill(null),
+    important: std.enums.EnumArray(Animation.Property, ?[]const u8) = .initFill(null),
+
+    fn declare(self: *LazyAnimation, property: Animation.Property, value: []const u8, important: bool) void {
+        const values = if (important) &self.important else &self.normal;
+        if (property == .shorthand) {
+            values.* = .initFill(null);
+        }
+        values.set(property, value);
+    }
+
+    fn isEmpty(self: *const LazyAnimation) bool {
+        for (self.normal.values, self.important.values) |normal, important| {
+            if (normal != null or important != null) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 const Layer = struct {
@@ -3254,13 +3271,9 @@ fn foldDeclarations(comptime Declared: type, declarations: CssParser.Declaration
             sink.content = .{ .name = "content", .value = declaration.value, .important = declaration.important };
             continue;
         }
-        if (Animation.longhands(declaration.name) != null) {
+        if (Animation.Property.parse(declaration.name)) |property| {
             const sink = lazy orelse continue;
-            if (declaration.important) {
-                sink.animation.important = true;
-            } else {
-                sink.animation.normal = true;
-            }
+            sink.animation.declare(property, declaration.value, declaration.important);
             continue;
         }
         slots.apply(declaration.name, declaration.value, declaration.important);
@@ -3406,47 +3419,98 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
 }
 
 /// The animation longhands `el` ends up with. One rule can set the name and
-/// another the duration, so each longhand takes its own winner instead of the
-/// whole value coming from one rule.
+/// another the duration, so each longhand takes its own winner, the shorthand's
+/// or its own declaration's.
 pub fn animation(self: *StyleManager, el: *Element) Animation {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{};
 
-    const rules = self.parsedRules(&self.animation_rules) catch |err| blk: {
-        log.err(.browser, "StyleManager animation", .{ .err = err });
-        break :blk &.{};
-    };
     var result: Animation = .{};
-    var priorities: std.enums.EnumArray(Animation.Longhand, u64) = .initFill(0);
-    for (rules) |rule| {
-        if (matchesSelector(el, rule.selector, self.frame) == false) {
-            continue;
+    const shorthand = self.animationWinner(el, .shorthand);
+    for (std.enums.values(Animation.Longhand)) |longhand| {
+        const own = self.animationWinner(el, switch (longhand) {
+            .name => .name,
+            .duration => .duration,
+            .delay => .delay,
+            .iteration_count => .iteration_count,
+        });
+        // Equal priorities are one block, where the longhand came last: a
+        // shorthand after it dropped it.
+        if (own) |winner| {
+            if (shorthand == null or winner.priority >= shorthand.?.priority) {
+                result.sources.set(longhand, .{ .list = winner.value });
+                continue;
+            }
         }
-        const declared = Animation.fold(CssParser.parseStyleBlock(rule.value), rule.priority & IMPORTANT_BIT != 0);
-        result.cascade(declared, rule.priority, &priorities);
-    }
-    if (el.getAttributeSafe(comptime .wrap("style"))) |text| {
-        result.cascade(Animation.fold(CssParser.parseDeclarationsList(text), false), INLINE_PRIORITY, &priorities);
-        result.cascade(Animation.fold(CssParser.parseDeclarationsList(text), true), INLINE_IMPORTANT_PRIORITY, &priorities);
+        if (shorthand) |winner| {
+            result.sources.set(longhand, .{ .shorthand = winner.value });
+        }
     }
     return result;
 }
 
-/// Whether a @keyframes rule has `name`, or with null, whether any does.
-pub fn hasKeyframes(self: *StyleManager, name: ?[]const u8) bool {
-    // The animation check asks on every page: one without keyframes would
-    // pay a rebuild that nothing else may need.
+fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Property) ?LazyWinner {
+    const rules = self.parsedRules(self.animation_rules.getPtr(property)) catch |err| blk: {
+        log.err(.browser, "StyleManager animation", .{ .err = err });
+        break :blk &.{};
+    };
+    var before: ?u16 = null;
+    while (self.lazyWinner(el, .wrap(property.cssName()), rules, before)) |winner| {
+        if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
+            return winner;
+        }
+        before = winner.layer;
+    }
+    return null;
+}
+
+fn animationRuleCount(self: *const StyleManager) usize {
+    var n: usize = 0;
+    for (self.animation_rules.values) |rules| {
+        n += rules.rules.items.len;
+    }
+    return n;
+}
+
+/// Whether a @keyframes rule has `name`.
+pub fn hasKeyframes(self: *StyleManager, name: []const u8) bool {
+    if (self.rebuildForKeyframes() == false) {
+        return false;
+    }
+    return self.keyframes.contains(name);
+}
+
+pub fn hasAnyKeyframes(self: *StyleManager) bool {
+    if (self.rebuildForKeyframes() == false) {
+        return false;
+    }
+    return self.keyframes.count() > 0;
+}
+
+/// False when no sheet can hold keyframes. The animation check asks on every
+/// page: one without keyframes would pay a rebuild nothing else may need.
+fn rebuildForKeyframes(self: *StyleManager) bool {
     if (self.dirty and !self.sheetsMentionKeyframes()) {
         return false;
     }
     self.rebuildIfDirty() catch return false;
-    const wanted = name orelse return self.keyframes.count() > 0;
-    return self.keyframes.contains(wanted);
+    return true;
 }
 
 /// The sheets `parseSheet` reads, searched as text.
 fn sheetsMentionKeyframes(self: *StyleManager) bool {
+    if (self.keyframes_mentioned) |mentioned| {
+        return mentioned;
+    }
+    const mentioned = self.searchSheetsForKeyframes() catch true;
+    self.keyframes_mentioned = mentioned;
+    return mentioned;
+}
+
+fn searchSheetsForKeyframes(self: *StyleManager) !bool {
     const sheets = self.frame.document._style_sheets orelse return false;
+    const arena = try self.frame.getArena(.small, "StyleManager.sheetsMentionKeyframes");
+    defer arena.release();
     for (sheets._sheets.items) |sheet| {
         if (sheet._disabled) {
             continue;
@@ -3461,9 +3525,7 @@ fn sheetsMentionKeyframes(self: *StyleManager) bool {
         }
         const owner_node = sheet.getOwnerNode() orelse continue;
         const style = owner_node.is(Element.Html.Style) orelse continue;
-        const arena = self.frame.getArena(.small, "StyleManager.sheetsMentionKeyframes") catch return true;
-        defer arena.release();
-        const text = style.asNode().getTextContentAlloc(arena.allocator()) catch return true;
+        const text = try style.asNode().getTextContentAlloc(arena.allocator());
         if (std.ascii.findIgnoreCase(text, "keyframes") != null) {
             return true;
         }
@@ -3471,224 +3533,11 @@ fn sheetsMentionKeyframes(self: *StyleManager) bool {
     return false;
 }
 
-/// The animation longhands that decide when the animation events fire, each as
-/// the value that declared it.
-pub const Animation = struct {
-    sources: std.enums.EnumArray(Longhand, ?Source) = .initFill(null),
-
-    const Longhand = enum { name, duration, delay, iteration_count };
-
-    const Source = union(enum) {
-        list: []const u8,
-        // `animation`, whose items set every longhand at once
-        shorthand: []const u8,
-    };
-
-    pub const Timing = struct {
-        name: []const u8,
-        // milliseconds
-        delay: f64,
-        duration: f64,
-        // inf for `infinite`
-        iterations: f64,
-    };
-
-    /// The longhands `property` sets, or null when it isn't an animation
-    /// property. Browsers alias the -webkit- names; the others are invalid.
-    fn longhands(property: []const u8) ?[]const Longhand {
-        const name = if (std.ascii.startsWithIgnoreCase(property, "-webkit-")) property["-webkit-".len..] else property;
-        if (std.ascii.startsWithIgnoreCase(name, "animation") == false) return null;
-        if (std.ascii.eqlIgnoreCase(name, "animation")) return &.{ .name, .duration, .delay, .iteration_count };
-        if (std.ascii.eqlIgnoreCase(name, "animation-name")) return &.{.name};
-        if (std.ascii.eqlIgnoreCase(name, "animation-duration")) return &.{.duration};
-        if (std.ascii.eqlIgnoreCase(name, "animation-delay")) return &.{.delay};
-        if (std.ascii.eqlIgnoreCase(name, "animation-iteration-count")) return &.{.iteration_count};
-        return null;
-    }
-
-    /// One block's declarations of the given importance, in order.
-    fn fold(declarations: CssParser.DeclarationsIterator, important: bool) Animation {
-        var result: Animation = .{};
-        var it = declarations;
-        while (it.next()) |declaration| {
-            if (declaration.important != important) {
-                continue;
-            }
-            const set = longhands(declaration.name) orelse continue;
-            const source: Source = if (set.len == 1) .{ .list = declaration.value } else .{ .shorthand = declaration.value };
-            for (set) |longhand| {
-                result.sources.set(longhand, source);
-            }
-        }
-        return result;
-    }
-
-    fn cascade(self: *Animation, declared: Animation, priority: u64, priorities: *std.enums.EnumArray(Longhand, u64)) void {
-        for (std.enums.values(Longhand)) |longhand| {
-            const source = declared.sources.get(longhand) orelse continue;
-            if (priority > priorities.get(longhand)) {
-                self.sources.set(longhand, source);
-                priorities.set(longhand, priority);
-            }
-        }
-    }
-
-    /// The animation-name list's length.
-    pub fn count(self: Animation) usize {
-        return switch (self.sources.get(.name) orelse return 0) {
-            .list, .shorthand => |list| listCount(list),
-        };
-    }
-
-    /// The `index`th animation, or null when its name is `none`.
-    pub fn timing(self: Animation, index: usize) ?Timing {
-        const name = switch (self.sources.get(.name) orelse return null) {
-            .list => |list| std.mem.trim(u8, listItem(list, index), "\"'"),
-            .shorthand => |list| parseItem(listItem(list, index)).name,
-        };
-        if (name.len == 0 or std.ascii.eqlIgnoreCase(name, "none")) {
-            return null;
-        }
-        const delay: f64 = switch (self.sources.get(.delay) orelse Source{ .list = "0s" }) {
-            // A longhand's list holds nothing but delays
-            .list => |list| parseItem(listItem(list, index)).duration,
-            .shorthand => |list| parseItem(listItem(list, index)).delay,
-        };
-        const duration: f64 = switch (self.sources.get(.duration) orelse Source{ .list = "0s" }) {
-            .list, .shorthand => |list| parseItem(listItem(list, index)).duration,
-        };
-        const iterations: f64 = switch (self.sources.get(.iteration_count) orelse Source{ .list = "1" }) {
-            .list, .shorthand => |list| parseItem(listItem(list, index)).iterations,
-        };
-        return .{ .name = name, .delay = delay, .duration = @max(duration, 0), .iterations = @max(iterations, 0) };
-    }
-
-    const Item = struct {
-        name: []const u8 = "",
-        duration: f64 = 0,
-        delay: f64 = 0,
-        iterations: f64 = 1,
-    };
-
-    /// One item of the shorthand, or of a longhand list. The first time is the
-    /// duration and the second the delay; an ident no other longhand takes is
-    /// the name.
-    fn parseItem(text: []const u8) Item {
-        var item: Item = .{};
-        var times: u8 = 0;
-        var depth: usize = 0;
-        var tokenizer: Tokenizer = .{ .input = text };
-        while (true) {
-            const start = tokenizer.position;
-            const token = tokenizer.next() orelse break;
-            if (depth > 0) {
-                switch (token) {
-                    .function, .parenthesis_block => depth += 1,
-                    .close_parenthesis => depth -= 1,
-                    else => {},
-                }
-                continue;
-            }
-            switch (token) {
-                // cubic-bezier(…), steps(…)
-                .function, .parenthesis_block => depth = 1,
-                .dimension => |d| {
-                    // The token's f32 would give an elapsedTime of 0.30000001
-                    const value = std.fmt.parseFloat(f64, text[start .. tokenizer.position - d.unit.len]) catch d.value;
-                    const ms = if (std.ascii.eqlIgnoreCase(d.unit, "s")) value * 1000 else if (std.ascii.eqlIgnoreCase(d.unit, "ms")) value else continue;
-                    switch (times) {
-                        0 => item.duration = ms,
-                        1 => item.delay = ms,
-                        else => {},
-                    }
-                    times +|= 1;
-                },
-                .number => |n| item.iterations = std.fmt.parseFloat(f64, text[start..tokenizer.position]) catch n.value,
-                .ident => |ident| {
-                    if (std.ascii.eqlIgnoreCase(ident, "infinite")) {
-                        item.iterations = std.math.inf(f64);
-                    } else if (isAnimationKeyword(ident) == false) {
-                        item.name = ident;
-                    }
-                },
-                .string => |s| item.name = s,
-                else => {},
-            }
-        }
-        return item;
-    }
-
-    // `none` included: in the shorthand it is the fill mode's before the name's
-    fn isAnimationKeyword(ident: []const u8) bool {
-        const keywords = [_][]const u8{
-            "linear", "ease",    "ease-in",   "ease-out",          "ease-in-out", "step-start", "step-end",
-            "normal", "reverse", "alternate", "alternate-reverse", "none",        "forwards",   "backwards",
-            "both",   "running", "paused",
-        };
-        for (keywords) |keyword| {
-            if (std.ascii.eqlIgnoreCase(ident, keyword)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    fn listCount(list: []const u8) usize {
-        var it: ListIterator = .{ .list = list };
-        var n: usize = 0;
-        while (it.next()) |_| {
-            n += 1;
-        }
-        return n;
-    }
-
-    /// A shorter list repeats, as the animation longhands do.
-    fn listItem(list: []const u8, index: usize) []const u8 {
-        const wanted = index % listCount(list);
-        var it: ListIterator = .{ .list = list };
-        var i: usize = 0;
-        while (it.next()) |item| : (i += 1) {
-            if (i == wanted) {
-                return item;
-            }
-        }
-        unreachable;
-    }
-
-    /// The items of a comma-separated list, outside parentheses.
-    const ListIterator = struct {
-        list: []const u8,
-        pos: usize = 0,
-        done: bool = false,
-
-        fn next(self: *ListIterator) ?[]const u8 {
-            if (self.done) {
-                return null;
-            }
-            const start = self.pos;
-            var depth: usize = 0;
-            while (self.pos < self.list.len) : (self.pos += 1) {
-                switch (self.list[self.pos]) {
-                    '(' => depth += 1,
-                    ')' => depth -|= 1,
-                    ',' => if (depth == 0) {
-                        const item = self.list[start..self.pos];
-                        self.pos += 1;
-                        return std.mem.trim(u8, item, &std.ascii.whitespace);
-                    },
-                    else => {},
-                }
-            }
-            self.done = true;
-            return std.mem.trim(u8, self.list[start..], &std.ascii.whitespace);
-        }
-    };
-};
-
 const LazyWinner = struct {
     value: []const u8,
     // Where it is in the layer order; see layerOrder.
     layer: u16,
+    priority: u64,
 };
 
 /// The style attribute cascades after every layer, unlayered rules included.
@@ -3722,7 +3571,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
         if (matchesSelector(el, rule.selector, self.frame) == false) {
             continue;
         }
-        winner = .{ .value = rule.value, .layer = layer };
+        winner = .{ .value = rule.value, .layer = layer, .priority = rule.priority };
         priority = rule.priority;
     }
 
@@ -3732,7 +3581,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
             if (declaration.declaredValue(property_name, self.frame)) |value| {
                 const inline_priority = if (declaration.declaredImportant(property_name)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
                 if (inline_priority > priority) {
-                    winner = .{ .value = value, .layer = INLINE_LAYER };
+                    winner = .{ .value = value, .layer = INLINE_LAYER, .priority = inline_priority };
                 }
             }
         }
@@ -3917,7 +3766,7 @@ test "StyleManager: hasKeyframes rebuilds only when a sheet mentions keyframes" 
     try style_el.asNode().setTextContent(".a { color: red }", frame);
     _ = try body.appendChild(style_el.asNode(), frame);
     try testing.expectEqual(true, sm.dirty);
-    try testing.expectEqual(false, sm.hasKeyframes(null));
+    try testing.expectEqual(false, sm.hasAnyKeyframes());
     try testing.expectEqual(true, sm.dirty);
 
     try style_el.asNode().setTextContent("@keyframes fade { to { opacity: 0 } }", frame);
