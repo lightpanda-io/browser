@@ -27,6 +27,7 @@ const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Animation = @import("css/Animation.zig");
+const properties = @import("css/properties.zig");
 const Element = @import("webapi/Element.zig");
 const popover = @import("webapi/element/popover.zig");
 
@@ -2008,13 +2009,13 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
                 .value = try arena.dupe(u8, declaration.value),
                 .important = declaration.important,
             });
-        } else if (std.ascii.eqlIgnoreCase(name, "content")) {
+        } else if (declaration.id == .content) {
             content = .{
                 .name = "content",
                 .value = try arena.dupe(u8, declaration.value),
                 .important = declaration.important,
             };
-        } else if (Animation.Property.parse(name)) |animation_property| {
+        } else if (Animation.Property.fromId(declaration.id)) |animation_property| {
             lazy_animation.declare(animation_property, try arena.dupe(u8, declaration.value), declaration.important);
         }
     }
@@ -2137,7 +2138,7 @@ fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties, frame: *
     var slots: Slots(Declared) = .{};
     var it = style.asCSSStyleDeclaration().iterator(frame);
     while (it.next()) |declaration| {
-        slots.apply(declaration.name, declaration.value, declaration.important);
+        slots.apply(declaration.id, declaration.value, declaration.important);
     }
     return slots;
 }
@@ -2573,37 +2574,46 @@ const Visibility = struct {
         opacity_zero: ?bool = null,
         pointer_events_none: ??bool = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "display")) {
-                self.display = Display.parse(value);
-                self.box = Box.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction")) {
-                self.flex_column = isColumnDirection(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-wrap")) {
-                self.flex_wrap = isWrap(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-flow")) {
-                self.flex_column = false;
-                self.flex_wrap = false;
-                // Either order; an omitted one resets to row or nowrap
-                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
-                while (it.next()) |token| {
-                    if (isColumnDirection(token)) {
-                        self.flex_column = true;
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .display => {
+                    self.display = Display.parse(value);
+                    self.box = Box.parse(value);
+                },
+                .@"flex-direction" => {
+                    self.flex_column = isColumnDirection(value);
+                },
+                .@"flex-wrap" => {
+                    self.flex_wrap = isWrap(value);
+                },
+                .@"flex-flow" => {
+                    self.flex_column = false;
+                    self.flex_wrap = false;
+                    // Either order; an omitted one resets to row or nowrap
+                    var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                    while (it.next()) |token| {
+                        if (isColumnDirection(token)) {
+                            self.flex_column = true;
+                        }
+                        if (isWrap(token)) {
+                            self.flex_wrap = true;
+                        }
                     }
-                    if (isWrap(token)) {
-                        self.flex_wrap = true;
-                    }
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
-                self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
-            } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
-                self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
-            } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
-                self.pointer_events_none = parseInheritedFlag(value, &.{"none"}, &.{
-                    "auto",         "initial", "visiblePainted", "visibleFill", "visibleStroke",
-                    "visible",      "painted", "fill",           "stroke",      "all",
-                    "bounding-box",
-                });
+                },
+                .visibility => {
+                    self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
+                },
+                .opacity => {
+                    self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
+                },
+                .@"pointer-events" => {
+                    self.pointer_events_none = parseInheritedFlag(value, &.{"none"}, &.{
+                        "auto",         "initial", "visiblePainted", "visibleFill", "visibleStroke",
+                        "visible",      "painted", "fill",           "stroke",      "all",
+                        "bounding-box",
+                    });
+                },
+                else => {},
             }
         }
 
@@ -2706,57 +2716,78 @@ const Geometry = struct {
         left: ?Length = null,
         right: ?Length = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
-                self.overflow_x_scrolls = overflowScrolls(value);
-                self.overflow_x_clips = overflowClips(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-grow")) {
-                self.flex_grow = flexGrows(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-shrink")) {
-                if (flexFactor(value)) |factor| {
-                    self.flex_no_shrink = factor == 0;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "flex")) {
-                self.flex_grow = flexShorthandGrows(value);
-                self.flex_no_shrink = flexShorthandNoShrink(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "margin")) {
-                const sides = boxSides(value) orelse return;
-                self.margin_left = sides.left;
-                self.margin_right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "margin-inline")) {
-                const sides = inlineSides(value) orelse return;
-                self.margin_left = sides.left;
-                self.margin_right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "inset")) {
-                const sides = boxSides(value) orelse return;
-                self.left = sides.left;
-                self.right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "inset-inline")) {
-                const sides = inlineSides(value) orelse return;
-                self.left = sides.left;
-                self.right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "left") or std.ascii.eqlIgnoreCase(name, "inset-inline-start")) {
-                self.left = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "right") or std.ascii.eqlIgnoreCase(name, "inset-inline-end")) {
-                self.right = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "margin-left") or std.ascii.eqlIgnoreCase(name, "margin-inline-start")) {
-                self.margin_left = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "margin-right") or std.ascii.eqlIgnoreCase(name, "margin-inline-end")) {
-                self.margin_right = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
-                self.overflow_y_scrolls = overflowScrolls(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
-                self.overscroll_x_contains = overscrollContains(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-y")) {
-                self.overscroll_y_contains = overscrollContains(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "width")) {
-                self.width = Length.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "height")) {
-                self.height = Length.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "min-width")) {
-                self.min_width = Length.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "max-width")) {
-                self.max_width = Length.parse(value);
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .@"overflow-x" => {
+                    self.overflow_x_scrolls = overflowScrolls(value);
+                    self.overflow_x_clips = overflowClips(value);
+                },
+                .@"flex-grow" => {
+                    self.flex_grow = flexGrows(value);
+                },
+                .@"flex-shrink" => {
+                    if (flexFactor(value)) |factor| {
+                        self.flex_no_shrink = factor == 0;
+                    }
+                },
+                .flex => {
+                    self.flex_grow = flexShorthandGrows(value);
+                    self.flex_no_shrink = flexShorthandNoShrink(value);
+                },
+                .margin => {
+                    const sides = boxSides(value) orelse return;
+                    self.margin_left = sides.left;
+                    self.margin_right = sides.right;
+                },
+                .@"margin-inline" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.margin_left = sides.left;
+                    self.margin_right = sides.right;
+                },
+                .inset => {
+                    const sides = boxSides(value) orelse return;
+                    self.left = sides.left;
+                    self.right = sides.right;
+                },
+                .@"inset-inline" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.left = sides.left;
+                    self.right = sides.right;
+                },
+                .left, .@"inset-inline-start" => {
+                    self.left = Length.parseMargin(value);
+                },
+                .right, .@"inset-inline-end" => {
+                    self.right = Length.parseMargin(value);
+                },
+                .@"margin-left", .@"margin-inline-start" => {
+                    self.margin_left = Length.parseMargin(value);
+                },
+                .@"margin-right", .@"margin-inline-end" => {
+                    self.margin_right = Length.parseMargin(value);
+                },
+                .@"overflow-y" => {
+                    self.overflow_y_scrolls = overflowScrolls(value);
+                },
+                .@"overscroll-behavior-x" => {
+                    self.overscroll_x_contains = overscrollContains(value);
+                },
+                .@"overscroll-behavior-y" => {
+                    self.overscroll_y_contains = overscrollContains(value);
+                },
+                .width => {
+                    self.width = Length.parse(value);
+                },
+                .height => {
+                    self.height = Length.parse(value);
+                },
+                .@"min-width" => {
+                    self.min_width = Length.parse(value);
+                },
+                .@"max-width" => {
+                    self.max_width = Length.parse(value);
+                },
+                else => {},
             }
         }
 
@@ -2882,8 +2913,8 @@ const TouchAction = struct {
         pan_x_blocked: ?bool = null,
         pan_y_blocked: ?bool = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (!std.ascii.eqlIgnoreCase(name, "touch-action")) return;
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            if (id != .@"touch-action") return;
             const pans = parse(value) orelse return;
             self.pan_x_blocked = !pans.x;
             self.pan_y_blocked = !pans.y;
@@ -2941,26 +2972,33 @@ const Text = struct {
         text_transform: ?TextTransform = null,
         white_space_collapse: ?SpaceCollapse = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "text-transform")) {
-                self.text_transform = TextTransform.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "white-space")) {
-                if (WhiteSpace.parse(value)) |white_space| {
-                    self.white_space_collapse = white_space.collapse;
-                    self.text_wrap_mode = white_space.wrap;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "white-space-collapse")) {
-                if (SpaceCollapse.parse(value)) |collapse| {
-                    self.white_space_collapse = collapse;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap-mode")) {
-                if (WrapMode.parse(value)) |mode| {
-                    self.text_wrap_mode = mode;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap")) {
-                if (WrapMode.parseTextWrap(value)) |mode| {
-                    self.text_wrap_mode = mode;
-                }
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .@"text-transform" => {
+                    self.text_transform = TextTransform.parse(value);
+                },
+                .@"white-space" => {
+                    if (WhiteSpace.parse(value)) |white_space| {
+                        self.white_space_collapse = white_space.collapse;
+                        self.text_wrap_mode = white_space.wrap;
+                    }
+                },
+                .@"white-space-collapse" => {
+                    if (SpaceCollapse.parse(value)) |collapse| {
+                        self.white_space_collapse = collapse;
+                    }
+                },
+                .@"text-wrap-mode" => {
+                    if (WrapMode.parse(value)) |mode| {
+                        self.text_wrap_mode = mode;
+                    }
+                },
+                .@"text-wrap" => {
+                    if (WrapMode.parseTextWrap(value)) |mode| {
+                        self.text_wrap_mode = mode;
+                    }
+                },
+                else => {},
             }
         }
     };
@@ -3022,12 +3060,16 @@ const Flow = struct {
         position: ?Position = null,
         floated: ?bool = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "position")) {
-                self.position = Position.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "float")) {
-                self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
-                    std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .position => {
+                    self.position = Position.parse(value);
+                },
+                .float => {
+                    self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
+                        std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
+                },
+                else => {},
             }
         }
     };
@@ -3063,9 +3105,9 @@ const Declarations = struct {
     text: Text.Declared = .{},
     flow: Flow.Declared = .{},
 
-    fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
+    fn apply(self: *Declarations, id: properties.Id, value: []const u8) void {
         inline for (group_fields) |field| {
-            @field(self, field).apply(name, value);
+            @field(self, field).apply(id, value);
         }
     }
 
@@ -3264,16 +3306,18 @@ fn foldDeclarations(comptime Declared: type, declarations: CssParser.Declaration
     var slots: Slots(Declared) = .{};
     var it = declarations;
     while (it.next()) |declaration| {
-        if (isCustomProperty(declaration.name)) {
-            const sink = lazy orelse continue;
-            const gop = try sink.customs.getOrPut(sink.allocator, declaration.name);
-            if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
-                continue;
+        const id = trackedId(declaration.name) orelse {
+            if (isCustomProperty(declaration.name)) {
+                const sink = lazy orelse continue;
+                const gop = try sink.customs.getOrPut(sink.allocator, declaration.name);
+                if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
+                    continue;
+                }
+                gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
             }
-            gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
             continue;
-        }
-        if (std.ascii.eqlIgnoreCase(declaration.name, "content")) {
+        };
+        if (id == .content) {
             const sink = lazy orelse continue;
             if (sink.content) |earlier| {
                 if (earlier.important and !declaration.important) {
@@ -3283,12 +3327,12 @@ fn foldDeclarations(comptime Declared: type, declarations: CssParser.Declaration
             sink.content = .{ .name = "content", .value = declaration.value, .important = declaration.important };
             continue;
         }
-        if (Animation.Property.parse(declaration.name)) |property| {
+        if (Animation.Property.fromId(id)) |property| {
             const sink = lazy orelse continue;
             sink.animation.declare(property, declaration.value, declaration.important);
             continue;
         }
-        slots.apply(declaration.name, declaration.value, declaration.important);
+        slots.apply(id, declaration.value, declaration.important);
     }
     return slots;
 }
@@ -3301,31 +3345,55 @@ fn Slots(comptime Declared: type) type {
 
         slots: [Declared.names.len]Slot = @splat(.{}),
 
-        fn apply(self: *Self, name: []const u8, value: []const u8, important: bool) void {
-            if (CssParser.axisShorthand(name)) |shorthand| {
+        const ids = blk: {
+            var result: [Declared.names.len]properties.Id = undefined;
+            for (Declared.names, &result) |name, *id| {
+                id.* = @field(properties.Id, name);
+            }
+            break :blk result;
+        };
+
+        // Each known property's slot, or `untracked`.
+        const untracked = std.math.maxInt(u8);
+        const slot_of = blk: {
+            std.debug.assert(Declared.names.len < untracked);
+            var result: [properties.known_count]u8 = @splat(untracked);
+            for (ids, 0..) |id, i| {
+                // A name in two groups' lists would only reach the last
+                std.debug.assert(result[@backingInt(id)] == untracked);
+                result[@backingInt(id)] = i;
+            }
+            break :blk result;
+        };
+
+        fn apply(self: *Self, id: properties.Id, value: []const u8, important: bool) void {
+            if (axisLonghands(id)) |longhands| {
                 const values = CssParser.splitAxisPair(value) orelse return;
-                self.apply(shorthand.x, values.x, important);
-                self.apply(shorthand.y, values.y, important);
+                self.apply(longhands.x, values.x, important);
+                self.apply(longhands.y, values.y, important);
                 return;
             }
-            for (Declared.names, &self.slots) |tracked, *slot| {
-                if (std.ascii.eqlIgnoreCase(name, tracked)) {
-                    slot.apply(value, important);
-                    return;
-                }
+            const index = @backingInt(id);
+            if (index >= slot_of.len) {
+                // a custom property
+                return;
+            }
+            const slot = slot_of[index];
+            if (slot != untracked) {
+                self.slots[slot].apply(value, important);
             }
         }
 
         fn props(self: Self, comptime importance: Importance) Declared {
             var p: Declared = .{};
-            for (Declared.names, self.slots) |name, s| {
+            for (ids, self.slots) |id, s| {
                 const value = s.value orelse continue;
                 switch (importance) {
                     .any => {},
                     .normal => if (s.important) continue,
                     .important => if (s.important == false) continue,
                 }
-                p.apply(name, value);
+                p.apply(id, value);
             }
             return p;
         }
@@ -3333,6 +3401,43 @@ fn Slots(comptime Declared: type) type {
 }
 
 const Importance = enum { any, normal, important };
+
+/// This is an optimized version of properties.idOf. It's the same thing, except
+/// limited to keys that the cascade reads. That sounds like a micro-optimization
+/// right? But it actually shows up in profiling.
+const tracked_ids = blk: {
+    @setEvalBranchQuota(1_000_000);
+    const Tracked = Slots(Declarations);
+    var kvs: []const struct { []const u8, properties.Id } = &.{};
+    for (0..properties.known_count) |i| {
+        const id: properties.Id = @fromBackingInt(i);
+        if (Tracked.slot_of[i] != Tracked.untracked or axisLonghands(id) != null or id == .content or Animation.Property.fromId(id) != null) {
+            kvs = kvs ++ .{.{ properties.knownName(id).?, id }};
+        }
+    }
+    break :blk std.StaticStringMap(properties.Id).initComptime(kvs);
+};
+
+/// The id of a property the cascade reads, by its name in any case, or null.
+fn trackedId(name: []const u8) ?properties.Id {
+    var buf: [tracked_ids.max_len]u8 = undefined;
+    if (name.len > buf.len) {
+        return null;
+    }
+    return tracked_ids.get(std.ascii.lowerString(&buf, name));
+}
+
+const AxisLonghands = struct { x: properties.Id, y: properties.Id };
+
+/// The longhands of an axis shorthand (overflow, overscroll-behavior).
+fn axisLonghands(id: properties.Id) ?AxisLonghands {
+    inline for (CssParser.axis_shorthands) |shorthand| {
+        if (id == @field(properties.Id, shorthand.name)) {
+            return .{ .x = @field(properties.Id, shorthand.x), .y = @field(properties.Id, shorthand.y) };
+        }
+    }
+    return null;
+}
 
 const Slot = struct {
     value: ?[]const u8 = null,
@@ -3373,7 +3478,7 @@ pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String
 fn importantRuleWins(self: *StyleManager, el: *Element, name: []const u8, value: []const u8) bool {
     self.rebuildIfDirty() catch return false;
     var slots: Slots(Declarations) = .{};
-    slots.apply(name, value, false);
+    slots.apply(trackedId(name) orelse return false, value, false);
     const declared = slots.props(.any);
     inline for (group_fields) |field| {
         if (@field(self, field).importantRuleWins(@field(declared, field), el, self.frame)) {
@@ -3443,7 +3548,7 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
     if (el.inlineStyle(self.frame)) |style| {
         var it = style.asCSSStyleDeclaration().iterator(self.frame);
         while (it.next()) |declaration| {
-            const animation_property = Animation.Property.parse(declaration.name) orelse continue;
+            const animation_property = Animation.Property.fromId(declaration.id) orelse continue;
             const value = declaration.value;
             if (std.ascii.eqlIgnoreCase(value, "revert-layer")) {
                 // Back to the rules, every one of them in an earlier layer

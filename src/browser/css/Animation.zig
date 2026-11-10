@@ -21,6 +21,7 @@
 
 const std = @import("std");
 const Tokenizer = @import("Tokenizer.zig");
+const properties = @import("properties.zig");
 
 const Animation = @This();
 
@@ -203,16 +204,16 @@ pub const Property = enum {
     delay,
     iteration_count,
 
-    /// Browsers alias the -webkit- names; the others are invalid.
-    pub fn parse(property: []const u8) ?Property {
-        const name = if (std.ascii.startsWithIgnoreCase(property, "-webkit-")) property["-webkit-".len..] else property;
-        if (std.ascii.startsWithIgnoreCase(name, "animation") == false) return null;
-        if (std.ascii.eqlIgnoreCase(name, "animation")) return .shorthand;
-        if (std.ascii.eqlIgnoreCase(name, "animation-name")) return .name;
-        if (std.ascii.eqlIgnoreCase(name, "animation-duration")) return .duration;
-        if (std.ascii.eqlIgnoreCase(name, "animation-delay")) return .delay;
-        if (std.ascii.eqlIgnoreCase(name, "animation-iteration-count")) return .iteration_count;
-        return null;
+    /// The property a declaration sets. Browsers alias the -webkit- names.
+    pub fn fromId(id: properties.Id) ?Property {
+        return switch (id) {
+            .animation, .@"-webkit-animation" => .shorthand,
+            .@"animation-name", .@"-webkit-animation-name" => .name,
+            .@"animation-duration", .@"-webkit-animation-duration" => .duration,
+            .@"animation-delay", .@"-webkit-animation-delay" => .delay,
+            .@"animation-iteration-count", .@"-webkit-animation-iteration-count" => .iteration_count,
+            else => null,
+        };
     }
 
     pub fn cssName(self: Property) []const u8 {

@@ -36,7 +36,7 @@ pub const AxisShorthand = struct {
 // The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
 // CSSOM object and the cascade store these expanded: setting one sets both
 // longhands, reading or serializing it recombines them.
-const axis_shorthands = [_]AxisShorthand{
+pub const axis_shorthands = [_]AxisShorthand{
     .{ .name = "overflow", .x = "overflow-x", .y = "overflow-y" },
     .{ .name = "overscroll-behavior", .x = "overscroll-behavior-x", .y = "overscroll-behavior-y" },
 };
