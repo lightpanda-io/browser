@@ -1,28 +1,53 @@
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Factory = @import("../../Factory.zig");
+
 const CSSRule = @import("CSSRule.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
+const GenericRule = @import("GenericRule.zig");
 const CSSStyleProperties = @import("CSSStyleProperties.zig");
 
 const CSSStyleRule = @This();
 
 pub const Proto = CSSRule;
 
-_proto: *CSSRule,
 _selector_text: []const u8 = "",
 _style: ?*CSSStyleProperties = null,
 /// The rules nested in this rule's block (CSS Nesting), null when there are
 /// none. A nested style rule keeps its selector as written (`&.active`).
 _rules: ?*CSSRuleList = null,
+_proto_canary: if (lp.IS_DEBUG) *CSSRule else void = undefined,
 
 pub fn init(frame: *Frame) !*CSSStyleRule {
-    const style_rule = try frame._factory.chained(.{
-        CSSRule{ ._type = undefined },
-        CSSStyleRule{ ._proto = undefined },
+    return frame._factory.chained(.{
+        CSSRule{ ._type = .style },
+        CSSStyleRule{},
     });
-    style_rule._proto._type = .{ .style = style_rule };
-    return style_rule;
+}
+
+pub fn asCSSRule(self: *CSSStyleRule) *CSSRule {
+    return Factory.protoOf(self);
 }
 
 fn getSelectorText(self: *const CSSStyleRule) []const u8 {
@@ -64,8 +89,8 @@ pub fn getCssText(self: *CSSStyleRule, frame: *Frame) ![]const u8 {
                 try buf.writer.writeByte(' ');
             }
             const text = switch (rule._type) {
-                .style => |nested| try nested.getCssText(frame),
-                else => rule._text,
+                .style => try rule.as(CSSStyleRule).getCssText(frame),
+                .generic => rule.as(GenericRule)._text,
             };
             try buf.writer.writeAll(text);
         }

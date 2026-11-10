@@ -1,79 +1,91 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Factory = @import("../../Factory.zig");
 
+const GenericRule = @import("GenericRule.zig");
 const CSSStyleRule = @import("CSSStyleRule.zig");
 
 const CSSRule = @This();
 
-pub const Type = union(enum) {
-    style: *CSSStyleRule,
-    charset: void,
-    import: void,
-    media: void,
-    font_face: void,
-    frame: void,
-    keyframes: void,
-    keyframe: void,
-    margin: void,
-    namespace: void,
-    counter_style: void,
-    supports: void,
-    document: void,
-    font_feature_values: void,
-    viewport: void,
-    region_style: void,
-    layer: void,
-    unknown: void,
+pub const Type = enum(u8) {
+    style,
+    generic,
 };
 
 _type: Type,
-/// Original source text for at-rules (`@keyframes`, `@media`, ...). Empty
-/// for `.style` because `CSSStyleRule.getCssText` constructs its own
-/// serialization from selector + declarations. The bridge dispatches the
-/// most-derived `cssText` accessor (CSSStyleRule's), so this field only
-/// surfaces for opaque at-rule placeholders. See lightpanda-io/browser#2459.
-_text: []const u8 = "",
 
-pub fn as(self: *CSSRule, comptime T: type) *T {
-    return self.is(T).?;
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .style => CSSStyleRule,
+        .generic => GenericRule,
+    };
 }
 
-pub fn is(self: *CSSRule, comptime T: type) ?*T {
-    switch (self._type) {
-        .style => |r| return if (T == CSSStyleRule) r else null,
-        else => return null,
+fn tagOf(comptime T: type) Type {
+    if (T == CSSStyleRule) {
+        return .style;
     }
+    if (T == GenericRule) {
+        return .generic;
+    }
+    @compileError(@typeName(T) ++ " is not a CSSRule subtype");
 }
 
-pub fn init(rule_type: Type, frame: *Frame) !*CSSRule {
-    return frame._factory.create(CSSRule{
-        ._type = rule_type,
-    });
+// Takes a const rule but returns a mutable subtype; see Node.subtype.
+pub fn subtype(self: *const CSSRule, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, CSSRule);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // The arithmetic rides on the factory allocating the chain in one
+        // block; the _proto_canary back pointer checks it.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
 }
 
-/// Construct an at-rule placeholder with stored source text. Used when an
-/// `@keyframes` / `@media` / etc. lands via `insertRule` or `replaceSync`
-/// so that JS-side reads via `cssRules` see the rule (matching length and
-/// `cssText`) without the CSS engine actually applying it.
-pub fn initAtRule(rule_type: Type, text: []const u8, frame: *Frame) !*CSSRule {
-    return frame._factory.create(CSSRule{
-        ._type = rule_type,
-        ._text = try frame.dupeString(text),
-    });
+pub fn is(self: *const CSSRule, comptime T: type) ?*T {
+    if (self._type != comptime tagOf(T)) {
+        return null;
+    }
+    return self.subtype(T);
+}
+
+pub fn as(self: *const CSSRule, comptime T: type) *T {
+    return self.is(T).?;
 }
 
 pub fn getType(self: *const CSSRule) u16 {
     return switch (self._type) {
-        // `@layer` rules postdate the legacy numeric type constants, so
-        // their `type` is 0 (CSSOM §6.4.1) — same as unknown at-rules.
-        .layer, .unknown => 0,
-        else => @as(u16, @backingInt(std.meta.activeTag(self._type))) + 1,
+        .style => 1,
+        .generic => self.subtype(GenericRule).getType(),
     };
 }
 
-pub fn getCssText(self: *const CSSRule, _: *Frame) []const u8 {
-    return self._text;
+pub fn getCssText(self: *const CSSRule, frame: *Frame) ![]const u8 {
+    return switch (self._type) {
+        .style => self.subtype(CSSStyleRule).getCssText(frame),
+        .generic => self.subtype(GenericRule)._text,
+    };
 }
 
 fn getParentRule(_: *const CSSRule) ?*CSSRule {
