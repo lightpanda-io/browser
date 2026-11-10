@@ -203,6 +203,7 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
                     if (style_manager.hasDisplayContents(element)) {
                         return "contents";
                     }
+                    return cascadedDisplay(style_manager, element, owner);
                 } else if (wrapped.eql(comptime .wrap("visibility"))) {
                     if (style_manager.hasVisibilityHiddenInherited(element)) {
                         return "hidden";
@@ -311,6 +312,33 @@ fn cascadedContent(style_manager: *StyleManager, element: *Element, owner: *Fram
         switch (keyword) {
             .initial, .unset, .revert => return "normal",
             .inherit => current = current.asNode().flatTreeParentElement(owner) orelse return "normal",
+        }
+    }
+}
+
+/// The computed `display`, once none and contents are ruled out. It doesn't
+/// inherit, so only an explicit `inherit` reads the parent's.
+fn cascadedDisplay(style_manager: *StyleManager, element: *Element, owner: *Frame) []const u8 {
+    var current = element;
+    while (true) {
+        const value = style_manager.displayValue(current) orelse return getDefaultDisplay(current);
+        const keyword = CssWideKeyword.parse(value) orelse {
+            const computed = StyleManager.computedDisplay(value) orelse return getDefaultDisplay(current);
+            // Only the root gets here with contents: it computes to block there
+            return if (std.mem.eql(u8, computed, "contents")) "block" else computed;
+        };
+        switch (keyword) {
+            .initial, .unset => return initialValue(comptime .wrap("display")),
+            .revert => return getDefaultDisplay(current),
+            .inherit => {
+                current = current.asNode().flatTreeParentElement(owner) orelse return initialValue(comptime .wrap("display"));
+                if (style_manager.hasDisplayNone(current)) {
+                    return "none";
+                }
+                if (style_manager.hasDisplayContents(current)) {
+                    return "contents";
+                }
+            },
         }
     }
 }
@@ -1618,6 +1646,10 @@ test "WebApi: CSSStyleDeclaration computed transform" {
 
 test "WebApi: CSSStyleDeclaration computed content" {
     try testing.htmlRunner("css/computed_content.html", .{});
+}
+
+test "WebApi: CSSStyleDeclaration computed display" {
+    try testing.htmlRunner("css/computed_display.html", .{});
 }
 
 test "WebApi: CSSStyleDeclaration computed inheritance" {

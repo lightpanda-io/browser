@@ -76,6 +76,10 @@ custom_rules: std.StringHashMapUnmanaged(LazyRules) = .empty,
 // which styles a static CSS file already ships from a `content` rule.
 content_rules: LazyRules = .{},
 
+// The rules declaring `display`, for the keyword getComputedStyle reports. The
+// tracked Visibility cascade keeps only what layout and the dumpers act on.
+display_rules: LazyRules = .{},
+
 // The rules declaring each animation property, the shorthand apart from the
 // longhands. frame/css_animations.zig reads them to fire the animation events.
 animation_rules: std.enums.EnumArray(Animation.Property, LazyRules) = .initFill(.{}),
@@ -515,6 +519,7 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
         property.stampRules(self);
     }
     self.content_rules.stampRules(self);
+    self.display_rules.stampRules(self);
     for (&self.animation_rules.values) |*rules| {
         rules.stampRules(self);
     }
@@ -569,8 +574,8 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
 // Custom properties (keyed by name) and `content` are lazy rules instead: they
-// parse the selector on first lookup. Returns whether the rule set a tracked or
-// a custom property: nothing memoizes `content`.
+// parse the selector on first lookup. `display` is both. Returns whether the
+// rule set a tracked or a custom property: nothing memoizes `content`.
 fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
@@ -580,10 +585,11 @@ fn addSelectorRules(
     layer: u16,
 ) !bool {
     var lazy = declared;
-    if ((lazy.content != null or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
+    if ((lazy.content != null or lazy.display != null or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
         // Icon fonts declare `content` on hundreds of `::before` rules, spinners
         // an animation, and no element matches one.
         lazy.content = null;
+        lazy.display = null;
         lazy.animation = .{};
     }
 
@@ -607,6 +613,9 @@ fn addSelectorRules(
         }
         if (lazy.content) |content| {
             try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
+        }
+        if (lazy.display) |display_declaration| {
+            try self.display_rules.append(arena, selector_text, display_declaration.value, if (display_declaration.important) important_priority else priority);
         }
         for (std.enums.values(Animation.Property)) |property| {
             const rules = self.animation_rules.getPtr(property);
@@ -907,6 +916,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.custom_rules = .empty;
     try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
     self.content_rules = .{};
+    self.display_rules = .{};
     self.animation_rules = .initFill(.{});
     self.keyframes = .empty;
 
@@ -1997,6 +2007,7 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
 
     var customs: std.ArrayList(LazyDeclaration) = .empty;
     var content: ?LazyDeclaration = null;
+    var display_declaration: ?LazyDeclaration = null;
     var lazy_animation: LazyAnimation = .{};
     var it = style.asCSSStyleDeclaration().iterator();
     while (it.next()) |declaration| {
@@ -2013,11 +2024,19 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
                 .value = try arena.dupe(u8, declaration.value),
                 .important = declaration.important,
             };
+        } else if (std.ascii.eqlIgnoreCase(name, "display")) {
+            if (isDisplayDeclaration(declaration.value)) {
+                display_declaration = .{
+                    .name = "display",
+                    .value = try arena.dupe(u8, declaration.value),
+                    .important = declaration.important,
+                };
+            }
         } else if (Animation.Property.parse(name)) |animation_property| {
             lazy_animation.declare(animation_property, try arena.dupe(u8, declaration.value), declaration.important);
         }
     }
-    return .{ .customs = customs.items, .content = content, .animation = lazy_animation };
+    return .{ .customs = customs.items, .content = content, .display = display_declaration, .animation = lazy_animation };
 }
 
 const BucketKey = union(enum) {
@@ -2223,6 +2242,57 @@ pub const Display = enum(u2) {
         return .other;
     }
 };
+
+/// The computed form of a `display` value, or null when it isn't valid. Two
+/// keywords, in either order, compute to the short form Chrome reports.
+pub fn computedDisplay(value: []const u8) ?[]const u8 {
+    var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+    const first = it.next() orelse return null;
+    const second = it.next() orelse return display_keywords.get(first);
+    if (it.next() != null) {
+        return null;
+    }
+    var buf: [64]u8 = undefined;
+    const pair = std.fmt.bufPrint(&buf, "{s} {s}", .{ first, second }) catch return null;
+    if (display_pairs.get(pair)) |computed| {
+        return computed;
+    }
+    const swapped = std.fmt.bufPrint(&buf, "{s} {s}", .{ second, first }) catch return null;
+    return display_pairs.get(swapped);
+}
+
+// A valid `display` declaration: one the cascade doesn't drop
+fn isDisplayDeclaration(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    return computedDisplay(trimmed) != null or isInheritKeyword(trimmed) or std.ascii.eqlIgnoreCase(trimmed, "initial");
+}
+
+const display_keywords = std.StaticStringMapWithEql([]const u8, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+    .{ "none", "none" },                             .{ "contents", "contents" },
+    .{ "block", "block" },                           .{ "inline", "inline" },
+    .{ "inline-block", "inline-block" },             .{ "flow-root", "flow-root" },
+    .{ "flow", "block" },                            .{ "list-item", "list-item" },
+    .{ "flex", "flex" },                             .{ "inline-flex", "inline-flex" },
+    .{ "grid", "grid" },                             .{ "inline-grid", "inline-grid" },
+    .{ "table", "table" },                           .{ "inline-table", "inline-table" },
+    .{ "table-row-group", "table-row-group" },       .{ "table-header-group", "table-header-group" },
+    .{ "table-footer-group", "table-footer-group" }, .{ "table-row", "table-row" },
+    .{ "table-cell", "table-cell" },                 .{ "table-column-group", "table-column-group" },
+    .{ "table-column", "table-column" },             .{ "table-caption", "table-caption" },
+    .{ "ruby", "ruby" },                             .{ "ruby-text", "ruby-text" },
+    .{ "-webkit-box", "-webkit-box" },               .{ "-webkit-inline-box", "-webkit-inline-box" },
+});
+
+// Outer and inner display type, with one space between them
+const display_pairs = std.StaticStringMapWithEql([]const u8, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+    .{ "block flow", "block" },          .{ "inline flow", "inline" },
+    .{ "block flow-root", "flow-root" }, .{ "inline flow-root", "inline-block" },
+    .{ "block flex", "flex" },           .{ "inline flex", "inline-flex" },
+    .{ "block grid", "grid" },           .{ "inline grid", "inline-grid" },
+    .{ "block table", "table" },         .{ "inline table", "inline-table" },
+    .{ "block ruby", "block ruby" },     .{ "inline ruby", "ruby" },
+    .{ "block list-item", "list-item" }, .{ "flow list-item", "list-item" },
+});
 
 const Box = enum(u3) {
     block_level,
@@ -3147,10 +3217,11 @@ const LazyDeclaration = struct {
 const LazyDeclarations = struct {
     customs: []const LazyDeclaration = &.{},
     content: ?LazyDeclaration = null,
+    display: ?LazyDeclaration = null,
     animation: LazyAnimation = .{},
 
     fn isEmpty(self: LazyDeclarations) bool {
-        return self.customs.len == 0 and self.content == null and self.animation.isEmpty();
+        return self.customs.len == 0 and self.content == null and self.display == null and self.animation.isEmpty();
     }
 };
 
@@ -3246,10 +3317,11 @@ const LazySink = struct {
     allocator: Allocator,
     customs: std.StringArrayHashMapUnmanaged(LazyDeclaration) = .empty,
     content: ?LazyDeclaration = null,
+    display: ?LazyDeclaration = null,
     animation: LazyAnimation = .{},
 
     fn declarations(self: *const LazySink) LazyDeclarations {
-        return .{ .customs = self.customs.values(), .content = self.content, .animation = self.animation };
+        return .{ .customs = self.customs.values(), .content = self.content, .display = self.display, .animation = self.animation };
     }
 };
 
@@ -3258,7 +3330,8 @@ const LazySink = struct {
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
 // case-sensitive. Custom properties, `content` and the animation properties go
-// to `lazy` when there is one.
+// to `lazy` when there is one, and so does a valid `display`, which is tracked
+// too.
 fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, lazy: ?*LazySink) !Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = declarations;
@@ -3286,6 +3359,14 @@ fn foldDeclarations(comptime Declared: type, declarations: CssParser.Declaration
             const sink = lazy orelse continue;
             sink.animation.declare(property, declaration.value, declaration.important);
             continue;
+        }
+        if (lazy) |sink| {
+            if (std.ascii.eqlIgnoreCase(declaration.name, "display") and isDisplayDeclaration(declaration.value)) {
+                const earlier_important = if (sink.display) |earlier| earlier.important else false;
+                if (earlier_important == false or declaration.important) {
+                    sink.display = .{ .name = "display", .value = declaration.value, .important = declaration.important };
+                }
+            }
         }
         slots.apply(declaration.name, declaration.value, declaration.important);
     }
@@ -3424,6 +3505,29 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
         }
         // Back to the layers before the winner's. Chrome and Firefox drop the
         // later layers' declarations too, even under an important one.
+        before = winner.layer;
+    }
+    return null;
+}
+
+/// Declared `display` of `el`, or null when nothing declares a valid one.
+pub fn displayValue(self: *StyleManager, el: *Element) ?[]const u8 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    // Most elements keep their UA display: no rule to match for those
+    if (self.visibilityProps(el).author_display == false) {
+        return null;
+    }
+
+    const rules = self.parsedRules(&self.display_rules) catch |err| blk: {
+        log.err(.browser, "StyleManager display", .{ .err = err });
+        break :blk &.{};
+    };
+    var before: ?u16 = null;
+    while (self.lazyWinner(el, comptime .wrap("display"), rules, before)) |winner| {
+        if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
+            return winner.value;
+        }
         before = winner.layer;
     }
     return null;
