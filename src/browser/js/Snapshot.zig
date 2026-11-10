@@ -421,10 +421,10 @@ fn hasGatedMember(comptime JsApi: type) bool {
 
 fn memberExposed(value: anytype) Caller.Function.Opts.Exposed {
     const T = @TypeOf(value);
-    if (T == bridge.Accessor or T == bridge.Function) {
-        return value.exposed;
-    }
-    return .both;
+    return switch (T) {
+        bridge.Accessor, bridge.Function, bridge.FastFunction => value.exposed,
+        else => .both,
+    };
 }
 
 fn countExternalReferences() comptime_int {
@@ -472,6 +472,9 @@ fn countExternalReferences() comptime_int {
                     continue;
                 }
                 count += 1;
+            } else if (T == bridge.FastFunction) {
+                // slow callback + v8.CFunction
+                count += 2;
             } else if (T == bridge.Iterator) {
                 count += 1;
             } else if (T == bridge.Indexed) {
@@ -564,6 +567,13 @@ fn collectExternalReferences() *const ExternalReferences {
                     continue;
                 }
                 references[idx] = @bitCast(@intFromPtr(value.func));
+                idx += 1;
+            } else if (T == bridge.FastFunction) {
+                references[idx] = @bitCast(@intFromPtr(value.slow));
+                idx += 1;
+                // V8 stores a pointer to the v8.CFunction itself (not its
+                // .address) as a Foreign in the template's C function overloads.
+                references[idx] = @bitCast(@intFromPtr(value.fast));
                 idx += 1;
             } else if (T == bridge.Iterator) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
@@ -842,7 +852,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         if (comptime flatten) {
             // [Global] flattening only mirrors non-static accessors/methods onto itself
             switch (definition) {
-                bridge.Accessor, bridge.Function => if (value.static) continue,
+                bridge.Accessor, bridge.Function, bridge.FastFunction => if (value.static) continue,
                 else => continue,
             }
         }
@@ -876,6 +886,26 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 // A member may override its JS-visible name (see Response.json_static)
                 const fn_name = value.js_name orelse name;
                 const js_name = v8.v8__String__NewFromUtf8(isolate, fn_name.ptr, v8.kNormal, @intCast(fn_name.len));
+                v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
+                if (value.static and !own_properties) {
+                    v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
+                } else {
+                    // Web IDL: operations on the interface prototype object
+                    // (and mirrored onto [Global] instances) are enumerable.
+                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), v8.None);
+                }
+            },
+            bridge.FastFunction => {
+                const func_signature = if (value.static) null else signature;
+                const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                    .callback = value.slow,
+                    .signature = func_signature,
+                    .length = value.arity,
+                    .behavior = v8.kConstructorBehavior_Throw,
+                    .side_effect_type = v8.kSideEffectType_HasSideEffect,
+                    .c_function = value.fast,
+                }).?;
+                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
                 if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
