@@ -58,6 +58,9 @@ pub const State = struct {
 
 /// An attribute of `element` changed, or it was inserted.
 pub fn elementChanged(frame: *Frame, element: *Element) void {
+    if (frame._session.experimental_features.animation == false) {
+        return;
+    }
     const owner = element.ownerFrame(frame) orelse return;
     const state = &owner._css_animations;
     if (state.whole_document == false) {
@@ -71,6 +74,9 @@ pub fn elementChanged(frame: *Frame, element: *Element) void {
 
 /// A stylesheet changed, or the parser inserted nodes.
 pub fn documentChanged(frame: *Frame) void {
+    if (frame._session.experimental_features.animation == false) {
+        return;
+    }
     frame._css_animations.whole_document = true;
     scheduleCheck(frame);
 }
@@ -316,3 +322,31 @@ const CssAnimation = struct {
         self.frame._factory.destroy(self);
     }
 };
+
+const testing = @import("../../testing.zig");
+test "css_animations: nothing is checked without the experimental feature" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    defer testing.test_session.experimental_features = .{};
+    const state = &frame._css_animations;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<style>@keyframes spin { to { opacity: 0 } } .spin { animation: spin 1s }</style>
+        \\<div></div>
+    );
+    const div = body.lastChild().?.as(Element);
+    try div.setAttribute(comptime .wrap("class"), comptime .wrap("spin"), frame);
+    try testing.expectEqual(false, state.check_scheduled);
+    try testing.expectEqual(false, state.whole_document);
+    try testing.expectEqual(0, state.pending.count());
+
+    testing.test_session.experimental_features.animation = true;
+    try div.setAttribute(comptime .wrap("class"), comptime .wrap("spin x"), frame);
+    try testing.expectEqual(true, state.check_scheduled);
+    try testing.expectEqual(1, state.pending.count());
+}

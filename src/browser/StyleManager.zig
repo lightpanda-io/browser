@@ -3793,7 +3793,7 @@ test "StyleManager: inline style writes" {
 }
 
 test "StyleManager: animation events" {
-    try testing.htmlRunner("css/animation_events.html", .{});
+    try testing.htmlRunner("css/animation_events.html", .{ .experimental_features = .{ .animation = true } });
 }
 
 test "StyleManager: hasKeyframes rebuilds only when a sheet mentions keyframes" {
