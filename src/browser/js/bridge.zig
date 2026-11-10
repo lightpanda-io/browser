@@ -693,8 +693,9 @@ pub const Property = struct {
 };
 
 pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-    // The window being read, not the caller's: a function from an iframe that
-    // the parent calls still runs in the parent's current context.
+    // The window being read, not the caller's: a property read doesn't enter
+    // the receiver's context, so the parent reading `iframe.contentWindow.abc`
+    // is still in the parent's current context.
     const holder = v8.v8__PropertyCallbackInfo__This(handle).?;
 
     // During snapshot creation, there's no Context in embedder data yet.

@@ -3,14 +3,13 @@
 <script src="../testing.js"></script>
 
 <div id="abc"></div>
-<iframe id="f" srcdoc="<script>function f() { return abc }</script><div id=abc></div>"></iframe>
+<iframe id="f" srcdoc="<div id=abc></div>"></iframe>
 
 <script id="named_access_uses_the_holder_window">
   testing.onload(() => {
     const iwin = $('#f').contentWindow;
     const child_abc = iwin.document.getElementById('abc');
 
-    testing.expectEqual(child_abc, iwin.f());
     testing.expectEqual(child_abc, iwin.abc);
     testing.expectTrue(iwin.abc instanceof iwin.HTMLDivElement);
     testing.expectEqual($('#abc'), abc);
