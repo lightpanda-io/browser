@@ -153,8 +153,14 @@ pub const Connection = struct {
                 } else if (std.ascii.eqlIgnoreCase(h.key, "connection")) {
                     self.connection = h.value;
                 } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-key")) {
+                    if (self.websocket_key != null) {
+                        return error.InvalidHeader;
+                    }
                     self.websocket_key = h.value;
                 } else if (std.ascii.eqlIgnoreCase(h.key, "sec-websocket-version")) {
+                    if (self.websocket_version != null) {
+                        return error.InvalidHeader;
+                    }
                     self.websocket_version = h.value;
                 }
             }
