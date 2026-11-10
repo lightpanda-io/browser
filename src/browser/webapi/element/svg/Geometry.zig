@@ -106,7 +106,7 @@ pub const JsApi = struct {
     };
 
     pub const pathLength = bridge.accessor(Geometry.getPathLength, null, .{});
-    pub const getTotalLength = bridge.function(Geometry.getTotalLength, .{});
+    pub const getTotalLength = bridge.fastFunction(Geometry.getTotalLength, .{});
     pub const getPointAtLength = bridge.function(Geometry.getPointAtLength, .{});
 };
 

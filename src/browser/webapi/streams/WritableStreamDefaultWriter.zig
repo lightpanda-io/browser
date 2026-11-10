@@ -126,7 +126,7 @@ pub const JsApi = struct {
 
     pub const write = bridge.function(WritableStreamDefaultWriter.write, .{});
     pub const close = bridge.function(WritableStreamDefaultWriter.close, .{});
-    pub const releaseLock = bridge.function(WritableStreamDefaultWriter.releaseLock, .{});
+    pub const releaseLock = bridge.fastFunction(WritableStreamDefaultWriter.releaseLock, .{});
     pub const closed = bridge.accessor(WritableStreamDefaultWriter.getClosed, null, .{});
     pub const ready = bridge.accessor(WritableStreamDefaultWriter.getReady, null, .{});
     pub const desiredSize = bridge.accessor(WritableStreamDefaultWriter.getDesiredSize, null, .{});

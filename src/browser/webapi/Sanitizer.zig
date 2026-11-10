@@ -1414,10 +1414,10 @@ pub const JsApi = struct {
     pub const removeAttribute = bridge.function(Sanitizer.removeAttribute, .{});
     pub const allowProcessingInstruction = bridge.function(Sanitizer.allowProcessingInstruction, .{});
     pub const removeProcessingInstruction = bridge.function(Sanitizer.removeProcessingInstruction, .{});
-    pub const setComments = bridge.function(Sanitizer.setComments, .{});
-    pub const setDataAttributes = bridge.function(Sanitizer.setDataAttributes, .{});
-    pub const setJavascriptURLs = bridge.function(Sanitizer.setJavascriptURLs, .{});
-    pub const removeUnsafe = bridge.function(Sanitizer.removeUnsafe, .{});
+    pub const setComments = bridge.fastFunction(Sanitizer.setComments, .{});
+    pub const setDataAttributes = bridge.fastFunction(Sanitizer.setDataAttributes, .{});
+    pub const setJavascriptURLs = bridge.fastFunction(Sanitizer.setJavascriptURLs, .{});
+    pub const removeUnsafe = bridge.fastFunction(Sanitizer.removeUnsafe, .{});
 };
 
 const testing = @import("../../testing.zig");

@@ -217,8 +217,8 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(Button.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Button.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Button.getValidationMessage, null, .{});
-    pub const checkValidity = bridge.function(Button.checkValidity, .{});
-    pub const reportValidity = bridge.function(Button.reportValidity, .{});
+    pub const checkValidity = bridge.fastFunction(Button.checkValidity, .{});
+    pub const reportValidity = bridge.fastFunction(Button.reportValidity, .{});
     pub const setCustomValidity = bridge.function(Button.setCustomValidity, .{});
 };
 

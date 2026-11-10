@@ -263,5 +263,5 @@ pub const JsApi = struct {
 
     pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{});
     pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{});
-    pub const detach = bridge.function(DOMNodeIterator.detach, .{});
+    pub const detach = bridge.fastFunction(DOMNodeIterator.detach, .{});
 };

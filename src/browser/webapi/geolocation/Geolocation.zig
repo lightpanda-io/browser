@@ -233,7 +233,7 @@ pub const JsApi = struct {
 
     pub const getCurrentPosition = bridge.function(Geolocation.getCurrentPosition, .{});
     pub const watchPosition = bridge.function(Geolocation.watchPosition, .{});
-    pub const clearWatch = bridge.function(Geolocation.clearWatch, .{});
+    pub const clearWatch = bridge.fastFunction(Geolocation.clearWatch, .{});
 };
 
 const testing = @import("../../../testing.zig");

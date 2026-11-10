@@ -93,5 +93,5 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(DocumentType.getName, null, .{});
     pub const publicId = bridge.accessor(DocumentType.getPublicId, null, .{});
     pub const systemId = bridge.accessor(DocumentType.getSystemId, null, .{});
-    pub const remove = bridge.function(DocumentType.remove, .{});
+    pub const remove = bridge.fastFunction(DocumentType.remove, .{});
 };

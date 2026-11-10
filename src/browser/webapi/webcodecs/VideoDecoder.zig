@@ -161,9 +161,9 @@ pub const JsApi = struct {
     pub const decodeQueueSize = bridge.accessor(VideoDecoder.getDecodeQueueSize, null, .{});
     pub const ondequeue = EventTarget.handlerAccessor(VideoDecoder, "dequeue");
     pub const configure = bridge.function(VideoDecoder.configure, .{});
-    pub const decode = bridge.function(VideoDecoder.decode, .{});
+    pub const decode = bridge.fastFunction(VideoDecoder.decode, .{});
     pub const flush = bridge.function(VideoDecoder.flush, .{});
-    pub const reset = bridge.function(VideoDecoder.reset, .{});
-    pub const close = bridge.function(VideoDecoder.close, .{});
+    pub const reset = bridge.fastFunction(VideoDecoder.reset, .{});
+    pub const close = bridge.fastFunction(VideoDecoder.close, .{});
     pub const isConfigSupported = bridge.function(VideoDecoder.isConfigSupported, .{ .static = true });
 };
