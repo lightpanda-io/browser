@@ -1760,7 +1760,9 @@ fn heightWritten(self: *StyleManager, el: *Element) void {
 /// Nothing substitutes var() (yet).
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
-    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y" };
+    // A vertical inset only moves a positioned box, and that's applied on
+    // every read (layout.boxTop), never cached.
+    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y", .top, .bottom, .@"inset-block", .@"inset-block-start", .@"inset-block-end" };
 
     // font-size isn't cascaded by any group, but text wraps at it
     const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
@@ -2400,21 +2402,32 @@ pub fn clipsOverflowX(self: *StyleManager, el: *Element) bool {
     return self.geometryProps(el).overflow_x_clips;
 }
 
-pub const WidthLimit = union(enum) {
+/// A length that may depend on the containing block's size.
+pub const BoxLength = union(enum) {
     px: f64,
     percent: f64, // A fraction of the containing block
 };
 
+pub const Side = enum { top, right, bottom, left };
+
+/// A positioned box's inset on one side. Null for auto, and for values that
+/// need layout (em, calc).
+pub fn inset(self: *StyleManager, el: *Element, comptime side: Side) ?BoxLength {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    return self.widthLimit(@field(self.geometryProps(el), @tagName(side)));
+}
+
 /// min-width and max-width. Null where they don't limit: auto, none, the
 /// intrinsic keywords, and values that need layout (em, calc).
-pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?WidthLimit, max: ?WidthLimit } {
+pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?BoxLength, max: ?BoxLength } {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{ .min = null, .max = null };
     const geometry = self.geometryProps(el);
     return .{ .min = self.widthLimit(geometry.min_width), .max = self.widthLimit(geometry.max_width) };
 }
 
-fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
+fn widthLimit(self: *StyleManager, length: Length) ?BoxLength {
     return switch (length.unit) {
         .auto, .content => null,
         .percent => .{ .percent = @as(f64, length.value) / 100.0 },
@@ -3794,7 +3807,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -3811,6 +3824,8 @@ const Geometry = struct {
         margin_right: ?Length = null,
         left: ?Length = null,
         right: ?Length = null,
+        top: ?Length = null,
+        bottom: ?Length = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
@@ -3844,6 +3859,19 @@ const Geometry = struct {
                     const sides = boxSides(value) orelse return;
                     self.left = sides.left;
                     self.right = sides.right;
+                    self.top = sides.top;
+                    self.bottom = sides.bottom;
+                },
+                .@"inset-block" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.top = sides.left;
+                    self.bottom = sides.right;
+                },
+                .top, .@"inset-block-start" => {
+                    self.top = Length.parseMargin(value);
+                },
+                .bottom, .@"inset-block-end" => {
+                    self.bottom = Length.parseMargin(value);
                 },
                 .@"inset-inline" => {
                     const sides = inlineSides(value) orelse return;
@@ -3887,10 +3915,11 @@ const Geometry = struct {
             }
         }
 
-        const Sides = struct { left: Length, right: Length };
+        // top and bottom only from boxSides
+        const Sides = struct { left: Length, right: Length, top: Length = .{}, bottom: Length = .{} };
 
-        // The left and right of a `top [right [bottom [left]]]` shorthand
-        // (margin, inset).
+        // The sides of a `top [right [bottom [left]]]` shorthand (margin,
+        // inset).
         fn boxSides(value: []const u8) ?Sides {
             var count: usize = 0;
             var tokens: [4][]const u8 = undefined;
@@ -3908,6 +3937,8 @@ const Geometry = struct {
             return .{
                 .left = Length.parseMargin(if (count == 4) tokens[3] else right),
                 .right = Length.parseMargin(right),
+                .top = Length.parseMargin(tokens[0]),
+                .bottom = Length.parseMargin(tokens[if (count >= 3) 2 else 0]),
             };
         }
 
@@ -3978,7 +4009,7 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u287) {
+    const Computed = packed struct(u357) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -3997,6 +4028,8 @@ const Geometry = struct {
         // Positioned boxes only; auto, and values that need layout, are auto
         left: Length = .{},
         right: Length = .{},
+        top: Length = .{},
+        bottom: Length = .{},
     };
 
     // Memory optimization. We usedto store each value as a
@@ -4005,30 +4038,33 @@ const Geometry = struct {
     // struct of arrays ("specialized", because the unit is bit-packed into bits)
     const Stored = struct {
         values: [length_count]f32,
-        bits: u32,
+        // each length's unit, then the bools: apart so neither needs a u64,
+        // which would pad the record
+        units: u32,
+        flags: u8,
 
         const names = @typeInfo(Computed).@"struct".field_names;
         const types = @typeInfo(Computed).@"struct".field_types;
         const length_count = std.mem.count(type, types, &.{Length});
 
         comptime {
-            std.debug.assert(length_count * @bitSizeOf(Length.Unit) + (names.len - length_count) <= 32);
+            std.debug.assert(length_count * @bitSizeOf(Length.Unit) <= 32);
+            std.debug.assert(names.len - length_count <= 8);
         }
 
         fn pack(computed: Computed) Stored {
-            var stored: Stored = .{ .values = undefined, .bits = 0 };
+            var stored: Stored = .{ .values = undefined, .units = 0, .flags = 0 };
             comptime var length = 0;
-            comptime var bit = 0;
+            comptime var flag = 0;
             inline for (names, types) |name, T| {
                 const value = @field(computed, name);
                 if (T == Length) {
                     stored.values[length] = value.value;
-                    stored.bits |= @as(u32, @backingInt(value.unit)) << bit;
+                    stored.units |= @as(u32, @backingInt(value.unit)) << (length * @bitSizeOf(Length.Unit));
                     length += 1;
-                    bit += @bitSizeOf(Length.Unit);
                 } else {
-                    stored.bits |= @as(u32, @intFromBool(value)) << bit;
-                    bit += 1;
+                    stored.flags |= @as(u8, @intFromBool(value)) << flag;
+                    flag += 1;
                 }
             }
             return stored;
@@ -4037,16 +4073,15 @@ const Geometry = struct {
         fn unpack(self: Stored) Computed {
             var computed: Computed = .{};
             comptime var length = 0;
-            comptime var bit = 0;
+            comptime var flag = 0;
             inline for (names, types) |name, T| {
                 if (T == Length) {
-                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.bits >> bit);
-                    @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(@intCast(unit)) };
+                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.units >> (length * @bitSizeOf(Length.Unit)));
+                    @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(unit) };
                     length += 1;
-                    bit += @bitSizeOf(Length.Unit);
                 } else {
-                    @field(computed, name) = (self.bits >> bit) & 1 == 1;
-                    bit += 1;
+                    @field(computed, name) = (self.flags >> flag) & 1 == 1;
+                    flag += 1;
                 }
             }
             return computed;
@@ -6192,6 +6227,11 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     try testing.expect(sm.geometry.memo.contains(p));
     try testing.expectEqual(false, sm.clipsOverflowX(p));
 
+    // A vertical inset only moves a positioned box, applied on every read
+    sm.setCacheLayout(div, .box_width, 100);
+    try style.setProperty("top", "4px", null, frame);
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(div, .box_width));
+
     // No memo reads a custom property
     sm.setCacheLayout(div, .box_width, 100);
     try style.setProperty("--offset", "4px", null, frame);
@@ -6387,7 +6427,7 @@ test "StyleManager: records: a group allocates the chunks it reaches" {
 }
 
 test "StyleManager: records: geometry packs its lengths' units with the flags" {
-    try testing.expectEqual(40, @sizeOf(Records(Geometry.Stored).Entry));
+    try testing.expectEqual(52, @sizeOf(Records(Geometry.Stored).Entry));
 
     // Each field apart from its neighbours
     const names = Geometry.Stored.names;

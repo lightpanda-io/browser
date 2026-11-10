@@ -2024,21 +2024,24 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     const owner = self.ownerFrame(frame) orelse return 0;
     const style_manager = &owner._style_manager;
 
-    if (self.inlineStyle(frame)) |style| {
-        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
-    }
-
-    while (current.flatParent(frame)) |parent| {
-        if (parent.is(Element)) |el| {
+    while (true) {
+        if (current.is(Element)) |el| {
             if (el.inlineStyle(frame)) |style| {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
             }
+            // Placed against its containing block, not its line (see
+            // layout.boxTop)
+            if (layout.Anchor.horizontal(el, owner)) |anchor| {
+                x += anchor.offset;
+                current = (anchor.base orelse return x).asNode();
+                continue;
+            }
+            x += layout.relativeShift(el, .horizontal, owner);
         }
+        const parent = current.flatParent(frame) orelse return x;
         x += lineOffset(current, parent, style_manager, frame);
         current = parent;
     }
-
-    return x;
 }
 
 fn lineOffset(node: *Node, parent: *Node, style_manager: *StyleManager, frame: *Frame) f64 {

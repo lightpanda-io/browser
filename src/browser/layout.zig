@@ -229,7 +229,7 @@ fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution 
     return clamped;
 }
 
-fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_percent: bool, owner: *Frame) ?f64 {
+fn resolveWidthLimit(self: *Element, limit: StyleManager.BoxLength, resolve_percent: bool, owner: *Frame) ?f64 {
     return switch (limit) {
         .px => |px| px,
         .percent => |fraction| if (resolve_percent) fraction * containingBlockWidth(self, owner) else null,
@@ -318,23 +318,126 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     return width;
 }
 
-/// Height flows up, top flows down. A box is never above its parent, nor above
-/// an earlier sibling. Offsets are cached from the parent's top, so a height
-/// write moves only the siblings below it (see StyleManager.heightWritten).
+/// Height flows up, top flows down. In the flow, a box is never above its
+/// parent, nor above an earlier sibling. Offsets are cached from the parent's
+/// top, so a height write moves only the siblings below it (see
+/// StyleManager.heightWritten). A positioned box then moves from there (see
+/// Anchor), along with its subtree.
 pub fn boxTop(self: *Element, owner: *Frame) f64 {
     var top: f64 = 0;
     var el = self;
-    while (el.asNode().flatTreeParentElement(owner)) |parent| : (el = parent) {
-        top += boxOffset(el, parent, owner);
+    while (true) {
+        if (Anchor.vertical(el, owner)) |anchor| {
+            top += anchor.offset;
+            el = anchor.base orelse return top;
+            continue;
+        }
+        const parent = el.asNode().flatTreeParentElement(owner) orelse return top;
+        top += boxOffset(el, parent, owner) + relativeShift(el, .vertical, owner);
+        el = parent;
     }
-    return top;
 }
 
 /// The box's top, given its flat-tree parent and the parent's top (for walks
 /// that already have them).
 pub fn boxTopFrom(self: *Element, parent: ?*Element, parent_top: f64, owner: *Frame) f64 {
+    if (Anchor.vertical(self, owner)) |anchor| {
+        const base = anchor.base orelse return anchor.offset;
+        return boxTop(base, owner) + anchor.offset;
+    }
     const p = parent orelse return 0;
-    return parent_top + boxOffset(self, p, owner);
+    return parent_top + boxOffset(self, p, owner) + relativeShift(self, .vertical, owner);
+}
+
+pub const Axis = enum { vertical, horizontal };
+
+/// Where an absolutely positioned or fixed box with an inset on the axis
+/// sits: offset from its containing block's edge (base), or from the
+/// document's when base is null. It takes no room in the flow, so nothing
+/// else moves with it but its subtree. Without an inset it stays where the
+/// flow put it.
+pub const Anchor = struct {
+    offset: f64,
+    base: ?*Element,
+
+    pub fn vertical(el: *Element, owner: *Frame) ?Anchor {
+        return anchor(el, .vertical, owner);
+    }
+
+    pub fn horizontal(el: *Element, owner: *Frame) ?Anchor {
+        return anchor(el, .horizontal, owner);
+    }
+
+    fn anchor(el: *Element, comptime axis: Axis, owner: *Frame) ?Anchor {
+        const style_manager = &owner._style_manager;
+        const position = style_manager.position(el);
+        if (position != .absolute and position != .fixed) {
+            return null;
+        }
+        const start, const end = switch (axis) {
+            .vertical => .{ style_manager.inset(el, .top), style_manager.inset(el, .bottom) },
+            .horizontal => .{ style_manager.inset(el, .left), style_manager.inset(el, .right) },
+        };
+        if (start == null and end == null) {
+            return null;
+        }
+
+        const base = style_manager.containingBlock(el);
+        var offset = if (start) |s|
+            resolveInset(s, base, axis, owner)
+        else
+            containingSize(base, axis, owner) - resolveInset(end.?, base, axis, owner) - boxSize(el, axis, owner);
+
+        if (position == .fixed) {
+            // against the viewport, wherever it's scrolled to
+            const window = owner.window;
+            offset += @floatFromInt(if (axis == .vertical) window.getScrollY() else window.getScrollX());
+        }
+        return .{ .offset = offset, .base = base };
+    }
+};
+
+/// How far a relatively positioned box moves from where the flow put it
+pub fn relativeShift(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.position(el) != .relative) {
+        return 0;
+    }
+    const start, const end = switch (axis) {
+        .vertical => .{ style_manager.inset(el, .top), style_manager.inset(el, .bottom) },
+        .horizontal => .{ style_manager.inset(el, .left), style_manager.inset(el, .right) },
+    };
+    const base = style_manager.containingBlock(el);
+    if (start) |s| {
+        return resolveInset(s, base, axis, owner);
+    }
+    if (end) |e| {
+        return -resolveInset(e, base, axis, owner);
+    }
+    return 0;
+}
+
+fn resolveInset(length: StyleManager.BoxLength, base: ?*Element, comptime axis: Axis, owner: *Frame) f64 {
+    return switch (length) {
+        .px => |px| px,
+        .percent => |fraction| fraction * containingSize(base, axis, owner),
+    };
+}
+
+// The containing block's size on the axis; the viewport's for null
+fn containingSize(base: ?*Element, comptime axis: Axis, owner: *Frame) f64 {
+    if (base) |b| {
+        return boxSize(b, axis, owner);
+    }
+    const viewport = owner.page.getViewport();
+    return @floatFromInt(if (axis == .vertical) viewport.height else viewport.width);
+}
+
+fn boxSize(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
+    return switch (axis) {
+        .vertical => boxHeight(el, owner),
+        .horizontal => boxWidth(el, owner),
+    };
 }
 
 // The box's top, from its parent's top. Caches every sibling's up to it: an

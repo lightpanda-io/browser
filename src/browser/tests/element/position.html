@@ -287,6 +287,74 @@
 }
 </script>
 
+<script id="positionedBoxes">
+{
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div id="pb-track" style="position:relative;width:300px;height:20px">
+      <div id="pb-knob" style="position:absolute;left:10px;top:15px;width:20px;height:20px"></div>
+    </div>
+    <div id="pb-out" style="height:0"></div>
+    <div id="pb-a" style="height:10px"></div>
+    <div id="pb-rel" style="position:relative;top:7px;left:3px;height:10px"></div>
+    <div id="pb-after" style="height:10px"></div>
+    <div id="pb-cb" style="position:relative;width:300px;height:100px">
+      <div id="pb-bottom" style="position:absolute;bottom:10px;right:10px;width:50px;height:20px"></div>
+    </div>
+    <div id="pb-outer" style="position:relative">
+      <div style="height:200px"></div>
+      <div><div id="pb-up" style="position:absolute;top:0;left:0;width:30px;height:30px"></div></div>
+    </div>
+    <div id="pb-fixed" style="position:fixed;top:5px;left:6px;width:10px;height:10px"></div>
+    <div style="height:3000px"></div>`;
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // An absolute box sits against its positioned ancestor (the issue repro).
+  // It takes no room: the next block stacks below the track, not the knob.
+  const track = rect('pb-track');
+  testing.expectEqual(track.top + 15, rect('pb-knob').top);
+  testing.expectEqual(track.left + 10, rect('pb-knob').left);
+  testing.expectEqual(track.top + 20, rect('pb-out').top);
+
+  // Where the knob hangs below the track, the knob is hit. (Below pb-a's
+  // band: where they overlap, Chrome hits the knob, painted above in-flow
+  // boxes, and we hit the later one.)
+  testing.expectEqual($('#pb-knob'), document.elementFromPoint(track.left + 15, track.top + 32));
+
+  // A relative box moves from where the flow put it; what follows doesn't
+  const a = rect('pb-a');
+  testing.expectEqual(a.top + 17, rect('pb-rel').top);
+  testing.expectEqual(a.left + 3, rect('pb-rel').left);
+  testing.expectEqual(a.top + 20, rect('pb-after').top);
+
+  // bottom and right count from the containing block's far edges
+  const cb = rect('pb-cb');
+  testing.expectEqual(cb.top + 70, rect('pb-bottom').top);
+  testing.expectEqual(cb.left + 240, rect('pb-bottom').left);
+
+  // A positioned box can sit above its parent, and is still hit there
+  const outer = rect('pb-outer');
+  testing.expectEqual(outer.top, rect('pb-up').top);
+  testing.expectEqual($('#pb-up'), document.elementFromPoint(outer.left + 5, outer.top + 5));
+
+  // A fixed box stays put in the viewport, wherever the page is scrolled
+  testing.expectEqual(5, rect('pb-fixed').top);
+  testing.expectEqual(6, rect('pb-fixed').left);
+  window.scrollTo(0, 100);
+  testing.expectEqual(5, rect('pb-fixed').top);
+  window.scrollTo(0, 0);
+
+  // Moving a positioned box moves its subtree with it
+  $('#pb-track').style.top = '40px';
+  testing.expectEqual(track.top + 40, rect('pb-track').top);
+  testing.expectEqual(track.top + 55, rect('pb-knob').top);
+  testing.expectEqual(track.top + 20, rect('pb-out').top);
+
+  wrap.remove();
+}
+</script>
+
 <script id="translateX">
 {
   const shell = document.createElement('div');
