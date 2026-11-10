@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<!--
+  The parser's stylesheets load in parallel, as in Chrome. Each slow/ sheet
+  arrives after 300 ms (delay_ms) and hides `.slow-<name>` and `.order-<name>`.
+-->
+<script id=links_record_their_events>
+  window.__events = [];
+  window.__start = performance.now();
+  let dclDisplay = null;
+  document.addEventListener('DOMContentLoaded', () => { dclDisplay = getComputedStyle(document.getElementById('d')).display; });
+  testing.onload(() => {
+    // Each link fires its own event once, after the script below.
+    testing.expectEqual(['404:error', 'a:load', 'b:load', 'c:load', 'd:load'], [...window.__events].sort());
+    // The parser-blocking script waited for the sheets, so DOMContentLoaded
+    // came after them.
+    testing.expectEqual('none', dclDisplay);
+  });
+</script>
+<link rel=stylesheet href="slow/a.css?delay_ms=300" onload="__events.push('a:load')" onerror="__events.push('a:error')">
+<style>.order-a { display: block; }</style>
+<link rel=stylesheet href="slow/b.css?delay_ms=300" onload="__events.push('b:load')" onerror="__events.push('b:error')">
+<link rel=stylesheet href="slow/c.css?delay_ms=300" onload="__events.push('c:load')" onerror="__events.push('c:error')">
+<link rel=stylesheet href="slow/d.css?delay_ms=300" onload="__events.push('d:load')" onerror="__events.push('d:error')">
+<link rel=stylesheet href="slow/404.css" onload="__events.push('404:load')" onerror="__events.push('404:error')">
+</head>
+<body>
+<p id=a class=slow-a>a</p>
+<p id=b class=slow-b>b</p>
+<p id=c class=slow-c>c</p>
+<p id=d class=slow-d>d</p>
+<p id=order class=order-a>order</p>
+<script id=a_script_after_the_links_sees_every_sheet>
+{
+  const elapsed = performance.now() - window.__start;
+  for (const id of ['a', 'b', 'c', 'd']) {
+    testing.expectEqual('none', getComputedStyle(document.getElementById(id)).display);
+  }
+  // Fetched together: less than the four delays one after another.
+  testing.expectTrue(elapsed < 4 * 300);
+
+  // document.styleSheets is in tree order, whichever sheet arrived first, and
+  // the <style> after a.css comes after it in the cascade: its display: block
+  // wins over a.css's display: none. The failed link's sheet, if any, is
+  // empty.
+  const names = Array.from(document.styleSheets)
+    .filter((s) => s.cssRules.length > 0)
+    .map((s) => s.href ? new URL(s.href).pathname.split('/').pop() : 'style');
+  testing.expectEqual(['a.css', 'style', 'b.css', 'c.css', 'd.css'], names);
+  testing.expectEqual('block', getComputedStyle(document.getElementById('order')).display);
+}
+</script>
+</body>
+</html>

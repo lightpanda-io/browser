@@ -84,6 +84,7 @@ pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
 pub const css_animations = @import("frame/css_animations.zig");
+pub const stylesheets = @import("frame/stylesheets.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -172,6 +173,9 @@ _mutation: observers.Mutation = .{},
 _intersection: observers.Intersection = .{},
 
 _css_animations: css_animations.State = .{},
+
+// The stylesheets this frame's parser links, loading while it parses on
+_stylesheets: stylesheets.State = .{},
 
 // Slots that need slotchange events to be fired, in signal order. Delivered
 // by deliverMutations because there is specific timing with for these events
@@ -2593,7 +2597,7 @@ pub fn queueImageEvent(self: *Frame, image: *Element.Html.Image, kind: QueuedEve
     try self.queueEvent(.{ .element = image.asHtml(), .kind = kind, .generation = image._generation });
 }
 
-fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind, generation: u32) !void {
+pub fn queueLinkEvent(self: *Frame, link: *Element.Html.Link, kind: QueuedEvent.Kind, generation: u32) !void {
     try self.queueEvent(.{ .element = link.asHtml(), .kind = kind, .generation = generation });
 }
 
@@ -2700,10 +2704,13 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     if (self._parse_mode == .fragment) {
         return;
     }
+    if (try stylesheets.start(self, link, href)) {
+        // The parser's link: it loads while the parse goes on
+        return;
+    }
     // Captured up front: if the link is reprocessed while the sync fetch is
     // in flight, this pass's outcome is stale and must not be delivered.
     const generation = link._generation;
-    const element = link.asElement();
 
     // HttpClient will take out a larger arena for the body, if necessary
     const arena = try session.getArena(.large, "Frame.loadExternalStylesheet");
@@ -2758,18 +2765,42 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
     defer response.deinit();
 
-    if (response.status < 200 or response.status >= 300) {
-        log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
-        return self.queueLinkEvent(link, .@"error", generation);
+    const kind = try self.applyStylesheet(link, resolved, response.status, response.content_type, response.body.items(), arena.allocator(), .append);
+    try self.queueLinkEvent(link, kind, generation);
+}
+
+/// Where a link's new sheet joins document.styleSheets.
+pub const SheetPlacement = enum {
+    append,
+    // Before the sheets whose owner comes after the link's: a parser sheet can
+    // load after the ones the parser met later.
+    tree_order,
+};
+
+/// Applies the response to a <link rel=stylesheet> fetch to the link's sheet,
+/// and returns the event the link fires.
+pub fn applyStylesheet(
+    self: *Frame,
+    link: *Element.Html.Link,
+    url: [:0]const u8,
+    status: u16,
+    content_type_value: ?[]const u8,
+    body: []const u8,
+    arena: Allocator,
+    placement: SheetPlacement,
+) !QueuedEvent.Kind {
+    if (status < 200 or status >= 300) {
+        log.info(.http, "external stylesheet status", .{ .status = status, .url = url });
+        return .@"error";
     }
 
-    if (response.body.items().len > MAX_STYLESHEET_BYTES) {
+    if (body.len > MAX_STYLESHEET_BYTES) {
         log.debug(.http, "external stylesheet too large", .{
-            .bytes = response.body.items().len,
+            .bytes = body.len,
             .max = MAX_STYLESHEET_BYTES,
-            .url = resolved,
+            .url = url,
         });
-        return self.queueLinkEvent(link, .@"error", generation);
+        return .@"error";
     }
 
     // Reuse the cached sheet on re-fetch (href mutation on a connected
@@ -2783,9 +2814,12 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // `orelse` branch, leaving the sheet permanently unreachable through
     // `document.styleSheets`).
     const sheet = link._sheet orelse blk: {
-        const new_sheet = try CSSStyleSheet.initWithOwner(element, self);
+        const new_sheet = try CSSStyleSheet.initWithOwner(link.asElement(), self);
         const sheets = try self.document.getStyleSheets(self);
-        try sheets.add(new_sheet, self);
+        switch (placement) {
+            .append => try sheets.add(new_sheet, self),
+            .tree_order => try sheets.addInTreeOrder(new_sheet, self),
+        }
         link._sheet = new_sheet;
         break :blk new_sheet;
     };
@@ -2796,19 +2830,18 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // scratch-list pattern in `CSSStyleSheet.replaceRules`. Keeping
     // `_href` consistent with what the sheet actually contains is the
     // minimum.
-    const content_type: ?Mime = if (response.content_type) |value|
+    const content_type: ?Mime = if (content_type_value) |value|
         Mime.parse(value) catch null
     else
         null;
     const protocol_charset = if (content_type) |*mime| mime.explicitCharset() else null;
-    const text = try css_charset.decode(arena.allocator(), response.body.items(), protocol_charset, self.charset);
+    const text = try css_charset.decode(arena, body, protocol_charset, self.charset);
     sheet.replaceRules(text, self) catch |err| {
-        log.debug(.http, "external stylesheet parse", .{ .err = err, .url = resolved });
-        return self.queueLinkEvent(link, .@"error", generation);
+        log.debug(.http, "external stylesheet parse", .{ .err = err, .url = url });
+        return .@"error";
     };
-    sheet._href = try self.page_arena.dupe(u8, resolved);
-
-    try self.queueLinkEvent(link, .load, generation);
+    sheet._href = try self.page_arena.dupe(u8, url);
+    return .load;
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps

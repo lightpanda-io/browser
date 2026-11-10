@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script id=deferred_scripts_wait_for_the_sheets>
+  window.__deferred = null;
+  let dclSheets = -1;
+  document.addEventListener('DOMContentLoaded', () => { dclSheets = document.styleSheets.length; });
+  testing.onload(() => {
+    // The module script, deferred, ran once both sheets had loaded, and
+    // DOMContentLoaded followed it.
+    testing.expectEqual('none none', window.__deferred);
+    testing.expectEqual(2, dclSheets);
+  });
+</script>
+<script type=module>
+  window.__deferred = ['a', 'b'].map((id) => getComputedStyle(document.getElementById(id)).display).join(' ');
+</script>
+<link rel=stylesheet href="slow/a.css?delay_ms=300">
+</head>
+<body>
+<p id=a class=slow-a>a</p>
+<p id=b class=slow-b>b</p>
+<link rel=stylesheet href="slow/b.css?delay_ms=300">
+</body>
+</html>
