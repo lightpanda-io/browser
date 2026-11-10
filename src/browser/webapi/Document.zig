@@ -1361,7 +1361,13 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         break :blk joined.items;
     };
 
-    if (self._current_script == null or frame._load_state != .parsing) {
+    const inline_write = self._current_script != null and switch (frame._load_state) {
+        .parsing => true,
+        // a deferred script, unless it explicitly opened the document
+        .interactive => self._script_created_parser == null,
+        else => false,
+    };
+    if (inline_write == false) {
         if (self._script_created_parser == null or looksLikeNewDocument(html)) {
             _ = try self.open(frame);
         }
