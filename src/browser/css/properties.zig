@@ -34,6 +34,9 @@
 //! `inherited` and `initial`.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
+const Allocator = std.mem.Allocator;
 
 pub const Property = struct {
     inherited: bool = false,
@@ -49,10 +52,71 @@ pub fn isKnown(name: []const u8) bool {
     return properties.has(name);
 }
 
-pub fn canonicalName(name: []const u8) ?[]const u8 {
+/// A property as a declaration stores it: a known property's index in the
+/// table, then the custom properties (`--name`) of a page, numbered by its
+/// `CustomNames`.
+pub const Id = blk: {
+    @setEvalBranchQuota(1_000_000);
+    const keys = properties.keys();
+    var names: [keys.len][:0]const u8 = undefined;
+    for (keys, &names) |key, *name| {
+        name.* = key[0..key.len :0];
+    }
+    break :blk @Enum(u16, .nonexhaustive, &names, &std.simd.iota(u16, keys.len));
+};
+
+const known_count = properties.keys().len;
+
+/// The id of a known property, null for any other name.
+pub fn idOf(name: []const u8) ?Id {
     const index = properties.getIndex(name) orelse return null;
+    return @fromBackingInt(@intCast(index));
+}
+
+/// The name of a known property, null for a custom one.
+pub fn knownName(id: Id) ?[]const u8 {
+    const index = @backingInt(id);
+    if (index >= known_count) {
+        return null;
+    }
     return properties.keys()[index];
 }
+
+/// The custom property names (`--name`) declared on a page.
+pub const CustomNames = struct {
+    _full_logged: bool = false,
+    _names: std.StringArrayHashMapUnmanaged(void) = .empty,
+
+    const capacity = std.math.maxInt(u16) + 1 - known_count;
+
+    pub fn intern(self: *CustomNames, allocator: Allocator, name: []const u8) !?Id {
+        if (self.lookup(name)) |id| {
+            return id;
+        }
+
+        const count = self._names.count();
+        if (count == capacity) {
+            if (self._full_logged == false) {
+                self._full_logged = true;
+                lp.log.warn(.browser, "too many custom properties", .{ .name = name, .count = count });
+            }
+            return null;
+        }
+
+        try self._names.putNoClobber(allocator, try allocator.dupe(u8, name), {});
+        return @fromBackingInt(@intCast(known_count + count));
+    }
+
+    /// The id of `name`, null when the page never declared it.
+    pub fn lookup(self: *const CustomNames, name: []const u8) ?Id {
+        const index = self._names.getIndex(name) orelse return null;
+        return @fromBackingInt(@intCast(known_count + index));
+    }
+
+    pub fn nameOf(self: *const CustomNames, id: Id) []const u8 {
+        return self._names.keys()[@backingInt(id) - known_count];
+    }
+};
 
 pub fn internValue(value: []const u8) ?[]const u8 {
     const index = common_values.getIndex(value) orelse return null;

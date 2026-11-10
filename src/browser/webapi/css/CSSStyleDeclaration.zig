@@ -84,11 +84,11 @@ pub fn length(self: *const CSSStyleDeclaration) u32 {
     return self._len;
 }
 
-pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
+pub fn item(self: *const CSSStyleDeclaration, index: u32, frame: *const Frame) []const u8 {
     if (index >= self._len) {
         return "";
     }
-    return self._entries[index].name();
+    return self._entries[index].name(frame);
 }
 
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
@@ -354,22 +354,22 @@ pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Fra
         return self.boxValue(shorthand, frame);
     }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
-        const x = self.findProperty(shorthand.x) orelse return null;
+        const x = self.findKnown(shorthand.x) orelse return null;
         const pair = self.axisPair(x) orelse return null;
         var buf = std.Io.Writer.Allocating.init(frame.local_arena);
         pair.formatValue(&buf.writer) catch return null;
         return buf.written();
     }
-    const prop = self.findProperty(name.str()) orelse return null;
+    const prop = self.findNamed(name.str(), frame) orelse return null;
     return prop.value();
 }
 
 /// A four-side shorthand kept as written because its value uses var(), while
 /// none of its sides has been declared since.
 fn storedBox(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) ?*const Entry {
-    const stored = self.findProperty(shorthand.name) orelse return null;
+    const stored = self.findKnown(shorthand.name) orelse return null;
     inline for (shorthand.sides) |side| {
-        if (self.findProperty(side) != null) {
+        if (self.findKnown(side) != null) {
             return null;
         }
     }
@@ -379,7 +379,7 @@ fn storedBox(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand
 /// Whether any side of a four-side shorthand is declared !important.
 fn boxSideImportant(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) bool {
     inline for (shorthand.sides) |side| {
-        if (self.findProperty(side)) |prop| {
+        if (self.findKnown(side)) |prop| {
             if (prop._important) {
                 return true;
             }
@@ -393,7 +393,7 @@ fn boxSideImportant(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxSh
 fn boxSides(self: *const CSSStyleDeclaration, shorthand: CssParser.BoxShorthand) ?[4]*const Entry {
     var sides: [4]*const Entry = undefined;
     inline for (shorthand.sides, 0..) |side, i| {
-        sides[i] = self.findProperty(side) orelse return null;
+        sides[i] = self.findKnown(side) orelse return null;
         if (sides[i]._important != sides[0]._important) {
             return null;
         }
@@ -463,8 +463,8 @@ const AxisPair = struct {
 /// The pair `prop` belongs to, when it is an axis longhand and the other is
 /// declared with the same priority.
 fn axisPair(self: *const CSSStyleDeclaration, prop: *const Entry) ?AxisPair {
-    const longhand = CssParser.axisLonghand(prop.name()) orelse return null;
-    const partner = self.findProperty(longhand.partner()) orelse return null;
+    const longhand = CssParser.axisLonghand(prop.knownName() orelse return null) orelse return null;
+    const partner = self.findKnown(longhand.partner()) orelse return null;
     if (partner._important != prop._important) {
         return null;
     }
@@ -538,11 +538,11 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
     const normalized = normalizePropertyName(frame.local_arena, property_name);
-    return if (self.declaredImportant(.wrap(normalized))) "important" else "";
+    return if (self.declaredImportant(.wrap(normalized), frame)) "important" else "";
 }
 
 /// Whether a declared property is !important; false when it isn't declared.
-pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
+pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String, frame: *const Frame) bool {
     if (CssParser.boxShorthand(name.str())) |shorthand| {
         if (self.storedBox(shorthand)) |stored| {
             return stored._important;
@@ -551,11 +551,11 @@ pub fn declaredImportant(self: *const CSSStyleDeclaration, name: String) bool {
         return sides[0]._important;
     }
     if (CssParser.axisShorthand(name.str())) |shorthand| {
-        const x = self.findProperty(shorthand.x) orelse return false;
+        const x = self.findKnown(shorthand.x) orelse return false;
         const pair = self.axisPair(x) orelse return false;
         return pair.x._important;
     }
-    const prop = self.findProperty(name.str()) orelse return false;
+    const prop = self.findNamed(name.str(), frame) orelse return false;
     return prop._important;
 }
 
@@ -585,7 +585,7 @@ fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Dec
     const normalized = normalizePropertyName(frame.local_arena, declaration.name);
     if (CssParser.boxShorthand(normalized)) |shorthand| {
         if (!declaration.important) {
-            if (self.findProperty(shorthand.name)) |stored| {
+            if (self.findKnown(shorthand.name)) |stored| {
                 if (stored._important) return;
             }
         }
@@ -608,7 +608,7 @@ fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Dec
         return;
     }
     if (!declaration.important) {
-        if (self.findProperty(normalized)) |existing| {
+        if (self.findNamed(normalized, frame)) |existing| {
             if (existing._important) return;
         }
     }
@@ -621,9 +621,8 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     }
 
     const normalized = normalizePropertyName(frame.local_arena, property_name);
-    // A declaration of a property we don't know is dropped, as in Chrome. A
-    // known name is stored as the property table's copy.
-    const canonical = if (isCustomProperty(normalized)) normalized else properties.canonicalName(normalized) orelse return false;
+    // A declaration of a property we don't know is dropped, as in Chrome.
+    const id = (try declarationId(normalized, frame)) orelse return false;
     if (CssParser.boxShorthand(normalized)) |shorthand| {
         if (color.usesSubstitution(value)) {
             // Stored as written, below: its sides aren't known yet.
@@ -664,7 +663,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     };
 
     const allocator = frame._factory.storageAllocator();
-    if (self.findProperty(canonical)) |existing| {
+    if (self.findProperty(id)) |existing| {
         if (!std.mem.eql(u8, existing.value(), normalized_value)) {
             try existing.setValue(normalized_value, allocator);
         } else if (existing._important == important) {
@@ -674,9 +673,6 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
         return true;
     }
 
-    if (canonical.len > std.math.maxInt(u16)) {
-        return false;
-    }
     if (self._len == self._cap) {
         if (self._cap > std.math.maxInt(u16) - 4) {
             return error.OutOfMemory;
@@ -686,18 +682,13 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
         try self.setCapacity(self._cap + 4, frame);
     }
     var entry: Entry = .{
-        ._name_ptr = canonical.ptr,
-        ._name_len = @intCast(canonical.len),
+        ._id = id,
         ._value_ptr = undefined,
         ._value_len = 0,
         ._important = important,
         ._value_owned = false,
     };
     try entry.setValue(normalized_value, allocator);
-    errdefer entry.freeValue(allocator);
-    if (isCustomProperty(canonical)) {
-        entry._name_ptr = (try allocator.dupe(u8, canonical)).ptr;
-    }
     self._entries[self._len] = entry;
     self._len += 1;
     return true;
@@ -738,12 +729,12 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 /// Removes the declaration of exactly `name`, without expanding a shorthand.
 fn removeDeclared(self: *CSSStyleDeclaration, name: []const u8, frame: *Frame) !?[]const u8 {
-    const index = self.findIndex(name) orelse return null;
+    const index = self.findIndex(lookupId(name, frame) orelse return null) orelse return null;
     const all = self.entries();
 
     // freed with the entry
     const old_value = try frame.call_arena.dupe(u8, all[index].value());
-    all[index].deinit(frame._factory.storageAllocator());
+    all[index].freeValue(frame._factory.storageAllocator());
     // Shift the rest down: declared order is serialization and cascade order.
     std.mem.copyForwards(Entry, all[index..], all[index + 1 ..]);
     self._len -= 1;
@@ -787,7 +778,7 @@ pub fn styleAttributeChanged(self: *CSSStyleDeclaration, text: ?[]const u8, fram
 fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
     const allocator = frame._factory.storageAllocator();
     for (self.entries()) |*entry| {
-        entry.deinit(allocator);
+        entry.freeValue(allocator);
     }
     self._len = 0;
 }
@@ -809,7 +800,7 @@ fn setFloat(self: *CSSStyleDeclaration, value: js.Value, frame: *Frame) !void {
 
 fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-    try self.format(&buf.writer);
+    try self.format(&buf.writer, frame);
     return buf.written();
 }
 
@@ -834,7 +825,7 @@ fn replaceDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Decla
     try self.syncStyleAttribute(null, frame);
 }
 
-pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
+pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer, frame: *const Frame) !void {
     var first = true;
     // An axis pair serializes once, where its first longhand sits.
     var skip: ?*const Entry = null;
@@ -844,11 +835,13 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
         if (prop == skip) {
             continue;
         }
+        // A custom name is no shorthand or longhand of one.
+        const known = prop.knownName() orelse "";
         // A shorthand kept as written is overridden once all four sides are set.
-        if (CssParser.boxShorthand(prop.name())) |shorthand| {
+        if (CssParser.boxShorthand(known)) |shorthand| {
             if (self.boxSides(shorthand) != null) continue;
         }
-        const box = if (CssParser.boxLonghandIndex(prop.name())) |i| blk: {
+        const box = if (CssParser.boxLonghandIndex(known)) |i| blk: {
             const sides = self.boxSides(CssParser.box_shorthands[i]) orelse break :blk null;
             if (boxes_written.isSet(i)) continue;
             boxes_written.set(i);
@@ -867,19 +860,20 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
             try pair.format(writer);
             skip = if (pair.x == prop) pair.y else pair.x;
         } else {
-            try prop.format(writer);
+            try prop.format(writer, frame);
         }
     }
 }
 
-pub fn iterator(self: *const CSSStyleDeclaration) Iterator {
-    return .{ .entries = self.entries() };
+pub fn iterator(self: *const CSSStyleDeclaration, frame: *const Frame) Iterator {
+    return .{ .entries = self.entries(), .custom_names = &frame.page.css_custom_names };
 }
 
 /// The declarations in declared order. Their strings belong to the
 /// declaration: any write to it can free them.
 pub const Iterator = struct {
     entries: []const Entry,
+    custom_names: *const properties.CustomNames,
     index: usize = 0,
 
     pub fn next(self: *Iterator) ?CssParser.Declaration {
@@ -889,25 +883,60 @@ pub const Iterator = struct {
         const entry = &self.entries[self.index];
         self.index += 1;
         return .{
-            .name = entry.name(),
+            .name = entry.knownName() orelse self.custom_names.nameOf(entry._id),
             .value = entry.value(),
             .important = entry._important,
         };
     }
 };
 
-fn findProperty(self: *const CSSStyleDeclaration, name: []const u8) ?*Entry {
-    const index = self.findIndex(name) orelse return null;
+fn findProperty(self: *const CSSStyleDeclaration, id: properties.Id) ?*Entry {
+    const index = self.findIndex(id) orelse return null;
     return &self._entries[index];
 }
 
-fn findIndex(self: *const CSSStyleDeclaration, name: []const u8) ?usize {
+fn findIndex(self: *const CSSStyleDeclaration, id: properties.Id) ?usize {
     for (self.entries(), 0..) |*entry, i| {
-        if (std.mem.eql(u8, entry.name(), name)) {
+        if (entry._id == id) {
             return i;
         }
     }
     return null;
+}
+
+/// The declaration of a known property, e.g. a shorthand's longhand.
+fn findKnown(self: *const CSSStyleDeclaration, name: []const u8) ?*Entry {
+    return self.findProperty(properties.idOf(name) orelse return null);
+}
+
+/// The declaration of a known or custom property.
+fn findNamed(self: *const CSSStyleDeclaration, name: []const u8, frame: *const Frame) ?*Entry {
+    return self.findProperty(lookupId(name, frame) orelse return null);
+}
+
+/// The id of a known or custom property, null when no declaration can have it.
+fn lookupId(name: []const u8, frame: *const Frame) ?properties.Id {
+    // Most names are known ones
+    if (properties.idOf(name)) |id| {
+        return id;
+    }
+    if (isCustomProperty(name) == false) {
+        return null;
+    }
+    return frame.page.css_custom_names.lookup(name);
+}
+
+/// The id a declaration of `name` is stored under, null when it's dropped: an
+/// unknown property, or a custom one past what the page can number.
+fn declarationId(name: []const u8, frame: *Frame) !?properties.Id {
+    if (properties.idOf(name)) |id| {
+        return id;
+    }
+    if (isCustomProperty(name) == false) {
+        return null;
+    }
+    const page = frame.page;
+    return page.css_custom_names.intern(page.arena, name);
 }
 
 fn normalizePropertyName(allocator: Allocator, name: []const u8) []const u8 {
@@ -1519,20 +1548,22 @@ fn getDefaultColor(element: *const Element) ?[]const u8 {
 // property table's copy; only a custom property's name is allocated. A common
 // value points at a static copy (see properties.internValue).
 const Entry = struct {
-    _name_ptr: [*]const u8,
     _value_ptr: [*]const u8,
     _value_len: u32,
-    _name_len: u16,
+    _id: properties.Id,
     _important: bool,
-    // False when the value is static: nothing to free.
-    _value_owned: bool,
+    _value_owned: bool, // False when the value is static: nothing to free.
 
     comptime {
-        std.debug.assert(@sizeOf(Entry) == 24);
+        std.debug.assert(@sizeOf(Entry) == 16);
     }
 
-    fn name(self: *const Entry) []const u8 {
-        return self._name_ptr[0..self._name_len];
+    fn name(self: *const Entry, frame: *const Frame) []const u8 {
+        return self.knownName() orelse frame.page.css_custom_names.nameOf(self._id);
+    }
+
+    fn knownName(self: *const Entry) ?[]const u8 {
+        return properties.knownName(self._id);
     }
 
     fn value(self: *const Entry) []const u8 {
@@ -1559,15 +1590,8 @@ const Entry = struct {
         }
     }
 
-    fn deinit(self: *const Entry, allocator: Allocator) void {
-        self.freeValue(allocator);
-        if (isCustomProperty(self.name())) {
-            allocator.free(self.name());
-        }
-    }
-
-    fn format(self: *const Entry, writer: *std.Io.Writer) !void {
-        try writer.writeAll(self.name());
+    fn format(self: *const Entry, writer: *std.Io.Writer, frame: *const Frame) !void {
+        try writer.writeAll(self.name(frame));
         try writer.writeAll(": ");
         try writer.writeAll(self.value());
         try formatDeclarationEnd(self._important, writer);
@@ -1593,11 +1617,11 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(CSSStyleDeclaration.length, null, .{});
     pub const item = bridge.function(_item, .{});
 
-    fn _item(self: *const CSSStyleDeclaration, index: i32) []const u8 {
+    fn _item(self: *const CSSStyleDeclaration, index: i32, frame: *Frame) []const u8 {
         if (index < 0) {
             return "";
         }
-        return self.item(@intCast(index));
+        return self.item(@intCast(index), frame);
     }
 
     pub const getPropertyValue = bridge.function(CSSStyleDeclaration.getPropertyValue, .{});
@@ -1656,11 +1680,11 @@ test "CSS property value storage is reused" {
     defer style.clearProperties(frame);
 
     try testing.expect(try style.setPropertyImpl("transform", "translate3d(1px,0,0)", false, frame));
-    const first_ptr = style.findProperty("transform").?._value_ptr;
+    const first_ptr = style.findKnown("transform").?._value_ptr;
     try testing.expect(try style.setPropertyImpl("transform", "translate3d(2px,0,0)", false, frame));
     try testing.expect(try style.setPropertyImpl("transform", "translate3d(3px,0,0)", false, frame));
 
-    const property = style.findProperty("transform").?;
+    const property = style.findKnown("transform").?;
     try std.testing.expectEqual(first_ptr, property._value_ptr);
     try std.testing.expectEqualStrings("translate3d(3px,0,0)", property.value());
 }
@@ -1677,18 +1701,38 @@ test "CSS declarations: order, names and value storage" {
     try testing.expectEqual(5, style._len);
     try testing.expectEqual(5, style._cap);
 
-    // A known name is the property table's copy, a custom one our own.
-    try std.testing.expectEqual(properties.canonicalName("display").?.ptr, style._entries[2]._name_ptr);
-    try testing.expectEqual("--gap", style.item(1));
+    // A known property has the table's id, a custom one the page's.
+    try testing.expectEqual(properties.idOf("display").?, style._entries[2]._id);
+    try testing.expectEqual(null, properties.knownName(style._entries[1]._id));
+    try testing.expectEqual("--gap", style.item(1, frame));
+
+    // A custom name has one id across the page's declarations.
+    var other = CSSStyleDeclaration{};
+    defer other.clearProperties(frame);
+    try other.setCssText("--gap: 8px", frame);
+    try testing.expectEqual(style._entries[1]._id, other._entries[0]._id);
+
+    // Reading one the page never declared doesn't number it.
+    const custom_count = frame.page.css_custom_names._names.count();
+    try testing.expectEqual("", style.getPropertyValue("--never-declared", frame));
+    try testing.expectEqual("", try style.removeProperty("--never-declared", frame));
+    try testing.expectEqual(custom_count, frame.page.css_custom_names._names.count());
 
     // A common value is static, any other ours to free.
-    try testing.expectEqual(false, style.findProperty("display").?._value_owned);
-    try testing.expectEqual(true, style.findProperty("width").?._value_owned);
+    try testing.expectEqual(false, style.findKnown("display").?._value_owned);
+    try testing.expectEqual(true, style.findKnown("width").?._value_owned);
 
     // Removing keeps the others in order; setting again appends.
     try testing.expectEqual("red", try style.removeProperty("color", frame));
     try style.setProperty("color", "blue", null, frame);
     try testing.expectEqual("--gap: 4px; display: none; width: 123px; opacity: 0.5; color: blue;", try style.getCssText(frame));
+
+    // A custom property declared later keeps its place too.
+    try style.setProperty("--Pad", "1px", null, frame);
+    try testing.expectEqual("--gap: 4px; display: none; width: 123px; opacity: 0.5; color: blue; --Pad: 1px;", try style.getCssText(frame));
+    try testing.expectEqual("1px", style.getPropertyValue("--Pad", frame));
+    try testing.expectEqual("", style.getPropertyValue("--pad", frame));
+    try testing.expectEqual("1px", try style.removeProperty("--Pad", frame));
 
     // An unknown property is dropped.
     try style.setProperty("not-a-property", "1", null, frame);
