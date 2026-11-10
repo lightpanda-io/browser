@@ -30,7 +30,6 @@ const PointList = @import("../../svg/PointList.zig");
 const Polyline = @This();
 
 pub const Proto = Geometry;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Geometry else void = undefined,
 
 pub fn asElement(self: *Polyline) *Element {

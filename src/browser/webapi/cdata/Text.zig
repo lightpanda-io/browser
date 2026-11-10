@@ -31,7 +31,6 @@ const Text = @This();
 
 pub const Proto = CData;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
 
 // Takes a const text but returns a mutable proto; see Node.subtype.

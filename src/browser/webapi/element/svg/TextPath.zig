@@ -33,7 +33,6 @@ const TextContent = @import("TextContent.zig");
 const TextPath = @This();
 
 pub const Proto = TextContent;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *TextContent else void = undefined,
 
 pub fn asElement(self: *TextPath) *Element {

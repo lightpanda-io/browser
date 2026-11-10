@@ -1291,13 +1291,11 @@ fn jsInt64ToZig(comptime T: type, number: f64) !T {
 // This function recursively walks the _type union field (if there is one) to
 // get the most specific class_id possible.
 const Resolved = struct {
-    ptr: *anyopaque,
     class_id: u16,
     tagged: TaggedOpaque,
     finalizer: ?Finalizer,
 
     const Finalizer = struct {
-        // Resolved.ptr is the most specific value in a chain (e.g. IFrame, not EventTarget, Node,  ...)
         // Finalizer.ptr_id is the most specific value in a chain that defines an acquireRef
         ptr_id: usize,
         acquire_ref: *const fn (ptr_id: usize) void,
@@ -1358,7 +1356,7 @@ fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: ty
     if (comptime lp.IS_DEBUG) {
         assertChainContiguity(T, value);
     }
-    const gop = try self.ctx.addIdentity(@intFromPtr(value));
+    const gop = try self.ctx.addIdentity(js.Identity.keyOf(value));
     if (gop.found_existing) {
         // we've seen this instance before, return the same object
         return @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle));
@@ -1372,7 +1370,7 @@ fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: ty
 // instantiated once per concrete type.
 noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolved: *const Resolved, global: *v8.Global, store_tagged: bool) !*const v8.Object {
     const ctx = self.ctx;
-    const resolved_ptr_id = @intFromPtr(resolved.ptr);
+    const identity_key = resolved.tagged.base;
     const isolate = self.isolate;
 
     // Sometimes we're creating a new Object, like when
@@ -1418,7 +1416,7 @@ noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolv
             // so that we can cleanup on Page teardown if v8 doesn't finalize.
             errdefer _ = page.finalizer_callbacks.remove(finalizer_ptr_id);
             finalizer.acquire_ref(finalizer_ptr_id);
-            finalizer_gop.value_ptr.* = createFinalizerCallback(resolved_ptr_id, finalizer_ptr_id, finalizer.release_ref_from_zig);
+            finalizer_gop.value_ptr.* = createFinalizerCallback(identity_key, finalizer_ptr_id, finalizer.release_ref_from_zig);
         }
         const fc = finalizer_gop.value_ptr;
         const browser = session.browser;
@@ -1428,7 +1426,7 @@ noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolv
             .page = page,
             .identity = ctx.identity,
             .finalizer_ptr_id = finalizer_ptr_id,
-            .resolved_ptr_id = resolved_ptr_id,
+            .identity_key = identity_key,
             .next = fc.identities,
         };
         fc.identities = identity_finalizer;
@@ -1442,7 +1440,6 @@ noinline fn wrapNew(self: *const Local, js_obj_handle: ?*const v8.Object, resolv
 fn resolveT(comptime T: type, value: *T) Resolved {
     const Meta = T.JsApi.Meta;
     return .{
-        .ptr = value,
         .class_id = if (@hasDecl(Meta, "wrap_as")) Meta.wrap_as.Meta.class_id else Meta.class_id,
         .tagged = .init(T, value),
         .finalizer = blk: {
@@ -1474,11 +1471,11 @@ fn resolveT(comptime T: type, value: *T) Resolved {
                     }
 
                     const page = identity_finalizer.page;
-                    const resolved_ptr_id = identity_finalizer.resolved_ptr_id;
+                    const identity_key = identity_finalizer.identity_key;
 
                     // Clean up the identity map entry: the object is being collected,
                     // so our Global to it is dead.
-                    if (identity_finalizer.identity.identity_map.fetchRemove(resolved_ptr_id)) |kv| {
+                    if (identity_finalizer.identity.identity_map.fetchRemove(identity_key)) |kv| {
                         var global = kv.value;
                         v8.v8__Global__Reset(&global);
                     }
@@ -1667,9 +1664,8 @@ pub fn debugContextId(self: *const Local) i32 {
 }
 
 fn createFinalizerCallback(
-    // Key in identity map
-    // The most specific value (KeyboardEvent, not Event)
-    resolved_ptr_id: usize,
+    // Key in identity map (see Identity.keyOf)
+    identity_key: usize,
 
     // The most specific value where finalizers are defined
     // What actually gets acquired / released / deinit
@@ -1678,7 +1674,7 @@ fn createFinalizerCallback(
 ) FinalizerCallback {
     return .{
         .release_ref = release_ref,
-        .resolved_ptr_id = resolved_ptr_id,
+        .identity_key = identity_key,
         .finalizer_ptr_id = finalizer_ptr_id,
     };
 }

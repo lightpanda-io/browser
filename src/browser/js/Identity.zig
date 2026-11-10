@@ -29,6 +29,9 @@
 const std = @import("std");
 const js = @import("js.zig");
 
+const reflect = @import("../reflect.zig");
+const Factory = @import("../Factory.zig");
+
 const v8 = js.v8;
 
 const Identity = @This();
@@ -49,6 +52,17 @@ const PtrContext = struct {
         return a == b;
     }
 };
+
+// The identity_map key for a given instance. This is always the root of the
+// prototype chain and it's the same value/address used in TaggedOpaque.base.
+pub fn keyOf(value: anytype) usize {
+    const T = reflect.Struct(@TypeOf(value));
+    if (comptime Factory.chainOffsetOf(T, T) + @sizeOf(T) == 0) {
+        // A zero-size allocation has no address of its own.
+        @compileError(@typeName(T) ++ ": chain has no fields, add a `_pad: bool = false`");
+    }
+    return @intFromPtr(value) - comptime Factory.chainOffsetOf(T, T);
+}
 
 pub fn deinit(self: *Identity) void {
     var it = self.identity_map.valueIterator();

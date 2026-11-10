@@ -33,7 +33,6 @@ const Audio = @This();
 
 pub const Proto = Media;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Media else void = undefined,
 
 pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
