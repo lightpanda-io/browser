@@ -876,7 +876,7 @@ fn iframeViewport(self: *const Window, comptime axis: Element.Axis) ?u32 {
         return 0;
     }
     // lossyCast saturates: a `width=1e10` or `inf` attribute is out of u32 range
-    return std.math.lossyCast(u32, el.boxAxis(parent, axis));
+    return std.math.lossyCast(u32, el.boxAxis(parent, axis, .content));
 }
 
 fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {

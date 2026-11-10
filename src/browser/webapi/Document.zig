@@ -1061,14 +1061,14 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
             if (!excluded and style_manager.isHitTestable(element)) {
-                if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
+                if (y >= pos and y <= pos + element.boxAxis(frame, .height, .border)) {
                     if (ignore_x) {
                         topmost = element;
                     } else {
                         // only bother calculating the horiziontal position for
                         // elements contained by the vertical band
                         const left = element.horizontalPosition(frame);
-                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
+                        if (x >= left and x <= left + element.boxAxis(frame, .width, .border)) {
                             topmost = element;
                         }
                     }

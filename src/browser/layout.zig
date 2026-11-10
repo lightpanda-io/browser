@@ -25,7 +25,8 @@ const Element = @import("webapi/Element.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 
 // Width flows down (height flows up): a block in normal flow is as wide as
-// its containing block.
+// its containing block. This is the content box's width; the padding and
+// border are around it.
 pub fn boxWidth(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     if (style_manager.cachedWidth(self, .box)) |width| {
@@ -51,16 +52,17 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
             if (sizing == .grow and own.explicit == false) {
                 width = @max(width, growShare(self, owner));
             }
-            break :blk clampWidth(self, width, .box, owner);
+            break :blk clampWidth(self, width, item.edges, .box, owner);
         }
-        const width = if (own.explicit) own.value else switch (sizing) {
-            .fixed => |width| width,
-            .percent => |fraction| fraction * containingBlockWidth(self, owner),
-            .fill => fillWidth(self, owner),
+        const edges = boxEdges(self, owner);
+        const width = if (own.explicit) ownContent(own, edges, .width) else switch (sizing) {
+            .fixed => |width| declaredContent(width, edges, .width),
+            .percent => |fraction| declaredContent(fraction * containingBlockWidth(self, owner), edges, .width),
+            .fill => @max(0, fillWidth(self, owner) - edges.along(.width)),
             .grow, .shrink => @max(own.value, contentWidth(self, .clipped, owner)),
             .contents => unreachable,
         };
-        break :blk clampWidth(self, width, .box, owner);
+        break :blk clampWidth(self, width, edges, .box, owner);
     };
     style_manager.cacheWidth(self, .box, width);
     return width;
@@ -76,22 +78,62 @@ pub const ContentMode = enum {
     scrollable,
 };
 
-// What the box, with its margins, adds to its parent's content width.
+/// el's padding and border, a percentage padding resolved against its
+/// containing block. html and body keep their synthetic sizes, so no edges.
+pub fn boxEdges(self: *Element, owner: *Frame) StyleManager.BoxEdges {
+    const edges = edgesWithin(self, null, owner);
+    if (edges.percent_padding == false) {
+        return edges;
+    }
+    return edgesWithin(self, containingBlockWidth(self, owner), owner);
+}
+
+// Like boxEdges, a percentage padding resolved against `containing`: null
+// while sizing the parent, which has no width yet to take a share of.
+fn edgesWithin(self: *Element, containing: ?f64, owner: *Frame) StyleManager.BoxEdges {
+    if (self.isRootContainer()) {
+        return .{};
+    }
+    return owner._style_manager.boxEdges(self, containing);
+}
+
+/// The content size an element's own width or height gives. Only a declared
+/// size can be a border box's.
+pub fn ownContent(own: Element.Axis.State, edges: StyleManager.BoxEdges, comptime axis: Element.Axis) f64 {
+    if (own.explicit == false or own.intrinsic) {
+        return own.value;
+    }
+    return declaredContent(own.value, edges, axis);
+}
+
+// box-sizing: border-box declares the border box, which is never smaller
+// than its padding and border.
+fn declaredContent(declared: f64, edges: StyleManager.BoxEdges, comptime axis: Element.Axis) f64 {
+    if (edges.border_box == false) {
+        return declared;
+    }
+    return @max(0, declared - edges.along(axis));
+}
+
+// What the box, with its padding, border and margins, adds to its parent's
+// content width.
 fn widthContribution(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
+    const edges = edgesWithin(self, null, owner);
+    const width = if (own.explicit) ownContent(own, edges, .width) else switch (style_manager.widthSizing(self)) {
+        .fixed => |width| declaredContent(width, edges, .width),
         .shrink, .grow => @max(own.value, contentWidth(self, mode, owner)),
         .percent, .fill => if (mode != .full and style_manager.clipsOverflowX(self)) 0 else contentWidth(self, mode, owner),
         .contents => return contentWidth(self, mode, owner),
     };
-    return clampWidth(self, width, .contribution, owner) + style_manager.inlineMargins(self, null);
+    return clampWidth(self, width, edges, .contribution, owner) + edges.along(.width) + style_manager.inlineMargins(self, null);
 }
 
 const FlexBase = struct {
-    base: f64, // The width before the row shrinks it
+    base: f64, // The content width before the row shrinks it
     floor: f64, // The least it shrinks to; base when it doesn't shrink
+    edges: StyleManager.BoxEdges = .{}, // Its padding and border, which don't shrink
 };
 
 // Get a flex row's item hypothetical width and how far it can shrink.
@@ -99,20 +141,21 @@ const FlexBase = struct {
 fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
     const style_manager = &owner._style_manager;
     const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
-        .percent => |fraction| fraction * row_width,
+    const edges = edgesWithin(self, row_width, owner);
+    const width = if (own.explicit) ownContent(own, edges, .width) else switch (style_manager.widthSizing(self)) {
+        .fixed => |width| declaredContent(width, edges, .width),
+        .percent => |fraction| declaredContent(fraction * row_width, edges, .width),
         .shrink, .grow, .fill => @max(own.value, contentWidth(self, .full, owner)),
         .contents => return .{
             .base = widthContribution(self, .full, owner),
             .floor = widthContribution(self, .clipped, owner),
         },
     };
-    const base = clampWidth(self, width, .box, owner);
+    const base = clampWidth(self, width, edges, .box, owner);
     if (style_manager.flexShrinks(self) == false) {
-        return .{ .base = base, .floor = base };
+        return .{ .base = base, .floor = base, .edges = edges };
     }
-    return .{ .base = base, .floor = flexMinWidth(self, base, owner) };
+    return .{ .base = base, .floor = flexMinWidth(self, base, owner), .edges = edges };
 }
 
 // min-width: auto on a flex item: no narrower than its content, or than its
@@ -152,7 +195,8 @@ fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
     var total: f64 = 0;
     var items: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
     while (nextFlexItem(&items, style_manager)) |el| {
-        total += flexBase(el, row_width, owner).base + flexItemMargins(el, row_width, style_manager);
+        const item = flexBase(el, row_width, owner);
+        total += item.base + item.edges.along(.width) + flexItemMargins(el, row_width, style_manager);
     }
 
     var ratio: f64 = 0;
@@ -210,15 +254,20 @@ fn flexItemMargins(el: *Element, row_width: f64, style_manager: *StyleManager) f
     return style_manager.inlineMargins(el, row_width);
 }
 
-// max-width caps the width, min-width wins over both.
-fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
+// max-width caps the width, min-width wins over both. Like a width, they
+// size the border box under box-sizing: border-box.
+fn clampWidth(self: *Element, width: f64, edges: StyleManager.BoxEdges, comptime of: enum { box, contribution }, owner: *Frame) f64 {
     const limits = owner._style_manager.widthLimits(self);
     var clamped = width;
     if (limits.max) |max| {
-        clamped = @min(clamped, resolveWidthLimit(self, max, of == .box, owner) orelse clamped);
+        if (resolveWidthLimit(self, max, of == .box, owner)) |limit| {
+            clamped = @min(clamped, declaredContent(limit, edges, .width));
+        }
     }
     if (limits.min) |min| {
-        clamped = @max(clamped, resolveWidthLimit(self, min, of == .box, owner) orelse clamped);
+        if (resolveWidthLimit(self, min, of == .box, owner)) |limit| {
+            clamped = @max(clamped, declaredContent(limit, edges, .width));
+        }
     }
     return clamped;
 }
@@ -238,12 +287,18 @@ fn fillWidth(self: *Element, owner: *Frame) f64 {
     return @max(0, containing - style_manager.inlineMargins(self, containing) - style_manager.inlineInsets(self, containing));
 }
 
-/// The width of the containing block; the viewport above the root.
+/// The width of the containing block: its content box, or for an absolutely
+/// positioned box its padding box (CSS 2 §10.1); the viewport above the root.
 fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
-    const parent = owner._style_manager.containingBlock(self) orelse {
+    const style_manager = &owner._style_manager;
+    const parent = style_manager.containingBlock(self) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
-    return boxWidth(parent, owner);
+    const width = boxWidth(parent, owner);
+    if (style_manager.position(self) != .absolute) {
+        return width;
+    }
+    return width + boxEdges(parent, owner).padding.along(.width);
 }
 
 /// A growing flex item's share: the row's free space, after the siblings
@@ -257,11 +312,15 @@ fn growShare(self: *Element, owner: *Frame) f64 {
     var items: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
     while (nextFlexItem(&items, style_manager)) |el| {
         switch (style_manager.widthSizing(el)) {
-            .grow => growers += 1,
+            // Its padding and border aren't part of its share
+            .grow => {
+                growers += 1;
+                taken += edgesWithin(el, row_width, owner).along(.width);
+            },
             // Its children are the row's items
             .contents => taken += widthContribution(el, .clipped, owner),
             // Only walks up, and the row's width never reads a child's box
-            else => taken += boxWidth(el, owner),
+            else => taken += boxWidth(el, owner) + edgesWithin(el, row_width, owner).along(.width),
         }
         taken += flexItemMargins(el, row_width, style_manager);
     }

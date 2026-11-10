@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<style>
+  .card { padding: 20px 0 30px; border: 2px solid black; }
+  .scoped { box-sizing: border-box; }
+  .scoped * { box-sizing: inherit; }
+</style>
+
+<div style="width: 300px">
+  <div id=plain>Text</div>
+  <div id=padded style="padding: 20px 15px 30px 10px; border: 3px solid">Text</div>
+  <div id=sheetPadded class=card>Text</div>
+  <span id=plainSpan>inline</span>
+  <span id=paddedSpan style="padding: 4px 8px; border: 2px solid">inline</span>
+</div>
+
+<script id=blockEdges>
+{
+  // A block fills its container with its border box, so the padding and
+  // border come out of its content width. Heights add them to the content,
+  // here one line of text: the unpadded twin's height.
+  const plain = $('#plain');
+  for (const id of ['#padded', '#sheetPadded']) {
+    const el = $(id);
+    const rect = el.getBoundingClientRect();
+    testing.expectEqual(300, el.offsetWidth, id);
+    testing.expectEqual(300, rect.width, id);
+    testing.expectEqual(el.offsetHeight, rect.height, id);
+    testing.expectEqual(plain.offsetHeight + 50, el.clientHeight, id);
+  }
+
+  const padded = $('#padded');
+  testing.expectEqual(294, padded.clientWidth);
+  testing.expectEqual(plain.offsetHeight + 56, padded.offsetHeight);
+  testing.expectEqual(3, padded.clientTop);
+  testing.expectEqual(3, padded.clientLeft);
+  testing.expectEqual('269px', getComputedStyle(padded).width);
+
+  const sheetPadded = $('#sheetPadded');
+  testing.expectEqual(296, sheetPadded.clientWidth);
+  testing.expectEqual(plain.offsetHeight + 54, sheetPadded.offsetHeight);
+  testing.expectEqual(2, sheetPadded.clientTop);
+}
+</script>
+
+<script id=inlineBox>
+{
+  // An inline box's border box takes its padding and border on every side,
+  // but it has no client or scrolling area (CSSOM View).
+  const plain = $('#plainSpan');
+  const padded = $('#paddedSpan');
+  testing.expectEqual(plain.offsetWidth + 20, padded.offsetWidth);
+  testing.expectEqual(plain.offsetHeight + 12, padded.offsetHeight);
+  testing.expectEqual(plain.getBoundingClientRect().width + 20, padded.getBoundingClientRect().width);
+  testing.expectEqual(plain.getBoundingClientRect().height + 12, padded.getBoundingClientRect().height);
+  for (const prop of ['clientWidth', 'clientHeight', 'clientTop', 'clientLeft', 'scrollWidth', 'scrollHeight']) {
+    testing.expectEqual(0, padded[prop], prop);
+  }
+}
+</script>
+
+<div style="width: 300px">
+  <div id=sized style="width: 100px; height: 40px; padding: 5px 6px; border: 1px solid"></div>
+  <div id=borderBox style="box-sizing: border-box; width: 100px; height: 40px; padding: 5px 6px; border: 1px solid"><div id=borderBoxChild></div></div>
+  <div id=tooSmall style="box-sizing: border-box; width: 10px; height: 10px; padding: 10px; border: 1px solid"></div>
+  <div id=scoped class=scoped style="width: 100px; padding: 0 5px"><div id=inherits style="width: 50px; padding: 0 10px"></div></div>
+  <div id=inlineBlock style="display: inline-block; padding: 4px 8px; border: 2px solid"><div style="width: 40px; height: 10px"></div></div>
+</div>
+
+<script id=declaredSizes>
+{
+  // A declared width and height size the content box
+  const sized = $('#sized');
+  testing.expectEqual(114, sized.offsetWidth);
+  testing.expectEqual(52, sized.offsetHeight);
+  testing.expectEqual(112, sized.clientWidth);
+  testing.expectEqual(50, sized.clientHeight);
+  testing.expectEqual(112, sized.scrollWidth);
+  testing.expectEqual(50, sized.scrollHeight);
+  testing.expectEqual(114, sized.getBoundingClientRect().width);
+  testing.expectEqual(52, sized.getBoundingClientRect().height);
+  testing.expectEqual(1, sized.clientTop);
+  testing.expectEqual(1, sized.clientLeft);
+
+  // ... or with box-sizing: border-box the border box, which is never
+  // smaller than its padding and border
+  const borderBox = $('#borderBox');
+  testing.expectEqual(100, borderBox.offsetWidth);
+  testing.expectEqual(40, borderBox.offsetHeight);
+  testing.expectEqual(98, borderBox.clientWidth);
+  testing.expectEqual(38, borderBox.clientHeight);
+  testing.expectEqual(86, $('#borderBoxChild').offsetWidth);
+  testing.expectEqual('100px', getComputedStyle(borderBox).width);
+
+  const tooSmall = $('#tooSmall');
+  testing.expectEqual(22, tooSmall.offsetWidth);
+  testing.expectEqual(22, tooSmall.offsetHeight);
+  testing.expectEqual(20, tooSmall.clientWidth);
+  testing.expectEqual(20, tooSmall.clientHeight);
+
+  // The `* { box-sizing: inherit }` reset
+  testing.expectEqual(100, $('#scoped').offsetWidth);
+  testing.expectEqual(50, $('#inherits').offsetWidth);
+
+  // An inline-block sizes to its content, then adds its padding and border
+  const inlineBlock = $('#inlineBlock');
+  testing.expectEqual(60, inlineBlock.offsetWidth);
+  testing.expectEqual(22, inlineBlock.offsetHeight);
+  testing.expectEqual(56, inlineBlock.clientWidth);
+  testing.expectEqual(18, inlineBlock.clientHeight);
+  testing.expectEqual(2, inlineBlock.clientLeft);
+}
+</script>
+
+<div style="width: 300px">
+  <div id=empty></div>
+  <div id=noStyle style="border-width: 5px"></div>
+  <div id=noStyleShorthand style="border: 5px"></div>
+  <div id=hidden style="border: 5px hidden"></div>
+  <div id=dashed style="border: 5px dashed"></div>
+  <div id=leftNone style="border: 5px solid; border-left-style: none"></div>
+  <div id=thin style="border: thin solid"></div>
+  <div id=medium style="border-style: solid"></div>
+  <div id=thick style="border: thick solid"></div>
+  <div id=sides style="border-style: solid; border-width: 3px 4px 5px 6px"></div>
+  <div id=varColor style="--line: red; border: 1px solid var(--line)"></div>
+  <div id=logical style="padding-inline: 10px 20px; padding-block: 5px 15px; border-inline-start: 3px solid; border-block: 2px solid"><div id=logicalChild></div></div>
+</div>
+
+<script id=borders>
+{
+  // A border is only as wide as its style draws it: none and hidden, the
+  // initial style, draw nothing
+  for (const id of ['#noStyle', '#noStyleShorthand', '#hidden']) {
+    const el = $(id);
+    testing.expectEqual(300, el.clientWidth, id);
+    testing.expectEqual(0, el.clientLeft, id);
+    testing.expectEqual($('#empty').offsetHeight, el.offsetHeight, id);
+  }
+
+  const dashed = $('#dashed');
+  testing.expectEqual(290, dashed.clientWidth);
+  testing.expectEqual(5, dashed.clientLeft);
+
+  const leftNone = $('#leftNone');
+  testing.expectEqual(295, leftNone.clientWidth);
+  testing.expectEqual(0, leftNone.clientLeft);
+  testing.expectEqual(5, leftNone.clientTop);
+
+  // thin, medium (the initial width) and thick
+  for (const [id, width] of [['#thin', 1], ['#medium', 3], ['#thick', 5]]) {
+    testing.expectEqual(300 - width * 2, $(id).clientWidth, id);
+    testing.expectEqual(width, $(id).clientTop, id);
+  }
+
+  const sides = $('#sides');
+  testing.expectEqual(3, sides.clientTop);
+  testing.expectEqual(6, sides.clientLeft);
+  testing.expectEqual(290, sides.clientWidth);
+  testing.expectEqual(8, sides.offsetHeight - sides.clientHeight);
+
+  // A var() beside the width and style is the color
+  testing.expectEqual(298, $('#varColor').clientWidth);
+  testing.expectEqual(1, $('#varColor').clientTop);
+
+  // Logical sides, in a horizontal left-to-right flow
+  const logical = $('#logical');
+  testing.expectEqual(297, logical.clientWidth);
+  testing.expectEqual(3, logical.clientLeft);
+  testing.expectEqual(2, logical.clientTop);
+  testing.expectEqual(267, $('#logicalChild').offsetWidth);
+  testing.expectEqual(4, logical.offsetHeight - logical.clientHeight);
+}
+</script>
+
+<div style="width: 300px">
+  <div id=percentPadding style="padding: 10%"></div>
+  <div id=percentPaddingParent style="padding: 0 10%"><div id=percentPaddingChild></div></div>
+  <div id=percentWidth style="width: 50%; padding: 0 10px; border: 1px solid"></div>
+  <div id=percentWidthBorderBox style="box-sizing: border-box; width: 50%; padding: 0 10px; border: 1px solid"></div>
+  <div id=capped style="max-width: 200px; padding: 0 10px"></div>
+  <div id=cappedBorderBox style="box-sizing: border-box; max-width: 200px; padding: 0 10px"></div>
+  <div id=floored style="display: inline-block; min-width: 200px; padding: 0 10px"></div>
+  <div id=flooredBorderBox style="display: inline-block; box-sizing: border-box; min-width: 200px; padding: 0 10px"></div>
+</div>
+
+<script id=widthsAndPercentages>
+{
+  // A percentage padding is a share of the containing block's width, on
+  // every side
+  testing.expectEqual($('#empty').offsetHeight + 60, $('#percentPadding').offsetHeight);
+  testing.expectEqual(240, $('#percentPaddingChild').offsetWidth);
+
+  // A percentage width or a width limit sizes the content box, or the
+  // border box under box-sizing: border-box
+  testing.expectEqual(172, $('#percentWidth').offsetWidth);
+  testing.expectEqual(150, $('#percentWidthBorderBox').offsetWidth);
+  testing.expectEqual(220, $('#capped').offsetWidth);
+  testing.expectEqual(200, $('#cappedBorderBox').offsetWidth);
+  testing.expectEqual(220, $('#floored').offsetWidth);
+  testing.expectEqual(200, $('#flooredBorderBox').offsetWidth);
+}
+</script>
+
+<div id=positioned style="position: relative; width: 300px; padding: 0 20px; border: 5px solid">
+  <div id=stretched style="position: absolute; left: 0; right: 0"></div>
+  <div id=half style="position: absolute; width: 50%"></div>
+  <div id=inFlow></div>
+</div>
+
+<script id=absoluteSizesOffThePaddingBox>
+{
+  // An absolutely positioned box's containing block is its positioned
+  // ancestor's padding box (CSS 2 §10.1); an in-flow one's is the content box
+  testing.expectEqual(350, $('#positioned').offsetWidth);
+  testing.expectEqual(340, $('#stretched').offsetWidth);
+  testing.expectEqual(170, $('#half').offsetWidth);
+  testing.expectEqual(300, $('#inFlow').offsetWidth);
+}
+</script>
+
+<div style="display: flex; width: 600px">
+  <div id=shrinking style="width: 400px; padding: 0 10px"><div id=shrinkingChild></div></div>
+  <div style="width: 400px; padding: 0 10px"></div>
+</div>
+<div style="display: flex; width: 800px">
+  <div id=menu style="width: 40px; flex-shrink: 0; padding: 0 5px"></div>
+  <div id=pane style="flex: 1; padding: 0 10px"></div>
+</div>
+<div style="display: flex; width: 800px">
+  <div id=paddedGrower style="flex: 1; padding: 0 50px"></div>
+  <div id=grower style="flex: 1"></div>
+</div>
+
+<script id=flexItems>
+{
+  // Items shrink their content box: the padding stays
+  testing.expectEqual(300, $('#shrinking').offsetWidth);
+  testing.expectEqual(280, $('#shrinkingChild').offsetWidth);
+
+  // Growing items share what's left after everyone's padding and border
+  testing.expectEqual(50, $('#menu').offsetWidth);
+  testing.expectEqual(750, $('#pane').offsetWidth);
+  testing.expectEqual(450, $('#paddedGrower').offsetWidth);
+  testing.expectEqual(350, $('#grower').offsetWidth);
+}
+</script>
+
+<div style="width: 300px">
+  <div id=fitsChild style="display: inline-block"><div style="width: 40px; padding: 0 10px; border: 1px solid; margin: 0 5px"></div></div>
+  <div id=fitsBorderBoxChild style="display: inline-block"><div style="box-sizing: border-box; width: 40px; padding: 0 10px; border: 1px solid; margin: 0 5px"></div></div>
+  <div id=fitsPercentPadding style="display: inline-block"><div id=percentPadded style="width: 100px; padding: 0 10%"></div></div>
+</div>
+
+<script id=shrinkToFit>
+{
+  // A shrink-to-fit box takes in its children's padding, border and margins
+  testing.expectEqual(72, $('#fitsChild').offsetWidth);
+  testing.expectEqual(50, $('#fitsBorderBoxChild').offsetWidth);
+
+  // ... but not a percentage padding: there is no width yet to take a share
+  // of. Once there is, the child overflows by it.
+  testing.expectEqual(100, $('#fitsPercentPadding').offsetWidth);
+  testing.expectEqual(120, $('#percentPadded').offsetWidth);
+}
+</script>
+
+<div id=scroller style="width: 100px; height: 50px; padding: 5px 6px; border: 1px solid; overflow: auto"><div style="width: 300px; height: 500px"></div></div>
+<div id=overflowing style="width: 100px; height: 50px; padding: 5px 6px; border: 1px solid"><div style="width: 300px; height: 500px"></div></div>
+
+<script id=scrollArea>
+{
+  // The content starts inside the padding, and a scroll container scrolls on
+  // through its end padding (CSS Overflow §2.2)
+  const scroller = $('#scroller');
+  testing.expectEqual(112, scroller.clientWidth);
+  testing.expectEqual(60, scroller.clientHeight);
+  testing.expectEqual(312, scroller.scrollWidth);
+  testing.expectEqual(510, scroller.scrollHeight);
+
+  const overflowing = $('#overflowing');
+  testing.expectEqual(306, overflowing.scrollWidth);
+  testing.expectEqual(505, overflowing.scrollHeight);
+}
+</script>
+
+<div style="width: 300px">
+  <div id=outer style="padding: 10px; border: 1px solid"><div id=inner style="height: 20px; padding: 5px; border: 1px solid"></div></div>
+</div>
+
+<script id=childrenAddTheirEdges>
+{
+  // A child's padding and border take room in its parent
+  const outer = $('#outer');
+  const inner = $('#inner');
+  testing.expectEqual(32, inner.offsetHeight);
+  testing.expectEqual(30, inner.clientHeight);
+  testing.expectEqual(54, outer.offsetHeight);
+  testing.expectEqual(52, outer.clientHeight);
+  testing.expectEqual(278, inner.offsetWidth);
+}
+</script>
+
+<div style="width: 400px">
+  <iframe id=frame style="border: 2px solid"></iframe>
+  <iframe id=frameBorderBox style="box-sizing: border-box; border: 2px solid"></iframe>
+  <img id=image width=100 height=50 style="padding: 10px; border: 2px solid">
+  <img id=imageBorderBox width=100 height=50 style="box-sizing: border-box; padding: 10px; border: 2px solid">
+</div>
+
+<script id=replacedElements>
+{
+  // An iframe's natural size is its content box's, whatever the box-sizing
+  for (const id of ['#frame', '#frameBorderBox']) {
+    testing.expectEqual(304, $(id).offsetWidth, id);
+    testing.expectEqual(154, $(id).offsetHeight, id);
+    testing.expectEqual(300, $(id).clientWidth, id);
+    testing.expectEqual(2, $(id).clientTop, id);
+  }
+
+  // Size attributes are declared sizes
+  testing.expectEqual(124, $('#image').offsetWidth);
+  testing.expectEqual(74, $('#image').offsetHeight);
+  testing.expectEqual(100, $('#imageBorderBox').offsetWidth);
+  testing.expectEqual(50, $('#imageBorderBox').offsetHeight);
+}
+</script>
+
+<div style="width: 300px">
+  <div id=restyled><div id=restyledChild></div></div>
+</div>
+
+<script id=styleWrites>
+{
+  const el = $('#restyled');
+  const child = $('#restyledChild');
+  testing.expectEqual(300, child.offsetWidth);
+
+  el.style.padding = '0 10px';
+  testing.expectEqual(300, el.offsetWidth);
+  testing.expectEqual(280, child.offsetWidth);
+
+  el.style.borderLeft = '4px solid';
+  testing.expectEqual(4, el.clientLeft);
+  testing.expectEqual(276, child.offsetWidth);
+
+  el.style.width = '200px';
+  testing.expectEqual(224, el.offsetWidth);
+  el.style.boxSizing = 'border-box';
+  testing.expectEqual(200, el.offsetWidth);
+  testing.expectEqual(176, child.offsetWidth);
+
+  const style = document.createElement('style');
+  style.textContent = '#restyled { padding-right: 30px !important }';
+  document.head.appendChild(style);
+  testing.expectEqual(156, child.offsetWidth);
+  style.remove();
+  testing.expectEqual(176, child.offsetWidth);
+}
+</script>
+
+<div style="width: 300px">
+  <div id=fitCard style="padding-top: 20px; padding-bottom: 30px; border: 2px solid">
+    <div id=fitTitle>One two three four five six seven eight nine ten eleven twelve</div>
+    <div>9.99</div>
+    <div>Add to cart</div>
+  </div>
+</div>
+
+<script id=fitInsidePaddedBox>
+{
+  // Fitting a title in two thirds of its card: the height left once the
+  // padding it reads back is taken off must be the card's content, or the
+  // loop never ends.
+  const card = $('#fitCard');
+  const title = $('#fitTitle');
+  const style = getComputedStyle(card);
+  const height = card.offsetHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  testing.expectTrue(height > 0);
+
+  let guard = 0;
+  while (title.offsetHeight > height / 3 * 2 && guard < 50) {
+    title.textContent = title.textContent.split(' ').slice(0, -1).join(' ');
+    guard++;
+  }
+  testing.expectTrue(guard < 50);
+}
+</script>

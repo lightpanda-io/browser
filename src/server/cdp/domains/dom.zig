@@ -33,6 +33,7 @@ const Factory = @import("../../../browser/Factory.zig");
 const xpath = @import("../../../browser/xpath/Evaluator.zig");
 const DOMNode = @import("../../../browser/webapi/Node.zig");
 const Range = @import("../../../browser/webapi/Range.zig");
+const StyleManager = @import("../../../browser/StyleManager.zig");
 const Input = @import("../../../browser/webapi/element/html/Input.zig");
 const Selector = @import("../../../browser/webapi/selector/Selector.zig");
 
@@ -600,18 +601,29 @@ fn getBoxModel(cmd: *CDP.Command) !void {
     else
         return cmd.sendError(-32000, "Could not compute box model.", .{});
 
-    // Without padding, border or margin in the layout, the four boxes coincide.
-    // Drivers read `border` for boundingBox(), so it must not be zero.
-    const quad = rectToQuad(rect);
+    // Drivers read `border` for boundingBox(), so it must not be zero. Margins
+    // aren't laid out per side, so the margin box is the border box.
+    const edges: StyleManager.BoxEdges = if (node.dom.is(DOMNode.Element)) |element| element.boxEdges(frame) else .{};
+    const padding = insetRect(rect, edges.border);
+    const border = rectToQuad(rect);
 
     return cmd.sendResult(.{ .model = BoxModel{
-        .content = quad,
-        .padding = quad,
-        .border = quad,
-        .margin = quad,
+        .content = rectToQuad(insetRect(padding, edges.padding)),
+        .padding = rectToQuad(padding),
+        .border = border,
+        .margin = border,
         .width = @trunc(rect.width),
         .height = @trunc(rect.height),
     } }, .{});
+}
+
+fn insetRect(rect: DOMNode.Element.DOMRect.Data, sides: StyleManager.BoxSides) DOMNode.Element.DOMRect.Data {
+    return .{
+        .x = rect.x + sides.left,
+        .y = rect.y + sides.top,
+        .width = @max(0, rect.width - sides.left - sides.right),
+        .height = @max(0, rect.height - sides.top - sides.bottom),
+    };
 }
 
 fn requestChildNodes(cmd: *CDP.Command) !void {
@@ -1688,6 +1700,38 @@ test "cdp.dom: getBoxModel" {
         .width = 1920,
         .height = 5,
     } }, .{ .id = 5 });
+}
+
+test "cdp.dom: getBoxModel insets the padding and content boxes" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
+    const main = (try testing.firstTarget(bc)).mainFrame().?;
+    {
+        var ls: js.Local.Scope = undefined;
+        main.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun(
+            \\document.body.insertAdjacentHTML('beforeend',
+            \\  '<div id=boxed style="width: 100px; height: 40px; padding: 5px 6px; border: 1px solid"></div>');
+        , null);
+    }
+
+    const el = main.document.getElementById("boxed").?;
+    const rect = el.boundingClientRectValues(main);
+    const x = rect.x;
+    const y = rect.y;
+    const node = try (try testing.firstTarget(bc)).node_registry.register(el.asNode());
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.getBoxModel", .params = .{ .nodeId = node.id } });
+    try ctx.expectSentResult(.{ .model = BoxModel{
+        .content = Quad{ x + 7, y + 6, x + 107, y + 6, x + 107, y + 46, x + 7, y + 46 },
+        .padding = Quad{ x + 1, y + 1, x + 113, y + 1, x + 113, y + 51, x + 1, y + 51 },
+        .border = Quad{ x, y, x + 114, y, x + 114, y + 52, x, y + 52 },
+        .margin = Quad{ x, y, x + 114, y, x + 114, y + 52, x, y + 52 },
+        .width = 114,
+        .height = 52,
+    } }, .{ .id = 1 });
 }
 
 test "cdp.dom: getBoxModel of a text node" {

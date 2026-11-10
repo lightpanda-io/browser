@@ -537,14 +537,13 @@ fn trimFraction(str: []const u8) []const u8 {
     return std.mem.trimEnd(u8, std.mem.trimEnd(u8, str, "0"), ".");
 }
 
-fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
+// The used width or height, which box-sizing: border-box makes the border
+// box's.
+fn resolvedDimension(element: *Element, comptime axis: Element.Axis, frame: *Frame) []const u8 {
     if (!element.isVisible(frame)) {
         return "auto";
     }
-    const value = switch (dimension) {
-        .width => element.boxAxis(frame, .width),
-        .height => element.boxAxis(frame, .height),
-    };
+    const value = if (element.sizesBorderBox(frame)) element.boxAxis(frame, axis, .border) else element.boxAxis(frame, axis, .content);
     return frame.local_arena.print("{d}px", .{value}) catch "auto";
 }
 
