@@ -33,7 +33,6 @@ const Graphics = @import("Graphics.zig");
 const ForeignObject = @This();
 
 pub const Proto = Graphics;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Graphics else void = undefined,
 
 pub fn asElement(self: *ForeignObject) *Element {

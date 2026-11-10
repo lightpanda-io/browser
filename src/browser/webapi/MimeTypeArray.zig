@@ -41,6 +41,8 @@ pub fn getByName(_: *const MimeTypeArray, name: []const u8) ?*MimeType {
 // Cannot be constructed, and we currently never return any, so no reason to
 // implement anything on it (for now)
 const MimeType = struct {
+    _pad: bool = false,
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(MimeType);
         pub const Meta = struct {

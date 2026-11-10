@@ -316,7 +316,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     // new context preserves WindowProxy identity
     const reuse_global_object: ?*const v8.Value = blk: {
         if (comptime !is_frame) break :blk null;
-        const existing = params.identity.identity_map.getPtr(@intFromPtr(global.window)) orelse break :blk null;
+        const existing = params.identity.identity_map.getPtr(js.Identity.keyOf(global.window)) orelse break :blk null;
         break :blk @ptrCast(v8.v8__Global__Get(existing, isolate.handle));
     };
 
@@ -398,10 +398,10 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 
     // Register in the identity map. Multiple contexts can be created for the
     // same global (via CDP), so we only register the first one.
-    const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else switch (global._type) {
-        inline else => |scope| @intFromPtr(scope),
+    const identity_key = if (comptime is_frame) js.Identity.keyOf(global.window) else switch (global._type) {
+        inline else => |scope| js.Identity.keyOf(scope),
     };
-    const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_ptr);
+    const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_key);
     if (gop.found_existing == false) {
         var global_global: v8.Global = undefined;
         v8.v8__Global__New(isolate.handle, global_obj, &global_global);

@@ -2060,5 +2060,5 @@ test "Node: text chain slot size" {
     // in existing padding. Debug is larger from the _proto_canary fields.
     const Text = @import("cdata/Text.zig");
     const slot = comptime Factory.chainOffsetOf(Text, Text) + @sizeOf(Text);
-    try testing.expectEqual(if (comptime lp.IS_DEBUG) 104 else 73, slot);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 96 else 72, slot);
 }

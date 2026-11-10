@@ -26,7 +26,6 @@ const CDATASection = @This();
 
 pub const Proto = Text;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Text else void = undefined,
 
 pub const JsApi = struct {

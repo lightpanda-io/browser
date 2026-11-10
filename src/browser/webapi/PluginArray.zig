@@ -42,6 +42,8 @@ pub fn getByName(_: *const PluginArray, name: []const u8) ?*Plugin {
 // Cannot be constructed, and we currently never return any, so no reason to
 // implement anything on it (for now)
 const Plugin = struct {
+    _pad: bool = false,
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Plugin);
         pub const Meta = struct {
