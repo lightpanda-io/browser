@@ -1170,7 +1170,8 @@ pub const JsApi = struct {
     fn _setOuterText(self: *HtmlElement, value: js.Value, frame: *Frame) !void {
         return self.setOuterText(if (value.isNull()) "" else try value.toZig([]const u8), frame);
     }
-    pub const click = bridge.function(HtmlElement.click, .{});
+    pub const click = bridge.fastFunction(HtmlElement.click, .{ .setup_caller = true });
+
     pub const attachInternals = bridge.function(HtmlElement.attachInternals, .{});
 
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
@@ -1183,8 +1184,8 @@ pub const JsApi = struct {
     pub const spellcheck = bridge.accessor(HtmlElement.getSpellcheck, HtmlElement.setSpellcheck, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
     pub const popover = bridge.accessor(HtmlElement.getPopover, HtmlElement.setPopover, .{ .ce_reactions = true });
-    pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
-    pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
+    pub const showPopover = bridge.fastFunction(HtmlElement.showPopover, .{});
+    pub const hidePopover = bridge.fastFunction(HtmlElement.hidePopover, .{});
     pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{});
     pub const contentEditable = bridge.accessor(HtmlElement.getContentEditable, HtmlElement.setContentEditable, .{ .ce_reactions = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});

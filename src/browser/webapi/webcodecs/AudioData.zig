@@ -454,7 +454,7 @@ pub const JsApi = struct {
     pub const allocationSize = bridge.function(AudioData.allocationSize, .{});
     pub const copyTo = bridge.function(AudioData.copyTo, .{});
     pub const clone = bridge.function(AudioData.clone, .{});
-    pub const close = bridge.function(AudioData.close, .{});
+    pub const close = bridge.fastFunction(AudioData.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

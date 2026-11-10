@@ -1276,13 +1276,13 @@ pub const JsApi = struct {
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
-    pub const clearTimeout = bridge.function(Window.clearTimeout, .{});
+    pub const clearTimeout = bridge.fastFunction(Window.clearTimeout, .{});
     pub const setInterval = bridge.function(Window.setInterval, .{});
-    pub const clearInterval = bridge.function(Window.clearInterval, .{});
+    pub const clearInterval = bridge.fastFunction(Window.clearInterval, .{});
     pub const requestAnimationFrame = bridge.function(Window.requestAnimationFrame, .{});
-    pub const cancelAnimationFrame = bridge.function(Window.cancelAnimationFrame, .{});
+    pub const cancelAnimationFrame = bridge.fastFunction(Window.cancelAnimationFrame, .{});
     pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});
-    pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
+    pub const cancelIdleCallback = bridge.fastFunction(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const postMessage = bridge.function(Window.postMessage, .{});
     pub const btoa = bridge.function(Window.btoa, .{});
@@ -1323,10 +1323,10 @@ pub const JsApi = struct {
     pub const closed = bridge.accessor(Window.getClosed, null, .{});
     pub const name = bridge.accessor(Window.getName, Window.setName, .{});
     pub const open = bridge.function(Window.open, .{});
-    pub const close = bridge.function(Window.close, .{});
-    pub const focus = bridge.function(Window.focus, .{});
-    pub const blur = bridge.function(Window.blur, .{});
-    pub const stop = bridge.function(Window.stop, .{});
+    pub const close = bridge.fastFunction(Window.close, .{});
+    pub const focus = bridge.fastFunction(Window.focus, .{});
+    pub const blur = bridge.fastFunction(Window.blur, .{});
+    pub const stop = bridge.fastFunction(Window.stop, .{});
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
@@ -1430,9 +1430,9 @@ const CrossOriginWindow = struct {
         };
 
         pub const postMessage = bridge.function(CrossOriginWindow.postMessage, .{});
-        pub const close = bridge.function(CrossOriginWindow.close, .{});
-        pub const focus = bridge.function(CrossOriginWindow.focus, .{});
-        pub const blur = bridge.function(CrossOriginWindow.blur, .{});
+        pub const close = bridge.fastFunction(CrossOriginWindow.close, .{});
+        pub const focus = bridge.fastFunction(CrossOriginWindow.focus, .{});
+        pub const blur = bridge.fastFunction(CrossOriginWindow.blur, .{});
         pub const window = bridge.accessor(CrossOriginWindow.getWindow, null, .{});
         pub const self = bridge.accessor(CrossOriginWindow.getWindow, null, .{});
         pub const frames = bridge.accessor(CrossOriginWindow.getWindow, null, .{});

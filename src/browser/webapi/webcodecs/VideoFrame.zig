@@ -969,7 +969,7 @@ pub const JsApi = struct {
     pub const allocationSize = bridge.function(VideoFrame.allocationSize, .{});
     pub const copyTo = bridge.function(VideoFrame.copyTo, .{});
     pub const clone = bridge.function(VideoFrame.clone, .{});
-    pub const close = bridge.function(VideoFrame.close, .{});
+    pub const close = bridge.fastFunction(VideoFrame.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

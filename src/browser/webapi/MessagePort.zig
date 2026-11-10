@@ -446,8 +446,8 @@ pub const JsApi = struct {
     };
 
     pub const postMessage = bridge.function(MessagePort.postMessage, .{});
-    pub const start = bridge.function(MessagePort.start, .{});
-    pub const close = bridge.function(MessagePort.close, .{});
+    pub const start = bridge.fastFunction(MessagePort.start, .{});
+    pub const close = bridge.fastFunction(MessagePort.close, .{});
 
     pub const onmessage = bridge.accessor(MessagePort.getOnMessage, MessagePort.setOnMessage, .{});
     pub const onmessageerror = EventTarget.handlerAccessor(MessagePort, "messageerror");

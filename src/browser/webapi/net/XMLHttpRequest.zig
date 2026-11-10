@@ -935,7 +935,7 @@ pub const JsApi = struct {
     pub const overrideMimeType = bridge.function(XMLHttpRequest.overrideMimeType, .{});
     pub const getResponseHeader = bridge.function(XMLHttpRequest.getResponseHeader, .{});
     pub const getAllResponseHeaders = bridge.function(XMLHttpRequest.getAllResponseHeaders, .{});
-    pub const abort = bridge.function(XMLHttpRequest.abort, .{});
+    pub const abort = bridge.fastFunction(XMLHttpRequest.abort, .{});
 };
 
 const testing = @import("../../../testing.zig");

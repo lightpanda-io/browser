@@ -828,13 +828,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const now = bridge.function(Performance.now, .{});
+    pub const now = bridge.fastFunction(Performance.now, .{});
     pub const mark = bridge.function(Performance.mark, .{});
     pub const measure = bridge.function(Performance.measure, .{});
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
     pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
-    pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{});
-    pub const clearResourceTimings = bridge.function(Performance.clearResourceTimings, .{});
+    pub const setResourceTimingBufferSize = bridge.fastFunction(Performance.setResourceTimingBufferSize, .{});
+    pub const clearResourceTimings = bridge.fastFunction(Performance.clearResourceTimings, .{});
     pub const getEntries = bridge.function(Performance.getEntries, .{});
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});

@@ -190,9 +190,9 @@ pub const JsApi = struct {
     pub const encodeQueueSize = bridge.accessor(AudioEncoder.getEncodeQueueSize, null, .{});
     pub const ondequeue = EventTarget.handlerAccessor(AudioEncoder, "dequeue");
     pub const configure = bridge.function(AudioEncoder.configure, .{});
-    pub const encode = bridge.function(AudioEncoder.encode, .{});
+    pub const encode = bridge.fastFunction(AudioEncoder.encode, .{});
     pub const flush = bridge.function(AudioEncoder.flush, .{});
-    pub const reset = bridge.function(AudioEncoder.reset, .{});
-    pub const close = bridge.function(AudioEncoder.close, .{});
+    pub const reset = bridge.fastFunction(AudioEncoder.reset, .{});
+    pub const close = bridge.fastFunction(AudioEncoder.close, .{});
     pub const isConfigSupported = bridge.function(AudioEncoder.isConfigSupported, .{ .static = true });
 };

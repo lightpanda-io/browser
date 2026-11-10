@@ -555,7 +555,7 @@ pub const JsApi = struct {
     pub const onmessage = EventTarget.handlerAccessor(EventSource, "message");
     pub const onerror = EventTarget.handlerAccessor(EventSource, "error");
 
-    pub const close = bridge.function(EventSource.close, .{});
+    pub const close = bridge.fastFunction(EventSource.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

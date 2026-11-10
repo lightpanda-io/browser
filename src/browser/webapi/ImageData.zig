@@ -42,6 +42,12 @@ pub const ConstructorSettings = struct {
     pixelFormat: String = .wrap("rgba-unorm8"),
 };
 
+//pub fn init(width: u32, height: u32, exec: *Execution) !*ImageData {}
+//pub fn initWithSettings(width: u32, height: u32, settings: ConstructorSettings, exec: *Execution) !*ImageData {}
+
+//bridge.constructor(.{ init, initWithSettings }, .{});
+//bridge.constructor(.{ init, initWithSettings }, .{});
+
 pub fn init(width: u32, height: u32, maybe_settings: ?ConstructorSettings, exec: *Execution) !*ImageData {
     try validateDimension(width);
     try validateDimension(height);

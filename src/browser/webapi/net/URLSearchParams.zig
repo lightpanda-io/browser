@@ -437,7 +437,7 @@ pub const JsApi = struct {
     pub const entries = bridge.function(URLSearchParams.entries, .{});
     pub const symbol_iterator = bridge.iterator(URLSearchParams.entries, .{});
     pub const forEach = bridge.function(URLSearchParams.forEach, .{});
-    pub const sort = bridge.function(URLSearchParams.sort, .{});
+    pub const sort = bridge.fastFunction(URLSearchParams.sort, .{});
 
     pub const toString = bridge.function(_toString, .{});
     fn _toString(self: *const URLSearchParams, exec: *const Execution) ![]const u8 {

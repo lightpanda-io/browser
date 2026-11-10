@@ -453,7 +453,7 @@ pub const JsApi = struct {
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
     pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
     pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});
-    pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{});
+    pub const deleteRule = bridge.fastFunction(CSSStyleSheet.deleteRule, .{});
     pub const replace = bridge.function(CSSStyleSheet.replace, .{});
     pub const replaceSync = bridge.function(CSSStyleSheet.replaceSync, .{});
 };

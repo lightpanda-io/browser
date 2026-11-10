@@ -525,9 +525,9 @@ pub const JsApi = struct {
     pub const defaultPrevented = bridge.accessor(Event.getDefaultPrevented, null, .{});
     pub const timeStamp = bridge.accessor(Event.getTimeStamp, null, .{});
     pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{ .unforgeable = true, .deletable = false });
-    pub const preventDefault = bridge.function(Event.preventDefault, .{});
-    pub const stopPropagation = bridge.function(Event.stopPropagation, .{});
-    pub const stopImmediatePropagation = bridge.function(Event.stopImmediatePropagation, .{});
+    pub const preventDefault = bridge.fastFunction(Event.preventDefault, .{});
+    pub const stopPropagation = bridge.fastFunction(Event.stopPropagation, .{});
+    pub const stopImmediatePropagation = bridge.fastFunction(Event.stopImmediatePropagation, .{});
     pub const composedPath = bridge.function(Event.composedPath, .{});
     pub const initEvent = bridge.function(Event.initEvent, .{});
     // deprecated

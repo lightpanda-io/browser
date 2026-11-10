@@ -2158,7 +2158,7 @@ pub const JsApi = struct {
             return frame.window;
         }
     }.defaultView, null, .{});
-    pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const hasFocus = bridge.fastFunction(Document.hasFocus, .{});
     pub const fullscreenEnabled = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});

@@ -136,7 +136,7 @@ pub const Orientation = struct {
         pub const angle = bridge.accessor(Orientation.getAngle, null, .{});
         pub const @"type" = bridge.accessor(Orientation.getType, null, .{});
         pub const lock = bridge.function(Orientation.lock, .{});
-        pub const unlock = bridge.function(Orientation.unlock, .{});
+        pub const unlock = bridge.fastFunction(Orientation.unlock, .{});
         pub const onchange = EventTarget.handlerAccessor(Orientation, "change");
     };
 };

@@ -274,7 +274,7 @@ pub const JsApi = struct {
     pub const timeEnd = bridge.function(Console.timeEnd, .{ .static = true });
     pub const group = bridge.function(Console.group, .{ .static = true });
     pub const groupCollapsed = bridge.function(Console.groupCollapsed, .{ .static = true });
-    pub const groupEnd = bridge.function(Console.groupEnd, .{ .static = true });
+    pub const groupEnd = bridge.fastFunction(Console.groupEnd, .{ .static = true });
 };
 
 const testing = @import("../../testing.zig");

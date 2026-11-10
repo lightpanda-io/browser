@@ -245,6 +245,6 @@ pub const TransformStreamDefaultController = struct {
 
         pub const enqueue = bridge.function(TransformStreamDefaultController.enqueueValue, .{});
         pub const @"error" = bridge.function(TransformStreamDefaultController.doError, .{});
-        pub const terminate = bridge.function(TransformStreamDefaultController.terminate, .{});
+        pub const terminate = bridge.fastFunction(TransformStreamDefaultController.terminate, .{});
     };
 };

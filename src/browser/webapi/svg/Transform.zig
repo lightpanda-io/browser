@@ -324,9 +324,9 @@ pub const JsApi = struct {
     pub const matrix = bridge.accessor(Transform.getMatrix, null, .{});
     pub const angle = bridge.accessor(Transform.getAngle, null, .{});
     pub const setMatrix = bridge.function(Transform.setMatrix, .{});
-    pub const setTranslate = bridge.function(Transform.setTranslate, .{});
-    pub const setScale = bridge.function(Transform.setScale, .{});
-    pub const setRotate = bridge.function(Transform.setRotate, .{});
-    pub const setSkewX = bridge.function(Transform.setSkewX, .{});
-    pub const setSkewY = bridge.function(Transform.setSkewY, .{});
+    pub const setTranslate = bridge.fastFunction(Transform.setTranslate, .{});
+    pub const setScale = bridge.fastFunction(Transform.setScale, .{});
+    pub const setRotate = bridge.fastFunction(Transform.setRotate, .{});
+    pub const setSkewX = bridge.fastFunction(Transform.setSkewX, .{});
+    pub const setSkewY = bridge.fastFunction(Transform.setSkewY, .{});
 };

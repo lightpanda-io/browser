@@ -269,8 +269,8 @@ pub const JsApi = struct {
     pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{ .noop = true });
-    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
-    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{});
+    pub const fill = bridge.fastFunction(CanvasRenderingContext2D.fill, .{});
+    pub const stroke = bridge.fastFunction(CanvasRenderingContext2D.stroke, .{});
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});

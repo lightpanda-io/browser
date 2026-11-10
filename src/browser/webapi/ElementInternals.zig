@@ -313,8 +313,8 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(ElementInternals.getWillValidate, null, .{});
     pub const validity = bridge.accessor(ElementInternals.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(ElementInternals.getValidationMessage, null, .{});
-    pub const checkValidity = bridge.function(ElementInternals.checkValidity, .{});
-    pub const reportValidity = bridge.function(ElementInternals.checkValidity, .{});
+    pub const checkValidity = bridge.fastFunction(ElementInternals.checkValidity, .{});
+    pub const reportValidity = bridge.fastFunction(ElementInternals.checkValidity, .{});
 
     // ARIAMixin
     pub const role = ariaAccessor("role");

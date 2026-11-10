@@ -277,7 +277,7 @@ pub const JsApi = struct {
     };
 
     pub const enqueue = bridge.function(ReadableStreamDefaultController.enqueueValue, .{});
-    pub const close = bridge.function(ReadableStreamDefaultController.close, .{});
+    pub const close = bridge.fastFunction(ReadableStreamDefaultController.close, .{});
     pub const @"error" = bridge.function(ReadableStreamDefaultController.doError, .{});
     pub const desiredSize = bridge.accessor(ReadableStreamDefaultController.getDesiredSize, null, .{});
 };

@@ -421,7 +421,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(Worker.init, .{});
 
-    pub const terminate = bridge.function(Worker.terminate, .{});
+    pub const terminate = bridge.fastFunction(Worker.terminate, .{});
     pub const postMessage = bridge.function(Worker.postMessage, .{});
 
     pub const onmessage = EventTarget.handlerAccessor(Worker, "message");
