@@ -1168,15 +1168,13 @@ fn webSocketAccept(version: header_parser.HttpVersion, headers: *const Connectio
     return out;
 }
 
-// Every request goes through this, not only the upgrades: the WebDriver
-// endpoints drive the browser as fully as a WebSocket does. A page that
-// rebinds its own name to our address leaves that name in Host; the browser
-// sets that header and a page can't change or drop it, so a request without
-// one isn't a page's. `advertise_host` is the explicit --advertise-host.
+// Guards every request against DNS rebinding: the WebDriver endpoints drive
+// the browser as fully as a WebSocket does. A rebound page's name ends up in
+// Host; a request without one isn't from a browser, so it passes.
 fn checkHost(headers: *const Connection.Headers, advertise_host: ?[]const u8) error{ForbiddenHost}!void {
     const host = headers.host orelse return;
     if (isAllowedHost(host, advertise_host) == false) {
-        log.warn(.serve, "rejected websocket host", .{ .host = host[0..@min(host.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
+        log.warn(.serve, "rejected request host", .{ .host = host[0..@min(host.len, 64)], .note = "See `--advertise-host <host>` if this is a legitimate host" });
         return error.ForbiddenHost;
     }
 }
