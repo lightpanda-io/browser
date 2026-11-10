@@ -264,11 +264,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const play = bridge.function(Animation.play, .{});
-    pub const pause = bridge.function(Animation.pause, .{});
-    pub const cancel = bridge.function(Animation.cancel, .{});
-    pub const finish = bridge.function(Animation.finish, .{});
-    pub const reverse = bridge.function(Animation.reverse, .{});
+    pub const play = bridge.fastFunction(Animation.play, .{});
+    pub const pause = bridge.fastFunction(Animation.pause, .{});
+    pub const cancel = bridge.fastFunction(Animation.cancel, .{});
+    pub const finish = bridge.fastFunction(Animation.finish, .{});
+    pub const reverse = bridge.fastFunction(Animation.reverse, .{});
     pub const playState = bridge.accessor(Animation.playState, null, .{});
     pub const pending = bridge.property(false, .{ .template = false });
     pub const finished = bridge.accessor(Animation.getFinished, null, .{});

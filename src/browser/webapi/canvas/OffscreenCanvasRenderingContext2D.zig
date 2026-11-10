@@ -261,8 +261,8 @@ pub const JsApi = struct {
     pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{ .noop = true });
-    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{});
-    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{});
+    pub const fill = bridge.fastFunction(OffscreenCanvasRenderingContext2D.fill, .{});
+    pub const stroke = bridge.fastFunction(OffscreenCanvasRenderingContext2D.stroke, .{});
     pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{});
     pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{});

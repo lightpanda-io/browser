@@ -187,7 +187,7 @@ pub const JsApi = struct {
     pub const configure = bridge.function(VideoEncoder.configure, .{});
     pub const encode = bridge.function(VideoEncoder.encode, .{});
     pub const flush = bridge.function(VideoEncoder.flush, .{});
-    pub const reset = bridge.function(VideoEncoder.reset, .{});
-    pub const close = bridge.function(VideoEncoder.close, .{});
+    pub const reset = bridge.fastFunction(VideoEncoder.reset, .{});
+    pub const close = bridge.fastFunction(VideoEncoder.close, .{});
     pub const isConfigSupported = bridge.function(VideoEncoder.isConfigSupported, .{ .static = true });
 };

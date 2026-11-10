@@ -328,8 +328,8 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(TextArea.getWillValidate, null, .{});
     pub const validity = bridge.accessor(TextArea.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(TextArea.getValidationMessage, null, .{});
-    pub const checkValidity = bridge.function(TextArea.checkValidity, .{});
-    pub const reportValidity = bridge.function(TextArea.reportValidity, .{});
+    pub const checkValidity = bridge.fastFunction(TextArea.checkValidity, .{});
+    pub const reportValidity = bridge.fastFunction(TextArea.reportValidity, .{});
     pub const setCustomValidity = bridge.function(TextArea.setCustomValidity, .{});
     pub const @"type" = bridge.property("textarea", .{ .template = false, .readonly = true });
     pub const value = bridge.accessor(_getApiValue, TextArea.setValue, .{});
@@ -354,7 +354,7 @@ pub const JsApi = struct {
     pub const maxLength = reflect.limitedLong("maxlength");
     pub const minLength = reflect.limitedLong("minlength");
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
-    pub const select = bridge.function(TextArea.select, .{});
+    pub const select = bridge.fastFunction(TextArea.select, .{});
 
     pub const selectionStart = bridge.accessor(TextArea.getSelectionStart, TextArea.setSelectionStart, .{});
     pub const selectionEnd = bridge.accessor(TextArea.getSelectionEnd, TextArea.setSelectionEnd, .{});

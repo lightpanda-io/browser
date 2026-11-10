@@ -350,7 +350,7 @@ pub const JsApi = struct {
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
 
-    pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
+    pub const javaEnabled = bridge.fastFunction(Navigator.javaEnabled, .{});
     pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});

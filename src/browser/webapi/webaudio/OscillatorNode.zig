@@ -269,5 +269,5 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(OscillatorNode.getType, OscillatorNode.setType, .{});
     pub const frequency = bridge.accessor(OscillatorNode.getFrequency, null, .{});
     pub const detune = bridge.accessor(OscillatorNode.getDetune, null, .{});
-    pub const setPeriodicWave = bridge.function(OscillatorNode.setPeriodicWave, .{});
+    pub const setPeriodicWave = bridge.fastFunction(OscillatorNode.setPeriodicWave, .{});
 };

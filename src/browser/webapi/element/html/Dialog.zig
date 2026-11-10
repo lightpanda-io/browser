@@ -167,8 +167,8 @@ pub const JsApi = struct {
     pub const open = reflect.boolean("open");
     pub const returnValue = bridge.accessor(Dialog.getReturnValue, Dialog.setReturnValue, .{});
 
-    pub const show = bridge.function(Dialog.show, .{});
-    pub const showModal = bridge.function(Dialog.showModal, .{});
+    pub const show = bridge.fastFunction(Dialog.show, .{});
+    pub const showModal = bridge.fastFunction(Dialog.showModal, .{});
     pub const close = bridge.function(Dialog.close, .{});
 };
 

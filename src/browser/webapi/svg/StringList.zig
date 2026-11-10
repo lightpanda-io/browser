@@ -226,7 +226,7 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(StringList.getLength, null, .{});
     pub const numberOfItems = bridge.accessor(StringList.getNumberOfItems, null, .{});
-    pub const clear = bridge.function(StringList.clear, .{});
+    pub const clear = bridge.fastFunction(StringList.clear, .{});
     pub const initialize = bridge.function(StringList.initialize, .{});
     pub const getItem = bridge.function(StringList.getItem, .{});
     pub const insertItemBefore = bridge.function(StringList.insertItemBefore, .{});

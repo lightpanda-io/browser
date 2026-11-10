@@ -404,11 +404,11 @@ pub const JsApi = struct {
     pub const onprogress = EventTarget.handlerAccessor(FileReader, "progress");
 
     // Methods
-    pub const readAsArrayBuffer = bridge.function(FileReader.readAsArrayBuffer, .{});
-    pub const readAsBinaryString = bridge.function(FileReader.readAsBinaryString, .{});
+    pub const readAsArrayBuffer = bridge.fastFunction(FileReader.readAsArrayBuffer, .{});
+    pub const readAsBinaryString = bridge.fastFunction(FileReader.readAsBinaryString, .{});
     pub const readAsText = bridge.function(FileReader.readAsText, .{});
-    pub const readAsDataURL = bridge.function(FileReader.readAsDataURL, .{});
-    pub const abort = bridge.function(FileReader.abort, .{});
+    pub const readAsDataURL = bridge.fastFunction(FileReader.readAsDataURL, .{});
+    pub const abort = bridge.fastFunction(FileReader.abort, .{});
 };
 
 const testing = @import("../../testing.zig");

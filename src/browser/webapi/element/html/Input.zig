@@ -1698,10 +1698,10 @@ pub const JsApi = struct {
     pub const willValidate = bridge.accessor(Input.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Input.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Input.getValidationMessage, null, .{});
-    pub const checkValidity = bridge.function(Input.checkValidity, .{});
-    pub const reportValidity = bridge.function(Input.reportValidity, .{});
+    pub const checkValidity = bridge.fastFunction(Input.checkValidity, .{});
+    pub const reportValidity = bridge.fastFunction(Input.reportValidity, .{});
     pub const setCustomValidity = bridge.function(Input.setCustomValidity, .{});
-    pub const select = bridge.function(Input.select, .{});
+    pub const select = bridge.fastFunction(Input.select, .{});
 
     pub const selectionStart = bridge.accessor(Input.getSelectionStart, Input.setSelectionStart, .{});
     pub const selectionEnd = bridge.accessor(Input.getSelectionEnd, Input.setSelectionEnd, .{});

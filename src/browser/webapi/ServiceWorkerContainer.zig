@@ -300,7 +300,7 @@ pub const JsApi = struct {
     pub const register = bridge.function(ServiceWorkerContainer.register, .{});
     pub const getRegistration = bridge.function(ServiceWorkerContainer.getRegistration, .{});
     pub const getRegistrations = bridge.function(ServiceWorkerContainer.getRegistrations, .{});
-    pub const startMessages = bridge.function(ServiceWorkerContainer.startMessages, .{});
+    pub const startMessages = bridge.fastFunction(ServiceWorkerContainer.startMessages, .{});
 
     // A worker has no way to reach a client yet, so the API is missing things
     // like onmessage for now

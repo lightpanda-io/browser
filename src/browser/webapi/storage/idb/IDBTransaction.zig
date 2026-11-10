@@ -782,8 +782,8 @@ pub const JsApi = struct {
     pub const objectStoreNames = bridge.accessor(IDBTransaction.getObjectStoreNames, null, .{});
     pub const @"error" = bridge.accessor(IDBTransaction.getError, null, .{ .null_as_undefined = true });
     pub const objectStore = bridge.function(IDBTransaction.objectStore, .{});
-    pub const abort = bridge.function(IDBTransaction.abort, .{});
-    pub const commit = bridge.function(IDBTransaction.commit, .{});
+    pub const abort = bridge.fastFunction(IDBTransaction.abort, .{});
+    pub const commit = bridge.fastFunction(IDBTransaction.commit, .{});
     pub const oncomplete = EventTarget.handlerAccessor(IDBTransaction, "complete");
     pub const onerror = EventTarget.handlerAccessor(IDBTransaction, "error");
     pub const onabort = EventTarget.handlerAccessor(IDBTransaction, "abort");

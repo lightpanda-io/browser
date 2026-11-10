@@ -476,8 +476,8 @@ pub const JsApi = struct {
 
     pub const canPlayType = bridge.function(Media.canPlayType, .{});
     pub const play = bridge.function(Media.play, .{});
-    pub const pause = bridge.function(Media.pause, .{});
-    pub const load = bridge.function(Media.load, .{});
+    pub const pause = bridge.fastFunction(Media.pause, .{});
+    pub const load = bridge.fastFunction(Media.load, .{});
 };
 
 const testing = @import("../../../../testing.zig");

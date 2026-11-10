@@ -541,9 +541,9 @@ pub const JsApi = struct {
     pub const delay = bridge.accessor(IntersectionObserver.getDelay, null, .{});
     pub const trackVisibility = bridge.accessor(IntersectionObserver.getTrackVisibility, null, .{});
 
-    pub const observe = bridge.function(IntersectionObserver.observe, .{});
-    pub const unobserve = bridge.function(IntersectionObserver.unobserve, .{});
-    pub const disconnect = bridge.function(IntersectionObserver.disconnect, .{});
+    pub const observe = bridge.fastFunction(IntersectionObserver.observe, .{});
+    pub const unobserve = bridge.fastFunction(IntersectionObserver.unobserve, .{});
+    pub const disconnect = bridge.fastFunction(IntersectionObserver.disconnect, .{});
     pub const takeRecords = bridge.function(IntersectionObserver.takeRecords, .{});
 };
 

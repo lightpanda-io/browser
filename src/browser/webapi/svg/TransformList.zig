@@ -184,7 +184,7 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(TransformList.getLength, null, .{});
     pub const numberOfItems = bridge.accessor(TransformList.getNumberOfItems, null, .{});
-    pub const clear = bridge.function(TransformList.clear, .{});
+    pub const clear = bridge.fastFunction(TransformList.clear, .{});
     pub const initialize = bridge.function(TransformList.initialize, .{});
     pub const getItem = bridge.function(TransformList.getItem, .{});
     pub const insertItemBefore = bridge.function(TransformList.insertItemBefore, .{});

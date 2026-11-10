@@ -744,20 +744,20 @@ pub const JsApi = struct {
     pub const rangeCount = bridge.accessor(Selection.getRangeCount, null, .{});
     pub const @"type" = bridge.accessor(Selection.getType, null, .{});
 
-    pub const addRange = bridge.function(Selection.addRange, .{});
+    pub const addRange = bridge.fastFunction(Selection.addRange, .{});
     pub const collapse = bridge.function(Selection.collapse, .{});
-    pub const collapseToEnd = bridge.function(Selection.collapseToEnd, .{});
-    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{});
-    pub const containsNode = bridge.function(Selection.containsNode, .{});
+    pub const collapseToEnd = bridge.fastFunction(Selection.collapseToEnd, .{});
+    pub const collapseToStart = bridge.fastFunction(Selection.collapseToStart, .{});
+    pub const containsNode = bridge.fastFunction(Selection.containsNode, .{});
     pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{ .ce_reactions = true });
-    pub const empty = bridge.function(Selection.removeAllRanges, .{});
+    pub const empty = bridge.fastFunction(Selection.removeAllRanges, .{});
     pub const extend = bridge.function(Selection.extend, .{});
     // unimplemented: getComposedRanges
     pub const getRangeAt = bridge.function(Selection.getRangeAt, .{});
     pub const modify = bridge.function(Selection.modify, .{});
-    pub const removeAllRanges = bridge.function(Selection.removeAllRanges, .{});
-    pub const removeRange = bridge.function(Selection.removeRange, .{});
-    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
+    pub const removeAllRanges = bridge.fastFunction(Selection.removeAllRanges, .{});
+    pub const removeRange = bridge.fastFunction(Selection.removeRange, .{});
+    pub const selectAllChildren = bridge.fastFunction(Selection.selectAllChildren, .{});
     pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{});
     pub const setPosition = bridge.function(Selection.collapse, .{});
     pub const toString = bridge.function(Selection.toString, .{});

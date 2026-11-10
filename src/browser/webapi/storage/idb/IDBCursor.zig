@@ -458,7 +458,7 @@ pub const JsApi = struct {
     pub const source = bridge.accessor(IDBCursor.getSource, null, .{});
     pub const @"continue" = bridge.function(IDBCursor.@"continue", .{});
     pub const continuePrimaryKey = bridge.function(IDBCursor.continuePrimaryKey, .{});
-    pub const advance = bridge.function(IDBCursor.advance, .{});
+    pub const advance = bridge.fastFunction(IDBCursor.advance, .{});
     pub const update = bridge.function(IDBCursor.update, .{});
     pub const delete = bridge.function(IDBCursor.delete, .{});
 };
