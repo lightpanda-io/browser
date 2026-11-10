@@ -24,6 +24,7 @@ const ArenaAllocator = @import("../../ArenaAllocator.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Document = @import("../webapi/Document.zig");
+const DOMException = @import("../webapi/DOMException.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
@@ -31,6 +32,7 @@ const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
+const bridge = @import("bridge.zig");
 const Local = @import("Local.zig");
 const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
@@ -489,20 +491,24 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-// Per Web IDL, exceptions belong to the operation's relevant realm — the
-// receiver's — which differs from the calling realm for cross-realm calls
-// (v8 API callbacks run in the caller's context, and our JS wrappers are
-// shared across the page's contexts). For DOM nodes, the relevant realm is
-// the node document's frame; otherwise fall back to the calling realm.
-fn errorLocal(local: *const Local, info: FunctionCallbackInfo, receiver: *const Receiver) Local {
+/// Per Web IDL, exceptions belong to the operation's relevant realm — the
+/// receiver's — which differs from the calling realm for cross-realm calls
+/// (v8 API callbacks run in the caller's context, and our JS wrappers are
+/// shared across the page's contexts). For DOM nodes, the relevant realm is
+/// the node document's frame; otherwise fall back to the calling realm.
+fn errorLocal(local: *const Local, info: FunctionCallbackInfo, receiver: *const ReceiverInfo) Local {
     const nodeOf = receiver.node orelse return local.*;
+    const node = nodeOf(info) orelse return local.*;
+    return nodeErrorLocal(local, node);
+}
 
+// errorLocal for a receiver that is already known to be a node.
+fn nodeErrorLocal(local: *const Local, node: *Node) Local {
     const frame = switch (local.ctx.global) {
-        .frame => |f| f,
+        .frame => |frame| frame,
         .worker => return local.*,
     };
 
-    const node = nodeOf(info) orelse return local.*;
     const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
         .document => node.subtype(Document),
         else => return local.*,
@@ -523,21 +529,24 @@ fn errorLocal(local: *const Local, info: FunctionCallbackInfo, receiver: *const 
 }
 
 // What handleError needs from the receiver type T. Keeps handleError non-generic.
-const Receiver = struct {
+const ReceiverInfo = struct {
     type_name: []const u8,
     // Null unless T is a Node: see errorLocal.
     node: ?*const fn (FunctionCallbackInfo) ?*Node,
 
-    fn of(comptime T: type) *const Receiver {
-        const is_node_type = @typeInfo(T) == .@"struct" and @hasDecl(T, "JsApi") and
-            @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
-        const receiver: Receiver = .{
+    fn of(comptime T: type) *const ReceiverInfo {
+        const receiver: ReceiverInfo = .{
             .type_name = @typeName(T),
-            .node = if (is_node_type) receiverNode(T) else null,
+            .node = if (isNodeType(T)) receiverNode(T) else null,
         };
         return &receiver;
     }
 };
+
+fn isNodeType(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "JsApi") and
+        bridge.inheritsOrIs(T.JsApi, Node.JsApi);
+}
 
 fn receiverNode(comptime T: type) *const fn (FunctionCallbackInfo) ?*Node {
     return &struct {
@@ -546,6 +555,15 @@ fn receiverNode(comptime T: type) *const fn (FunctionCallbackInfo) ?*Node {
             return protoNode(T, instance);
         }
     }.get;
+}
+
+// receiverNode for the fast variant, which has its receiver unwrapped already:
+// null if the function is static.
+fn fastReceiverNode(comptime T: type, receiver: ?*T) ?*Node {
+    if (comptime !isNodeType(T)) {
+        return null;
+    }
+    return protoNode(T, receiver orelse return null);
 }
 
 // Upcast a Node-descendant instance to *Node by walking the Proto chain.
@@ -558,12 +576,13 @@ fn protoNode(comptime T: type, instance: *T) *Node {
     return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
 }
 
-fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, receiver: *const Receiver, func_name: []const u8, returns_promise: bool) void {
+/// Converts a Zig error to JS error, then either throws it or, if function
+/// returns a promise, rejects with error.
+fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, receiver: *const ReceiverInfo, func_name: []const u8, returns_promise: bool) void {
     if (comptime lp.IS_DEBUG) {
         if (log.enabled(.js, .debug)) {
-            const DOMException = @import("../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
-                // This isn't a DOMException, let's log it
+                // This isn't a DOMException, let's log it.
                 logFunctionCallError(local, receiver.type_name, func_name, err, info);
             }
         }
@@ -573,6 +592,7 @@ fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, r
         return;
     }
 
+    // Get to correct realm.
     const err_local = errorLocal(local, info, receiver);
     const js_err = createError(local, &err_local, err);
     if (returns_promise) {
@@ -589,6 +609,17 @@ fn handlePropertyError(local: *const Local, err: anyerror, info: PropertyCallbac
     }
     const js_err = createError(local, local, err);
     info.getReturnValue().setValueHandle(local.isolate.throwException(js_err));
+}
+
+// Fast functions throw in the receiver's realm and cannot return promises.
+// `node` is the receiver if it's a node: see fastReceiverNode.
+fn handleFastError(local: *const Local, err: anyerror, node: ?*Node) void {
+    if (isPending(err)) {
+        return;
+    }
+    const err_local = if (node) |n| nodeErrorLocal(local, n) else local.*;
+    const js_err = createError(local, &err_local, err);
+    _ = local.isolate.throwException(js_err);
 }
 
 fn isPending(err: anyerror) bool {
@@ -648,7 +679,6 @@ fn returnsPromise(comptime F: type) bool {
 
 // Convert a Zig error to a DOMException. If the error is unknown, return null.
 fn domExceptionToJs(local: *const Local, err: anyerror) ?*const v8.Value {
-    const DOMException = @import("../webapi/DOMException.zig");
     const ex = DOMException.fromError(err) orelse return null;
     const value = local.zigValueToJs(ex, .{}) catch return local.isolate.createError("internal error");
     return value.handle;
@@ -1052,6 +1082,238 @@ pub const Function = struct {
     };
 };
 
+/// V8 Fast API integration.
+pub const FastFunction = struct {
+    pub const Options = struct {
+        static: bool = false,
+        /// Whether the fast variant need to setup `Caller`. Don't modify it
+        /// if you're unsure.
+        setup_caller: bool = true,
+        exposed: Function.Opts.Exposed = .both,
+    };
+
+    fn isPrimitive(comptime T: type) bool {
+        return switch (T) {
+            bool, i32, u32, i64, u64, f32, f64 => true,
+            else => false,
+        };
+    }
+
+    inline fn isPointer(comptime T: type) bool {
+        const Inner = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
+        return switch (@typeInfo(Inner)) {
+            .pointer => |ptr| ptr.size == .one and @typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "JsApi"),
+            else => false,
+        };
+    }
+
+    /// Only primitives and V8 values are allowed.
+    fn Arg(comptime T: type) type {
+        // Treat pointers as V8 values; we can change this in the future.
+        if (comptime isPointer(T)) {
+            return ?*const v8.Value;
+        }
+        // Primitives.
+        return switch (comptime T) {
+            void, bool, i32, u32, i64, u64, f32, f64 => T,
+            else => @compileError("type '" ++ @typeName(T) ++ "' is not allowed in fast functions"),
+        };
+    }
+
+    fn toCTypeEnum(comptime T: type) v8.CTypeInfo {
+        // Treat pointers as V8 values; we can change this in the future.
+        if (comptime isPointer(T)) {
+            return .{ .type = v8.kCTypeInfoType_V8Value };
+        }
+        // Primitives.
+        return switch (T) {
+            void => .{ .type = v8.kCTypeInfoType_Void },
+            bool => .{ .type = v8.kCTypeInfoType_Bool },
+            u8 => unreachable, // u8 as return type is not supported by V8.
+            i32 => .{ .type = v8.kCTypeInfoType_Int32 },
+            u32 => .{ .type = v8.kCTypeInfoType_Uint32 },
+            i64 => .{ .type = v8.kCTypeInfoType_Int64 },
+            u64 => .{ .type = v8.kCTypeInfoType_Uint64 },
+            f32 => .{ .type = v8.kCTypeInfoType_Float32 },
+            f64 => .{ .type = v8.kCTypeInfoType_Float64 },
+            else => unreachable,
+        };
+    }
+
+    /// Mirrors `.optional` / `.pointer` branches from `Local.jsValueToZig`.
+    fn toZigObject(comptime T: type, handle: ?*const v8.Value) error{InvalidArgument}!T {
+        const value = handle.?;
+        if (@typeInfo(T) == .optional) {
+            if (v8.v8__Value__IsNullOrUndefined(value)) return null;
+        }
+        if (!v8.v8__Value__IsObject(value)) return error.InvalidArgument;
+        const Pointer = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
+        return TaggedOpaque.fromJS(Pointer, @ptrCast(value));
+    }
+
+    fn isErrorUnion(comptime T: type) struct { type, bool } {
+        return switch (@typeInfo(T)) {
+            .error_union => |info| .{ info.payload, true },
+            .error_set => unreachable,
+            else => .{ T, false },
+        };
+    }
+
+    /// Extracts various information from a given function type. Returned type
+    /// slice only includes types that are necessary for JS context.
+    ///
+    /// [JS-parameters, global-type-or-null, return-type-without-error-union, can-return-error]
+    fn signature(comptime Fn: type, comptime is_static: bool) struct { []const ?type, ?type, type, bool } {
+        const info = @typeInfo(Fn).@"fn";
+        const ParamTypes = info.param_types;
+        if (!is_static and ParamTypes.len == 0) {
+            @compileError("non-static fast functions need a receiver parameter");
+        }
+        const ReturnType, const can_return_err = isErrorUnion(info.return_type orelse {
+            @compileError("fast functions cannot return generic types");
+        });
+        // Parameters bound from JS arguments; a non-static function's `self`
+        // comes from the receiver instead.
+        const start = if (is_static) 0 else 1;
+
+        // Not enough arguments for a global.
+        if (ParamTypes.len == start) {
+            return .{ ParamTypes[start..], null, ReturnType, can_return_err };
+        }
+
+        // Check if last argument is a global.
+        const LastParamType = ParamTypes[ParamTypes.len - 1].?;
+        return switch (LastParamType) {
+            *Frame,
+            *const Frame,
+            *Page,
+            *const Page,
+            *js.Execution,
+            *const js.Execution,
+            => .{ ParamTypes[start .. ParamTypes.len - 1], LastParamType, ReturnType, can_return_err },
+            else => .{ ParamTypes[start..], null, ReturnType, can_return_err },
+        };
+    }
+
+    /// Creates a constant `v8.CFunction`.
+    pub fn create(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        // Bunch of comptime-known stuff.
+        const Fn = @TypeOf(function);
+        const JsP, const maybe_global_type, const ReturnType, const can_return_err = signature(Fn, options.static);
+        const info = @typeInfo(Fn).@"fn";
+        const P = info.param_types;
+        const Receiver = if (options.static) void else @typeInfo(P[0].?).pointer.child;
+        const Opts = *const v8.FastApiCallbackOptions;
+
+        // This initializes a `Caller`, attaches necessary types for given
+        // `function` and calls it.
+        const safe_call = struct {
+            inline fn wrap(c_args: anytype, opts: Opts) ReturnType {
+                const isolate = opts.isolate.?;
+                const js_isolate = js.Isolate{ .handle = isolate };
+                // V8 doesn't create `HandleScope` for fast calls, so here we
+                // manually create one.
+                var hs: js.HandleScope = undefined;
+                hs.init(js_isolate);
+                defer hs.deinit();
+                // Get context.
+                const ctx, const v8_context = Context.fromIsolate(.{ .handle = isolate }) orelse {
+                    throwDetachedError(isolate);
+                    return std.mem.zeroes(ReturnType);
+                };
+                // Check if execution is terminating.
+                if (refuseIfTerminating(ctx, isolate)) {
+                    return std.mem.zeroes(ReturnType);
+                }
+                // Init `Caller`.
+                var caller: Caller = undefined;
+                caller.initWithContext(ctx, v8_context);
+                defer caller.deinit();
+
+                var args: ParameterTypes(Fn) = undefined;
+                if (comptime !options.static) {
+                    // Cannot fail.
+                    args[0] = TaggedOpaque.fromJS(P[0].?, @ptrCast(c_args[0].?)) catch unreachable;
+                }
+                // Static functions have no receiver.
+                const receiver: ?*Receiver = if (comptime options.static) null else @constCast(args[0]);
+                // Set global argument (at the last offset).
+                if (comptime maybe_global_type) |GlobalType| {
+                    args[args.len - 1] = getGlobalArg(GlobalType, ctx);
+                }
+
+                // `offset` is to skip unused receiver on static functions.
+                const offset = if (comptime options.static) 0 else 1;
+                inline for (JsP, 0..) |param_type, i| {
+                    const c_arg = c_args[i + 1];
+                    args[i + offset] = blk: {
+                        const ParamType = param_type.?;
+                        if (comptime isPointer(ParamType)) {
+                            break :blk toZigObject(ParamType, c_arg) catch |err| {
+                                handleFastError(&caller.local, err, fastReceiverNode(Receiver, receiver));
+                                return std.mem.zeroes(ReturnType);
+                            };
+                        }
+                        // Primitive.
+                        break :blk c_arg;
+                    };
+                }
+
+                // Invoke passed function.
+                if (comptime can_return_err) {
+                    return @call(.auto, function, args) catch |err| {
+                        handleFastError(&caller.local, err, fastReceiverNode(Receiver, receiver));
+                        return std.mem.zeroes(ReturnType);
+                    };
+                }
+                return @call(.auto, function, args);
+            }
+        }.wrap;
+
+        // Zig doesn't allow us to build parameter lists in comptime. So we
+        // switch on the JS argument count and prefer a wrapper depending on it.
+        const func = switch (comptime JsP.len) {
+            0 => struct {
+                fn wrap(recv: ?*const v8.Value, opts: Opts) callconv(.c) ReturnType {
+                    return safe_call(.{recv}, opts);
+                }
+            }.wrap,
+            1 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(JsP[0].?), opts: Opts) callconv(.c) ReturnType {
+                    return safe_call(.{ recv, a0 }, opts);
+                }
+            }.wrap,
+            2 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(JsP[0].?), a1: Arg(JsP[1].?), opts: Opts) callconv(.c) ReturnType {
+                    return safe_call(.{ recv, a0, a1 }, opts);
+                }
+            }.wrap,
+            3 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(JsP[0].?), a1: Arg(JsP[1].?), a2: Arg(JsP[2].?), opts: Opts) callconv(.c) ReturnType {
+                    return safe_call(.{ recv, a0, a1, a2 }, opts);
+                }
+            }.wrap,
+            else => @compileError("exceeded argument limit for fast functions"),
+        };
+
+        const args = comptime blk: {
+            // [receiver] + [JS arguments] + [v8.FastApiCallbackOptions].
+            var list: [JsP.len + 2]v8.CTypeInfo = undefined;
+            list[0] = .{ .type = v8.kCTypeInfoType_V8Value };
+            for (JsP, 1..) |t, i| list[i] = toCTypeEnum(t.?);
+            list[list.len - 1] = .{ .type = v8.kCTypeInfoType_CallbackOptions };
+            break :blk list;
+        };
+        const func_info: *const v8.CFunctionInfo = &.{
+            .return_info = toCTypeEnum(ReturnType),
+            .arg_count = args.len,
+            .arg_info = &args,
+        };
+
+        return &.{ .address = @ptrCast(&func), .type_info = func_info };
+    }
+};
+
 // If we call a method in javascript: cat.lives('nine');
 //
 // Then we'd expect a Zig function with 2 parameters: a self and the string.
@@ -1074,7 +1336,6 @@ fn argToZig(comptime T: type, local: *const Local, js_val: js.Value) !T {
             // the termination, is pending; propagate it untouched
             return err;
         }
-        const DOMException = @import("../webapi/DOMException.zig");
         if (DOMException.fromError(err) != null) {
             return err;
         }

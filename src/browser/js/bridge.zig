@@ -45,6 +45,12 @@ pub fn Builder(comptime T: type) type {
             return Function.init(T, func, opts);
         }
 
+        //pub fn Function(comptime func: anytype, comptime opts: Caller.Function.Opts) FastFunction {}
+
+        pub fn fastFunction(comptime func: anytype, comptime opts: Caller.FastFunction.Options) FastFunction {
+            return FastFunction.init(T, func, opts);
+        }
+
         pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
             return Indexed.init(T, getter_func, null, null, null, null, enumerator_func, opts);
         }
@@ -202,6 +208,70 @@ pub const Function = struct {
             count += 1;
         }
         return count;
+    }
+};
+
+const FnOptions = struct {
+    noop: bool = false,
+    static: bool = false,
+    wpt_only: bool = false,
+    deletable: bool = true,
+    as_typed_array: bool = false,
+    null_as_undefined: bool = false,
+    cache: ?Caller.Function.Opts.Caching = null,
+    embedded_receiver: bool = false,
+    exposed: Caller.Function.Opts.Exposed = .both,
+    ce_reactions: bool = false,
+    unforgeable: bool = false,
+    /// Create V8 Fast Function variant for this function. Setting this to true
+    /// causes function to inspected in comptime for Fast API eligibility.
+    fast: bool = false,
+    /// Whether setup `Caller` for this function. Affects both variants if
+    /// `fast` is set. Unsetting this option should be rare, yet, having the
+    /// ability to do, gives more control.
+    setup_caller: bool = true,
+};
+
+//pub fn Fn(comptime function: anytype, comptime options: FnOptions) type {
+//    return struct {
+//        pub const has_fast_variant = options.fast;
+//
+//        slow: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
+//        fast: if (has_fast_variant) *const v8.CFunction else void,
+//    };
+//}
+
+pub const FastFunction = struct {
+    static: bool,
+    // JS-visible `length`; follows the slow path's rules (see `Function.getArity`).
+    arity: usize,
+    exposed: Caller.Function.Opts.Exposed,
+    /// V8 still requires us to create a slow variant.
+    slow: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
+    fast: *const v8.CFunction,
+
+    fn init(
+        comptime T: type,
+        comptime func: anytype,
+        comptime opts: Caller.FastFunction.Options,
+    ) FastFunction {
+        return .{
+            .static = opts.static,
+            .arity = comptime Function.getArity(@TypeOf(func), if (opts.static) 0 else 1),
+            .exposed = opts.exposed,
+            .slow = struct {
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    return Caller.Function.call(T, handle.?, func, .{
+                        .static = opts.static,
+                        .exposed = opts.exposed,
+                    });
+                }
+            }.wrap,
+            .fast = Caller.FastFunction.create(func, .{
+                .static = opts.static,
+                .exposed = opts.exposed,
+            }),
+        };
     }
 };
 
