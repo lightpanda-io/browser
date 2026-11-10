@@ -75,7 +75,7 @@ fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, ex
         .uaFullVersion = if (brands.len > 0) brands[0].version else "1.0.0.0",
         .fullVersionList = brands,
         .wow64 = false,
-        .formFactor = [_][]const u8{"Desktop"},
+        .formFactors = [_][]const u8{"Desktop"},
     });
 }
 
