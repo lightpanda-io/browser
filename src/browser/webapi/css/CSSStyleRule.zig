@@ -82,7 +82,7 @@ pub fn getCssText(self: *CSSStyleRule, frame: *Frame) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try buf.writer.print("{s} {{ ", .{self._selector_text});
     const start = buf.written().len;
-    try style.format(&buf.writer);
+    try style.format(&buf.writer, frame);
     if (self._rules) |rules| {
         for (rules._rules.items) |rule| {
             if (buf.written().len > start) {

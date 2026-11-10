@@ -1904,7 +1904,7 @@ fn addRuleAs(self: *StyleManager, style_rule: *CSSStyleRule, selector_text: []co
         return false;
     }
     const style = style_rule._style orelse return false;
-    const folded = extractDeclared(Declarations, style);
+    const folded = extractDeclared(Declarations, style, self.frame);
     const lazy = try self.extractLazyDeclarations(style);
 
     // A custom rule holds selector_text until the property is looked up, but it
@@ -2004,7 +2004,7 @@ fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !Laz
     var customs: std.ArrayList(LazyDeclaration) = .empty;
     var content: ?LazyDeclaration = null;
     var lazy_animation: LazyAnimation = .{};
-    var it = style.asCSSStyleDeclaration().iterator();
+    var it = style.asCSSStyleDeclaration().iterator(self.frame);
     while (it.next()) |declaration| {
         const name = declaration.name;
         if (isCustomProperty(name)) {
@@ -2138,9 +2138,9 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
 /// Extracts the tracked properties from a style declaration. The object holds
 /// one entry per name in first-declared order, so folding it in order gives a
 /// shorthand and its longhands the same precedence as the source text.
-fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties) Slots(Declared) {
+fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties, frame: *const Frame) Slots(Declared) {
     var slots: Slots(Declared) = .{};
-    var it = style.asCSSStyleDeclaration().iterator();
+    var it = style.asCSSStyleDeclaration().iterator(frame);
     while (it.next()) |declaration| {
         slots.apply(declaration.name, declaration.value, declaration.important);
     }
@@ -3239,7 +3239,7 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
         return .{};
     }
     if (el.existingStyle(frame)) |style| {
-        return extractDeclared(Declared, style);
+        return extractDeclared(Declared, style, frame);
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
     // Without a sink nothing allocates
@@ -3367,7 +3367,7 @@ pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String
     const style = el.inlineStyle(self.frame) orelse return null;
     const declaration = style.asCSSStyleDeclaration();
     const value = declaration.declaredValue(property_name, self.frame) orelse return null;
-    if (declaration.declaredImportant(property_name) == false and self.importantRuleWins(el, property_name.str(), value)) {
+    if (declaration.declaredImportant(property_name, self.frame) == false and self.importantRuleWins(el, property_name.str(), value)) {
         return null;
     }
     return value;
@@ -3446,7 +3446,7 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
     // names aliased, and a shorthand dropping the longhands before it.
     var inline_declared: LazyAnimation = .{};
     if (el.inlineStyle(self.frame)) |style| {
-        var it = style.asCSSStyleDeclaration().iterator();
+        var it = style.asCSSStyleDeclaration().iterator(self.frame);
         while (it.next()) |declaration| {
             const animation_property = Animation.Property.parse(declaration.name) orelse continue;
             const value = declaration.value;
@@ -3637,7 +3637,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
         if (el.inlineStyle(self.frame)) |style| {
             const declaration = style.asCSSStyleDeclaration();
             if (declaration.declaredValue(property_name, self.frame)) |value| {
-                const inline_priority = if (declaration.declaredImportant(property_name)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
+                const inline_priority = if (declaration.declaredImportant(property_name, self.frame)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
                 if (inline_priority > priority) {
                     winner = .{ .value = value, .layer = INLINE_LAYER, .priority = inline_priority };
                 }
@@ -4122,7 +4122,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         try std.testing.expectEqual(expected[i].flow, inlineDeclared(Flow.Declared, el, frame).props(.any));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
-        const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame)).props(.any);
+        const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame), frame).props(.any);
         try std.testing.expectEqual(expected[i], materialized);
         i += 1;
     }
