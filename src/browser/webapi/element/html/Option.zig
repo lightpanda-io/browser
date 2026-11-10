@@ -134,7 +134,7 @@ pub fn getSelected(self: *const Option) bool {
 
 pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
     self.setSelectedness(selected);
-    frame.domChanged();
+    Frame.change.stateChanged(self.asElement(), .selectedness, frame);
 }
 
 fn setSelectedness(self: *Option, selected: bool) void {

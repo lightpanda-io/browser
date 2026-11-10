@@ -791,7 +791,7 @@ const ActivationState = struct {
             }
             // Listeners ran between setChecked and here, so `:checked` state
             // built during dispatch has to be stamped as stale.
-            frame.styleChanged();
+            Frame.change.stateChanged(input.asElement(), .checked, frame);
             return;
         }
 
