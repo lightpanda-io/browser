@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<head>
+  <meta name=lp-mode content=test>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  getComputedStyle().display: the declared keyword from the cascade, in the
+  short form Chrome reports. An invalid value is dropped, so an earlier rule
+  wins.
+-->
+
+<style>
+  .later { display: none; }
+</style>
+<style>
+  @layer base { .rl { display: grid; } }
+  .rl { display: revert-layer; }
+
+  .later { display: flex; }
+  .alone { display: flex; }
+  .upper { DISPLAY: INLINE-GRID; }
+  .pair { display: flow-root   inline; }
+  .flow { display: flow; }
+  .box { display: -webkit-box; }
+  .bogus { display: flex; }
+  .bogus { display: bogus; }
+  .imp { display: grid !important; }
+  .imp { display: flex; }
+  #spec { display: table; }
+  .spec { display: flex; }
+  .block { display: block; }
+  .inline { display: inline; }
+  .initial { display: initial; }
+  .unset { display: unset; }
+  .revert { display: revert; }
+  .inline-block { display: inline-block; }
+  .inherit { display: inherit; }
+  .hidden { display: none; }
+  .pseudo::before { display: flex; }
+  @media all { .media { display: inline-table; } }
+</style>
+
+<div class=later id=later></div>
+<div class=alone id=alone></div>
+<div id=inline-style style="display: flex"></div>
+<div class=upper id=upper></div>
+<div class=pair id=pair></div>
+<span class=flow id=flow></span>
+<div class=box id=box></div>
+<div class=bogus id=bogus></div>
+<div class=imp id=imp></div>
+<div class=spec id=spec></div>
+<span class=block id=span-block></span>
+<div class=inline id=div-inline></div>
+<div class=initial id=initial></div>
+<div class=unset id=unset></div>
+<div class=revert id=div-revert></div>
+<span class=revert id=span-revert></span>
+<div class=rl id=rl></div>
+<div class=inline-block><p class=inherit id=inherit></p></div>
+<div class=hidden><p class=inherit id=inherit-none></p></div>
+<div class=pseudo id=pseudo></div>
+<div class=media id=media></div>
+<div id=plain></div>
+<span id=plain-span></span>
+<div id=dynamic></div>
+
+<script id=stylesheet_value>
+  // A later sheet's flex overrides an earlier sheet's none
+  testing.expectEqual('flex', getComputedStyle($('#later')).display);
+  testing.expectEqual('flex', getComputedStyle($('#alone')).display);
+  testing.expectEqual('flex', getComputedStyle($('#inline-style')).display);
+  testing.expectEqual('inline-table', getComputedStyle($('#media')).display);
+  testing.expectEqual('block', getComputedStyle($('#span-block')).display);
+  testing.expectEqual('inline', getComputedStyle($('#div-inline')).display);
+</script>
+
+<script id=computed_form>
+  testing.expectEqual('inline-grid', getComputedStyle($('#upper')).display);
+  testing.expectEqual('inline-block', getComputedStyle($('#pair')).display);
+  testing.expectEqual('block', getComputedStyle($('#flow')).display);
+  testing.expectEqual('-webkit-box', getComputedStyle($('#box')).display);
+</script>
+
+<script id=cascade>
+  testing.expectEqual('flex', getComputedStyle($('#bogus')).display);
+  testing.expectEqual('grid', getComputedStyle($('#imp')).display);
+  testing.expectEqual('table', getComputedStyle($('#spec')).display);
+  testing.expectEqual('block', getComputedStyle($('#pseudo')).display);
+  testing.expectEqual('block', getComputedStyle($('#plain')).display);
+  testing.expectEqual('inline', getComputedStyle($('#plain-span')).display);
+</script>
+
+<script id=css_wide_keywords>
+  testing.expectEqual('inline', getComputedStyle($('#initial')).display);
+  testing.expectEqual('inline', getComputedStyle($('#unset')).display);
+  testing.expectEqual('block', getComputedStyle($('#div-revert')).display);
+  testing.expectEqual('inline', getComputedStyle($('#span-revert')).display);
+  testing.expectEqual('grid', getComputedStyle($('#rl')).display);
+  testing.expectEqual('inline-block', getComputedStyle($('#inherit')).display);
+  testing.expectEqual('none', getComputedStyle($('#inherit-none')).display);
+</script>
+
+<script id=cssom>
+  const el = $('#dynamic');
+  const style = getComputedStyle(el);
+  const sheet = document.styleSheets[1];
+  sheet.insertRule('#dynamic { display: inline-flex; }', sheet.cssRules.length);
+  testing.expectEqual('inline-flex', style.display);
+
+  el.style.display = 'table-cell';
+  testing.expectEqual('table-cell', style.display);
+
+  el.style.display = '';
+  sheet.deleteRule(sheet.cssRules.length - 1);
+  testing.expectEqual('block', style.display);
+</script>
