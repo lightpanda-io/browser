@@ -857,13 +857,8 @@ fn startsPseudoElement(after_colon: []const u8) bool {
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
     self.keyframes_mentioned = null;
-    self.cascadeChanged();
+    Frame.change.rulesChanged(self.frame);
     Frame.css_animations.documentChanged(self.frame);
-}
-
-fn cascadeChanged(self: *StyleManager) void {
-    self.frame.styleChanged();
-    Frame.observers.scheduleResizeDelivery(self.frame);
 }
 
 /// Rebuilds the rule list from all document stylesheets.
@@ -1964,7 +1959,7 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
         // Nothing tracked changed, so every memoized answer still holds.
         return;
     }
-    self.cascadeChanged();
+    Frame.change.rulesChanged(self.frame);
 }
 
 fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) bool {
@@ -4343,7 +4338,7 @@ test "StyleManager: memo: a descendant overrides inherited visibility and pointe
     // Deepest first resolves the whole path in one walk; top-down hits the
     // memo one level up each time
     for ([_][4]*Element{ .{ u, s, i, b }, .{ b, i, s, u } }) |order| {
-        frame.styleChanged();
+        frame.page.style_version += 1; // drop the memo
         for (order) |el| {
             try testing.expectEqual(el == b, sm.isHidden(el, .{ .check_visibility = true }));
             try testing.expectEqual(el == b, sm.hasPointerEventsNone(el));
@@ -4405,7 +4400,7 @@ test "StyleManager: memo: probing a deep tree stays linear" {
     const DEPTH = 1000;
     const top = try buildDivChain(frame, DEPTH);
 
-    frame.styleChanged();
+    frame.page.style_version += 1; // drop the memo
     const before = sm.visibility.cascades;
     var current: ?*Element = top;
     while (current) |el| {

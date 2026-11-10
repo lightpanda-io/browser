@@ -78,6 +78,7 @@ const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const framing = @import("frame/framing.zig");
 pub const parse = @import("frame/parse.zig");
+pub const change = @import("frame/change.zig");
 pub const preload = @import("frame/preload.zig");
 pub const resource_load = @import("frame/resource_load.zig");
 pub const observers = @import("frame/observers.zig");
@@ -1168,7 +1169,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         }
 
         // `:target` matches off the fragment, which just changed.
-        target.styleChanged();
+        change.documentStateChanged(.target, target);
 
         // Updating the document for the new entry fires popstate right away
         // (the entry's state is null), then hashchange in a queued task.
@@ -2464,31 +2465,6 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     return popup;
 }
 
-pub fn domChanged(self: *Frame) void {
-    self.page.dom_version += 1;
-    self.renderingChanged();
-}
-
-/// A style change that is also our "rendering opportunity": re-evaluate the
-/// layout observers. Both are no-ops unless something they track changed.
-pub fn renderingChanged(self: *Frame) void {
-    self.styleChanged();
-    self.layoutObserversChanged();
-}
-
-/// A change that can move a box without changing any selector match or
-/// cascaded value, like an inline transform: only the layout observers look.
-pub fn layoutObserversChanged(self: *Frame) void {
-    observers.scheduleIntersectionChecks(self);
-    observers.scheduleResizeChecks(self);
-}
-
-/// Stamps the cascade: any change that can alter a selector match or cascade
-/// result, including non-tree state that live collections never see.
-pub fn styleChanged(self: *Frame) void {
-    self.page.style_version += 1;
-}
-
 fn getIdMap(frame: *Frame, node: *Node) *IdMap {
     return idMapForRoot(node.getRootNode(.{})) orelse {
         // Detached nodes should not have IDs registered
@@ -3064,6 +3040,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     const old_id_map = idMapForRoot(old_root);
 
     child._parent = null;
+    change.childRemoved(parent, child, previous_sibling, next_sibling, self);
 
     // deferred: the id maps are only updated further down
     defer if (opts.move == false and self._form_associated.items.len != 0) {
@@ -3261,7 +3238,6 @@ const MoveChildrenNotify = enum { records, silent_parent };
 // regardless — the spec's insert algorithm notes it "intentionally does not
 // pay attention to suppressObservers".
 pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
-    self.domChanged();
     const notify = observers.hasMutationObservers(self);
 
     var moved: std.ArrayList(*Node) = .empty;
@@ -3364,6 +3340,11 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         },
     }
     child._parent = parent;
+    if (comptime from_parser) {
+        change.parserInserted(parent, child, self);
+    } else {
+        change.childInserted(parent, child, self);
+    }
 
     // deferred: the id maps are only updated further down.
     defer if (self._form_associated.items.len != 0) {
@@ -3414,9 +3395,6 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     // The parser path does its own (limited) notification and
     // connected-callback work, then returns.
     if (comptime from_parser) {
-        // Not domChanged: live collections keep their cursors mid-parse.
-        self.styleChanged();
-
         // Main-document parser insertions notify per node: scripts running
         // during parsing can observe the document. Fragment parses
         // (innerHTML et al.) stay silent; Node.setHTML queues one combined

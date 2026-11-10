@@ -268,7 +268,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     // Insertions and removals during construction queue nothing, so the
     // dedup flags must reflect where the constructor left the element.
     const connected = node.isConnected();
-    frame.styleChanged(); // the element now matches :defined
+    Frame.change.stateChanged(custom.asElement(), .defined, frame);
     custom._connected_callback_invoked = connected;
     custom._disconnected_callback_invoked = connected == false;
 

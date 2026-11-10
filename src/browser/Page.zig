@@ -74,7 +74,7 @@ session: *Session,
 dom_version: usize = 0,
 
 // Superset of dom_version that also moves for non-tree state (see
-// Frame.styleChanged); validates the StyleManager memo.
+// frame/change.zig); validates the StyleManager memo.
 style_version: usize = 0,
 
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage

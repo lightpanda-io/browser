@@ -65,7 +65,9 @@ fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
         return null;
     }
 
-    if (self._sheet) |sheet| return sheet;
+    if (self._sheet) |sheet| {
+        return sheet;
+    }
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), frame);
     self._sheet = sheet;
 

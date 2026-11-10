@@ -609,8 +609,6 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
         return error.NoModificationAllowed;
     }
 
-    frame.domChanged();
-
     // Observers of the parent must see a single mutation record replacing
     // this node with the parsed nodes.
     const notify = Frame.observers.hasMutationObservers(frame);
@@ -990,8 +988,7 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     const page = frame.page;
     try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
-    // The host's children leave the flat tree until a slot takes them
-    frame.renderingChanged();
+    Frame.change.shadowAttached(self, frame);
     return shadow_root;
 }
 
@@ -1235,7 +1232,6 @@ pub fn replaceWith(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *
 pub fn remove(self: *Element, frame: *Frame) void {
     const node = self.asNode();
     const parent = node._parent orelse return;
-    frame.domChanged();
     frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
