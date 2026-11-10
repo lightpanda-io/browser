@@ -216,6 +216,17 @@ pub const Property = enum {
         };
     }
 
+    /// The standard property's id, which cssName names.
+    pub fn standardId(self: Property) properties.Id {
+        return switch (self) {
+            .shorthand => .animation,
+            .name => .@"animation-name",
+            .duration => .@"animation-duration",
+            .delay => .@"animation-delay",
+            .iteration_count => .@"animation-iteration-count",
+        };
+    }
+
     pub fn cssName(self: Property) []const u8 {
         return switch (self) {
             .shorthand => "animation",
