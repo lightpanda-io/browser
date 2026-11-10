@@ -52,6 +52,7 @@
   for (const [el, box] of boxes) {
     if (!el.isConnected) continue;
 
+
     // Every box is positioned, so each one is the containing block of its
     // children: offsets are relative to the parent's box.
     const parent = el.parentElement && boxes.get(el.parentElement);
@@ -68,7 +69,15 @@
     el.setAttribute('data-lp-box', numbers);
 
     // Outline instead of border: it doesn't move the children.
-    const color = COLORS[depthOf(el) % COLORS.length];
+    var color = '#fff';
+    const tag = el.tagName;
+    if (tag == 'HTML') {
+      color = '#fff';
+    } else if (tag == 'BODY') {
+      color = '#fff';
+    } else {
+      color = COLORS[depthOf(el) % COLORS.length];
+    }
     el.setAttribute('style', [
       box.hidden ? 'display:none' : '',
       'position:absolute',
