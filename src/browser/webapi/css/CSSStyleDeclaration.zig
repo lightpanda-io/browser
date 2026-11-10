@@ -872,17 +872,25 @@ pub fn iterator(self: *const CSSStyleDeclaration, frame: *const Frame) Iterator 
 /// The declarations in declared order. Their strings belong to the
 /// declaration: any write to it can free them.
 pub const Iterator = struct {
+    pub const Declaration = struct {
+        id: properties.Id,
+        name: []const u8,
+        value: []const u8,
+        important: bool,
+    };
+
     entries: []const Entry,
     custom_names: *const properties.CustomNames,
     index: usize = 0,
 
-    pub fn next(self: *Iterator) ?CssParser.Declaration {
+    pub fn next(self: *Iterator) ?Declaration {
         if (self.index == self.entries.len) {
             return null;
         }
         const entry = &self.entries[self.index];
         self.index += 1;
         return .{
+            .id = entry._id,
             .name = entry.knownName() orelse self.custom_names.nameOf(entry._id),
             .value = entry.value(),
             .important = entry._important,

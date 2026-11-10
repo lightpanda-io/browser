@@ -65,7 +65,7 @@ pub const Id = blk: {
     break :blk @Enum(u16, .nonexhaustive, &names, &std.simd.iota(u16, keys.len));
 };
 
-const known_count = properties.keys().len;
+pub const known_count = properties.keys().len;
 
 /// The id of a known property, null for any other name.
 pub fn idOf(name: []const u8) ?Id {
