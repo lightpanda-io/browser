@@ -1003,9 +1003,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // inside their slot, as layout.zig lays them out); topmost = last visited
     // element whose rect contains (x, y).
     //
-    // A box is never above its parent (see layout.boxTop), so a subtree that
-    // starts below y can't contain the point and isn't walked. Neither is a
-    // display:none or inert one, which nothing in it opts out of.
+    // A display:none or inert subtree isn't walked: nothing in it opts out.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1033,12 +1031,13 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             }
             top = layout.boxTopFrom(element, parent, entry.parent_top, owner);
             parent = element;
-            if (top > y or style_manager.hasDisplayNone(element) or element.hasInertAttribute()) {
+            if (style_manager.hasDisplayNone(element) or element.hasInertAttribute()) {
                 continue;
             }
             // Unlike display:none, visibility and pointer-events let a child
-            // opt back in, so the subtree is still walked.
-            if (style_manager.isHitTestable(element) and y <= top + layout.boxHeight(element, owner)) {
+            // opt back in, so the subtree is still walked. So is a subtree
+            // that starts below y: a positioned box in it can sit higher.
+            if (style_manager.isHitTestable(element) and y >= top and y <= top + layout.boxHeight(element, owner)) {
                 if (ignore_x) {
                     topmost = element;
                 } else {
