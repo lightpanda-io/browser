@@ -1,11 +1,14 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=navigator>
   // Navigator should be accessible from window
   testing.expectEqual(navigator, window.navigator);
   testing.expectEqual(true, navigator.userAgent.length > 0);
-  testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
+  testing.diverges('our user agent names Lightpanda', () => {
+    testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
+  });
   testing.expectEqual('Netscape', navigator.appName);
   testing.expectEqual(true, navigator.appVersion.startsWith('5.0 ('));
   testing.expectEqual(true, navigator.platform.length > 0);
@@ -21,12 +24,18 @@
   testing.expectEqual(true, navigator.onLine);
   testing.expectEqual(true, navigator.cookieEnabled);
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
-  testing.expectEqual(4, navigator.hardwareConcurrency);
+  testing.diverges('we report a fixed hardwareConcurrency', () => {
+    testing.expectEqual(4, navigator.hardwareConcurrency);
+  });
   testing.expectEqual(0, navigator.maxTouchPoints);
-  testing.expectEqual('', navigator.vendor);
+  testing.diverges('Chrome reports "Google Inc." as vendor', () => {
+    testing.expectEqual('', navigator.vendor);
+  });
   testing.expectEqual('Gecko', navigator.product);
   testing.expectEqual(false, navigator.javaEnabled());
-  testing.expectEqual(false, navigator.webdriver);
+  testing.diverges('Chrome reports webdriver while automated; we never do', () => {
+    testing.expectEqual(false, navigator.webdriver);
+  });
 
   testing.expectEqual(null, navigator.doNotTrack);
 
@@ -34,21 +43,29 @@
   // the signal reflects an explicit user preference (Firefox defaults to false;
   // Chrome doesn't expose the property at all). A true default makes
   // GPC-compliant consent managers reject-all and skip their consent UI.
-  testing.expectEqual(false, navigator.globalPrivacyControl);
+  testing.diverges("Chrome doesn't expose globalPrivacyControl", () => {
+    testing.expectEqual(false, navigator.globalPrivacyControl);
+  });
 
   // Every Navigator attribute must be a native accessor on the prototype
-  for (const name of [
-    'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
-    'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
-    'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
-    'plugins', 'mimeTypes', 'doNotTrack', 'globalPrivacyControl',
-  ]) {
+  function expectNativeAccessor(name) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
     testing.expectEqual('function', typeof desc.get); // accessor on prototype
     testing.expectEqual(undefined, desc.value);        // not a data property
     testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(navigator, name)); // not own
     testing.expectEqual(true, desc.get.toString().includes('[native code]'));
   }
+  for (const name of [
+    'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
+    'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
+    'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
+    'plugins', 'mimeTypes', 'doNotTrack',
+  ]) {
+    expectNativeAccessor(name);
+  }
+  testing.diverges("Chrome doesn't expose globalPrivacyControl", () => {
+    expectNativeAccessor('globalPrivacyControl');
+  });
 </script>
 
 <script id=navigator_plugins_named_presence>
@@ -64,22 +81,26 @@
 <script id=navigator_plugins_iterable>
   // WebIDL: indexed getter => @@iterator (Chrome: [...navigator.plugins] works)
   testing.expectEqual('function', typeof navigator.plugins[Symbol.iterator]);
-  testing.expectEqual(0, [...navigator.plugins].length);
+  testing.diverges("Chrome lists its built-in PDF viewer plugins", () => {
+    testing.expectEqual(0, [...navigator.plugins].length);
+  });
 </script>
 
 <script id=navigator_mime_types>
   // No MIME type is exposed: an empty MimeTypeArray, the same object on every read.
   testing.expectEqual(true, navigator.mimeTypes instanceof MimeTypeArray);
   testing.expectEqual(navigator.mimeTypes, navigator.mimeTypes);
-  testing.expectEqual(0, navigator.mimeTypes.length);
-  testing.expectEqual(null, navigator.mimeTypes.item(0));
-  testing.expectEqual(null, navigator.mimeTypes.namedItem('application/pdf'));
-  testing.expectEqual(undefined, navigator.mimeTypes[0]);
-  testing.expectEqual(false, 'application/pdf' in navigator.mimeTypes);
-  testing.expectEqual(0, [...navigator.mimeTypes].length);
+  testing.diverges("Chrome lists its PDF viewer's MIME types", () => {
+    testing.expectEqual(0, navigator.mimeTypes.length);
+    testing.expectEqual(null, navigator.mimeTypes.item(0));
+    testing.expectEqual(null, navigator.mimeTypes.namedItem('application/pdf'));
+    testing.expectEqual(undefined, navigator.mimeTypes[0]);
+    testing.expectEqual(false, 'application/pdf' in navigator.mimeTypes);
+    testing.expectEqual(0, [...navigator.mimeTypes].length);
 
-  // Scripts that fingerprint the browser count its keys.
-  testing.expectEqual(0, Object.keys(navigator.mimeTypes).length);
+    // Scripts that fingerprint the browser count its keys.
+    testing.expectEqual(0, Object.keys(navigator.mimeTypes).length);
+  });
 
   testing.expectEqual('function', typeof MimeType);
   testing.expectError('TypeError', () => new MimeType());
@@ -135,13 +156,17 @@
 
     await state.done(() =>{
       testing.expectEqual(0, estimate.usage);
-      testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
+      testing.diverges('Chrome derives the quota from free disk space', () => {
+        testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
+      });
     });
   }
 </script>
 
 <script id=deviceMemory>
-  testing.expectEqual(8, navigator.deviceMemory);
+  testing.diverges("Chrome reports the machine's memory", () => {
+    testing.expectEqual(8, navigator.deviceMemory);
+  });
 </script>
 
 <script id=userAgentData>
@@ -152,24 +177,29 @@
   const validUAPlatforms = ['macOS', 'Windows', 'Linux', 'FreeBSD', 'Unknown'];
   testing.expectEqual(true, validUAPlatforms.includes(navigator.userAgentData.platform));
 
-  testing.expectEqual(1, navigator.userAgentData.brands.length);
-  testing.expectEqual('Lightpanda', navigator.userAgentData.brands[0].brand);
-  testing.expectEqual("1.1.0-", navigator.userAgentData.brands[0].version.substring(0,6));
+  testing.diverges('our only brand is Lightpanda', () => {
+    testing.expectEqual(1, navigator.userAgentData.brands.length);
+    testing.expectEqual('Lightpanda', navigator.userAgentData.brands[0].brand);
+    testing.expectEqual("1.1.0-", navigator.userAgentData.brands[0].version.substring(0,6));
+  });
 
-  // Same instance returned on repeated access
-  testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
+  testing.diverges('Chrome returns a new object on each read', () => {
+    testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
+  });
 
   const json = navigator.userAgentData.toJSON();
   testing.expectEqual(false, json.mobile);
   testing.expectEqual(navigator.userAgentData.platform, json.platform);
   testing.expectEqual(true, Array.isArray(json.brands));
-  testing.expectEqual('Lightpanda', json.brands[0].brand);
+  testing.diverges('our only brand is Lightpanda', () => {
+    testing.expectEqual('Lightpanda', json.brands[0].brand);
+  });
 </script>
 
 <script id=userAgentData_highEntropy type=module>
   {
     const state = await testing.async();
-    const p = navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion', 'fullVersionList']);
+    const p = navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion', 'fullVersionList', 'uaFullVersion', 'wow64', 'formFactors']);
     testing.expectTrue(p instanceof Promise);
     const v = await p;
     state.resolve();
@@ -179,11 +209,13 @@
       testing.expectEqual(navigator.userAgentData.platform, v.platform);
       testing.expectEqual(true, Array.isArray(v.brands));
       testing.expectEqual(true, Array.isArray(v.fullVersionList));
-      testing.expectEqual('Lightpanda', v.fullVersionList[0].brand);
-      testing.expectEqual('1.1.0-', v.uaFullVersion.substring(0,6));
+      testing.diverges('our only brand is Lightpanda', () => {
+        testing.expectEqual('Lightpanda', v.fullVersionList[0].brand);
+        testing.expectEqual('1.1.0-', v.uaFullVersion.substring(0,6));
+      });
       testing.expectEqual(false, v.wow64);
-      testing.expectEqual(true, Array.isArray(v.formFactor));
-      testing.expectEqual('Desktop', v.formFactor[0]);
+      testing.expectEqual(true, Array.isArray(v.formFactors));
+      testing.expectEqual('Desktop', v.formFactors[0]);
     });
   }
 </script>
@@ -192,7 +224,9 @@
   // Like Firefox, we don't expose navigator.getBattery. Sites already
   // have to handle it being undefined, so this is a real-browser shape
   // rather than a stub that always rejects.
-  testing.expectEqual('undefined', typeof navigator.getBattery);
+  testing.diverges('Chrome exposes getBattery', () => {
+    testing.expectEqual('undefined', typeof navigator.getBattery);
+  });
 </script>
 
 
@@ -207,7 +241,11 @@
   testing.expectError('TypeError', () => navigator.sendBeacon('http://['));
   testing.expectError('TypeError', () => navigator.sendBeacon('/analytics', new ReadableStream()));
   testing.expectEqual(false, navigator.sendBeacon('/analytics', 'x'.repeat(65537)));
-  testing.expectEqual(true, navigator.sendBeacon('/analytics', 'x'.repeat(65536)));
+  // Chrome counts the beacons above, still in flight, against the 64KiB quota.
+  // Nothing is in flight here, so the whole quota is free.
+  testing.diverges('Chrome has earlier beacons in flight', () => {
+    testing.expectEqual(true, navigator.sendBeacon('/analytics', 'x'.repeat(65536)));
+  });
 </script>
 
 <script id=sendBeacon-not-sent type=module>
@@ -219,7 +257,9 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, sent);
-    testing.expectEqual('(missing)', record);
+    testing.diverges('Chrome always sends beacons', () => {
+      testing.expectEqual('(missing)', record);
+    });
   });
 </script>
 
