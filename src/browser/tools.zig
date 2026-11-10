@@ -2625,6 +2625,9 @@ test "click: waits for the CSS animation it starts" {
     var registry: NodeRegistry = .init(std.testing.allocator);
     defer registry.deinit();
 
+    testing.test_session.experimental_features.animation = true;
+    defer testing.test_session.experimental_features = .{};
+
     var page = try testing.pageTest("mcp_actions.html", .{});
     defer page.close();
 

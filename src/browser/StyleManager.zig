@@ -199,6 +199,9 @@ fn applyAtRule(self: *StyleManager, build_arena: Allocator, keyword: []const u8,
 
 /// `text` is the whole `@keyframes <name> { … }` rule; the name can be a string.
 fn addKeyframes(self: *StyleManager, text: []const u8) Allocator.Error!void {
+    if (self.animationsEnabled() == false) {
+        return;
+    }
     const open = std.mem.findScalar(u8, text, '{') orelse return;
     const keyword_end = std.mem.findAny(u8, text[0..open], &std.ascii.whitespace) orelse return;
     const name = std.mem.trim(u8, text[keyword_end..open], " \t\r\n\x0c\"'");
@@ -580,6 +583,9 @@ fn addSelectorRules(
     layer: u16,
 ) !bool {
     var lazy = declared;
+    if (self.animationsEnabled() == false) {
+        lazy.animation = .{};
+    }
     if ((lazy.content != null or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
         // Icon fonts declare `content` on hundreds of `::before` rules, spinners
         // an animation, and no element matches one.
@@ -3508,6 +3514,13 @@ fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Proper
     return winner;
 }
 
+/// Only frame/css_animations.zig reads the animation rules and @keyframes,
+/// and only with the experimental feature on: without it, they aren't kept.
+/// The feature is set per session, so a page's rules never miss a change.
+fn animationsEnabled(self: *const StyleManager) bool {
+    return self.frame._session.experimental_features.animation;
+}
+
 fn animationRuleCount(self: *const StyleManager) usize {
     var n: usize = 0;
     for (self.animation_rules.values) |rules| {
@@ -3793,10 +3806,12 @@ test "StyleManager: inline style writes" {
 }
 
 test "StyleManager: animation events" {
-    try testing.htmlRunner("css/animation_events.html", .{});
+    try testing.htmlRunner("css/animation_events.html", .{ .experimental_features = .{ .animation = true } });
 }
 
 test "StyleManager: hasKeyframes rebuilds only when a sheet mentions keyframes" {
+    testing.test_session.experimental_features.animation = true;
+    defer testing.test_session.experimental_features = .{};
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
     const sm = &frame._style_manager;
@@ -4516,6 +4531,8 @@ test "StyleManager: content rules no element matches aren't kept" {
 }
 
 test "StyleManager: animation rules no element matches aren't kept" {
+    testing.test_session.experimental_features.animation = true;
+    defer testing.test_session.experimental_features = .{};
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
     const sm = &frame._style_manager;
@@ -4539,6 +4556,33 @@ test "StyleManager: animation rules no element matches aren't kept" {
     try testing.expectEqual(1, sm.animation(probe).count());
     try testing.expectEqual(1, sm.animation_rules.get(.shorthand).rules.items.len);
     try testing.expectEqual(0, sm.animation_rules.get(.name).rules.items.len);
+}
+
+test "StyleManager: animations aren't kept without the experimental feature" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\@keyframes fade { to { opacity: 0 } }
+        \\.probe { animation: fade 1s; display: block }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    // The rebuild still cascades the rest of the block
+    try testing.expectEqual(false, sm.hasDisplayNone(probe));
+    try testing.expectEqual(0, sm.animation(probe).count());
+    try testing.expectEqual(0, sm.animation_rules.get(.shorthand).rules.items.len);
+    try testing.expectEqual(0, sm.keyframes.count());
 }
 
 test "StyleManager: ruleInserted: a content rule keeps the memos" {
