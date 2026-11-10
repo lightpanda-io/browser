@@ -822,3 +822,20 @@
     });
   }
 </script>
+
+<script id=fetch_status_999 type=module>
+  {
+    // Any three-digit status reaches the page, as in Chrome and Firefox.
+    const state = await testing.async();
+    const response = await fetch('http://127.0.0.1:9582/raw/status_999');
+    const body = await response.text();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(999, response.status);
+      testing.expectEqual('Request denied', response.statusText);
+      testing.expectEqual(false, response.ok);
+      testing.expectEqual('denied', body);
+    });
+  }
+</script>

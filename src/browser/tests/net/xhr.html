@@ -1002,3 +1002,21 @@ handler runs, abort() cancels the re-send and no load is delivered.
     testing.expectEqual(200, sync_status);
   }
 </script>
+
+<script id=xhr_status_999 type=module>
+  {
+    // Any three-digit status reaches the page, as in Chrome and Firefox.
+    const state = await testing.async();
+    const result = await new Promise((resolve) => {
+      const req = new XMLHttpRequest();
+      req.onloadend = () => resolve(req.status + '|' + req.statusText + '|' + req.responseText);
+      req.open('GET', 'http://127.0.0.1:9582/raw/status_999');
+      req.send();
+    });
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('999|Request denied|denied', result);
+    });
+  }
+</script>

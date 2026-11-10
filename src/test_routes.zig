@@ -82,6 +82,11 @@ pub const raw_responses = struct {
         .head = "HTTP/1.1 200 OK\r\nContent-Length: 262144\r\n\r\n",
         .body = &@as([256 * 1024]u8, @splat('a')),
     };
+    // A three-digit status outside 100..599, like LinkedIn's 999.
+    pub const status_999: RawResponse = .{
+        .head = "HTTP/1.1 999 Request denied\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\n",
+        .body = "denied",
+    };
 };
 
 fn serveRaw(req: *std.http.Server.Request, name: []const u8) !void {
@@ -97,6 +102,8 @@ fn serveRaw(req: *std.http.Server.Request, name: []const u8) !void {
         raw_responses.revalidated
     else if (std.mem.eql(u8, name, "large"))
         raw_responses.large
+    else if (std.mem.eql(u8, name, "status_999"))
+        raw_responses.status_999
     else
         return req.respond("unknown raw response", .{ .status = .not_found });
     try req.server.out.writeAll(r.head);
