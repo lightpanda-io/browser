@@ -293,9 +293,15 @@ test "Network: easies on separate multis share one DNS cache" {
     defer libcurl.curl_slist_free_all(resolve);
 
     try libcurl.curl_easy_setopt(teacher._easy, .resolve, resolve);
+    // The server refuses a name in Host unless it's the one it advertises, so
+    // both send the address the name stands for.
+    try teacher.addRawHeader("Host: 127.0.0.1");
+    try teacher.commitHeaders();
     try teacher.setURL(url);
     try testing.expectEqual(200, try teacher.perform());
 
+    try learner.addRawHeader("Host: 127.0.0.1");
+    try learner.commitHeaders();
     try learner.setURL(url);
     try testing.expectEqual(200, try learner.perform());
 }
