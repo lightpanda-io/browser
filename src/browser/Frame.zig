@@ -1435,8 +1435,8 @@ pub fn abortDocumentLoad(self: *Frame) void {
 }
 
 // The navigation parser is on the stack, i.e. an inline script is running from
-// inside parser.parse(). Narrower than `_load_state == .parsing`, which stays
-// true through deferred and async scripts.
+// inside parser.parse(). Narrower than `_load_state == .parsing`, which also
+// covers waiting for the response body.
 fn parserIsRunning(self: *const Frame) bool {
     return switch (self._parse_state) {
         .html => true,
@@ -1497,18 +1497,50 @@ fn releaseParentLoadDelay(self: *Frame) void {
     }
 }
 
+// The parser has finished. Readiness becomes interactive,
+fn documentIsInteractive(self: *Frame) void {
+    if (self._load_state == .parsing) {
+        self._load_state = .interactive;
+    }
+
+    // Not only the first time: document.open() resets readiness to loading.
+    if (self.document._ready_state != .loading or self.loadEventsAborted()) {
+        return;
+    }
+    self.document._ready_state = .interactive;
+    self.window._performance.markNavigation(.dom_interactive);
+    self.dispatchReadyStateChange() catch |err| switch (err) {
+        error.JsException => {}, // already logged
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is interactive", .{ .err = err, .type = self._type, .url = self.url }),
+        else => log.err(.frame, "document is interactive", .{ .err = err, .type = self._type, .url = self.url }),
+    };
+}
+
 pub fn documentIsLoaded(self: *Frame) void {
-    if (self._load_state != .parsing or self.loadEventsAborted()) {
+    switch (self._load_state) {
+        .parsing, .interactive => {},
         // Ideally, documentIsLoaded would only be called once, but if a
         // script is dynamically added from an async script after
         // documentIsLoaded is already called, then ScriptManager will call
         // it again.
+        .waiting, .load, .complete => return,
+    }
+
+    // A script open()ed the document: closing it finishes the load.
+    if (self.document._script_created_parser != null) {
+        return;
+    }
+
+    self.documentIsInteractive();
+
+    // A readystatechange handler can open() the document, or open() and
+    // close() it, which runs documentIsLoaded itself.
+    if (self._load_state != .interactive or self.document._script_created_parser != null or self.loadEventsAborted()) {
         return;
     }
 
     self._load_state = .load;
-    self.document._ready_state = .interactive;
-    self.window._performance.markNavigation(.dom_interactive);
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
         // logged by whatever requested the terminate (watchdog, runaway loop)
@@ -1518,9 +1550,6 @@ pub fn documentIsLoaded(self: *Frame) void {
 }
 
 fn _documentIsLoaded(self: *Frame) !void {
-    try self.dispatchReadyStateChange();
-    if (self.loadEventsAborted()) return;
-
     const perf = self.window._performance;
     perf.markNavigation(.dom_content_loaded_event_start);
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self.page);
@@ -1597,7 +1626,7 @@ pub fn pendingLoadCompleted(self: *Frame) void {
 // will re-trigger DOMContentLoaded and load.
 pub fn scriptCreatedParserDone(self: *Frame) void {
     switch (self._load_state) {
-        .parsing, .load => {},
+        .parsing, .interactive, .load => {},
         .waiting => self._load_state = .parsing,
         .complete => {
             self._load_state = .parsing;
@@ -1623,9 +1652,11 @@ fn documentIsComplete(self: *Frame) void {
 
     // documentIsComplete could be called directly, without first calling
     // documentIsLoaded, if there were _only_ async scripts
-    if (self._load_state == .parsing) {
+    if (self._load_state == .parsing or self._load_state == .interactive) {
         self.documentIsLoaded();
         if (self._load_state == .complete) return;
+        // Left open by a script: close() finishes the load, as in Chrome.
+        if (self.document._script_created_parser != null) return;
     }
 
     self._load_state = .complete;
@@ -2032,7 +2063,13 @@ fn frameDone(self: *Frame) !void {
                     parser.parseWithEncoding(raw_html, self.charset);
                 }
             }
-            self._script_manager.staticScriptsDone();
+            // Deferred and module scripts run after readiness is interactive.
+            self.documentIsInteractive();
+            // A readystatechange handler that open()s and close()s the
+            // document has already released them.
+            if (self._script_manager.base.static_scripts_done == false) {
+                self._script_manager.staticScriptsDone();
+            }
         },
         .text => |*buf| {
             try buf.appendSlice(self.page_arena, "</pre></body></html>");
@@ -3843,6 +3880,10 @@ const LoadState = enum {
 
     // the main HTML is being parsed (or downloaded)
     parsing,
+
+    // the main HTML has been parsed; deferred and module scripts may still be
+    // pending. Corresponds to readyState "interactive"
+    interactive,
 
     // the main HTML has been parsed and the JavaScript (including deferred
     // scripts) have been loaded. Corresponds to the DOMContentLoaded event
