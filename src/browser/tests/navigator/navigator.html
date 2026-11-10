@@ -24,9 +24,10 @@
   testing.expectEqual(true, navigator.onLine);
   testing.expectEqual(true, navigator.cookieEnabled);
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
-  testing.diverges('we report a fixed hardwareConcurrency', () => {
+  if (testing.IS_TEST_RUNNER) {
+    // A real browser reports the host's core count.
     testing.expectEqual(4, navigator.hardwareConcurrency);
-  });
+  }
   testing.expectEqual(0, navigator.maxTouchPoints);
   testing.diverges('Chrome reports "Google Inc." as vendor', () => {
     testing.expectEqual('', navigator.vendor);
@@ -155,18 +156,23 @@
     state.resolve();
 
     await state.done(() =>{
-      testing.expectEqual(0, estimate.usage);
-      testing.diverges('Chrome derives the quota from free disk space', () => {
+      testing.expectEqual(true, estimate.usage >= 0);
+      testing.expectEqual(true, estimate.quota > 0);
+      if (testing.IS_TEST_RUNNER) {
+        // A real browser reports the profile's usage and a quota from free disk space.
+        testing.expectEqual(0, estimate.usage);
         testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
-      });
+      }
     });
   }
 </script>
 
 <script id=deviceMemory>
-  testing.diverges("Chrome reports the machine's memory", () => {
+  testing.expectEqual(true, navigator.deviceMemory > 0);
+  if (testing.IS_TEST_RUNNER) {
+    // A real browser reports the host's memory.
     testing.expectEqual(8, navigator.deviceMemory);
-  });
+  }
 </script>
 
 <script id=userAgentData>
