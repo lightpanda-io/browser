@@ -79,7 +79,8 @@ fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
 }
 
 pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
-    // Force stylesheet initialization so rules are parsed immediately
+    // Creates the sheet and adds it to the document's list. Its rules are
+    // parsed on first use.
     if (self.getSheet(frame) catch null) |_| {
         // Notify StyleManager about the new stylesheet
         frame._style_manager.sheetModified();

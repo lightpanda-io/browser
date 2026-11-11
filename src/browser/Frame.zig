@@ -3177,8 +3177,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
                 removeStyleSheet(sheet_owner, sheet);
                 style._sheet = null;
             }
-            // Unconditional: with no materialized sheet the manager still holds
-            // the rules it parsed straight from the element's text.
+            // Unconditional: a <style> whose `type` changed lost its `_sheet`
+            // while the sheet stayed in the list (and so in the cascade).
             if (sheet_owner) |owner| {
                 owner._style_manager.sheetModified();
             }

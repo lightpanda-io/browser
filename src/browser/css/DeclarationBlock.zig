@@ -66,12 +66,15 @@ pub fn append(self: *DeclarationBlock, allocator: Allocator, id: properties.Id, 
         std.debug.assert(self.findIndex(id) == null);
     }
     if (self._len == self._cap) {
-        if (self._cap > std.math.maxInt(u16) - 4) {
+        if (self._cap == std.math.maxInt(u16)) {
             return error.OutOfMemory;
         }
-        // A parsed block is trimmed once done, so most take one allocation
-        // here. Additions from JS are rare and small.
-        try self.setCapacity(allocator, self._cap + 4);
+        // Most blocks fit in the first 4, and a parsed block is trimmed once
+        // done. Grows by half: the storage allocator can't resize in place, so
+        // each step leaves the old array behind, and a 2000-property :root
+        // growing by 4 would strand megabytes.
+        const grown = @as(u32, self._cap) + self._cap / 2 + 4;
+        try self.setCapacity(allocator, @intCast(@min(grown, std.math.maxInt(u16))));
     }
     var entry: Entry = .{
         ._id = id,
