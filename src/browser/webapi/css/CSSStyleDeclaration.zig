@@ -234,7 +234,7 @@ fn propertyValue(self: *const CSSStyleDeclaration, normalized: []const u8, wrapp
             const style_manager = &owner._style_manager;
 
             if (isCustomProperty(normalized)) {
-                return style_manager.customPropertyValue(element, wrapped) orelse "";
+                return style_manager.customPropertyValue(element, normalized) orelse "";
             }
 
             if (wrapped.eql(comptime .wrap("content"))) {
@@ -362,6 +362,18 @@ pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Fra
     }
     const prop = self.findNamed(name.str(), frame) orelse return null;
     return prop.value();
+}
+
+pub const Declared = struct {
+    value: []const u8,
+    important: bool,
+};
+
+/// The declaration stored under `id`. A shorthand only has one when kept as
+/// written, see declaredValue; a custom property or `content` always does.
+pub fn storedDeclaration(self: *const CSSStyleDeclaration, id: properties.Id) ?Declared {
+    const entry = self.findProperty(id) orelse return null;
+    return .{ .value = entry.value(), .important = entry._important };
 }
 
 /// A four-side shorthand kept as written because its value uses var(), while

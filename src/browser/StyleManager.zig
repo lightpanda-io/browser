@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
 const text_measure = @import("text_measure.zig");
@@ -69,13 +70,12 @@ widths: WidthMemo = .{},
 // Inline writes of a property the layout memos read.
 layout_bumps: usize = 0,
 
-// Keyed by property name, pruning to what is (hopefully) one or few rules
-custom_rules: std.StringHashMapUnmanaged(LazyRules) = .empty,
-
-// The rules declaring `content`. Nothing memoizes it: it only matters to
-// scripts reading it back, often from a probe element. @ant-design/cssinjs reads
-// which styles a static CSS file already ships from a `content` rule.
-content_rules: LazyRules = .{},
+// The rules declaring each custom property and `content`, by property id,
+// pruning to what is (hopefully) one or few rules. Nothing memoizes `content`:
+// it only matters to scripts reading it back, often from a probe element.
+// @ant-design/cssinjs reads which styles a static CSS file already ships from a
+// `content` rule.
+lazy_rules: std.HashMapUnmanaged(properties.Id, LazyRules, IdContext, std.hash_map.default_max_load_percentage) = .empty,
 
 // The rules declaring each animation property, the shorthand apart from the
 // longhands. frame/css_animations.zig reads them to fire the animation events.
@@ -514,11 +514,10 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
 
     // Lazy rules parse their selectors on first lookup, but the layer ranks
     // are only known now that every sheet has been read
-    var custom_it = self.custom_rules.valueIterator();
-    while (custom_it.next()) |property| {
+    var lazy_it = self.lazy_rules.valueIterator();
+    while (lazy_it.next()) |property| {
         property.stampRules(self);
     }
-    self.content_rules.stampRules(self);
     for (&self.animation_rules.values) |*rules| {
         rules.stampRules(self);
     }
@@ -546,7 +545,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     if (selector_text.len == 0) {
         return;
     }
-    var sink: LazySink = .{ .allocator = build_arena };
+    var sink: LazySink = .{ .allocator = build_arena, .page = self.frame.page };
     const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &sink);
     _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), sink.declarations(), layer);
 
@@ -572,7 +571,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
-// Custom properties (keyed by name) and `content` are lazy rules instead: they
+// Custom properties and `content` are lazy rules instead, keyed by id: they
 // parse the selector on first lookup. Returns whether the rule set a tracked or
 // a custom property: nothing memoizes `content`.
 fn addSelectorRules(
@@ -587,10 +586,10 @@ fn addSelectorRules(
     if (self.animationsEnabled() == false) {
         lazy.animation = .{};
     }
-    if ((lazy.content != null or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
+    if ((lazy.declares(.content) or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
         // Icon fonts declare `content` on hundreds of `::before` rules, spinners
         // an animation, and no element matches one.
-        lazy.content = null;
+        lazy.dropContent();
         lazy.animation = .{};
     }
 
@@ -600,20 +599,17 @@ fn addSelectorRules(
     }
 
     const arena = self.arena.allocator();
-    var changed = lazy.customs.len > 0;
+    var changed = lazy.declaresCustom();
 
     if (lazy.isEmpty() == false) {
         const priority = try self.nextPriority(layer);
         const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
-        for (lazy.customs) |custom| {
-            const gop = try self.custom_rules.getOrPut(arena, custom.name);
+        for (lazy.declared) |declaration| {
+            const gop = try self.lazy_rules.getOrPut(arena, declaration.id);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = .{};
             }
-            try gop.value_ptr.append(arena, selector_text, custom.value, if (custom.important) important_priority else priority);
-        }
-        if (lazy.content) |content| {
-            try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
+            try gop.value_ptr.append(arena, selector_text, declaration.value, if (declaration.important) important_priority else priority);
         }
         for (std.enums.values(Animation.Property)) |property| {
             const rules = self.animation_rules.getPtr(property);
@@ -893,7 +889,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     inline for (group_fields, &caps) |field, *c| {
         c.* = @field(self, field).capacities();
     }
-    const custom_rules_count = self.custom_rules.count();
+    const lazy_rules_count = self.lazy_rules.count();
 
     self.arena.resetRetain();
     self.widths = .{};
@@ -906,9 +902,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
         try @field(self, field).reset(self.arena.allocator(), c);
     }
 
-    self.custom_rules = .empty;
-    try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
-    self.content_rules = .{};
+    self.lazy_rules = .empty;
+    try self.lazy_rules.ensureTotalCapacity(self.arena.allocator(), lazy_rules_count);
     self.animation_rules = .initFill(.{});
     self.keyframes = .empty;
 
@@ -1997,29 +1992,21 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
 fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !LazyDeclarations {
     const arena = self.arena.allocator();
 
-    var customs: std.ArrayList(LazyDeclaration) = .empty;
-    var content: ?LazyDeclaration = null;
+    var declared: std.ArrayList(LazyDeclaration) = .empty;
     var lazy_animation: LazyAnimation = .{};
     var it = style.asCSSStyleDeclaration().iterator(self.frame);
     while (it.next()) |declaration| {
-        const name = declaration.name;
-        if (isCustomProperty(name)) {
-            try customs.append(arena, .{
-                .name = try arena.dupe(u8, name),
+        if (isLazy(declaration.id)) {
+            try declared.append(arena, .{
+                .id = declaration.id,
                 .value = try arena.dupe(u8, declaration.value),
                 .important = declaration.important,
             });
-        } else if (declaration.id == .content) {
-            content = .{
-                .name = "content",
-                .value = try arena.dupe(u8, declaration.value),
-                .important = declaration.important,
-            };
         } else if (Animation.Property.fromId(declaration.id)) |animation_property| {
             lazy_animation.declare(animation_property, try arena.dupe(u8, declaration.value), declaration.important);
         }
     }
-    return .{ .customs = customs.items, .content = content, .animation = lazy_animation };
+    return .{ .declared = declared.items, .animation = lazy_animation };
 }
 
 const BucketKey = union(enum) {
@@ -3138,11 +3125,10 @@ fn Priorities(comptime Declared: type) type {
     return std.enums.EnumArray(std.meta.FieldEnum(Declared), u64);
 }
 
-// custom_rules map is property_name -> LazyRules, loosely:
+// lazy_rules map is property id -> LazyRules, loosely:
 //    --color => [(:root, "#ff0"), (.card, "#000")]
 // So when code says "getComputedStyle(el).getPropertyValue("--color")
-// We end up with a relatively small number of rules. content_rules holds the
-// same for `content`.
+// We end up with a relatively small number of rules. `content` is one more id.
 const LazyRules = struct {
     rules: std.ArrayList(LazyRule) = .empty,
     parsed: ?[]const ParsedRule = null, // lazily parsed
@@ -3178,22 +3164,51 @@ const ParsedRule = struct {
     priority: u64, // packed the same way as a group Rule.priority
 };
 
-/// A lazy declaration on its way from a rule block into custom_rules or
-/// content_rules.
+/// A lazy declaration on its way from a rule block into lazy_rules.
 const LazyDeclaration = struct {
-    name: []const u8,
+    id: properties.Id,
     value: []const u8,
     important: bool,
 };
 
 /// The lazy declarations of one rule block.
 const LazyDeclarations = struct {
-    customs: []const LazyDeclaration = &.{},
-    content: ?LazyDeclaration = null,
+    // Custom properties and `content`, one per id
+    declared: []LazyDeclaration = &.{},
     animation: LazyAnimation = .{},
 
     fn isEmpty(self: LazyDeclarations) bool {
-        return self.customs.len == 0 and self.content == null and self.animation.isEmpty();
+        return self.declared.len == 0 and self.animation.isEmpty();
+    }
+
+    fn declares(self: LazyDeclarations, id: properties.Id) bool {
+        for (self.declared) |declaration| {
+            if (declaration.id == id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Unlike `content`, a custom property can change what a memo reads
+    fn declaresCustom(self: LazyDeclarations) bool {
+        for (self.declared) |declaration| {
+            if (declaration.id != .content) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn dropContent(self: *LazyDeclarations) void {
+        for (self.declared, 0..) |declaration, i| {
+            if (declaration.id == .content) {
+                // Each id goes to its own rules: the order doesn't matter
+                self.declared[i] = self.declared[self.declared.len - 1];
+                self.declared.len -= 1;
+                return;
+            }
+        }
     }
 };
 
@@ -3283,18 +3298,49 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
     return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr), null) catch unreachable;
 }
 
-/// The lazy declarations of one block. Custom properties go by name, so a
-/// block declaring the same one twice keeps only the winner.
+/// The lazy declarations of one block. They go by id, so a block declaring
+/// the same one twice keeps only the winner.
 const LazySink = struct {
     allocator: Allocator,
-    customs: std.StringArrayHashMapUnmanaged(LazyDeclaration) = .empty,
-    content: ?LazyDeclaration = null,
+    page: *Page, // Its custom property names are numbered on the page, like the CSSOM's.
+    declared: std.ArrayHashMapUnmanaged(properties.Id, LazyDeclaration, IdArrayContext, false) = .empty,
     animation: LazyAnimation = .{},
 
     fn declarations(self: *const LazySink) LazyDeclarations {
-        return .{ .customs = self.customs.values(), .content = self.content, .animation = self.animation };
+        return .{ .declared = self.declared.values(), .animation = self.animation };
     }
 };
+
+/// For the maps keyed by property id. Ids are small and dense, so a multiply
+/// spreads them; the default hashes their bytes with Wyhash, which costs a
+/// custom property about as much as hashing its name. The map takes the slot
+/// from the low bits and the fingerprint from the top 7, so both need mixing.
+const IdContext = struct {
+    pub fn hash(_: IdContext, id: properties.Id) u64 {
+        const h = @as(u64, @backingInt(id)) *% 0x9e3779b97f4a7c15;
+        return h ^ (h >> 32);
+    }
+
+    pub fn eql(_: IdContext, a: properties.Id, b: properties.Id) bool {
+        return a == b;
+    }
+};
+
+const IdArrayContext = struct {
+    pub fn hash(_: IdArrayContext, id: properties.Id) u32 {
+        return @truncate(IdContext.hash(.{}, id));
+    }
+
+    pub fn eql(_: IdArrayContext, a: properties.Id, b: properties.Id, _: usize) bool {
+        return a == b;
+    }
+};
+
+/// Custom properties and `content`: kept as declared, and resolved only when
+/// a script reads one.
+fn isLazy(id: properties.Id) bool {
+    return id == .content or properties.knownName(id) == null;
+}
 
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
 // materialized object was built from: a normal declaration never overrides an
@@ -3306,25 +3352,20 @@ fn foldDeclarations(comptime Declared: type, declarations: CssParser.Declaration
     var slots: Slots(Declared) = .{};
     var it = declarations;
     while (it.next()) |declaration| {
-        const id = trackedId(declaration.name) orelse {
-            if (isCustomProperty(declaration.name)) {
-                const sink = lazy orelse continue;
-                const gop = try sink.customs.getOrPut(sink.allocator, declaration.name);
-                if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
-                    continue;
-                }
-                gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
+        const id = trackedId(declaration.name) orelse blk: {
+            if (isCustomProperty(declaration.name) == false) {
+                continue;
             }
-            continue;
+            const page = (lazy orelse continue).page;
+            break :blk (try page.css_custom_names.intern(page.arena, declaration.name)) orelse continue;
         };
-        if (id == .content) {
+        if (isLazy(id)) {
             const sink = lazy orelse continue;
-            if (sink.content) |earlier| {
-                if (earlier.important and !declaration.important) {
-                    continue;
-                }
+            const gop = try sink.declared.getOrPut(sink.allocator, id);
+            if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
+                continue;
             }
-            sink.content = .{ .name = "content", .value = declaration.value, .important = declaration.important };
+            gop.value_ptr.* = .{ .id = id, .value = declaration.value, .important = declaration.important };
             continue;
         }
         if (Animation.Property.fromId(id)) |property| {
@@ -3490,14 +3531,20 @@ fn importantRuleWins(self: *StyleManager, el: *Element, name: []const u8, value:
 
 /// Computed value of a custom property (`--x`) on `el`, or null when nothing
 /// declares it. The value is returned as-is, no var substitution
-pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+pub fn customPropertyValue(self: *StyleManager, el: *Element, name: []const u8) ?[]const u8 {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
+
+    // The rebuild numbered every sheet's custom names. A style attribute's
+    // are numbered once it's parsed, which the walk below does: until then a
+    // name without an id is in no rule, but may be in a style attribute.
+    const custom_names = &self.frame.page.css_custom_names;
+    var maybe_id = custom_names.lookup(name);
 
     // Only the rules declaring this name; usually a handful, often none. An
     // element can still shadow them with an inline declaration, so a miss here
     // means walking for inline styles, not returning early.
-    const property = self.custom_rules.getPtr(property_name.str());
+    const property = if (maybe_id) |id| self.lazy_rules.getPtr(id) else null;
     const rules = self.parsedRules(property) catch |err| blk: {
         log.err(.browser, "StyleManager customProperty", .{ .err = err });
         break :blk &.{};
@@ -3505,7 +3552,15 @@ pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: Str
 
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        if (self.lazyWinner(elem, property_name, rules, null)) |winner| {
+        if (maybe_id == null) {
+            // Parsing its style attribute numbers the names it declares
+            if (elem.inlineStyle(self.frame) == null) {
+                continue;
+            }
+            maybe_id = custom_names.lookup(name);
+        }
+        const id = maybe_id orelse continue;
+        if (self.lazyWinner(elem, id, rules, null)) |winner| {
             return winner.value;
         }
     }
@@ -3519,12 +3574,12 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
 
-    const rules = self.parsedRules(&self.content_rules) catch |err| blk: {
+    const rules = self.parsedRules(self.lazy_rules.getPtr(.content)) catch |err| blk: {
         log.err(.browser, "StyleManager content", .{ .err = err });
         break :blk &.{};
     };
     var before: ?u16 = null;
-    while (self.lazyWinner(el, comptime .wrap("content"), rules, before)) |winner| {
+    while (self.lazyWinner(el, .content, rules, before)) |winner| {
         if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
             return winner.value;
         }
@@ -3597,7 +3652,7 @@ fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Proper
     var winner: ?LazyWinner = null;
     // Stopping at INLINE_LAYER keeps lazyWinner off the style attribute
     var before: ?u16 = INLINE_LAYER;
-    while (self.lazyWinner(el, .wrap(property.cssName()), rules, before)) |candidate| {
+    while (self.lazyWinner(el, property.standardId(), rules, before)) |candidate| {
         if (std.ascii.eqlIgnoreCase(candidate.value, "revert-layer") == false) {
             winner = candidate;
             break;
@@ -3713,7 +3768,7 @@ fn layerOrder(priority: u64) u16 {
 
 /// The declaration of a lazy property that wins on `el`, from the matching
 /// rules and its inline style. With `before`, only those from earlier layers.
-fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
+fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
     const limit = before orelse std.math.maxInt(u16);
 
     var winner: ?LazyWinner = null;
@@ -3736,10 +3791,10 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
     if (limit > INLINE_LAYER) {
         if (el.inlineStyle(self.frame)) |style| {
             const declaration = style.asCSSStyleDeclaration();
-            if (declaration.declaredValue(property_name, self.frame)) |value| {
-                const inline_priority = if (declaration.declaredImportant(property_name, self.frame)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
+            if (declaration.storedDeclaration(id)) |declared| {
+                const inline_priority = if (declared.important) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
                 if (inline_priority > priority) {
-                    winner = .{ .value = value, .layer = INLINE_LAYER, .priority = inline_priority };
+                    winner = .{ .value = declared.value, .layer = INLINE_LAYER, .priority = inline_priority };
                 }
             }
         }
@@ -4385,7 +4440,7 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     // No memo reads a custom property
     sm.cacheWidth(div, .box, 100);
     try style.setProperty("--offset", "4px", null, frame);
-    try testing.expectString("4px", sm.customPropertyValue(p, comptime .wrap("--offset")).?);
+    try testing.expectString("4px", sm.customPropertyValue(p, "--offset").?);
     try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
 
     // None of it touched another frame's memos
@@ -4627,7 +4682,7 @@ test "StyleManager: content rules no element matches aren't kept" {
     _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
 
     try testing.expectString("\"probe\"", sm.contentValue(probe).?);
-    try testing.expectEqual(1, sm.content_rules.rules.items.len);
+    try testing.expectEqual(1, sm.lazy_rules.get(.content).?.rules.items.len);
 }
 
 test "StyleManager: animation rules no element matches aren't kept" {
