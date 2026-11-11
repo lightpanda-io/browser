@@ -55,10 +55,7 @@ fn getComputedStyleForNode(cmd: *CDP.Command) !void {
     const element = node.dom.is(DOMNode.Element) orelse node.dom.parentElement() orelse return error.NodeIsNotAnElement;
     const frame = element.ownerFrame(main_frame) orelse main_frame;
 
-    const decl = CSSStyleDeclaration{
-        ._element = element,
-        ._is_computed = true,
-    };
+    const decl = CSSStyleDeclaration{ ._owner = .{ .computed = element } };
 
     // decl.getKnownPropertyValue uses frame.local_arena, which is only reset
     // between JS calls. So we reset it manually here.

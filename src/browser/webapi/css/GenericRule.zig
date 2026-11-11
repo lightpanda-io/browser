@@ -20,6 +20,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
+const RuleStore = @import("../../css/RuleStore.zig");
 
 const CSSRule = @import("CSSRule.zig");
 
@@ -28,49 +29,17 @@ const GenericRule = @This();
 
 pub const Proto = CSSRule;
 
-_text: []const u8,
-_kind: Kind,
 _proto_canary: if (lp.IS_DEBUG) *CSSRule else void = undefined,
 
-/// In the order of the CSSOM rule-type constants, starting at CHARSET_RULE.
-pub const Kind = enum(u8) {
-    charset,
-    import,
-    media,
-    font_face,
-    page,
-    keyframes,
-    keyframe,
-    margin,
-    namespace,
-    counter_style,
-    supports,
-    document,
-    font_feature_values,
-    viewport,
-    region_style,
-    layer,
-    unknown,
-};
-
-pub fn init(kind: Kind, text: []const u8, frame: *Frame) !*GenericRule {
+pub fn init(store: *RuleStore, id: u32, hint: u32, frame: *Frame) !*GenericRule {
     return frame._factory.chained(.{
-        CSSRule{ ._type = .generic },
-        GenericRule{ ._kind = kind, ._text = try frame.dupeString(text) },
+        CSSRule{ ._type = .generic, ._store = store, ._id = id, ._hint = hint },
+        GenericRule{},
     });
 }
 
 pub fn asCSSRule(self: *GenericRule) *CSSRule {
     return Factory.protoOf(self);
-}
-
-pub fn getType(self: *const GenericRule) u16 {
-    return switch (self._kind) {
-        // `@layer` rules postdate the legacy numeric type constants, so
-        // their `type` is 0 (CSSOM §6.4.1) — same as unknown at-rules.
-        .layer, .unknown => 0,
-        else => @as(u16, @backingInt(self._kind)) + 2,
-    };
 }
 
 pub const JsApi = struct {

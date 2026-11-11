@@ -366,7 +366,7 @@ const AtRule = struct {
     text: []const u8,
 };
 
-const Rule = union(enum) {
+pub const Rule = union(enum) {
     style: StyleRule,
     at_rule: AtRule,
 };
