@@ -358,7 +358,25 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// levels. Maps to each provider's native thinking/reasoning knob. Resolved
 /// in `Agent.init` (explicit flag > remembered > mode default), so there is
 /// no Config-level accessor like `agentVerbosity`.
-pub const Effort = zenai.provider.Effort;
+pub const Effort = enum {
+    /// Send no effort field; the model default applies. Explicit, unlike an
+    /// unset `--effort`, which falls back to the provider or mode default.
+    null,
+    none,
+    minimal,
+    low,
+    medium,
+    high,
+    xhigh,
+
+    /// The wire level for zenai, or null to send none.
+    pub fn level(self: Effort) ?zenai.provider.Effort {
+        return switch (self) {
+            .null => null,
+            inline else => |e| @field(zenai.provider.Effort, @tagName(e)),
+        };
+    }
+};
 const SearchEngine = @import("browser/tools/search.zig").Engine;
 
 /// Controls how chatty `agent` mode is on stderr.

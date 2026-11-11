@@ -1214,10 +1214,10 @@ fn setProvider(self: *Agent, credential: settings.Credential) !void {
     } else {
         self.terminal.printInfo("provider: {s}", .{@tagName(credential.provider)});
     }
-    if (zenai.provider.defaultEffort(credential.provider)) |e| if (e != self.effort) {
-        self.effort = e;
-        self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credential.provider) });
-    };
+    if (zenai.provider.omitsEffort(credential.provider) and self.effort != .null) {
+        self.effort = .null;
+        self.terminal.printInfo("effort: null ({s} default)", .{@tagName(credential.provider)});
+    }
     self.reportSaved("model", self.model);
     // Prime the completion cache on the command, not on a `/model` keystroke.
     _ = completionModels(self, self.allocator);
@@ -1486,7 +1486,7 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
             .max_turns = 1,
             .max_tokens = 8192,
             .tool_choice = .none,
-            .effort = bumpedEffort(self.effort),
+            .effort = bumpedEffort(self.effort).level(),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
             .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
@@ -1979,7 +1979,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // Per-turn reasoning budget; resolved from --effort / .lp-agent.zon
             // / mode default, adjustable at runtime via /effort. Ignored by
             // non-thinking models.
-            .effort = self.effort,
+            .effort = self.effort.level(),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
             // streaming would bypass the `suppress_answer` guard in `runTurn`.
@@ -2076,7 +2076,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // .low caps thinking so reasoning models still emit an answer;
                 // `.null` and `.none` are kept as chosen.
                 .effort = switch (self.effort) {
-                    .null, .none => self.effort,
+                    .null => null,
+                    .none => .none,
                     else => .low,
                 },
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
