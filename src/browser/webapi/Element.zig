@@ -2051,27 +2051,40 @@ fn lineOffset(node: *Node, parent: *Node, owner: *Frame, frame: *Frame) f64 {
         return 0;
     }
 
+    // Text before el on its line, unwrapped. A row's text is an item of its
+    // own we don't place.
+    var text: ?layout.LineText(.full) = null;
+    if (in_row == false) {
+        if (parent.is(Element)) |p| {
+            text = .{ .parent = p };
+        }
+    }
     var x: f64 = 0.0;
     var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
     while (siblings.next()) |s| {
         if (s == node) break;
-        const sibling = s.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(sibling)) {
+        const sibling = s.is(Element) orelse {
+            if (text) |*t| {
+                if (s.is(Node.CData.Text)) |data| {
+                    t.add(data.ownData(), owner);
+                }
+            }
+            continue;
+        };
+        if (style_manager.hasDisplayNone(sibling) or style_manager.isOutOfFlow(sibling)) {
             continue;
         }
         if (in_row == false and style_manager.isBlockLevel(sibling)) {
             x = 0;
-            continue;
-        }
-        if (in_row) {
-            // A row's items are sized by the layout; out-of-flow boxes take
-            // no room in it
-            if (style_manager.isOutOfFlow(sibling) == false) {
-                x += layout.boxWidth(sibling, owner);
+            if (text) |*t| {
+                _ = t.end();
             }
             continue;
         }
-        x += sibling.getElementAxis(frame, .width).value;
+        x += layout.boxWidth(sibling, owner);
+    }
+    if (text) |*t| {
+        x += t.endBefore();
     }
     return x;
 }
