@@ -201,6 +201,17 @@ pub const Tool = enum {
         };
     }
 
+    /// Calling it again can't repeat an act on the world: no click or key
+    /// press that may submit a form, no page-side JavaScript, no login, no
+    /// file written. `--save` replays a script to check it only when the
+    /// script calls none of the others. Exhaustive so a new tool must choose.
+    pub fn replaySafe(self: Tool) bool {
+        return switch (self) {
+            .goto, .search, .markdown, .html, .links, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools, .classify => true,
+            .evaluate, .click, .press, .screenshot, .download, .callPageTool, .acceptCookies, .login => false,
+        };
+    }
+
     /// A read tool that navigates when handed a `url`. The read isn't recorded,
     /// but the navigation is, so the recorder captures it as a `goto`. Excludes
     /// `evaluate` (carries its own `url`), `search` (derived engine URL), and

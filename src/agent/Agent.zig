@@ -193,6 +193,9 @@ synthetic_tool_call_id: u32 = 0,
 /// and the navigation a read tool's `url` made.
 save_calls: std.ArrayList(SavedCall) = .empty,
 capturing_for_save: bool = false,
+/// Set while the model repairs a `--save` script whose replay came back
+/// empty: it may read the page the replay left, not act on it or leave it.
+save_repair: bool = false,
 prompt_target: ?PromptTarget = null,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
@@ -1419,7 +1422,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     }
 
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
-    self.synthesizeSaveTo(arena, resolved.path, resolved.mode, prompt);
+    self.synthesizeSaveTo(arena, resolved.path, resolved.mode, prompt, .none);
 }
 
 /// One-shot `--task ... --save`: overwrites the destination without the REPL's
@@ -1429,13 +1432,15 @@ fn saveOneShot(self: *Agent) void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
     const path = save.ensureJsExtension(arena.allocator(), self.one_shot_save.?) catch self.one_shot_save.?;
-    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?);
+    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?, .replay);
 }
+
+/// Whether a synthesized script is replayed once before it is written.
+const SaveCheck = enum { none, replay };
 
 /// LLM synthesis + write for an already-resolved destination. Shared by the
 /// interactive `/save` and one-shot `--save`.
-fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8) void {
-    const provider_client = self.ai_client.?;
+fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8, check: SaveCheck) void {
     self.refreshAuthIfNeeded();
 
     // Only update feeds the saved script back to the model; append stays
@@ -1464,59 +1469,16 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
-    self.http_interrupt.reset();
-    self.terminal.spinner.start();
     self.trace_phase = "save";
     defer self.trace_phase = "turn";
-    var result = ModelCall.run(
-        self.ts.session,
-        provider_client,
-        self.model,
-        &self.conversation.messages,
-        self.allocator,
-        ma,
-        .{ .context = @ptrCast(self), .callFn = handleToolCall },
-        .{
-            .tools = &.{},
-            .max_turns = 1,
-            .max_tokens = 8192,
-            .tool_choice = .none,
-            .effort = bumpedEffort(self.effort),
-            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-            .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
-            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
-        },
-    ) catch |err| {
-        self.terminal.spinner.cancel();
-        if (self.cancel_requested.load(.acquire)) {
-            self.resetAfterCancel(baseline);
-            return;
-        }
-        log.err(.app, "AI save synthesis error", .{ .err = err });
-        return self.abortSave(baseline, @errorName(err));
+    var script = switch (self.synthesizeScript(arena, .blind)) {
+        .script => |s| s,
+        .cancelled => return self.resetAfterCancel(baseline),
+        .failed => |reason| return self.abortSave(baseline, reason),
     };
-    self.terminal.spinner.stop();
-    defer result.deinit();
-    self.total_usage.add(result.usage);
-
-    if (result.cancelled) {
-        self.resetAfterCancel(baseline);
-        return;
+    if (check == .replay) {
+        script = self.replayAndRepair(arena, script) orelse return self.resetAfterCancel(baseline);
     }
-
-    // `stripCodeFence` accepts an unclosed block, so a truncated script is
-    // indistinguishable from a complete one once it is on disk.
-    if (result.finish_reason == .max_tokens) {
-        return self.abortSave(baseline, "the model ran out of output tokens mid-script");
-    }
-
-    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
-
-    // `result.text` lives in the conversation arena, freed by the rollback
-    // below; copy into the command arena first (scrubbing may return its input
-    // as-is).
-    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
-    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
@@ -1531,6 +1493,206 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     };
     self.save_buffer.reset();
     self.terminal.printInfo("Saved synthesized script to {s}", .{path});
+}
+
+const Synthesis = union(enum) {
+    /// In the command arena, so it outlives the conversation rollback.
+    script: []const u8,
+    cancelled,
+    failed: []const u8,
+};
+
+const SynthesisMode = enum {
+    /// One reply, no tools: the script comes from the session alone.
+    blind,
+    /// A few turns with the read-only tools on the current page, to check
+    /// selectors against the page as a replay sees it.
+    inspect,
+};
+
+/// Bounds the repair turn's page reads.
+const max_repair_turns = 8;
+
+/// One synthesis over the conversation as it stands. The model's reply stays
+/// in the conversation, so a repair turn can follow it.
+fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode) Synthesis {
+    const inspect = mode == .inspect;
+    self.save_repair = inspect;
+    defer self.save_repair = false;
+    self.http_interrupt.reset();
+    self.terminal.spinner.start();
+    var result = ModelCall.run(
+        self.ts.session,
+        self.ai_client.?,
+        self.model,
+        &self.conversation.messages,
+        self.allocator,
+        self.conversation.arena.allocator(),
+        .{ .context = @ptrCast(self), .callFn = handleToolCall },
+        .{
+            // The full list, as in a prompt turn; `toolOutcome` refuses the rest.
+            .tools = if (inspect) globalTools() else &.{},
+            .max_turns = if (inspect) max_repair_turns else 1,
+            .max_tokens = 8192,
+            .tool_choice = if (inspect) .auto else .none,
+            .effort = bumpedEffort(self.effort),
+            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+            .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
+            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
+        },
+    ) catch |err| {
+        self.terminal.spinner.cancel();
+        if (self.cancel_requested.load(.acquire)) return .cancelled;
+        log.err(.app, "AI save synthesis error", .{ .err = err });
+        return .{ .failed = @errorName(err) };
+    };
+    self.terminal.spinner.stop();
+    defer result.deinit();
+    self.total_usage.add(result.usage);
+
+    if (result.cancelled) return .cancelled;
+
+    // `stripCodeFence` accepts an unclosed block, so a truncated script is
+    // indistinguishable from a complete one once it is on disk.
+    if (result.finish_reason == .max_tokens) return .{ .failed = "the model ran out of output tokens mid-script" };
+
+    const raw = result.text orelse return .{ .failed = "the model returned no script" };
+
+    // `result.text` lives in the conversation arena, freed by the rollback;
+    // copy into the command arena first (scrubbing may return its input as-is).
+    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return .{ .failed = "out of memory" };
+    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return .{ .failed = "out of memory" };
+    return .{ .script = script };
+}
+
+/// Caps the replay output handed back to the model.
+const max_replay_feedback_bytes = 4096;
+const replay_timeout_ms = 60_000;
+
+/// Replays a synthesized script once with no model and, when the replay fails
+/// or returns nothing, gives the model one turn to fix it. The session's own
+/// run found an answer, so an empty replay means the script reads the page
+/// wrong: typically a selector or a filter written for a page shape the fresh
+/// load doesn't serve. Scripts that act on a page are written unchecked, since
+/// replaying them would repeat the act. Null when the user cancelled.
+fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?[]const u8 {
+    if (!replaySafe(script)) return script;
+    const problem = switch (self.replayScript(arena, script)) {
+        .ok => return script,
+        .cancelled => return null,
+        .problem => |p| p,
+    };
+    self.terminal.printWarning("the script's replay {s}; asking the model to fix it", .{firstLine(problem)});
+
+    const feedback = arena.print(
+        \\I replayed that script once, on a fresh load and with no model, and it {s}
+        \\
+        \\The run above found the answer, so the script reads the page wrong. The
+        \\page the replay loaded is still open: read it with the read-only tools and
+        \\try your extract schema on it before you answer. Check each selector and
+        \\each filter against what the page actually holds, not against what it
+        \\usually looks like. Then reply with the corrected script in full, with the
+        \\same output rules.
+    , .{problem}) catch return script;
+    const ma = self.conversation.arena.allocator();
+    const content = ma.dupe(u8, feedback) catch return script;
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = content }) catch return script;
+
+    const fixed = switch (self.synthesizeScript(arena, .inspect)) {
+        .script => |s| s,
+        .cancelled => return null,
+        .failed => |reason| {
+            self.terminal.printWarning("the fix failed ({s}); keeping the first script", .{reason});
+            return script;
+        },
+    };
+    switch (self.replayScript(arena, fixed)) {
+        .ok => {},
+        .cancelled => return null,
+        .problem => |p| self.terminal.printWarning("the fixed script's replay {s}", .{firstLine(p)}),
+    }
+    return fixed;
+}
+
+fn firstLine(text: []const u8) []const u8 {
+    return text[0 .. std.mem.findScalar(u8, text, '\n') orelse text.len];
+}
+
+/// Whether replaying the script can't repeat an act: it calls no page method
+/// that `BrowserTool.replaySafe` rules out. A plain substring match, so a
+/// mention in a comment skips the check too; that errs toward not replaying.
+fn replaySafe(script: []const u8) bool {
+    inline for (comptime std.enums.values(BrowserTool)) |tool| {
+        if (comptime !tool.replaySafe()) {
+            if (std.mem.find(u8, script, "." ++ @tagName(tool) ++ "(") != null) return false;
+        }
+    }
+    return true;
+}
+
+const Replay = union(enum) {
+    ok,
+    cancelled,
+    /// Completes "it …" in a sentence, then the script's output.
+    problem: []const u8,
+};
+
+fn replayScript(self: *Agent, arena: std.mem.Allocator, script: []const u8) Replay {
+    const runtime = self.beginScriptRuntime() catch |err| {
+        self.terminal.printWarning("can't replay the script ({s}); saving it unchecked", .{@errorName(err)});
+        return .ok;
+    };
+    defer self.endScriptRuntime(runtime);
+
+    // Keeps the replay's output off stdout, which `--save` leaves to the caller.
+    var console: std.Io.Writer.Allocating = .init(arena);
+    var capped: lp.LimitedWriter = .init(&console.writer, max_replay_feedback_bytes);
+    runtime.console_sink = &capped.writer;
+    var returned: std.Io.Writer.Allocating = .init(arena);
+    runtime.result_sink = &returned.writer;
+    runtime.timeout_ms = replay_timeout_ms;
+
+    self.terminal.beginTool("replay", "saved script");
+    const result = runtime.runSource(script, "replay");
+    self.terminal.endTool();
+    if (self.cancel_requested.load(.acquire)) return .cancelled;
+
+    const message = result catch |err| return .{ .problem = arena.print("failed: {s}", .{@errorName(err)}) catch "failed" };
+    const output = std.mem.trim(u8, returned.written(), " \t\r\n");
+    const logged = std.mem.trim(u8, console.written(), " \t\r\n");
+    const verdict: []const u8 = if (runtime.timed_out)
+        arena.print("timed out after {d} s.", .{replay_timeout_ms / 1000}) catch "timed out."
+    else if (message) |m|
+        arena.print("failed: {s}", .{m}) catch "failed."
+    else if (isEmptyResult(arena, output))
+        arena.print("returned an empty result: {s}", .{if (output.len == 0) "\"\"" else output[0..@min(output.len, max_replay_feedback_bytes)]}) catch "returned an empty result."
+    else
+        return .ok;
+    if (logged.len == 0) return .{ .problem = verdict };
+    return .{ .problem = arena.print("{s}\n\nIts console output:\n{s}", .{ verdict, logged }) catch verdict };
+}
+
+/// A returned value with no data in it: `null`, `""`, or arrays and objects
+/// made only of those, like `[]` or `[{"title": null}]`. A script that returns
+/// nothing (`undefined`) prints nothing and is left alone: it may only act.
+fn isEmptyResult(arena: std.mem.Allocator, output: []const u8) bool {
+    if (output.len == 0) return false;
+    const value = std.json.parseFromSliceLeaky(std.json.Value, arena, output, .{}) catch return false;
+    return isEmptyValue(value);
+}
+
+fn isEmptyValue(value: std.json.Value) bool {
+    return switch (value) {
+        .null => true,
+        .string => |s| s.len == 0,
+        .array => |a| for (a.items) |item| {
+            if (!isEmptyValue(item)) break false;
+        } else true,
+        .object => |o| for (o.values()) |item| {
+            if (!isEmptyValue(item)) break false;
+        } else true,
+        .bool, .integer, .float, .number_string => false,
+    };
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1787,21 +1949,11 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     };
 
-    const runtime = ScriptRuntime.init(self.allocator, self.ts.browser.app, self.ts.session, &self.ts.registry) catch |err| {
+    const runtime = self.beginScriptRuntime() catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
         return false;
     };
-    defer runtime.deinit();
-    self.script_runtime_mutex.lockUncancelable(lp.io);
-    self.active_script_runtime = runtime;
-    self.script_runtime_mutex.unlock(lp.io);
-    defer {
-        self.script_runtime_mutex.lockUncancelable(lp.io);
-        self.active_script_runtime = null;
-        self.script_runtime_mutex.unlock(lp.io);
-        self.ts.browser.env.cancelTerminate();
-        self.cancel_requested.store(false, .release);
-    }
+    defer self.endScriptRuntime(runtime);
 
     var output: ScriptOutput = .{ .terminal = &self.terminal };
     runtime.console_observer = .{ .context = @ptrCast(&output), .notify = ScriptOutput.observe };
@@ -1821,6 +1973,24 @@ fn runScript(self: *Agent, path: []const u8) bool {
     // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", name);
     return true;
+}
+
+/// A script runtime on the agent's session, registered so Ctrl-C cancels it.
+fn beginScriptRuntime(self: *Agent) !*ScriptRuntime {
+    const runtime = try ScriptRuntime.init(self.allocator, self.ts.browser.app, self.ts.session, &self.ts.registry);
+    self.script_runtime_mutex.lockUncancelable(lp.io);
+    self.active_script_runtime = runtime;
+    self.script_runtime_mutex.unlock(lp.io);
+    return runtime;
+}
+
+fn endScriptRuntime(self: *Agent, runtime: *ScriptRuntime) void {
+    self.script_runtime_mutex.lockUncancelable(lp.io);
+    self.active_script_runtime = null;
+    self.script_runtime_mutex.unlock(lp.io);
+    self.ts.browser.env.cancelTerminate();
+    self.cancel_requested.store(false, .release);
+    runtime.deinit();
 }
 
 fn readScriptSource(allocator: std.mem.Allocator, path: []const u8, from_stdin: bool) ![]u8 {
@@ -2232,6 +2402,16 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
         }
     }
 
+    if (self.save_repair) {
+        const tool = std.meta.stringToEnum(BrowserTool, tool_name);
+        if (tool == null or (tool.?.group() != .reading and tool.? != .extract)) {
+            return .{ .content = "Error: only the read-only tools and extract are available while fixing the script.", .is_error = true };
+        }
+        if (tool.?.navigatesToUrl() and urlArg(args) != null) {
+            return .{ .content = "Error: read the page the replay loaded; don't navigate.", .is_error = true };
+        }
+    }
+
     const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, args, .{
         .inline_image = true,
         .record = self.capturing_for_save,
@@ -2492,4 +2672,29 @@ test "replayArgs: a backendNodeId still becomes the resolved selector" {
     const rewritten = replayArgs(aa, args, .{ .selector = "#main" }).?;
     try std.testing.expect(rewritten.object.get("backendNodeId") == null);
     try std.testing.expectEqualStrings("#main", rewritten.object.get("selector").?.string);
+}
+
+test "isEmptyResult: no data in the returned value" {
+    const arena = std.testing.allocator;
+    var state: std.heap.ArenaAllocator = .init(arena);
+    defer state.deinit();
+    const a = state.allocator();
+    for ([_][]const u8{ "[]", "{}", "null", "\"\"", "[{\"title\":null,\"price\":\"\"}]", "{\"items\":[]}" }) |empty| {
+        try std.testing.expect(isEmptyResult(a, empty));
+    }
+    // No `return` prints nothing; plain text and zero are data.
+    for ([_][]const u8{ "", "0", "false", "Bridgestone", "[{\"price\":275}]", "{\"items\":[null,\"x\"]}" }) |data| {
+        try std.testing.expect(!isEmptyResult(a, data));
+    }
+}
+
+test "replaySafe: scripts that act on a page are not replayed" {
+    try std.testing.expect(replaySafe(
+        \\const page = new Page();
+        \\await page.goto("https://example.com");
+        \\return page.extract({ title: "h1" });
+    ));
+    try std.testing.expect(!replaySafe("page.fill(\"#q\", \"x\");\npage.click(\"button\");"));
+    try std.testing.expect(!replaySafe("return page.evaluate(\"document.title\");"));
+    try std.testing.expect(!replaySafe("page.press(\"Enter\");"));
 }
