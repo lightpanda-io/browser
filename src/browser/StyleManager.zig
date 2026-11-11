@@ -29,6 +29,7 @@ const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Animation = @import("css/Animation.zig");
 const properties = @import("css/properties.zig");
+const DeclarationBlock = @import("css/DeclarationBlock.zig");
 const Element = @import("webapi/Element.zig");
 const popover = @import("webapi/element/popover.zig");
 
@@ -40,7 +41,6 @@ const CSSRule = @import("webapi/css/CSSRule.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
 const GenericRule = @import("webapi/css/GenericRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
-const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -1890,8 +1890,9 @@ fn addRuleAs(self: *StyleManager, style_rule: *CSSStyleRule, selector_text: []co
         return false;
     }
     const style = style_rule._style orelse return false;
-    const folded = extractDeclared(Declarations, style, self.frame);
-    const lazy = try self.extractLazyDeclarations(style);
+    const block = style.asCSSStyleDeclaration().declarationBlock();
+    const folded = extractDeclared(Declarations, block, self.frame);
+    const lazy = try self.extractLazyDeclarations(block);
 
     // A custom rule holds selector_text until the property is looked up, but it
     // doesn't need a copy: setSelectorText allocates the replacement from the
@@ -1984,12 +1985,12 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
 /// the declaration, and setProperty / removeProperty free them without going
 /// through sheetModified(). We'd be left reading freed memory rather than
 /// something merely stale.
-fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !LazyDeclarations {
+fn extractLazyDeclarations(self: *StyleManager, block: *const DeclarationBlock) !LazyDeclarations {
     const arena = self.arena.allocator();
 
     var declared: std.ArrayList(LazyDeclaration) = .empty;
     var lazy_animation: LazyAnimation = .{};
-    var it = style.asCSSStyleDeclaration().iterator(self.frame);
+    var it = block.iterator(&self.frame.page.css_custom_names);
     while (it.next()) |declaration| {
         if (isLazy(declaration.id)) {
             try declared.append(arena, .{
@@ -2113,12 +2114,12 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
     return best_key;
 }
 
-/// Extracts the tracked properties from a style declaration. The object holds
+/// Extracts the tracked properties from a declaration block. The block holds
 /// one entry per name in first-declared order, so folding it in order gives a
 /// shorthand and its longhands the same precedence as the source text.
-fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties, frame: *const Frame) Slots(Declared) {
+fn extractDeclared(comptime Declared: type, block: *const DeclarationBlock, frame: *const Frame) Slots(Declared) {
     var slots: Slots(Declared) = .{};
-    var it = style.asCSSStyleDeclaration().iterator(frame);
+    var it = block.iterator(&frame.page.css_custom_names);
     while (it.next()) |declaration| {
         slots.apply(declaration.id, declaration.value, declaration.important);
     }
@@ -3286,7 +3287,7 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
         return .{};
     }
     if (el.existingStyle(frame)) |style| {
-        return extractDeclared(Declared, style, frame);
+        return extractDeclared(Declared, style.asCSSStyleDeclaration().declarationBlock(), frame);
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
     // Without a sink nothing allocates
@@ -3594,7 +3595,7 @@ pub fn animation(self: *StyleManager, el: *Element) Animation {
     // names aliased, and a shorthand dropping the longhands before it.
     var inline_declared: LazyAnimation = .{};
     if (el.inlineStyle(self.frame)) |style| {
-        var it = style.asCSSStyleDeclaration().iterator(self.frame);
+        var it = style.asCSSStyleDeclaration().declarationBlock().iterator(&self.frame.page.css_custom_names);
         while (it.next()) |declaration| {
             const animation_property = Animation.Property.fromId(declaration.id) orelse continue;
             const value = declaration.value;
@@ -4270,7 +4271,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         try std.testing.expectEqual(expected[i].flow, inlineDeclared(Flow.Declared, el, frame).props(.any));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
-        const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame), frame).props(.any);
+        const materialized = extractDeclared(Declarations, (try el.getOrCreateStyle(frame)).asCSSStyleDeclaration().declarationBlock(), frame).props(.any);
         try std.testing.expectEqual(expected[i], materialized);
         i += 1;
     }
