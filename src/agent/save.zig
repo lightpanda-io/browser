@@ -108,6 +108,24 @@ pub fn stripCodeFence(text: []const u8) []const u8 {
     return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
 }
 
+/// The first fenced block in a reply that wraps the script in prose, as a
+/// model answering after tool calls does; `stripCodeFence` when there is none.
+pub fn extractCodeBlock(text: []const u8) []const u8 {
+    const open = std.mem.find(u8, text, "```") orelse return stripCodeFence(text);
+    const fenced = text[open..];
+    const first_nl = std.mem.findScalar(u8, fenced, '\n') orelse return stripCodeFence(text);
+    const body = fenced[first_nl + 1 ..];
+    const close = std.mem.find(u8, body, "\n```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
+    return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
+}
+
+test "extractCodeBlock: the script out of a prose reply" {
+    try std.testing.expectEqualStrings("return 1;", extractCodeBlock("The selector was wrong.\n\n```js\nreturn 1;\n```\nIt now returns data."));
+    try std.testing.expectEqualStrings("a();\nb();", extractCodeBlock("```js\na();\nb();\n```\n\n```js\nc();\n```"));
+    try std.testing.expectEqualStrings("return 1;", extractCodeBlock("return 1;"));
+    try std.testing.expectEqualStrings("return 1;", extractCodeBlock("Fixed:\n```\nreturn 1;"));
+}
+
 test "parseCommand: filename only" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();

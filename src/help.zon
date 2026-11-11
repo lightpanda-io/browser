@@ -352,7 +352,8 @@
     \\          A script that only reads pages (no click, press, evaluate,
     \\          login, acceptCookies, callPageTool, screenshot or download) is
     \\          replayed once first; if it fails or returns nothing, the model
-    \\          fixes it against the page the replay loaded. Requires --task.
+    \\          fixes it against the script's first page. When the replay
+    \\          returns data, it is printed on stdout. Requires --task.
     \\  --search-engine <ENGINE>
     \\          Which web search API the `search` tool uses. Default: auto,
     \\          which takes the first with a key in the environment, in the
