@@ -287,6 +287,66 @@
 }
 </script>
 
+<script id="tablesStackRowsOfCells">
+{
+  // Rows stack like blocks and fill their table; cells sit side by side and
+  // the row is as tall as its tallest cell. width and height attributes size
+  // the table and its cells, and any CSS size beats them.
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  wrap.innerHTML = `
+    <table id="tb-table" width="50%">
+      <tr id="tb-r1"><td id="tb-a" width="40">a</td><td id="tb-b">b</td></tr>
+      <tr id="tb-r2"><td id="tb-c" height="30"></td><td id="tb-d" width="0" style="width: 60px"></td></tr>
+    </table>`;
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  const table = rect('tb-table');
+  const r1 = rect('tb-r1');
+  const r2 = rect('tb-r2');
+  testing.expectEqual(300, table.width);
+  testing.expectEqual(300, r1.width);
+  testing.expectEqual(table.left, r1.left);
+  testing.expectEqual(r1.left, r2.left);
+  testing.expectEqual(r1.top + r1.height, r2.top);
+  testing.expectEqual(r1.height + 30, table.height);
+
+  testing.expectEqual(40, rect('tb-a').width);
+  testing.expectEqual(rect('tb-a').left + 40, rect('tb-b').left);
+  testing.expectEqual(r1.top, rect('tb-b').top);
+  testing.expectEqual(r1.height, rect('tb-b').height);
+
+  testing.expectEqual(30, r2.height);
+  testing.expectEqual(60, rect('tb-d').width);
+  // The cells' widths aren't shared across rows (no columns yet)
+  testing.expectEqual(rect('tb-c').left + rect('tb-c').width, rect('tb-d').left);
+
+  // A CSS width replaces the attribute; removing it brings the attribute back
+  $('#tb-table').style.width = '200px';
+  testing.expectEqual(200, rect('tb-table').width);
+  $('#tb-table').style.width = '';
+  $('#tb-table').setAttribute('width', '120');
+  testing.expectEqual(120, rect('tb-table').width);
+
+  // The same boxes from display values
+  wrap.innerHTML = `
+    <div style="display: table-row-group">
+      <div id="tb-row" style="display: table-row">
+        <div id="tb-e" style="display: table-cell; width: 50px; height: 25px"></div>
+        <div id="tb-f" style="display: table-cell"></div>
+      </div>
+      <div id="tb-next" style="display: table-row"></div>
+    </div>`;
+  testing.expectEqual(600, rect('tb-row').width);
+  testing.expectEqual(rect('tb-e').left + 50, rect('tb-f').left);
+  testing.expectEqual(25, rect('tb-row').height);
+  testing.expectEqual(rect('tb-row').top + 25, rect('tb-next').top);
+
+  wrap.remove();
+}
+</script>
+
 <script id="positionedBoxes">
 {
   const wrap = document.createElement('div');
