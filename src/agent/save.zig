@@ -99,7 +99,7 @@ pub fn fileExists(path: []const u8) !bool {
 
 /// Strip a surrounding ```` ```lang … ``` ```` markdown fence if the model
 /// wrapped its output in one despite being told not to.
-pub fn stripCodeFence(text: []const u8) []const u8 {
+fn stripCodeFence(text: []const u8) []const u8 {
     const t = std.mem.trim(u8, text, &std.ascii.whitespace);
     if (!std.mem.startsWith(u8, t, "```")) return t;
     const first_nl = std.mem.findScalar(u8, t, '\n') orelse return t;
@@ -108,15 +108,14 @@ pub fn stripCodeFence(text: []const u8) []const u8 {
     return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
 }
 
-/// The first fenced block in a reply that wraps the script in prose, as a
-/// model answering after tool calls does; `stripCodeFence` when there is none.
+/// The first fenced block of a reply, which may wrap the script in prose;
+/// `stripCodeFence` when there is no fence.
 pub fn extractCodeBlock(text: []const u8) []const u8 {
     const open = std.mem.find(u8, text, "```") orelse return stripCodeFence(text);
     const fenced = text[open..];
-    const first_nl = std.mem.findScalar(u8, fenced, '\n') orelse return stripCodeFence(text);
-    const body = fenced[first_nl + 1 ..];
-    const close = std.mem.find(u8, body, "\n```") orelse return std.mem.trim(u8, body, &std.ascii.whitespace);
-    return std.mem.trim(u8, body[0..close], &std.ascii.whitespace);
+    const first_nl = std.mem.findScalar(u8, fenced, '\n') orelse return stripCodeFence(fenced);
+    const close = std.mem.find(u8, fenced[first_nl..], "\n```") orelse return stripCodeFence(fenced);
+    return stripCodeFence(fenced[0 .. first_nl + close + "\n```".len]);
 }
 
 test "extractCodeBlock: the script out of a prose reply" {

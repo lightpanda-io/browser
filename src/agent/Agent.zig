@@ -1437,7 +1437,6 @@ fn saveOneShot(self: *Agent) void {
     self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?, .replay);
 }
 
-/// Whether a synthesized script is replayed once before it is written.
 const SaveCheck = enum { none, replay };
 
 /// LLM synthesis + write for an already-resolved destination. Shared by the
@@ -1511,18 +1510,14 @@ const Synthesis = union(enum) {
 };
 
 const SynthesisMode = enum {
-    /// One reply, no tools: the script comes from the session alone.
     blind,
-    /// A few turns with the read-only tools on the current page, to check
-    /// selectors against the page as a replay sees it.
+    /// A few turns with the read-only tools, to check selectors on the page.
     inspect,
 };
 
-/// Bounds the repair turn's page reads.
 const max_repair_turns = 8;
 
-/// One synthesis over the conversation as it stands. The model's reply stays
-/// in the conversation, so a repair turn can follow it.
+/// The model's reply stays in the conversation, so a repair turn can follow it.
 fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode) Synthesis {
     const inspect = mode == .inspect;
     self.save_repair = inspect;
@@ -1560,7 +1555,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode)
 
     if (result.cancelled) return .cancelled;
 
-    // `stripCodeFence` accepts an unclosed block, so a truncated script is
+    // `extractCodeBlock` accepts an unclosed block, so a truncated script is
     // indistinguishable from a complete one once it is on disk.
     if (result.finish_reason == .max_tokens) return .{ .failed = "the model ran out of output tokens mid-script" };
 
@@ -1568,57 +1563,57 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode)
 
     // `result.text` lives in the conversation arena, freed by the rollback;
     // copy into the command arena first (scrubbing may return its input as-is).
-    // After tool calls the model tends to explain its fix before the script.
-    const code = if (inspect) save.extractCodeBlock(raw) else save.stripCodeFence(raw);
+    // A model may explain itself before the script, after tool calls above all.
+    const code = save.extractCodeBlock(raw);
     const owned = arena.dupe(u8, code) catch return .{ .failed = "out of memory" };
     const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return .{ .failed = "out of memory" };
     return .{ .script = script };
 }
 
-/// Caps the replay output handed back to the model.
 const max_replay_feedback_bytes = 4096;
 const replay_timeout_ms = 60_000;
 
-/// Replays a synthesized script once with no model and, when the replay fails
-/// or returns nothing, gives the model one turn to fix it. The session's own
-/// run found an answer, so an empty replay means the script reads the page
-/// wrong: typically a selector or a filter written for a page shape the fresh
-/// load doesn't serve. Scripts that act on a page are written unchecked, since
-/// replaying them would repeat the act. Null when the user cancelled.
+/// Replays a synthesized script once with no model; when the replay fails or
+/// returns nothing, the model gets one turn to fix it on the page the replay
+/// ended on. A script that acts on a page is written unchecked rather than
+/// replayed. Null when the user cancelled.
 fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?Checked {
     const unchecked: Checked = .{ .script = script, .result = null };
-    if (!replaySafe(script)) return unchecked;
+    if (!readsOnly(script)) return unchecked;
+    const session = self.ts.session;
+    const before = browser_tools.pageIds(arena, session) catch return unchecked;
+    defer browser_tools.closePagesOpenedSince(arena, session, &self.ts.registry, before);
+
     const problem = switch (self.replayScript(arena, script)) {
         .ok => |result| return .{ .script = script, .result = result },
+        .unchecked => return unchecked,
         .cancelled => return null,
         .problem => |p| p,
     };
     self.terminal.printWarning("the script's replay {s}; asking the model to fix it", .{firstLine(problem)});
 
-    // The replay's pages close with it, so the model would otherwise read
-    // whatever the session last had open.
-    const start_url = firstGotoUrl(script);
-    const loaded = if (start_url) |url| self.loadForRepair(arena, url) else false;
-    const page_note: []const u8 = if (loaded)
-        arena.print("{s}, the script's first page, is loaded in the browser now with waitUntil: \"networkidle\", so content its scripts render after load is there; make the script's goto wait as long", .{start_url.?}) catch return unchecked
+    const last_page = browser_tools.lastPageOpenedSince(session, before);
+    const page_note: []const u8 = if (last_page != null)
+        "The page the replay ended on is open, as it is now. It kept loading after the script read it, so if it holds what the script missed, make the script wait for it (goto with waitUntil: \"networkidle\", or waitForSelector)"
     else
-        "The browser holds the page this session last loaded";
-
-    const feedback = arena.print(
+        "The replay opened no page; the browser holds the page this session last loaded";
+    const feedback = self.conversation.arena.allocator().print(
         \\I replayed that script once, on a fresh load and with no model, and it {s}
         \\
-        \\The run above found the answer, so the script reads the page wrong. {s}:
-        \\read it with the read-only tools and try your extract schema on it before
+        \\The run above found the answer, so the script reads the page wrong. {s}.
+        \\Read it with the read-only tools and try your extract schema on it before
         \\you answer. Check each selector and each filter against what the page
         \\actually holds, not against what it usually looks like. Then reply with the
         \\corrected script in full, with the same output rules: the script alone, no
         \\explanation.
     , .{ problem, page_note }) catch return unchecked;
-    const ma = self.conversation.arena.allocator();
-    const content = ma.dupe(u8, feedback) catch return unchecked;
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = content }) catch return unchecked;
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = feedback }) catch return unchecked;
 
-    const fixed = switch (self.synthesizeScript(arena, .inspect)) {
+    // The repair's tool calls read the replay's page, not `pages[0]`.
+    session.setToolFrameOverride(last_page);
+    const repair = self.synthesizeScript(arena, .inspect);
+    session.setToolFrameOverride(null);
+    const fixed = switch (repair) {
         .script => |s| s,
         .cancelled => return null,
         .failed => |reason| {
@@ -1629,9 +1624,10 @@ fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?
     switch (self.replayScript(arena, fixed)) {
         .ok => |result| return .{ .script = fixed, .result = result },
         .cancelled => return null,
+        .unchecked => return .{ .script = fixed, .result = null },
         .problem => |p| {
-            self.terminal.printWarning("the fixed script's replay {s}", .{firstLine(p)});
-            return .{ .script = fixed, .result = null };
+            self.terminal.printWarning("the fixed script's replay {s}; keeping the first script", .{firstLine(p)});
+            return unchecked;
         },
     }
 }
@@ -1643,39 +1639,10 @@ const Checked = struct {
     result: ?[]const u8,
 };
 
-/// Navigates the session to `url` as a script would, so the repair turn reads
-/// that page. False when the load fails.
-fn loadForRepair(self: *Agent, arena: std.mem.Allocator, url: []const u8) bool {
-    var args: std.json.ObjectMap = .empty;
-    args.put(arena, "url", .{ .string = url }) catch return false;
-    args.put(arena, "waitUntil", .{ .string = "networkidle" }) catch return false;
-    const result = browser_tools.call(arena, self.ts.session, &self.ts.registry, "goto", .{ .object = args }, .{ .source = .script }) catch return false;
-    return !result.is_error;
-}
-
-/// The literal URL of a script's first `goto`, in either call shape:
-/// `goto("…")` or `goto({ url: "…" })`. Null for a computed or `$LP_*` one.
-fn firstGotoUrl(script: []const u8) ?[]const u8 {
-    const call = ".goto(";
-    const at = std.mem.find(u8, script, call) orelse return null;
-    const rest = script[at + call.len ..];
-    const window = rest[0..@min(rest.len, 200)];
-    const open = std.mem.findAny(u8, window, "\"'`") orelse return null;
-    const quoted = window[open + 1 ..];
-    const close = std.mem.findScalar(u8, quoted, window[open]) orelse return null;
-    const url = quoted[0..close];
-    const is_http = std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://");
-    return if (is_http) url else null;
-}
-
-fn firstLine(text: []const u8) []const u8 {
-    return text[0 .. std.mem.findScalar(u8, text, '\n') orelse text.len];
-}
-
-/// Whether replaying the script can't repeat an act: it calls no page method
-/// that `BrowserTool.replaySafe` rules out. A plain substring match, so a
-/// mention in a comment skips the check too; that errs toward not replaying.
-fn replaySafe(script: []const u8) bool {
+/// Whether the script calls no tool `BrowserTool.replaySafe` rules out. A
+/// script that fails before its first act would otherwise be "repaired"; the
+/// read-only Runtime still refuses any act this text match misses.
+fn readsOnly(script: []const u8) bool {
     inline for (comptime std.enums.values(BrowserTool)) |tool| {
         if (comptime !tool.replaySafe()) {
             if (std.mem.find(u8, script, "." ++ @tagName(tool) ++ "(") != null) return false;
@@ -1684,9 +1651,15 @@ fn replaySafe(script: []const u8) bool {
     return true;
 }
 
+fn firstLine(text: []const u8) []const u8 {
+    return text[0 .. std.mem.findScalar(u8, text, '\n') orelse text.len];
+}
+
 const Replay = union(enum) {
     /// The returned value, empty when the script returns nothing.
     ok: []const u8,
+    /// The script acts on a page, or the replay couldn't start.
+    unchecked,
     cancelled,
     /// Completes "it …" in a sentence, then the script's output.
     problem: []const u8,
@@ -1695,59 +1668,33 @@ const Replay = union(enum) {
 fn replayScript(self: *Agent, arena: std.mem.Allocator, script: []const u8) Replay {
     const runtime = self.beginScriptRuntime() catch |err| {
         self.terminal.printWarning("can't replay the script ({s}); saving it unchecked", .{@errorName(err)});
-        return .{ .ok = "" };
+        return .unchecked;
     };
     defer self.endScriptRuntime(runtime);
 
-    // Keeps the replay's output off stdout, which `--save` leaves to the caller.
-    var console: std.Io.Writer.Allocating = .init(arena);
-    var capped: lp.LimitedWriter = .init(&console.writer, max_replay_feedback_bytes);
-    runtime.console_sink = &capped.writer;
-    var returned: std.Io.Writer.Allocating = .init(arena);
-    runtime.result_sink = &returned.writer;
     runtime.timeout_ms = replay_timeout_ms;
+    runtime.read_only = true;
 
     self.terminal.beginTool("replay", "saved script");
-    const result = runtime.runSource(script, "replay");
+    // Captured, which keeps the replay's output off stdout: `--save` leaves it to the caller.
+    const captured = runtime.runCaptured(arena, script, "replay", max_replay_feedback_bytes);
     self.terminal.endTool();
     if (self.cancel_requested.load(.acquire)) return .cancelled;
+    if (runtime.refused != null) return .unchecked;
 
-    const message = result catch |err| return .{ .problem = arena.print("failed: {s}", .{@errorName(err)}) catch "failed" };
-    const output = std.mem.trim(u8, returned.written(), " \t\r\n");
-    const logged = std.mem.trim(u8, console.written(), " \t\r\n");
-    const verdict: []const u8 = if (runtime.timed_out)
+    const done = captured catch |err| return .{ .problem = arena.print("failed: {s}", .{@errorName(err)}) catch "failed" };
+    const output = std.mem.trim(u8, done.returned, &std.ascii.whitespace);
+    const logged = std.mem.trim(u8, done.console, &std.ascii.whitespace);
+    const verdict: []const u8 = if (done.timed_out)
         arena.print("timed out after {d} s.", .{replay_timeout_ms / 1000}) catch "timed out."
-    else if (message) |m|
+    else if (done.message) |m|
         arena.print("failed: {s}", .{m}) catch "failed."
-    else if (isEmptyResult(arena, output))
-        arena.print("returned an empty result: {s}", .{if (output.len == 0) "\"\"" else output[0..@min(output.len, max_replay_feedback_bytes)]}) catch "returned an empty result."
+    else if (browser_tools.isEmptyJson(arena, output))
+        arena.print("returned an empty result: {s}", .{output[0..@min(output.len, max_replay_feedback_bytes)]}) catch "returned an empty result."
     else
         return .{ .ok = output };
     if (logged.len == 0) return .{ .problem = verdict };
     return .{ .problem = arena.print("{s}\n\nIts console output:\n{s}", .{ verdict, logged }) catch verdict };
-}
-
-/// A returned value with no data in it: `null`, `""`, or arrays and objects
-/// made only of those, like `[]` or `[{"title": null}]`. A script that returns
-/// nothing (`undefined`) prints nothing and is left alone: it may only act.
-fn isEmptyResult(arena: std.mem.Allocator, output: []const u8) bool {
-    if (output.len == 0) return false;
-    const value = std.json.parseFromSliceLeaky(std.json.Value, arena, output, .{}) catch return false;
-    return isEmptyValue(value);
-}
-
-fn isEmptyValue(value: std.json.Value) bool {
-    return switch (value) {
-        .null => true,
-        .string => |s| s.len == 0,
-        .array => |a| for (a.items) |item| {
-            if (!isEmptyValue(item)) break false;
-        } else true,
-        .object => |o| for (o.values()) |item| {
-            if (!isEmptyValue(item)) break false;
-        } else true,
-        .bool, .integer, .float, .number_string => false,
-    };
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -2227,22 +2174,22 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
         // When the LLM tries multiple `extract` schemas in one turn, only the
         // last one that found data is the answer; earlier probes are noise.
         // With none that found data, the last successful one is kept, marked.
-        var last_extract_idx: ?usize = null;
+        var last_extract: ?usize = null;
         var last_with_data: ?usize = null;
         for (result.tool_calls_made, 0..) |tc, i| {
             const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
             if (tc.is_error or t != .extract) continue;
-            last_extract_idx = i;
+            last_extract = i;
             const no_data = i < self.save_calls.items.len and self.save_calls.items[i].no_data;
             if (!no_data) last_with_data = i;
         }
-        if (last_with_data) |i| last_extract_idx = i;
+        const answer_extract = last_with_data orelse last_extract;
 
         var recorded_any = false;
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
             const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
-            if (last_extract_idx) |idx| {
+            if (answer_extract) |idx| {
                 if (tool == .extract and idx != i) continue;
             }
             const ca = self.conversation.arena.allocator();
@@ -2433,19 +2380,29 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
         const ca = self.conversation.arena.allocator();
         const kept = if (saved.selector) |sel| ca.dupe(u8, sel) catch null else null;
         const kept_replay = if (saved.replay_args) |json| ca.dupe(u8, json) catch null else null;
-        const no_data = !outcome.is_error and std.mem.eql(u8, tool_name, "extract") and isEmptyResult(allocator, std.mem.trim(u8, outcome.content, " \t\r\n"));
         self.save_calls.append(self.allocator, .{
             .selector = kept,
             .replay_args = kept_replay,
             .navigated = saved.navigated,
             .args = saved.args,
-            .no_data = no_data,
+            .no_data = saved.no_data,
         }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
     return outcome;
+}
+
+const ReadOnlyRefusal = enum { other_tool, navigation };
+
+/// Why `tool` can't run in a turn limited to reading the current page, as a
+/// prompt request or a `--save` repair is; null when it can.
+fn readOnlyRefusal(tool: ?BrowserTool, args: ?std.json.Value) ?ReadOnlyRefusal {
+    const t = tool orelse return .other_tool;
+    if (t.group() != .reading) return .other_tool;
+    if (t.navigatesToUrl() and urlArg(args) != null) return .navigation;
+    return null;
 }
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
@@ -2461,21 +2418,18 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
                 args = try pinArgs(self.conversation.arena.allocator(), args, t.cmd.args);
                 saved.args = args;
             }
-        } else if (tool == null or tool.?.group() != .reading) {
-            return .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.cmd.tool)}) catch "Error: tool not available", .is_error = true };
-        } else if (tool.?.navigatesToUrl() and urlArg(args) != null) {
-            return .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true };
-        }
+        } else if (readOnlyRefusal(tool, args)) |refusal| return switch (refusal) {
+            .other_tool => .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.cmd.tool)}) catch "Error: tool not available", .is_error = true },
+            .navigation => .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true },
+        };
     }
 
     if (self.save_repair) {
         const tool = std.meta.stringToEnum(BrowserTool, tool_name);
-        if (tool == null or (tool.?.group() != .reading and tool.? != .extract)) {
-            return .{ .content = "Error: only the read-only tools and extract are available while fixing the script.", .is_error = true };
-        }
-        if (tool.?.navigatesToUrl() and urlArg(args) != null) {
-            return .{ .content = "Error: read the page that is loaded; don't navigate.", .is_error = true };
-        }
+        if (tool != .extract) if (readOnlyRefusal(tool, args)) |refusal| return switch (refusal) {
+            .other_tool => .{ .content = "Error: only the read-only tools and extract are available while fixing the script.", .is_error = true },
+            .navigation => .{ .content = "Error: read the page that is open; don't navigate.", .is_error = true },
+        };
     }
 
     const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, args, .{
@@ -2489,6 +2443,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     saved.selector = result.selector;
     saved.replay_args = result.replay_args;
     saved.navigated = result.navigated;
+    saved.no_data = result.no_data;
     if (is_target and !result.is_error) {
         const t = &self.prompt_target.?;
         t.done = true;
@@ -2740,35 +2695,12 @@ test "replayArgs: a backendNodeId still becomes the resolved selector" {
     try std.testing.expectEqualStrings("#main", rewritten.object.get("selector").?.string);
 }
 
-test "isEmptyResult: no data in the returned value" {
-    const arena = std.testing.allocator;
-    var state: std.heap.ArenaAllocator = .init(arena);
-    defer state.deinit();
-    const a = state.allocator();
-    for ([_][]const u8{ "[]", "{}", "null", "\"\"", "[{\"title\":null,\"price\":\"\"}]", "{\"items\":[]}" }) |empty| {
-        try std.testing.expect(isEmptyResult(a, empty));
-    }
-    // No `return` prints nothing; plain text and zero are data.
-    for ([_][]const u8{ "", "0", "false", "Bridgestone", "[{\"price\":275}]", "{\"items\":[null,\"x\"]}" }) |data| {
-        try std.testing.expect(!isEmptyResult(a, data));
-    }
-}
-
-test "replaySafe: scripts that act on a page are not replayed" {
-    try std.testing.expect(replaySafe(
+test "readsOnly: scripts that act on a page are not replayed" {
+    try std.testing.expect(readsOnly(
         \\const page = new Page();
         \\await page.goto("https://example.com");
         \\return page.extract({ title: "h1" });
     ));
-    try std.testing.expect(!replaySafe("page.fill(\"#q\", \"x\");\npage.click(\"button\");"));
-    try std.testing.expect(!replaySafe("return page.evaluate(\"document.title\");"));
-    try std.testing.expect(!replaySafe("page.press(\"Enter\");"));
-}
-
-test "firstGotoUrl: both call shapes, literal URLs only" {
-    try std.testing.expectEqualStrings("https://a.test/x?q=1", firstGotoUrl("const page = new Page();\nawait page.goto(\"https://a.test/x?q=1\", { waitUntil: \"networkidle\" });").?);
-    try std.testing.expectEqualStrings("https://a.test/", firstGotoUrl("await page.goto({ url: 'https://a.test/', waitUntil: 'load' });").?);
-    try std.testing.expect(firstGotoUrl("await page.goto(base + \"/x\");") == null);
-    try std.testing.expect(firstGotoUrl("await page.goto(\"$LP_BASE/x\");") == null);
-    try std.testing.expect(firstGotoUrl("return 1;") == null);
+    try std.testing.expect(!readsOnly("page.fill(\"#q\", \"x\");\npage.click(\"button\");"));
+    try std.testing.expect(!readsOnly("return page.evaluate(\"document.title\");"));
 }
