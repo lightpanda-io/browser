@@ -2191,7 +2191,8 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
         }
         return .fill;
     }
-    if (vis.box != .block_level or el.getTag().isReplacedOrControl() or flow.floated) {
+    // A row fills its table; the table and its cells shrink to their content
+    if ((vis.box != .block_level and vis.box != .table_row) or el.getTag().isReplacedOrControl() or flow.floated) {
         return .shrink;
     }
     const parent = self.boxParent(el) orelse return .fill;
@@ -2353,21 +2354,32 @@ fn plainInline(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(parent).display != .flex and self.visibilityProps(parent).display != .grid;
 }
 
-/// The children lay out side by side: a flex row or a grid. Elsewhere block
-/// children stack and only inline-level ones share a line.
+/// The children lay out side by side: a flex row, a grid or a table row.
+/// Elsewhere block children stack and only inline-level ones share a line.
 pub fn laysOutInRow(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     const vis = self.visibilityProps(el);
-    return vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+    return vis.box == .table_row or vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+}
+
+/// An in-flow table cell: it sits beside its sibling cells.
+pub fn isTableCell(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    if (self.visibilityProps(el).box != .table_cell) {
+        return false;
+    }
+    const flow = self.flowProps(el);
+    return flow.position.outOfFlow() == false and flow.floated == false;
 }
 
 pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     switch (self.visibilityProps(el).box) {
-        .block_level, .table => {},
-        .inline_level, .atomic_inline, .contents => return false,
+        .block_level, .table, .table_row => {},
+        .inline_level, .atomic_inline, .contents, .table_cell => return false,
     }
     const flow = self.flowProps(el);
     return flow.position.outOfFlow() == false and flow.floated == false;
@@ -3343,6 +3355,11 @@ const Box = enum(u3) {
     atomic_inline,
     contents,
     table,
+    // Stacks like a block, lays its cells out side by side
+    table_row,
+    // Sits beside its siblings, like in an anonymous row when its parent
+    // isn't one
+    table_cell,
 
     fn parse(value: []const u8) ?Box {
         const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
@@ -3352,6 +3369,18 @@ const Box = enum(u3) {
 
         if (std.ascii.eqlIgnoreCase(trimmed, "table")) {
             return .table;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "table-row")) {
+            return .table_row;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "table-cell")) {
+            return .table_cell;
+        }
+        // Row groups and captions stack their children like a block
+        inline for (.{ "table-row-group", "table-header-group", "table-footer-group", "table-caption" }) |keyword| {
+            if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
+                return .block_level;
+            }
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed, "inline") or std.ascii.eqlIgnoreCase(trimmed, "inline flow")) {
@@ -3377,8 +3406,11 @@ const Box = enum(u3) {
     fn uaDefault(tag: Tag) Box {
         return switch (tag) {
             .table => .table,
+            .tr => .table_row,
+            .td, .th => .table_cell,
             .slot => .contents,
             .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
+            .tbody, .thead, .tfoot, .caption => .block_level,
             else => if (tag.isBlock()) .block_level else .inline_level,
         };
     }
@@ -4008,6 +4040,53 @@ const Geometry = struct {
                 std.ascii.eqlIgnoreCase(value, "none");
         }
     };
+
+    // Presentational width and height attributes (HTML Rendering §15.3.10
+    // "Tables"): author-level hints that any declaration beats.
+    pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
+        const tag = el.getTag();
+        // td and th ignore a zero height; table and tr don't
+        const zero_height = switch (tag) {
+            .table, .tr => true,
+            .td, .th => false,
+            else => return,
+        };
+        if (priorities.get(.width) == 0 and tag != .tr) {
+            if (el.getAttributeSafe(comptime .wrap("width"))) |attr| {
+                if (parseDimension(attr, false)) |length| {
+                    p.width = length;
+                }
+            }
+        }
+        if (priorities.get(.height) == 0) {
+            if (el.getAttributeSafe(comptime .wrap("height"))) |attr| {
+                if (parseDimension(attr, zero_height)) |length| {
+                    p.height = length;
+                }
+            }
+        }
+    }
+
+    // HTML "rules for parsing dimension values": leading digits, then a `%`
+    // for a percentage; anything after is ignored.
+    fn parseDimension(text: []const u8, allow_zero: bool) ?Length {
+        const trimmed = std.mem.trimStart(u8, text, &std.ascii.whitespace);
+        var end: usize = 0;
+        while (end < trimmed.len and std.ascii.isDigit(trimmed[end])) : (end += 1) {}
+        if (end == 0) {
+            return null;
+        }
+        if (end < trimmed.len and trimmed[end] == '.') {
+            end += 1;
+            while (end < trimmed.len and std.ascii.isDigit(trimmed[end])) : (end += 1) {}
+        }
+        const value = std.fmt.parseFloat(f32, std.mem.trimEnd(u8, trimmed[0..end], ".")) catch return null;
+        if (value == 0 and allow_zero == false) {
+            return null;
+        }
+        const percent = end < trimmed.len and trimmed[end] == '%';
+        return .{ .value = value, .unit = if (percent) .percent else .px };
+    }
 
     const Computed = packed struct(u357) {
         overflow_x_scrolls: bool = false,

@@ -2022,7 +2022,6 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     var x: f64 = 0.0;
     var current = self.asNode();
     const owner = self.ownerFrame(frame) orelse return 0;
-    const style_manager = &owner._style_manager;
 
     while (true) {
         if (current.is(Element)) |el| {
@@ -2039,14 +2038,15 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
             x += layout.relativeShift(el, .horizontal, owner);
         }
         const parent = current.flatParent(frame) orelse return x;
-        x += lineOffset(current, parent, style_manager, frame);
+        x += lineOffset(current, parent, owner, frame);
         current = parent;
     }
 }
 
-fn lineOffset(node: *Node, parent: *Node, style_manager: *StyleManager, frame: *Frame) f64 {
+fn lineOffset(node: *Node, parent: *Node, owner: *Frame, frame: *Frame) f64 {
     const el = node.is(Element) orelse return 0;
-    const in_row = style_manager.isFlexRowItem(el);
+    const style_manager = &owner._style_manager;
+    const in_row = style_manager.isFlexRowItem(el) or style_manager.isTableCell(el);
     if (in_row == false and style_manager.isBlockLevel(el)) {
         return 0;
     }
@@ -2061,6 +2061,14 @@ fn lineOffset(node: *Node, parent: *Node, style_manager: *StyleManager, frame: *
         }
         if (in_row == false and style_manager.isBlockLevel(sibling)) {
             x = 0;
+            continue;
+        }
+        if (in_row) {
+            // A row's items are sized by the layout; out-of-flow boxes take
+            // no room in it
+            if (style_manager.isOutOfFlow(sibling) == false) {
+                x += layout.boxWidth(sibling, owner);
+            }
             continue;
         }
         x += sibling.getElementAxis(frame, .width).value;
