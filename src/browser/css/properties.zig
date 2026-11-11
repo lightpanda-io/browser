@@ -320,9 +320,8 @@ const common_values = std.StaticStringMap(void).initComptime(.{
 
 /// The longhands a computed style lists, as CSS.getComputedStyleForNode
 /// returns them, sorted by name.
-pub const computed_names: []const []const u8 = blk: {
+pub const computed_ids: []const Id = blk: {
     @setEvalBranchQuota(1_000_000);
-    const keys = properties.keys();
     const values = properties.values();
 
     var count: usize = 0;
@@ -330,20 +329,20 @@ pub const computed_names: []const []const u8 = blk: {
         if (v.initial != null and v.computed) count += 1;
     }
 
-    var names: [count][]const u8 = undefined;
+    var ids: [count]Id = undefined;
     var i: usize = 0;
-    for (keys, values) |k, v| {
+    for (values, 0..) |v, index| {
         if (v.initial != null and v.computed) {
-            names[i] = k;
+            ids[i] = @fromBackingInt(index);
             i += 1;
         }
     }
-    std.mem.sort([]const u8, &names, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
+    std.mem.sort(Id, &ids, {}, struct {
+        fn lessThan(_: void, a: Id, b: Id) bool {
+            return std.mem.lessThan(u8, knownName(a).?, knownName(b).?);
         }
     }.lessThan);
-    const final = names;
+    const final = ids;
     break :blk &final;
 };
 
