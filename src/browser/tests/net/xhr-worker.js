@@ -45,21 +45,18 @@ self.onmessage = function(e) {
       return;
     }
 
-    if (cmd.kind === 'document_unsupported') {
+    if (cmd.kind === 'document_ignored') {
       const req = new XMLHttpRequest();
+      // Workers have no DOM: setting "document" is ignored.
       req.responseType = 'document';
+      const response_type = req.responseType;
       req.onload = () => {
-        let threw = false;
-        let err = null;
-        try {
-          // Reading .response in worker context with responseType=document
-          // must error: workers have no DOM document.
-          void req.response;
-        } catch (e) {
-          threw = true;
-          err = String(e);
-        }
-        postMessage({ ok: true, status: req.status, threw, err });
+        postMessage({
+          ok: true,
+          status: req.status,
+          response_type,
+          is_text: typeof req.response === 'string' && req.response === req.responseText,
+        });
       };
       req.onerror = () => postMessage({ ok: false, err: 'xhr error', status: req.status });
       req.open('GET', 'http://127.0.0.1:9582/xhr');
