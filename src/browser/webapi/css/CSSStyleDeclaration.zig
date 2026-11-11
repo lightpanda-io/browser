@@ -1602,7 +1602,7 @@ test "CSS declarations: order, names and value storage" {
     var style = CSSStyleDeclaration{};
     defer style.clearProperties(frame);
 
-    // A parsed block is sized exactly: grown to 8, trimmed to 5.
+    // A parsed block is sized exactly: grown to 10, trimmed to 5.
     try style.setCssText("color: red; --gap: 4px; display: none; width: 123px; opacity: 0.5", frame);
     try testing.expectEqual(5, style._declarations._len);
     try testing.expectEqual(5, style._declarations._cap);

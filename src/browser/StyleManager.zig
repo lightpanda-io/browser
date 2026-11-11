@@ -141,34 +141,23 @@ fn assertOwns(self: *const StyleManager, el_: ?*const Element) void {
 pub const MAX_AT_RULE_NESTING: u8 = 32;
 
 fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet) !void {
-    if (sheet._parsed) {
-        for (sheet._store.entries()) |*entry| {
-            switch (entry._kind) {
-                .style => {
-                    _ = try self.addStoredRule(entry, entry.text());
-                    try self.addNestedStoredRules(build_arena, entry, entry.text(), 0);
-                },
-                // Re-parse the stored source so an `@media` rule inserted via
-                // `insertRule` / `replaceSync` participates in the cascade
-                // when its query matches the viewport.
-                .media => try self.applyMediaAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
-                .layer => try self.applyLayerAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
-                .keyframes => try self.addKeyframes(entry.text()),
-                else => {},
-            }
-        }
-        return;
-    }
-
-    const owner_node = sheet.getOwnerNode() orelse return;
-    if (owner_node.is(Element.Html.Style)) |style| {
-        const text = try style.asNode().getTextContentAlloc(self.arena.allocator());
-        var it = CssParser.parseStylesheet(text);
-        while (it.next()) |parsed_rule| {
-            switch (parsed_rule) {
-                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, 0, NO_LAYER),
-                .at_rule => |a| try self.applyAtRule(build_arena, a.keyword, a.text, 0, NO_LAYER, null),
-            }
+    // A <style> is parsed into its store on first use
+    try sheet.ensureParsed(self.frame);
+    for (sheet._store.entries()) |*entry| {
+        switch (entry._kind) {
+            .style => {
+                if (entry.text().len == 0) {
+                    // An invalid rule: its nested rules go with it
+                    continue;
+                }
+                _ = try self.addStoredRule(entry, entry.text());
+                try self.addNestedStoredRules(build_arena, entry, entry.text(), 0);
+            },
+            // The store keeps an at-rule as written: its body is parsed here
+            .media => try self.applyMediaAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+            .layer => try self.applyLayerAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+            .keyframes => try self.addKeyframes(entry.text()),
+            else => {},
         }
     }
 }
@@ -1955,13 +1944,8 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, index: u32) bool
     return false;
 }
 
-/// The CSSOM counterpart to foldDeclarations' lazy branches. Names within one
+/// The stored counterpart to foldDeclarations' lazy branches. Names within one
 /// declaration block are already unique, so there is nothing to dedup here.
-///
-/// Unlike the selector text, both strings have to be copied: they belong to
-/// the declaration, and setProperty / removeProperty free them without going
-/// through sheetModified(). We'd be left reading freed memory rather than
-/// something merely stale.
 fn extractLazyDeclarations(self: *StyleManager, block: *const DeclarationBlock) !LazyDeclarations {
     const arena = self.arena.allocator();
 
@@ -1970,13 +1954,17 @@ fn extractLazyDeclarations(self: *StyleManager, block: *const DeclarationBlock) 
     var it = block.iterator(&self.frame.page.css_custom_names);
     while (it.next()) |declaration| {
         if (isLazy(declaration.id)) {
+            // Not duping declaration.value is risky, but ok. Any write to the
+            // declaration which would free the value also makes the StyleManager
+            // as dirty and a rebuild would happen 100% of the time before the
+            // freed value was accessed.
             try declared.append(arena, .{
                 .id = declaration.id,
-                .value = try arena.dupe(u8, declaration.value),
+                .value = declaration.value,
                 .important = declaration.important,
             });
         } else if (Animation.Property.fromId(declaration.id)) |animation_property| {
-            lazy_animation.declare(animation_property, try arena.dupe(u8, declaration.value), declaration.important);
+            lazy_animation.declare(animation_property, declaration.value, declaration.important);
         }
     }
     return .{ .declared = declared.items, .animation = lazy_animation };
@@ -3692,28 +3680,18 @@ fn sheetsMentionKeyframes(self: *StyleManager) bool {
 
 fn searchSheetsForKeyframes(self: *StyleManager) !bool {
     const sheets = self.frame.document._style_sheets orelse return false;
-    const arena = try self.frame.getArena(.small, "StyleManager.sheetsMentionKeyframes");
-    defer arena.release();
     for (sheets._sheets.items) |sheet| {
         if (sheet._disabled) {
             continue;
         }
-        if (sheet._parsed) {
-            for (sheet._store.entries()) |*entry| {
-                if (entry._kind == .style) {
-                    continue;
-                }
-                if (std.ascii.findIgnoreCase(entry.text(), "keyframes") != null) {
-                    return true;
-                }
+        try sheet.ensureParsed(self.frame);
+        for (sheet._store.entries()) |*entry| {
+            if (entry._kind == .style) {
+                continue;
             }
-            continue;
-        }
-        const owner_node = sheet.getOwnerNode() orelse continue;
-        const style = owner_node.is(Element.Html.Style) orelse continue;
-        const text = try style.asNode().getTextContentAlloc(arena.allocator());
-        if (std.ascii.findIgnoreCase(text, "keyframes") != null) {
-            return true;
+            if (std.ascii.findIgnoreCase(entry.text(), "keyframes") != null) {
+                return true;
+            }
         }
     }
     return false;

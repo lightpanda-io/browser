@@ -107,9 +107,12 @@ pub fn append(self: *RuleStore, allocator: Allocator, entry: Entry) !void {
 
 pub fn appendSlice(self: *RuleStore, allocator: Allocator, items: []const Entry) !void {
     const len = std.math.add(u32, self._len, std.math.cast(u32, items.len) orelse return error.OutOfMemory) catch return error.OutOfMemory;
-    // Sized exactly: a parsed sheet arrives in one piece
-    if (self._cap != len) {
-        try self.setCapacity(allocator, len);
+    if (len > self._cap) {
+        // A first parse is sized exactly: a sheet arrives in one piece. One
+        // re-parsed as it grows (text appended to a <style>) grows by half, or
+        // every new size would leave the old array behind.
+        const grown = if (self._cap == 0) len else @max(len, self._cap +| self._cap / 2);
+        try self.setCapacity(allocator, grown);
     }
     @memcpy(self._entries[self._len..len], items);
     self._len = len;
@@ -318,10 +321,33 @@ test "RuleStore: insert, take and find by id" {
     try list.trim(allocator);
     try testing.expectEqual(2, list._cap);
 
-    // A parsed sheet arrives in one piece, sized exactly.
     try list.appendSlice(allocator, &.{try .init(allocator, .style, ".d", 3)});
-    try testing.expectEqual(3, list._cap);
     try testing.expectEqual(".d", list.entries()[2].text());
+}
+
+test "RuleStore: appendSlice sizing" {
+    const allocator = testing.allocator;
+    var list: RuleStore = .{ ._sheet = undefined };
+    defer {
+        for (list.entries()) |*entry| {
+            entry.deinit(allocator);
+        }
+        allocator.free(list._entries[0..list._cap]);
+    }
+
+    // A first parse is sized exactly
+    try list.appendSlice(allocator, &.{
+        try .init(allocator, .style, ".a", 0),
+        try .init(allocator, .style, ".b", 1),
+        try .init(allocator, .style, ".c", 2),
+        try .init(allocator, .style, ".d", 3),
+    });
+    try testing.expectEqual(4, list._cap);
+
+    // Growing again goes up by half
+    try list.appendSlice(allocator, &.{try .init(allocator, .style, ".e", 4)});
+    try testing.expectEqual(6, list._cap);
+    try testing.expectEqual(5, list.length());
 }
 
 test "RuleStore: Kind" {

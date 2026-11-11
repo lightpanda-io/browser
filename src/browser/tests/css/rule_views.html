@@ -161,3 +161,31 @@
   style.remove();
 }
 </script>
+
+<script id="custom_property_rewrites">
+{
+  const style = document.createElement('style');
+  style.textContent = '#target { --size: 1px; --name: "first one, kept long" }';
+  document.head.appendChild(style);
+  const target = document.getElementById('target');
+  const computed = getComputedStyle(target);
+  testing.expectEqual('1px', computed.getPropertyValue('--size'));
+  testing.expectEqual('"first one, kept long"', computed.getPropertyValue('--name'));
+
+  // The old values are freed by the write, the cascade reads the new ones.
+  const rule = style.sheet.cssRules[0];
+  rule.style.setProperty('--name', '"second"');
+  rule.style.setProperty('--size', '2px');
+  testing.expectEqual('"second"', computed.getPropertyValue('--name'));
+  testing.expectEqual('2px', computed.getPropertyValue('--size'));
+
+  rule.style.removeProperty('--name');
+  testing.expectEqual('', computed.getPropertyValue('--name'));
+
+  // And a text change parses the <style> again.
+  style.textContent = '#target { --size: 3px }';
+  testing.expectEqual('3px', computed.getPropertyValue('--size'));
+  style.remove();
+  testing.expectEqual('', computed.getPropertyValue('--size'));
+}
+</script>

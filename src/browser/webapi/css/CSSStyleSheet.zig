@@ -137,8 +137,12 @@ pub fn ensureParsed(self: *CSSStyleSheet, frame: *Frame) !void {
     }
     if (self.getOwnerNode()) |owner| {
         if (owner.is(Element.Html.Style)) |style| {
-            // Same cascade as the text StyleManager already parsed: no notify.
-            const text = try style.asNode().getTextContentAlloc(frame.local_arena);
+            // A rebuild can call us outside JS, where nothing resets local_arena
+            const scratch = try frame.getArena(.medium, "CSSStyleSheet.ensureParsed");
+            defer scratch.release();
+            const text = try style.asNode().getTextContentAlloc(scratch.allocator());
+            // No notify: until parsed, the sheet's rules aren't in a cascade.
+            // The <style> being added or its text changing made it dirty.
             try self.parseInto(text, .append, frame);
         }
     }
@@ -234,7 +238,7 @@ pub fn replaceRules(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSEr
 }
 
 /// With `.replace`, a failed parse leaves the old rules as they were.
-fn parseInto(self: *CSSStyleSheet, text: []const u8, comptime mode: enum { append, replace }, frame: *Frame) CSSError!void {
+fn parseInto(self: *CSSStyleSheet, text: []const u8, mode: enum { append, replace }, frame: *Frame) CSSError!void {
     // Collect on scratch so that we don't strand small un-releasable memory
     // as our list grows.
     const scratch = try frame.getArena(.medium, "CSSStyleSheet.parseInto");
