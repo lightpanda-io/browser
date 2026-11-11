@@ -62,9 +62,9 @@ const clickAndSettle = jev.clickAndSettle;
 const settleAndFollow = jev.settleAndFollow;
 const Frame = lp.Frame;
 
-const Questions = zenai.typesafe.Questions;
-const QuestionEntry = zenai.typesafe.QuestionEntry;
-const ChoiceEntry = zenai.typesafe.ChoiceEntry;
+const Questions = zenai.decisions.Questions;
+const QuestionEntry = zenai.decisions.QuestionEntry;
+const ChoiceEntry = zenai.decisions.ChoiceEntry;
 
 /// The question ids, which also key the answers.
 pub const wall_key = @tagName(jev.Preset.isLoginWall);
@@ -150,7 +150,7 @@ pub const Picks = struct {
 pub fn picks(
     candidates: []const choose.Candidate,
     asked: Questions,
-    response: zenai.typesafe.types.AskResponse,
+    response: zenai.decisions.types.AskResponse,
 ) choose.Error!Picks {
     var out: Picks = .{};
     if (asked.has(user_key)) {
@@ -166,7 +166,7 @@ pub fn picks(
     return out;
 }
 
-fn pickOf(candidates: []const choose.Candidate, response: zenai.typesafe.types.AskResponse, asked: Questions, key: []const u8) choose.Error!?choose.Candidate {
+fn pickOf(candidates: []const choose.Candidate, response: zenai.decisions.types.AskResponse, asked: Questions, key: []const u8) choose.Error!?choose.Candidate {
     const scored = try choose.best(candidates, response, asked, key) orelse return null;
     return scored.candidate;
 }
@@ -757,28 +757,30 @@ test "login: the recorded selectors are filled and submitted without the model" 
     try std.testing.expect(std.mem.find(u8, tree.text, "*****") != null);
 }
 
-test "login: Jev picks the identifier, the password field and the submit control" {
-    var registry: NodeRegistry = .init(std.testing.allocator);
-    defer registry.deinit();
+test "login: the decision model picks the identifier, the password field and the submit control" {
+    for (std.enums.values(testing.MockJev.Provider)) |provider| {
+        var registry: NodeRegistry = .init(std.testing.allocator);
+        defer registry.deinit();
 
-    var page = try testing.pageTest("login_form.html", .{});
-    defer page.close();
+        var page = try testing.pageTest("login_form.html", .{});
+        defer page.close();
 
-    const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
-    defer mock.stop();
+        const aa = testing.arena_allocator;
+        const mock = try testing.MockJev.startAs(aa, provider);
+        defer mock.stop();
 
-    // decideOnly, so nothing is typed and the decoy newsletter form is the
-    // only thing that could have been picked by mistake.
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"username":"ada","password":"hunter2","decideOnly":true}
-    , .{});
-    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
-    try std.testing.expect(!result.is_error);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"usernameSelector\":\"#user\"") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+        // decideOnly, so nothing is typed and the decoy newsletter form is the
+        // only thing that could have been picked by mistake.
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+            \\{"username":"ada","password":"hunter2","decideOnly":true}
+        , .{});
+        const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+        try std.testing.expect(!result.is_error);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"usernameSelector\":\"#user\"") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+    }
 }
 
 test "login: the password waits for the step that asks for it" {

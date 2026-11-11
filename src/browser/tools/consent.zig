@@ -48,8 +48,8 @@ const verdict = jev.verdict;
 const unverified = jev.unverified;
 const clickAndSettle = jev.clickAndSettle;
 
-const Questions = zenai.typesafe.Questions;
-const QuestionEntry = zenai.typesafe.QuestionEntry;
+const Questions = zenai.decisions.Questions;
+const QuestionEntry = zenai.decisions.QuestionEntry;
 
 /// The question ids, which also key the answers.
 pub const wall_key = @tagName(jev.Preset.isConsentWall);
@@ -302,28 +302,30 @@ test "acceptCookies: a recorded control that is gone clicks nothing and asks not
     try std.testing.expectEqual(null, result.replay_args);
 }
 
-test "acceptCookies: the control Jev picks is clicked and the re-read verifies it" {
-    var registry: NodeRegistry = .init(std.testing.allocator);
-    defer registry.deinit();
+test "acceptCookies: the control the decision model picks is clicked and the re-read verifies it" {
+    for (std.enums.values(testing.MockJev.Provider)) |provider| {
+        var registry: NodeRegistry = .init(std.testing.allocator);
+        defer registry.deinit();
 
-    var page = try testing.pageTest("consent_banner.html", .{});
-    defer page.close();
+        var page = try testing.pageTest("consent_banner.html", .{});
+        defer page.close();
 
-    const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
-    defer mock.stop();
+        const aa = testing.arena_allocator;
+        const mock = try testing.MockJev.startAs(aa, provider);
+        defer mock.stop();
 
-    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
-    try std.testing.expect(!result.is_error);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
-    // What `--save` writes into the script, so the next run clicks it directly.
-    try std.testing.expectEqualStrings("{\"selectors\":[\"#accept\"]}", result.replay_args.?);
+        const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+        try std.testing.expect(!result.is_error);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
+        // What `--save` writes into the script, so the next run clicks it directly.
+        try std.testing.expectEqualStrings("{\"selectors\":[\"#accept\"]}", result.replay_args.?);
 
-    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
-    try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
-    try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+        const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+        try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
+        try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+    }
 }
 
 test "acceptCookies: a click that moves the page is followed by a pick on the page it went to" {
@@ -377,11 +379,12 @@ test "acceptCookies: a missing key is reported so the REPL can ask a model inste
     defer page.close();
 
     const aa = testing.arena_allocator;
-    _ = testing.unsetenv(@constCast(zenai.typesafe.env_var_name));
+    const mock = testing.MockJev.startWithoutKey();
+    defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(result.is_error);
     // What `/acceptCookies` reads to fall back to the prompt it used to send.
     try std.testing.expectEqual(.missing_api_key, result.failure);
-    try std.testing.expect(std.mem.find(u8, result.text, zenai.typesafe.env_var_name) != null);
+    try std.testing.expect(std.mem.find(u8, result.text, zenai.decisions.env_hint) != null);
 }

@@ -1139,7 +1139,6 @@ fn dupeError(self: *Runtime, message: []const u8) RunError![]const u8 {
 }
 
 const testing = @import("../testing.zig");
-const zenai = @import("zenai");
 
 fn runTestScript(runtime: *Runtime, source: []const u8) !void {
     if (try runtime.runSource(source, "agent-runtime-test.js")) |message| {
@@ -1226,7 +1225,8 @@ test "agent script runtime: page.classify executes presets, categories and struc
 test "agent script runtime: page.classify missing API key throws" {
     defer testing.test_session.closeAllPages();
 
-    _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+    const mock = testing.MockJev.startWithoutKey();
+    defer mock.stop();
 
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();

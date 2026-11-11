@@ -52,10 +52,15 @@ regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
-/// Clients for asking Jev, pooled so concurrent calls each get their own and
-/// keep its connection warm. It reads the API key from the environment on
-/// every ask. Usable from any thread: it touches no browser state.
-typesafe: zenai.typesafe.Pool,
+/// Clients for asking a decision model (Gemini or TypeSafe Jev), pooled so
+/// concurrent calls each get their own and keep its connection warm. It reads
+/// the provider and its API key from the environment on every ask. Usable
+/// from any thread: it touches no browser state.
+decisions: zenai.decisions.Pool,
+
+/// Picks the decision model's provider, "gemini" or "typesafe", when keys for
+/// both are set. Unset, Gemini is preferred.
+pub const decision_provider_env_var_name = "LIGHTPANDA_DECISION_PROVIDER";
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
@@ -92,9 +97,10 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .watchdog = .init(config.watchdogMs()),
         // The calling session waits on an ask, so fail fast rather than
         // honouring a Retry-After on the browser thread.
-        .typesafe = .init(lp.io, allocator, lp.environ, .{
+        .decisions = .init(lp.io, allocator, lp.environ, .{
             .retry_policy = .disabled,
             .request_timeout_ms = 10_000,
+            .provider_env_var_name = decision_provider_env_var_name,
         }),
     };
     try app.watchdog.start();
@@ -135,7 +141,7 @@ pub fn deinit(self: *App) void {
     self.render_fonts.deinit(allocator);
     self.arena_pool.deinit();
 
-    self.typesafe.deinit();
+    self.decisions.deinit();
 
     allocator.destroy(self);
 }

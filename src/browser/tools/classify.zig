@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The `classify` tool's end of `zenai.typesafe.json`: the page presets a
+//! The `classify` tool's end of `zenai.decisions.json`: the page presets a
 //! caller can name instead of wording a question, and what an empty questions
 //! object means. The question shapes themselves, and the answers coming back
 //! as JSON, are zenai's.
@@ -26,7 +26,7 @@ const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 const jev = @import("jev.zig");
 
-const json = zenai.typesafe.json;
+const json = zenai.decisions.json;
 
 /// A preset can be named by key alone; an empty object asks every one of them.
 /// `presets` adds every preset the questions do not already ask, so a caller
@@ -73,7 +73,7 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     };
     defer response.deinit();
 
-    const formatted = zenai.typesafe.json.formatAnswers(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
+    const formatted = zenai.decisions.json.formatAnswers(arena, response.value, prepared) catch |err| return internalUnlessOom(err);
 
     return .{ .text = formatted };
 }

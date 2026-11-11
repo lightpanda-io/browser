@@ -789,11 +789,11 @@ fn runRepl(self: *Agent) void {
                 var tc = parsed;
                 if (tc.tool == .login and tc.args == null) {
                     const names = browser_tools.lpEnvNames(aa) catch continue :repl;
-                    const has_key = zenai.typesafe.Client.envApiKey(lp.environ()) != null;
+                    const has_key = zenai.decisions.envProvider(lp.environ(), App.decision_provider_env_var_name) != null;
                     switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
                         .args => |args| tc.args = args,
                         .prompt => |prompt| {
-                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                            self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
                             _ = self.runPromptTurn(aa, tc.name(), prompt, line);
                             continue :repl;
                         },
@@ -816,7 +816,7 @@ fn runRepl(self: *Agent) void {
                         self.printCommandResult(tc, result);
                         continue :repl;
                     };
-                    self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                    self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         self.printCommandResult(tc, result);
                     }
