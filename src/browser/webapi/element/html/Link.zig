@@ -220,6 +220,10 @@ pub const Build = struct {
 
     pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Link);
+        // The parser created the link: Frame.stylesheets can load it while the
+        // parse goes on
+        frame._stylesheets.from_parser = true;
+        defer frame._stylesheets.from_parser = false;
         return self.linkAddedCallback(frame);
     }
 };
@@ -250,4 +254,17 @@ test "WebApi: HTML.Link external stylesheet event ordering" {
 test "WebApi: HTML.Link deferred script then external stylesheet" {
     testing.silenceLog(&.{.http});
     try testing.htmlRunner("css/deferred_script_then_stylesheet.html", .{ .load_resources = .{ .stylesheet = true } });
+}
+
+test "WebApi: HTML.Link the parser's stylesheets load in parallel" {
+    testing.silenceLog(&.{.http});
+    try testing.htmlRunner("css/stylesheet_parallel.html", .{ .load_resources = .{ .stylesheet = true } });
+}
+
+test "WebApi: HTML.Link the load event waits for the parser's stylesheets" {
+    try testing.htmlRunner("css/stylesheet_parallel_load.html", .{ .load_resources = .{ .stylesheet = true } });
+}
+
+test "WebApi: HTML.Link deferred scripts wait for the parser's stylesheets" {
+    try testing.htmlRunner("css/stylesheet_parallel_defer.html", .{ .load_resources = .{ .stylesheet = true } });
 }

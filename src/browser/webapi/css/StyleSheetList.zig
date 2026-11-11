@@ -29,6 +29,23 @@ pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, frame: *Frame) !void {
     try self._sheets.append(frame.page_arena, sheet);
 }
 
+/// Adds `sheet` before the sheets whose owner comes after its own in the tree.
+pub fn addInTreeOrder(self: *StyleSheetList, sheet: *CSSStyleSheet, frame: *Frame) !void {
+    const DISCONNECTED: u16 = 0x01;
+    const FOLLOWING: u16 = 0x04;
+
+    const node = (sheet._owner_node orelse return self.add(sheet, frame)).asNode();
+    var index = self._sheets.items.len;
+    while (index > 0) : (index -= 1) {
+        const owner = self._sheets.items[index - 1]._owner_node orelse break;
+        const position = node.compareDocumentPosition(owner.asNode());
+        if (position & DISCONNECTED != 0 or position & FOLLOWING == 0) {
+            break;
+        }
+    }
+    try self._sheets.insert(frame.page_arena, index, sheet);
+}
+
 pub fn remove(self: *StyleSheetList, sheet: *CSSStyleSheet) void {
     for (self._sheets.items, 0..) |s, i| {
         if (s == sheet) {

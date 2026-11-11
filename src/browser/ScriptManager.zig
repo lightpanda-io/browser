@@ -421,6 +421,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             }
             handover = true;
         }
+        // Fetched while the parser's stylesheets loaded; it runs once they have
+        Frame.stylesheets.waitForParserSheets(frame);
 
         if (script.status < 200 or script.status > 299) {
             log.info(.http, "script load error", .{ .status = script.status });
@@ -533,6 +535,10 @@ fn addInlineScript(self: *ScriptManager, script_element: *Element.Html.Script, f
         .text_position = if (from_parser and std.mem.indexOf(u8, source, "sourceURL=") == null) script_element._text_position else .{},
     };
 
+    if (from_parser and mode == .normal) {
+        // A parser-blocking script runs once the stylesheets before it load
+        Frame.stylesheets.waitForParserSheets(frame);
+    }
     switch (mode) {
         .normal => self.evalNow(script),
         .async => {
@@ -590,6 +596,10 @@ fn evalNow(self: *ScriptManager, script: *Script) void {
 }
 
 pub fn staticScriptsDone(self: *ScriptManager) void {
+    if (Frame.stylesheets.holdDeferredScripts(self.frame)) {
+        // The last of the parser's stylesheets to load runs them
+        return;
+    }
     self.base.staticScriptsDone();
 }
 

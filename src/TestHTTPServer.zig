@@ -189,6 +189,10 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "text/plain";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".css")) {
+        return "text/css";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".xhtml")) {
         return "application/xhtml+xml";
     }
