@@ -67,6 +67,38 @@ jobs:
             zig-out/bin/lightpanda
           retention-days: 1
 
+  zig-build-base:
+    name: zig build base
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Don't run the CI with draft PR.
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: checkout base
+        run: git checkout --detach HEAD^1
+
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/v8-snapshot
+
+      - name: zig build release
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dorderfile=orderfile/lightpanda.ld -Dcpu=x86_64
+
+      - name: upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lightpanda-build-base
+          path: |
+            zig-out/bin/lightpanda
+          retention-days: 1
+
   demo-runner:
     strategy:
       fail-fast: false
@@ -394,6 +426,63 @@ jobs:
             commit.txt
           retention-days: 10
 
+  # Perf scenarios from the demo repo (perf/), this build against its base,
+  # runs interleaved on the same box.See perf/README.md in the demo repo.
+  #
+  # The runner needs perf with user-space counters:
+  # $ sudo apt install linux-tools-common linux-tools-$(uname -r)
+  # $ echo 'kernel.perf_event_paranoid = 2' | sudo tee /etc/sysctl.d/99-perf.conf
+  # $ sudo sysctl --system
+  perf-scenarios:
+    name: perf-scenarios
+    needs:
+      - zig-build-release
+      - zig-build-base
+
+    # use a self host runner.
+    runs-on: lpd-bench-hetzner
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lightpanda-build-release
+          path: bin-new
+
+      - name: download base build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lightpanda-build-base
+          path: bin-base
+
+      - run: chmod a+x bin-new/lightpanda bin-base/lightpanda
+
+      - name: run perf scenarios
+        working-directory: perf
+        run: go run . -bin base=../bin-base/lightpanda,new=../bin-new/lightpanda -rounds 3 -out ../perf.json
+
+      - name: write commit
+        if: always()
+        run: echo "${{ github.sha }}" > commit.txt
+
+      - name: upload artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-scenarios
+          path: |
+            perf.json
+            commit.txt
+          retention-days: 10
 
   perf-fmt:
     name: perf-fmt
@@ -427,6 +516,37 @@ jobs:
 
       - name: format and send json result
         run: /perf-fmt hyperfine ${{ github.sha }} hyperfine.json
+
+  # Separate from perf-fmt, so a failing perf-scenarios gate doesn't block the
+  # cdp/hyperfine history. It still records a failed gate on main: a
+  # regression that landed belongs in the history too.
+  perf-scenarios-fmt:
+    name: perf-scenarios-fmt
+    needs: perf-scenarios
+    permissions:
+      contents: read
+      packages: read
+
+    # Don't execute on PR
+    if: github.event_name != 'pull_request' && !cancelled() && needs.perf-scenarios.result != 'skipped'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    container:
+      image: ghcr.io/lightpanda-io/perf-fmt:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: download artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: perf-scenarios
+
+      - name: format and send json result
+        run: /perf-fmt scenarios ${{ github.sha }} perf.json
 
   browser-fetch:
     name: browser fetch
