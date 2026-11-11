@@ -1026,8 +1026,8 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
     //
-    // Hidden subtrees still count towards the index so positions agree with
-    // getBoundingClientRect; the hidden verdict just rides down the stack.
+    // Hidden and inert subtrees still count towards the index so positions
+    // agree with getBoundingClientRect; the exclusion rides down the stack.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1038,16 +1038,16 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    const Entry = struct { node: *Node, hidden: bool };
+    const Entry = struct { node: *Node, excluded: bool };
     var stack: std.ArrayList(Entry) = .empty;
-    try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
+    try stack.append(frame.local_arena, .{ .node = root, .excluded = false });
 
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
         const entry = stack.pop() orelse break;
         const node = entry.node;
-        var hidden = entry.hidden;
+        var excluded = entry.excluded;
         const pos = preorder_index * 5.0;
 
         if (pos > y) {
@@ -1057,10 +1057,10 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            hidden = hidden or style_manager.hasDisplayNone(element);
+            excluded = excluded or style_manager.hasDisplayNone(element) or element.hasInertAttribute();
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
-            if (!hidden and style_manager.isHitTestable(element)) {
+            if (!excluded and style_manager.isHitTestable(element)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -1080,7 +1080,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
+            try stack.append(frame.local_arena, .{ .node = c, .excluded = excluded });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }

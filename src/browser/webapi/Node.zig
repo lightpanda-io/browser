@@ -1763,7 +1763,7 @@ pub fn isInert(self: *Node, frame: *const Frame) bool {
     var current: ?*Node = self;
     while (current) |node| : (current = node.flatTreeParent(frame)) {
         if (node.is(Element)) |el| {
-            if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
+            if (el.hasInertAttribute()) {
                 return true;
             }
         }

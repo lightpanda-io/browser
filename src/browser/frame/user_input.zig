@@ -625,7 +625,7 @@ fn documentHit(frame: *Frame, x: f64, y: f64, width: f64, height: f64) !?*Elemen
     }
     const root = frame.document.getDocumentElement() orelse return null;
     const style_manager = &frame._style_manager;
-    if (style_manager.hasDisplayNone(root) or !style_manager.isHitTestable(root)) {
+    if (root.asNode().isInert(frame) or style_manager.hasDisplayNone(root) or !style_manager.isHitTestable(root)) {
         return null;
     }
     return root;
@@ -4651,6 +4651,113 @@ test "user_input: dispatchTouchEvent a closed-shadow touch target retargets to t
     _ = try dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
     const result = try ls.local.compileAndRun("window.eventTargetOK === true && window.touchTargetOK === true", null);
     try testing.expect(result.isTrue());
+}
+
+test "user_input: mouse hit testing skips inert flat-tree subtrees" {
+    for ([_][]const u8{
+        \\behind.innerHTML = '<button inert>Inert</button>';
+        \\const target = behind.firstChild, inert = target;
+        ,
+        \\behind.innerHTML = '<div inert><button style="pointer-events:auto">Inert</button></div>';
+        \\const inert = behind.firstChild, target = inert.firstChild;
+        ,
+        \\behind.innerHTML = '<div inert></div>';
+        \\const inert = behind.firstChild;
+        \\const shadow = inert.attachShadow({mode:'closed'});
+        \\shadow.innerHTML = '<button>Inert</button>';
+        \\const target = shadow.firstChild;
+        ,
+        \\behind.innerHTML = '<div><button>Slotted</button></div>';
+        \\const host = behind.firstChild, target = host.firstChild;
+        \\host.style.pointerEvents = 'none';
+        \\const shadow = host.attachShadow({mode:'open'});
+        \\shadow.innerHTML = '<slot inert></slot>';
+        \\const inert = shadow.firstChild;
+        ,
+    }) |setup| {
+        const page = try testing.pageTest("mcp_actions.html", .{});
+        defer page.close();
+        const frame = page.frame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun(
+            \\document.body.innerHTML = '<div id="behind" tabindex="0" style="width:400px;height:400px"></div>';
+            \\const behind = document.getElementById('behind');
+        , null);
+        _ = try ls.local.compileAndRun(setup, null);
+        const target = try ls.local.jsValueToZig(*Element, try ls.local.compileAndRun(
+            \\target.style.cssText = 'width:80px;height:20px;pointer-events:auto';
+            \\window.events = [];
+            \\for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            \\  behind.addEventListener(type, e => events.push({type, target:e.composedPath()[0], trusted:e.isTrusted}));
+            \\}
+            \\window.inertEvents = 0;
+            \\for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'focus']) {
+            \\  target.addEventListener(type, () => inertEvents++);
+            \\}
+            \\target;
+        , null));
+        const behind = frame.document.getElementById("behind").?;
+        const rect = target.boundingClientRectValues(frame);
+        const x = rect.x + 1;
+        const y = rect.y + 1;
+        try testing.expect((try frame.document.hitTest(x, y, frame)) == behind);
+        try testing.expect((try frame.document.hitTestVertical(y, frame)) == behind);
+        try triggerMouseMove(frame, x, y);
+        try triggerMousePress(frame, x, y, mouse_button.main, 1);
+        try triggerMouseRelease(frame, x, y, mouse_button.main, 1);
+        try testing.expect((try ls.local.compileAndRun(
+            \\inertEvents === 0 && document.activeElement === behind &&
+            \\events.map(e => e.type).join(',') === 'pointerdown,mousedown,pointerup,mouseup,click' &&
+            \\events.every(e => e.target === behind && e.trusted)
+        , null)).isTrue());
+
+        // Removing inert restores hit testing without changing layout.
+        _ = try ls.local.compileAndRun("inert.inert = false; events.length = 0", null);
+        try testing.expect((try mouseHitTest(frame, x, y)).target == target);
+        try triggerMousePress(frame, x, y, mouse_button.main, 1);
+        try triggerMouseRelease(frame, x, y, mouse_button.main, 1);
+        try testing.expect((try ls.local.compileAndRun(
+            \\events.map(e => e.type).join(',') === 'pointerdown,mousedown,pointerup,mouseup,click' &&
+            \\events.every(e => e.trusted) && inertEvents > 0
+        , null)).isTrue());
+    }
+}
+
+test "user_input: inert roots are excluded from mouse fallback and iframe descent" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const main = page.frame().?;
+    const child = main.child_frames.items[0];
+    const iframe = child.iframe.?.asElement();
+    const rect = iframe.boundingClientRectValues(main);
+    const x = rect.x + 1;
+    const y = rect.y + 1;
+
+    // An inert iframe must not allow input into its document.
+    try iframe.setAttributeSafe(comptime .wrap("inert"), .wrap(""), main);
+    const excluded = try mouseHitTest(main, x, y);
+    try testing.expect(excluded.frame == main);
+    try testing.expect(excluded.target == main.document.getBody().?.asElement());
+    try iframe.removeAttribute(comptime .wrap("inert"), main);
+
+    // A non-inert iframe can contain an inert root. No root fallback may
+    // resurrect it, including at blank points beyond the root's faux box.
+    const root = child.document.getDocumentElement().?;
+    try root.setAttributeSafe(comptime .wrap("inert"), .wrap(""), child);
+    const hit = try mouseHitTest(main, x, y);
+    try testing.expect(hit.frame == child);
+    try testing.expect(hit.target == null);
+    try testing.expect((try documentHit(child, 299, 299, 300, 300)) == null);
+    try triggerMousePress(main, x, y, mouse_button.main, 1);
+    try testing.expect(main.page.input_pointer.down_target == null);
+    try testing.expect(main.document._active_element == null);
+    try testing.expect(child.document._active_element == null);
+
+    try root.removeAttribute(comptime .wrap("inert"), child);
+    try testing.expect((try mouseHitTest(main, x, y)).target != null);
+    try testing.expect((try documentHit(child, 299, 299, 300, 300)) == root);
 }
 
 test "user_input: mouse hit testing descends nested iframe viewports" {

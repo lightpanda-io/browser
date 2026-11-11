@@ -810,6 +810,12 @@ pub fn hasAttributeInterned(self: *const Element, comptime name: []const u8) boo
     return self._attributes.hasInterned(name);
 }
 
+/// Only HTML elements take the inert attribute. This is the element's own
+/// attribute; Node.isInert also checks its flat-tree ancestors.
+pub fn hasInertAttribute(self: *const Element) bool {
+    return self._namespace == .html and self.hasAttributeSafe(comptime .wrap("inert"));
+}
+
 // Per HTML "concept-fe-disabled", only listed elements participate in the
 // disabled concept. Anything else (e.g. <div disabled>) has no disabled
 // state and never matches :disabled / :enabled.
