@@ -25,6 +25,7 @@ const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const text_measure = @import("text_measure.zig");
+const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 // Width flows down (height flows up): a block in normal flow is as wide as
 // its containing block.
@@ -502,6 +503,9 @@ pub fn contentHeight(self: *Element, owner: *Frame) f64 {
     defer StyleManager.fill_check.exit(fill);
 
     var wrap: ?text_measure.LineWrap = null;
+    // Without a width to wrap at, each text node with content is one line
+    // tall, placed like an inline box. Computed on first use.
+    var line_height: ?f64 = null;
     const width = self.getElementAxis(owner, .width);
     if (width.explicit) {
         wrap = .{
@@ -516,11 +520,27 @@ pub fn contentHeight(self: *Element, owner: *Frame) f64 {
     while (children.next()) |node| {
         if (node.is(Element)) |el| {
             flow.advance(el, owner);
-        } else if (wrap) |*w| {
-            if (node.is(Node.CData.Text)) |text| {
-                w.add(text.ownData());
-            }
+            continue;
         }
+        const text = node.is(Node.CData.Text) orelse continue;
+        if (wrap) |*w| {
+            w.add(text.ownData());
+            continue;
+        }
+        // Skip the scan once the line is already this tall
+        if (line_height) |h| {
+            if (flow.line >= h) continue;
+        }
+        if (isAllWhitespace(text.ownData())) {
+            continue;
+        }
+        const h = line_height orelse blk: {
+            // Whole pixels, like the wrapped height
+            const h = @ceil(style_manager.computedFontSize(self) * text_measure.LINE_HEIGHT);
+            line_height = h;
+            break :blk h;
+        };
+        flow.line = @max(flow.line, h);
     }
 
     var height = flow.offset + flow.line;

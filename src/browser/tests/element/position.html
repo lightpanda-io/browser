@@ -1504,13 +1504,32 @@
   testing.expectTrue(box.scrollTop > 0);
   testing.expectEqual(box.scrollHeight - box.clientHeight, box.scrollTop);
 
-  // Without one, it isn't measured
-  testing.expectEqual(5, $('#textFree').scrollHeight);
+  // Without one, text is one line tall
+  testing.expectEqual(20, $('#textFree').scrollHeight);
 
   const small = $('#textSmall');
   const before = small.clientHeight;
   small.style.fontSize = '4px';
   testing.expectTrue(small.clientHeight < before);
+}
+</script>
+
+<div id="lineHead">text<div style="height: 10px"></div></div>
+<div id="lineTail"><div style="height: 10px"></div>text</div>
+<div id="lineInline"><span></span>text</div>
+<div id="lineBlank">
+</div>
+
+<script id="textWithoutWidthIsOneLine">
+{
+  // Text before a block is a line above it
+  testing.expectEqual(30, $('#lineHead').scrollHeight);
+  // Text after a block is a line below it
+  testing.expectEqual(30, $('#lineTail').scrollHeight);
+  // Text after an inline shares its line
+  testing.expectEqual(20, $('#lineInline').scrollHeight);
+  // Whitespace adds nothing
+  testing.expectEqual(5, $('#lineBlank').scrollHeight);
 }
 </script>
 

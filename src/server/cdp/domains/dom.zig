@@ -1680,14 +1680,14 @@ test "cdp.dom: getBoxModel" {
         .params = .{ .nodeId = 3 },
     });
     // A block in normal flow is as wide as the body, and the first block
-    // starts at its parent's top.
+    // starts at its parent's top. Its text makes it one line tall.
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
-        .padding = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
-        .border = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
-        .margin = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 5.0, 0.0, 5.0 },
+        .content = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 20.0, 0.0, 20.0 },
+        .padding = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 20.0, 0.0, 20.0 },
+        .border = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 20.0, 0.0, 20.0 },
+        .margin = Quad{ 0.0, 0.0, 1920.0, 0.0, 1920.0, 20.0, 0.0, 20.0 },
         .width = 1920,
-        .height = 5,
+        .height = 20,
     } }, .{ .id = 5 });
 }
 
