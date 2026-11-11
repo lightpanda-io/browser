@@ -2133,13 +2133,13 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     const style_manager = &owner._style_manager;
 
     if (self.inlineStyle(frame)) |style| {
-        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
     }
 
     while (current.flatParent(frame)) |parent| {
         if (parent.is(Element)) |el| {
             if (el.inlineStyle(frame)) |style| {
-                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
             }
         }
         x += lineOffset(current, parent, style_manager, frame);

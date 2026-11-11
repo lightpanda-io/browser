@@ -27,53 +27,6 @@ pub const Declaration = struct {
 
 pub const AxisPair = struct { x: []const u8, y: []const u8 };
 
-pub const AxisShorthand = struct {
-    name: []const u8,
-    x: []const u8,
-    y: []const u8,
-};
-
-// The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
-// CSSOM object and the cascade store these expanded: setting one sets both
-// longhands, reading or serializing it recombines them.
-pub const axis_shorthands = [_]AxisShorthand{
-    .{ .name = "overflow", .x = "overflow-x", .y = "overflow-y" },
-    .{ .name = "overscroll-behavior", .x = "overscroll-behavior-x", .y = "overscroll-behavior-y" },
-};
-
-/// The axis shorthand `name` names, if it names one.
-pub fn axisShorthand(name: []const u8) ?AxisShorthand {
-    for (axis_shorthands) |shorthand| {
-        if (std.ascii.eqlIgnoreCase(name, shorthand.name)) {
-            return shorthand;
-        }
-    }
-    return null;
-}
-
-pub const AxisLonghand = struct {
-    shorthand: AxisShorthand,
-    is_x: bool,
-
-    /// The longhand on the other axis.
-    pub fn partner(self: AxisLonghand) []const u8 {
-        return if (self.is_x) self.shorthand.y else self.shorthand.x;
-    }
-};
-
-/// The axis shorthand `name` is a longhand of, if it is one.
-pub fn axisLonghand(name: []const u8) ?AxisLonghand {
-    for (axis_shorthands) |shorthand| {
-        if (std.ascii.eqlIgnoreCase(name, shorthand.x)) {
-            return .{ .shorthand = shorthand, .is_x = true };
-        }
-        if (std.ascii.eqlIgnoreCase(name, shorthand.y)) {
-            return .{ .shorthand = shorthand, .is_x = false };
-        }
-    }
-    return null;
-}
-
 /// An `<x> [<y>]` axis shorthand such as `overflow` or `overscroll-behavior`;
 /// a single value applies to both axes. More than two values is invalid and
 /// null, as is an empty declaration.
@@ -85,43 +38,6 @@ pub fn splitAxisPair(value: []const u8) ?AxisPair {
         return null;
     }
     return .{ .x = x, .y = y };
-}
-
-/// A four-side shorthand such as `margin`: its longhands in top, right,
-/// bottom, left order.
-pub const BoxShorthand = struct {
-    name: []const u8,
-    sides: [4][]const u8,
-};
-
-pub const box_shorthands = [_]BoxShorthand{
-    .{ .name = "margin", .sides = .{ "margin-top", "margin-right", "margin-bottom", "margin-left" } },
-    .{ .name = "padding", .sides = .{ "padding-top", "padding-right", "padding-bottom", "padding-left" } },
-    .{ .name = "inset", .sides = .{ "top", "right", "bottom", "left" } },
-    .{ .name = "border-width", .sides = .{ "border-top-width", "border-right-width", "border-bottom-width", "border-left-width" } },
-    .{ .name = "border-style", .sides = .{ "border-top-style", "border-right-style", "border-bottom-style", "border-left-style" } },
-    .{ .name = "border-color", .sides = .{ "border-top-color", "border-right-color", "border-bottom-color", "border-left-color" } },
-};
-
-pub fn boxShorthand(name: []const u8) ?BoxShorthand {
-    for (box_shorthands) |shorthand| {
-        if (std.ascii.eqlIgnoreCase(name, shorthand.name)) {
-            return shorthand;
-        }
-    }
-    return null;
-}
-
-/// The index in `box_shorthands` of the shorthand `name` is a side of.
-pub fn boxLonghandIndex(name: []const u8) ?usize {
-    for (box_shorthands, 0..) |shorthand, i| {
-        for (shorthand.sides) |side| {
-            if (std.ascii.eqlIgnoreCase(name, side)) {
-                return i;
-            }
-        }
-    }
-    return null;
 }
 
 /// One to four values for top, right, bottom and left, filled in the CSS way:

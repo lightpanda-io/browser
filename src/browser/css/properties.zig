@@ -44,10 +44,6 @@ pub const Property = struct {
     computed: bool = true,
 };
 
-pub fn get(name: []const u8) ?Property {
-    return properties.get(name);
-}
-
 pub fn isKnown(name: []const u8) bool {
     return properties.has(name);
 }
@@ -80,6 +76,98 @@ pub fn knownName(id: Id) ?[]const u8 {
         return null;
     }
     return properties.keys()[index];
+}
+
+/// The table entry of a known property, null for a custom one.
+pub fn propertyOf(id: Id) ?Property {
+    const index = @backingInt(id);
+    if (index >= known_count) {
+        return null;
+    }
+    return properties.values()[index];
+}
+
+pub const AxisShorthand = struct {
+    name: Id,
+    x: Id,
+    y: Id,
+};
+
+// The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
+// CSSOM object and the cascade store these expanded: setting one sets both
+// longhands, reading or serializing it recombines them.
+pub const axis_shorthands = [_]AxisShorthand{
+    .{ .name = .overflow, .x = .@"overflow-x", .y = .@"overflow-y" },
+    .{ .name = .@"overscroll-behavior", .x = .@"overscroll-behavior-x", .y = .@"overscroll-behavior-y" },
+};
+
+/// The axis shorthand `id` is, if it is one.
+pub fn axisShorthand(id: Id) ?AxisShorthand {
+    for (axis_shorthands) |shorthand| {
+        if (shorthand.name == id) {
+            return shorthand;
+        }
+    }
+    return null;
+}
+
+pub const AxisLonghand = struct {
+    shorthand: AxisShorthand,
+    is_x: bool,
+
+    /// The longhand on the other axis.
+    pub fn partner(self: AxisLonghand) Id {
+        return if (self.is_x) self.shorthand.y else self.shorthand.x;
+    }
+};
+
+/// The axis shorthand `id` is a longhand of, if it is one.
+pub fn axisLonghand(id: Id) ?AxisLonghand {
+    for (axis_shorthands) |shorthand| {
+        if (shorthand.x == id) {
+            return .{ .shorthand = shorthand, .is_x = true };
+        }
+        if (shorthand.y == id) {
+            return .{ .shorthand = shorthand, .is_x = false };
+        }
+    }
+    return null;
+}
+
+/// A four-side shorthand such as `margin`: its longhands in top, right,
+/// bottom, left order.
+pub const BoxShorthand = struct {
+    name: Id,
+    sides: [4]Id,
+};
+
+pub const box_shorthands = [_]BoxShorthand{
+    .{ .name = .margin, .sides = .{ .@"margin-top", .@"margin-right", .@"margin-bottom", .@"margin-left" } },
+    .{ .name = .padding, .sides = .{ .@"padding-top", .@"padding-right", .@"padding-bottom", .@"padding-left" } },
+    .{ .name = .inset, .sides = .{ .top, .right, .bottom, .left } },
+    .{ .name = .@"border-width", .sides = .{ .@"border-top-width", .@"border-right-width", .@"border-bottom-width", .@"border-left-width" } },
+    .{ .name = .@"border-style", .sides = .{ .@"border-top-style", .@"border-right-style", .@"border-bottom-style", .@"border-left-style" } },
+    .{ .name = .@"border-color", .sides = .{ .@"border-top-color", .@"border-right-color", .@"border-bottom-color", .@"border-left-color" } },
+};
+
+/// The four-side shorthand `id` is, if it is one.
+pub fn boxShorthand(id: Id) ?BoxShorthand {
+    for (box_shorthands) |shorthand| {
+        if (shorthand.name == id) {
+            return shorthand;
+        }
+    }
+    return null;
+}
+
+/// The index in `box_shorthands` of the shorthand `id` is a side of.
+pub fn boxLonghandIndex(id: Id) ?usize {
+    for (box_shorthands, 0..) |shorthand, i| {
+        if (std.mem.findScalar(Id, &shorthand.sides, id) != null) {
+            return i;
+        }
+    }
+    return null;
 }
 
 /// The custom property names (`--name`) declared on a page.

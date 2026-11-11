@@ -709,13 +709,13 @@ comptime {
 /// Invalidates the memos an inline style write of `name` on `el` can change.
 /// This returns false when an individual memo cannot be cleared. The caller
 /// must report a full style change.
-pub fn inlineStyleWritten(self: *StyleManager, el: *Element, name: []const u8) bool {
+pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) bool {
     self.assertOwns(el);
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
 
-    var it = propertyReach(name).iterator();
+    var it = propertyReach(id).iterator();
     while (it.next()) |memo| {
         switch (memo) {
             .layout => self.layout_bumps += 1,
@@ -737,19 +737,19 @@ pub fn layoutVersion(self: *const StyleManager) usize {
     return self.frame.page.style_version + self.layout_bumps;
 }
 
-/// Lowercase property name -> the memos that read it. A name not in here
+/// Each known property's memos: the ones that read it. A property not listed
 /// reaches nothing. transform/z-index/custom properties...no memo reads them.
 /// Nothing substitutes var() (yet).
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
-    const layout_ignores = [_][]const u8{ "visibility", "opacity", "pointer-events", "touch-action", "overscroll-behavior-x", "overscroll-behavior-y" };
+    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y" };
 
     // font-size isn't cascaded by any group, but text wraps at it
     const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
     @setEvalBranchQuota(names.len * names.len * 100);
 
-    var kvs: [names.len]struct { []const u8, Memos } = undefined;
-    for (names, &kvs) |name, *kv| {
+    var result: [properties.known_count]Memos = @splat(.empty);
+    for (names) |name| {
         var memos: Memos = .empty;
         for (group_fields) |field| {
             const Spec = @FieldType(Declarations, field);
@@ -759,31 +759,26 @@ const property_reach = blk: {
                 }
             }
         }
-        for (layout_ignores) |ignored| {
-            if (std.mem.eql(u8, name, ignored)) {
-                break;
-            }
-        } else {
+        const id = @field(properties.Id, name);
+        if (std.mem.findScalar(properties.Id, &layout_ignores, id) == null) {
             memos.insert(.layout);
         }
-        kv.* = .{ name, memos };
+        result[@backingInt(id)] = memos;
     }
-    break :blk std.StaticStringMap(Memos).initComptime(kvs);
+    // An axis shorthand reaches what its longhands do
+    for (properties.axis_shorthands) |shorthand| {
+        result[@backingInt(shorthand.name)] = result[@backingInt(shorthand.x)].unionWith(result[@backingInt(shorthand.y)]);
+    }
+    break :blk result;
 };
 
-fn propertyReach(name: []const u8) Memos {
-    // A shorthand is shorter than its longhands, so nothing longer is read
-    var buf: [property_reach.max_len]u8 = undefined;
-    if (name.len > buf.len) {
+fn propertyReach(id: properties.Id) Memos {
+    const index = @backingInt(id);
+    if (index >= property_reach.len) {
+        // a custom property
         return .empty;
     }
-    const lower = std.ascii.lowerString(&buf, name);
-    if (CssParser.axisShorthand(lower)) |shorthand| {
-        const x_prop: Memos = property_reach.get(shorthand.x) orelse .empty;
-        const y_prop: Memos = property_reach.get(shorthand.y) orelse .empty;
-        return x_prop.unionWith(y_prop);
-    }
-    return property_reach.get(lower) orelse .empty;
+    return property_reach[index];
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer
@@ -3408,7 +3403,7 @@ fn Slots(comptime Declared: type) type {
         };
 
         fn apply(self: *Self, id: properties.Id, value: []const u8, important: bool) void {
-            if (axisLonghands(id)) |longhands| {
+            if (properties.axisShorthand(id)) |longhands| {
                 const values = CssParser.splitAxisPair(value) orelse return;
                 self.apply(longhands.x, values.x, important);
                 self.apply(longhands.y, values.y, important);
@@ -3452,7 +3447,7 @@ const tracked_ids = blk: {
     var kvs: []const struct { []const u8, properties.Id } = &.{};
     for (0..properties.known_count) |i| {
         const id: properties.Id = @fromBackingInt(i);
-        if (Tracked.slot_of[i] != Tracked.untracked or axisLonghands(id) != null or id == .content or Animation.Property.fromId(id) != null) {
+        if (Tracked.slot_of[i] != Tracked.untracked or properties.axisShorthand(id) != null or id == .content or Animation.Property.fromId(id) != null) {
             kvs = kvs ++ .{.{ properties.knownName(id).?, id }};
         }
     }
@@ -3466,18 +3461,6 @@ fn trackedId(name: []const u8) ?properties.Id {
         return null;
     }
     return tracked_ids.get(std.ascii.lowerString(&buf, name));
-}
-
-const AxisLonghands = struct { x: properties.Id, y: properties.Id };
-
-/// The longhands of an axis shorthand (overflow, overscroll-behavior).
-fn axisLonghands(id: properties.Id) ?AxisLonghands {
-    inline for (CssParser.axis_shorthands) |shorthand| {
-        if (id == @field(properties.Id, shorthand.name)) {
-            return .{ .x = @field(properties.Id, shorthand.x), .y = @field(properties.Id, shorthand.y) };
-        }
-    }
-    return null;
 }
 
 const Slot = struct {
@@ -3497,18 +3480,18 @@ const Slot = struct {
     }
 };
 
-/// Resolved value of an element's inline `style=` declaration for `property_name`,
+/// Resolved value of an element's inline `style=` declaration of `id`,
 /// or null when the element has no such declaration. Reads the element's parsed
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 /// Null too when a tracked property's normal declaration loses to an
 /// !important stylesheet rule.
-pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+pub fn inlineStyleValue(self: *StyleManager, el: *Element, id: properties.Id) ?[]const u8 {
     self.assertOwns(el);
     const style = el.inlineStyle(self.frame) orelse return null;
     const declaration = style.asCSSStyleDeclaration();
-    const value = declaration.declaredValue(property_name, self.frame) orelse return null;
-    if (declaration.declaredImportant(property_name, self.frame) == false and self.importantRuleWins(el, property_name.str(), value)) {
+    const value = declaration.declaredValue(id, self.frame) orelse return null;
+    if (declaration.declaredImportant(id) == false and self.importantRuleWins(el, id, value)) {
         return null;
     }
     return value;
@@ -3516,10 +3499,10 @@ pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String
 
 // Folds the one declaration the way the inline style is folded for layout, so
 // a shorthand checks its longhands and a value we don't parse checks nothing.
-fn importantRuleWins(self: *StyleManager, el: *Element, name: []const u8, value: []const u8) bool {
+fn importantRuleWins(self: *StyleManager, el: *Element, id: properties.Id, value: []const u8) bool {
     self.rebuildIfDirty() catch return false;
     var slots: Slots(Declarations) = .{};
-    slots.apply(trackedId(name) orelse return false, value, false);
+    slots.apply(id, value, false);
     const declared = slots.props(.any);
     inline for (group_fields) |field| {
         if (@field(self, field).importantRuleWins(@field(declared, field), el, self.frame)) {
@@ -3529,42 +3512,52 @@ fn importantRuleWins(self: *StyleManager, el: *Element, name: []const u8, value:
     return false;
 }
 
-/// Computed value of a custom property (`--x`) on `el`, or null when nothing
-/// declares it. The value is returned as-is, no var substitution
-pub fn customPropertyValue(self: *StyleManager, el: *Element, name: []const u8) ?[]const u8 {
+/// The id of custom property `name` as `el` can see it, null when nothing
+/// declares it for `el`: no rule, and no style attribute on its flat-tree
+/// ancestors. Unlike numbering it, a miss leaves the page's names as they are.
+pub fn customPropertyId(self: *StyleManager, el: *Element, name: []const u8) ?properties.Id {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
 
-    // The rebuild numbered every sheet's custom names. A style attribute's
-    // are numbered once it's parsed, which the walk below does: until then a
-    // name without an id is in no rule, but may be in a style attribute.
+    // The rebuild numbered every sheet's custom names
     const custom_names = &self.frame.page.css_custom_names;
-    var maybe_id = custom_names.lookup(name);
+    if (custom_names.lookup(name)) |id| {
+        return id;
+    }
+
+    // A style attribute's are numbered once it's parsed
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
+        if (elem.inlineStyle(self.frame) == null) {
+            continue;
+        }
+        if (custom_names.lookup(name)) |id| {
+            return id;
+        }
+    }
+    return null;
+}
+
+/// Computed value of custom property `id` on `el`, or null when nothing
+/// declares it. The value is returned as-is, no var substitution
+pub fn customPropertyValue(self: *StyleManager, el: *Element, id: properties.Id) ?[]const u8 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
 
     // Only the rules declaring this name; usually a handful, often none. An
     // element can still shadow them with an inline declaration, so a miss here
     // means walking for inline styles, not returning early.
-    const property = if (maybe_id) |id| self.lazy_rules.getPtr(id) else null;
-    const rules = self.parsedRules(property) catch |err| blk: {
+    const rules = self.parsedRules(self.lazy_rules.getPtr(id)) catch |err| blk: {
         log.err(.browser, "StyleManager customProperty", .{ .err = err });
         break :blk &.{};
     };
 
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        if (maybe_id == null) {
-            // Parsing its style attribute numbers the names it declares
-            if (elem.inlineStyle(self.frame) == null) {
-                continue;
-            }
-            maybe_id = custom_names.lookup(name);
-        }
-        const id = maybe_id orelse continue;
         if (self.lazyWinner(elem, id, rules, null)) |winner| {
             return winner.value;
         }
     }
-
     return null;
 }
 
@@ -3858,7 +3851,7 @@ fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
     const current = element orelse return DEFAULT_FONT_SIZE;
     const parent = current.asNode().flatTreeParentElement(self.frame);
 
-    if (self.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {
+    if (self.inlineStyleValue(current, .@"font-size")) |raw| {
         if (self.parseFontSize(raw, parent, depth + 1)) |size| {
             return size;
         }
@@ -4440,7 +4433,7 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     // No memo reads a custom property
     sm.cacheWidth(div, .box, 100);
     try style.setProperty("--offset", "4px", null, frame);
-    try testing.expectString("4px", sm.customPropertyValue(p, "--offset").?);
+    try testing.expectString("4px", sm.customPropertyValue(p, sm.customPropertyId(p, "--offset").?).?);
     try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
 
     // None of it touched another frame's memos
