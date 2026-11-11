@@ -162,6 +162,8 @@ app_dir: ?[]const u8,
 /// other settings doesn't clobber the remembered provider.
 no_llm_persisted: bool,
 model_base_url: ?[:0]const u8,
+/// Backs the `X-HF-Bill-To` header the AI client borrows; see `extraHeaders`.
+hf_bill_header: [1]std.http.Header = undefined,
 /// Cached chat-model ids for the current provider, backed by
 /// `model_completion_arena`; invalidated on `/provider` switch.
 model_completions: ?ModelCompletions,
@@ -385,7 +387,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     try self.ts.init(app);
     errdefer self.ts.deinit();
 
-    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .bill_to = hfBillTo(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
+    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     if (opts.trace) |path| {
@@ -1179,17 +1181,20 @@ fn disableProvider(self: *Agent) void {
 
 /// `HF_BILL_TO` org for routed requests; null for non-HF providers. Without it,
 /// requests bill the token owner's personal account instead of the org.
-fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
-    if (provider != .huggingface) return null;
-    const v = std.c.getenv("HF_BILL_TO") orelse return null;
-    return std.mem.span(v);
+/// `X-HF-Bill-To` from HF_BILL_TO for Hugging Face, so the router bills that
+/// org instead of the token owner. The result borrows `self`.
+fn extraHeaders(self: *Agent, provider: Config.AiProvider) []const std.http.Header {
+    if (provider != .huggingface) return &.{};
+    const v = std.c.getenv("HF_BILL_TO") orelse return &.{};
+    self.hf_bill_header = .{.{ .name = "X-HF-Bill-To", .value = std.mem.span(v) }};
+    return &self.hf_bill_header;
 }
 
 /// `credential` transfers ownership of its key resources on success; on error
 /// the caller still owns them. The previous credential is released only after
 /// the old client is gone.
 fn setProvider(self: *Agent, credential: settings.Credential) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.provider, credential.keySlice(), .{ .base_url = self.model_base_url, .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .bill_to = hfBillTo(credential.provider), .environ = lp.environ(), .account_id = credential.accountId() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.provider, credential.keySlice(), .{ .base_url = self.model_base_url, .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(credential.provider), .environ = lp.environ(), .account_id = credential.accountId() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
