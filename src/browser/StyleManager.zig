@@ -111,6 +111,10 @@ dirty: bool = false,
 // change what it matches.
 reads_style_attribute: bool = false,
 
+// The attribute names the tracked selectors read. Nested selectors (:is,
+// :not, :has, ...) and pseudo-classes included.
+attribute_names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
 last_rule_sheet: ?*CSSStyleSheet = null,
@@ -637,9 +641,7 @@ fn addSelectorRules(
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, important: Declarations, layer: u16) !void {
-    if (readsStyleAttribute(selector)) {
-        self.reads_style_attribute = true;
-    }
+    try self.collectAttributeNames(selector);
     const matched = unwrapWhere(selector);
     const placement = placeSelector(matched) orelse return;
     const rank_and_order = try self.nextPriority(layer);
@@ -658,42 +660,145 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Decla
     }
 }
 
-fn readsStyleAttribute(selector: Selector.Selector) bool {
-    if (compoundReadsStyleAttribute(selector.first)) {
-        return true;
-    }
+fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector) Allocator.Error!void {
+    try self.collectCompoundAttributeNames(selector.first);
     for (selector.segments) |segment| {
-        if (compoundReadsStyleAttribute(segment.compound)) {
-            return true;
-        }
+        try self.collectCompoundAttributeNames(segment.compound);
     }
-    return false;
 }
 
-fn compoundReadsStyleAttribute(compound: Selector.Compound) bool {
-    for (compound.parts) |part| {
-        const nested: []const Selector.Selector = switch (part) {
-            .attribute => |attr| {
+fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compound) Allocator.Error!void {
+    // By pointer: a short name's str() points into its String, which would be
+    // an issue, except these are all on the same self.arena, so we can copy the pointer.
+    const allocator = self.arena.allocator();
+    for (compound.parts) |*part| {
+        const nested: []const Selector.Selector = switch (part.*) {
+            .attribute => |*attr| {
                 if (attr.name.eql(comptime .wrap("style"))) {
-                    return true;
+                    self.reads_style_attribute = true;
                 }
+                try self.attribute_names.put(allocator, attr.name.str(), {});
                 continue;
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where, .has => |selectors| selectors,
                 .nth_child_of, .nth_last_child_of => |of| of.selectors,
-                else => continue,
+                else => {
+                    for (pseudoClassAttributes(pseudo)) |name| {
+                        try self.attribute_names.put(allocator, name, {});
+                    }
+                    continue;
+                },
             },
             else => continue,
         };
         for (nested) |selector| {
-            if (readsStyleAttribute(selector)) {
-                return true;
-            }
+            try self.collectAttributeNames(selector);
         }
     }
-    return false;
 }
+
+/// The attribute names that are read for a pseudo. For example, the :link
+/// pseudo class requires that we read the "href" attribute, thus we need to
+/// monitor changes to "href".
+fn pseudoClassAttributes(pseudo: Selector.PseudoClass) []const []const u8 {
+    return switch (pseudo) {
+        .link, .any_link => &.{"href"},
+        .lang => &.{"lang"},
+        .disabled, .enabled => &.{"disabled"},
+        .checked => &.{ "checked", "selected" },
+        .default => &.{ "checked", "selected", "form" },
+        .required, .optional => &.{ "required", "readonly", "disabled" },
+        .read_only, .read_write => &.{ "readonly", "disabled", "contenteditable" },
+        // Constraint validation (ValidityState); a form or fieldset checks
+        // the controls under it, name groups radios. checked, selected and
+        // value set a control's state while the user hasn't touched it.
+        .valid, .invalid, .in_range, .out_of_range => &.{ "required", "readonly", "disabled", "pattern", "min", "max", "step", "minlength", "maxlength", "multiple", "value", "checked", "selected", "form", "name" },
+        // Element state, the tree, or always_read (:target reads id)
+        .modal, .popover_open, .indeterminate, .placeholder_shown, .hover, .active, .focus, .focus_within, .focus_visible, .visited, .target, .root, .scope, .empty, .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type, .defined => &.{},
+        // Walked by collectCompoundAttributeNames
+        .not, .is, .where, .has, .nth_child_of, .nth_last_child_of => unreachable,
+    };
+}
+
+/// Attributes the engine reads whatever the rules: class and id selectors,
+/// inline style, the UA hidden-element rules (matchesUaDisplayNoneRule),
+/// img/iframe sizes (Element.getElementAxis) and SVG's font-size presentation
+/// attribute (computedFontSizeAt).
+const always_read = std.StaticStringMapWithEql(void, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+    .{"class"}, .{"id"},      .{"style"}, .{"hidden"}, .{"type"},
+    .{"open"},  .{"popover"}, .{"width"}, .{"height"}, .{"font-size"},
+});
+
+/// When an attribute changes, we only want to invalidate the caches if we care
+/// about that attribute. Some attributes we care about because a selector is
+/// using it (div[role=menu]), which is what the `attribute_names` field is
+/// tracking. But we implicitly always care about some attributes, like "hidden"
+/// or "open". But how do we make sure that `readsAttribute` is kept in sync?
+/// What if someone adds el.isAccessible() which the StyleManager starts to use
+/// and which accesses the "axs" attribute? This is what this debug-only code
+/// is for. A thread-local variable is set by the StyleManager before it reads
+/// anything, and then in Attribute.zig, when an attribute is read, and the
+/// thread local is set, we can make sure that the attribute is a known one.
+pub const fill_check = struct {
+    threadlocal var current: ?*const StyleManager = null;
+
+    pub fn enter(self: *const StyleManager) ?*const StyleManager {
+        if (comptime lp.IS_DEBUG == false) {
+            return null;
+        }
+        const previous = current;
+        current = self;
+        return previous;
+    }
+
+    pub fn exit(previous: ?*const StyleManager) void {
+        if (comptime lp.IS_DEBUG) {
+            current = previous;
+        }
+    }
+
+    pub fn attributeRead(name: []const u8) void {
+        if (comptime lp.IS_DEBUG == false) {
+            return;
+        }
+        const self = current orelse return;
+        if (self.readsAttribute(name) == false) {
+            std.debug.panic("StyleManager memo read untracked attribute '{s}': add it to always_read or pseudoClassAttributes", .{name});
+        }
+    }
+};
+
+/// Whether writing attribute `name` can change what a memo holds
+pub fn readsAttribute(self: *const StyleManager, name: []const u8) bool {
+    if (self.dirty) {
+        // doesn't matter, we're rebuilding anyways.
+        return true;
+    }
+    return always_read.has(name) or self.attribute_names.contains(name);
+}
+
+// Selector attribute names are lowercased, but a foreign element's attribute
+// keeps its case (viewBox). Ignoring the case can only cost us perf, not
+// correctness.
+const AttributeNameContext = struct {
+    pub fn hash(_: AttributeNameContext, name: []const u8) u64 {
+        var buf: [32]u8 = undefined;
+        var hasher: std.hash.Wyhash = .init(0);
+
+        var rest = name;
+        while (rest.len > 0) {
+            const n = @min(rest.len, buf.len);
+            hasher.update(std.ascii.lowerString(&buf, rest[0..n]));
+            rest = rest[n..];
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: AttributeNameContext, a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
@@ -885,6 +990,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
         c.* = @field(self, field).capacities();
     }
     const lazy_rules_count = self.lazy_rules.count();
+    const attribute_names_count = self.attribute_names.count();
 
     self.arena.resetRetain();
     self.widths = .{};
@@ -893,14 +999,18 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.rule_layers = .empty;
     self.last_rule_sheet = null;
 
+    const arena = self.arena.allocator();
+
     inline for (group_fields, caps) |field, c| {
-        try @field(self, field).reset(self.arena.allocator(), c);
+        try @field(self, field).reset(arena, c);
     }
 
     self.lazy_rules = .empty;
-    try self.lazy_rules.ensureTotalCapacity(self.arena.allocator(), lazy_rules_count);
+    try self.lazy_rules.ensureTotalCapacity(arena, lazy_rules_count);
     self.animation_rules = .initFill(.{});
     self.keyframes = .empty;
+    self.attribute_names = .empty;
+    try self.attribute_names.ensureTotalCapacity(arena, attribute_names_count);
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
@@ -1741,6 +1851,11 @@ fn Group(comptime Spec: type) type {
         }
 
         fn compute(self: *const Self, el: *Element, frame: *Frame) Cascaded {
+            // Debug only check to make sure any attribute we access is known.
+            // Protects against adding reads to un-tracked attributes.
+            const previous = fill_check.enter(&frame._style_manager);
+            defer fill_check.exit(previous);
+
             var p: Cascaded = .{};
             var priorities: Priorities(Declared) = .initFill(0);
 
@@ -3929,6 +4044,8 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
 }
 
 const testing = @import("../testing.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
+
 test "StyleManager: important cascade across external sheets, inline styles and layers" {
     try testing.htmlRunner("css/important_cascade.html", .{ .load_resources = .{ .stylesheet = true } });
 }
@@ -4385,6 +4502,115 @@ test "StyleManager: memo: an inline write it doesn't cascade keeps it" {
     _ = try body.appendChild(style_el.asNode(), frame);
     try testing.expectEqual(false, sm.hasDisplayNone(div));
     try style.setProperty("transform", "rotate(5deg)", null, frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(div));
+}
+
+test "StyleManager: memo: validity pseudo-classes read only listed attributes" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    // One control per validity path. fill_check panics on any attribute
+    // read that pseudoClassAttributes doesn't list.
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<form id=f><fieldset>
+        \\<input required pattern="\d+" minlength=2 maxlength=4 value=abc>
+        \\<input type=email multiple value="a@b, c">
+        \\<input type=url value=x>
+        \\<input type=number min=1 max=5 step=2 value=4>
+        \\<input type=range min=1 max=5>
+        \\<input type=date min=2020-01-01 max=2020-12-31 value=2019-01-01>
+        \\<input type=time step=60 value=10:00:30>
+        \\<input type=month value=2020-01><input type=week value=2020-W01>
+        \\<input type=datetime-local value=2020-01-01T00:00>
+        \\<input type=checkbox required><input type=radio name=r required>
+        \\<input type=file required><input type=hidden required>
+        \\<input readonly required><input disabled required>
+        \\<input list=l><datalist id=l><option value=1></datalist>
+        \\<textarea required minlength=2 maxlength=4>a</textarea>
+        \\<select required><option value="">-</option><option>a</option></select>
+        \\<select multiple required><option selected>a</option></select>
+        \\<button>b</button><button type=reset>r</button><output></output>
+        \\</fieldset></form>
+        \\<input form=f required>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(":invalid, :out-of-range { display: none } :valid, :in-range { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+
+    // Too long and too short only apply once the user edited the value
+    const first = (try doc.querySelector(comptime .wrap("input"), frame)).?;
+    try first.as(Element.Html.Input).setUserValue("abcde", frame);
+    const textarea = (try doc.querySelector(comptime .wrap("textarea"), frame)).?;
+    try textarea.as(Element.Html.TextArea).setUserValue("abcde", frame);
+
+    var it: TreeWalker.Full = .init(body, .{});
+    while (it.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        _ = sm.hasDisplayNone(el);
+        _ = sm.hasVisibilityHiddenInherited(el);
+    }
+
+    // A listed name flips :invalid
+    try testing.expectEqual(true, sm.hasDisplayNone(first));
+    try first.setAttribute(comptime .wrap("pattern"), comptime .wrap("[a-z]+"), frame);
+    try first.setAttribute(comptime .wrap("maxlength"), comptime .wrap("8"), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(first));
+}
+
+test "StyleManager: memo: attribute writes no selector reads keep it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div data-open><p class=a></p></div>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("div:not([data-open]) .a { display: none } :has(> [aria-busy=true]) { visibility: hidden } :disabled { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+
+    // A foreign element's attribute keeps its case: names match ignoring it
+    try testing.expectEqual(false, sm.readsAttribute("viewBox"));
+    try testing.expectEqual(true, sm.readsAttribute("Data-Open"));
+    try testing.expectEqual(true, sm.readsAttribute("HIDDEN"));
+
+    // Unread names and same-value writes keep the memo
+    const version = frame.page.style_version;
+    try div.setAttribute(comptime .wrap("data-track"), comptime .wrap("1"), frame);
+    try div.setAttribute(comptime .wrap("aria-label"), comptime .wrap("x"), frame);
+    try div.setAttribute(comptime .wrap("title"), comptime .wrap("x"), frame);
+    try div.setAttribute(comptime .wrap("href"), comptime .wrap("/x"), frame);
+    try div.removeAttribute(comptime .wrap("data-track"), frame);
+    try div.setAttribute(comptime .wrap("data-open"), comptime .wrap(""), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // Names read inside :not() and :has() drop it
+    try div.removeAttribute(comptime .wrap("data-open"), frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(div));
+    try p.setAttribute(comptime .wrap("aria-busy"), comptime .wrap("true"), frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(div));
+
+    // Names a pseudo-class reads: :disabled reads disabled
+    try p.setAttribute(comptime .wrap("disabled"), comptime .wrap(""), frame);
+    try testing.expect(frame.page.style_version != version);
+
+    // Names the engine reads whatever the rules
+    const before = frame.page.style_version;
+    try div.setAttribute(comptime .wrap("hidden"), comptime .wrap(""), frame);
+    try testing.expect(frame.page.style_version != before);
     try testing.expectEqual(true, sm.hasDisplayNone(div));
 }
 
