@@ -260,12 +260,12 @@ fn apiSearch(
     defer client.deinit();
 
     var response = client.search(query, e.options) catch |err| {
-        if (client.last_error.status) |status| {
+        if (client.transport.last_error.status) |status| {
             log.debug(.browser, @tagName(e.tag) ++ " non-2xx", .{
                 .status = status,
-                .message = client.last_error.message,
+                .message = client.transport.last_error.message,
             });
-            detail.* = try client.last_error.dupe(arena);
+            detail.* = try client.transport.last_error.dupe(arena);
         }
         return err;
     };
