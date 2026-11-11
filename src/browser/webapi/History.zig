@@ -87,7 +87,7 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     });
 
     if (result == .fired) {
-        try navigation.commitSameDocument(result.fired, target);
+        try navigation.commitSameDocument(result.fired.signal, target);
     }
 }
 
@@ -124,7 +124,7 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
     });
 
     if (result == .fired) {
-        try navigation.commitSameDocument(result.fired, target);
+        try navigation.commitSameDocument(result.fired.signal, target);
     }
 }
 

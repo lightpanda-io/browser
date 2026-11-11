@@ -344,7 +344,13 @@ pub const NavigateEventResult = union(enum) {
     // No event: an iframe, the initial about:blank, or nothing could observe it.
     not_fired,
     // Navigate. A same-document navigation then calls commitSameDocument.
-    fired: *AbortSignal,
+    fired: struct {
+        signal: *AbortSignal,
+        // intercept() was called: even a cross-document navigation stays in
+        // this document and is driven by the handlers, like a same-document
+        // one.
+        intercepted: bool,
+    },
 };
 
 // Fires `navigate` at a navigation about to happen in `frame`, aborting the
@@ -440,13 +446,15 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         event._handlers.clearRetainingCapacity();
     }
 
-    if (params.same_document == false) {
+    const intercepted = event._intercepted;
+
+    if (params.same_document == false and !intercepted) {
         // The promises of a navigation to another document never settle: this
         // document goes away. It stays ongoing until then, so that a newer
         // navigation or window.stop() still aborts it.
         ongoing.releasePromises();
     }
-    return .{ .fired = signal };
+    return .{ .fired = .{ .signal = signal, .intercepted = intercepted } };
 }
 
 fn ongoingFor(signal: *AbortSignal, frame: *Frame) ?*OngoingNavigation {
@@ -805,7 +813,7 @@ pub fn navigateInner(
     // navigate() stays in the document only for a fragment change, but a
     // traversal stays in it whenever the entry belongs to it, whatever URL
     // pushState gave the entry. A reload never does.
-    const is_same_document = switch (kind) {
+    const is_same_document_pre = switch (kind) {
         .traverse => |index| self._entries.items[index].sameDocument(frame),
         .reload => false,
         else => is_same_url,
@@ -814,14 +822,14 @@ pub fn navigateInner(
     // In case of navigation to the same document, we force an url duplication.
     // Keeping the same url generates a crash during WPT test navigate-history-push-same-url.html.
     // When building a script's src, script's base and frame url overlap.
-    if (is_same_document) {
+    if (is_same_document_pre) {
         new_url = try arena.dupeSentinel(u8, new_url, 0);
     }
 
     const result = try self.fireNavigateEvent(.{
         .navigation_type = kind.toNavigationType(),
         .url = new_url,
-        .same_document = is_same_document,
+        .same_document = is_same_document_pre,
         .entry = switch (kind) {
             .traverse => |index| self._entries.items[index],
             else => null,
@@ -841,8 +849,16 @@ pub fn navigateInner(
         // aborting the navigation rejected the promises
         .canceled => return returnPromises(committed, finished),
         .not_fired => null,
-        .fired => |signal| signal,
+        .fired => |f| f.signal,
     };
+    const intercepted = switch (result) {
+        .fired => |f| f.intercepted,
+        else => false,
+    };
+
+    // intercept() turns even a cross-document navigation into one that
+    // stays in this document, driven by the handlers.
+    const is_same_document = is_same_document_pre or intercepted;
 
     // Captured before a same-document navigation overwrites frame.url; used
     // to queue the hashchange once below.
@@ -901,7 +917,11 @@ pub fn navigateInner(
                 previous._state = .{ .source = .navigation, .value = state };
                 try self.fireCurrentEntryChangeEvent(previous, .reload, frame);
             }
-            try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
+            if (is_same_document) {
+                try self.settleSameDocument(finished, signal, frame);
+            } else {
+                try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
+            }
         },
     }
 

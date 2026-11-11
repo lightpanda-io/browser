@@ -1139,7 +1139,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             arena.release();
 
             if (result == .fired) {
-                try session.navigationFor(target).commitSameDocument(result.fired, target);
+                try session.navigationFor(target).commitSameDocument(result.fired.signal, target);
             }
             return;
         }
@@ -1181,7 +1181,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         arena.release();
 
         if (result == .fired) {
-            try session.navigationFor(target).commitSameDocument(result.fired, target);
+            try session.navigationFor(target).commitSameDocument(result.fired.signal, target);
         }
         return;
     }
