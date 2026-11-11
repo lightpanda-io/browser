@@ -4547,7 +4547,7 @@ test "user_input: inert roots are excluded from mouse fallback and iframe descen
     try iframe.setAttributeSafe(comptime .wrap("inert"), .wrap(""), main);
     const excluded = try mouseHitTest(main, x, y);
     try testing.expect(excluded.frame == main);
-    try testing.expect(excluded.target != iframe);
+    try testing.expect(excluded.target == main.document.getBody().?.asElement());
     try iframe.removeAttribute(comptime .wrap("inert"), main);
 
     // A non-inert iframe can contain an inert root. No root fallback may

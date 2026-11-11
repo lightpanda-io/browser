@@ -48,8 +48,8 @@
   slot.inert = false;
   testing.expectEqual(button, document.elementFromPoint(x, y));
   host.inert = true;
-  testing.expectFalse(document.elementFromPoint(x, y) === host);
-  testing.expectFalse(root.elementFromPoint(x, y) === button);
+  testing.expectEqual(document.body, document.elementFromPoint(x, y));
+  testing.expectEqual(document.body, root.elementFromPoint(x, y));
   host.remove();
 }
 </script>
