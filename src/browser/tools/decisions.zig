@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! The decision-model substrate (Gemini Decisions or TypeSafe System One, see
-//! `zenai.decisions`): what a page looks like to it, the
-//! presets every caller asks about, the one confidence gate, and what the
-//! tools built on it share — `askPage`, their JSON verdicts, and letting the
-//! page settle after a click. The question DSL that the `classify` tool
+//! `zenai.decisions`): what a page looks like to it, the presets every caller
+//! asks about, the one confidence gate, and what the tools built on it share
+//! — `askPage`, their JSON verdicts, and letting the page settle after a
+//! click. The question DSL that the `classify` tool
 //! exposes lives in classify.zig, which is one consumer of this among several
 //! — consent and login ask their own questions and classify nothing.
 
@@ -330,7 +330,7 @@ test "classify: the page is still serviced while the model is asked" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startSlow(aa);
+    const mock = try testing.MockDecisions.startSlow(aa);
     defer mock.stop();
 
     const before = try tickCount(aa, page.session, &registry);
@@ -355,7 +355,7 @@ test "classify: a page that navigates while the model is asked is not answered f
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startSlow(aa);
+    const mock = try testing.MockDecisions.startSlow(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -377,7 +377,7 @@ test "classify: Gemini answers through the same questions" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startAs(aa, .gemini);
+    const mock = try testing.MockDecisions.startAs(aa, .gemini);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -397,7 +397,7 @@ test "classify: an input Gemini blocks is reported with its reason" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startBlocked(aa);
+    const mock = try testing.MockDecisions.startBlocked(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,

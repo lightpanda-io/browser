@@ -24,7 +24,7 @@
 const std = @import("std");
 const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
-const jev = @import("jev.zig");
+const decisions = @import("decisions.zig");
 
 const json = zenai.decisions.json;
 
@@ -38,14 +38,14 @@ fn prepareQuestions(
     presets: bool,
 ) json.PrepareError!json.Prepared {
     const prepared: json.Prepared = json.prepareQuestions(arena, questions, .{
-        .vocabulary = jev.presetDescription,
+        .vocabulary = decisions.presetDescription,
         .category_instructions = "What kind of page is this?",
     }) catch |err| switch (err) {
-        error.EmptyObject => .{ .questions = try jev.allPresetQuestions(arena), .kind = .questions_object },
+        error.EmptyObject => .{ .questions = try decisions.allPresetQuestions(arena), .kind = .questions_object },
         else => return err,
     };
     if (!presets) return prepared;
-    return json.addQuestions(arena, prepared, try jev.allPresetQuestions(arena));
+    return json.addQuestions(arena, prepared, try decisions.allPresetQuestions(arena));
 }
 
 pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
@@ -87,8 +87,8 @@ const parseArgs = tools.parseArgs;
 const requireFrame = tools.requireFrame;
 const resolveScope = tools.resolveScope;
 const NodeRegistry = lp.NodeRegistry;
-const askPage = jev.askPage;
-const internalUnlessOom = jev.internalUnlessOom;
+const askPage = decisions.askPage;
+const internalUnlessOom = decisions.internalUnlessOom;
 
 test "browser.classify: a preset can be named by key alone" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -97,7 +97,7 @@ test "browser.classify: a preset can be named by key alone" {
     const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{\"isBlocked\": true, \"isCaptcha\": true}" }, false);
     try testing.expectEqual(json.ResponseKind.questions_object, prepared.kind);
     try testing.expectEqual(2, prepared.questions.count());
-    try testing.expectString(jev.Preset.isBlocked.description(), prepared.questions.get("isBlocked").?.noul.instructions.text);
+    try testing.expectString(decisions.Preset.isBlocked.description(), prepared.questions.get("isBlocked").?.noul.instructions.text);
     try testing.expect(prepared.questions.has("isCaptcha"));
 }
 
@@ -107,8 +107,8 @@ test "browser.classify: an empty object asks every preset" {
 
     const prepared = try prepareQuestions(arena.allocator(), .{ .string = "{}" }, false);
     try testing.expectEqual(json.ResponseKind.questions_object, prepared.kind);
-    try testing.expectEqual(std.enums.values(jev.Preset).len, prepared.questions.count());
-    for (std.enums.values(jev.Preset)) |preset| {
+    try testing.expectEqual(std.enums.values(decisions.Preset).len, prepared.questions.count());
+    for (std.enums.values(decisions.Preset)) |preset| {
         try testing.expect(prepared.questions.has(@tagName(preset)));
     }
 }
@@ -119,7 +119,7 @@ test "browser.classify: the presets are added beside the caller's own wording" {
     const aa = arena.allocator();
 
     const with = try prepareQuestions(aa, .{ .string = "{\"kind\": [\"a\", \"b\"], \"isPaywall\": \"Is it paywalled?\"}" }, true);
-    const presets = std.enums.values(jev.Preset);
+    const presets = std.enums.values(decisions.Preset);
     try testing.expectEqual(2 + presets.len - 1, with.questions.count());
     try testing.expect(with.questions.has("kind"));
     for (presets) |preset| try testing.expect(with.questions.has(@tagName(preset)));

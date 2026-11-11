@@ -1176,8 +1176,8 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 test "agent script runtime: page.classify executes presets, categories and structured questions" {
     defer testing.test_session.closeAllPages();
 
-    const jev = try testing.MockJev.start(testing.arena_allocator);
-    defer jev.stop();
+    const mock = try testing.MockDecisions.start(testing.arena_allocator);
+    defer mock.stop();
 
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
@@ -1225,7 +1225,7 @@ test "agent script runtime: page.classify executes presets, categories and struc
 test "agent script runtime: page.classify missing API key throws" {
     defer testing.test_session.closeAllPages();
 
-    const mock = testing.MockJev.startWithoutKey();
+    const mock = testing.MockDecisions.startWithoutKey();
     defer mock.stop();
 
     var registry = NodeRegistry.init(testing.allocator);

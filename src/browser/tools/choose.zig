@@ -16,7 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Picking one element on the page with TypeSafe System One (Jev).
+//! Picking one element on the page with a decision model (Gemini Decisions or
+//! TypeSafe System One).
 //!
 //! The candidates are the question's options, keyed by the node id the state
 //! carries too. The model writes no text, so an option id is the only way it

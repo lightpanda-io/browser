@@ -545,7 +545,7 @@ fn testHttpPort() u16 {
 /// zenai talks `std.http`, which libcurl's test port remap does not reach.
 /// The provider is always named, so a developer's own Gemini key never sends
 /// a test to Google.
-pub const MockJev = struct {
+pub const MockDecisions = struct {
     provider: Provider,
 
     pub const Provider = zenai.decisions.Provider;
@@ -553,12 +553,12 @@ pub const MockJev = struct {
     /// The Gemini key the pool reads first, so it is the one a test sets.
     const gemini_key_env_var_name = "GOOGLE_API_KEY";
 
-    pub fn start(arena: std.mem.Allocator) !MockJev {
+    pub fn start(arena: std.mem.Allocator) !MockDecisions {
         return startAs(arena, .typesafe);
     }
 
-    pub fn startAs(arena: std.mem.Allocator, provider: Provider) !MockJev {
-        const mock: MockJev = .{ .provider = provider };
+    pub fn startAs(arena: std.mem.Allocator, provider: Provider) !MockDecisions {
+        const mock: MockDecisions = .{ .provider = provider };
         mock.stop();
         _ = setenv(@constCast(App.decision_provider_env_var_name), @constCast(@tagName(provider)), 1);
         const base_url = try arena.printSentinel("http://127.0.0.1:{d}", .{testHttpPort()}, 0);
@@ -569,7 +569,7 @@ pub const MockJev = struct {
 
     /// The decision is answered as usual and the verification re-read after
     /// it fails: the API breaking once a tool has already acted.
-    pub fn startFailingVerification(arena: std.mem.Allocator) !MockJev {
+    pub fn startFailingVerification(arena: std.mem.Allocator) !MockDecisions {
         const mock = try start(arena);
         mock.setKey(test_routes.no_verify_key);
         return mock;
@@ -577,28 +577,28 @@ pub const MockJev = struct {
 
     /// Answers after a delay, so a test can see whether the caller kept its
     /// own page running while it waited.
-    pub fn startSlow(arena: std.mem.Allocator) !MockJev {
+    pub fn startSlow(arena: std.mem.Allocator) !MockDecisions {
         const mock = try start(arena);
         mock.setKey(test_routes.slow_key);
         return mock;
     }
 
     /// Gemini refuses the input, as its safety filters do.
-    pub fn startBlocked(arena: std.mem.Allocator) !MockJev {
+    pub fn startBlocked(arena: std.mem.Allocator) !MockDecisions {
         const mock = try startAs(arena, .gemini);
         mock.setKey(test_routes.blocked_key);
         return mock;
     }
 
     /// No key for the provider asked: what someone who set none sees.
-    pub fn startWithoutKey() MockJev {
-        const mock: MockJev = .{ .provider = .typesafe };
+    pub fn startWithoutKey() MockDecisions {
+        const mock: MockDecisions = .{ .provider = .typesafe };
         mock.stop();
         _ = setenv(@constCast(App.decision_provider_env_var_name), @constCast("typesafe"), 1);
         return mock;
     }
 
-    fn setKey(self: MockJev, key: [:0]const u8) void {
+    fn setKey(self: MockDecisions, key: [:0]const u8) void {
         const name = switch (self.provider) {
             .typesafe => zenai.typesafe.env_var_name,
             .gemini => gemini_key_env_var_name,
@@ -606,14 +606,14 @@ pub const MockJev = struct {
         _ = setenv(@constCast(name), @constCast(key), 1);
     }
 
-    fn baseUrlEnvVarName(self: MockJev) [:0]const u8 {
+    fn baseUrlEnvVarName(self: MockDecisions) [:0]const u8 {
         return switch (self.provider) {
             .typesafe => zenai.typesafe.base_url_env_var_name,
             .gemini => zenai.decisions.gemini_base_url_env_var_name,
         };
     }
 
-    pub fn stop(_: MockJev) void {
+    pub fn stop(_: MockDecisions) void {
         const names = [_][:0]const u8{
             App.decision_provider_env_var_name,
             zenai.typesafe.env_var_name,
