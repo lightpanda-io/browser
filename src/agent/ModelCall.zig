@@ -33,7 +33,7 @@ const ModelCall = @This();
 const ToolCall = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
-    arguments: ?std.json.Value,
+    arguments: []const u8,
     result: Client.ToolHandler.Result = undefined,
 };
 
@@ -110,7 +110,7 @@ fn serve(self: *ModelCall, session: *lp.Session) void {
     }
 }
 
-fn forwardTool(ctx: *anyopaque, allocator: std.mem.Allocator, name: []const u8, arguments: ?std.json.Value) Client.ToolHandler.Result {
+fn forwardTool(ctx: *anyopaque, allocator: std.mem.Allocator, name: []const u8, arguments: []const u8) Client.ToolHandler.Result {
     const self: *ModelCall = @ptrCast(@alignCast(ctx));
     var call: ToolCall = .{ .allocator = allocator, .name = name, .arguments = arguments };
     self.answered.reset();

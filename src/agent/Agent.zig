@@ -1859,7 +1859,7 @@ fn recordSlashToolCall(
     tool_calls[0] = .{
         .id = try ma.print("lp-slash-{d}", .{self.synthetic_tool_call_id}),
         .name = try ma.dupe(u8, tool_name),
-        .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
+        .arguments = if (args) |v| try zenai.json.valueToString(ma, v) else "{}",
     };
 
     // capToolOutput returns its input unchanged under the cap; dupe so content
@@ -2021,7 +2021,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             }
             const ca = self.conversation.arena.allocator();
             const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
-            const call_args = saved.args orelse tc.arguments;
+            const call_args = saved.args orelse (zenai.provider.ToolCall.parseArguments(ca, tc.arguments) catch null);
             const args = browser_tools.normalizeArgs(ca, tool, call_args) catch call_args;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
@@ -2176,15 +2176,16 @@ fn capToolOutput(allocator: std.mem.Allocator, tool_name: []const u8, output: []
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
-fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
+fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, args_json: []const u8) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // Close any assistant text streamed this turn before the tool spinner shows.
     self.endStreamedText();
+    const arguments: ?std.json.Value = zenai.provider.ToolCall.parseArguments(allocator, args_json) catch null;
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     // Stringify the pre-substitution args so $LP_* placeholders the model
-    // emitted stay redacted in the UI.
+    // emitted stay redacted in the UI, on one line however the model spaced them.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
