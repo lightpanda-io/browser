@@ -2449,7 +2449,7 @@ fn widthLimit(self: *StyleManager, length: Length) ?BoxLength {
 
 // row_shrink is a flex row's shrink ratio, not a width. Offsets aren't a
 // kind: see getCachedOffset.
-pub const LayoutKind = enum { box_width, content_width, full_content_width, scrollable_content_width, row_shrink, box_height, content_height };
+pub const LayoutKind = enum { box_width, content_width, full_content_width, min_content_width, scrollable_content_width, row_shrink, box_height, content_height };
 
 /// Element's computed layout (see layout.zig), valid for one layout version and viewport.
 const LayoutMemo = struct {
@@ -2498,7 +2498,7 @@ const LayoutMemo = struct {
     };
 
     comptime {
-        std.debug.assert(@sizeOf(Entry) <= 80);
+        std.debug.assert(@sizeOf(Entry) <= 88);
     }
 };
 
@@ -6535,7 +6535,7 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
 }
 
 test "StyleManager: records: the layout memo keeps each kind apart" {
-    try testing.expectEqual(88, @sizeOf(Records(LayoutMemo.Entry).Entry));
+    try testing.expectEqual(96, @sizeOf(Records(LayoutMemo.Entry).Entry));
 
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();

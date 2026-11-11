@@ -1606,3 +1606,46 @@
   testing.expectEqual(nowrap, $('#textWrapModeNowrap').clientHeight);
 }
 </script>
+
+<script id="textWidths">
+{
+  // Text is ~0.6em a glyph and 0.33em a collapsed space, at 16px by default
+  const close = (expected, actual) => testing.expectTrue(Math.abs(expected - actual) < 0.01, `${expected} ~ ${actual}`);
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // An inline box is as wide as its text, its spaces collapsed, and the next
+  // one on the line starts after it and the text before it
+  wrap.innerHTML = '<span id="tw-a">Hello</span><span id="tw-b">\n   a    b  </span><div id="tw-line">abc <b id="tw-c">x</b></div>';
+  close(48, rect('tw-a').width);
+  close(9.6 + 5.28 + 9.6, rect('tw-b').width);
+  close(48, rect('tw-b').left - rect('tw-a').left);
+  close(3 * 9.6 + 5.28, rect('tw-c').left - rect('tw-line').left);
+
+  // A cell is as wide as its text
+  wrap.innerHTML = '<table><tr><td id="tw-cell">Hello</td><td id="tw-next"></td></tr></table>';
+  close(48, rect('tw-next').left - rect('tw-cell').left);
+
+  // Text wraps at its block's width, so it doesn't overflow it; unless it
+  // doesn't wrap, or a word is longer than the line
+  const words = 'word '.repeat(200);
+  wrap.innerHTML = `<div id="tw-wraps" style="width: 100px">${words}</div><div id="tw-nowrap" style="width: 100px; white-space: nowrap">${words}</div><div id="tw-long" style="width: 100px">${'x'.repeat(20)}</div>`;
+  testing.expectEqual(100, $('#tw-wraps').scrollWidth);
+  testing.expectTrue($('#tw-nowrap').scrollWidth > 1000);
+  close(20 * 9.6, $('#tw-long').scrollWidth);
+
+  // A flex item shrinks down to its longest word, not its whole text
+  wrap.innerHTML = `<div style="display: flex; width: 200px"><div id="tw-item">${words}</div></div>`;
+  testing.expectEqual(200, rect('tw-item').width);
+
+  // A shrink-to-fit box sized by wrapping text takes its widest line at the
+  // viewport's width
+  wrap.innerHTML = `<span id="tw-shrink" style="display: inline-block">${words}</span>`;
+  const shrink = rect('tw-shrink').width;
+  testing.expectTrue(shrink <= window.innerWidth && shrink > window.innerWidth - 100);
+
+  wrap.remove();
+}
+</script>

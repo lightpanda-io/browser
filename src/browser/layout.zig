@@ -74,9 +74,12 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
 // How a box that clips its overflow counts toward its ancestors' content.
 // Out-of-flow boxes take no room in their parent's flow, so they don't size
 // it, but they still extend a scroller's scrollable area.
+// Text that wraps is as wide as the line it wraps at (see textLineWidth).
 pub const ContentMode = enum {
     full,
     clipped,
+    // clipped, with wrapping text at its longest word: the least it takes
+    min,
     // clipped, with out-of-flow boxes counted
     scrollable,
 };
@@ -110,7 +113,7 @@ fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
         .shrink, .grow, .fill => @max(own.value, contentWidth(self, .full, owner)),
         .contents => return .{
             .base = widthContribution(self, .full, owner),
-            .floor = widthContribution(self, .clipped, owner),
+            .floor = widthContribution(self, .min, owner),
         },
     };
     const base = clampWidth(self, width, .box, owner);
@@ -134,8 +137,8 @@ fn flexMinWidth(self: *Element, base: f64, owner: *Frame) f64 {
         return base;
     }
     const own = self.getElementAxis(owner, .width);
-    const content = contentWidth(self, .clipped, owner);
-    // An auto width's fallback stands in for its text
+    const content = contentWidth(self, .min, owner);
+    // An auto width's fallback stands in for an empty box
     return @min(base, if (own.explicit) content else @max(own.value, content));
 }
 
@@ -278,13 +281,14 @@ fn growShare(self: *Element, owner: *Frame) f64 {
 // The width the children would take unconstrained: the sum of their
 // contributions. In a flex row or grid they sit side by side; elsewhere
 // block-level children stack, so the widest counts, and inline-level ones
-// share one line that never wraps (the dummy layout has no line breaking,
-// which keeps the "append until the lane outgrows its shell" idiom
-// terminating).
+// and text share one line. Boxes on a line never wrap (the dummy layout has
+// no line breaking, which keeps the "append until the lane outgrows its
+// shell" idiom terminating); only text does.
 pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
     const kind: StyleManager.LayoutKind = switch (mode) {
         .full => .full_content_width,
         .clipped => .content_width,
+        .min => .min_content_width,
         .scrollable => .scrollable_content_width,
     };
     const style_manager = &owner._style_manager;
@@ -297,9 +301,15 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     const in_row = style_manager.laysOutInRow(self);
     var widest: f64 = 0;
     var line: f64 = 0;
+    var text: LineText(mode) = .{ .parent = self };
     var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
     while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
+        const el = node.is(Element) orelse {
+            if (node.is(Node.CData.Text)) |t| {
+                text.add(t.ownData(), owner);
+            }
+            continue;
+        };
         if (style_manager.hasDisplayNone(el)) {
             continue;
         }
@@ -310,13 +320,76 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
         if (in_row or style_manager.isBlockLevel(el) == false) {
             line += width;
         } else {
-            widest = @max(widest, line, width);
+            widest = @max(widest, line + text.end(), width);
             line = 0;
         }
     }
-    const width = @max(widest, line);
+    const width = @max(widest, line + text.end());
     style_manager.setCacheLayout(self, kind, width);
     return width;
+}
+
+// Where el's text wraps, for each mode: never for its full width, at the
+// viewport to size a box by it (its containing block's width may be sized by
+// this box), between every word for the least it takes, and at its block's
+// width for what overflows.
+fn textLineWidth(self: *Element, comptime mode: ContentMode, white_space: text_measure.WhiteSpace, owner: *Frame) f64 {
+    if (white_space.wrap == false) {
+        return std.math.inf(f64);
+    }
+    return switch (mode) {
+        .full => std.math.inf(f64),
+        .clipped => @floatFromInt(owner.page.getViewport().width),
+        .min => 0,
+        .scrollable => {
+            const block = owner._style_manager.blockContainer(self) orelse {
+                return @floatFromInt(owner.page.getViewport().width);
+            };
+            return boxWidth(block, owner);
+        },
+    };
+}
+
+/// The text of parent's children on one line, measured as it's added.
+pub fn LineText(comptime mode: ContentMode) type {
+    return struct {
+        parent: *Element,
+        // Set up at the first text with content
+        wrap: ?text_measure.LineWrap = null,
+
+        const Self = @This();
+
+        pub fn add(self: *Self, data: []const u8, owner: *Frame) void {
+            if (self.wrap) |*w| {
+                w.add(data);
+                return;
+            }
+            if (isAllWhitespace(data)) {
+                return;
+            }
+            const style_manager = &owner._style_manager;
+            const white_space = style_manager.whiteSpace(self.parent);
+            self.wrap = .{
+                .line_width = textLineWidth(self.parent, mode, white_space, owner),
+                .font_size = style_manager.computedFontSize(self.parent),
+                .white_space = white_space,
+            };
+            self.wrap.?.add(data);
+        }
+
+        /// The text's width; the next line's text starts afresh.
+        pub fn end(self: *Self) f64 {
+            const w = self.wrap orelse return 0;
+            self.wrap = .{ .line_width = w.line_width, .font_size = w.font_size, .white_space = w.white_space };
+            return w.lines().width;
+        }
+
+        /// Like end, with the space before what comes next.
+        pub fn endBefore(self: *Self) f64 {
+            const space = if (self.wrap) |w| w.space else 0;
+            return self.end() + space;
+        }
+    };
 }
 
 /// Height flows up, top flows down. In the flow, a box is never above its
