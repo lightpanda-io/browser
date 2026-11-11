@@ -22,26 +22,24 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
+const RuleStore = @import("../../css/RuleStore.zig");
 
 const CSSRule = @import("CSSRule.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
-const GenericRule = @import("GenericRule.zig");
+const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 const CSSStyleProperties = @import("CSSStyleProperties.zig");
 
 const CSSStyleRule = @This();
 
 pub const Proto = CSSRule;
 
-_selector_text: []const u8 = "",
-_style: ?*CSSStyleProperties = null,
-/// The rules nested in this rule's block (CSS Nesting), null when there are
-/// none. A nested style rule keeps its selector as written (`&.active`).
 _rules: ?*CSSRuleList = null,
+_style: ?*CSSStyleProperties = null,
 _proto_canary: if (lp.IS_DEBUG) *CSSRule else void = undefined,
 
-pub fn init(frame: *Frame) !*CSSStyleRule {
+pub fn init(store: *RuleStore, id: u32, hint: u32, frame: *Frame) !*CSSStyleRule {
     return frame._factory.chained(.{
-        CSSRule{ ._type = .style },
+        CSSRule{ ._type = .style, ._store = store, ._id = id, ._hint = hint },
         CSSStyleRule{},
     });
 }
@@ -50,53 +48,65 @@ pub fn asCSSRule(self: *CSSStyleRule) *CSSRule {
     return Factory.protoOf(self);
 }
 
-fn getSelectorText(self: *const CSSStyleRule) []const u8 {
-    return self._selector_text;
+fn getSelectorText(self: *CSSStyleRule) []const u8 {
+    return self.asCSSRule().entry().text();
 }
 
-pub fn setSelectorText(self: *CSSStyleRule, text: []const u8, frame: *Frame) !void {
-    self._selector_text = try frame.dupeString(text);
+fn setSelectorText(self: *CSSStyleRule, text: []const u8, frame: *Frame) !void {
+    const rule = self.asCSSRule();
+    try rule.entry().setText(frame._factory.storageAllocator(), text);
+    rule.changed(frame);
 }
 
-pub fn getStyle(self: *CSSStyleRule, frame: *Frame) !*CSSStyleProperties {
+fn getStyle(self: *CSSStyleRule, frame: *Frame) !*CSSStyleProperties {
     if (self._style) |style| {
         return style;
     }
-    const style = try CSSStyleProperties.init(null, false, frame);
+    const style = try CSSStyleProperties.init(.{ .rule = self }, frame);
     self._style = style;
     return style;
 }
 
-pub fn getCssRules(self: *CSSStyleRule, frame: *Frame) !*CSSRuleList {
+/// The rules nested in this rule's block (CSS Nesting).
+fn getCssRules(self: *CSSStyleRule, frame: *Frame) !*CSSRuleList {
     if (self._rules) |rules| {
         return rules;
     }
-    const rules = try CSSRuleList.init(frame);
+    const rule = self.asCSSRule();
+    const entry = rule.entry();
+    const children = entry._children orelse blk: {
+        const children = try RuleStore.init(frame._factory.storageAllocator(), rule._store._sheet);
+        children._detached = rule._store._detached;
+        entry._children = children;
+        break :blk children;
+    };
+    const rules = try CSSRuleList.init(children, frame);
     self._rules = rules;
     return rules;
 }
 
 pub fn getCssText(self: *CSSStyleRule, frame: *Frame) ![]const u8 {
-    const style_props = try self.getStyle(frame);
-    const style = style_props.asCSSStyleDeclaration();
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-    try buf.writer.print("{s} {{ ", .{self._selector_text});
+    try writeCssText(self.asCSSRule().entry(), &buf, frame);
+    return buf.written();
+}
+
+fn writeCssText(entry: *const RuleStore.Entry, buf: *std.Io.Writer.Allocating, frame: *Frame) !void {
+    try buf.writer.print("{s} {{ ", .{entry.text()});
     const start = buf.written().len;
-    try style.format(&buf.writer, frame);
-    if (self._rules) |rules| {
-        for (rules._rules.items) |rule| {
+    try CSSStyleDeclaration.formatBlock(&entry._block, &buf.writer, frame);
+    if (entry._children) |children| {
+        for (children.entries()) |*child| {
             if (buf.written().len > start) {
                 try buf.writer.writeByte(' ');
             }
-            const text = switch (rule._type) {
-                .style => try rule.as(CSSStyleRule).getCssText(frame),
-                .generic => rule.as(GenericRule)._text,
-            };
-            try buf.writer.writeAll(text);
+            switch (child._kind) {
+                .style => try writeCssText(child, buf, frame),
+                else => try buf.writer.writeAll(child.text()),
+            }
         }
     }
     try buf.writer.writeAll(" }");
-    return buf.written();
 }
 
 pub const JsApi = struct {

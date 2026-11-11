@@ -32,6 +32,12 @@ _entries: [*]Entry = @constCast(&empty_entries),
 
 const empty_entries: [0]Entry = .{};
 
+pub fn deinit(self: *DeclarationBlock, allocator: Allocator) void {
+    self.clear(allocator);
+    allocator.free(self._entries[0..self._cap]);
+    self.* = .{};
+}
+
 pub fn entries(self: *const DeclarationBlock) []Entry {
     return self._entries[0..self._len];
 }
@@ -54,9 +60,9 @@ pub fn findIndex(self: *const DeclarationBlock, id: properties.Id) ?usize {
     return null;
 }
 
-/// Adds a declaration of `id`, which must not be declared yet.
-pub fn append(self: *DeclarationBlock, id: properties.Id, value: []const u8, important: bool, allocator: Allocator) !void {
+pub fn append(self: *DeclarationBlock, allocator: Allocator, id: properties.Id, value: []const u8, important: bool) !void {
     if (comptime lp.IS_DEBUG) {
+        // the caller updates an existing declaration instead
         std.debug.assert(self.findIndex(id) == null);
     }
     if (self._len == self._cap) {
@@ -65,7 +71,7 @@ pub fn append(self: *DeclarationBlock, id: properties.Id, value: []const u8, imp
         }
         // A parsed block is trimmed once done, so most take one allocation
         // here. Additions from JS are rare and small.
-        try self.setCapacity(self._cap + 4, allocator);
+        try self.setCapacity(allocator, self._cap + 4);
     }
     var entry: Entry = .{
         ._id = id,
@@ -74,13 +80,12 @@ pub fn append(self: *DeclarationBlock, id: properties.Id, value: []const u8, imp
         ._important = important,
         ._value_owned = false,
     };
-    try entry.setValue(value, allocator);
+    try entry.setValue(allocator, value);
     self._entries[self._len] = entry;
     self._len += 1;
 }
 
-/// Removes the entry at `index`, freeing its value.
-pub fn removeAt(self: *DeclarationBlock, index: usize, allocator: Allocator) void {
+pub fn removeAt(self: *DeclarationBlock, allocator: Allocator, index: usize) void {
     const all = self.entries();
     all[index].freeValue(allocator);
     // keep declaration order
@@ -88,22 +93,22 @@ pub fn removeAt(self: *DeclarationBlock, index: usize, allocator: Allocator) voi
     self._len -= 1;
 }
 
-/// Keeps the capacity: a new set of declarations usually follows.
 pub fn clear(self: *DeclarationBlock, allocator: Allocator) void {
     for (self.entries()) |*entry| {
         entry.freeValue(allocator);
     }
+    // Keeps the capacity: a new set of declarations usually follows
     self._len = 0;
 }
 
 /// A parsed block rarely changes after. Gives back the spare room.
 pub fn trim(self: *DeclarationBlock, allocator: Allocator) !void {
     if (self._cap > self._len) {
-        try self.setCapacity(self._len, allocator);
+        try self.setCapacity(allocator, self._len);
     }
 }
 
-fn setCapacity(self: *DeclarationBlock, cap: u16, allocator: Allocator) !void {
+fn setCapacity(self: *DeclarationBlock, allocator: Allocator, cap: u16) !void {
     const resized = try allocator.realloc(self._entries[0..self._cap], cap);
     self._entries = resized.ptr;
     self._cap = cap;
@@ -166,7 +171,7 @@ pub const Entry = struct {
 
     // The new value is stored before the old one is freed, so `new_value` may
     // alias it, and a failed allocation leaves the entry as it was.
-    pub fn setValue(self: *Entry, new_value: []const u8, allocator: Allocator) !void {
+    pub fn setValue(self: *Entry, allocator: Allocator, new_value: []const u8) !void {
         if (new_value.len > std.math.maxInt(u32)) {
             return error.StringTooLarge;
         }

@@ -126,7 +126,9 @@ pub fn childrenChanged(self: *Style, frame: *Frame) void {
         return;
     }
     if (self._sheet) |sheet| {
-        sheet._css_rules = null;
+        sheet.textChanged(frame) catch |err| {
+            lp.log.err(.browser, "style text changed", .{ .err = err });
+        };
     }
     const owner = node.ownerFrame(frame) orelse return;
     owner._style_manager.sheetModified();

@@ -2803,12 +2803,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         break :blk new_sheet;
     };
 
-    // Parse first, only swap `_href` on success. `replaceRules` itself is
-    // not atomic (clears rules before the insert loop), so a mid-parse
-    // OOM still drops the old rules — full atomicity would require a
-    // scratch-list pattern in `CSSStyleSheet.replaceRules`. Keeping
-    // `_href` consistent with what the sheet actually contains is the
-    // minimum.
+    // Parse first, only swap `_href` on success: a parse failure in `replaceRules`
+    // leaves the old rules, so `_href` stays consistent with them.
     const content_type: ?Mime = if (response.content_type) |value|
         Mime.parse(value) catch null
     else

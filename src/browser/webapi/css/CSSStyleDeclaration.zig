@@ -32,15 +32,31 @@ const StyleManager = @import("../../StyleManager.zig");
 const Element = @import("../Element.zig");
 const DOMMatrixReadOnly = @import("../DOMMatrixReadOnly.zig");
 
+const CSSStyleRule = @import("CSSStyleRule.zig");
+
 const Allocator = std.mem.Allocator;
 
 const CSSStyleDeclaration = @This();
 
-_element: ?*Element = null,
-// On the factory's storage allocator.
+_owner: Owner = .none,
+// On the factory's storage allocator. Unused for a rule's style.
 _declarations: DeclarationBlock = .{},
 _syncing: bool = false,
-_is_computed: bool = false,
+
+/// Who the declarations bleong to
+pub const Owner = union(enum) {
+    // A bare block: parseBlock/formatBlock scratch, tests
+    none,
+
+    // el.style: writes sync the element's style attribute
+    inline_style: *Element,
+
+    // getComputedStyle(el): read-only
+    computed: *Element,
+
+    // rule.style: the declarations are the rule's
+    rule: *CSSStyleRule,
+};
 
 const Entry = DeclarationBlock.Entry;
 
@@ -48,10 +64,10 @@ const Entry = DeclarationBlock.Entry;
 // subsequent JS reads and writes see all CSS properties, not just newly
 // added ones.  Computed styles have no inline attribute to parse.
 pub fn parseInlineStyle(self: *CSSStyleDeclaration, frame: *Frame) !void {
-    if (self._is_computed) {
-        return;
-    }
-    const el = self._element orelse return;
+    const el = switch (self._owner) {
+        .inline_style => |el| el,
+        else => return,
+    };
     const attr_value = el.getAttributeInterned("style") orelse return;
     try self.applyDeclarations(CssParser.parseDeclarationsList(attr_value), frame);
 }
@@ -61,15 +77,15 @@ fn applyDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Declara
     while (it.next()) |declaration| {
         try self.applyParsedDeclaration(declaration, frame);
     }
-    try self._declarations.trim(frame._factory.storageAllocator());
+    try self.storage().trim(frame._factory.storageAllocator());
 }
 
 pub fn length(self: *const CSSStyleDeclaration) u32 {
-    return self._declarations.length();
+    return self.storage().length();
 }
 
 pub fn item(self: *const CSSStyleDeclaration, index: u32, frame: *const Frame) []const u8 {
-    const all = self._declarations.entries();
+    const all = self.storage().entries();
     if (index >= all.len) {
         return "";
     }
@@ -81,13 +97,13 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     if (lookupId(normalized, frame)) |id| {
         return self.getKnownPropertyValue(id, frame);
     }
-    if (self._is_computed == false or isCustomProperty(normalized) == false) {
+    if (self._owner != .computed or isCustomProperty(normalized) == false) {
         return "";
     }
 
     // A custom name the page hasn't numbered yet can still be declared in a
     // sheet not yet rebuilt or a style attribute not yet parsed.
-    const element = self._element orelse return "";
+    const element = self._owner.computed;
     const owner = element.ownerFrame(frame) orelse return "";
     const style_manager = &owner._style_manager;
     const id = style_manager.customPropertyId(element, normalized) orelse return "";
@@ -97,7 +113,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 pub fn getKnownPropertyValue(self: *const CSSStyleDeclaration, id: properties.Id, frame: *Frame) []const u8 {
     const value = self.cascadedValue(id, frame);
 
-    if (self._is_computed == false) {
+    if (self._owner != .computed) {
         return value;
     }
 
@@ -193,8 +209,8 @@ fn cascadedValue(self: *const CSSStyleDeclaration, id: properties.Id, frame: *Fr
     // tree builders (Playwright ariaSnapshot) consult on every element —
     // pointer-events and text-transform, which innerText applies, and
     // position, which offsetParent consults.
-    if (self._is_computed) computed: {
-        const element = self._element orelse break :computed;
+    if (self._owner == .computed) computed: {
+        const element = self._owner.computed;
         const owner = element.ownerFrame(frame) orelse break :computed;
         const style_manager = &owner._style_manager;
         switch (id) {
@@ -224,10 +240,10 @@ fn cascadedValue(self: *const CSSStyleDeclaration, id: properties.Id, frame: *Fr
     }
 
     // Only return default values for computed styles
-    if (!self._is_computed) {
+    if (self._owner != .computed) {
         return "";
     }
-    const element = self._element orelse return initialValue(id);
+    const element = self._owner.computed;
     const owner = element.ownerFrame(frame) orelse {
         return uaDefaultValue(element, id) orelse initialValue(id);
     };
@@ -564,7 +580,7 @@ pub fn declaredImportant(self: *const CSSStyleDeclaration, id: properties.Id) bo
 }
 
 pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, frame: *Frame) !void {
-    if (self._is_computed) {
+    if (self._owner == .computed) {
         return error.NoModificationAllowed;
     }
 
@@ -673,7 +689,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, value: []const
     const allocator = frame._factory.storageAllocator();
     if (self.findProperty(id)) |existing| {
         if (!std.mem.eql(u8, existing.value(), normalized_value)) {
-            try existing.setValue(normalized_value, allocator);
+            try existing.setValue(allocator, normalized_value);
         } else if (existing._important == important) {
             return false;
         }
@@ -681,12 +697,12 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, value: []const
         return true;
     }
 
-    try self._declarations.append(id, normalized_value, important, allocator);
+    try self.storage().append(allocator, id, normalized_value, important);
     return true;
 }
 
 pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
-    if (self._is_computed) {
+    if (self._owner == .computed) {
         return error.NoModificationAllowed;
     }
     const normalized = normalizePropertyName(frame.local_arena, property_name);
@@ -721,10 +737,10 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, frame: *Fra
 
 /// Removes the declaration of exactly `id`, without expanding a shorthand.
 fn removeDeclared(self: *CSSStyleDeclaration, id: properties.Id, frame: *Frame) !?[]const u8 {
-    const index = self._declarations.findIndex(id) orelse return null;
+    const index = self.storage().findIndex(id) orelse return null;
     // freed with the entry
-    const old_value = try frame.call_arena.dupe(u8, self._declarations.entries()[index].value());
-    self._declarations.removeAt(index, frame._factory.storageAllocator());
+    const old_value = try frame.call_arena.dupe(u8, self.storage().entries()[index].value());
+    self.storage().removeAt(frame._factory.storageAllocator(), index);
     return old_value;
 }
 
@@ -732,7 +748,11 @@ fn removeDeclared(self: *CSSStyleDeclaration, id: properties.Id, frame: *Frame) 
 // DOM serialization (outerHTML, getAttribute) reflects JS-modified styles.
 // `changed` is the one property written, when that's all that changed.
 fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?properties.Id, frame: *Frame) !void {
-    const element = self._element orelse return;
+    const element = switch (self._owner) {
+        .inline_style => |el| el,
+        .rule => |rule| return rule.asCSSRule().changed(frame),
+        .none, .computed => return,
+    };
     const css_text = try self.getCssText(frame);
     self._syncing = true;
     defer self._syncing = false;
@@ -763,7 +783,7 @@ pub fn styleAttributeChanged(self: *CSSStyleDeclaration, text: ?[]const u8, fram
 
 // Keeps the capacity: a new set of declarations usually follows.
 fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
-    self._declarations.clear(frame._factory.storageAllocator());
+    self.storage().clear(frame._factory.storageAllocator());
 }
 
 fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
@@ -771,7 +791,7 @@ fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
 }
 
 fn setFloat(self: *CSSStyleDeclaration, value: js.Value, frame: *Frame) !void {
-    if (self._is_computed) {
+    if (self._owner == .computed) {
         return error.NoModificationAllowed;
     }
     // `[LegacyNullToEmptyString] CSSOMString`: null becomes "", undefined becomes "undefined".
@@ -788,17 +808,10 @@ fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
 }
 
 pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
-    if (self._is_computed) {
+    if (self._owner == .computed) {
         return error.NoModificationAllowed;
     }
     try self.replaceDeclarations(CssParser.parseDeclarationsList(text), frame);
-}
-
-// A CSSStyleRule's style, from the rule's block in a stylesheet. Unlike
-// cssText, the block may nest rules (CSS Nesting); its declarations are the
-// ones around them.
-pub fn replaceStyleBlock(self: *CSSStyleDeclaration, block: []const u8, frame: *Frame) !void {
-    try self.replaceDeclarations(CssParser.parseStyleBlock(block), frame);
 }
 
 fn replaceDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.DeclarationsIterator, frame: *Frame) !void {
@@ -814,7 +827,7 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer, frame: *
     var skip: ?*const Entry = null;
     // As does a four-side shorthand with all four sides declared.
     var boxes_written: std.StaticBitSet(properties.box_shorthands.len) = .empty;
-    for (self._declarations.entries()) |*prop| {
+    for (self.storage().entries()) |*prop| {
         if (prop == skip) {
             continue;
         }
@@ -847,11 +860,32 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer, frame: *
 }
 
 pub fn declarationBlock(self: *const CSSStyleDeclaration) *const DeclarationBlock {
-    return &self._declarations;
+    return self.storage();
+}
+
+// A rule's block is only valid until its sheet's rules next change.
+fn storage(self: *const CSSStyleDeclaration) *DeclarationBlock {
+    return switch (self._owner) {
+        .rule => |rule| &rule.asCSSRule().entry()._block,
+        .none, .inline_style, .computed => @constCast(&self._declarations),
+    };
+}
+
+/// A style rule's block as a sheet stores it.
+pub fn parseBlock(text: []const u8, frame: *Frame) !DeclarationBlock {
+    var parsed: CSSStyleDeclaration = .{};
+    errdefer parsed._declarations.deinit(frame._factory.storageAllocator());
+    try parsed.applyDeclarations(CssParser.parseStyleBlock(text), frame);
+    return parsed._declarations;
+}
+
+pub fn formatBlock(declarations: *const DeclarationBlock, writer: *std.Io.Writer, frame: *const Frame) !void {
+    const view: CSSStyleDeclaration = .{ ._declarations = declarations.* };
+    return view.format(writer, frame);
 }
 
 fn findProperty(self: *const CSSStyleDeclaration, id: properties.Id) ?*Entry {
-    return self._declarations.find(id);
+    return self.storage().find(id);
 }
 
 /// The id of a known or custom property, null when no declaration can have it.

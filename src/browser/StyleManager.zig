@@ -37,9 +37,7 @@ const Selector = @import("webapi/selector/Selector.zig");
 const SelectorParser = @import("webapi/selector/Parser.zig");
 const SelectorList = @import("webapi/selector/List.zig");
 
-const CSSRule = @import("webapi/css/CSSRule.zig");
-const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
-const GenericRule = @import("webapi/css/GenericRule.zig");
+const RuleStore = @import("css/RuleStore.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 
 const log = lp.log;
@@ -143,26 +141,20 @@ fn assertOwns(self: *const StyleManager, el_: ?*const Element) void {
 pub const MAX_AT_RULE_NESTING: u8 = 32;
 
 fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet) !void {
-    if (sheet._css_rules) |css_rules| {
-        for (css_rules._rules.items) |rule| {
-            switch (rule._type) {
+    if (sheet._parsed) {
+        for (sheet._store.entries()) |*entry| {
+            switch (entry._kind) {
                 .style => {
-                    const sr = rule.as(CSSStyleRule);
-                    _ = try self.addRule(sr);
-                    try self.addNestedCssomRules(build_arena, sr, sr._selector_text, 0);
+                    _ = try self.addStoredRule(entry, entry.text());
+                    try self.addNestedStoredRules(build_arena, entry, entry.text(), 0);
                 },
-                .generic => {
-                    const generic = rule.as(GenericRule);
-                    switch (generic._kind) {
-                        // Re-parse the stored source so an `@media` rule inserted via
-                        // `insertRule` / `replaceSync` participates in the cascade
-                        // when its query matches the viewport.
-                        .media => try self.applyMediaAtRule(build_arena, generic._text, 0, NO_LAYER, null),
-                        .layer => try self.applyLayerAtRule(build_arena, generic._text, 0, NO_LAYER, null),
-                        .keyframes => try self.addKeyframes(generic._text),
-                        else => {},
-                    }
-                },
+                // Re-parse the stored source so an `@media` rule inserted via
+                // `insertRule` / `replaceSync` participates in the cascade
+                // when its query matches the viewport.
+                .media => try self.applyMediaAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+                .layer => try self.applyLayerAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+                .keyframes => try self.addKeyframes(entry.text()),
+                else => {},
             }
         }
         return;
@@ -1878,55 +1870,41 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     return false;
 }
 
-/// The CSSOM twin of addRawRule; returns what addSelectorRules does.
-fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
-    return self.addRuleAs(style_rule, style_rule._selector_text);
-}
-
-/// Add a style rule's declarations under `selector_text`: its own selector,
-/// or for a nested rule, that selector resolved against its parent's.
-fn addRuleAs(self: *StyleManager, style_rule: *CSSStyleRule, selector_text: []const u8) !bool {
+/// The stored twin of addRawRule: add a style rule's declarations under
+/// `selector_text`, its own selector or, for a nested rule, that selector
+/// resolved against its parent's. Returns what addSelectorRules does.
+fn addStoredRule(self: *StyleManager, entry: *const RuleStore.Entry, selector_text: []const u8) !bool {
     if (selector_text.len == 0) {
         return false;
     }
-    const style = style_rule._style orelse return false;
-    const block = style.asCSSStyleDeclaration().declarationBlock();
-    const folded = extractDeclared(Declarations, block, self.frame);
-    const lazy = try self.extractLazyDeclarations(block);
+    const folded = extractDeclared(Declarations, &entry._block, self.frame);
+    const lazy = try self.extractLazyDeclarations(&entry._block);
 
     // A custom rule holds selector_text until the property is looked up, but it
-    // doesn't need a copy: setSelectorText allocates the replacement from the
-    // frame arena and never frees the old one. Worst case we match a stale
-    // selector, which is what the rest of this file already does when a rule is
-    // mutated without going through sheetModified().
+    // doesn't need a copy: the sheet frees a rule's selector only along with
+    // sheetModified(), and every lookup rebuilds first.
     return self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), lazy, NO_LAYER);
 }
 
-/// The CSSOM counterpart to the nested rules addRawRule adds: a style rule
-/// keeps the rules nested in its block in `_rules`. `parent_selector` is the
-/// parent's selector, already resolved when the parent is itself nested.
-fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSSStyleRule, parent_selector: []const u8, depth: u8) Allocator.Error!void {
-    const nested_rules = parent._rules orelse return;
+/// The stored counterpart to the nested rules addRawRule adds.
+/// `parent_selector` is the parent's selector, already resolved when the
+/// parent is itself nested.
+fn addNestedStoredRules(self: *StyleManager, build_arena: Allocator, parent: *const RuleStore.Entry, parent_selector: []const u8, depth: u8) Allocator.Error!void {
+    const children = parent._children orelse return;
     if (depth >= MAX_AT_RULE_NESTING) {
         return;
     }
-    for (nested_rules._rules.items) |rule| {
-        switch (rule._type) {
+    for (children.entries()) |*entry| {
+        switch (entry._kind) {
             .style => {
-                const sr = rule.as(CSSStyleRule);
                 // The arena, as in addRawRule.
-                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, sr._selector_text) orelse continue;
-                _ = try self.addRuleAs(sr, selector);
-                try self.addNestedCssomRules(build_arena, sr, selector, depth + 1);
+                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, entry.text()) orelse continue;
+                _ = try self.addStoredRule(entry, selector);
+                try self.addNestedStoredRules(build_arena, entry, selector, depth + 1);
             },
-            .generic => {
-                const generic = rule.as(GenericRule);
-                switch (generic._kind) {
-                    .media => try self.applyMediaAtRule(build_arena, generic._text, depth + 1, NO_LAYER, parent_selector),
-                    .layer => try self.applyLayerAtRule(build_arena, generic._text, depth + 1, NO_LAYER, parent_selector),
-                    else => {},
-                }
-            },
+            .media => try self.applyMediaAtRule(build_arena, entry.text(), depth + 1, NO_LAYER, parent_selector),
+            .layer => try self.applyLayerAtRule(build_arena, entry.text(), depth + 1, NO_LAYER, parent_selector),
+            else => {},
         }
     }
 }
@@ -1934,19 +1912,19 @@ fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSS
 /// A style rule appended at or after the sheet that emitted the last rule is
 /// last in cascade order, so it joins the buckets directly. Anything else
 /// takes the rebuild path.
-pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) void {
+pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, index: u32) void {
     if (self.dirty or sheet._disabled) {
         // The pending rebuild reads the sheet's rules and picks it up.
         return;
     }
-    const style_rule = rule.is(CSSStyleRule) orelse return self.sheetModified();
+    const entry = &sheet._store.entries()[index];
     // A rule with nested rules takes the rebuild path, which adds them.
-    if (style_rule._rules != null or !self.appendable(sheet, rule)) {
+    if (entry._kind != .style or entry._children != null or !self.appendable(sheet, index)) {
         return self.sheetModified();
     }
     const before = self.next_doc_order;
     const animations = self.animationRuleCount();
-    const changed = self.addRule(style_rule) catch return self.sheetModified();
+    const changed = self.addStoredRule(entry, entry.text()) catch return self.sheetModified();
     if (self.next_doc_order != before) {
         self.last_rule_sheet = sheet;
     }
@@ -1960,9 +1938,8 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     Frame.change.rulesChanged(self.frame);
 }
 
-fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) bool {
-    const rules = sheet._css_rules orelse return false;
-    if (rules._rules.last() != rule) {
+fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, index: u32) bool {
+    if (index + 1 != sheet._store.length()) {
         return false;
     }
     const sheets = self.frame.document._style_sheets orelse return false;
@@ -3721,10 +3698,12 @@ fn searchSheetsForKeyframes(self: *StyleManager) !bool {
         if (sheet._disabled) {
             continue;
         }
-        if (sheet._css_rules) |css_rules| {
-            for (css_rules._rules.items) |rule| {
-                const generic = rule.is(GenericRule) orelse continue;
-                if (std.ascii.findIgnoreCase(generic._text, "keyframes") != null) {
+        if (sheet._parsed) {
+            for (sheet._store.entries()) |*entry| {
+                if (entry._kind == .style) {
+                    continue;
+                }
+                if (std.ascii.findIgnoreCase(entry.text(), "keyframes") != null) {
                     return true;
                 }
             }

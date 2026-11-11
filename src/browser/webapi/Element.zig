@@ -1101,7 +1101,7 @@ pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     const page = frame.page;
     const gop = try page.element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
+        gop.value_ptr.* = try CSSStyleProperties.init(.{ .inline_style = self }, owner);
     }
     self._flags.has_inline_style = true;
     return gop.value_ptr.*;
