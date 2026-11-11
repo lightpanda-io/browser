@@ -52,6 +52,12 @@ regex_context: *Regex.Context,
 default_sanitizer: *Sanitizer,
 render_fonts: screenshot.Fonts,
 
+/// One connection pool and CA bundle for the API clients outside the page
+/// network stack (decisions, search, the agent's model), so a call to a host
+/// already reached skips the handshakes. Shared across threads, which its
+/// allocator (`allocator`, thread-safe) allows.
+http_client: std.http.Client,
+
 /// Clients for asking a decision model (Gemini or TypeSafe Jev), pooled so
 /// concurrent calls each get their own and keep its connection warm. It reads
 /// the provider and its API key from the environment on every ask. Usable
@@ -95,12 +101,14 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
         .default_sanitizer = undefined,
         .watchdog = .init(config.watchdogMs()),
+        .http_client = zenai.http.newClient(lp.io, allocator),
         // The calling session waits on an ask, so fail fast rather than
         // honouring a Retry-After on the browser thread.
         .decisions = .init(lp.io, allocator, lp.environ, .{
             .retry_policy = .disabled,
             .request_timeout_ms = 10_000,
             .provider_env_var_name = decision_provider_env_var_name,
+            .http_client = &app.http_client,
         }),
     };
     try app.watchdog.start();
@@ -142,6 +150,7 @@ pub fn deinit(self: *App) void {
     self.arena_pool.deinit();
 
     self.decisions.deinit();
+    self.http_client.deinit();
 
     allocator.destroy(self);
 }
