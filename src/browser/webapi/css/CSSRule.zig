@@ -23,6 +23,8 @@ const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
 
 const RuleStore = @import("../../css/RuleStore.zig");
+const properties = @import("../../css/properties.zig");
+const StyleManager = @import("../../StyleManager.zig");
 
 const GenericRule = @import("GenericRule.zig");
 const CSSStyleRule = @import("CSSStyleRule.zig");
@@ -99,6 +101,15 @@ pub fn changed(self: *const CSSRule, frame: *Frame) void {
         return;
     }
     self._store._sheet.rulesModified(frame);
+}
+
+/// The rule's declaration of `id` changed through rule.style.
+pub fn declarationChanged(self: *const CSSRule, id: properties.Id, frame: *Frame) void {
+    if (StyleManager.readsDeclaration(id) == false) {
+        // Nothing the cascade answers depends on it
+        return;
+    }
+    self.changed(frame);
 }
 
 pub fn getType(self: *CSSRule) u16 {

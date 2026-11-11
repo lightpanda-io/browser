@@ -3535,6 +3535,49 @@ const tracked_ids = blk: {
     break :blk std.StaticStringMap(properties.Id).initComptime(kvs);
 };
 
+/// tracked_ids by id.
+const tracked_bits = blk: {
+    var result: std.StaticBitSet(properties.known_count) = .empty;
+    for (tracked_ids.values()) |id| {
+        result.set(@backingInt(id));
+    }
+    break :blk result;
+};
+
+/// Whether the cascade reads a rule's declaration of `id`: a tracked property,
+/// a custom one, or a box shorthand with a tracked side. Writing one it doesn't
+/// (transform, color...) changes no answer, so needs no rebuild.
+pub fn readsDeclaration(id: properties.Id) bool {
+    const index = @backingInt(id);
+    if (index >= properties.known_count) {
+        // a custom property
+        return true;
+    }
+    if (properties.boxShorthand(id)) |shorthand| {
+        // writing it writes its sides
+        for (shorthand.sides) |side| {
+            if (tracked_bits.isSet(@backingInt(side))) {
+                return true;
+            }
+        }
+    }
+    return tracked_bits.isSet(index);
+}
+
+/// Whether the cascade took anything from a rule, so removing it changes
+/// answers (and frees a selector the buckets hold).
+pub fn readsRule(entry: *const RuleStore.Entry) bool {
+    if (entry._kind != .style or entry._children != null) {
+        return true;
+    }
+    for (entry._block.entries()) |declaration| {
+        if (readsDeclaration(declaration._id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// The id of a property the cascade reads, by its name in any case, or null.
 fn trackedId(name: []const u8) ?properties.Id {
     var buf: [tracked_ids.max_len]u8 = undefined;
