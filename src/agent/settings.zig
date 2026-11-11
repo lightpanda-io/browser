@@ -70,6 +70,14 @@ pub const Credential = struct {
         };
     }
 
+    /// The zenai backend: the env's settings for the provider (Vertex
+    /// project/location) plus the subscription's account id.
+    pub fn backend(self: *const Credential) zenai.provider.Backend {
+        var b = zenai.provider.fromEnv(lp.environ(), self.provider).backend;
+        if (b == .codex) b.codex.account_id = self.accountId();
+        return b;
+    }
+
     pub fn deinit(self: *Credential, allocator: std.mem.Allocator) void {
         switch (self.key) {
             .env => {},
@@ -79,14 +87,21 @@ pub const Credential = struct {
     }
 };
 
+/// `base_url` (`--base-url`), else what the env sets for `provider`
+/// (OPENAI_BASE_URL for `.openai_compatible`).
+pub fn baseUrl(provider: Config.AiProvider, base_url: ?[:0]const u8) ?[:0]const u8 {
+    return base_url orelse zenai.provider.fromEnv(lp.environ(), provider).base_url;
+}
+
 /// Probe a keyless local provider (Ollama, llama.cpp, LLMD): its env key is a
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
 pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Candidate {
-    const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
+    const env = zenai.provider.fromEnv(lp.environ(), tag);
+    const key = env.key orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), tag, key, .{ .base_url = base_url, .environ = lp.environ() }) catch return null;
+    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), env.backend, key, .{ .base_url = base_url }) catch return null;
     if (ids.len == 0) return null;
     return .{ .provider = tag, .key = key };
 }
@@ -391,7 +406,7 @@ pub fn reconcileModel(
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.provider, credential.keySlice(), .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.backend(), credential.keySlice(), .{ .base_url = baseUrl(credential.provider, base_url) }) catch &.{};
     if (ids.len == 0 or string.isOneOf(desired, ids)) return try allocator.dupe(u8, desired);
 
     if (!explicit) {

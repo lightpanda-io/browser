@@ -387,7 +387,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     try self.ts.init(app);
     errdefer self.ts.deinit();
 
-    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
+    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.backend(), c.keySlice(), .{ .base_url = settings.baseUrl(c.provider, opts.base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider) }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     if (opts.trace) |path| {
@@ -1194,7 +1194,7 @@ fn extraHeaders(self: *Agent, provider: Config.AiProvider) []const std.http.Head
 /// the caller still owns them. The previous credential is released only after
 /// the old client is gone.
 fn setProvider(self: *Agent, credential: settings.Credential) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.provider, credential.keySlice(), .{ .base_url = self.model_base_url, .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(credential.provider), .environ = lp.environ(), .account_id = credential.accountId() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.backend(), credential.keySlice(), .{ .base_url = settings.baseUrl(credential.provider, self.model_base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(credential.provider) });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -2291,7 +2291,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     const ids: []const []const u8 = if (auth.descriptorFor(resolved.credential.provider)) |desc|
         models_dev.modelIds(arena.allocator(), desc.models_dev_id, auth.dataDir(arena.allocator()))
     else
-        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.provider, resolved.credential.keySlice(), .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
+        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.backend(), resolved.credential.keySlice(), .{ .base_url = settings.baseUrl(resolved.credential.provider, opts.base_url) }) catch |err| {
             if (resolved.credential.provider == .vertex and !settings.vertexProjectMode()) {
                 std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
             }
@@ -2364,9 +2364,9 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
             lp.io,
             self.allocator,
             arena,
-            cred.provider,
+            cred.backend(),
             cred.keySlice(),
-            .{ .base_url = self.model_base_url, .environ = lp.environ() },
+            .{ .base_url = settings.baseUrl(cred.provider, self.model_base_url) },
         ) catch &.{};
     self.model_completions = .{ .provider = cred.provider, .ids = ids };
     return ids;
