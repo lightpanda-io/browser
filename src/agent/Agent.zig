@@ -981,7 +981,7 @@ const provider_off_keyword = "null";
 
 /// Keyless local providers (placeholder key), so reachability needs a live probe.
 /// Parallel to `local_completable`.
-const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp, .llmd };
+const local_providers = zenai.provider.local_providers;
 
 /// Send a prebuilt prompt as a turn, the way `/logout` and the fallback for
 /// `/acceptCookies` and `/login` do. False when there is no model to send to.
@@ -1107,15 +1107,15 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     };
     // Ollama's key is a placeholder, so probe the server instead of trusting it.
     if (provider == .ollama and settings.detectLocalProvider(self.allocator, .ollama, self.model_base_url) == null) {
-        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
+        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.ollama).?});
         return;
     }
     if (provider == .llama_cpp and settings.detectLocalProvider(self.allocator, .llama_cpp, self.model_base_url) == null) {
-        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
+        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.llama_cpp).?});
         return;
     }
     if (provider == .llmd and settings.detectLocalProvider(self.allocator, .llmd, self.model_base_url) == null) {
-        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llmd_default_base_url});
+        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.llmd).?});
         return;
     }
     self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {

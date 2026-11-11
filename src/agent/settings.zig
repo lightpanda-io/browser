@@ -192,15 +192,9 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     var buf: [zenai.provider.default_candidates.len]Candidate = undefined;
     const found = availableProviders(&buf);
     if (found.len == 0) {
-        if (detectLocalProvider(allocator, .ollama, opts.base_url)) |creds| {
+        for (zenai.provider.local_providers) |local| if (detectLocalProvider(allocator, local, opts.base_url)) |creds| {
             return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
-        }
-        if (detectLocalProvider(allocator, .llama_cpp, opts.base_url)) |creds| {
-            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
-        }
-        if (detectLocalProvider(allocator, .llmd, opts.base_url)) |creds| {
-            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
-        }
+        };
         std.debug.print(
             \\No API key detected. Set {s}, or run a local Ollama, llama.cpp or LLMD server with a loaded model.
             \\To use the basic REPL (without LLM integration), pass the --no-llm option.
@@ -401,10 +395,7 @@ pub fn reconcileModel(
     if (ids.len == 0 or string.isOneOf(desired, ids)) return try allocator.dupe(u8, desired);
 
     if (!explicit) {
-        switch (credential.provider) {
-            .ollama, .llama_cpp, .llmd => {},
-            else => return try allocator.dupe(u8, desired),
-        }
+        if (!zenai.provider.info(credential.provider).local) return try allocator.dupe(u8, desired);
         std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(credential.provider), desired, ids[0] });
         return try allocator.dupe(u8, ids[0]);
     }
