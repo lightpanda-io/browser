@@ -772,3 +772,44 @@
     });
   }
 </script>
+
+<script id=intercept_cross_document type=module>
+  {
+    // intercept() on a same-origin but cross-document navigation keeps it in
+    // this document, driven by the handler, instead of actually loading the
+    // target (navigate_event_target.html doesn't exist on purpose: a leaked
+    // load would 404).
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let same_document_in_event;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      same_document_in_event = e.destination.sameDocument;
+      e.intercept({handler: () => Promise.reject(new Error('cross-document boom'))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('navigate_event_target.html?intercept-cross-document');
+    Promise.all([
+      r.committed.then(() => 'resolved', (err) => err),
+      r.finished.then(() => 'resolved', (err) => err),
+    ]).then((results) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(results);
+    });
+
+    state.done(([committed, finished]) => {
+      testing.expectFalse(same_document_in_event);
+      // intercept() kept the navigation in this document: no real load, so
+      // the promises settle instead of hanging forever.
+      testing.expectEqual(original, location.href);
+      testing.expectEqual('resolved', committed);
+      testing.expectEqual('cross-document boom', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
+  }
+</script>
