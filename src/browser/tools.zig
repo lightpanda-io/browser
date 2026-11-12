@@ -54,7 +54,7 @@ pub const search = @import("tools/search.zig");
 pub const choose = @import("tools/choose.zig");
 pub const classify = @import("tools/classify.zig");
 pub const consent = @import("tools/consent.zig");
-pub const jev = @import("tools/jev.zig");
+pub const decisions = @import("tools/decisions.zig");
 pub const login = @import("tools/login.zig");
 
 const log = lp.log;

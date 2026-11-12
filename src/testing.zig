@@ -539,37 +539,91 @@ fn testHttpPort() u16 {
     return test_http_server.?.listener.?.socket.address.getPort();
 }
 
-/// Point the TypeSafe client at the test server's `/v1/systemone` mock, so a
-/// tool that asks Jev runs its real path without reaching the real API. The
-/// base URL is needed because zenai talks `std.http`, which libcurl's test
-/// port remap does not reach.
-pub const MockJev = struct {
-    pub fn start(arena: std.mem.Allocator) !MockJev {
-        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast("test-key"), 1);
+/// Point the decision model at the test server's mock (`/v1/systemone` for
+/// TypeSafe, `/v1beta/decisions` for Gemini), so a tool that asks it runs its
+/// real path without reaching the real API. The base URL is needed because
+/// zenai talks `std.http`, which libcurl's test port remap does not reach.
+/// The provider is always named, so a developer's own Gemini key never sends
+/// a test to Google.
+pub const MockDecisions = struct {
+    provider: Provider,
+
+    pub const Provider = zenai.decisions.Provider;
+
+    /// The Gemini key the pool reads first, so it is the one a test sets.
+    const gemini_key_env_var_name = "GOOGLE_API_KEY";
+
+    pub fn start(arena: std.mem.Allocator) !MockDecisions {
+        return startAs(arena, .typesafe);
+    }
+
+    pub fn startAs(arena: std.mem.Allocator, provider: Provider) !MockDecisions {
+        const mock: MockDecisions = .{ .provider = provider };
+        mock.stop();
+        _ = setenv(@constCast(App.decision_provider_env_var_name), @constCast(@tagName(provider)), 1);
         const base_url = try arena.printSentinel("http://127.0.0.1:{d}", .{testHttpPort()}, 0);
-        _ = setenv(@constCast(zenai.typesafe.base_url_env_var_name), base_url, 1);
-        return .{};
+        _ = setenv(@constCast(mock.baseUrlEnvVarName()), base_url, 1);
+        mock.setKey("test-key");
+        return mock;
     }
 
     /// The decision is answered as usual and the verification re-read after
     /// it fails: the API breaking once a tool has already acted.
-    pub fn startFailingVerification(arena: std.mem.Allocator) !MockJev {
+    pub fn startFailingVerification(arena: std.mem.Allocator) !MockDecisions {
         const mock = try start(arena);
-        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast(test_routes.no_verify_key), 1);
+        mock.setKey(test_routes.no_verify_key);
         return mock;
     }
 
     /// Answers after a delay, so a test can see whether the caller kept its
     /// own page running while it waited.
-    pub fn startSlow(arena: std.mem.Allocator) !MockJev {
+    pub fn startSlow(arena: std.mem.Allocator) !MockDecisions {
         const mock = try start(arena);
-        _ = setenv(@constCast(zenai.typesafe.env_var_name), @constCast(test_routes.slow_key), 1);
+        mock.setKey(test_routes.slow_key);
         return mock;
     }
 
-    pub fn stop(_: MockJev) void {
-        _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
-        _ = unsetenv(@constCast(zenai.typesafe.base_url_env_var_name));
+    /// Gemini refuses the input, as its safety filters do.
+    pub fn startBlocked(arena: std.mem.Allocator) !MockDecisions {
+        const mock = try startAs(arena, .gemini);
+        mock.setKey(test_routes.blocked_key);
+        return mock;
+    }
+
+    /// No key for the provider asked: what someone who set none sees.
+    pub fn startWithoutKey() MockDecisions {
+        const mock: MockDecisions = .{ .provider = .typesafe };
+        mock.stop();
+        _ = setenv(@constCast(App.decision_provider_env_var_name), @constCast("typesafe"), 1);
+        return mock;
+    }
+
+    fn setKey(self: MockDecisions, key: [:0]const u8) void {
+        const name = switch (self.provider) {
+            .typesafe => zenai.typesafe.env_var_name,
+            .gemini => gemini_key_env_var_name,
+        };
+        _ = setenv(@constCast(name), @constCast(key), 1);
+    }
+
+    fn baseUrlEnvVarName(self: MockDecisions) [:0]const u8 {
+        return switch (self.provider) {
+            .typesafe => zenai.typesafe.base_url_env_var_name,
+            .gemini => zenai.decisions.gemini_base_url_env_var_name,
+        };
+    }
+
+    pub fn stop(_: MockDecisions) void {
+        const names = [_][:0]const u8{
+            App.decision_provider_env_var_name,
+            zenai.typesafe.env_var_name,
+            zenai.typesafe.base_url_env_var_name,
+            gemini_key_env_var_name,
+            "GEMINI_API_KEY",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            zenai.decisions.gemini_base_url_env_var_name,
+        };
+        for (names) |name| _ = unsetenv(@constCast(name));
     }
 };
 

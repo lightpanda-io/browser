@@ -162,6 +162,8 @@ app_dir: ?[]const u8,
 /// other settings doesn't clobber the remembered provider.
 no_llm_persisted: bool,
 model_base_url: ?[:0]const u8,
+/// Backs the `X-HF-Bill-To` header the AI client borrows; see `extraHeaders`.
+hf_bill_header: [1]std.http.Header = undefined,
 /// Cached chat-model ids for the current provider, backed by
 /// `model_completion_arena`; invalidated on `/provider` switch.
 model_completions: ?ModelCompletions,
@@ -388,7 +390,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     try self.ts.init(app);
     errdefer self.ts.deinit();
 
-    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
+    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.backend(), c.keySlice(), .{ .base_url = settings.baseUrl(c.provider, opts.base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider) }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     if (opts.trace) |path| {
@@ -792,11 +794,11 @@ fn runRepl(self: *Agent) void {
                 var tc = parsed;
                 if (tc.tool == .login and tc.args == null) {
                     const names = browser_tools.lpEnvNames(aa) catch continue :repl;
-                    const has_key = zenai.typesafe.Client.envApiKey(lp.environ()) != null;
+                    const has_key = zenai.decisions.envProvider(lp.environ(), App.decision_provider_env_var_name) != null;
                     switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
                         .args => |args| tc.args = args,
                         .prompt => |prompt| {
-                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                            self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
                             _ = self.runPromptTurn(aa, tc.name(), prompt, line);
                             continue :repl;
                         },
@@ -819,7 +821,7 @@ fn runRepl(self: *Agent) void {
                         self.printCommandResult(tc, result);
                         continue :repl;
                     };
-                    self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                    self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         self.printCommandResult(tc, result);
                     }
@@ -984,7 +986,7 @@ const provider_off_keyword = "null";
 
 /// Keyless local providers (placeholder key), so reachability needs a live probe.
 /// Parallel to `local_completable`.
-const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp, .llmd };
+const local_providers = zenai.provider.local_providers;
 
 /// Send a prebuilt prompt as a turn, the way `/logout` and the fallback for
 /// `/acceptCookies` and `/login` do. False when there is no model to send to.
@@ -1110,15 +1112,15 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     };
     // Ollama's key is a placeholder, so probe the server instead of trusting it.
     if (provider == .ollama and settings.detectLocalProvider(self.allocator, .ollama, self.model_base_url) == null) {
-        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
+        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.ollama).?});
         return;
     }
     if (provider == .llama_cpp and settings.detectLocalProvider(self.allocator, .llama_cpp, self.model_base_url) == null) {
-        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
+        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.llama_cpp).?});
         return;
     }
     if (provider == .llmd and settings.detectLocalProvider(self.allocator, .llmd, self.model_base_url) == null) {
-        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llmd_default_base_url});
+        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.llmd).?});
         return;
     }
     self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {
@@ -1182,17 +1184,20 @@ fn disableProvider(self: *Agent) void {
 
 /// `HF_BILL_TO` org for routed requests; null for non-HF providers. Without it,
 /// requests bill the token owner's personal account instead of the org.
-fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
-    if (provider != .huggingface) return null;
-    const v = std.c.getenv("HF_BILL_TO") orelse return null;
-    return std.mem.span(v);
+/// `X-HF-Bill-To` from HF_BILL_TO for Hugging Face, so the router bills that
+/// org instead of the token owner. The result borrows `self`.
+fn extraHeaders(self: *Agent, provider: Config.AiProvider) []const std.http.Header {
+    if (provider != .huggingface) return &.{};
+    const v = std.c.getenv("HF_BILL_TO") orelse return &.{};
+    self.hf_bill_header = .{.{ .name = "X-HF-Bill-To", .value = std.mem.span(v) }};
+    return &self.hf_bill_header;
 }
 
 /// `credential` transfers ownership of its key resources on success; on error
 /// the caller still owns them. The previous credential is released only after
 /// the old client is gone.
 fn setProvider(self: *Agent, credential: settings.Credential) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.provider, credential.keySlice(), .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credential.provider), .environ = lp.environ(), .account_id = credential.accountId() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.backend(), credential.keySlice(), .{ .base_url = settings.baseUrl(credential.provider, self.model_base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(credential.provider) });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -1212,10 +1217,10 @@ fn setProvider(self: *Agent, credential: settings.Credential) !void {
     } else {
         self.terminal.printInfo("provider: {s}", .{@tagName(credential.provider)});
     }
-    if (zenai.provider.defaultEffort(credential.provider)) |e| if (e != self.effort) {
-        self.effort = e;
-        self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credential.provider) });
-    };
+    if (zenai.provider.omitsEffort(credential.provider) and self.effort != .null) {
+        self.effort = .null;
+        self.terminal.printInfo("effort: null ({s} default)", .{@tagName(credential.provider)});
+    }
     self.reportSaved("model", self.model);
     // Prime the completion cache on the command, not on a `/model` keystroke.
     _ = completionModels(self, self.allocator);
@@ -1532,7 +1537,7 @@ fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode)
             .max_turns = if (inspect) max_repair_turns else 1,
             .max_tokens = 8192,
             .tool_choice = if (inspect) .auto else .none,
-            .effort = bumpedEffort(self.effort),
+            .effort = bumpedEffort(self.effort).level(),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
             .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
@@ -2035,7 +2040,7 @@ fn recordSlashToolCall(
     tool_calls[0] = .{
         .id = try ma.print("lp-slash-{d}", .{self.synthetic_tool_call_id}),
         .name = try ma.dupe(u8, tool_name),
-        .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
+        .arguments = if (args) |v| try zenai.json.valueToString(ma, v) else "{}",
     };
 
     // capToolOutput returns its input unchanged under the cap; dupe so content
@@ -2155,7 +2160,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // Per-turn reasoning budget; resolved from --effort / .lp-agent.zon
             // / mode default, adjustable at runtime via /effort. Ignored by
             // non-thinking models.
-            .effort = self.effort,
+            .effort = self.effort.level(),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
             // streaming would bypass the `suppress_answer` guard in `runTurn`.
@@ -2203,7 +2208,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             }
             const ca = self.conversation.arena.allocator();
             const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
-            const call_args = saved.args orelse tc.arguments;
+            const call_args = saved.args orelse (zenai.provider.ToolCall.parseArguments(ca, tc.arguments) catch null);
             const args = browser_tools.normalizeArgs(ca, tool, call_args) catch call_args;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
@@ -2261,7 +2266,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // .low caps thinking so reasoning models still emit an answer;
                 // `.null` and `.none` are kept as chosen.
                 .effort = switch (self.effort) {
-                    .null, .none => self.effort,
+                    .null => null,
+                    .none => .none,
                     else => .low,
                 },
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
@@ -2361,15 +2367,16 @@ fn capToolOutput(allocator: std.mem.Allocator, tool_name: []const u8, output: []
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
-fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
+fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, args_json: []const u8) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // Close any assistant text streamed this turn before the tool spinner shows.
     self.endStreamedText();
+    const arguments: ?std.json.Value = zenai.provider.ToolCall.parseArguments(allocator, args_json) catch null;
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     // Stringify the pre-substitution args so $LP_* placeholders the model
-    // emitted stay redacted in the UI.
+    // emitted stay redacted in the UI, on one line however the model spaced them.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
@@ -2496,7 +2503,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     const ids: []const []const u8 = if (auth.descriptorFor(resolved.credential.provider)) |desc|
         models_dev.modelIds(arena.allocator(), desc.models_dev_id, auth.dataDir(arena.allocator()))
     else
-        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.provider, resolved.credential.keySlice(), .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
+        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.backend(), resolved.credential.keySlice(), .{ .base_url = settings.baseUrl(resolved.credential.provider, opts.base_url) }) catch |err| {
             if (resolved.credential.provider == .vertex and !settings.vertexProjectMode()) {
                 std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
             }
@@ -2569,9 +2576,9 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
             lp.io,
             self.allocator,
             arena,
-            cred.provider,
+            cred.backend(),
             cred.keySlice(),
-            .{ .base_url = self.model_base_url, .environ = lp.environ() },
+            .{ .base_url = settings.baseUrl(cred.provider, self.model_base_url) },
         ) catch &.{};
     self.model_completions = .{ .provider = cred.provider, .ids = ids };
     return ids;
