@@ -44,7 +44,8 @@ pub fn attributeSet(element: *Element, name: String, old: ?String, new: String, 
             return;
         }
     }
-    attributeChanged(element, name, frame);
+    // By pointer: a short String's str() points into it
+    attributeChanged(element, name, if (old) |*o| o.str() else null, new.str(), frame);
 }
 
 /// A style attribute write no selector can see (see Attribute.List.putInertStyle).
@@ -55,17 +56,30 @@ pub fn inertStyleSet(element: *Element, frame: *Frame) void {
 }
 
 pub fn attributeRemoved(element: *Element, name: String, old: String, frame: *Frame) void {
-    _ = old;
-    attributeChanged(element, name, frame);
+    attributeChanged(element, name, old.str(), null, frame);
 }
 
-fn attributeChanged(element: *Element, name: String, frame: *Frame) void {
-    // the style manager is tracking selectors with this attribute
-    if (frame._style_manager.readsAttribute(name.str()) and detachedHandled(element.asNode(), frame) == false) {
-        renderingChanged(frame);
-    }
-
+fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]const u8, frame: *Frame) void {
     frame.page.dom_version += 1;
+    // A frameless document (DOMParser, XHR) has no styles
+    const owner = element.ownerFrame(frame) orelse return;
+    if (owner._style_manager.readsAttribute(name.str()) == false) {
+        // no selector reads it, and neither does the engine
+        return;
+    }
+    if (detachedHandled(element.asNode(), frame)) {
+        return;
+    }
+    if (name.eql(comptime .wrap("class"))) {
+        if (owner._style_manager.classChanged(element, old, new)) {
+            // the stylemanager handled the classChange (maybe it was a noop
+            // maybe there was an optimized path). Whatever the case, we don't
+            // need to signal a rendering change.
+            layoutObserversChanged(frame);
+            return;
+        }
+    }
+    renderingChanged(frame);
 }
 
 pub fn childInserted(parent: *Node, child: *Node, frame: *Frame) void {

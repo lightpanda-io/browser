@@ -121,7 +121,16 @@ attribute_names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, st
 // thus having any selector like this disables some optimizations. TODO: make
 // this more selective than a global boolean.
 reads_form: bool = false,
+reads_default: bool = false,
 reads_empty: bool = false,
+
+// given a class name, what, if anything, does it reach. Best class: a class
+// that no selector we track uses is a noop.
+class_reach: std.HashMapUnmanaged([]const u8, ClassReach, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+
+// The widest reach of a compound reading the class attribute as a string
+// ([class*=x]): any change to it can change what that matches. Null: none.
+class_attribute_reach: ?ClassReach = null,
 has: HasKeys = .{},
 
 // Short dudupe list of roots that had treeChanged call since the memos last
@@ -541,6 +550,7 @@ fn addSelectorRules(
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, layer: u16) !void {
     try self.collectAttributeNames(selector);
+    try self.collectClassReach(selector, .subtree);
     const matched = unwrapWhere(selector);
     const placement = placeSelector(matched) orelse return;
     const rank_and_order = try self.nextPriority(layer);
@@ -591,6 +601,7 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
                 else => {
                     if (readsOtherFormElements(pseudo)) {
                         self.reads_form = true;
+                        self.reads_default = self.reads_default or pseudo == .default;
                     }
                     if (pseudo == .empty) {
                         self.reads_empty = true;
@@ -738,6 +749,13 @@ const HasKeys = struct {
     tags: std.EnumSet(Tag) = .empty,
     names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
 
+    // How many ancestors of a subject an argument reaches: `:has(> a > img)`
+    // (stored as `:scope > a > img`) 2, so its subject moving can only change
+    // the match of its 2 nearest ancestors. Unbounded with a descendant
+    // combinator.
+    depth: usize = 0,
+    unbounded: bool = false,
+
     fn isEmpty(self: *const HasKeys) bool {
         return self.any == false and self.tags.count() == 0 and self.names.count() == 0;
     }
@@ -752,6 +770,13 @@ const HasKeys = struct {
             self.any = true;
             return;
         }
+
+        for (argument.segments) |segment| {
+            if (segment.combinator != .child) {
+                self.unbounded = true;
+            }
+        }
+        self.depth = @max(self.depth, argument.segments.len);
 
         const subject = argument.rightmost();
         for (subject.parts) |*part| {
@@ -867,6 +892,121 @@ pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
     return self.dropSubtree(node.getRootNode(.{ .composed = true }), memos, &budget);
 }
 
+/// When the class on an element changes.  For example .hidden{display: none}
+const ClassReach = enum(u8) {
+    // Order matters: narrowest to widest.
+    subtree, // the element and whatever inherits them
+    parent_subtree, // sibling combinator, all later siblings
+    full, // something in a :has(...) argument. ARG!
+
+    fn widest(a: ClassReach, b: ClassReach) ClassReach {
+        return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
+    }
+};
+
+// `subject` is the reach of the selector's subject compound: .subtree for a
+// rule's selector, the enclosing compound's for an :is() argument.
+fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach) Allocator.Error!void {
+    const segments = selector.segments;
+    for (0..segments.len + 1) |i| {
+        const compound = if (i == 0) selector.first else segments[i - 1].compound;
+        // The combinator to the compound's right relates it to the subject.
+        // In a :has() argument (.full) every compound reaches everything.
+        const reach: ClassReach = if (i == segments.len or subject == .full) subject else switch (segments[i].combinator) {
+            .descendant, .child => .subtree,
+            .next_sibling, .subsequent_sibling => .parent_subtree,
+        };
+        try self.collectCompoundClassReach(compound, reach);
+    }
+}
+
+fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach) Allocator.Error!void {
+    for (compound.parts) |part| {
+        switch (part) {
+            .class => |class| {
+                const gop = try self.class_reach.getOrPut(self.arena.allocator(), class);
+                gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.widest(reach) else reach;
+            },
+            .attribute => |attr| if (attr.name.eql(comptime .wrap("class"))) {
+                self.class_attribute_reach = if (self.class_attribute_reach) |current| current.widest(reach) else reach;
+            },
+            .pseudo_class => |pseudo| switch (pseudo) {
+                .not, .is, .where => |selectors| for (selectors) |selector| {
+                    try self.collectClassReach(selector, reach);
+                },
+                // A sibling's class changes which index the element has
+                .nth_child_of, .nth_last_child_of => |of| for (of.selectors) |selector| {
+                    try self.collectClassReach(selector, reach.widest(.parent_subtree));
+                },
+                .has => |selectors| for (selectors) |selector| {
+                    try self.collectClassReach(selector, .full);
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+/// `el`'s class attribute went from `old` to `new` (null: absent), `el`
+/// connected. Drops the memo entries the classes added or removed can reach.
+/// Returns false when that's everything: the caller reports a full style change.
+pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[]const u8) bool {
+    self.assertOwns(el);
+    if (self.dirty) {
+        // the rebuild resets every memo
+        return true;
+    }
+    // [class*=x] reads the string, [class] its presence: any call is a change
+    // (change.attributeSet skips same-value writes)
+    var reach: ?ClassReach = self.class_attribute_reach;
+    inline for (.{ .{ old, new }, .{ new, old } }) |pair| {
+        var it = std.mem.tokenizeAny(u8, pair[0] orelse "", &std.ascii.whitespace);
+        outer: while (it.next()) |class| {
+            var others = std.mem.tokenizeAny(u8, pair[1] orelse "", &std.ascii.whitespace);
+            while (others.next()) |other| {
+                if (std.mem.eql(u8, class, other)) {
+                    continue :outer;
+                }
+            }
+            if (self.class_reach.get(class)) |r| {
+                reach = if (reach) |current| current.widest(r) else r;
+            }
+        }
+    }
+    const scope = reach orelse return true;
+    if (scope == .full) {
+        return false;
+    }
+
+    // Boxes can move
+    self.layout_bumps += 1;
+    const page = self.frame.page;
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.memo.count() != 0 and group.memo_version == page.style_version + group.bumps) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    if (budget == 0) {
+        return true;
+    }
+    const node = el.asNode();
+    const root = if (scope == .parent_subtree) node._parent orelse node else node;
+    if (self.droppedCovers(root)) {
+        // nothing under it was read since it was dropped
+        return true;
+    }
+    if (self.dropSubtree(root, memos, &budget) == false) {
+        return false;
+    }
+    self.recordDropped(root);
+    return true;
+}
+
 pub const TreeChange = enum { inserted, removed };
 
 /// `child` was inserted/removed from `parent`. Drop the memo entries that can
@@ -905,17 +1045,19 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, op: TreeCha
         // :focus-within on the ancestors
         return false;
     }
+    // Usually parent's subtree, wider when the moved subtree reaches a match
+    // above it: a :has() anchor, a form's validity
+    var root = parent;
     if (self.reads_form or self.has.isEmpty() == false) {
         if (self.has.any) {
             return false;
         }
-        if (self.reachesOutsideSubtree(child)) {
-            return false;
-        }
+        const reach = self.movedReach(child) orelse return false;
+        root = movedRoot(parent, reach, self.has.depth);
     }
 
     // Past the budget, dropping costs more than recomputing what's cached.
-    if (self.droppedCovers(parent)) {
+    if (self.droppedCovers(root)) {
         // Changes batched between two reads: parent's subtree was dropped and
         // nothing filled since, but what this inserts can come with entries
         // (read while detached).
@@ -926,10 +1068,10 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, op: TreeCha
         if (op == .removed and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
-        if (self.dropSubtree(parent, memos, &budget) == false) {
+        if (self.dropSubtree(root, memos, &budget) == false) {
             return false;
         }
-        self.recordDropped(parent);
+        self.recordDropped(root);
     }
     if (self.reads_empty and emptinessFlips(parent, child)) {
         // `:empty + x` and `:empty ~ x` reach the parent's later siblings
@@ -989,17 +1131,72 @@ fn holdsFocus(self: *const StyleManager, child: *Node) bool {
 
 // Whether `child`'s subtree holds an element whose insertion or removal
 // changes a match outside it: a form element or a :has() subject.
-fn reachesOutsideSubtree(self: *const StyleManager, child: *Node) bool {
+const MovedReach = struct {
+    // A form control: the forms, fieldsets and selects around read it
+    form: bool = false,
+    // A :has() subject: the anchors above, up to HasKeys.depth
+    has: bool = false,
+};
+
+// What outside `child`'s subtree its insertion or removal can change. Null
+// when that can be anywhere: a :has() subject any ancestor can anchor on, or a
+// control whose form owner, radio group or default button can be elsewhere.
+fn movedReach(self: *const StyleManager, child: *Node) ?MovedReach {
+    var reach: MovedReach = .{};
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (self.reads_form and isFormElement(el)) {
-            return true;
+            if (el.hasAttributeSafe(comptime .wrap("form"))) {
+                // owned by a form anywhere
+                return null;
+            }
+            if (el.is(Input)) |input| {
+                if (input._input_type == .radio) {
+                    // a group's validity reads every radio in the form owner
+                    return null;
+                }
+            }
+            if (self.reads_default and Element.Html.Form.isSubmitButton(el)) {
+                return null;
+            }
+            reach.form = true;
         }
         if (self.has.matches(el)) {
-            return true;
+            if (self.has.unbounded) {
+                return null;
+            }
+            reach.has = true;
         }
     }
-    return false;
+    return reach;
+}
+
+// The subtree to drop for `reach` around `parent`: the parent of the highest
+// element whose match can change, as it can reach its later siblings.
+fn movedRoot(parent: *Node, reach: MovedReach, has_depth: usize) *Node {
+    var highest: ?*Node = null;
+    if (reach.has) {
+        // The moved subject's anchors: parent, and so on up
+        var anchor = parent;
+        for (1..has_depth) |_| {
+            anchor = anchor._parent orelse break;
+        }
+        highest = anchor;
+    }
+    if (reach.form) {
+        var node: ?*Node = parent;
+        while (node) |n| : (node = n._parent) {
+            const el = n.is(Element) orelse continue;
+            switch (el.getTag()) {
+                .form, .fieldset, .select => if (highest == null or n.contains(highest.?)) {
+                    highest = n;
+                },
+                else => {},
+            }
+        }
+    }
+    const top = highest orelse return parent;
+    return top._parent orelse top;
 }
 
 fn emptinessFlips(parent: *Node, child: *Node) bool {
@@ -1246,7 +1443,10 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     errdefer self.dirty = true;
     self.reads_style_attribute = false;
     self.reads_form = false;
+    self.reads_default = false;
     self.reads_empty = false;
+    self.class_reach = .empty;
+    self.class_attribute_reach = null;
     self.has = .{};
     self.dropped_len = 0;
     var caps: [group_fields.len]Capacities = undefined;
@@ -4927,6 +5127,165 @@ test "StyleManager: memo: a tree change drops only the parent's subtree" {
     _ = try section.appendChild(b.asNode(), frame);
     try testing.expect(frame.page.style_version != version);
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(in_section));
+}
+
+test "StyleManager: memo: form controls and :has() subjects widen a tree change" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<p></p><main><ul><li></li></ul></main><section><form><div></div></form></section>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.ctl:invalid ~ .msg, :disabled { display: none }
+        \\.card:has(> img) { visibility: hidden }
+    , frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const p = body.firstChild().?.as(Element);
+    const main = p.asNode().nextSibling().?;
+    const ul = main.firstChild().?;
+    const section = main.nextSibling().?;
+    const form = section.firstChild().?;
+    var tw = TreeWalker.Full.Elements.init(body, .{});
+    while (tw.next()) |el| {
+        _ = sm.hasVisibilityHiddenInherited(el);
+    }
+    try testing.expectEqual(1, sm.has.depth);
+    try testing.expectEqual(false, sm.has.unbounded);
+    const version = frame.page.style_version;
+
+    // A row with a control and an image, outside any form: ul's parent's
+    // subtree (the image's anchor is ul), p untouched
+    const li = try doc.createElement("li", null, frame);
+    try Frame.parse.htmlAsChildren(frame, li.asNode(), "<input class=ctl required><img>");
+    _ = try ul.appendChild(li.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(true, sm.visibility.memo.contains(p));
+    try testing.expectEqual(false, sm.visibility.memo.contains(main.as(Element)));
+
+    // A control in a form: the form's parent's subtree
+    _ = sm.hasVisibilityHiddenInherited(main.as(Element));
+    const input = try doc.createElement("input", null, frame);
+    _ = try form.firstChild().?.appendChild(input.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(false, sm.visibility.memo.contains(section.as(Element)));
+    try testing.expectEqual(true, sm.visibility.memo.contains(p));
+
+    // A radio's group can be anywhere in its form owner: everything
+    tw = TreeWalker.Full.Elements.init(body, .{});
+    while (tw.next()) |el| {
+        _ = sm.hasVisibilityHiddenInherited(el);
+    }
+    const radio = try doc.createElement("input", null, frame);
+    try radio.setAttribute(comptime .wrap("type"), comptime .wrap("radio"), frame);
+    _ = try ul.appendChild(radio.asNode(), frame);
+    try testing.expect(frame.page.style_version != version);
+}
+
+test "StyleManager: memo: a class change drops what its selectors reach" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p></p></div><section><i></i></section>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.a { visibility: hidden }
+        \\.anc .x, .sib + i, :not(.neg) > b { display: none }
+        \\li:nth-child(odd of .of) { display: none }
+        \\.h:has(.k > .kk) { display: none }
+        \\.hh:has(:is(.ka .kb)) { display: none }
+    , frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    const section = div.asNode().nextSibling().?.as(Element);
+    const i = section.asNode().firstChild().?.as(Element);
+
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("a").?);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("anc").?);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("x").?);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("sib").?);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("neg").?);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("of").?);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("h").?);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("k").?);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kk").?);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("ka").?);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kb").?);
+    try testing.expectEqual(null, sm.class_reach.get("hook"));
+
+    _ = sm.hasVisibilityHiddenInherited(i);
+    const version = frame.page.style_version;
+    const layout_version = sm.layoutVersion();
+    const cascades = sm.visibility.cascades;
+
+    // No selector names it: nothing moves
+    try section.setAttribute(comptime .wrap("class"), comptime .wrap("hook"), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(layout_version, sm.layoutVersion());
+
+    // Its subtree only: p keeps its entry
+    try section.setAttribute(comptime .wrap("class"), comptime .wrap("hook a"), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expect(sm.layoutVersion() != layout_version);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(cascades + 2, sm.visibility.cascades);
+
+    // Reordering the same classes changes nothing
+    try section.setAttribute(comptime .wrap("class"), comptime .wrap("a  hook"), frame);
+    try testing.expectEqual(cascades + 2, sm.visibility.cascades);
+
+    // In a :has() argument: everything
+    try i.setAttribute(comptime .wrap("class"), comptime .wrap("k"), frame);
+    try testing.expect(frame.page.style_version != version);
+}
+
+test "StyleManager: memo: a class attribute selector reaches where it sits" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p></p></div><main><section></section><i></i></main>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("[class] + i { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    const main = div.asNode().nextSibling().?;
+    const section = main.firstChild().?.as(Element);
+    const i = section.asNode().nextSibling().?.as(Element);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    // More cached than the walk visits, or dropping costs more than a reset
+    _ = sm.hasVisibilityHiddenInherited(section);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_attribute_reach.?);
+    const version = frame.page.style_version;
+
+    // Present but empty is a change for [class]: i, a later sibling, sees it
+    try section.setAttribute(comptime .wrap("class"), comptime .wrap(""), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(true, sm.visibility.memo.contains(p));
+    try section.removeAttribute(comptime .wrap("class"), frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
 }
 
 test "StyleManager: memo: changes in a detached tree keep it" {
