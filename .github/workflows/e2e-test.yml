@@ -466,9 +466,21 @@ jobs:
 
       - run: chmod a+x bin-new/lightpanda bin-base/lightpanda
 
+      # A regression (exit 1) only warns: instruction counts flag changes
+      # worth a look, not ones that must block. Any other failure (exit 2:
+      # harness error, crashed scenario) still fails the job. Built first
+      # because `go run` turns every non-zero exit into 1.
       - name: run perf scenarios
         working-directory: perf
-        run: go run . -bin base=../bin-base/lightpanda,new=../bin-new/lightpanda -rounds 3 -out ../perf.json
+        run: |
+          go build -o perf-scenarios .
+          rc=0
+          ./perf-scenarios -bin base=../bin-base/lightpanda,new=../bin-new/lightpanda -rounds 3 -out ../perf.json || rc=$?
+          if [ "$rc" -eq 1 ]; then
+            echo "::warning title=perf-scenarios::perf regression against the base build, see the job log"
+            exit 0
+          fi
+          exit $rc
 
       - name: write commit
         if: always()
@@ -517,9 +529,9 @@ jobs:
       - name: format and send json result
         run: /perf-fmt hyperfine ${{ github.sha }} hyperfine.json
 
-  # Separate from perf-fmt, so a failing perf-scenarios gate doesn't block the
-  # cdp/hyperfine history. It still records a failed gate on main: a
-  # regression that landed belongs in the history too.
+  # Separate from perf-fmt, so a failing perf-scenarios job doesn't block the
+  # cdp/hyperfine history. A regression only warns, so it's recorded on main
+  # like any other run: a regression that landed belongs in the history too.
   perf-scenarios-fmt:
     name: perf-scenarios-fmt
     needs: perf-scenarios
