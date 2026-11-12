@@ -840,6 +840,33 @@ const HasKeys = struct {
     }
 };
 
+/// Something changed in the detached tree. Selectors never cross this, so
+/// all this can ever invalidate are caches within that tree.
+pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
+    if (self.dirty) {
+        return true;
+    }
+    const page = self.frame.page;
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.detached and group.memo_version == page.style_version + group.bumps) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    // A detached element's box sizes to its tree: the layout memo too
+    if (self.widths.detached and self.widthsLive()) {
+        memos.insert(.layout);
+        budget += self.widths.map.count();
+    }
+    if (budget == 0) {
+        return true;
+    }
+    return self.dropSubtree(node.getRootNode(.{ .composed = true }), memos, &budget);
+}
+
 pub const TreeChange = enum { inserted, removed };
 
 /// `child` was inserted/removed from `parent`. Drop the memo entries that can
@@ -997,9 +1024,9 @@ fn countsForEmpty(node: *Node) bool {
     };
 }
 
-/// Drops `root`'s subtree from `memos`, and what inherits from it outside the
-/// DOM subtree: a host's shadow tree, the nodes assigned to a slot. False once
-/// it visits more elements than `budget`.
+/// Drops `root`'s subtree from `memos` (.layout: the width memo), and what
+/// inherits from it outside the DOM subtree: a host's shadow tree, the nodes
+/// assigned to a slot. False once it visits more elements than `budget`.
 fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) bool {
     var tw = TreeWalker.Full.Elements.init(root, .{});
     while (tw.next()) |el| {
@@ -1014,7 +1041,7 @@ fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) b
         var it = memos.iterator();
         while (it.next()) |memo| {
             switch (memo) {
-                .layout => unreachable,
+                .layout => _ = self.widths.map.remove(el),
                 inline else => |group| _ = @field(self, @tagName(group)).memo.remove(el),
             }
         }
@@ -1050,6 +1077,9 @@ comptime {
 /// must report a full style change.
 pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) bool {
     self.assertOwns(el);
+    if (el.asNode().isConnected() == false) {
+        return self.detachedChanged(el.asNode());
+    }
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
@@ -1746,6 +1776,8 @@ pub const WidthKind = enum { box, content, full_content, scrollable_content, row
 /// the subtree.
 const WidthMemo = struct {
     version: usize = 0,
+    // Whether the map holds a detached element (see detachedChanged)
+    detached: bool = false,
     viewport_width: u32 = 0,
     viewport_height: u32 = 0,
     map: std.AutoHashMapUnmanaged(*Element, Entry) = .empty,
@@ -1773,8 +1805,19 @@ pub fn cacheWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind, w
     };
     if (gop.found_existing == false) {
         gop.value_ptr.* = .{};
+        if (memo.detached == false and el.asNode().isConnected() == false) {
+            memo.detached = true;
+        }
     }
     @field(gop.value_ptr, @tagName(kind)) = width;
+}
+
+// Whether the width memo holds entries the next read keeps
+fn widthsLive(self: *StyleManager) bool {
+    const memo = &self.widths;
+    const viewport = self.frame.page.getViewport();
+    return memo.map.count() != 0 and memo.version == self.layoutVersion() and
+        memo.viewport_width == viewport.width and memo.viewport_height == viewport.height;
 }
 
 // Rebuilding resets the arena the memo lives in, so it runs first.
@@ -1784,6 +1827,7 @@ fn freshWidthMemo(self: *StyleManager) ?*WidthMemo {
     const version = self.layoutVersion();
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
+        memo.detached = false;
         memo.map.clearRetainingCapacity();
         memo.version = version;
         memo.viewport_width = viewport.width;
@@ -1977,6 +2021,9 @@ fn Group(comptime Spec: type) type {
         // Entries put, ever: see StyleManager.dropped
         fills: usize = 0,
 
+        // Whether the memo holds a detached element (see detachedChanged)
+        detached: bool = false,
+
         // inheritedProps' scratch, kept so each walk doesn't reallocate
         path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
 
@@ -2035,15 +2082,20 @@ fn Group(comptime Spec: type) type {
 
         fn ownProps(self: *Self, allocator: Allocator, el: *Element, frame: *Frame) Computed {
             comptime std.debug.assert(Cascaded == Computed);
-            const gop = self.freshMemo(frame).getOrPut(allocator, el) catch |err| {
-                log.warn(.browser, "StyleManager memo", .{ .err = err });
-                return self.compute(el, frame);
-            };
-            if (gop.found_existing == false) {
-                gop.value_ptr.* = self.compute(el, frame);
-                self.fills += 1;
+            const memo = self.freshMemo(frame);
+            if (memo.get(el)) |cached| {
+                return cached;
             }
-            return gop.value_ptr.*;
+            const computed = self.compute(el, frame);
+            memo.put(allocator, el, computed) catch |err| {
+                log.warn(.browser, "StyleManager memo", .{ .err = err });
+                return computed;
+            };
+            self.fills += 1;
+            if (self.detached == false and el.asNode().isConnected() == false) {
+                self.detached = true;
+            }
+            return computed;
         }
 
         /// Resolves the path up to the first memoized ancestor, so each
@@ -2068,6 +2120,11 @@ fn Group(comptime Spec: type) type {
                 };
             }
 
+            // The walk stopped at a memoized ancestor, whose tree is el's,
+            // or at the root of el's tree.
+            if (current == null and self.path.items.len != 0 and self.detached == false) {
+                self.detached = self.path.items[self.path.items.len - 1].el.asNode().isConnected() == false;
+            }
             self.fills += self.path.items.len;
             var it = std.mem.reverseIterator(self.path.items);
             while (it.next()) |step| {
@@ -2084,6 +2141,7 @@ fn Group(comptime Spec: type) type {
             const version = frame.page.style_version + self.bumps;
             if (self.memo_version != version) {
                 self.memo.clearRetainingCapacity();
+                self.detached = false;
                 self.memo_version = version;
             }
             return &self.memo;
@@ -4869,6 +4927,76 @@ test "StyleManager: memo: a tree change drops only the parent's subtree" {
     _ = try section.appendChild(b.asNode(), frame);
     try testing.expect(frame.page.style_version != version);
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(in_section));
+}
+
+test "StyleManager: memo: changes in a detached tree keep it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<p></p>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".x i { visibility: hidden } [data-off] { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const p = body.firstChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    const version = frame.page.style_version;
+    const layout_version = sm.layoutVersion();
+    sm.cacheWidth(p, .box, 10);
+
+    // A component built off-DOM: attributes, children, text, inline style,
+    // innerHTML
+    const card = try doc.createElement("div", null, frame);
+    try card.setAttribute(comptime .wrap("class"), comptime .wrap("x"), frame);
+    const i = try doc.createElement("i", null, frame);
+    _ = try card.asNode().appendChild(i.asNode(), frame);
+    try i.asNode().setTextContent("text", frame);
+    const style = (try i.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("width", "10px", null, frame);
+    const extra = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, extra.asNode(), "<b data-off></b>");
+    _ = try card.asNode().appendChild(extra.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(layout_version, sm.layoutVersion());
+
+    // Once a detached element is read, a change in its tree drops that
+    // tree's entries, and only those
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(true, sm.visibility.memo.contains(i));
+    sm.cacheWidth(i, .box, 50);
+    try card.removeAttribute(comptime .wrap("class"), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(layout_version, sm.layoutVersion());
+    try testing.expectEqual(false, sm.visibility.memo.contains(i));
+    try testing.expectEqual(false, sm.visibility.memo.contains(card));
+    try testing.expectEqual(true, sm.visibility.memo.contains(p));
+    try testing.expectEqual(null, sm.cachedWidth(i, .box));
+    try testing.expectEqual(@as(?f64, 10), sm.cachedWidth(p, .box));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
+
+    // Taken out of its detached tree, it no longer inherits from it
+    try card.setAttribute(comptime .wrap("class"), comptime .wrap("x"), frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    _ = try card.asNode().removeChild(i.asNode(), frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
+    _ = try card.asNode().insertBefore(i.asNode(), card.asNode().firstChild(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // Inserted, it's read from the cascade again
+    _ = try body.appendChild(card.asNode(), frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(true, sm.visibility.memo.contains(i));
+    try testing.expectEqual(true, sm.hasDisplayNone(extra.asNode().firstChild().?.as(Element)));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+
+    // Removed, its entries go with it
+    _ = try body.removeChild(card.asNode(), frame);
+    try testing.expectEqual(false, sm.visibility.memo.contains(i));
 }
 
 test "StyleManager: memo: tree changes between two reads walk once" {
