@@ -1655,8 +1655,11 @@ test "agent script runtime: read_only refuses tools that act, and names the firs
     try testing.expect(message != null);
     try testing.expectEqual(BrowserTool.click, runtime.refused.?);
 
+    var returned: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    runtime.result_sink = &returned.writer;
     runtime.read_only = false;
     try testing.expectEqual(null, try runtime.runSource("return 1;", "read-only-test.js"));
+    try testing.expectString("1\n", returned.written());
     try testing.expectEqual(null, runtime.refused);
 }
 
