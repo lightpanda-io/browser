@@ -172,6 +172,7 @@ pub fn deinit(self: *Browser) void {
     self.fc_identity_pool.deinit(allocator);
     self.page_pool.deinit(allocator);
     self.documents.deinit();
+    self.http_client.cache.clearScope(self.http_client.scope);
     self.http_client.deinit();
     if (self.renderer) |r| r.deinit();
     self.clearPermissions();
