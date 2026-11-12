@@ -7013,6 +7013,18 @@ test "HttpClient: privatecache caches Set-Cookie responses" {
     }
 }
 
+test "HttpClient: a cors-mode fetch is blocked even when the response is a cache hit" {
+    const client = &testing.test_browser.http_client;
+    const previous = client.cache;
+    defer client.cache = previous;
+
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    client.cache = &cache;
+
+    try testing.htmlRunner("net/cache_cors.html", .{});
+}
+
 test "HttpClient: a Range request and a URL with userinfo skip the cache" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
