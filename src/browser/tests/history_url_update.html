@@ -16,5 +16,16 @@
 
     // Restore original URL so other tests aren't affected
     history.replaceState(null, '', originalUrl);
+
+    // pushState/replaceState must not be able to rewrite the URL to a
+    // different origin (CWE-346 origin validation error).
+    testing.expectError('SecurityError', () => history.pushState(null, '', 'http://localhost:9582/'));
+    testing.expectError('SecurityError', () => history.replaceState(null, '', 'http://localhost:9582/'));
+    testing.expectEqual(originalUrl, location.href);
+
+    // Nor to a URL with no origin at all.
+    testing.expectError('SecurityError', () => history.replaceState(null, '', 'data:text/html,hello'));
+    testing.expectError('SecurityError', () => history.replaceState(null, '', 'javascript:void(0)'));
+    testing.expectEqual(originalUrl, location.href);
   }
 </script>
