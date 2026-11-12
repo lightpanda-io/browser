@@ -1308,6 +1308,13 @@ pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn cacheScopeMetric(scope: Cache.CacheScope) @TypeOf(lp.metrics.http_cache_scope).Tag {
+    return switch (scope) {
+        .public => .public,
+        .private => .private,
+    };
+}
+
 // Returns true if the request was served from the cache (response buffered
 // for dispatch). On a miss the transfer is tagged so completion can store
 // the response; on an expired-with-validators entry the request becomes a
@@ -1370,6 +1377,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     switch (cache_result) {
         .hit => |cached| {
             lp.metrics.http_cache.incr(.hit);
+            lp.metrics.http_cache_scope.incr(cacheScopeMetric(cached.scope));
             try self.serveCached(transfer, cached, .local);
             return true;
         },
@@ -1434,6 +1442,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     };
 
     lp.metrics.http_cache.incr(.revalidated);
+    lp.metrics.http_cache_scope.incr(cacheScopeMetric(stale.scope));
     try self.serveCached(transfer, stale, .validated);
     return true;
 }
@@ -1478,6 +1487,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
         return;
     };
     if (stored_scope) |scope| {
+        lp.metrics.http_cache_scope.incr(cacheScopeMetric(scope));
         transfer.script_cache = .{ .key = transfer._cache_key, .scope = scope, .bytes = null };
     }
 }
