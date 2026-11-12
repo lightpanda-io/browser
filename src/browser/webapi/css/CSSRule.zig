@@ -22,9 +22,14 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
 
+const RuleStore = @import("../../css/RuleStore.zig");
+
 const GenericRule = @import("GenericRule.zig");
 const CSSStyleRule = @import("CSSStyleRule.zig");
+const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
+/// A view of one entry in a RuleStore. The sheet keeps one view per rule
+/// (see CSSStyleSheet.ruleView), so a rule read twice is the same object.
 const CSSRule = @This();
 
 pub const Type = enum(u8) {
@@ -33,6 +38,13 @@ pub const Type = enum(u8) {
 };
 
 _type: Type,
+_id: u32,
+
+// The rule's position in `_store` when last seen: inserts and deletes shift it.
+_hint: u32,
+
+// Either the sheet's `_store`, a rule's nested one, or `_detached_store`.
+_store: *RuleStore,
 
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
@@ -74,17 +86,29 @@ pub fn as(self: *const CSSRule, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn getType(self: *const CSSRule) u16 {
-    return switch (self._type) {
-        .style => 1,
-        .generic => self.subtype(GenericRule).getType(),
-    };
+/// The rule's entry. Only valid until the list next changes.
+pub fn entry(self: *CSSRule) *RuleStore.Entry {
+    const index = self._store.indexOf(self._id, self._hint).?;
+    self._hint = index;
+    return &self._store.entries()[index];
 }
 
-pub fn getCssText(self: *const CSSRule, frame: *Frame) ![]const u8 {
+pub fn changed(self: *const CSSRule, frame: *Frame) void {
+    if (self._store._detached) {
+        // removed from the sheet. Not in any cascade
+        return;
+    }
+    self._store._sheet.rulesModified(frame);
+}
+
+pub fn getType(self: *CSSRule) u16 {
+    return self.entry()._kind.ruleType();
+}
+
+pub fn getCssText(self: *CSSRule, frame: *Frame) ![]const u8 {
     return switch (self._type) {
         .style => self.subtype(CSSStyleRule).getCssText(frame),
-        .generic => self.subtype(GenericRule)._text,
+        .generic => self.entry().text(),
     };
 }
 
@@ -92,9 +116,11 @@ fn getParentRule(_: *const CSSRule) ?*CSSRule {
     return null;
 }
 
-fn getParentStyleSheet(self: *const CSSRule) ?*CSSRule {
-    _ = self;
-    return null;
+fn getParentStyleSheet(self: *const CSSRule) ?*CSSStyleSheet {
+    if (self._store._detached) {
+        return null;
+    }
+    return self._store._sheet;
 }
 
 pub const JsApi = struct {

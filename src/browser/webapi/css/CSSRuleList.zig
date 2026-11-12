@@ -16,52 +16,46 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const RuleStore = @import("../../css/RuleStore.zig");
 
 const CSSRule = @import("CSSRule.zig");
 const GenericIterator = @import("../collections/iterator.zig").Entry;
 
+/// A view of a RuleStore: a sheet's rules, or a style rule's nested ones.
 const CSSRuleList = @This();
 
 pub fn registerTypes() []const type {
     return &.{ CSSRuleList, ValueIterator };
 }
 
-_rules: std.ArrayList(*CSSRule) = .empty,
+_store: *RuleStore,
 
-pub fn init(frame: *Frame) !*CSSRuleList {
-    return frame._factory.create(CSSRuleList{});
+pub fn init(store: *RuleStore, frame: *Frame) !*CSSRuleList {
+    return frame._factory.create(CSSRuleList{ ._store = store });
 }
 
-pub fn length(self: *const CSSRuleList) u32 {
-    return @intCast(self._rules.items.len);
+fn parsedStore(self: *const CSSRuleList, frame: *Frame) !*RuleStore {
+    const store = self._store;
+    const sheet = store._sheet;
+    if (store == &sheet._store) {
+        // // The sheet's own rules, not a nested one. Might have changed.
+        try sheet.ensureParsed(frame);
+    }
+    return store;
 }
 
-pub fn item(self: *const CSSRuleList, index: usize) ?*CSSRule {
-    if (index >= self._rules.items.len) {
+fn length(self: *const CSSRuleList, frame: *Frame) !u32 {
+    return (try self.parsedStore(frame)).length();
+}
+
+fn item(self: *const CSSRuleList, index: usize, frame: *Frame) !?*CSSRule {
+    const store = try self.parsedStore(frame);
+    if (index >= store.length()) {
         return null;
     }
-    return self._rules.items[index];
-}
-
-pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, frame: *Frame) !void {
-    if (index > self._rules.items.len) {
-        return error.IndexSizeError;
-    }
-    try self._rules.insert(frame.page_arena, index, rule);
-}
-
-pub fn remove(self: *CSSRuleList, index: u32) !void {
-    if (index >= self._rules.items.len) {
-        return error.IndexSizeError;
-    }
-    _ = self._rules.orderedRemove(index);
-}
-
-pub fn clear(self: *CSSRuleList) void {
-    self._rules.clearRetainingCapacity();
+    return try store._sheet.ruleView(store, @intCast(index), frame);
 }
 
 fn values(self: *CSSRuleList, frame: *Frame) !*ValueIterator {
@@ -74,8 +68,8 @@ const Iterator = struct {
     index: u32 = 0,
     list: *CSSRuleList,
 
-    pub fn next(self: *Iterator, _: *Frame) ?*CSSRule {
-        const rule = self.list.item(self.index) orelse return null;
+    pub fn next(self: *Iterator, frame: *Frame) !?*CSSRule {
+        const rule = try self.list.item(self.index, frame) orelse return null;
         self.index += 1;
         return rule;
     }

@@ -23,6 +23,14 @@ const HTTP_PORT = 9582;
 const WS_PORT = 9584;
 
 pub fn main() !void {
+    // A browser can drop a connection we're still writing to (a WebSocket
+    // closed while connecting): that's a write error, not a reason to die.
+    std.posix.sigaction(.PIPE, &.{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    }, null);
+
     var http_server: lp.TestHTTPServer = .init(lp.test_routes.handle, HTTP_PORT);
     var ws_server: lp.TestWSServer = .init(WS_PORT);
 

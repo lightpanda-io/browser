@@ -18,9 +18,8 @@
 
 // Invalidation events. Every change that can make a cached read stale (live
 // collections, the StyleManager memo, the layout observers) is reported here,
-// saying what happened, and only here are the versions bumped. Each event
-// still does a full bump through the primitives at the bottom (domChanged,
-// styleChanged, ...); the arguments are what a narrower invalidation needs.
+// saying what happened, and only here are the versions bumped, through the
+// primitives at the bottom (domChanged, styleChanged, ...).
 //
 // Tree events fire from the leaves (Frame.removeNode, Frame._insertNodeRelative)
 // right after the link/unlink and before anything that can run script, so
@@ -39,10 +38,13 @@ const String = lp.String;
 
 pub fn attributeSet(element: *Element, name: String, old: ?String, new: String, frame: *Frame) void {
     _ = element;
-    _ = name;
-    _ = old;
-    _ = new;
-    domChanged(frame);
+    if (old) |o| {
+        if (o.eql(new)) {
+            // Nothing that reads attributes can tell.
+            return;
+        }
+    }
+    attributeChanged(name, frame);
 }
 
 /// A style attribute write no selector can see (see Attribute.List.putInertStyle).
@@ -53,9 +55,17 @@ pub fn inertStyleSet(element: *Element, frame: *Frame) void {
 
 pub fn attributeRemoved(element: *Element, name: String, old: String, frame: *Frame) void {
     _ = element;
-    _ = name;
     _ = old;
-    domChanged(frame);
+    attributeChanged(name, frame);
+}
+
+fn attributeChanged(name: String, frame: *Frame) void {
+    if (frame._style_manager.readsAttribute(name.str())) {
+        // the style manager is tracking selectors with this attribute
+        renderingChanged(frame);
+    }
+
+    frame.page.dom_version += 1;
 }
 
 pub fn childInserted(parent: *Node, child: *Node, frame: *Frame) void {

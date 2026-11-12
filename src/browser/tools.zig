@@ -201,6 +201,17 @@ pub const Tool = enum {
         };
     }
 
+    /// Calling it again can't repeat an act on the world: no click or key
+    /// press that may submit a form, no page-side JavaScript, no login, no
+    /// file written. A `read_only` script Runtime refuses the rest.
+    /// Exhaustive so a new tool must choose.
+    pub fn replaySafe(self: Tool) bool {
+        return switch (self) {
+            .goto, .search, .markdown, .html, .links, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools, .classify => true,
+            .evaluate, .click, .press, .screenshot, .download, .callPageTool, .acceptCookies, .login => false,
+        };
+    }
+
     /// A read tool that navigates when handed a `url`. The read isn't recorded,
     /// but the navigation is, so the recorder captures it as a `goto`. Excludes
     /// `evaluate` (carries its own `url`), `search` (derived engine URL), and
@@ -386,6 +397,9 @@ pub const ToolResult = struct {
     /// which element to act on writes the answer into the script this way, so
     /// the question is asked once instead of on every replay.
     replay_args: ?[]const u8 = null,
+    /// An `extract` whose selectors matched elements with no data in them, so
+    /// a recording shouldn't reuse its schema.
+    no_data: bool = false,
     /// Set for the tools `Tool.reportsPageState` names.
     page_state: ?PageState = null,
     /// Set when a caller acts on an in-band failure's kind rather than only
@@ -771,7 +785,34 @@ pub fn extract(
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
     const page = try ensurePage(session, registry, null, null);
-    return runEval(arena, page, script, null);
+    var result = try runEval(arena, page, script, null);
+    // Checked here, on the full text: callers cap what they pass on.
+    if (!result.is_error) result.no_data = isEmptyJson(arena, result.text);
+    return result;
+}
+
+/// JSON with no data in it: `null`, `""`, or arrays and objects made only of
+/// those, like `[]` or `[{"title": null}]`. Empty text isn't JSON, so it is
+/// not: a script that returns nothing prints nothing, and may only act.
+pub fn isEmptyJson(arena: std.mem.Allocator, output: []const u8) bool {
+    const trimmed = std.mem.trim(u8, output, &std.ascii.whitespace);
+    if (trimmed.len == 0) return false;
+    const value = std.json.parseFromSliceLeaky(std.json.Value, arena, trimmed, .{}) catch return false;
+    return isEmptyValue(value);
+}
+
+fn isEmptyValue(value: std.json.Value) bool {
+    return switch (value) {
+        .null => true,
+        .string => |s| s.len == 0,
+        .array => |a| for (a.items) |item| {
+            if (!isEmptyValue(item)) break false;
+        } else true,
+        .object => |o| for (o.values()) |item| {
+            if (!isEmptyValue(item)) break false;
+        } else true,
+        .bool, .integer, .float, .number_string => false,
+    };
 }
 
 // The schema literal is spliced between prefix and suffix verbatim — a format
@@ -1373,7 +1414,7 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRe
             error.OutOfMemory => return ToolError.OutOfMemory,
             error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
         };
-        return .{ .text = "" };
+        return .{ .text = "", .no_data = result.no_data };
     };
 
     return result;
@@ -2466,6 +2507,32 @@ pub fn closePage(session: *lp.Session, registry: *NodeRegistry, frame_id: u32) v
     const page = session.livePage(frame_id) orelse return;
     registry.resetFrame(&page.frame);
     session.closePage(frame_id);
+}
+
+/// The frame ids of the session's pages, to tell later which ones a run opened.
+pub fn pageIds(arena: std.mem.Allocator, session: *lp.Session) ![]u32 {
+    var ids: std.ArrayList(u32) = .empty;
+    for (session.pages.items) |page| try ids.append(arena, page.frame._frame_id);
+    return ids.items;
+}
+
+/// The newest page that isn't in `before`.
+pub fn lastPageOpenedSince(session: *lp.Session, before: []const u32) ?u32 {
+    var last: ?u32 = null;
+    for (session.pages.items) |page| {
+        const id = page.frame._frame_id;
+        if (std.mem.findScalar(u32, before, id) == null) last = id;
+    }
+    return last;
+}
+
+pub fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, before: []const u32) void {
+    var opened: std.ArrayList(u32) = .empty;
+    for (session.pages.items) |page| {
+        const id = page.frame._frame_id;
+        if (std.mem.findScalar(u32, before, id) == null) opened.append(arena, id) catch return;
+    }
+    for (opened.items) |id| closePage(session, registry, id);
 }
 
 /// Start a navigation without waiting for it to load, so the agent script Runtime
@@ -3748,4 +3815,39 @@ test "watchPopups: watches the page while a popup is followed" {
     // return before the timer opens the second window.
     try watchPopups(session, 1, .networkidle, 2000);
     try testing.expectEqual(2, popups.items.len);
+}
+
+test "isEmptyJson: no data in the value" {
+    const arena = std.testing.allocator;
+    var state: std.heap.ArenaAllocator = .init(arena);
+    defer state.deinit();
+    const a = state.allocator();
+    for ([_][]const u8{ "[]", "{}", "null", "\"\"", "[{\"title\":null,\"price\":\"\"}]", "{\"items\":[]}" }) |empty| {
+        try std.testing.expect(isEmptyJson(a, empty));
+    }
+    // No `return` prints nothing; plain text and zero are data.
+    for ([_][]const u8{ "", "0", "false", "Bridgestone", "[{\"price\":275}]", "{\"items\":[null,\"x\"]}" }) |data| {
+        try std.testing.expect(!isEmptyJson(a, data));
+    }
+}
+
+test "extract: no_data when every match holds nothing" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    for ([_]struct { []const u8, bool }{
+        .{ "{\"schema\":\"{\\\"btn\\\":\\\"#btn\\\"}\"}", false },
+        .{ "{\"schema\":\"{\\\"rows\\\":[\\\"li.nothing-here\\\"],\\\"btn\\\":\\\"#btn\\\"}\"}", false },
+        .{ "{\"schema\":\"{\\\"rows\\\":[\\\"li.nothing-here\\\"]}\"}", true },
+    }) |case| {
+        const json, const no_data = case;
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, json, .{});
+        const r = try call(aa, page.session, &registry, "extract", args, .{ .source = .user });
+        try std.testing.expect(!r.is_error);
+        try std.testing.expectEqual(no_data, r.no_data);
+    }
 }

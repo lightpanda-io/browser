@@ -20,7 +20,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 
-const Element = @import("../Element.zig");
 const Frame = @import("../../Frame.zig");
 const Factory = @import("../../Factory.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
@@ -34,12 +33,9 @@ pub const Proto = CSSStyleDeclaration;
 
 _proto_canary: if (lp.IS_DEBUG) *CSSStyleDeclaration else void = undefined,
 
-pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleProperties {
+pub fn init(owner: CSSStyleDeclaration.Owner, frame: *Frame) !*CSSStyleProperties {
     const self = try frame._factory.chained(.{
-        CSSStyleDeclaration{
-            ._element = element,
-            ._is_computed = is_computed,
-        },
+        CSSStyleDeclaration{ ._owner = owner },
         CSSStyleProperties{},
     });
     try self.asCSSStyleDeclaration().parseInlineStyle(frame);
