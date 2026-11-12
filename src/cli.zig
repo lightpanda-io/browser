@@ -103,6 +103,8 @@ const string = @import("string.zig");
 ///     to `false` when no `default` is given. `?bool` is not allowed.
 ///   - Integers (`u8`, `u16`, `u31`, `usize`, etc.) — parsed with
 ///     `std.fmt.parseInt`. Requires `default` unless wrapped in `?`.
+///   - Floats (`f32`, `f64`) — parsed with `std.fmt.parseFloat`. Requires
+///     `default` unless wrapped in `?`.
 ///   - `[]const u8`, `[:0]const u8` (and mutable variants) — string slices
 ///     duped from argv. Sentinel is preserved. Requires `default` unless `?`.
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
@@ -724,6 +726,24 @@ pub fn Builder(comptime commands: anytype) type {
 
                     if (is_multiple) {
                         // Push to ArrayList.
+                        try target.append(allocator, v);
+                    } else {
+                        target.* = v;
+                    }
+                },
+                .float => {
+                    const Float = switch (@typeInfo(T)) {
+                        .optional => |optional| optional.child,
+                        inline else => T,
+                    };
+
+                    const str = args.next() orelse return error.MissingArgument;
+                    const v = std.fmt.parseFloat(Float, str) catch {
+                        log.fatal(.app, "invalid number", .{ .arg = kebab_cased, .value = str });
+                        return error.InvalidArgument;
+                    };
+
+                    if (is_multiple) {
                         try target.append(allocator, v);
                     } else {
                         target.* = v;
