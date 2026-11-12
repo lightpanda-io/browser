@@ -110,8 +110,11 @@ const HtmlElement = @This();
 
 pub const Proto = Element;
 
+// At 1 byte, we fit in the Element's padding, where a chain slot of our own
+// costs most html elements 8 bytes.
+pub const embedded_in_proto = "_html";
+
 _type: Type,
-_proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 
 // Special constructor for custom elements (autonomous, `extends HTMLElement`).
 // Two paths:
