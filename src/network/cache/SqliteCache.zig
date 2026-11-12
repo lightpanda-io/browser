@@ -250,80 +250,120 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, body_allocator: std.mem
     const conn = try self.pool.acquire();
     defer self.pool.release(conn);
 
-    return readEntry(conn, arena, body_allocator, req) catch |err| switch (err) {
-        error.CorruptEntry => {
-            discardCorrupt(conn, req.url, req.scope);
-            return .miss;
-        },
-        else => return err,
-    };
+    return readEntry(conn, arena, body_allocator, req);
 }
 
+// A public entry (scope 0) is visible to every caller; a private one only to
+// the matching scope. When both exist for a url, a candidate is considered
+// private-first, then public: whichever is usable first wins. Expired (no
+// validators) or corrupt candidates are evicted as they're found rather than
+// shadowing a candidate behind them that might still be fresh.
 fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
-    // A public entry (scope 0) is visible to every caller; a private one only
-    // to the matching scope. When both exist for a url, prefer the caller's
-    // own private entry over the public one.
-    var entry = try conn.row(
-        \\ select scope, status, stored_at, age_at_store, must_revalidate,
+    var rows = try conn.rows(
+        \\ select rowid, scope, status, stored_at, age_at_store, must_revalidate,
         \\     max_age, content_type, etag, last_modified, vary_headers,
         \\     headers, script_cache, body
         \\ from cache where url = $1 and scope in ($2, 0)
-        \\ order by (scope = $2) desc limit 1
-    , .{ req.url, scopeToInt(req.scope) }) orelse {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
-        return .miss;
-    };
-    defer entry.deinit();
+        \\ order by (scope = $2) desc
+    , .{ req.url, scopeToInt(req.scope) });
+    defer rows.deinit();
 
-    const matched_scope = try scopeFromInt(entry.get(i64, 0));
-    const status = std.math.cast(u16, entry.get(i64, 1)) orelse return error.CorruptEntry;
-    const stored_at = std.math.cast(u64, entry.get(i64, 2)) orelse return error.CorruptEntry;
-    const age_at_store = std.math.cast(u64, entry.get(i64, 3)) orelse return error.CorruptEntry;
-    const must_revalidate = entry.get(bool, 4);
-    const max_age = std.math.cast(u64, entry.get(i64, 5)) orelse return error.CorruptEntry;
-    const raw_content_type = entry.get([]const u8, 6);
-    const raw_etag = entry.get(?[]const u8, 7);
-    const raw_last_modified = entry.get(?[]const u8, 8);
+    // The first stale-without-validators candidate found, returned only if
+    // no later candidate (e.g. a still-fresh public entry) is usable.
+    var stale_scope: ?CacheScope = null;
 
-    const expired = must_revalidate or blk: {
-        // Saturates if the clock went back since the entry was stored.
-        const age = (req.timestamp -| stored_at) +| age_at_store;
-        break :blk age >= max_age;
-    };
-    const has_validators = raw_etag != null or raw_last_modified != null;
+    while (try rows.next()) |entry| {
+        const rowid = entry.get(i64, 0);
+        const matched_scope = scopeFromInt(entry.get(i64, 1)) catch {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        };
+        const status = std.math.cast(u16, entry.get(i64, 2)) orelse {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        };
+        const stored_at = std.math.cast(u64, entry.get(i64, 3)) orelse {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        };
+        const age_at_store = std.math.cast(u64, entry.get(i64, 4)) orelse {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        };
+        const must_revalidate = entry.get(bool, 5);
+        const max_age = std.math.cast(u64, entry.get(i64, 6)) orelse {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        };
+        const raw_content_type = entry.get([]const u8, 7);
+        const raw_etag = entry.get(?[]const u8, 8);
+        const raw_last_modified = entry.get(?[]const u8, 9);
 
-    // If it is expired without validators,
-    // we are going to have to make a network request for this resource.
-    if (expired and !has_validators) {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired with no validators" });
-        return .{ .stale = matched_scope };
+        const expired = must_revalidate or blk: {
+            // Saturates if the clock went back since the entry was stored.
+            const age = (req.timestamp -| stored_at) +| age_at_store;
+            break :blk age >= max_age;
+        };
+        const has_validators = raw_etag != null or raw_last_modified != null;
+
+        // Expired without validators: nothing to revalidate against, so this
+        // candidate can never become usable. Evict it and keep looking.
+        if (expired and !has_validators) {
+            log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired with no validators" });
+            deleteRowid(conn, rowid);
+            if (stale_scope == null) {
+                stale_scope = matched_scope;
+            }
+            continue;
+        }
+
+        const headers = decodeHeaders(arena, try arena.dupe(u8, entry.get(Blob, 11).data)) catch {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        };
+
+        const vary_digest = entry.get(Blob, 10).data;
+        if (vary_digest.len != Sha256.digest_length) {
+            discardCorruptRow(conn, req.url, rowid);
+            continue;
+        }
+        if (!std.mem.eql(u8, vary_digest, &varyDigest(headers, req.request_headers))) {
+            log.debug(.cache, "miss", .{ .url = req.url, .reason = "vary mismatch" });
+            continue;
+        }
+
+        log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
+
+        const resp: CachedResponse = .{
+            .scope = matched_scope,
+            .status = status,
+            .headers = headers,
+            .content_type = try arena.dupe(u8, raw_content_type),
+            .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
+            .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
+            .script_cache = if (entry.get(?Blob, 12)) |b| try arena.dupe(u8, b.data) else null,
+            // Last, so nothing after it can fail and leak it.
+            .data = .{ .buffer = try body_allocator.dupe(u8, entry.get(Blob, 13).data) },
+        };
+        return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
     }
 
-    const headers = try decodeHeaders(arena, try arena.dupe(u8, entry.get(Blob, 10).data));
-
-    const vary_digest = entry.get(Blob, 9).data;
-    if (vary_digest.len != Sha256.digest_length) {
-        return error.CorruptEntry;
+    if (stale_scope) |scope| {
+        return .{ .stale = scope };
     }
-    if (!std.mem.eql(u8, vary_digest, &varyDigest(headers, req.request_headers))) {
-        log.debug(.cache, "miss", .{ .url = req.url, .reason = "vary mismatch" });
-        return .miss;
-    }
+    log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
+    return .miss;
+}
 
-    log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
+fn discardCorruptRow(conn: Sqlite.Conn, url: []const u8, rowid: i64) void {
+    log.warn(.cache, "discarding corrupt entry", .{ .url = url });
+    deleteRowid(conn, rowid);
+}
 
-    const resp: CachedResponse = .{
-        .scope = matched_scope,
-        .status = status,
-        .headers = headers,
-        .content_type = try arena.dupe(u8, raw_content_type),
-        .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
-        .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
-        .script_cache = if (entry.get(?Blob, 11)) |b| try arena.dupe(u8, b.data) else null,
-        // Last, so nothing after it can fail and leak it.
-        .data = .{ .buffer = try body_allocator.dupe(u8, entry.get(Blob, 12).data) },
+fn deleteRowid(conn: Sqlite.Conn, rowid: i64) void {
+    conn.exec("delete from cache where rowid = $1", .{rowid}) catch |err| {
+        log.err(.cache, "delete from cache", .{ .rowid = rowid, .err = err });
     };
-    return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
 
 pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
@@ -417,13 +457,11 @@ fn deleteEntry(conn: Sqlite.Conn, url: []const u8, scope: CacheScope) void {
     };
 }
 
-// The corrupt row could be either candidate readEntry tried (the caller's own
-// scope or the public one): clear both rather than track which one it was.
+// keepStoredHeaders reads exactly this scope's row, so it's unambiguous
+// which entry was corrupt.
 fn discardCorrupt(conn: Sqlite.Conn, url: []const u8, scope: CacheScope) void {
     log.warn(.cache, "discarding corrupt entry", .{ .url = url });
-    conn.exec("delete from cache where url = $1 and scope in ($2, 0)", .{ url, scopeToInt(scope) }) catch |err| {
-        log.err(.cache, "delete from cache", .{ .url = url, .err = err });
-    };
+    deleteEntry(conn, url, scope);
 }
 
 pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !void {
@@ -832,6 +870,151 @@ test "SqliteCache: put override" {
         try testing.expect(result == .hit);
         try testing.expectEqual("goodbye world", result.hit.data.buffer);
     }
+}
+
+test "SqliteCache: private falls back to public when stale with no validators" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    const scope: CacheScope = .{ .private = 7 };
+
+    // Private, already expired by the time we look it up.
+    try cache.put(.{
+        .url = "https://example.com",
+        .scope = scope,
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 5000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 100 },
+        .headers = &.{},
+        .request_headers = &.{},
+    }, "private");
+
+    // Public, still fresh.
+    try cache.put(.{
+        .url = "https://example.com",
+        .scope = .public,
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 5000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 10000 },
+        .headers = &.{},
+        .request_headers = &.{},
+    }, "public");
+
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
+        .url = "https://example.com",
+        .scope = scope,
+        .timestamp = 6000,
+        .request_headers = &.{},
+    });
+    try testing.expect(result == .hit);
+    try testing.expectEqual("public", result.hit.data.buffer);
+    try testing.expect(result.hit.scope == .public);
+
+    // The stale private entry was evicted along the way.
+    try testing.expectEqual(1, try entryCount(&cache));
+}
+
+test "SqliteCache: private wins over public when stale but revalidatable" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    const scope: CacheScope = .{ .private = 7 };
+
+    // Private, expired but has validators: still a candidate to revalidate.
+    try cache.put(.{
+        .url = "https://example.com",
+        .scope = scope,
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 5000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 100 },
+        .etag = "\"private-etag\"",
+        .headers = &.{},
+        .request_headers = &.{},
+    }, "private");
+
+    // Public, still fresh.
+    try cache.put(.{
+        .url = "https://example.com",
+        .scope = .public,
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 5000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 10000 },
+        .headers = &.{},
+        .request_headers = &.{},
+    }, "public");
+
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
+        .url = "https://example.com",
+        .scope = scope,
+        .timestamp = 6000,
+        .request_headers = &.{},
+    });
+
+    // The private entry is a different, scope-specific response, not just an
+    // older copy of the public one: it must win and be revalidated rather
+    // than silently falling back to serving the public hit.
+    try testing.expect(result == .revalidate);
+    try testing.expectEqual("private", result.revalidate.data.buffer);
+    try testing.expect(std.meta.eql(result.revalidate.scope, scope));
+
+    // Neither entry was touched: the private one still needs revalidation,
+    // and the public one was never even considered.
+    try testing.expectEqual(2, try entryCount(&cache));
+}
+
+test "SqliteCache: private falls back to public on vary mismatch" {
+    var cache = try setupCache(testing.allocator);
+    defer cache.deinit();
+
+    const scope: CacheScope = .{ .private = 7 };
+
+    // Private, varies on a header this request doesn't send.
+    try cache.put(.{
+        .url = "https://example.com",
+        .scope = scope,
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 5000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{.{ .name = "vary", .value = "x-custom" }},
+        .request_headers = &.{.{ .name = "x-custom", .value = "a" }},
+    }, "private");
+
+    // Public, no vary.
+    try cache.put(.{
+        .url = "https://example.com",
+        .scope = .public,
+        .content_type = "text/html",
+        .status = 200,
+        .stored_at = 5000,
+        .age_at_store = 0,
+        .cache_control = .{ .max_age = 600 },
+        .headers = &.{},
+        .request_headers = &.{},
+    }, "public");
+
+    const result = try cache.get(testing.arena_allocator, testing.arena_allocator, .{
+        .url = "https://example.com",
+        .scope = scope,
+        .timestamp = 5100,
+        .request_headers = &.{.{ .name = "x-custom", .value = "b" }},
+    });
+    try testing.expect(result == .hit);
+    try testing.expectEqual("public", result.hit.data.buffer);
+    try testing.expect(result.hit.scope == .public);
+
+    // Vary mismatch isn't corruption: the private entry is still there for
+    // the request header combination it actually matches.
+    try testing.expectEqual(2, try entryCount(&cache));
 }
 
 // Stores a response that varies on `vary` to a request with `request_headers`.
