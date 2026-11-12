@@ -58,6 +58,10 @@ render_fonts: screenshot.Fonts,
 /// allocator (`allocator`, thread-safe) allows.
 http_client: std.http.Client,
 
+// Issues each Browser's cache scope id. Starts at 1: 0 is reserved for the
+// public/shared cache entries (Cache.CacheScope.public).
+next_browser_scope: std.atomic.Value(u32) = .init(1),
+
 /// Clients for asking a decision model (Gemini or TypeSafe Jev), pooled so
 /// concurrent calls each get their own and keep its connection warm. It reads
 /// the provider and its API key from the environment on every ask. Usable
@@ -67,6 +71,13 @@ decisions: zenai.decisions.Pool,
 /// Picks the decision model's provider, "gemini" or "typesafe", when keys for
 /// both are set. Unset, Gemini is preferred.
 pub const decision_provider_env_var_name = "LIGHTPANDA_DECISION_PROVIDER";
+
+// A fresh, process-unique id for a Browser's private cache entries. Called
+// from whichever thread spawns that Browser (each Worker/CDP connection has
+// its own), so this must stay atomic.
+pub fn nextBrowserScope(self: *App) u32 {
+    return self.next_browser_scope.fetchAdd(1, .monotonic);
+}
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{

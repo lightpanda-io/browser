@@ -191,6 +191,8 @@ blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 intercepted: usize = 0,
 
 cache: *Cache,
+// This Browser's identity for private cache entries.
+scope: Cache.CacheScope,
 
 // Cached config decisions, resolved once at init.
 serve_mode: bool,
@@ -205,7 +207,7 @@ robots: RobotsGate,
 cors: CorsGate,
 url_blocklist: ?UrlBlocklist,
 
-pub fn init(self: *Client, app: *lp.App) !void {
+pub fn init(self: *Client, app: *lp.App, scope: Cache.CacheScope) !void {
     const config = app.config;
     const allocator = app.allocator;
 
@@ -236,6 +238,7 @@ pub fn init(self: *Client, app: *lp.App) !void {
         .network = network,
         .allocator = app.allocator,
         .cache = &network.cache,
+        .scope = scope,
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -1356,7 +1359,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const cache_result = cache.get(arena.allocator(), self.allocator, .{
         .url = key,
-        .scope = .public,
+        .scope = self.scope,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = try transfer.cacheRequestHeaders(),
     }) catch |e| blk: {
@@ -1393,7 +1396,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         },
         .stale => {
             lp.metrics.http_cache.incr(.miss);
-            cache.evict(key, .public);
+            cache.evict(key, self.scope);
             transfer._cache_intent = .store;
             return false;
         },
@@ -1422,7 +1425,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
     cache.renew(transfer.arena.allocator(), .{
         .url = transfer._cache_key,
-        .scope = .public,
+        .scope = self.scope,
         .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
         .request_headers = request_headers,
@@ -1470,7 +1473,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const rh = &(transfer.res.header orelse return);
 
-    const stored = storeResponse(cache, transfer, rh) catch |err| {
+    const stored = storeResponse(cache, self.scope, transfer, rh) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
         return;
     };
@@ -1479,12 +1482,12 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     }
 }
 
-fn storeResponse(cache: *Cache, transfer: *Transfer, rh: *http.ResponseHead) !bool {
+fn storeResponse(cache: *Cache, scope: Cache.CacheScope, transfer: *Transfer, rh: *http.ResponseHead) !bool {
     const arena = transfer.arena.allocator();
     return cache.put(arena, .{
         .timestamp = lp.datetime.timestamp(.real),
         .url = transfer._cache_key,
-        .scope = .public,
+        .scope = scope,
         .status = rh.status,
         .content_type = rh.contentType(),
         .headers = transfer.res.headers,
@@ -5289,6 +5292,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.http_active = 0;
     client.ws_active = 0;
     client.cache = &Cache.noop;
+    client.scope = .public;
     client.serve_mode = false;
     client.obey_robots = false;
     client.http_version = .auto;
