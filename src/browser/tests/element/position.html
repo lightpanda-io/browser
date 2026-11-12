@@ -15,7 +15,7 @@
   testing.expectTrue(test1.clientWidth >= 0);
   testing.expectTrue(test1.clientHeight >= 0);
 
-  // clientTop/Left should be 0 (no borders in dummy layout)
+  // clientTop/Left are the border widths: 0 without a border
   testing.expectEqual(0, test1.clientTop);
   testing.expectEqual(0, test1.clientLeft);
 }

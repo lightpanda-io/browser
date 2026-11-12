@@ -278,24 +278,21 @@ pub fn getRequired(self: *const TextArea) bool {
 // The value is laid out as anonymous text, not child boxes, so measure it
 // directly. Auto-sizing components set height: 0 and read scrollHeight to get
 // this intrinsic height.
-pub fn getScrollHeight(self: *TextArea, frame: *Frame) f64 {
+pub fn textHeight(self: *TextArea, frame: *Frame) f64 {
     const el = self.asElement();
-    const height = el.getElementAxis(frame, .height).value;
-    const owner = el.ownerFrame(frame) orelse return height;
+    const owner = el.ownerFrame(frame) orelse return 0;
     const style_manager = &owner._style_manager;
 
     const font_size = style_manager.computedFontSize(el);
-    const width = el.getElementAxis(frame, .width);
     // Without a CSS width, the cols attribute sets the line width.
-    const line_width = if (width.explicit) width.value else text_measure.width("0", font_size) * @as(f64, @floatFromInt(self.cols()));
+    const line_width = if (el.getElementAxis(frame, .width).explicit) el.boxAxis(frame, .width, .content) else text_measure.width("0", font_size) * @as(f64, @floatFromInt(self.cols()));
 
     const value = self.getValue();
     const lines = text_measure.layout(value, font_size, line_width, style_manager.whiteSpace(el));
     // A trailing newline opens an empty last line.
     const trailing: u32 = @intFromBool(std.mem.endsWith(u8, value, "\n"));
     const count = @max(1, lines.count + trailing);
-    const text_height = @ceil(@as(f64, @floatFromInt(count)) * font_size * text_measure.LINE_HEIGHT);
-    return @max(height, text_height);
+    return @ceil(@as(f64, @floatFromInt(count)) * font_size * text_measure.LINE_HEIGHT);
 }
 
 // As the cols IDL attribute reflects it: positive, else 20.

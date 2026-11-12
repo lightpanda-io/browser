@@ -1655,6 +1655,8 @@ pub const Axis = enum {
     pub const State = struct {
         value: f64,
         explicit: bool = false,
+        // A replaced element's natural size, which box-sizing doesn't change
+        intrinsic: bool = false,
     };
 };
 
@@ -1695,7 +1697,7 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         return .{ .value = switch (axis) {
             .width => 300.0,
             .height => 150.0,
-        }, .explicit = true };
+        }, .explicit = true, .intrinsic = true };
     }
 
     return .{ .value = 5.0 };
@@ -1732,7 +1734,25 @@ fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
+    if (self.viewportAxis(frame, axis)) |size| {
+        return size;
+    }
+    if (self.hasInlineBox(frame)) {
+        return 0.0;
+    }
+    return self.boxAxis(frame, axis, .padding);
+}
+
+// An inline box has no client or scrolling area (CSSOM View). With no table
+// display values and no UA display for dialog, the cascade takes those for
+// inline boxes.
+fn hasInlineBox(self: *Element, frame: *Frame) bool {
+    switch (self.getTag()) {
+        .caption, .col, .colgroup, .dialog, .tbody, .td, .tfoot, .th, .thead, .tr => return false,
+        else => {},
+    }
+    const owner = self.ownerFrame(frame) orelse return false;
+    return owner._style_manager.isPlainInline(self);
 }
 
 /// Document.scrollSize, when self is the root scroller (see viewportAxis).
@@ -1759,24 +1779,51 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     return @floatFromInt(if (axis == .width) viewport.width else viewport.height);
 }
 
-// Caller must have made sure self is visible.
-pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
-    if (axis == .width) {
-        const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-        return layout.boxWidth(self, owner);
-    }
+pub const Box = enum { content, padding, border };
 
-    const own = self.getElementAxis(frame, axis);
+// The content box, or around it the padding box and then the border box.
+// Caller must have made sure self is visible.
+pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis, comptime box: Box) f64 {
+    const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, axis).value;
+    const edges = layout.boxEdges(self, owner);
+    const content = switch (axis) {
+        .width => layout.boxWidth(self, owner),
+        .height => self.contentBoxHeight(frame, edges),
+    };
+    return switch (box) {
+        .content => content,
+        .padding => content + edges.padding.along(axis),
+        .border => content + edges.along(axis),
+    };
+}
+
+fn contentBoxHeight(self: *Element, frame: *Frame, edges: StyleManager.BoxEdges) f64 {
+    const own = self.getElementAxis(frame, .height);
     if (own.explicit) {
         // an explicitly set value always wins
-        return own.value;
+        return layout.ownContent(own, edges, .height);
     }
 
     if (self.isRootContainer()) {
         // html/body return their set value regardless of children.
         return own.value;
     }
-    return @max(own.value, self.contentAxis(frame, axis));
+    return @max(own.value, self.contentAxis(frame, .height));
+}
+
+/// Whether a declared width or height sizes the border box
+/// (box-sizing: border-box).
+pub fn sizesBorderBox(self: *Element, frame: *Frame) bool {
+    return self.boxEdges(frame).border_box;
+}
+
+/// The padding and border around the content box; none without a box.
+pub fn boxEdges(self: *Element, frame: *Frame) StyleManager.BoxEdges {
+    if (!self.isVisible(frame)) {
+        return .{};
+    }
+    const owner = self.ownerFrame(frame) orelse return .{};
+    return layout.boxEdges(self, owner);
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1799,8 +1846,8 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
     return .{
         .x = origin.x,
         .y = origin.y,
-        .width = self.boxAxis(frame, .width),
-        .height = self.boxAxis(frame, .height),
+        .width = self.boxAxis(frame, .width, .border),
+        .height = self.boxAxis(frame, .height, .border),
     };
 }
 
@@ -1887,18 +1934,25 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return 0.0;
     }
 
-    if (self.is(Html.TextArea)) |textarea| {
-        return textarea.getScrollHeight(frame);
-    }
-
-    const height = self.getElementAxis(frame, .height).value;
-
     // The root scroller reports what the viewport scrolls over.
     if (self.isRootContainer()) {
-        return self.rootScrollSize(frame, .height) orelse height;
+        return self.rootScrollSize(frame, .height) orelse self.getElementAxis(frame, .height).value;
     }
 
-    return @max(height, self.contentAxis(frame, .height));
+    const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .height).value;
+    if (self.hasInlineBox(frame)) {
+        return 0.0;
+    }
+    const edges = layout.boxEdges(self, owner);
+    if (self.is(Html.TextArea)) |textarea| {
+        // It scrolls by default
+        return scrollArea(edges.padding, .height, self.contentBoxHeight(frame, edges), textarea.textHeight(frame), true);
+    }
+    // As contentBoxHeight, with the children measured once for both
+    const content = self.contentAxis(frame, .height);
+    const own = self.getElementAxis(frame, .height);
+    const box = if (own.explicit) layout.ownContent(own, edges, .height) else @max(own.value, content);
+    return scrollArea(edges.padding, .height, box, content, owner._style_manager.clipsOverflow(self));
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
@@ -1913,7 +1967,21 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-    return @max(layout.boxWidth(self, owner), layout.contentWidth(self, .scrollable, owner));
+    if (self.hasInlineBox(frame)) {
+        return 0.0;
+    }
+    const padding = layout.boxEdges(self, owner).padding;
+    return scrollArea(padding, .width, layout.boxWidth(self, owner), layout.contentWidth(self, .scrollable, owner), owner._style_manager.clipsOverflow(self));
+}
+
+// At least the padding box. The content starts inside the start padding,
+// and a box that clips its overflow scrolls on through its end padding.
+fn scrollArea(padding: StyleManager.BoxSides, comptime axis: Axis, box: f64, content: f64, clips: bool) f64 {
+    const start, const end = switch (axis) {
+        .width => .{ padding.left, padding.right },
+        .height => .{ padding.top, padding.bottom },
+    };
+    return @max(box + start + end, start + content + if (clips) end else 0);
 }
 
 /// Null where we can't prove a limit, which leaves the offset unbounded:
@@ -1934,8 +2002,9 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     return content - client;
 }
 
-// One axis of the direct child elements' size: laid end to end on a single
-// row for the width, stacked for the height.
+// One axis of the direct child elements' own size, with their padding and
+// border: laid end to end on a single row for the width, stacked for the
+// height.
 //
 // The dummy layout engine has no line-breaking, and an element only overflows
 // horizontally when its children don't wrap (white-space:nowrap, a flex row, an
@@ -1962,10 +2031,9 @@ pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
 
     var wrap: ?text_measure.LineWrap = null;
     if (axis == .height) {
-        const width = self.getElementAxis(frame, .width);
-        if (width.explicit) {
+        if (self.getElementAxis(frame, .width).explicit) {
             wrap = .{
-                .line_width = width.value,
+                .line_width = layout.boxWidth(self, owner),
                 .font_size = style_manager.computedFontSize(self),
                 .white_space = style_manager.whiteSpace(self),
             };
@@ -1976,7 +2044,8 @@ pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     while (children.next()) |node| {
         if (node.is(Element)) |el| {
             if (!style_manager.hasDisplayNone(el)) {
-                total += el.getElementAxis(frame, axis).value;
+                const edges = layout.boxEdges(el, owner);
+                total += layout.ownContent(el.getElementAxis(frame, axis), edges, axis) + edges.along(axis);
             }
         } else if (wrap) |*w| {
             if (node.is(Node.CData.Text)) |text| {
@@ -1997,14 +2066,14 @@ pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return self.boxAxis(frame, .height);
+    return self.boxAxis(frame, .height, .border);
 }
 
 pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return self.boxAxis(frame, .width);
+    return self.boxAxis(frame, .width, .border);
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
@@ -2060,14 +2129,20 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
     return null;
 }
 
-pub fn getClientTop(_: *Element) f64 {
-    // Border width - in our dummy layout, we don't apply borders to layout
-    return 0.0;
+pub fn getClientTop(self: *Element, frame: *Frame) f64 {
+    return self.borderAt(frame, .top);
 }
 
-pub fn getClientLeft(_: *Element) f64 {
-    // Border width - in our dummy layout, we don't apply borders to layout
-    return 0.0;
+pub fn getClientLeft(self: *Element, frame: *Frame) f64 {
+    return self.borderAt(frame, .left);
+}
+
+fn borderAt(self: *Element, frame: *Frame, comptime side: enum { top, left }) f64 {
+    if (!self.isVisible(frame) or self.hasInlineBox(frame)) {
+        return 0.0;
+    }
+    const owner = self.ownerFrame(frame) orelse return 0.0;
+    return @field(layout.boxEdges(self, owner).border, @tagName(side));
 }
 
 // Calculates document position by counting all nodes that appear before this one

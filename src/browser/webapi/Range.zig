@@ -1004,7 +1004,7 @@ fn lineWidth(box: *Node.Element, owner: *Frame) f64 {
     const block = owner._style_manager.blockContainer(box) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
-    return block.boxAxis(owner, .width);
+    return block.boxAxis(owner, .width, .content);
 }
 
 fn getContainerElement(self: *const Range, frame: *Frame) ?*Node.Element {

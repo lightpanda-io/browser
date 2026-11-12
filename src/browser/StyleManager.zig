@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
+const color = @import("color.zig");
 const text_measure = @import("text_measure.zig");
 
 const units = @import("css/units.zig");
@@ -1311,19 +1312,85 @@ pub fn inlineInsets(self: *StyleManager, el: *Element, containing_width: f64) f6
     return self.inlineSum(geometry.left, geometry.right, containing_width);
 }
 
-// A left and right length together, in px. A percentage resolves against
-// the containing block's width (0 when it isn't known); auto and values
-// that need layout are 0.
+// A left and right length together, in px.
 fn inlineSum(self: *StyleManager, left: Length, right: Length, containing_width: ?f64) f64 {
     const viewport = self.frame.page.getViewport();
-    var total: f64 = 0;
-    for ([_]Length{ left, right }) |length| {
-        total += length.resolve(viewport) orelse switch (length.unit) {
-            .percent => if (containing_width) |width| @as(f64, length.value) / 100.0 * width else 0,
-            else => 0,
+    return resolveLength(left, containing_width, viewport) + resolveLength(right, containing_width, viewport);
+}
+
+// A percentage resolves against the containing block's width (0 when it
+// isn't known); auto and values that need layout are 0.
+fn resolveLength(length: Length, containing_width: ?f64, viewport: Viewport) f64 {
+    return length.resolve(viewport) orelse switch (length.unit) {
+        .percent => if (containing_width) |width| @as(f64, length.value) / 100.0 * width else 0,
+        else => 0,
+    };
+}
+
+pub const BoxSides = struct {
+    top: f64 = 0,
+    right: f64 = 0,
+    bottom: f64 = 0,
+    left: f64 = 0,
+
+    pub fn along(self: BoxSides, comptime axis: Element.Axis) f64 {
+        return switch (axis) {
+            .width => self.left + self.right,
+            .height => self.top + self.bottom,
         };
     }
-    return total;
+};
+
+/// The padding and border around an element's content box, in px.
+pub const BoxEdges = struct {
+    padding: BoxSides = .{},
+    border: BoxSides = .{},
+    // box-sizing: border-box, a declared width or height includes them
+    border_box: bool = false,
+    // A percentage padding, left at 0 for want of a containing block width
+    percent_padding: bool = false,
+
+    pub fn along(self: BoxEdges, comptime axis: Element.Axis) f64 {
+        return self.padding.along(axis) + self.border.along(axis);
+    }
+};
+
+/// el's padding and border widths, and its box-sizing. A percentage padding
+/// is a share of `containing_width`, the containing block's width, on every
+/// side. display: contents generates no box, so no edges.
+pub fn boxEdges(self: *StyleManager, el: *Element, containing_width: ?f64) BoxEdges {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    const p = self.geometryProps(el);
+    // Most elements have neither, so they skip the walks below
+    if (Edges.isEmpty(p) or self.generatesBox(el) == false) {
+        return .{};
+    }
+    const viewport = self.frame.page.getViewport();
+    var edges: BoxEdges = .{ .border_box = self.sizesBorderBox(el, p.box_sizing) };
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const padding = @field(p, "padding_" ++ side);
+        @field(edges.padding, side) = resolveLength(padding, containing_width, viewport);
+        if (padding.unit == .percent and containing_width == null) {
+            edges.percent_padding = true;
+        }
+        if (@field(p, "border_" ++ side ++ "_drawn")) {
+            @field(edges.border, side) = @field(p, "border_" ++ side ++ "_width").resolve(viewport) orelse 0;
+        }
+    }
+    return edges;
+}
+
+// box-sizing doesn't inherit, but `*, ::before, ::after { box-sizing:
+// inherit }` under `html { box-sizing: border-box }` is a common reset.
+fn sizesBorderBox(self: *StyleManager, el: *Element, own: Edges.BoxSizing) bool {
+    var sizing = own;
+    var current = el;
+    while (sizing == .inherit) {
+        current = current.asNode().flatTreeParentElement(self.frame) orelse return false;
+        sizing = self.geometryProps(current).box_sizing;
+    }
+    return sizing == .border_box;
 }
 
 /// The nearest element to el that generates a box, or `el` itself it it does
@@ -1461,6 +1528,15 @@ pub fn clipsOverflowX(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     return self.geometryProps(el).overflow_x_clips;
+}
+
+/// Overflow is clipped or scrolled within the box along either axis, so its
+/// scrollable area takes in its end padding (CSS Overflow §2.2).
+pub fn clipsOverflow(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    const geometry = self.geometryProps(el);
+    return geometry.overflow_x_clips or geometry.overflow_y_clips;
 }
 
 pub const WidthLimit = union(enum) {
@@ -2562,6 +2638,10 @@ fn isInheritKeyword(value: []const u8) bool {
     return inheritsKeyword(value) or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer");
 }
 
+fn isCssWideKeyword(value: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(value, "initial") or isInheritKeyword(value);
+}
+
 /// A declared width or height. Values that need layout (auto, em, calc) are
 /// `auto`: they win the cascade but give no size. The intrinsic sizes, which
 /// follow the content, are `content`. A `percent` resolves against the
@@ -2758,16 +2838,17 @@ const Visibility = struct {
     }
 };
 
-/// An element's box: its size and how it scrolls.
+/// An element's box: its size, padding and border, and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end" } ++ Edges.names;
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
         flex_grow: ?bool = null,
         flex_no_shrink: ?bool = null,
         overflow_y_scrolls: ?bool = null,
+        overflow_y_clips: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
         width: ?Length = null,
@@ -2778,6 +2859,20 @@ const Geometry = struct {
         margin_right: ?Length = null,
         left: ?Length = null,
         right: ?Length = null,
+        box_sizing: ?Edges.BoxSizing = null,
+        padding_top: ?Length = null,
+        padding_right: ?Length = null,
+        padding_bottom: ?Length = null,
+        padding_left: ?Length = null,
+        border_top_width: ?Length = null,
+        border_right_width: ?Length = null,
+        border_bottom_width: ?Length = null,
+        border_left_width: ?Length = null,
+        // A style other than none and hidden draws the border
+        border_top_drawn: ?bool = null,
+        border_right_drawn: ?bool = null,
+        border_bottom_drawn: ?bool = null,
+        border_left_drawn: ?bool = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
@@ -2831,6 +2926,7 @@ const Geometry = struct {
                 },
                 .@"overflow-y" => {
                     self.overflow_y_scrolls = overflowScrolls(value);
+                    self.overflow_y_clips = overflowClips(value);
                 },
                 .@"overscroll-behavior-x" => {
                     self.overscroll_x_contains = overscrollContains(value);
@@ -2850,7 +2946,7 @@ const Geometry = struct {
                 .@"max-width" => {
                     self.max_width = Length.parse(value);
                 },
-                else => {},
+                else => Edges.apply(self, id, value),
             }
         }
 
@@ -2945,12 +3041,13 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u287) {
+    const Computed = packed struct(u574) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
         flex_no_shrink: bool = false,
         overflow_y_scrolls: bool = false,
+        overflow_y_clips: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
         width: Length = .{},
@@ -2964,7 +3061,267 @@ const Geometry = struct {
         // Positioned boxes only; auto, and values that need layout, are auto
         left: Length = .{},
         right: Length = .{},
+        box_sizing: Edges.BoxSizing = .content_box,
+        padding_top: Length = .{},
+        padding_right: Length = .{},
+        padding_bottom: Length = .{},
+        padding_left: Length = .{},
+        border_top_width: Length = Edges.medium,
+        border_right_width: Length = Edges.medium,
+        border_bottom_width: Length = Edges.medium,
+        border_left_width: Length = Edges.medium,
+        border_top_drawn: bool = false,
+        border_right_drawn: bool = false,
+        border_bottom_drawn: bool = false,
+        border_left_drawn: bool = false,
     };
+};
+
+/// The padding and border properties, which Geometry cascades: what an
+/// element's border box adds around its content box, and whether its declared
+/// width and height include them (box-sizing). Logical sides map to the
+/// physical ones of a horizontal left-to-right flow. A value we can't resolve
+/// (em, calc(), var()) is dropped, leaving the cascade as it was.
+const Edges = struct {
+    const Side = enum { top, right, bottom, left };
+
+    const Property = struct {
+        name: []const u8,
+        kind: enum { box_sizing, padding, border, border_width, border_style },
+        sides: []const Side = &.{ .top, .right, .bottom, .left },
+    };
+
+    const block_sides: []const Side = &.{ .top, .bottom };
+    const inline_sides: []const Side = &.{ .left, .right };
+
+    // The cascade replays a block's declarations in this order: a shorthand
+    // before its longhands, so a longhand wins wherever the two sit in the block.
+    const table = [_]Property{
+        .{ .name = "box-sizing", .kind = .box_sizing },
+        .{ .name = "padding", .kind = .padding },
+        .{ .name = "padding-block", .kind = .padding, .sides = block_sides },
+        .{ .name = "padding-inline", .kind = .padding, .sides = inline_sides },
+        .{ .name = "padding-top", .kind = .padding, .sides = &.{.top} },
+        .{ .name = "padding-right", .kind = .padding, .sides = &.{.right} },
+        .{ .name = "padding-bottom", .kind = .padding, .sides = &.{.bottom} },
+        .{ .name = "padding-left", .kind = .padding, .sides = &.{.left} },
+        .{ .name = "padding-block-start", .kind = .padding, .sides = &.{.top} },
+        .{ .name = "padding-block-end", .kind = .padding, .sides = &.{.bottom} },
+        .{ .name = "padding-inline-start", .kind = .padding, .sides = &.{.left} },
+        .{ .name = "padding-inline-end", .kind = .padding, .sides = &.{.right} },
+        .{ .name = "border", .kind = .border },
+        .{ .name = "border-block", .kind = .border, .sides = block_sides },
+        .{ .name = "border-inline", .kind = .border, .sides = inline_sides },
+        .{ .name = "border-top", .kind = .border, .sides = &.{.top} },
+        .{ .name = "border-right", .kind = .border, .sides = &.{.right} },
+        .{ .name = "border-bottom", .kind = .border, .sides = &.{.bottom} },
+        .{ .name = "border-left", .kind = .border, .sides = &.{.left} },
+        .{ .name = "border-block-start", .kind = .border, .sides = &.{.top} },
+        .{ .name = "border-block-end", .kind = .border, .sides = &.{.bottom} },
+        .{ .name = "border-inline-start", .kind = .border, .sides = &.{.left} },
+        .{ .name = "border-inline-end", .kind = .border, .sides = &.{.right} },
+        .{ .name = "border-width", .kind = .border_width },
+        .{ .name = "border-block-width", .kind = .border_width, .sides = block_sides },
+        .{ .name = "border-inline-width", .kind = .border_width, .sides = inline_sides },
+        .{ .name = "border-top-width", .kind = .border_width, .sides = &.{.top} },
+        .{ .name = "border-right-width", .kind = .border_width, .sides = &.{.right} },
+        .{ .name = "border-bottom-width", .kind = .border_width, .sides = &.{.bottom} },
+        .{ .name = "border-left-width", .kind = .border_width, .sides = &.{.left} },
+        .{ .name = "border-block-start-width", .kind = .border_width, .sides = &.{.top} },
+        .{ .name = "border-block-end-width", .kind = .border_width, .sides = &.{.bottom} },
+        .{ .name = "border-inline-start-width", .kind = .border_width, .sides = &.{.left} },
+        .{ .name = "border-inline-end-width", .kind = .border_width, .sides = &.{.right} },
+        .{ .name = "border-style", .kind = .border_style },
+        .{ .name = "border-block-style", .kind = .border_style, .sides = block_sides },
+        .{ .name = "border-inline-style", .kind = .border_style, .sides = inline_sides },
+        .{ .name = "border-top-style", .kind = .border_style, .sides = &.{.top} },
+        .{ .name = "border-right-style", .kind = .border_style, .sides = &.{.right} },
+        .{ .name = "border-bottom-style", .kind = .border_style, .sides = &.{.bottom} },
+        .{ .name = "border-left-style", .kind = .border_style, .sides = &.{.left} },
+        .{ .name = "border-block-start-style", .kind = .border_style, .sides = &.{.top} },
+        .{ .name = "border-block-end-style", .kind = .border_style, .sides = &.{.bottom} },
+        .{ .name = "border-inline-start-style", .kind = .border_style, .sides = &.{.left} },
+        .{ .name = "border-inline-end-style", .kind = .border_style, .sides = &.{.right} },
+    };
+
+    const names = blk: {
+        var result: [table.len][]const u8 = undefined;
+        for (table, &result) |property, *name| {
+            name.* = property.name;
+        }
+        break :blk result;
+    };
+
+    // Each known property's place in the table, or `other`.
+    const other = std.math.maxInt(u8);
+    const index_of = blk: {
+        std.debug.assert(table.len < other);
+        var result: [properties.known_count]u8 = @splat(other);
+        for (table, 0..) |property, i| {
+            result[@backingInt(@field(properties.Id, property.name))] = i;
+        }
+        break :blk result;
+    };
+
+    const BoxSizing = enum(u2) {
+        content_box,
+        border_box,
+        inherit,
+
+        fn parse(value: []const u8) ?BoxSizing {
+            if (std.ascii.eqlIgnoreCase(value, "border-box")) return .border_box;
+            if (std.ascii.eqlIgnoreCase(value, "inherit")) return .inherit;
+            if (std.ascii.eqlIgnoreCase(value, "content-box") or isCssWideKeyword(value)) return .content_box;
+            return null;
+        }
+    };
+
+    // The initial border width; it only shows once a style draws the border
+    const medium: Length = .{ .value = 3, .unit = .px };
+
+    fn apply(declared: *Geometry.Declared, id: properties.Id, value: []const u8) void {
+        const index = @backingInt(id);
+        // A custom property has no place in the table
+        if (index >= index_of.len or index_of[index] == other) {
+            return;
+        }
+        const property = table[index_of[index]];
+
+        const text = std.mem.trim(u8, value, &std.ascii.whitespace);
+        switch (property.kind) {
+            .box_sizing => declared.box_sizing = BoxSizing.parse(text),
+            .border => {
+                const border = parseBorder(text) orelse return;
+                for (property.sides) |side| {
+                    borderWidthAt(declared, side).* = border.width;
+                    borderDrawnAt(declared, side).* = border.drawn;
+                }
+            },
+            .padding, .border_width, .border_style => {
+                // A var() could stand for any number of the values
+                if (property.sides.len > 1 and color.usesSubstitution(text)) {
+                    return;
+                }
+                // In top, right, bottom, left order; a pair is start, end
+                const values = CssParser.splitBoxSides(text) orelse return;
+                for (property.sides, 0..) |side, i| {
+                    const side_text = if (property.sides.len == 1) text else values[i];
+                    switch (property.kind) {
+                        .padding => if (parsePadding(side_text)) |padding| {
+                            paddingAt(declared, side).* = padding;
+                        },
+                        .border_width => if (parseBorderWidth(side_text)) |width| {
+                            borderWidthAt(declared, side).* = width;
+                        },
+                        .border_style => if (parseBorderStyle(side_text)) |drawn| {
+                            borderDrawnAt(declared, side).* = drawn;
+                        },
+                        .box_sizing, .border => unreachable,
+                    }
+                }
+            },
+        }
+    }
+
+    // No padding, and no border drawn
+    fn isEmpty(p: Geometry.Computed) bool {
+        return p.padding_top.value == 0 and p.padding_right.value == 0 and
+            p.padding_bottom.value == 0 and p.padding_left.value == 0 and
+            !p.border_top_drawn and !p.border_right_drawn and
+            !p.border_bottom_drawn and !p.border_left_drawn;
+    }
+
+    fn paddingAt(declared: *Geometry.Declared, side: Side) *?Length {
+        return switch (side) {
+            inline else => |s| &@field(declared, "padding_" ++ @tagName(s)),
+        };
+    }
+
+    fn borderWidthAt(declared: *Geometry.Declared, side: Side) *?Length {
+        return switch (side) {
+            inline else => |s| &@field(declared, "border_" ++ @tagName(s) ++ "_width"),
+        };
+    }
+
+    fn borderDrawnAt(declared: *Geometry.Declared, side: Side) *?bool {
+        return switch (side) {
+            inline else => |s| &@field(declared, "border_" ++ @tagName(s) ++ "_drawn"),
+        };
+    }
+
+    // `border: <width> || <style> || <color>`, each optional; an omitted
+    // width is medium and an omitted style none, which draws nothing.
+    fn parseBorder(value: []const u8) ?struct { width: Length, drawn: bool } {
+        if (isCssWideKeyword(value)) {
+            return .{ .width = medium, .drawn = false };
+        }
+        var width: ?Length = null;
+        var drawn: ?bool = null;
+        // Filling four sides repeats a part, which sets the same component
+        // again. Whatever isn't a width or style is the color.
+        const parts = CssParser.splitBoxSides(value) orelse return null;
+        for (parts) |part| {
+            if (parseBorderStyle(part)) |style| {
+                drawn = style;
+            } else if (parseBorderWidth(part)) |w| {
+                width = w;
+            }
+        }
+        // A var() could stand for any part, unless both others are there
+        if ((width == null or drawn == null) and color.usesSubstitution(value)) {
+            return null;
+        }
+        return .{ .width = width orelse medium, .drawn = drawn orelse false };
+    }
+
+    fn parsePadding(text: []const u8) ?Length {
+        if (isCssWideKeyword(text)) {
+            return .{ .unit = .px };
+        }
+        return parseLength(text, .percent);
+    }
+
+    fn parseBorderWidth(text: []const u8) ?Length {
+        if (isCssWideKeyword(text)) {
+            return medium;
+        }
+        inline for (.{ .{ "thin", 1 }, .{ "medium", 3 }, .{ "thick", 5 } }) |keyword| {
+            if (std.ascii.eqlIgnoreCase(text, keyword[0])) {
+                return .{ .value = keyword[1], .unit = .px };
+            }
+        }
+        return parseLength(text, .no_percent);
+    }
+
+    // Null for a style we don't know, such as a var() reference.
+    fn parseBorderStyle(text: []const u8) ?bool {
+        if (isCssWideKeyword(text) or std.ascii.eqlIgnoreCase(text, "none") or std.ascii.eqlIgnoreCase(text, "hidden")) {
+            return false;
+        }
+        inline for (.{ "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset" }) |style| {
+            if (std.ascii.eqlIgnoreCase(text, style)) {
+                return true;
+            }
+        }
+        return null;
+    }
+
+    // Null for a negative length, which is invalid, and for one we can't
+    // resolve.
+    fn parseLength(text: []const u8, comptime percent: enum { percent, no_percent }) ?Length {
+        const parsed = units.parse(text) catch return null;
+        if (parsed.value < 0) {
+            return null;
+        }
+        return switch (parsed.unit) {
+            .percentage => if (percent == .percent) .{ .value = @floatCast(parsed.value), .unit = .percent } else null,
+            inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Length.Unit, @tagName(unit)) },
+            else => .{
+                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return null)),
+                .unit = .px,
+            },
+        };
+    }
 };
 
 /// The axes a touch may not pan along: touch-action, intersected with the
@@ -4304,7 +4661,16 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         \\<i style="display: inline-grid"></i>
         \\<i style="width: max-content; position: absolute; float: left"></i>
         \\<i style="width: fit-content(10px); position: relative; float: none"></i>
+        \\<i style="padding: 1px 2px; border: 3px solid red; box-sizing: border-box"></i>
+        \\<i style="border-width: 0 0 thin; border-style: none none solid; padding-inline: 4px 5%"></i>
+        \\<i style="border: 2px dashed; border-left: none; padding: -1px; padding-top: 2em"></i>
+        \\<i style="border: var(--w) var(--s); padding: var(--p) 1px; border-top: 1px solid var(--c)"></i>
     );
+    const px = struct {
+        fn of(value: f32) Length {
+            return .{ .value = value, .unit = .px };
+        }
+    }.of;
     const expected = [_]Declarations{
         .{ .visibility = .{ .display = .none } },
         .{ .visibility = .{ .display = .none } },
@@ -4316,11 +4682,11 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .visibility = .{ .visibility_hidden = true } },
         .{},
         .{},
-        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false } },
-        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = false, .overflow_y_clips = true } },
+        .{ .geometry = .{ .overflow_x_scrolls = false, .overflow_x_clips = true, .overflow_y_scrolls = true, .overflow_y_clips = true } },
         .{ .geometry = .{ .overflow_x_scrolls = true, .overflow_x_clips = true } },
         .{},
         .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
@@ -4331,6 +4697,46 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .visibility = .{ .display = .grid, .box = .atomic_inline } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .relative, .floated = false } },
+        .{ .geometry = .{
+            .box_sizing = .border_box,
+            .padding_top = px(1),
+            .padding_right = px(2),
+            .padding_bottom = px(1),
+            .padding_left = px(2),
+            .border_top_width = px(3),
+            .border_right_width = px(3),
+            .border_bottom_width = px(3),
+            .border_left_width = px(3),
+            .border_top_drawn = true,
+            .border_right_drawn = true,
+            .border_bottom_drawn = true,
+            .border_left_drawn = true,
+        } },
+        .{ .geometry = .{
+            .padding_right = .{ .value = 5, .unit = .percent },
+            .padding_left = px(4),
+            .border_top_width = px(0),
+            .border_right_width = px(0),
+            .border_bottom_width = px(1),
+            .border_left_width = px(0),
+            .border_top_drawn = false,
+            .border_right_drawn = false,
+            .border_bottom_drawn = true,
+            .border_left_drawn = false,
+        } },
+        // An invalid or unresolved padding is dropped
+        .{ .geometry = .{
+            .border_top_width = px(2),
+            .border_right_width = px(2),
+            .border_bottom_width = px(2),
+            .border_left_width = Edges.medium,
+            .border_top_drawn = true,
+            .border_right_drawn = true,
+            .border_bottom_drawn = true,
+            .border_left_drawn = false,
+        } },
+        // A var() can stand for any part, but beside a width and a style it's the color
+        .{ .geometry = .{ .border_top_width = px(1), .border_top_drawn = true } },
     };
 
     var i: usize = 0;
