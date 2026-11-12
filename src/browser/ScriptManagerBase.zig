@@ -1092,7 +1092,7 @@ pub const Script = struct {
             return;
         };
         defer allocator.free(bytes);
-        self.manager.client.cache.putScriptCache(sc.key, text, bytes) catch |err| {
+        self.manager.client.cache.putScriptCache(sc.key, .public, text, bytes) catch |err| {
             log.warn(.cache, "put script cache", .{ .url = self.url, .err = err });
         };
     }

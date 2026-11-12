@@ -578,7 +578,7 @@ fn flushModuleCodeCaches(self: *Context, local: *const js.Local) void {
         };
         defer code_cache.deinit();
 
-        self.script_manager.client.cache.putScriptCache(pending.key, pending.text, code_cache.bytes()) catch |err| {
+        self.script_manager.client.cache.putScriptCache(pending.key, .public, pending.text, code_cache.bytes()) catch |err| {
             log.warn(.cache, "put module script cache", .{ .url = pending.url, .err = err });
         };
     }
