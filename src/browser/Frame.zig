@@ -1884,10 +1884,10 @@ fn frameDoneCallback(transfer: *HttpClient.Transfer) !void {
     if (body.len > 0) {
         try self.processBody(transfer, body);
     }
-    return self.frameDone();
+    return self.frameDone(body);
 }
 
-fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !void {
+fn processBody(self: *Frame, transfer: *HttpClient.Transfer, body: []const u8) !void {
     if (self._parse_state == .pre) {
         // done here rather than in the header callback because sniffing the
         // content type needs the body
@@ -1895,16 +1895,16 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
             if (transfer.contentType()) |ct| {
                 // A Content-Type we can't parse must not fail the navigation;
                 // browsers render the page anyway, so fall back to sniffing.
-                break :blk Mime.parseLenient(ct) catch Mime.sniff(data);
+                break :blk Mime.parseLenient(ct) catch Mime.sniff(body);
             }
-            break :blk Mime.sniff(data);
+            break :blk Mime.sniff(body);
         } orelse .unknown;
 
         // If the HTTP Content-Type header didn't specify a charset and this is HTML,
         // prescan the first 1024 bytes for a <meta charset> declaration.
         var html_prescan_found_charset = false;
         if (mime.content_type == .text_html and mime.is_default_charset) {
-            if (Mime.prescanCharset(data)) |charset| {
+            if (Mime.prescanCharset(body)) |charset| {
                 html_prescan_found_charset = true;
                 if (charset.len <= 40) {
                     @memcpy(mime.charset[0..charset.len], charset);
@@ -1917,7 +1917,7 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
         if (comptime lp.IS_DEBUG) {
             log.debug(.frame, "navigate body", .{
                 .content_type = mime.content_type,
-                .len = data.len,
+                .len = body.len,
                 .type = self._type,
                 .url = self.url,
             });
@@ -1948,23 +1948,16 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
                     const name = info.name();
                     self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
                 }
-                self._parse_state = .{ .html = .{
-                    .buffer = .empty,
-                    .arena = try self.getArena(.large, "Frame.navigate"),
-                } };
+                self._parse_state = .{ .html = .{ .xml = false } };
             },
             .text_xml, .other_xml => {
                 // XML ignores <meta charset>. Priority is BOM, header and XML declaration
                 // declaration (a BOM overrides both when decoding).
-                const label = if (mime.is_default_charset) Mime.xmlDeclarationEncoding(data) else mime.charsetString();
+                const label = if (mime.is_default_charset) Mime.xmlDeclarationEncoding(body) else mime.charsetString();
                 if (h5e.EncodingInfo.forLabel(label)) |info| {
                     self.charset = info.name();
                 }
-                self._parse_state = .{ .html = .{
-                    .buffer = .empty,
-                    .arena = try self.getArena(.large, "Frame.navigate"),
-                    .xml = true,
-                } };
+                self._parse_state = .{ .html = .{ .xml = true } };
             },
             .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
@@ -1981,11 +1974,11 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.buffer.appendSlice(html.arena.allocator(), data),
+        .html => {},
         .text => |*buf| {
             // The payload is text, not markup: `&` has to be escaped too, or
             // the parser turns a literal "&#9733;" in the body into a star.
-            var v = data;
+            var v = body;
             while (v.len > 0) {
                 const index = std.mem.findAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.page_arena, v);
@@ -2000,8 +1993,8 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
                 v = v[index + 1 ..];
             }
         },
-        .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
-        .download => |*download| download.feed(data) catch {
+        .raw, .image => |*buf| try buf.appendSlice(self.page_arena, body),
+        .download => |*download| download.feed(body) catch {
             // Like Chrome, a failed download doesn't fail the navigation:
             // report it canceled, then let `done` commit the same empty
             // document a finished download gets (see `.raw`). The partial
@@ -2016,7 +2009,7 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
     }
 }
 
-fn frameDone(self: *Frame) !void {
+fn frameDone(self: *Frame, body: []const u8) !void {
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate done", .{ .type = self._type, .url = self.url });
     }
@@ -2043,20 +2036,13 @@ fn frameDone(self: *Frame) !void {
     var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
 
     switch (self._parse_state) {
-        .html => |*html| {
+        .html => |html| {
             {
-                defer {
-                    html.arena.release();
-                    self._parse_state = .complete;
-                }
-
-                const raw_html = html.buffer.items;
-
-                preload.prescan(self, raw_html);
-
+                defer self._parse_state = .complete;
+                preload.prescan(self, body);
                 if (html.xml) {
                     const encoding = h5e.EncodingInfo.forLabel(self.charset) orelse h5e.EncodingInfo.utf8();
-                    const xml = try h5e.validUtf8(html.arena.allocator(), encoding, raw_html);
+                    const xml = try h5e.validUtf8(parse_arena.allocator(), encoding, body);
                     if (Parser.isWellFormedXML(xml)) {
                         parser.parseXML(xml);
                     } else {
@@ -2065,9 +2051,9 @@ fn frameDone(self: *Frame) !void {
                         parser.parse(xml);
                     }
                 } else if (std.mem.eql(u8, self.charset, "UTF-8")) {
-                    parser.parse(raw_html);
+                    parser.parse(body);
                 } else {
-                    parser.parseWithEncoding(raw_html, self.charset);
+                    parser.parseWithEncoding(body, self.charset);
                 }
             }
             // Deferred and module scripts run after readiness is interactive.
@@ -2178,7 +2164,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     // In case of error, we want to complete the frame with a custom HTML
     // containing the error.
-    self.frameDone() catch |e| {
+    self.frameDone("") catch |e| {
         log.err(.browser, "frameErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
@@ -3832,9 +3818,7 @@ const ParseState = union(enum) {
     complete,
     err: anyerror,
     html: struct {
-        arena: *lp.Arena,
         xml: bool = false,
-        buffer: std.ArrayList(u8),
     },
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
@@ -3844,7 +3828,6 @@ const ParseState = union(enum) {
 
     fn deinit(self: *ParseState, _: *Frame) void {
         switch (self.*) {
-            .html => |html| html.arena.release(),
             .download => |*download| {
                 download.cancel();
                 self.* = .complete;
