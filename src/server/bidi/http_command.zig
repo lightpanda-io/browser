@@ -951,6 +951,18 @@ fn deleteCookies(cmd: *BiDi.Command, name: ?[]const u8) !void {
     return cmd.sendDone();
 }
 
+// POST /session/{id}/alert/text
+const AlertText = struct {
+    text: []const u8,
+};
+
+// POST /session/{id}/alert/dismiss, /alert/accept, GET and POST /alert/text.
+// alert(), confirm() and prompt() never block: they return as soon as they're
+// called. So there's never a prompt open to act on.
+fn noSuchAlert(cmd: *BiDi.Command) !void {
+    return cmd.sendError("no such alert", "no user prompt is open");
+}
+
 // {"element-6066-…": "<sharedId>"}: a WebDriver element reference is the
 // node registry's id, the same one BiDi hands out.
 pub const Reference = struct {
@@ -1023,18 +1035,6 @@ fn isBooleanAttribute(name: []const u8) bool {
         return false;
     }
     return boolean_attributes.has(std.ascii.lowerString(buf[0..name.len], name));
-}
-
-// POST /session/{id}/alert/text
-const AlertText = struct {
-    text: []const u8,
-};
-
-// POST /session/{id}/alert/dismiss, /alert/accept, GET and POST /alert/text.
-// alert(), confirm() and prompt() never block: they return as soon as they're
-// called. So there's never a prompt open to act on.
-fn noSuchAlert(cmd: *BiDi.Command) !void {
-    return cmd.sendError("no such alert", "no user prompt is open");
 }
 
 fn currentContext(cmd: *BiDi.Command) !?*browsing_context.Context {
