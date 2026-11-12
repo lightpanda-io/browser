@@ -50,8 +50,10 @@ impl ElementData {
 // A document parse's input, for the position the tokenizer is at in it.
 pub struct DocumentInput<'a> {
     text: &'a str,
-    // The queue the tokenizer reads `text` from: what it hasn't read yet.
+    // What the tokenizer hasn't read yet: what's left in the queue it reads
+    // from, and what hasn't been put in that queue.
     unread: &'a BufferQueue,
+    unfed: &'a Cell<usize>,
     // Counting resumes from the previous position, or a minified document
     // (one long line) would be rescanned for each of its scripts.
     last: Cell<Counted>,
@@ -65,12 +67,13 @@ struct Counted {
 }
 
 impl<'a> DocumentInput<'a> {
-    pub fn new(text: &'a str, unread: &'a BufferQueue) -> Self {
+    pub fn new(text: &'a str, unread: &'a BufferQueue, unfed: &'a Cell<usize>) -> Self {
         // Not a column: Chrome decodes a BOM away, the tokenizer reads past it.
         let bom_len = if text.starts_with('\u{feff}') { 3 } else { 0 };
         Self {
             text: text,
             unread: unread,
+            unfed: unfed,
             last: Cell::new(Counted {
                 offset: bom_len,
                 line: 0,
@@ -82,10 +85,10 @@ impl<'a> DocumentInput<'a> {
     // As in Chrome, a lone \r doesn't end a line.
     fn position(&self) -> Option<TextPosition> {
         let unread = self.unread.clone();
-        let unread_len: usize = std::iter::from_fn(|| unread.pop_front())
+        let queued: usize = std::iter::from_fn(|| unread.pop_front())
             .map(|chunk| chunk.len())
             .sum();
-        let read = self.text.len().checked_sub(unread_len)?;
+        let read = self.text.len().checked_sub(queued + self.unfed.get())?;
 
         let last = self.last.get();
         let segment = self.text.as_bytes().get(last.offset..read)?;
