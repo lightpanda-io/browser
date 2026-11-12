@@ -525,7 +525,7 @@ pub fn deinit(self: *Frame) void {
     }
 
     if (self._queued_navigation) |qn| {
-        qn.arena.release();
+        qn.release();
     }
 
     while (self._message_ports.first) |node| {
@@ -1237,14 +1237,20 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .url = resolved_url,
         .is_about_something = is_about_something,
         .navigation_type = std.meta.activeTag(nt),
+        .task = originator.js.attribution.current(),
     };
 
     if (target._queued_navigation) |existing| {
-        existing.arena.release();
+        existing.release();
     }
 
     target._queued_navigation = qn;
     try session.scheduleNavigation(target);
+    // Processed at the start of the next tick, after this tick's settled
+    // check. A top-level navigation's request is a root of its own.
+    if (target.parent != null) {
+        qn.settle_hold = target.page.settle.hold(qn.task);
+    }
     target.abortedDocumentIsComplete();
 }
 
@@ -1473,7 +1479,7 @@ pub fn cancelQueuedNavigation(self: *Frame) void {
     if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
         _ = queued.swapRemove(idx);
     }
-    qn.arena.release();
+    qn.release();
     self._queued_navigation = null;
 
     // Our own load is aborted and the replacement that would have completed it
@@ -4009,6 +4015,15 @@ pub const QueuedNavigation = struct {
     opts: NavigateOpts,
     is_about_something: bool, // about:blank or about:srcdoc
     navigation_type: NavigationType,
+    // The work that queued it: the navigation runs under it.
+    task: ?JS.Attribution.Tag,
+    settle_hold: JS.Attribution.Hold = .{},
+
+    // Lives in its own arena, so this frees it.
+    pub fn release(self: *QueuedNavigation) void {
+        self.settle_hold.release();
+        self.arena.release();
+    }
 };
 
 const TargetFrame = union(enum) {
