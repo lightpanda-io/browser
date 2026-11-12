@@ -70,7 +70,12 @@ fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]c
     if (detachedHandled(element.asNode(), frame)) {
         return;
     }
-    if (name.eql(comptime .wrap("class"))) {
+    if (name.eql(comptime .wrap("style"))) {
+        if (owner._style_manager.styleAttributeChanged(element, old, new)) {
+            layoutObserversChanged(frame);
+            return;
+        }
+    } else if (name.eql(comptime .wrap("class"))) {
         if (owner._style_manager.classChanged(element, old, new)) {
             // the stylemanager handled the classChange (maybe it was a noop
             // maybe there was an optimized path). Whatever the case, we don't
@@ -83,16 +88,14 @@ fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]c
 }
 
 pub fn childInserted(parent: *Node, child: *Node, frame: *Frame) void {
-    treeChanged(parent, child, .inserted, frame);
+    treeChanged(parent, child, child.previousSibling(), child.nextSibling(), .inserted, frame);
 }
 
 pub fn childRemoved(parent: *Node, child: *Node, previous_sibling: ?*Node, next_sibling: ?*Node, frame: *Frame) void {
-    _ = previous_sibling;
-    _ = next_sibling;
-    treeChanged(parent, child, .removed, frame);
+    treeChanged(parent, child, previous_sibling, next_sibling, .removed, frame);
 }
 
-fn treeChanged(parent: *Node, child: *Node, op: StyleManager.TreeChange, frame: *Frame) void {
+fn treeChanged(parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: StyleManager.TreeChange, frame: *Frame) void {
     frame.page.dom_version += 1;
     if (detachedHandled(parent, frame)) {
         // A removed child takes its entries along, out of parent's tree
@@ -103,7 +106,7 @@ fn treeChanged(parent: *Node, child: *Node, op: StyleManager.TreeChange, frame: 
         return;
     }
     if (parent.ownerFrame(frame)) |owner| {
-        if (owner._style_manager.treeChanged(parent, child, op) == false) {
+        if (owner._style_manager.treeChanged(parent, child, previous, next, op) == false) {
             // style manager wasn't able to restrict the change to a part of
             // the tree, we need to invalidate everything
             styleChanged(frame);

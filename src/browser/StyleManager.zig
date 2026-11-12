@@ -123,6 +123,7 @@ attribute_names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, st
 reads_form: bool = false,
 reads_default: bool = false,
 reads_empty: bool = false,
+siblings: SiblingReads = .{},
 
 // given a class name, what, if anything, does it reach. Best class: a class
 // that no selector we track uses is a noop.
@@ -550,6 +551,7 @@ fn addSelectorRules(
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, layer: u16) !void {
     try self.collectAttributeNames(selector);
+    self.siblings.addNext(nextReach(selector));
     try self.collectClassReach(selector, .subtree);
     const matched = unwrapWhere(selector);
     const placement = placeSelector(matched) orelse return;
@@ -572,6 +574,11 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
 fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector) Allocator.Error!void {
     try self.collectCompoundAttributeNames(selector.first);
     for (selector.segments) |segment| {
+        switch (segment.combinator) {
+            .subsequent_sibling => self.siblings.later = true,
+            // counted by nextReach
+            .next_sibling, .descendant, .child => {},
+        }
         try self.collectCompoundAttributeNames(segment.compound);
     }
 }
@@ -597,8 +604,16 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
                     }
                     break :blk selectors;
                 },
-                .nth_child_of, .nth_last_child_of => |of| of.selectors,
+                .nth_child_of => |of| blk: {
+                    self.siblings.later = true;
+                    break :blk of.selectors;
+                },
+                .nth_last_child_of => |of| blk: {
+                    self.siblings.earlier = true;
+                    break :blk of.selectors;
+                },
                 else => {
+                    self.siblings.add(pseudo);
                     if (readsOtherFormElements(pseudo)) {
                         self.reads_form = true;
                         self.reads_default = self.reads_default or pseudo == .default;
@@ -721,6 +736,87 @@ const AttributeNameContext = struct {
         return std.ascii.eqlIgnoreCase(a, b);
     }
 };
+
+/// Which siblings are impacted by a change.
+const SiblingReads = struct {
+    // A change reaches this many element siblings after it: one for `+` or
+    // :first-child, one more for each `+` that follows (see nextReach)
+    next: u8 = 0,
+    // ... every later one: `~`, :nth-child(), :nth-of-type(), :first-of-type
+    later: bool = false,
+    // ... the previous element sibling: :last-child
+    previous: bool = false,
+    // ... every earlier one: :nth-last-child(), :nth-last-of-type(), :last-of-type
+    earlier: bool = false,
+
+    // Past this, walking the next siblings one by one costs more than the
+    // parent's subtree, which batches.
+    const max_next = 4;
+
+    fn addNext(self: *SiblingReads, reach: usize) void {
+        if (reach > max_next) {
+            self.later = true;
+            return;
+        }
+        self.next = @max(self.next, @as(u8, @intCast(reach)));
+    }
+
+    fn add(self: *SiblingReads, pseudo: Selector.PseudoClass) void {
+        switch (pseudo) {
+            // their next sibling is counted by nextReach
+            .last_child, .only_child => self.previous = true,
+            .nth_child, .nth_of_type, .first_of_type => self.later = true,
+            .nth_last_child, .nth_last_of_type, .last_of_type => self.earlier = true,
+            .only_of_type => {
+                self.later = true;
+                self.earlier = true;
+            },
+            else => {},
+        }
+    }
+};
+
+/// How many element siblings after a gap (an element inserted or removed) can
+/// change what `selector` matches. A compound's match changes at the gap (the
+/// moved element), one after it through :first-child, and each `+` reaches one
+/// further: `:first-child + b + u` reaches u, 3 after. A descendant or child
+/// combinator starts over in another sibling list, but whatever it reaches is
+/// under a sibling that's dropped with its subtree. `~` is SiblingReads.later.
+fn nextReach(selector: Selector.Selector) usize {
+    var reach = compoundNextReach(selector.first);
+    var deepest = reach;
+    for (selector.segments) |segment| {
+        const compound = compoundNextReach(segment.compound);
+        reach = switch (segment.combinator) {
+            .next_sibling => @max(reach + 1, compound),
+            .subsequent_sibling, .descendant, .child => compound,
+        };
+        deepest = @max(deepest, reach);
+    }
+    return deepest;
+}
+
+fn compoundNextReach(compound: Selector.Compound) usize {
+    var reach: usize = 0;
+    for (compound.parts) |part| {
+        const nested: []const Selector.Selector = switch (part) {
+            .pseudo_class => |pseudo| switch (pseudo) {
+                .first_child, .only_child => {
+                    reach = @max(reach, 1);
+                    continue;
+                },
+                .not, .is, .where, .has => |selectors| selectors,
+                .nth_child_of, .nth_last_child_of => |of| of.selectors,
+                else => continue,
+            },
+            else => continue,
+        };
+        for (nested) |selector| {
+            reach = @max(reach, nextReach(selector));
+        }
+    }
+    return reach;
+}
 
 /// Pseudo-classes whose match reads other elements of a form or select, e.g the
 /// form's default button, the fieldset's first levent, ...
@@ -1012,7 +1108,7 @@ pub const TreeChange = enum { inserted, removed };
 /// `child` was inserted/removed from `parent`. Drop the memo entries that can
 /// change. Returns false if treeChanged wasn't able to prune only the tree, in
 /// which case the caller should report a full style change.
-pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, op: TreeChange) bool {
+pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: TreeChange) bool {
     // Boxes move whatever the cascade does
     self.layout_bumps += 1;
     if (self.dirty) {
@@ -1064,7 +1160,10 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, op: TreeCha
         if (op == .inserted and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
-    } else {
+    } else if (root != parent or (child._type == .element and self.readsAllSiblings(previous, next))) {
+        // Widened (a :has() anchor, a form), or a match reads every sibling
+        // and there are some: everything under root, which batching can skip
+        // next time
         if (op == .removed and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
@@ -1072,12 +1171,81 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, op: TreeCha
             return false;
         }
         self.recordDropped(root);
+    } else {
+        // What moved, and the siblings whose matches read across the gap it
+        // opened or closed. parent's own match doesn't change but for :empty.
+        if (self.dropSubtree(child, memos, &budget) == false) {
+            return false;
+        }
+        if (child._type == .element and self.dropSiblings(previous, next, memos, &budget) == false) {
+            return false;
+        }
     }
     if (self.reads_empty and emptinessFlips(parent, child)) {
-        // `:empty + x` and `:empty ~ x` reach the parent's later siblings
+        // parent's :empty, and through `:empty + x` and `:empty ~ x` its later
+        // siblings
+        if (self.dropSubtree(parent, memos, &budget) == false) {
+            return false;
+        }
         var sibling = parent.nextSibling();
         while (sibling) |s| : (sibling = s.nextSibling()) {
             if (self.dropSubtree(s, memos, &budget) == false) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Whether a match reads every sibling on a side of the gap that has some
+// (`~`, :nth-child()...). Not for an append when only earlier siblings are
+// read: there's nothing after it.
+fn readsAllSiblings(self: *const StyleManager, previous: ?*Node, next: ?*Node) bool {
+    if (self.siblings.later and nextElement(next) != null) {
+        return true;
+    }
+    if (self.siblings.earlier and previousElement(previous) != null) {
+        return true;
+    }
+    return false;
+}
+
+fn nextElement(from: ?*Node) ?*Node {
+    var sibling = from;
+    while (sibling) |s| : (sibling = s.nextSibling()) {
+        if (s._type == .element) {
+            return s;
+        }
+    }
+    return null;
+}
+
+fn previousElement(from: ?*Node) ?*Node {
+    var sibling = from;
+    while (sibling) |s| : (sibling = s.previousSibling()) {
+        if (s._type == .element) {
+            return s;
+        }
+    }
+    return null;
+}
+
+// The siblings of a gap (an element inserted or removed between `previous`
+// and `next`) whose match can change (see SiblingReads), with their subtrees.
+// Only the nearest ones: readsAllSiblings sent the rest to the parent's
+// subtree.
+fn dropSiblings(self: *StyleManager, previous: ?*Node, next: ?*Node, memos: Memos, budget: *usize) bool {
+    var sibling = next;
+    for (0..self.siblings.next) |_| {
+        const s = nextElement(sibling) orelse break;
+        if (self.dropSubtree(s, memos, budget) == false) {
+            return false;
+        }
+        sibling = s.nextSibling();
+    }
+    if (self.siblings.previous) {
+        if (previousElement(previous)) |s| {
+            if (self.dropSubtree(s, memos, budget) == false) {
                 return false;
             }
         }
@@ -1280,12 +1448,77 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
+    self.invalidateInline(el, propertyReach(id));
+    return true;
+}
 
-    var it = propertyReach(id).iterator();
+/// `el`'s style attribute went from `old` to `new` (null: absent), `el`
+/// connected: setAttribute('style'), cssText. Like an inline write (see
+/// inlineStyleWritten) of what changed. Returns false when that can't be
+/// scoped: the caller reports a full style change.
+pub fn styleAttributeChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[]const u8) bool {
+    self.assertOwns(el);
+    if (self.dirty or self.reads_style_attribute) {
+        return false;
+    }
+    var reach: Memos = .empty;
+    var it = declaredReach(old).unionWith(declaredReach(new)).iterator();
+    while (it.next()) |memo| {
+        if (sameDeclarations(old, new, memo) == false) {
+            reach.insert(memo);
+        }
+    }
+    self.invalidateInline(el, reach);
+    return true;
+}
+
+// The memos a style attribute's declarations reach
+fn declaredReach(text: ?[]const u8) Memos {
+    var reach: Memos = .empty;
+    var it = CssParser.parseDeclarationsList(text orelse "");
+    while (it.next()) |declaration| {
+        const id = knownId(declaration.name) orelse continue;
+        reach = reach.unionWith(propertyReach(id));
+    }
+    return reach;
+}
+
+// Whether `old` and `new` declare the same for `memo`, in the same order: a
+// shorthand and its longhands fold by position (the style object expands
+// `margin` in place), so `margin: 0; margin-left: 5px` and its reverse differ.
+fn sameDeclarations(old: ?[]const u8, new: ?[]const u8, memo: Memo) bool {
+    var old_it = CssParser.parseDeclarationsList(old orelse "");
+    var new_it = CssParser.parseDeclarationsList(new orelse "");
+    while (true) {
+        const a = nextReaching(&old_it, memo);
+        const b = nextReaching(&new_it, memo);
+        const x = a orelse return b == null;
+        const y = b orelse return false;
+        // the parser trims values
+        if (x.id != y.id or x.important != y.important or std.mem.eql(u8, x.value, y.value) == false) {
+            return false;
+        }
+    }
+}
+
+const Reaching = struct { id: properties.Id, value: []const u8, important: bool };
+
+fn nextReaching(it: *CssParser.DeclarationsIterator, memo: Memo) ?Reaching {
+    while (it.next()) |declaration| {
+        const id = knownId(declaration.name) orelse continue;
+        if (propertyReach(id).contains(memo)) {
+            return .{ .id = id, .value = declaration.value, .important = declaration.important };
+        }
+    }
+    return null;
+}
+
+fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
+    var it = reach.iterator();
     while (it.next()) |memo| {
         switch (memo) {
             .layout => self.layout_bumps += 1,
-            .geometry => _ = {
+            .geometry => {
                 // geometry properties aren't inherited. el1.style.width = '100px'
                 // might change the bounding rect of its parent or children,
                 // but they don't change their actual styles. We don't need
@@ -1295,7 +1528,15 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
             inline else => |group| @field(self, @tagName(group)).bumps += 1,
         }
     }
-    return true;
+}
+
+// A known property's id, by a name as written (any case)
+fn knownId(name: []const u8) ?properties.Id {
+    var buf: [64]u8 = undefined;
+    if (name.len > buf.len) {
+        return null;
+    }
+    return properties.idOf(std.ascii.lowerString(&buf, name));
 }
 
 /// The version the layout memos are valid for.
@@ -1444,6 +1685,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.reads_style_attribute = false;
     self.reads_form = false;
     self.reads_default = false;
+    self.siblings = .{};
     self.reads_empty = false;
     self.class_reach = .empty;
     self.class_attribute_reach = null;
@@ -5075,7 +5317,7 @@ test "StyleManager: memo: attribute writes no selector reads keep it" {
     try testing.expectEqual(true, sm.hasDisplayNone(div));
 }
 
-test "StyleManager: memo: a tree change drops only the parent's subtree" {
+test "StyleManager: memo: a tree change drops only what it can reach" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
     const sm = &frame._style_manager;
@@ -5106,14 +5348,24 @@ test "StyleManager: memo: a tree change drops only the parent's subtree" {
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
     try testing.expectEqual(cascades, sm.visibility.cascades);
 
-    // An insertion next to p drops the parent's subtree, the parent and p
-    // included, but not body
+    // Appended after p: `+` reads the previous sibling, so only what's
+    // appended can change; div and p keep their entries
     const after_p = try doc.createElement("i", null, frame);
     _ = try div.appendChild(after_p.asNode(), frame);
     try testing.expectEqual(version, frame.page.style_version);
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(after_p));
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
-    try testing.expectEqual(cascades + 3, sm.visibility.cascades);
+    try testing.expectEqual(cascades + 1, sm.visibility.cascades);
+
+    // Inserted before p: p's previous sibling changed, p goes, div stays
+    const before_p = try doc.createElement("i", null, frame);
+    _ = try div.insertBefore(before_p.asNode(), p.asNode(), frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(cascades + 2, sm.visibility.cascades);
+    // A text node isn't a sibling to any selector: nothing changes
+    _ = try div.insertBefore(try doc.createTextNode("x"), p.asNode(), frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(cascades + 2, sm.visibility.cascades);
 
     // A removed element inherited from its old ancestors
     _ = try div.removeChild(p.asNode(), frame);
@@ -5358,6 +5610,127 @@ test "StyleManager: memo: changes in a detached tree keep it" {
     try testing.expectEqual(false, sm.visibility.memo.contains(i));
 }
 
+test "StyleManager: memo: a style attribute write drops what its declarations reach" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p></p></div>");
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    _ = sm.geometryProps(div);
+    const version = frame.page.style_version;
+    const visibility_bumps = sm.visibility.bumps;
+    var layout_version = sm.layoutVersion();
+
+    // No memo reads a custom property or a transform
+    try div.setAttribute(comptime .wrap("style"), .wrap("--x: 1; transform: translateX(3px)"), frame);
+    try testing.expectEqual(layout_version, sm.layoutVersion());
+    try testing.expectEqual(true, sm.geometry.memo.contains(div));
+
+    // A width: the element's geometry and the layout, not visibility
+    try div.setAttribute(comptime .wrap("style"), .wrap("--x: 1; transform: translateX(3px); width: 10px"), frame);
+    try testing.expectEqual(false, sm.geometry.memo.contains(div));
+    try testing.expect(sm.layoutVersion() != layout_version);
+    try testing.expectEqual(visibility_bumps, sm.visibility.bumps);
+
+    // The same width, written differently: only the custom property changed
+    _ = sm.geometryProps(div);
+    layout_version = sm.layoutVersion();
+    try div.setAttribute(comptime .wrap("style"), .wrap("WIDTH:10px ; --x: 2; transform: translateX(3px)"), frame);
+    try testing.expectEqual(layout_version, sm.layoutVersion());
+    try testing.expectEqual(true, sm.geometry.memo.contains(div));
+
+    // A shorthand and its longhand, reordered: same declarations, but they
+    // fold by position
+    try div.setAttribute(comptime .wrap("style"), .wrap("margin: 0; margin-left: 50px"), frame);
+    _ = sm.geometryProps(div);
+    layout_version = sm.layoutVersion();
+    try div.setAttribute(comptime .wrap("style"), .wrap("margin-left: 50px; margin: 0"), frame);
+    try testing.expectEqual(false, sm.geometry.memo.contains(div));
+    try testing.expect(sm.layoutVersion() != layout_version);
+
+    // Visibility is inherited: the group goes
+    try div.setAttribute(comptime .wrap("style"), .wrap("visibility: hidden"), frame);
+    try testing.expect(sm.visibility.bumps != visibility_bumps);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(p));
+    try div.removeAttribute(comptime .wrap("style"), frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(version, frame.page.style_version);
+}
+
+test "StyleManager: memo: :first-child alone reaches the next element" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<ul><li></li><li></li></ul><p></p>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("li:first-child { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const ul = body.firstChild().?;
+    const first = ul.firstChild().?.as(Element);
+    const second = first.asNode().nextSibling().?.as(Element);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(first));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(second));
+    try testing.expectEqual(SiblingReads{ .next = 1 }, sm.siblings);
+
+    const version = frame.page.style_version;
+    const li = try doc.createElement("li", null, frame);
+    _ = try ul.insertBefore(li.asNode(), first.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(first));
+    // only the next one: second kept its entry
+    try testing.expectEqual(true, sm.visibility.memo.contains(second));
+}
+
+test "StyleManager: memo: a `+` chain reaches a sibling per hop" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><i></i><b></b><u></u><s></s></div>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("i + b + u { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?;
+    const b = div.firstChild().?.nextSibling().?;
+    const u = b.nextSibling().?.as(Element);
+    const s = u.asNode().nextSibling().?.as(Element);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(s));
+    try testing.expectEqual(SiblingReads{ .next = 2 }, sm.siblings);
+
+    const version = frame.page.style_version;
+    const span = try doc.createElement("span", null, frame);
+    _ = try div.insertBefore(span.asNode(), b, frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    // two hops from the gap: u's entry went, s kept its own
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(true, sm.visibility.memo.contains(s));
+
+    // :first-child counts as a hop
+    try style_el.asNode().setTextContent(":first-child + b + u { visibility: hidden }", frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(u));
+    try testing.expectEqual(SiblingReads{ .next = 3 }, sm.siblings);
+}
+
 test "StyleManager: memo: tree changes between two reads walk once" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -5368,12 +5741,14 @@ test "StyleManager: memo: tree changes between two reads walk once" {
     _ = try doc.asNode().appendChild(html, frame);
     const body = (try doc.createElement("body", null, frame)).asNode();
     _ = try html.appendChild(body, frame);
-    try Frame.parse.htmlAsChildren(frame, body, "<ul class=hide><li></li><li></li><li></li></ul><p></p>");
+    try Frame.parse.htmlAsChildren(frame, body, "<main><ul class=hide><li></li><li></li><li></li></ul></main><p></p>");
     const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
-    try style_el.asNode().setTextContent(".hide i { visibility: hidden }", frame);
+    // An li moving reaches ul's match, so main's subtree: a drop batching skips
+    try style_el.asNode().setTextContent(".hide i { visibility: hidden } ul:has(> li) { visibility: visible }", frame);
     _ = try body.appendChild(style_el.asNode(), frame);
-    const ul = body.firstChild().?;
-    const p = ul.nextSibling().?.as(Element);
+    const main = body.firstChild().?;
+    const ul = main.firstChild().?;
+    const p = main.nextSibling().?.as(Element);
     var it = ul.childrenIterator();
     while (it.next()) |li| {
         _ = sm.hasVisibilityHiddenInherited(li.as(Element));
@@ -5383,12 +5758,12 @@ test "StyleManager: memo: tree changes between two reads walk once" {
     const detached = try doc.createElement("i", null, frame);
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(detached));
 
-    // The first change walks ul and its items, the next ones only what they
-    // insert, which can bring entries along
+    // The first change walks main, ul and its items, the next ones only what
+    // they insert, which can bring entries along
     const version = frame.page.style_version;
     var walked = sm.walked;
     _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
-    try testing.expectEqual(walked + 5, sm.walked);
+    try testing.expectEqual(walked + 6, sm.walked);
     walked = sm.walked;
     _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
     _ = try ul.removeChild(ul.firstChild().?, frame);
