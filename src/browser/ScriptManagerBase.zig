@@ -804,6 +804,7 @@ pub const Script = struct {
             const allocator = try self.sourceAllocator(sc.key.len + if (sc.bytes) |b| b.len else 0);
             self.script_cache = .{
                 .key = try allocator.dupe(u8, sc.key),
+                .scope = sc.scope,
                 .bytes = if (sc.bytes) |b| try allocator.dupe(u8, b) else null,
             };
         }
@@ -1092,7 +1093,7 @@ pub const Script = struct {
             return;
         };
         defer allocator.free(bytes);
-        self.manager.client.cache.putScriptCache(sc.key, self.manager.client.scope, text, bytes) catch |err| {
+        self.manager.client.cache.putScriptCache(sc.key, sc.scope, text, bytes) catch |err| {
             log.warn(.cache, "put script cache", .{ .url = self.url, .err = err });
         };
     }

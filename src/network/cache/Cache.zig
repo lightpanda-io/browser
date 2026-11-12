@@ -78,16 +78,20 @@ pub fn get(self: *Cache, arena: std.mem.Allocator, body_allocator: std.mem.Alloc
     };
 }
 
-/// Stores the response if it is cacheable; returns whether it did. The
-/// candidate's names and values only need to outlive the call.
-pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !bool {
+/// Stores the response if it is cacheable; returns the scope it actually
+/// landed under (null if not stored). Set-Cookie, Authorization, and
+/// `Cache-Control: private` force the candidate's own scope; every other
+/// cacheable response lands in the public scope instead, regardless of what
+/// scope the candidate carried. The candidate's names and values only need to
+/// outlive the call.
+pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !?CacheScope {
     switch (self.kind) {
-        .noop => return false,
+        .noop => return null,
         inline else => |*c| {
-            const req = try tryCache(arena, candidate) orelse return false;
+            const req = try tryCache(arena, candidate) orelse return null;
             log.debug(.cache, "put", .{ .put = req });
             try c.put(req, body);
-            return true;
+            return req.scope;
         },
     }
 }
@@ -317,11 +321,16 @@ pub const CacheGetResult = union(enum) {
     revalidate: CachedResponse,
     /// Cache Miss.
     miss,
-    /// Stale entry with no revalidators. Must call `evict()` and should be treated as a miss.
-    stale,
+    /// Stale entry with no revalidators, at this scope. Must call `evict()`
+    /// with it and should be treated as a miss.
+    stale: CacheScope,
 };
 
 pub const CachedResponse = struct {
+    // The scope this entry was actually matched at (public or the caller's
+    // own), not necessarily the one the caller asked for: a `renew` or
+    // `evict` of this entry must target this scope, not the caller's.
+    scope: CacheScope,
     status: u16,
     content_type: []const u8,
     etag: ?[]const u8,
@@ -816,7 +825,7 @@ test "Cache: renew strips a 304's Set-Cookie" {
         },
         .request_headers = &.{},
     }, "hello");
-    try testing.expectEqual(true, stored);
+    try testing.expect(stored != null);
 
     try cache.renew(arena.allocator(), .{
         .url = "https://example.com",

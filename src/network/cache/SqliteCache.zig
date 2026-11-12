@@ -253,25 +253,30 @@ pub fn get(self: *SqliteCache, arena: std.mem.Allocator, body_allocator: std.mem
 }
 
 fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
+    // A public entry (scope 0) is visible to every caller; a private one only
+    // to the matching scope. When both exist for a url, prefer the caller's
+    // own private entry over the public one.
     var entry = try conn.row(
-        \\ select status, stored_at, age_at_store, max_age, must_revalidate,
-        \\     content_type, etag, last_modified, vary_headers, headers,
-        \\     script_cache, body
-        \\ from cache where url = $1 and scope = $2
+        \\ select scope, status, stored_at, age_at_store, must_revalidate,
+        \\     max_age, content_type, etag, last_modified, vary_headers,
+        \\     headers, script_cache, body
+        \\ from cache where url = $1 and scope in ($2, 0)
+        \\ order by (scope = $2) desc limit 1
     , .{ req.url, scopeToInt(req.scope) }) orelse {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "missing" });
         return .miss;
     };
     defer entry.deinit();
 
-    const status = std.math.cast(u16, entry.get(i64, 0)) orelse return error.CorruptEntry;
-    const stored_at = std.math.cast(u64, entry.get(i64, 1)) orelse return error.CorruptEntry;
-    const age_at_store = std.math.cast(u64, entry.get(i64, 2)) orelse return error.CorruptEntry;
-    const max_age = std.math.cast(u64, entry.get(i64, 3)) orelse return error.CorruptEntry;
+    const matched_scope = try scopeFromInt(entry.get(i64, 0));
+    const status = std.math.cast(u16, entry.get(i64, 1)) orelse return error.CorruptEntry;
+    const stored_at = std.math.cast(u64, entry.get(i64, 2)) orelse return error.CorruptEntry;
+    const age_at_store = std.math.cast(u64, entry.get(i64, 3)) orelse return error.CorruptEntry;
     const must_revalidate = entry.get(bool, 4);
-    const raw_content_type = entry.get([]const u8, 5);
-    const raw_etag = entry.get(?[]const u8, 6);
-    const raw_last_modified = entry.get(?[]const u8, 7);
+    const max_age = std.math.cast(u64, entry.get(i64, 5)) orelse return error.CorruptEntry;
+    const raw_content_type = entry.get([]const u8, 6);
+    const raw_etag = entry.get(?[]const u8, 7);
+    const raw_last_modified = entry.get(?[]const u8, 8);
 
     const expired = must_revalidate or blk: {
         // Saturates if the clock went back since the entry was stored.
@@ -284,12 +289,12 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.me
     // we are going to have to make a network request for this resource.
     if (expired and !has_validators) {
         log.debug(.cache, "miss", .{ .url = req.url, .reason = "expired with no validators" });
-        return .stale;
+        return .{ .stale = matched_scope };
     }
 
-    const headers = try decodeHeaders(arena, try arena.dupe(u8, entry.get(Blob, 9).data));
+    const headers = try decodeHeaders(arena, try arena.dupe(u8, entry.get(Blob, 10).data));
 
-    const vary_digest = entry.get(Blob, 8).data;
+    const vary_digest = entry.get(Blob, 9).data;
     if (vary_digest.len != Sha256.digest_length) {
         return error.CorruptEntry;
     }
@@ -301,14 +306,15 @@ fn readEntry(conn: Sqlite.Conn, arena: std.mem.Allocator, body_allocator: std.me
     log.debug(.cache, "hit", .{ .url = req.url, .expired = expired });
 
     const resp: CachedResponse = .{
+        .scope = matched_scope,
         .status = status,
         .headers = headers,
         .content_type = try arena.dupe(u8, raw_content_type),
         .etag = if (raw_etag) |v| try arena.dupe(u8, v) else null,
         .last_modified = if (raw_last_modified) |v| try arena.dupe(u8, v) else null,
-        .script_cache = if (entry.get(?Blob, 10)) |b| try arena.dupe(u8, b.data) else null,
+        .script_cache = if (entry.get(?Blob, 11)) |b| try arena.dupe(u8, b.data) else null,
         // Last, so nothing after it can fail and leak it.
-        .data = .{ .buffer = try body_allocator.dupe(u8, entry.get(Blob, 11).data) },
+        .data = .{ .buffer = try body_allocator.dupe(u8, entry.get(Blob, 12).data) },
     };
     return if (expired) .{ .revalidate = resp } else .{ .hit = resp };
 }
@@ -388,9 +394,13 @@ fn deleteEntry(conn: Sqlite.Conn, url: []const u8, scope: CacheScope) void {
     };
 }
 
+// The corrupt row could be either candidate readEntry tried (the caller's own
+// scope or the public one): clear both rather than track which one it was.
 fn discardCorrupt(conn: Sqlite.Conn, url: []const u8, scope: CacheScope) void {
     log.warn(.cache, "discarding corrupt entry", .{ .url = url });
-    deleteEntry(conn, url, scope);
+    conn.exec("delete from cache where url = $1 and scope in ($2, 0)", .{ url, scopeToInt(scope) }) catch |err| {
+        log.err(.cache, "delete from cache", .{ .url = url, .err = err });
+    };
 }
 
 pub fn renew(self: *SqliteCache, arena: std.mem.Allocator, req: RenewResponse) !void {
