@@ -82,6 +82,12 @@ pub fn getOwnerElement(self: *const Attribute) ?*Element {
     return self._element;
 }
 
+// Always true per the DOM Standard, which keeps it for legacy code. Selenium's
+// getAttribute atom still checks it before reading the value.
+pub fn getSpecified(_: *const Attribute) bool {
+    return true;
+}
+
 pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
     return self.getName().eql(other.getName()) and self.getValue().eql(other.getValue());
 }
@@ -107,6 +113,7 @@ pub const JsApi = struct {
     pub const value = bridge.accessor(Attribute.getValue, Attribute.setValue, .{ .ce_reactions = true });
     pub const namespaceURI = bridge.accessor(Attribute.getNamespaceURI, null, .{});
     pub const ownerElement = bridge.accessor(Attribute.getOwnerElement, null, .{});
+    pub const specified = bridge.accessor(Attribute.getSpecified, null, .{});
 };
 
 // This is what an Element references. It isn't exposed to JavaScript. In
