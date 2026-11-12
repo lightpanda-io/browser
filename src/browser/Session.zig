@@ -781,6 +781,9 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
         if (frame._queued_navigation) |qn| {
             if (qn.is_about_something) {
                 log.debug(.frame, "recursive about blank", .{});
+                // Never processed: it must not hold settled. The frame keeps it
+                // until deinit.
+                qn.settle_hold.release();
                 _ = page.queued_navigation.swapRemove(i);
                 continue;
             }
@@ -791,7 +794,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
 
 fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
     frame._queued_navigation = null;
-    defer qn.arena.release();
+    defer qn.release();
 
     // A popup whose window was close()'d is parked in page.closed_frames and
     // torn down at Page.deinit. It must never be navigated. This navigation
@@ -801,6 +804,9 @@ fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) 
     if (frame.window._closed) {
         return;
     }
+
+    const task_scope = frame.js.attribution.enter(qn.task);
+    defer task_scope.exit();
 
     self._processFrameNavigation(frame, qn) catch |err| {
         log.debug(.frame, "frame navigation", .{ .url = qn.url, .err = err });
@@ -928,7 +934,7 @@ fn processRootQueuedNavigation(self: *Session, page: *Page) !void {
     // The qn arena is consumed here regardless of success — frame.navigate
     // dupes the URL into the page's own arena, so we can release the qn
     // arena as soon as navigate returns.
-    defer qn.arena.release();
+    defer qn.release();
 
     if (is_synthetic) {
         return self.replaceRootImmediate(current_frame._frame_id, qn.url, qn.opts);
