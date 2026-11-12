@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=basic>
 {
@@ -136,8 +137,14 @@
 
 <script id=propfind>
   {
-    const req = new Request('https://example.com/api', { method: 'propfind' });
-    testing.expectEqual('PROPFIND', req.method);
+    // Only DELETE, GET, HEAD, OPTIONS, POST and PUT are uppercased.
+    testing.expectEqual('propfind', new Request('https://example.com/api', { method: 'propfind' }).method);
+    testing.expectEqual('patch', new Request('https://example.com/api', { method: 'patch' }).method);
+    testing.expectEqual('PATCH', new Request('https://example.com/api', { method: 'PATCH' }).method);
+    testing.expectEqual('DELETE', new Request('https://example.com/api', { method: 'delete' }).method);
+    const patch = new Request('https://example.com/api', { method: 'Patch' });
+    testing.expectEqual('Patch', new Request(patch).method);
+    testing.expectEqual('Patch', patch.clone().method);
   }
 </script>
 
@@ -264,7 +271,7 @@
 <script id=no_cors_method>
   {
     const url = 'https://example.com/api';
-    testing.expectError("TypeError: 'PUT' is unsupported in no-cors mode", () => new Request(url, { mode: 'no-cors', method: 'put' }));
+    testing.expectError('TypeError', () => new Request(url, { mode: 'no-cors', method: 'put' }));
     testing.expectEqual('POST', new Request(url, { mode: 'no-cors', method: 'post' }).method);
 
     // mode and method may come from the input Request.
@@ -294,7 +301,7 @@
   const usedAfter2 = req2.bodyUsed;
 
   // text() decodes as UTF-8, stripping a leading BOM.
-  const req3 = new Request('https://example.com', { method: 'POST', body: '﻿hi' });
+  const req3 = new Request('https://example.com', { method: 'POST', body: '\uFEFFhi' });
   const text3 = await req3.text();
 
   state.resolve();
@@ -328,6 +335,7 @@
   let controller;
   const req1 = new Request('https://example.com', {
     method: 'POST',
+    duplex: 'half',
     body: new ReadableStream({ start(c) { controller = c; } }),
   });
   const usedBefore1 = req1.bodyUsed;
@@ -336,14 +344,19 @@
   const text1 = await req1.text();
   const usedAfter1 = req1.bodyUsed;
 
-  // Still open at first use: TypeError.
-  const req2 = new Request('https://example.com', { method: 'POST', body: new ReadableStream() });
-  let rejected2 = false;
-  try { await req2.text(); } catch (e) { rejected2 = e instanceof TypeError; }
+  // Still open at first use: TypeError. We drain a stream body whole; Chrome
+  // waits on it.
+  let rejected2 = true;
+  if (testing.IS_TEST_RUNNER) {
+    const req2 = new Request('https://example.com', { method: 'POST', duplex: 'half', body: new ReadableStream() });
+    rejected2 = false;
+    try { await req2.text(); } catch (e) { rejected2 = e instanceof TypeError; }
+  }
 
   // A Request built from one with a stream body carries it.
   const req3 = new Request(new Request('https://example.com', {
     method: 'POST',
+    duplex: 'half',
     body: new ReadableStream({ start(c) { c.enqueue(enc.encode('carried')); c.close(); } }),
   }));
   const text3 = await req3.text();
@@ -351,6 +364,7 @@
   // clone() drains, so both copies read the body.
   const req4 = new Request('https://example.com', {
     method: 'POST',
+    duplex: 'half',
     body: new ReadableStream({ start(c) { c.enqueue(enc.encode('twice')); c.close(); } }),
   });
   const req4b = req4.clone();
@@ -359,7 +373,9 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectFalse(duplexRead);
+    testing.diverges('we never read duplex, so ky concludes uploads cannot stream', () => {
+      testing.expectFalse(duplexRead);
+    });
     testing.expectFalse(probeHasContentType);
     testing.expectFalse(usedBefore1);
     testing.expectEqual('late', text1);

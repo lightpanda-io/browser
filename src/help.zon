@@ -349,7 +349,10 @@
     \\          Synthesize a replayable .js script from the --task run and write
     \\          it to PATH, instead of printing the answer. Replay it later with
     \\          `run PATH` (no LLM calls). Overwrites PATH if it exists.
-    \\          Requires --task.
+    \\          A script that only reads pages (no clicks, key presses, page
+    \\          JavaScript, logins or files written) is replayed once first; if
+    \\          it fails or returns nothing, the model fixes it against the page
+    \\          the replay ended on. Requires --task.
     \\  --search-engine <ENGINE>
     \\          Which web search API the `search` tool uses. Default: auto,
     \\          which takes the first with a key in the environment, in the

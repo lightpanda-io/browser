@@ -74,8 +74,9 @@ session: *Session,
 // a cached lookup on Frame 2. We picked the latter.
 dom_version: usize = 0,
 
-// Superset of dom_version that also moves for non-tree state (see
-// frame/change.zig); validates the StyleManager memo.
+// Moves for every change that can alter a selector match or cascaded value,
+// non-tree state included, but not for attribute writes no selector reads
+// (see frame/change.zig); validates the StyleManager memo.
 style_version: usize = 0,
 
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage

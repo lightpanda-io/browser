@@ -2803,12 +2803,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         break :blk new_sheet;
     };
 
-    // Parse first, only swap `_href` on success. `replaceRules` itself is
-    // not atomic (clears rules before the insert loop), so a mid-parse
-    // OOM still drops the old rules — full atomicity would require a
-    // scratch-list pattern in `CSSStyleSheet.replaceRules`. Keeping
-    // `_href` consistent with what the sheet actually contains is the
-    // minimum.
+    // Parse first, only swap `_href` on success: a parse failure in `replaceRules`
+    // leaves the old rules, so `_href` stays consistent with them.
     const content_type: ?Mime = if (response.content_type) |value|
         Mime.parse(value) catch null
     else
@@ -3181,8 +3177,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
                 removeStyleSheet(sheet_owner, sheet);
                 style._sheet = null;
             }
-            // Unconditional: with no materialized sheet the manager still holds
-            // the rules it parsed straight from the element's text.
+            // Unconditional: a <style> whose `type` changed lost its `_sheet`
+            // while the sheet stayed in the list (and so in the cascade).
             if (sheet_owner) |owner| {
                 owner._style_manager.sheetModified();
             }

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<div id="target"></div>
+<div id="selector_target" class="before"></div>
+
+<script id="same_object">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('.a { color: red; } @media screen { .m { color: blue; } }');
+  const a = sheet.cssRules[0];
+  testing.expectTrue(a === sheet.cssRules[0]);
+  testing.expectTrue(sheet.cssRules === sheet.cssRules);
+  testing.expectTrue(a.style === a.style);
+
+  // Inserting before it shifts it, it stays the same object.
+  sheet.insertRule('.b { color: green; }', 0);
+  testing.expectTrue(a === sheet.cssRules[1]);
+  testing.expectEqual('.a', a.selectorText);
+  testing.expectEqual('.b', sheet.cssRules[0].selectorText);
+  testing.expectEqual(4, sheet.cssRules[2].type);
+  testing.expectTrue(sheet.cssRules[2] === [...sheet.cssRules][2]);
+
+  testing.expectTrue(a.parentStyleSheet === sheet);
+  testing.expectEqual(null, a.parentRule);
+}
+</script>
+
+<script id="deleted_rule">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('.a { color: red; } .b { margin: 1px 2px; }');
+  const a = sheet.cssRules[0];
+  const b = sheet.cssRules[1];
+  sheet.deleteRule(0);
+
+  // A removed rule keeps working, outside the sheet.
+  testing.expectEqual(null, a.parentStyleSheet);
+  testing.expectEqual('red', a.style.color);
+  testing.expectEqual('.a { color: red; }', a.cssText);
+  a.style.color = 'blue';
+  a.selectorText = '.c';
+  testing.expectEqual('.c { color: blue; }', a.cssText);
+
+  // The rule that moved up is the same one.
+  testing.expectTrue(b === sheet.cssRules[0]);
+  testing.expectTrue(b.parentStyleSheet === sheet);
+  testing.expectEqual('1px 2px', b.style.margin);
+  testing.expectEqual(1, sheet.cssRules.length);
+}
+</script>
+
+<script id="replaced_rules">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('.a { color: red; }');
+  const a = sheet.cssRules[0];
+  sheet.replaceSync('.b { color: green; }');
+  testing.expectEqual('.a', a.selectorText);
+  testing.expectEqual('red', a.style.color);
+  testing.expectEqual('.b', sheet.cssRules[0].selectorText);
+
+  // Some held, some not, some nested: the held ones all keep working.
+  sheet.replaceSync('.c { color: red; } .d { color: blue; } .e { color: green; & .f { color: black; } }');
+  const c = sheet.cssRules[0];
+  const e = sheet.cssRules[2];
+  const f = e.cssRules[0];
+  sheet.replaceSync('.g { color: white; }');
+  testing.expectEqual(null, c.parentStyleSheet);
+  testing.expectEqual(null, e.parentStyleSheet);
+  testing.expectEqual('.c { color: red; }', c.cssText);
+  testing.expectEqual('.e', e.selectorText);
+  testing.expectEqual('green', e.style.color);
+  testing.expectTrue(f === e.cssRules[0]);
+  testing.expectEqual('black', f.style.color);
+  testing.expectEqual('red', a.style.color);
+  e.style.color = 'gray';
+  testing.expectEqual('gray', e.style.color);
+  testing.expectEqual('.g', sheet.cssRules[0].selectorText);
+  testing.expectEqual(1, sheet.cssRules.length);
+}
+</script>
+
+<script id="nested_rules">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('.p { color: red; & .c { color: blue; } }');
+  const p = sheet.cssRules[0];
+  const c = p.cssRules[0];
+  testing.expectTrue(c === p.cssRules[0]);
+  testing.expectTrue(c.parentStyleSheet === sheet);
+  testing.expectEqual('blue', c.style.color);
+
+  sheet.deleteRule(0);
+  testing.expectEqual('blue', c.style.color);
+  testing.expectTrue(c === p.cssRules[0]);
+}
+</script>
+
+<script id="style_text_change">
+{
+  const style = document.createElement('style');
+  style.textContent = '.a { color: red; }';
+  document.head.appendChild(style);
+  const a = style.sheet.cssRules[0];
+
+  style.textContent = '.b { color: green; }';
+  testing.expectEqual('.a', a.selectorText);
+  testing.expectEqual('red', a.style.color);
+  testing.expectEqual('.b', style.sheet.cssRules[0].selectorText);
+  style.remove();
+}
+</script>
+
+<script id="rule_style_write_cascades">
+{
+  const style = document.createElement('style');
+  style.textContent = '#target { visibility: visible; }';
+  document.head.appendChild(style);
+  const target = document.getElementById('target');
+  testing.expectEqual('visible', getComputedStyle(target).visibility);
+
+  const rule = style.sheet.cssRules[0];
+  rule.style.visibility = 'hidden';
+  testing.expectEqual('hidden', getComputedStyle(target).visibility);
+
+  rule.style.removeProperty('visibility');
+  testing.expectEqual('visible', getComputedStyle(target).visibility);
+
+  rule.style.cssText = 'display: none';
+  testing.expectEqual('none', getComputedStyle(target).display);
+  style.remove();
+}
+</script>
+
+<script id="selector_text_write_cascades">
+{
+  const style = document.createElement('style');
+  style.textContent = '.after { display: none; }';
+  document.head.appendChild(style);
+  const target = document.getElementById('selector_target');
+  testing.expectEqual('block', getComputedStyle(target).display);
+
+  style.sheet.cssRules[0].selectorText = '.before';
+  testing.expectEqual('none', getComputedStyle(target).display);
+  style.remove();
+}
+</script>
+
+<script id="removed_rule_write_does_not_cascade">
+{
+  const style = document.createElement('style');
+  style.textContent = '.x { color: red; } #target { visibility: visible; }';
+  document.head.appendChild(style);
+  const target = document.getElementById('target');
+  const rule = style.sheet.cssRules[1];
+  style.sheet.deleteRule(1);
+  rule.style.visibility = 'hidden';
+  testing.expectEqual('visible', getComputedStyle(target).visibility);
+  style.remove();
+}
+</script>
+
+<script id="custom_property_rewrites">
+{
+  const style = document.createElement('style');
+  style.textContent = '#target { --size: 1px; --name: "first one, kept long" }';
+  document.head.appendChild(style);
+  const target = document.getElementById('target');
+  const computed = getComputedStyle(target);
+  testing.expectEqual('1px', computed.getPropertyValue('--size'));
+  testing.expectEqual('"first one, kept long"', computed.getPropertyValue('--name'));
+
+  // The old values are freed by the write, the cascade reads the new ones.
+  const rule = style.sheet.cssRules[0];
+  rule.style.setProperty('--name', '"second"');
+  rule.style.setProperty('--size', '2px');
+  testing.expectEqual('"second"', computed.getPropertyValue('--name'));
+  testing.expectEqual('2px', computed.getPropertyValue('--size'));
+
+  rule.style.removeProperty('--name');
+  testing.expectEqual('', computed.getPropertyValue('--name'));
+
+  // And a text change parses the <style> again.
+  style.textContent = '#target { --size: 3px }';
+  testing.expectEqual('3px', computed.getPropertyValue('--size'));
+  style.remove();
+  testing.expectEqual('', computed.getPropertyValue('--size'));
+}
+</script>

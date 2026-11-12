@@ -55,20 +55,17 @@ fn getComputedStyleForNode(cmd: *CDP.Command) !void {
     const element = node.dom.is(DOMNode.Element) orelse node.dom.parentElement() orelse return error.NodeIsNotAnElement;
     const frame = element.ownerFrame(main_frame) orelse main_frame;
 
-    const decl = CSSStyleDeclaration{
-        ._element = element,
-        ._is_computed = true,
-    };
+    const decl = CSSStyleDeclaration{ ._owner = .{ .computed = element } };
 
-    // decl.getPropertyValue uses frame.local_arena, which is only reset
+    // decl.getKnownPropertyValue uses frame.local_arena, which is only reset
     // between JS calls. So we reset it manually here.
     defer frame.resetLocalArena();
 
-    const computed = try cmd.arena.alloc(ComputedProperty, properties.computed_names.len);
-    for (computed, properties.computed_names) |*prop, name| {
+    const computed = try cmd.arena.alloc(ComputedProperty, properties.computed_ids.len);
+    for (computed, properties.computed_ids) |*prop, id| {
         prop.* = .{
-            .name = name,
-            .value = try cmd.arena.dupe(u8, decl.getPropertyValue(name, frame)),
+            .name = properties.knownName(id).?,
+            .value = try cmd.arena.dupe(u8, decl.getKnownPropertyValue(id, frame)),
         };
     }
 
@@ -96,7 +93,7 @@ test "cdp.css: getComputedStyleForNode" {
     try ctx.processMessage(.{ .id = 4, .method = "CSS.getComputedStyleForNode", .params = .{ .nodeId = styled.get("nodeId").?.integer } });
     const styled_style = (try testing.sentResult(&ctx, 4)).get("computedStyle").?.array.items;
 
-    try std.testing.expectEqual(properties.computed_names.len, styled_style.len);
+    try std.testing.expectEqual(properties.computed_ids.len, styled_style.len);
 
     try expectValue(styled_style, "color", "rgb(255, 0, 0)");
     try expectValue(styled_style, "width", "10px");

@@ -585,7 +585,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
         if (pseudo == .other) {
             log.debug(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
         }
-        gop.value_ptr.* = try CSSStyleProperties.init(element, true, frame);
+        gop.value_ptr.* = try CSSStyleProperties.init(.{ .computed = element }, frame);
     }
     return gop.value_ptr.*;
 }
