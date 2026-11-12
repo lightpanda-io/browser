@@ -750,7 +750,13 @@ fn removeDeclared(self: *CSSStyleDeclaration, id: properties.Id, frame: *Frame) 
 fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?properties.Id, frame: *Frame) !void {
     const element = switch (self._owner) {
         .inline_style => |el| el,
-        .rule => |rule| return rule.asCSSRule().changed(frame),
+        .rule => |rule| {
+            const css_rule = rule.asCSSRule();
+            if (changed) |id| {
+                return css_rule.declarationChanged(id, frame);
+            }
+            return css_rule.changed(frame);
+        },
         .none, .computed => return,
     };
     const css_text = try self.getCssText(frame);
