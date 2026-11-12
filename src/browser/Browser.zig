@@ -142,7 +142,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
         .watchdog_entry = undefined,
     };
     self.env.protectHeapLimit();
-    try self.http_client.init(app);
+    try self.http_client.init(app, .{ .private = app.nextBrowserScope() });
 
     self.watchdog_entry = .{
         .env = &self.env,
