@@ -2839,6 +2839,20 @@ test "server: HTTP command errors" {
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
     }
 
+    // dialogs never block, so no user prompt is ever open
+    for ([_][3][]const u8{
+        .{ "POST", "/alert/dismiss", "{}" },
+        .{ "POST", "/alert/accept", "{}" },
+        .{ "GET", "/alert/text", "" },
+        .{ "POST", "/alert/text", "{\"text\":\"hi\"}" },
+    }) |command| {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, command[0], &session_id, command[1], command[2]);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"no such alert\",\"message\":\"no user prompt is open\",\"stacktrace\":\"\"}}"));
+    }
+
     // a slow page keeps the navigate parked on the worker
     var slow = try createTestClient();
     defer slow.deinit();
