@@ -449,9 +449,9 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-fn hasAuthorization(request_headers: []const Http.Header) bool {
+fn hasAuthHeader(request_headers: []const Http.Header) bool {
     for (request_headers) |h| {
-        if (std.mem.eql(u8, h.name, "authorization")) {
+        if (std.mem.eql(u8, h.name, "authorization") or std.mem.eql(u8, h.name, "proxy-authorization")) {
             return true;
         }
     }
@@ -476,12 +476,12 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutReque
         return null;
     };
 
-    // Authorization, Set-Cookie, and `Cache-Control: private` don't bar
-    // storage anymore, only sharing: the entry lands in the requesting
-    // Browser's own private scope instead of the public one. Authorization
-    // is a request header, not a response one: it marks the request as
-    // authenticated, not the response.
-    const is_private = hasAuthorization(candidate.request_headers) or response.has_set_cookie or response.directives.private;
+    // Authorization/Proxy-Authorization, Set-Cookie, and `Cache-Control:
+    // private` don't bar storage anymore, only sharing: the entry lands in
+    // the requesting Browser's own private scope instead of the public one.
+    // Authorization/Proxy-Authorization are request headers, not response
+    // ones: they mark the request as authenticated, not the response.
+    const is_private = hasAuthHeader(candidate.request_headers) or response.has_set_cookie or response.directives.private;
 
     const cc: CacheControl = blk: {
         const directives = response.directives;
@@ -635,7 +635,8 @@ const TestResponse = struct {
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
     set_cookie: ?[]const u8 = null,
-    authorization: ?[]const u8 = null,
+    // A single request header to spell out, e.g. authorization/proxy-authorization.
+    request_header: ?Http.Header = null,
 
     fn run(self: TestResponse, arena: std.mem.Allocator) !?CachePutRequest {
         var headers: std.ArrayList(Http.Header) = .empty;
@@ -659,10 +660,7 @@ const TestResponse = struct {
             .status = self.status,
             .content_type = "text/html",
             .headers = headers.items,
-            .request_headers = if (self.authorization) |a|
-                &.{.{ .name = "authorization", .value = a }}
-            else
-                &.{},
+            .request_headers = if (self.request_header) |h| &.{h} else &.{},
         });
     }
 };
@@ -815,12 +813,22 @@ test "Cache: tryCache with Set-Cookie, Authorization, or Cache-Control: private 
     const private_result = (try private.run(arena.allocator())).?;
     try testing.expectEqual(7, private_result.scope.private);
 
-    // Authorization is a request header, not a response one: a request
-    // carrying it, even to a plain response, must land in the caller's own
-    // scope rather than the shared public one.
-    const with_authorization: TestResponse = .{ .cache_control = "max-age=300", .authorization = "Bearer abc" };
+    // Authorization and Proxy-Authorization are request headers, not
+    // response ones: a request carrying either, even to a plain response,
+    // must land in the caller's own scope rather than the shared public one.
+    const with_authorization: TestResponse = .{
+        .cache_control = "max-age=300",
+        .request_header = .{ .name = "authorization", .value = "Bearer abc" },
+    };
     const authorization_result = (try with_authorization.run(arena.allocator())).?;
     try testing.expectEqual(7, authorization_result.scope.private);
+
+    const with_proxy_authorization: TestResponse = .{
+        .cache_control = "max-age=300",
+        .request_header = .{ .name = "proxy-authorization", .value = "Basic abc" },
+    };
+    const proxy_authorization_result = (try with_proxy_authorization.run(arena.allocator())).?;
+    try testing.expectEqual(7, proxy_authorization_result.scope.private);
 
     // no-store is still never stored, regardless of scope.
     const no_store: TestResponse = .{ .cache_control = "no-store, max-age=300" };
