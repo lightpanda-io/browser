@@ -76,7 +76,8 @@ dom_version: usize = 0,
 
 // Moves for every change that can alter a selector match or cascaded value,
 // non-tree state included, but not for attribute writes no selector reads
-// (see frame/change.zig); validates the StyleManager memo.
+// nor tree changes whose entries the StyleManager dropped itself (see
+// frame/change.zig); validates the StyleManager memo.
 style_version: usize = 0,
 
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage

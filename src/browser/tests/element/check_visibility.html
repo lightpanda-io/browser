@@ -1088,3 +1088,212 @@
     host.remove();
   }
 </script>
+
+<script id="memo_tree_scoped">
+  {
+    // An insertion or removal only drops the cascade around its parent. Each
+    // case reads (filling the memo), mutates, reads again. The sheet goes
+    // at the end: what selectors it holds decides how much a change drops.
+    const sheet = document.createElement("style");
+    sheet.textContent = `
+      .s-a + .s-b { display: none }
+      .s-list > i:first-child { display: none }
+      .s-e:empty + .s-f { display: none }
+      .s-hide { visibility: hidden }
+      .s-h:has(.s-k) { display: none }
+      .s-form:invalid { display: none }
+      .s-submit:default { display: none }
+      .s-fw:focus-within + .s-mark { display: none }
+    `;
+    document.head.appendChild(sheet);
+    const make = (html) => {
+      const div = document.createElement("div");
+      div.innerHTML = html;
+      document.body.appendChild(div);
+      return div;
+    };
+    const hidden = (el) => el.checkVisibility({ visibilityProperty: true }) === false;
+
+    // + : a sibling inserted between, then removed
+    {
+      const root = make("<p class=s-a></p><p class=s-b></p>");
+      const b = root.querySelector(".s-b");
+      testing.expectEqual(true, hidden(b));
+      const x = root.insertBefore(document.createElement("p"), b);
+      testing.expectEqual(false, hidden(b));
+      x.remove();
+      testing.expectEqual(true, hidden(b));
+      root.remove();
+    }
+
+    // :first-child moves to an inserted element
+    {
+      const root = make("<div class=s-list><i></i><i></i></div>");
+      const list = root.firstChild;
+      const first = list.firstChild;
+      testing.expectEqual(true, hidden(first));
+      const inserted = list.insertBefore(document.createElement("i"), first);
+      testing.expectEqual(false, hidden(first));
+      testing.expectEqual(true, hidden(inserted));
+      inserted.remove();
+      testing.expectEqual(true, hidden(first));
+      root.remove();
+    }
+
+    // :empty flips on the parent, reaching its next sibling
+    {
+      const root = make("<p class=s-e></p><p class=s-f></p>");
+      const e = root.firstChild;
+      const f = root.lastChild;
+      testing.expectEqual(true, hidden(f));
+      const child = e.appendChild(document.createElement("b"));
+      testing.expectEqual(false, hidden(f));
+      child.remove();
+      testing.expectEqual(true, hidden(f));
+      e.appendChild(document.createComment("not content"));
+      testing.expectEqual(true, hidden(f));
+      root.remove();
+    }
+
+    // A moved element drops what it inherited
+    {
+      const root = make("<div class=s-hide><span></span></div><div></div>");
+      const span = root.querySelector("span");
+      testing.expectEqual(true, hidden(span));
+      root.lastChild.appendChild(span);
+      testing.expectEqual(false, hidden(span));
+      root.firstChild.appendChild(span);
+      testing.expectEqual(true, hidden(span));
+      root.remove();
+    }
+
+    // An element read while detached, then inserted
+    {
+      const root = make("<div class=s-hide></div>");
+      const detached = document.createElement("div");
+      const span = detached.appendChild(document.createElement("span"));
+      // Chrome says hidden (no box), we don't: only the read matters here
+      hidden(span);
+      root.firstChild.appendChild(detached);
+      testing.expectEqual(true, hidden(span));
+      root.appendChild(detached);
+      testing.expectEqual(false, hidden(span));
+      root.remove();
+    }
+
+    // :has() with a key: its subject moving in or out, deep below
+    {
+      const root = make("<div class=s-h><div><p></p></div></div>");
+      const h = root.firstChild;
+      const p = h.querySelector("p");
+      testing.expectEqual(false, hidden(h));
+      const k = p.appendChild(document.createElement("span"));
+      testing.expectEqual(false, hidden(h));
+      k.className = "s-k";
+      testing.expectEqual(true, hidden(h));
+      k.remove();
+      testing.expectEqual(false, hidden(h));
+      p.appendChild(k);
+      testing.expectEqual(true, hidden(h));
+      root.remove();
+    }
+
+    // A form's validity reads its controls
+    {
+      const root = make("<form class=s-form><div></div></form>");
+      const form = root.firstChild;
+      testing.expectEqual(false, hidden(form));
+      const input = document.createElement("input");
+      input.required = true;
+      form.firstChild.appendChild(input);
+      testing.expectEqual(true, hidden(form));
+      input.remove();
+      testing.expectEqual(false, hidden(form));
+      root.remove();
+    }
+
+    // :default is the form's first submit button
+    {
+      const root = make("<form><div><button class=s-submit></button></div></form>");
+      const button = root.querySelector("button");
+      testing.expectEqual(true, hidden(button));
+      const first = root.firstChild.insertBefore(document.createElement("button"), root.firstChild.firstChild);
+      testing.expectEqual(false, hidden(button));
+      first.remove();
+      testing.expectEqual(true, hidden(button));
+      root.remove();
+    }
+
+    // Moving the focused element keeps it focused (moveBefore), moving
+    // :focus-within from its old ancestors to its new ones
+    {
+      // not a form control: the :invalid rule would drop everything anyway
+      const root = make("<div class=s-fw><div><div><p tabindex=0></p></div></div></div><b class=s-mark></b><div></div>");
+      const focused = root.querySelector("p");
+      const mark = root.querySelector(".s-mark");
+      testing.expectEqual(false, hidden(mark));
+      focused.focus();
+      testing.expectEqual(true, hidden(mark));
+      root.lastChild.moveBefore(focused.parentNode, null);
+      testing.expectEqual(focused, document.activeElement);
+      testing.expectEqual(false, hidden(mark));
+      root.remove();
+    }
+
+    sheet.remove();
+  }
+</script>
+
+<script id="memo_tree_scoped_shadow">
+  {
+    // A host's match changing reaches its shadow tree and slotted nodes
+    const sheet = document.createElement("style");
+    sheet.textContent = ".sh-x + .sh-host { visibility: hidden }";
+    document.head.appendChild(sheet);
+    const root = document.createElement("div");
+    const host = root.appendChild(document.createElement("div"));
+    host.className = "sh-host";
+    const span = host.appendChild(document.createElement("span"));
+    document.body.appendChild(root);
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = "<div><b></b><slot></slot></div>";
+    const b = shadow.querySelector("b");
+    const hidden = (el) => el.checkVisibility({ visibilityProperty: true }) === false;
+    testing.expectEqual(false, hidden(b));
+    testing.expectEqual(false, hidden(span));
+
+    const x = document.createElement("div");
+    x.className = "sh-x";
+    root.insertBefore(x, host);
+    testing.expectEqual(true, hidden(b));
+    testing.expectEqual(true, hidden(span));
+    x.remove();
+    testing.expectEqual(false, hidden(b));
+    testing.expectEqual(false, hidden(span));
+
+    root.remove();
+    sheet.remove();
+  }
+</script>
+
+<script id="memo_tree_has_unkeyed">
+  {
+    // A :has() argument with a sibling combinator changes without its
+    // subject moving
+    const sheet = document.createElement("style");
+    sheet.textContent = ".u-h:has(.u-a + .u-b) { display: none }";
+    document.head.appendChild(sheet);
+    const root = document.createElement("div");
+    root.innerHTML = "<div class=u-h><div><p class=u-a></p><p class=u-b></p></div></div>";
+    document.body.appendChild(root);
+    const h = root.firstChild;
+    const list = h.firstChild;
+    testing.expectEqual(false, h.checkVisibility());
+    const x = list.insertBefore(document.createElement("p"), list.lastChild);
+    testing.expectEqual(true, h.checkVisibility());
+    x.remove();
+    testing.expectEqual(false, h.checkVisibility());
+    root.remove();
+    sheet.remove();
+  }
+</script>

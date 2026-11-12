@@ -29,7 +29,9 @@ const MediaQuery = @import("css/MediaQuery.zig");
 const Animation = @import("css/Animation.zig");
 const properties = @import("css/properties.zig");
 const DeclarationBlock = @import("css/DeclarationBlock.zig");
+const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
 const popover = @import("webapi/element/popover.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
@@ -64,7 +66,8 @@ flow: Group(Flow) = .{},
 
 widths: WidthMemo = .{},
 
-// Inline writes of a property the layout memos read.
+// Inline writes of a property the layout memos read, and tree changes whose
+// cascade entries treeChanged dropped itself: boxes move either way.
 layout_bumps: usize = 0,
 
 // The rules declaring each custom property and `content`, by property id,
@@ -111,6 +114,25 @@ reads_style_attribute: bool = false,
 // The attribute names the tracked selectors read. Nested selectors (:is,
 // :not, :has, ...) and pseudo-classes included.
 attribute_names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+
+// Can any tracked selector read a form, or depends on :empty or uses :has
+// pseudo-selector. All of these are mechanisms that break normal selector
+// hierachy (e.g. selectors don't match up, or into their sibling trees), and
+// thus having any selector like this disables some optimizations. TODO: make
+// this more selective than a global boolean.
+reads_form: bool = false,
+reads_empty: bool = false,
+has: HasKeys = .{},
+
+// Short dudupe list of roots that had treeChanged call since the memos last
+// filled. They don't need to be dropped again. Useful for common pattern of
+// appending in a loop.
+dropped: [4]*Node = undefined,
+dropped_len: u8 = 0,
+dropped_fills: usize = 0,
+
+// treeChanged's visited elements, our tests want to count work, not time
+walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
@@ -558,9 +580,21 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
                 continue;
             },
             .pseudo_class => |pseudo| switch (pseudo) {
-                .not, .is, .where, .has => |selectors| selectors,
+                .not, .is, .where => |selectors| selectors,
+                .has => |selectors| blk: {
+                    for (selectors) |argument| {
+                        try self.has.add(allocator, argument);
+                    }
+                    break :blk selectors;
+                },
                 .nth_child_of, .nth_last_child_of => |of| of.selectors,
                 else => {
+                    if (readsOtherFormElements(pseudo)) {
+                        self.reads_form = true;
+                    }
+                    if (pseudo == .empty) {
+                        self.reads_empty = true;
+                    }
                     for (pseudoClassAttributes(pseudo)) |name| {
                         try self.attribute_names.put(allocator, name, {});
                     }
@@ -676,6 +710,329 @@ const AttributeNameContext = struct {
         return std.ascii.eqlIgnoreCase(a, b);
     }
 };
+
+/// Pseudo-classes whose match reads other elements of a form or select, e.g the
+/// form's default button, the fieldset's first levent, ...
+fn readsOtherFormElements(pseudo: Selector.PseudoClass) bool {
+    return switch (pseudo) {
+        .default, .valid, .invalid, .disabled, .enabled, .read_only, .read_write, .checked => true,
+        else => false,
+    };
+}
+
+/// Elements whose insertion or removal can change a form pseudo-class elsewhere
+fn isFormElement(el: *Element) bool {
+    return switch (el.getTag()) {
+        .form, .input, .button, .select, .textarea, .output, .object, .fieldset, .legend, .option, .optgroup => true,
+        .custom => if (el.is(Element.Html.Custom)) |custom| custom.isFormAssociated() else false,
+        else => false,
+    };
+}
+
+/// E:has(S) reads E's subtree, so a change under E can change what it matches.
+/// But if the argument is only made of descendants and child combinators, the
+/// selector can only change when the change matches S's subject.
+const HasKeys = struct {
+    // An argument that can change without its subject moving, or with no key.
+    any: bool = false,
+    tags: std.EnumSet(Tag) = .empty,
+    names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    fn isEmpty(self: *const HasKeys) bool {
+        return self.any == false and self.tags.count() == 0 and self.names.count() == 0;
+    }
+
+    fn add(self: *HasKeys, allocator: Allocator, argument: Selector.Selector) Allocator.Error!void {
+        if (self.any) {
+            // no point tracking anything else
+            return;
+        }
+
+        if (reachesOutside(argument)) {
+            self.any = true;
+            return;
+        }
+
+        const subject = argument.rightmost();
+        for (subject.parts) |*part| {
+            switch (part.*) {
+                .id, .class, .tag_name => |name| return self.names.put(allocator, name, {}),
+                .attribute => |*attr| return self.names.put(allocator, attr.name.str(), {}),
+                else => {},
+            }
+        }
+        for (subject.parts) |part| {
+            switch (part) {
+                .tag => |tag| return self.tags.insert(tag),
+                else => {},
+            }
+        }
+        self.any = true;
+    }
+
+    fn matches(self: *const HasKeys, el: *Element) bool {
+        if (self.tags.contains(el.getTag())) {
+            return true;
+        }
+        if (self.names.count() == 0) {
+            return false;
+        }
+        if (self.names.contains(el.getTagNameLower())) {
+            return true;
+        }
+        if (el.getId()) |id| {
+            if (self.names.contains(id)) {
+                return true;
+            }
+        }
+        if (el.getClassName()) |class_attr| {
+            var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
+            while (it.next()) |class| {
+                if (self.names.contains(class)) {
+                    return true;
+                }
+            }
+        }
+        for (el._attributes.entries()) |*entry| {
+            if (self.names.contains(entry.name())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Whether a :has() argument's match can change without its subject moving.
+    fn reachesOutside(selector: Selector.Selector) bool {
+        if (compoundReachesOutside(selector.first)) {
+            return true;
+        }
+        for (selector.segments) |segment| {
+            switch (segment.combinator) {
+                .next_sibling, .subsequent_sibling => return true,
+                .descendant, .child => {},
+            }
+            if (compoundReachesOutside(segment.compound)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn compoundReachesOutside(compound: Selector.Compound) bool {
+        for (compound.parts) |part| {
+            const pseudo = switch (part) {
+                .pseudo_class => |pseudo| pseudo,
+                else => continue,
+            };
+            switch (pseudo) {
+                .not, .is, .where => |selectors| for (selectors) |selector| {
+                    if (reachesOutside(selector)) {
+                        return true;
+                    }
+                },
+                .empty, .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_child_of, .nth_last_child_of, .nth_of_type, .nth_last_of_type, .has, .focus_within => return true,
+                else => if (readsOtherFormElements(pseudo)) {
+                    return true;
+                },
+            }
+        }
+        return false;
+    }
+};
+
+pub const TreeChange = enum { inserted, removed };
+
+/// `child` was inserted/removed from `parent`. Drop the memo entries that can
+/// change. Returns false if treeChanged wasn't able to prune only the tree, in
+/// which case the caller should report a full style change.
+pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, op: TreeChange) bool {
+    // Boxes move whatever the cascade does
+    self.layout_bumps += 1;
+    if (self.dirty) {
+        // doesn't matter, a rebuild is needed anyways.
+        return true;
+    }
+
+    if (parent._type == .document) {
+        // everything is under the root, invaliding its tree is the same as a
+        // full invalidation, so there's no optimization to be had here.
+        return false;
+    }
+
+    // A memo the next read clears anyway holds nothing to drop
+    const page = self.frame.page;
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.memo.count() != 0 and group.memo_version == page.style_version + group.bumps) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    if (budget == 0) {
+        return true;
+    }
+
+    if (self.holdsFocus(child)) {
+        // :focus-within on the ancestors
+        return false;
+    }
+    if (self.reads_form or self.has.isEmpty() == false) {
+        if (self.has.any) {
+            return false;
+        }
+        if (self.reachesOutsideSubtree(child)) {
+            return false;
+        }
+    }
+
+    // Past the budget, dropping costs more than recomputing what's cached.
+    if (self.droppedCovers(parent)) {
+        // Changes batched between two reads: parent's subtree was dropped and
+        // nothing filled since, but what this inserts can come with entries
+        // (read while detached).
+        if (op == .inserted and self.dropSubtree(child, memos, &budget) == false) {
+            return false;
+        }
+    } else {
+        if (op == .removed and self.dropSubtree(child, memos, &budget) == false) {
+            return false;
+        }
+        if (self.dropSubtree(parent, memos, &budget) == false) {
+            return false;
+        }
+        self.recordDropped(parent);
+    }
+    if (self.reads_empty and emptinessFlips(parent, child)) {
+        // `:empty + x` and `:empty ~ x` reach the parent's later siblings
+        var sibling = parent.nextSibling();
+        while (sibling) |s| : (sibling = s.nextSibling()) {
+            if (self.dropSubtree(s, memos, &budget) == false) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+fn memoFills(self: *const StyleManager) usize {
+    var fills: usize = 0;
+    inline for (group_fields) |field| {
+        fills += @field(self, field).fills;
+    }
+    return fills;
+}
+
+// Whether `parent` is under a root dropped since the memos last filled. Then
+// nothing under it has an entry: whatever entered it since came through an
+// insertion, which dropped what it brought.
+fn droppedCovers(self: *StyleManager, parent: *Node) bool {
+    if (self.dropped_fills != self.memoFills()) {
+        self.dropped_len = 0;
+        return false;
+    }
+    for (self.dropped[0..self.dropped_len]) |root| {
+        if (root.contains(parent)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn recordDropped(self: *StyleManager, root: *Node) void {
+    const fills = self.memoFills();
+    if (self.dropped_fills != fills) {
+        self.dropped_len = 0;
+        self.dropped_fills = fills;
+    }
+    if (self.dropped_len == self.dropped.len) {
+        std.mem.copyForwards(*Node, self.dropped[0 .. self.dropped.len - 1], self.dropped[1..]);
+        self.dropped_len -= 1;
+    }
+    self.dropped[self.dropped_len] = root;
+    self.dropped_len += 1;
+}
+
+// Focus inside a shadow tree counts: :focus-within crosses into the host
+fn holdsFocus(self: *const StyleManager, child: *Node) bool {
+    const active = self.frame.document._active_element orelse return false;
+    return child.isHostIncludingInclusiveAncestorOf(active.asNode());
+}
+
+// Whether `child`'s subtree holds an element whose insertion or removal
+// changes a match outside it: a form element or a :has() subject.
+fn reachesOutsideSubtree(self: *const StyleManager, child: *Node) bool {
+    var tw = TreeWalker.Full.Elements.init(child, .{});
+    while (tw.next()) |el| {
+        if (self.reads_form and isFormElement(el)) {
+            return true;
+        }
+        if (self.has.matches(el)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn emptinessFlips(parent: *Node, child: *Node) bool {
+    if (countsForEmpty(child) == false) {
+        return false;
+    }
+    var it = parent.childrenIterator();
+    while (it.next()) |other| {
+        if (other != child and countsForEmpty(other)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// What makes an element not :empty (see selector/List.zig)
+fn countsForEmpty(node: *Node) bool {
+    const cdata = node.is(Node.CData) orelse return true;
+    return switch (cdata._type) {
+        .comment, .processing_instruction => false,
+        else => cdata.getLength() > 0,
+    };
+}
+
+/// Drops `root`'s subtree from `memos`, and what inherits from it outside the
+/// DOM subtree: a host's shadow tree, the nodes assigned to a slot. False once
+/// it visits more elements than `budget`.
+fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) bool {
+    var tw = TreeWalker.Full.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (budget.* == 0) {
+            return false;
+        }
+        budget.* -= 1;
+        if (comptime lp.IS_TEST) {
+            self.walked += 1;
+        }
+
+        var it = memos.iterator();
+        while (it.next()) |memo| {
+            switch (memo) {
+                .layout => unreachable,
+                inline else => |group| _ = @field(self, @tagName(group)).memo.remove(el),
+            }
+        }
+        if (el.hostedShadowRoot(self.frame)) |shadow| {
+            if (self.dropSubtree(shadow.asNode(), memos, budget) == false) {
+                return false;
+            }
+        }
+        if (el.is(Element.Html.Slot)) |slot| {
+            for (slot._assigned.items) |assigned| {
+                if (self.dropSubtree(assigned, memos, budget) == false) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
@@ -858,6 +1215,10 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.dirty = false;
     errdefer self.dirty = true;
     self.reads_style_attribute = false;
+    self.reads_form = false;
+    self.reads_empty = false;
+    self.has = .{};
+    self.dropped_len = 0;
     var caps: [group_fields.len]Capacities = undefined;
     inline for (group_fields, &caps) |field, *c| {
         c.* = @field(self, field).capacities();
@@ -1613,6 +1974,9 @@ fn Group(comptime Spec: type) type {
         // Inline writes of a property this group declares (invalidate).
         bumps: usize = 0,
 
+        // Entries put, ever: see StyleManager.dropped
+        fills: usize = 0,
+
         // inheritedProps' scratch, kept so each walk doesn't reallocate
         path: std.ArrayList(struct { el: *Element, own: Cascaded }) = .empty,
 
@@ -1677,6 +2041,7 @@ fn Group(comptime Spec: type) type {
             };
             if (gop.found_existing == false) {
                 gop.value_ptr.* = self.compute(el, frame);
+                self.fills += 1;
             }
             return gop.value_ptr.*;
         }
@@ -1703,6 +2068,7 @@ fn Group(comptime Spec: type) type {
                 };
             }
 
+            self.fills += self.path.items.len;
             var it = std.mem.reverseIterator(self.path.items);
             while (it.next()) |step| {
                 above = .resolve(step.own, above);
@@ -3882,7 +4248,6 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
 }
 
 const testing = @import("../testing.zig");
-const TreeWalker = @import("webapi/TreeWalker.zig");
 
 test "StyleManager: important cascade across external sheets, inline styles and layers" {
     try testing.htmlRunner("css/important_cascade.html", .{ .load_resources = .{ .stylesheet = true } });
@@ -4450,6 +4815,130 @@ test "StyleManager: memo: attribute writes no selector reads keep it" {
     try div.setAttribute(comptime .wrap("hidden"), comptime .wrap(""), frame);
     try testing.expect(frame.page.style_version != before);
     try testing.expectEqual(true, sm.hasDisplayNone(div));
+}
+
+test "StyleManager: memo: a tree change drops only the parent's subtree" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p></p></div><section></section>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("p + i { visibility: hidden } :has(> b) { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?;
+    const p = div.firstChild().?.as(Element);
+    const section = div.nextSibling().?;
+
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    const version = frame.page.style_version;
+    const layout_version = sm.layoutVersion();
+    const cascades = sm.visibility.cascades;
+
+    // An insertion into section keeps p's entry, but moves the layout memos
+    const in_section = try doc.createElement("i", null, frame);
+    _ = try section.appendChild(in_section.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expect(sm.layoutVersion() != layout_version);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(cascades, sm.visibility.cascades);
+
+    // An insertion next to p drops the parent's subtree, the parent and p
+    // included, but not body
+    const after_p = try doc.createElement("i", null, frame);
+    _ = try div.appendChild(after_p.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(after_p));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(cascades + 3, sm.visibility.cascades);
+
+    // A removed element inherited from its old ancestors
+    _ = try div.removeChild(p.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    const before_read = sm.visibility.cascades;
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    try testing.expectEqual(before_read + 1, sm.visibility.cascades);
+
+    // A :has() subject moving in reaches the ancestors: everything goes
+    const b = try doc.createElement("b", null, frame);
+    _ = try section.appendChild(b.asNode(), frame);
+    try testing.expect(frame.page.style_version != version);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(in_section));
+}
+
+test "StyleManager: memo: tree changes between two reads walk once" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<ul class=hide><li></li><li></li><li></li></ul><p></p>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".hide i { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const ul = body.firstChild().?;
+    const p = ul.nextSibling().?.as(Element);
+    var it = ul.childrenIterator();
+    while (it.next()) |li| {
+        _ = sm.hasVisibilityHiddenInherited(li.as(Element));
+    }
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    // Read while detached: its entry is stale once it's under .hide
+    const detached = try doc.createElement("i", null, frame);
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(detached));
+
+    // The first change walks ul and its items, the next ones only what they
+    // insert, which can bring entries along
+    const version = frame.page.style_version;
+    var walked = sm.walked;
+    _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
+    try testing.expectEqual(walked + 5, sm.walked);
+    walked = sm.walked;
+    _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
+    _ = try ul.removeChild(ul.firstChild().?, frame);
+    _ = try ul.lastChild().?.appendChild(detached.asNode(), frame);
+    try testing.expectEqual(walked + 2, sm.walked);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(detached));
+
+    // Reads fill the memo again: the next change walks ul again
+    it = ul.childrenIterator();
+    while (it.next()) |li| {
+        _ = sm.hasVisibilityHiddenInherited(li.as(Element));
+    }
+    walked = sm.walked;
+    _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
+    try testing.expect(sm.walked > walked + 1);
+    try testing.expectEqual(version, frame.page.style_version);
+}
+
+test "StyleManager: memo: a tree change moves only its own frame's layout" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const main = page.frame().?;
+    const child = main.child_frames.items[0];
+    const main_version = main._style_manager.layoutVersion();
+    const child_version = child._style_manager.layoutVersion();
+
+    const div = try child.document.createElement("div", null, child);
+    _ = try child.document.getBody().?.asNode().appendChild(div.asNode(), child);
+    try testing.expect(child._style_manager.layoutVersion() != child_version);
+    try testing.expectEqual(main_version, main._style_manager.layoutVersion());
+
+    // A parent's script mutating the child's DOM passes the parent's frame:
+    // the bump still goes to the node's own
+    const span = try child.document.createElement("span", null, child);
+    _ = try div.asNode().appendChild(span.asNode(), main);
+    try testing.expectEqual(main_version, main._style_manager.layoutVersion());
 }
 
 test "StyleManager: memo: an inline write drops only the memos that read it" {
