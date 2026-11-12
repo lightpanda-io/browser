@@ -163,6 +163,7 @@ fn PrototypeChain(comptime types: []const type) type {
         fn totalSize() usize {
             var size: usize = 0;
             for (types) |T| {
+                if (isEmbeddedInProto(T)) continue;
                 size = std.mem.alignForward(usize, size, @alignOf(T));
                 size += @sizeOf(T);
             }
@@ -173,10 +174,36 @@ fn PrototypeChain(comptime types: []const type) type {
             var alignment: std.mem.Alignment = .@"1";
 
             for (types) |T| {
+                if (isEmbeddedInProto(T)) continue;
                 alignment = std.mem.Alignment.max(alignment, std.mem.Alignment.of(T));
             }
 
             return alignment;
+        }
+
+        fn offsetOf(comptime index: usize) usize {
+            comptime {
+                var offset: usize = 0;
+                var proto_offset: usize = 0;
+                for (types, 0..) |T, i| {
+                    if (isEmbeddedInProto(T)) {
+                        // no slot of its own: it's a field of the previous
+                        // member, its Proto
+                        assert(reflect.Proto(T).? == types[i - 1]);
+                        if (i == index) {
+                            return proto_offset + @offsetOf(types[i - 1], T.embedded_in_proto);
+                        }
+                        continue;
+                    }
+                    offset = std.mem.alignForward(usize, offset, @alignOf(T));
+                    if (i == index) {
+                        return offset;
+                    }
+                    proto_offset = offset;
+                    offset += @sizeOf(T);
+                }
+                unreachable;
+            }
         }
 
         fn getType(comptime index: usize) type {
@@ -192,16 +219,7 @@ fn PrototypeChain(comptime types: []const type) type {
         }
 
         fn get(self: *const Self, comptime index: usize) *getType(index) {
-            var offset: usize = 0;
-            inline for (types, 0..) |T, i| {
-                offset = std.mem.alignForward(usize, offset, @alignOf(T));
-
-                if (i == index) {
-                    return @as(*T, @ptrCast(@alignCast(self.memory.ptr + offset)));
-                }
-                offset += @sizeOf(T);
-            }
-            unreachable;
+            return @ptrCast(@alignCast(self.memory.ptr + comptime offsetOf(index)));
         }
 
         fn set(self: *const Self, comptime index: usize, value: getType(index)) void {
@@ -415,17 +433,31 @@ pub fn cdataNode(self: *Factory, owner: *const Document, cd: Node.CData, leaf: a
 }
 
 // The types that get a slot of their own in the chain allocation for a leaf:
-// its prototype types, minus any that its child embeds. For example
-// CData.Text -> [_]type{Node, CData, Text}, since Node embeds its EventTarget.
+// its prototype types, minus any that are embedded in a neighbour. For example
+// Div -> [_]type{Node, Element, Div}: Node embeds its EventTarget, and the
+// HtmlElement is embedded in the Element.
 fn chainTypes(comptime Leaf: type) []const type {
     comptime {
-        var types: []const type = &.{Leaf};
+        var types: []const type = &.{};
         var T = Leaf;
-        while (hasEmbeddedProto(T) == false) {
+        while (true) {
+            if (isEmbeddedInProto(T) == false) {
+                types = &[_]type{T} ++ types;
+            }
+            if (hasEmbeddedProto(T)) break;
             T = reflect.Proto(T) orelse break;
-            types = &[_]type{T} ++ types;
         }
         return types;
+    }
+}
+
+fn inPrototypeChain(comptime Leaf: type, comptime T: type) bool {
+    comptime {
+        var C = Leaf;
+        while (C != T) {
+            C = reflect.Proto(C) orelse return false;
+        }
+        return true;
     }
 }
 
@@ -433,14 +465,19 @@ fn chainTypes(comptime Leaf: type) []const type {
 // a child reach its parent without a stored pointer.
 pub fn chainOffsetOf(comptime Leaf: type, comptime T: type) usize {
     comptime {
-        var offset: usize = 0;
-        for (chainTypes(Leaf)) |C| {
-            offset = std.mem.alignForward(usize, offset, @alignOf(C));
-            if (C == T) return offset;
-            if (hasEmbeddedProto(C) and reflect.Proto(C).? == T) {
-                return offset + @offsetOf(C, "_proto");
+        if (inPrototypeChain(Leaf, T)) {
+            var offset: usize = 0;
+            for (chainTypes(Leaf)) |C| {
+                offset = std.mem.alignForward(usize, offset, @alignOf(C));
+                if (C == T) return offset;
+                if (hasEmbeddedProto(C) and reflect.Proto(C).? == T) {
+                    return offset + @offsetOf(C, "_proto");
+                }
+                if (isEmbeddedInProto(T) and reflect.Proto(T).? == C) {
+                    return offset + @offsetOf(C, T.embedded_in_proto);
+                }
+                offset += @sizeOf(C);
             }
-            offset += @sizeOf(C);
         }
         @compileError(@typeName(T) ++ " is not in the prototype chain of " ++ @typeName(Leaf));
     }
@@ -459,7 +496,7 @@ pub fn protoOf(value: anytype) *reflect.Proto(reflect.Struct(@TypeOf(value))).? 
         return &value._proto;
     }
     const proto: *reflect.Proto(T).? = @ptrFromInt(@intFromPtr(value) - comptime protoOffset(T));
-    if (comptime lp.IS_DEBUG) {
+    if (comptime lp.IS_DEBUG and isEmbeddedInProto(T) == false) {
         // In debug, we'll assert that our offset and the _proto field agree.
         std.debug.assert(proto == if (comptime hasStoredProto(T)) value._proto else value._proto_canary);
     }
@@ -488,6 +525,13 @@ fn hasStoredProto(comptime T: type) bool {
 fn hasEmbeddedProto(comptime T: type) bool {
     const P = reflect.Proto(T) orelse return false;
     return @hasField(T, "_proto") and @FieldType(T, "_proto") == P;
+}
+
+// `pub const embedded_in_proto = "_field"`, the other way around: T is a field
+// of its parent, and its own children follow the parent in the chain. Worth it
+// when T fits in the parent's padding (Element and the 1-byte HtmlElement).
+fn isEmbeddedInProto(comptime T: type) bool {
+    return @hasDecl(T, "embedded_in_proto");
 }
 
 // Generic contiguous chain from explicit values, for chains whose middles
@@ -651,6 +695,11 @@ fn destroyChain(
     const allocator = self._recycling.allocator();
 
     // aligns the old size to the alignment of this element
+    if (comptime isEmbeddedInProto(S)) {
+        // takes no space of its own
+        return self.destroyChain(protoOf(value), old_size, old_align);
+    }
+
     const current_size = std.mem.alignForward(usize, old_size, @alignOf(S));
     const new_size = current_size + @sizeOf(S);
     const new_align = std.mem.Alignment.max(old_align, std.mem.Alignment.of(S));
