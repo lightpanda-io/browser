@@ -45,3 +45,11 @@
    testing.expectEqual(1, Event.length);
 }
 </script>
+
+<script id="current_script_classic">
+  testing.expectEqual('current_script_classic', document.currentScript.id);
+</script>
+
+<script id="current_script_module" type=module>
+  testing.expectEqual(null, document.currentScript);
+</script>

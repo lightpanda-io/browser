@@ -81,6 +81,7 @@ _navigated_away: bool = false,
 _iframe_load_in_progress: bool = false,
 _mute_iframe_load: bool = false,
 _current_script: ?*Element.Html.Script = null,
+_current_script_is_module: bool = false,
 _ids: IdMap = .{},
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
@@ -1283,6 +1284,12 @@ fn getApplets(_: *const Document, frame: *Frame) !*collections.HTMLCollection {
 }
 
 fn getCurrentScript(self: *const Document) ?*Element.Html.Script {
+    if (self._current_script_is_module) {
+        // document.currentScript is null while a module is running
+        // but we still need to track it, which is why we can't just set
+        // _current_script = null.
+        return null;
+    }
     return self._current_script;
 }
 
