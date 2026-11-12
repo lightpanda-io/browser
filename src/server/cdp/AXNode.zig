@@ -1163,6 +1163,15 @@ pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, labels
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
+    const name = try self.writeNameInto(&aw, frame, labels) orelse return null;
+    return try allocator.dupe(u8, name);
+}
+
+/// Write the name into `aw` and return the value as a slice into `aw`, which
+/// is only valid until the next write
+pub fn writeNameInto(self: AXNode, aw: *std.Io.Writer.Allocating, frame: *Frame, labels: *Label.LabelByForIndex) !?[]const u8 {
+    const start = aw.written().len;
+
     // writeName expects a std.json.Stringify instance.
     const TextCaptureWriter = struct {
         aw: *std.Io.Writer.Allocating,
@@ -1184,14 +1193,13 @@ pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, labels
         pub fn endWriteRaw(_: @This()) void {}
     };
 
-    const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
+    const w: TextCaptureWriter = .{ .aw = aw, .writer = &aw.writer };
 
     const source = try self.writeName(null, w, frame, labels);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
-        var raw_text = std.mem.trim(u8, aw.written(), "\"");
-        raw_text = std.mem.trim(u8, raw_text, &std.ascii.whitespace);
-        return try allocator.dupe(u8, raw_text);
+        const raw_text = std.mem.trim(u8, aw.written()[start..], "\"");
+        return std.mem.trim(u8, raw_text, &std.ascii.whitespace);
     }
 
     return null;
