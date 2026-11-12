@@ -1384,6 +1384,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const cache_result = cache.get(arena.allocator(), self.allocator, .{
         .url = key,
+        .scope = .public,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = try transfer.cacheRequestHeaders(),
     }) catch |e| blk: {
@@ -1420,7 +1421,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         },
         .stale => {
             lp.metrics.http_cache.incr(.miss);
-            cache.evict(key);
+            cache.evict(key, .public);
             transfer._cache_intent = .store;
             return false;
         },
@@ -1449,6 +1450,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
     cache.renew(transfer.arena.allocator(), .{
         .url = transfer._cache_key,
+        .scope = .public,
         .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
         .request_headers = request_headers,
@@ -1510,6 +1512,7 @@ fn storeResponse(cache: *Cache, transfer: *Transfer, rh: *http.ResponseHead) !bo
     return cache.put(arena, .{
         .timestamp = lp.datetime.timestamp(.real),
         .url = transfer._cache_key,
+        .scope = .public,
         .status = rh.status,
         .content_type = rh.contentType(),
         .headers = transfer.res.headers,

@@ -97,17 +97,17 @@ pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, bo
     }
 }
 
-pub fn putScriptCache(self: *Cache, url: []const u8, body: []const u8, bytes: []const u8) !void {
+pub fn putScriptCache(self: *Cache, url: []const u8, scope: CacheScope, body: []const u8, bytes: []const u8) !void {
     return switch (self.kind) {
         .noop => {},
-        inline else => |*c| c.putScriptCache(url, body, bytes),
+        inline else => |*c| c.putScriptCache(url, scope, body, bytes),
     };
 }
 
-pub fn evict(self: *Cache, url: []const u8) void {
+pub fn evict(self: *Cache, url: []const u8, scope: CacheScope) void {
     return switch (self.kind) {
         .noop => {},
-        inline else => |*c| c.evict(url),
+        inline else => |*c| c.evict(url, scope),
     };
 }
 
@@ -198,14 +198,28 @@ pub const ResponseDirectives = struct {
     }
 };
 
+pub const CacheScope = union(enum) {
+    public,
+    private: u32,
+
+    pub fn format(self: CacheScope, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .public => try writer.writeAll("public"),
+            .private => |id| try writer.print("private({d})", .{id}),
+        }
+    }
+};
+
 pub const CacheGetRequest = struct {
     url: []const u8,
+    scope: CacheScope,
     timestamp: u64,
     request_headers: []const Http.Header,
 };
 
 pub const CachePutRequest = struct {
     url: [:0]const u8,
+    scope: CacheScope,
     content_type: []const u8,
 
     status: u16,
@@ -223,8 +237,9 @@ pub const CachePutRequest = struct {
     last_modified: ?[]const u8 = null,
 
     pub fn format(self: CachePutRequest, writer: *std.Io.Writer) !void {
-        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
+        try writer.print("url={s} | scope={f} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
             self.url,
+            self.scope,
             self.status,
             self.content_type,
             self.cache_control.max_age,
@@ -248,6 +263,7 @@ pub const CachePutRequest = struct {
 
 pub const RenewResponse = struct {
     url: []const u8,
+    scope: CacheScope,
     timestamp: u64,
     headers: []const Http.Header,
     /// Request Headers of the revalidation, which the merged Vary may name.
@@ -389,6 +405,7 @@ const ResponseHeaders = struct {
 pub const CacheCandidate = struct {
     timestamp: u64,
     url: [:0]const u8,
+    scope: CacheScope,
     status: u16,
     content_type: ?[]const u8, // from ResponseHead, can be truncated
     headers: []const Http.Header,
@@ -494,6 +511,7 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
 
     return .{
         .url = try arena.dupeSentinel(u8, url, 0),
+        .scope = candidate.scope,
         .content_type = if (candidate.content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
         .status = status,
         .stored_at = candidate.timestamp,
@@ -624,6 +642,7 @@ const TestResponse = struct {
         return tryCache(arena, .{
             .timestamp = test_now,
             .url = "https://example.com",
+            .scope = .public,
             .status = self.status,
             .content_type = "text/html",
             .headers = headers.items,
@@ -753,6 +772,7 @@ test "Cache: tryCache vary headers" {
     const wildcard = try tryCache(arena.allocator(), .{
         .timestamp = test_now,
         .url = "https://example.com",
+        .scope = .public,
         .status = 200,
         .content_type = "text/html",
         .headers = &.{
@@ -800,6 +820,7 @@ test "Cache: renew strips a 304's Set-Cookie" {
         const stored = try cache.put(arena.allocator(), .{
             .timestamp = test_now,
             .url = "https://example.com",
+            .scope = .public,
             .status = 200,
             .content_type = "text/html",
             .headers = &.{
@@ -812,6 +833,7 @@ test "Cache: renew strips a 304's Set-Cookie" {
 
         try cache.renew(arena.allocator(), .{
             .url = "https://example.com",
+            .scope = .public,
             .timestamp = test_now + 10,
             .headers = &.{
                 .{ .name = "cache-control", .value = "max-age=600" },
@@ -822,6 +844,7 @@ test "Cache: renew strips a 304's Set-Cookie" {
 
         const result = try cache.get(arena.allocator(), arena.allocator(), .{
             .url = "https://example.com",
+            .scope = .public,
             .timestamp = test_now + 10,
             .request_headers = &.{},
         });
