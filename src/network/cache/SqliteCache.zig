@@ -50,7 +50,9 @@ const schema_version = 4;
 const schema = [_][:0]const u8{
     // scope 0 is the public/shared entry for a url; a non-zero scope is a
     // Browser's id and is private to it. 0 is never issued as a Browser's
-    // id, so it can't collide with a real private entry.
+    // id, so it can't collide with a real private entry. Private scope ids
+    // are only unique within a single process run, so they're purged on
+    // every startup (see open()) rather than persisted across restarts.
     \\ create table cache (
     \\      url               text not null,
     \\      scope             integer not null default 0,
@@ -171,6 +173,11 @@ fn open(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !
 
         try conn.exec("pragma journal_mode=wal", .{});
         try createSchema(conn);
+
+        // Delete all leftover private entries.
+        conn.exec("delete from cache where scope != 0", .{}) catch |err| {
+            log.err(.cache, "clear private scopes", .{ .err = err });
+        };
     }
 
     var cache: SqliteCache = .{ .allocator = allocator, .pool = pool, .entry_limit = entry_limit };
