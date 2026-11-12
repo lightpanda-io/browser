@@ -1477,11 +1477,8 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
         .cancelled => return self.resetAfterCancel(baseline),
         .failed => |reason| return self.abortSave(baseline, reason),
     };
-    var replayed: ?[]const u8 = null;
     if (check == .replay) {
-        const checked = self.replayAndRepair(arena, script) orelse return self.resetAfterCancel(baseline);
-        script = checked.script;
-        replayed = checked.result;
+        script = self.replayAndRepair(arena, script) orelse return self.resetAfterCancel(baseline);
     }
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
@@ -1497,9 +1494,6 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     };
     self.save_buffer.reset();
     self.terminal.printInfo("Saved synthesized script to {s}", .{path});
-    // What the check replay returned, so a caller has the script's current
-    // output without replaying it again.
-    if (replayed) |result| self.terminal.printPlain(result);
 }
 
 const Synthesis = union(enum) {
@@ -1575,39 +1569,49 @@ const replay_timeout_ms = 60_000;
 
 /// Replays a synthesized script once with no model; when the replay fails or
 /// returns nothing, the model gets one turn to fix it on the page the replay
-/// ended on. A script that acts on a page is written unchecked rather than
-/// replayed. Null when the user cancelled.
-fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?Checked {
-    const unchecked: Checked = .{ .script = script, .result = null };
-    if (!readsOnly(script)) return unchecked;
+/// ended on. A fix is kept only when its own replay passes. A script that
+/// acts on a page is written unchecked rather than replayed. Null when the
+/// user cancelled.
+fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?[]const u8 {
+    if (!readsOnly(script)) return script;
     const session = self.ts.session;
-    const before = browser_tools.pageIds(arena, session) catch return unchecked;
+    const before = browser_tools.pageIds(arena, session) catch return script;
     defer browser_tools.closePagesOpenedSince(arena, session, &self.ts.registry, before);
 
-    const problem = switch (self.replayScript(arena, script)) {
-        .ok => |result| return .{ .script = script, .result = result },
-        .unchecked => return unchecked,
+    const replay = self.replayScript(arena, script);
+    const problem = switch (replay) {
+        .ok => return script,
+        .unchecked => |reason| {
+            self.terminal.printWarning("can't replay the script ({s}); saving it unchecked", .{reason});
+            return script;
+        },
         .cancelled => return null,
-        .problem => |p| p,
+        .failed, .empty => |p| p,
     };
-    self.terminal.printWarning("the script's replay {s}; asking the model to fix it", .{firstLine(problem)});
+    const empty = replay == .empty;
+    self.terminal.printWarning("the script's replay {s}; asking the model to check it", .{firstLine(problem)});
 
+    const diagnosis: []const u8 = if (empty)
+        "An empty result is right when the page holds nothing that matches, as when the run above found nothing either: then reply with the script unchanged. Otherwise the script reads the page wrong"
+    else
+        "The run above found the answer, so the script reads the page wrong";
     const last_page = browser_tools.lastPageOpenedSince(session, before);
     const page_note: []const u8 = if (last_page != null)
         "The page the replay ended on is open, as it is now. It kept loading after the script read it, so if it holds what the script missed, make the script wait for it (goto with waitUntil: \"networkidle\", or waitForSelector)"
     else
         "The replay opened no page; the browser holds the page this session last loaded";
     const feedback = self.conversation.arena.allocator().print(
-        \\I replayed that script once, on a fresh load and with no model, and it {s}
+        \\I replayed that script once with no model, in this browser session (its
+        \\cookies and storage carry over), and it {s}
         \\
-        \\The run above found the answer, so the script reads the page wrong. {s}.
+        \\{s}. {s}.
         \\Read it with the read-only tools and try your extract schema on it before
         \\you answer. Check each selector and each filter against what the page
         \\actually holds, not against what it usually looks like. Then reply with the
-        \\corrected script in full, with the same output rules: the script alone, no
+        \\script in full, with the same output rules: the script alone, no
         \\explanation.
-    , .{ problem, page_note }) catch return unchecked;
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = feedback }) catch return unchecked;
+    , .{ problem, diagnosis, page_note }) catch return script;
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = feedback }) catch return script;
 
     // The repair's tool calls read the replay's page, not `pages[0]`.
     session.setToolFrameOverride(last_page);
@@ -1618,26 +1622,31 @@ fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?
         .cancelled => return null,
         .failed => |reason| {
             self.terminal.printWarning("the fix failed ({s}); keeping the first script", .{reason});
-            return unchecked;
+            return script;
         },
     };
+    const ws = &std.ascii.whitespace;
+    if (empty and std.mem.eql(u8, std.mem.trim(u8, fixed, ws), std.mem.trim(u8, script, ws))) {
+        self.terminal.printInfo("the model kept the script: the empty result is the answer", .{});
+        return script;
+    }
+    if (!readsOnly(fixed)) {
+        self.terminal.printWarning("the fix acts on a page, so it can't be checked; keeping the first script", .{});
+        return script;
+    }
     switch (self.replayScript(arena, fixed)) {
-        .ok => |result| return .{ .script = fixed, .result = result },
+        .ok => return fixed,
         .cancelled => return null,
-        .unchecked => return .{ .script = fixed, .result = null },
-        .problem => |p| {
+        .unchecked => |reason| {
+            self.terminal.printWarning("can't replay the fixed script ({s}); keeping the first script", .{reason});
+            return script;
+        },
+        .failed, .empty => |p| {
             self.terminal.printWarning("the fixed script's replay {s}; keeping the first script", .{firstLine(p)});
-            return unchecked;
+            return script;
         },
     }
 }
-
-const Checked = struct {
-    script: []const u8,
-    /// What a passing replay returned; null when the script wasn't replayed
-    /// or its replay failed.
-    result: ?[]const u8,
-};
 
 /// Whether the script calls no tool `BrowserTool.replaySafe` rules out. A
 /// script that fails before its first act would otherwise be "repaired"; the
@@ -1656,45 +1665,45 @@ fn firstLine(text: []const u8) []const u8 {
 }
 
 const Replay = union(enum) {
-    /// The returned value, empty when the script returns nothing.
-    ok: []const u8,
-    /// The script acts on a page, or the replay couldn't start.
-    unchecked,
+    ok,
+    /// Why the replay couldn't run: the script acts on a page, or the
+    /// runtime couldn't start.
+    unchecked: []const u8,
     cancelled,
-    /// Completes "it …" in a sentence, then the script's output.
-    problem: []const u8,
+    /// Completes "it …" in a sentence, then the script's console output.
+    failed: []const u8,
+    /// Same, for a run that returned an empty value, which may be the answer.
+    empty: []const u8,
 };
 
 fn replayScript(self: *Agent, arena: std.mem.Allocator, script: []const u8) Replay {
-    const runtime = self.beginScriptRuntime() catch |err| {
-        self.terminal.printWarning("can't replay the script ({s}); saving it unchecked", .{@errorName(err)});
-        return .unchecked;
-    };
+    const runtime = self.beginScriptRuntime() catch |err| return .{ .unchecked = @errorName(err) };
     defer self.endScriptRuntime(runtime);
 
     runtime.timeout_ms = replay_timeout_ms;
     runtime.read_only = true;
 
     self.terminal.beginTool("replay", "saved script");
-    // Captured, which keeps the replay's output off stdout: `--save` leaves it to the caller.
+    // Captured, which keeps the replay's output off stdout.
     const captured = runtime.runCaptured(arena, script, "replay", max_replay_feedback_bytes);
     self.terminal.endTool();
     if (self.cancel_requested.load(.acquire)) return .cancelled;
-    if (runtime.refused != null) return .unchecked;
+    if (runtime.refused) |tool| return .{ .unchecked = arena.print("it calls {s}", .{@tagName(tool)}) catch "it acts on a page" };
 
-    const done = captured catch |err| return .{ .problem = arena.print("failed: {s}", .{@errorName(err)}) catch "failed" };
+    const done = captured catch |err| return .{ .failed = arena.print("failed: {s}", .{@errorName(err)}) catch "failed" };
     const output = std.mem.trim(u8, done.returned, &std.ascii.whitespace);
     const logged = std.mem.trim(u8, done.console, &std.ascii.whitespace);
+    const empty = !done.timed_out and done.message == null and browser_tools.isEmptyJson(arena, output);
     const verdict: []const u8 = if (done.timed_out)
         arena.print("timed out after {d} s.", .{replay_timeout_ms / 1000}) catch "timed out."
     else if (done.message) |m|
         arena.print("failed: {s}", .{m}) catch "failed."
-    else if (browser_tools.isEmptyJson(arena, output))
+    else if (empty)
         arena.print("returned an empty result: {s}", .{output[0..@min(output.len, max_replay_feedback_bytes)]}) catch "returned an empty result."
     else
-        return .{ .ok = output };
-    if (logged.len == 0) return .{ .problem = verdict };
-    return .{ .problem = arena.print("{s}\n\nIts console output:\n{s}", .{ verdict, logged }) catch verdict };
+        return .ok;
+    const problem = if (logged.len == 0) verdict else arena.print("{s}\n\nIts console output:\n{s}", .{ verdict, logged }) catch verdict;
+    return if (empty) .{ .empty = problem } else .{ .failed = problem };
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
