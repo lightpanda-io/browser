@@ -29,6 +29,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
 const observers = @import("observers.zig");
+const StyleManager = @import("../StyleManager.zig");
 
 const Node = @import("../webapi/Node.zig");
 const CData = @import("../webapi/CData.zig");
@@ -69,17 +70,25 @@ fn attributeChanged(name: String, frame: *Frame) void {
 }
 
 pub fn childInserted(parent: *Node, child: *Node, frame: *Frame) void {
-    _ = parent;
-    _ = child;
-    domChanged(frame);
+    treeChanged(parent, child, .inserted, frame);
 }
 
 pub fn childRemoved(parent: *Node, child: *Node, previous_sibling: ?*Node, next_sibling: ?*Node, frame: *Frame) void {
-    _ = parent;
-    _ = child;
     _ = previous_sibling;
     _ = next_sibling;
-    domChanged(frame);
+    treeChanged(parent, child, .removed, frame);
+}
+
+fn treeChanged(parent: *Node, child: *Node, op: StyleManager.TreeChange, frame: *Frame) void {
+    frame.page.dom_version += 1;
+    if (parent.ownerFrame(frame)) |owner| {
+        if (owner._style_manager.treeChanged(parent, child, op) == false) {
+            // style manager wasn't able to restrict the change to a part of
+            // the tree, we need to invalidate everything
+            styleChanged(frame);
+        }
+    }
+    layoutObserversChanged(frame);
 }
 
 /// Not domChanged: live collections keep their cursors mid-parse, and the

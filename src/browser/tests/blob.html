@@ -19,7 +19,6 @@
 
   state.resolve();
   await state.done(() => {
-    console.warn('a')
     testing.expectEqual(expected1.length, blob1.size);
     testing.expectEqual("text/html", blob1.type);
     testing.expectEqual(expected1, text1);
