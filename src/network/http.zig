@@ -600,10 +600,12 @@ pub const Connection = struct {
         return inHttpRange(status);
     }
 
-    /// 0 outside 100..599, which is curl's own value for having no status.
-    /// Consumers cast this into `std.http.Status`, an enum(u10).
+    /// 0 outside 100..999, which is curl's own value for having no status.
+    /// Every three-digit code is kept, as browsers do: some servers answer
+    /// with codes above 599, such as LinkedIn's 999. Consumers cast this into
+    /// `std.http.Status`, an enum(u10), which holds them all.
     fn inHttpRange(status: c_long) u16 {
-        if (status < 100 or status > 599) return 0;
+        if (status < 100 or status > 999) return 0;
         return @intCast(status);
     }
 
@@ -1210,12 +1212,12 @@ test "opensocketCallback: block_private=false allows private IP" {
 }
 
 test "Connection.inHttpRange: only a real status survives" {
-    const kept = [_]c_long{ 100, 200, 404, 503, 599 };
+    const kept = [_]c_long{ 100, 200, 404, 503, 599, 600, 999 };
     for (kept) |status| {
         try std.testing.expectEqual(@as(u16, @intCast(status)), Connection.inHttpRange(status));
     }
     // 9999 used to survive and then panic in every std.http.Status cast.
-    const dropped = [_]c_long{ -1, 0, 99, 600, 1024, 9999, 65536 };
+    const dropped = [_]c_long{ -1, 0, 99, 1000, 1024, 9999, 65536 };
     for (dropped) |status| {
         try std.testing.expectEqual(0, Connection.inHttpRange(status));
     }

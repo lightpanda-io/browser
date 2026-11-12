@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=xhr type=module>
@@ -279,14 +280,22 @@
 <script id=xhr_401_challenge type=module>
   {
     const state = await testing.async();
-    const req = new XMLHttpRequest();
-    req.onload = () => { state.resolve() };
-    req.open('GET', 'http://127.0.0.1:9582/xhr/401');
-    req.send();
+    // Chrome answers the Basic challenge with a login prompt, which nothing
+    // dismisses when it's driven by puppeteer: the request never ends.
+    if (testing.IS_TEST_RUNNER) {
+      const req = new XMLHttpRequest();
+      req.onload = () => { state.resolve(req) };
+      req.open('GET', 'http://127.0.0.1:9582/xhr/401');
+      req.send();
+    } else {
+      state.resolve(null);
+    }
 
-    await state.done(() => {
-      testing.expectEqual(401, req.status);
-      testing.expectEqual('Unauthorized', req.statusText);
+    await state.done((req) => {
+      if (req) {
+        testing.expectEqual(401, req.status);
+        testing.expectEqual('Unauthorized', req.statusText);
+      }
     });
   }
 </script>
@@ -1010,10 +1019,13 @@
       }
       testing.expectEqual('fr', got['accept-language']);
       testing.expectEqual('a, b', got['x-multi']);
-      testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
-      testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
-      testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
-      testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+      if (testing.IS_TEST_RUNNER) {
+        // our own User-Agent and Sec-Ch-Ua win over the authored ones
+        testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
+        testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
+        testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
+        testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+      }
       testing.expectEqual(false, (got['cookie'] ?? '').includes('injected'));
       testing.expectEqual(undefined, got['proxy-test']);
       testing.expectEqual(undefined, got['sec-test']);
@@ -1123,11 +1135,13 @@ handler runs, abort() cancels the re-send and no load is delivered.
     ]).then((t) => { types = t; state.resolve() });
 
     await state.done(() => {
-      testing.expectEqual('text/html; charset=utf-8', types[0]);
+      testing.diverges('Chrome drops the MIME type parameters', () => {
+        testing.expectEqual('text/html; charset=utf-8', types[0]);
+        // overrideMimeType() wins over the response's own Content-Type.
+        testing.expectEqual('text/plain;charset=iso-8859-1', types[2]);
+      });
       // Absent a Content-Type, "get a response MIME type" yields text/xml.
       testing.expectEqual('text/xml', types[1]);
-      // overrideMimeType() wins over the response's own Content-Type.
-      testing.expectEqual('text/plain;charset=iso-8859-1', types[2]);
       // An unparseable override is application/octet-stream.
       testing.expectEqual('application/octet-stream', types[3]);
     });
@@ -1235,5 +1249,64 @@ handler runs, abort() cancels the re-send and no load is delivered.
     testing.expectEqual(200, req.status);
     testing.expectEqual('text/html; charset=utf-8', req.getResponseHeader('Content-Type'));
     testing.expectEqual('content-length: 100\r\ncontent-type: text/html; charset=utf-8\r\n', req.getAllResponseHeaders());
+  }
+</script>
+
+<script id=abort_while_preflighting>
+  {
+    // A cross-origin XHR with an authored header waits on its CORS preflight.
+    // abort() fires `abort` synchronously, and a sync XHR in that handler
+    // pumps the network, resolving the preflight.
+    const a = new XMLHttpRequest();
+    a.open('GET', 'http://localhost:9582/echo_headers');
+    a.setRequestHeader('x-hop', '1');
+    a.send();
+
+    let sync_status = 0;
+    a.onabort = () => {
+      const s = new XMLHttpRequest();
+      s.open('GET', 'http://127.0.0.1:9582/xhr/slow', false);
+      s.send();
+      sync_status = s.status;
+    };
+    a.abort();
+    testing.expectEqual(200, sync_status);
+  }
+</script>
+
+<script id=reopen_while_preflighting>
+  {
+    // open() terminates the in-flight request without firing any event.
+    const a = new XMLHttpRequest();
+    a.open('GET', 'http://localhost:9582/echo_headers');
+    a.setRequestHeader('x-hop', '1');
+    a.send();
+
+    const events = [];
+    for (const type of ['abort', 'error', 'loadend']) {
+      a.addEventListener(type, () => events.push(type));
+    }
+    a.onreadystatechange = () => events.push('readystatechange ' + a.readyState);
+    a.open('GET', 'http://127.0.0.1:9582/xhr');
+    testing.expectEqual([], events);
+    testing.expectEqual(1, a.readyState);
+  }
+</script>
+
+<script id=xhr_status_999 type=module>
+  {
+    // Any three-digit status reaches the page, as in Chrome and Firefox.
+    const state = await testing.async();
+    const result = await new Promise((resolve) => {
+      const req = new XMLHttpRequest();
+      req.onloadend = () => resolve(req.status + '|' + req.statusText + '|' + req.responseText);
+      req.open('GET', 'http://127.0.0.1:9582/raw/status_999');
+      req.send();
+    });
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('999|Request denied|denied', result);
+    });
   }
 </script>

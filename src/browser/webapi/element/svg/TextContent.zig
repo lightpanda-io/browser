@@ -229,7 +229,7 @@ fn anchorShift(element: *Element, width: f64, frame: *Frame) f64 {
     const style_manager = &owner._style_manager;
     var current: ?*Element = element;
     while (current) |el| : (current = el.asNode().flatTreeParentElement(owner)) {
-        const raw = style_manager.inlineStyleValue(el, comptime .wrap("text-anchor")) orelse
+        const raw = style_manager.inlineStyleValue(el, .@"text-anchor") orelse
             el.getAttributeSafe(comptime .wrap("text-anchor")) orelse continue;
         const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
         if (std.ascii.eqlIgnoreCase(value, "start")) {

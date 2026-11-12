@@ -55,6 +55,11 @@ run_timer: std.Io.Timestamp,
 /// Cancels a run that outlives it. Null runs without a deadline.
 timeout_ms: ?u32 = null,
 timed_out: bool = false,
+/// Refuses every tool `BrowserTool.replaySafe` rules out, throwing at the call,
+/// so a check replay can't repeat an act on the world.
+read_only: bool = false,
+/// The first tool `read_only` refused in the last run.
+refused: ?BrowserTool = null,
 cancelled: std.atomic.Value(bool) = .init(false),
 
 /// The runtime installs exactly the recorded browser tools as script
@@ -282,12 +287,49 @@ fn setObjectProperty(
     if (!out.has_value or !out.value) return error.RuntimeInitFailed;
 }
 
+/// What a captured run printed and returned, in the caller's arena.
+pub const Captured = struct {
+    /// Every console line, capped, ending in a note when the cap dropped some.
+    console: []const u8,
+    /// Kept apart from the console, so the cap can't drop it.
+    returned: []const u8,
+    /// The thrown error, formatted; null when the run completed.
+    message: ?[]const u8,
+    timed_out: bool,
+};
+
+/// `runSource` with the console capped at `console_cap` bytes and the return
+/// value captured, as the MCP `run` tool and the `--save` check replay report it.
+pub fn runCaptured(self: *Runtime, arena: std.mem.Allocator, source: []const u8, name: []const u8, console_cap: u32) RunError!Captured {
+    var console: std.Io.Writer.Allocating = .init(arena);
+    var capped: lp.LimitedWriter = .init(&console.writer, console_cap);
+    var returned: std.Io.Writer.Allocating = .init(arena);
+    const sinks = .{ self.console_sink, self.result_sink };
+    self.console_sink = &capped.writer;
+    self.result_sink = &returned.writer;
+    defer self.console_sink, self.result_sink = sinks;
+
+    const message = try self.runSource(source, name);
+    var printed = console.toArrayList();
+    if (capped.truncated) {
+        if (!std.mem.endsWith(u8, printed.items, "\n")) try printed.append(arena, '\n');
+        try printed.print(arena, "[console output truncated at {d} bytes]\n", .{console_cap});
+    }
+    return .{
+        .console = printed.items,
+        .returned = returned.written(),
+        .message = if (message) |m| try arena.dupe(u8, m) else null,
+        .timed_out = self.timed_out,
+    };
+}
+
 /// Run script source in the agent context. Returns null on success; on a JS
 /// compile/runtime exception returns a formatted error allocated in this
 /// runtime's call arena and valid until deinit or the next run.
 pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!?[]const u8 {
     _ = self.call_arena.reset(.retain_capacity);
     self.timed_out = false;
+    self.refused = null;
 
     const previous_hook = self.session.cancel_hook;
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
@@ -513,6 +555,11 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         self.throwError("internal: missing callback context");
         return;
     };
+
+    if (self.read_only and !tool.replaySafe()) {
+        if (self.refused == null) self.refused = tool;
+        return self.throwError("this run only reads pages; it doesn't click, type keys, run page JavaScript, log in or write files");
+    }
 
     const args = self.buildArgs(arena, context, tool, info) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
@@ -1139,7 +1186,6 @@ fn dupeError(self: *Runtime, message: []const u8) RunError![]const u8 {
 }
 
 const testing = @import("../testing.zig");
-const zenai = @import("zenai");
 
 fn runTestScript(runtime: *Runtime, source: []const u8) !void {
     if (try runtime.runSource(source, "agent-runtime-test.js")) |message| {
@@ -1177,8 +1223,8 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 test "agent script runtime: page.classify executes presets, categories and structured questions" {
     defer testing.test_session.closeAllPages();
 
-    const jev = try testing.MockJev.start(testing.arena_allocator);
-    defer jev.stop();
+    const mock = try testing.MockDecisions.start(testing.arena_allocator);
+    defer mock.stop();
 
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
@@ -1226,7 +1272,8 @@ test "agent script runtime: page.classify executes presets, categories and struc
 test "agent script runtime: page.classify missing API key throws" {
     defer testing.test_session.closeAllPages();
 
-    _ = unsetenv(@constCast(zenai.typesafe.env_var_name));
+    const mock = testing.MockDecisions.startWithoutKey();
+    defer mock.stop();
 
     var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
@@ -1585,6 +1632,32 @@ test "agent script runtime: cancel interrupts local JavaScript" {
     runtime.result_sink = &returned.writer;
     try testing.expectEqual(null, try runtime.runSource("return 'ok';", "agent-runtime-cancel-test.js"));
     try testing.expectString("ok\n", returned.written());
+}
+
+test "agent script runtime: read_only refuses tools that act, and names the first" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+    runtime.read_only = true;
+
+    // Reads run; the click throws before it reaches the page, however it is spelled.
+    const message = try runtime.runSource(
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (page.extract({ btn: "#btn" }).btn !== "Click Me") throw new Error("read failed");
+        \\try { page["click"]("#btn"); } catch {}
+        \\page.press("Enter");
+    , "read-only-test.js");
+    try testing.expect(message != null);
+    try testing.expectEqual(BrowserTool.click, runtime.refused.?);
+
+    runtime.read_only = false;
+    try testing.expectEqual(null, try runtime.runSource("return 1;", "read-only-test.js"));
+    try testing.expectEqual(null, runtime.refused);
 }
 
 test "agent script runtime: timeout_ms cancels a run that outlives it" {

@@ -65,7 +65,9 @@ fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
         return null;
     }
 
-    if (self._sheet) |sheet| return sheet;
+    if (self._sheet) |sheet| {
+        return sheet;
+    }
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), frame);
     self._sheet = sheet;
 
@@ -77,7 +79,8 @@ fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
 }
 
 pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
-    // Force stylesheet initialization so rules are parsed immediately
+    // Creates the sheet and adds it to the document's list. Its rules are
+    // parsed on first use.
     if (self.getSheet(frame) catch null) |_| {
         // Notify StyleManager about the new stylesheet
         frame._style_manager.sheetModified();
@@ -124,7 +127,9 @@ pub fn childrenChanged(self: *Style, frame: *Frame) void {
         return;
     }
     if (self._sheet) |sheet| {
-        sheet._css_rules = null;
+        sheet.textChanged(frame) catch |err| {
+            lp.log.err(.browser, "style text changed", .{ .err = err });
+        };
     }
     const owner = node.ownerFrame(frame) orelse return;
     owner._style_manager.sheetModified();

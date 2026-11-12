@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const URL = @import("../URL.zig");
 
 const Navigation = @import("navigation/Navigation.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
@@ -54,15 +55,30 @@ fn setScrollRestoration(self: *History, str: []const u8) void {
     }
 }
 
+// The URL resolves against the frame's document, not the caller's. Per the
+// pushState/replaceState spec: an unparseable URL, a different origin, or
+// one carrying credentials all throw SecurityError.
+fn resolveHistoryUrl(target: *Frame, url_: ?[]const u8) ![:0]const u8 {
+    const arena = target._session.arena;
+    const url = url_ orelse {
+        return arena.dupeSentinel(u8, target.url, 0);
+    };
+
+    const resolved = URL.resolve(arena.allocator(), target.url, url, .{}) catch |err| switch (err) {
+        error.TypeError => return error.SecurityError,
+        else => return err,
+    };
+    if (!URL.isSameOrigin(resolved, target.url) or URL.getUsername(resolved).len > 0 or URL.getPassword(resolved).len > 0) {
+        return error.SecurityError;
+    }
+    return resolved;
+}
+
 pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8) !void {
-    // The URL resolves against this history's document, not the caller's.
     const target = self._frame;
     const session = target._session;
     const arena = session.arena;
-    const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena.allocator(), target.url, u, .{})
-    else
-        try arena.dupeSentinel(u8, target.url, 0);
+    const url = try resolveHistoryUrl(target, _url);
 
     const json = try Navigation.serializeState(state, arena.allocator());
 
@@ -78,7 +94,7 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     // setHref == reinitializing.
     try target.window._location._url.setHref(url, &target.js.execution);
     // `:target` matches off the fragment, which the new URL can change.
-    target.styleChanged();
+    Frame.change.documentStateChanged(.target, target);
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,
@@ -92,14 +108,10 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
 }
 
 fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8) !void {
-    // The URL resolves against this history's document, not the caller's.
     const target = self._frame;
     const session = target._session;
     const arena = session.arena;
-    const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena.allocator(), target.url, u, .{})
-    else
-        try arena.dupeSentinel(u8, target.url, 0);
+    const url = try resolveHistoryUrl(target, _url);
 
     const json = try Navigation.serializeState(state, arena.allocator());
 
@@ -115,7 +127,7 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
     // setHref == reinitializing.
     try target.window._location._url.setHref(url, &target.js.execution);
     // `:target` matches off the fragment, which the new URL can change.
-    target.styleChanged();
+    Frame.change.documentStateChanged(.target, target);
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,

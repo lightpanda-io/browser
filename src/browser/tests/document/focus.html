@@ -460,6 +460,63 @@
 }
 </script>
 
+<script id="focus_contenteditable_caret">
+{
+  // Like Chrome, focus() puts a caret at the host's first position, unless the
+  // selection is already in its editable content.
+  const host = document.createElement('div');
+  host.setAttribute('contenteditable', '');
+  host.innerHTML = '\n  <p>abc</p>\n';
+  const outside = document.createElement('p');
+  outside.textContent = 'plain';
+  document.body.append(outside, host);
+  const sel = window.getSelection();
+  const abc = host.querySelector('p').firstChild;
+
+  sel.selectAllChildren(outside);
+  host.focus();
+  testing.expectEqual(abc, sel.anchorNode);
+  testing.expectEqual(0, sel.anchorOffset);
+  testing.expectEqual(true, sel.isCollapsed);
+
+  // a selection already in it stays, through blur and focus
+  sel.collapse(abc, 2);
+  host.blur();
+  host.focus();
+  testing.expectEqual(abc, sel.anchorNode);
+  testing.expectEqual(2, sel.anchorOffset);
+
+  // a caret in a contenteditable=false island is not in its editable content
+  host.innerHTML = '<p>a<span contenteditable="false">island</span>b</p>';
+  host.blur();
+  sel.collapse(host.querySelector('span').firstChild, 2);
+  host.focus();
+  testing.expectEqual(host.querySelector('p').firstChild, sel.anchorNode);
+  testing.expectEqual(0, sel.anchorOffset);
+
+  // an empty host takes the caret itself
+  host.innerHTML = '';
+  host.blur();
+  outside.focus();
+  sel.collapse(outside.firstChild, 1);
+  host.focus();
+  testing.expectEqual(host, sel.anchorNode);
+  testing.expectEqual(0, sel.anchorOffset);
+
+  // the caret is there when focus fires
+  host.innerHTML = '<p>xyz</p>';
+  host.blur();
+  sel.collapse(outside.firstChild, 1);
+  let seen = null;
+  host.addEventListener('focus', () => { seen = sel.anchorNode; }, {once: true});
+  host.focus();
+  testing.expectEqual(host.querySelector('p').firstChild, seen);
+
+  host.remove();
+  outside.remove();
+}
+</script>
+
 <script id="focus_svg_link">
 {
   const input1 = $('#input1');

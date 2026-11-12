@@ -34,6 +34,9 @@
 //! `inherited` and `initial`.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
+const Allocator = std.mem.Allocator;
 
 pub const Property = struct {
     inherited: bool = false,
@@ -41,19 +44,284 @@ pub const Property = struct {
     computed: bool = true,
 };
 
-pub fn get(name: []const u8) ?Property {
-    return properties.get(name);
-}
-
 pub fn isKnown(name: []const u8) bool {
     return properties.has(name);
 }
 
-/// The longhands a computed style lists, as CSS.getComputedStyleForNode
-/// returns them, sorted by name.
-pub const computed_names: []const []const u8 = blk: {
+/// A property as a declaration stores it: a known property's index in the
+/// table, then the custom properties (`--name`) of a page, numbered by its
+/// `CustomNames`.
+pub const Id = blk: {
     @setEvalBranchQuota(1_000_000);
     const keys = properties.keys();
+    var names: [keys.len][:0]const u8 = undefined;
+    for (keys, &names) |key, *name| {
+        name.* = key[0..key.len :0];
+    }
+    break :blk @Enum(u16, .nonexhaustive, &names, &std.simd.iota(u16, keys.len));
+};
+
+pub const known_count = properties.keys().len;
+
+/// The id of a known property, null for any other name.
+pub fn idOf(name: []const u8) ?Id {
+    const index = properties.getIndex(name) orelse return null;
+    return @fromBackingInt(@intCast(index));
+}
+
+/// The name of a known property, null for a custom one.
+pub fn knownName(id: Id) ?[]const u8 {
+    const index = @backingInt(id);
+    if (index >= known_count) {
+        return null;
+    }
+    return properties.keys()[index];
+}
+
+/// The table entry of a known property, null for a custom one.
+pub fn propertyOf(id: Id) ?Property {
+    const index = @backingInt(id);
+    if (index >= known_count) {
+        return null;
+    }
+    return properties.values()[index];
+}
+
+pub const AxisShorthand = struct {
+    name: Id,
+    x: Id,
+    y: Id,
+};
+
+// The `<x> [<y>]` shorthands whose longhands the style cascade tracks. Both the
+// CSSOM object and the cascade store these expanded: setting one sets both
+// longhands, reading or serializing it recombines them.
+pub const axis_shorthands = [_]AxisShorthand{
+    .{ .name = .overflow, .x = .@"overflow-x", .y = .@"overflow-y" },
+    .{ .name = .@"overscroll-behavior", .x = .@"overscroll-behavior-x", .y = .@"overscroll-behavior-y" },
+};
+
+/// The axis shorthand `id` is, if it is one.
+pub fn axisShorthand(id: Id) ?AxisShorthand {
+    for (axis_shorthands) |shorthand| {
+        if (shorthand.name == id) {
+            return shorthand;
+        }
+    }
+    return null;
+}
+
+pub const AxisLonghand = struct {
+    shorthand: AxisShorthand,
+    is_x: bool,
+
+    /// The longhand on the other axis.
+    pub fn partner(self: AxisLonghand) Id {
+        return if (self.is_x) self.shorthand.y else self.shorthand.x;
+    }
+};
+
+/// The axis shorthand `id` is a longhand of, if it is one.
+pub fn axisLonghand(id: Id) ?AxisLonghand {
+    for (axis_shorthands) |shorthand| {
+        if (shorthand.x == id) {
+            return .{ .shorthand = shorthand, .is_x = true };
+        }
+        if (shorthand.y == id) {
+            return .{ .shorthand = shorthand, .is_x = false };
+        }
+    }
+    return null;
+}
+
+/// A four-side shorthand such as `margin`: its longhands in top, right,
+/// bottom, left order.
+pub const BoxShorthand = struct {
+    name: Id,
+    sides: [4]Id,
+};
+
+pub const box_shorthands = [_]BoxShorthand{
+    .{ .name = .margin, .sides = .{ .@"margin-top", .@"margin-right", .@"margin-bottom", .@"margin-left" } },
+    .{ .name = .padding, .sides = .{ .@"padding-top", .@"padding-right", .@"padding-bottom", .@"padding-left" } },
+    .{ .name = .inset, .sides = .{ .top, .right, .bottom, .left } },
+    .{ .name = .@"border-width", .sides = .{ .@"border-top-width", .@"border-right-width", .@"border-bottom-width", .@"border-left-width" } },
+    .{ .name = .@"border-style", .sides = .{ .@"border-top-style", .@"border-right-style", .@"border-bottom-style", .@"border-left-style" } },
+    .{ .name = .@"border-color", .sides = .{ .@"border-top-color", .@"border-right-color", .@"border-bottom-color", .@"border-left-color" } },
+};
+
+/// The four-side shorthand `id` is, if it is one.
+pub fn boxShorthand(id: Id) ?BoxShorthand {
+    for (box_shorthands) |shorthand| {
+        if (shorthand.name == id) {
+            return shorthand;
+        }
+    }
+    return null;
+}
+
+/// The index in `box_shorthands` of the shorthand `id` is a side of.
+pub fn boxLonghandIndex(id: Id) ?usize {
+    for (box_shorthands, 0..) |shorthand, i| {
+        if (std.mem.findScalar(Id, &shorthand.sides, id) != null) {
+            return i;
+        }
+    }
+    return null;
+}
+
+/// The custom property names (`--name`) declared on a page.
+pub const CustomNames = struct {
+    _full_logged: bool = false,
+    _names: std.StringArrayHashMapUnmanaged(void) = .empty,
+
+    const capacity = std.math.maxInt(u16) + 1 - known_count;
+
+    pub fn intern(self: *CustomNames, allocator: Allocator, name: []const u8) !?Id {
+        if (self.lookup(name)) |id| {
+            return id;
+        }
+
+        const count = self._names.count();
+        if (count == capacity) {
+            if (self._full_logged == false) {
+                self._full_logged = true;
+                lp.log.warn(.browser, "too many custom properties", .{ .name = name, .count = count });
+            }
+            return null;
+        }
+
+        try self._names.putNoClobber(allocator, try allocator.dupe(u8, name), {});
+        return @fromBackingInt(@intCast(known_count + count));
+    }
+
+    /// The id of `name`, null when the page never declared it.
+    pub fn lookup(self: *const CustomNames, name: []const u8) ?Id {
+        const index = self._names.getIndex(name) orelse return null;
+        return @fromBackingInt(@intCast(known_count + index));
+    }
+
+    pub fn nameOf(self: *const CustomNames, id: Id) []const u8 {
+        return self._names.keys()[@backingInt(id) - known_count];
+    }
+};
+
+pub fn internValue(value: []const u8) ?[]const u8 {
+    const index = common_values.getIndex(value) orelse return null;
+    return common_values.keys()[index];
+}
+
+// 100 most frequent declaration values, as our CSSOM stores them, across 13
+// populate stylesheets/sites (Bootstrap, Bulma, Materialize, Semantic UI,
+// Tailwind 2, a TinyMCE skin, GitHub, Wikipedia, BBC, Amazon, Le Monde,
+// tailwindcss.com, Shopify).
+const common_values = std.StaticStringMap(void).initComptime(.{
+    .{ "#fff", {} },
+    .{ "''", {} },
+    .{ "-1px", {} },
+    .{ "-2px", {} },
+    .{ "0 0", {} },
+    .{ "0", {} },
+    .{ "0.125rem", {} },
+    .{ "0.25rem", {} },
+    .{ "0.2em", {} },
+    .{ "0.375rem", {} },
+    .{ "0.4rem", {} },
+    .{ "0.5", {} },
+    .{ "0.5em", {} },
+    .{ "0.5rem", {} },
+    .{ "0.75em", {} },
+    .{ "0.75rem", {} },
+    .{ "0px", {} },
+    .{ "1", {} },
+    .{ "1.25rem", {} },
+    .{ "1.2rem", {} },
+    .{ "1.5em", {} },
+    .{ "1.5rem", {} },
+    .{ "100%", {} },
+    .{ "10px", {} },
+    .{ "11px", {} },
+    .{ "12px", {} },
+    .{ "13px", {} },
+    .{ "14px", {} },
+    .{ "15px", {} },
+    .{ "16px", {} },
+    .{ "18px", {} },
+    .{ "1em", {} },
+    .{ "1px", {} },
+    .{ "1rem", {} },
+    .{ "2", {} },
+    .{ "2.5rem", {} },
+    .{ "20px", {} },
+    .{ "24px", {} },
+    .{ "2em", {} },
+    .{ "2px", {} },
+    .{ "2rem", {} },
+    .{ "3", {} },
+    .{ "30px", {} },
+    .{ "32px", {} },
+    .{ "3px", {} },
+    .{ "3rem", {} },
+    .{ "4", {} },
+    .{ "400", {} },
+    .{ "4px", {} },
+    .{ "4rem", {} },
+    .{ "50%", {} },
+    .{ "500", {} },
+    .{ "5px", {} },
+    .{ "6px", {} },
+    .{ "700", {} },
+    .{ "8px", {} },
+    .{ "9px", {} },
+    .{ "\"\"", {} },
+    .{ "absolute", {} },
+    .{ "auto", {} },
+    .{ "baseline", {} },
+    .{ "block", {} },
+    .{ "bold", {} },
+    .{ "border-box", {} },
+    .{ "both", {} },
+    .{ "center", {} },
+    .{ "column", {} },
+    .{ "currentcolor", {} },
+    .{ "default", {} },
+    .{ "fixed", {} },
+    .{ "flex", {} },
+    .{ "flex-end", {} },
+    .{ "flex-start", {} },
+    .{ "grid", {} },
+    .{ "hidden", {} },
+    .{ "inherit", {} },
+    .{ "inline-block", {} },
+    .{ "inline-flex", {} },
+    .{ "left", {} },
+    .{ "middle", {} },
+    .{ "none", {} },
+    .{ "normal", {} },
+    .{ "nowrap", {} },
+    .{ "pointer", {} },
+    .{ "relative", {} },
+    .{ "rgb(0, 0, 0)", {} },
+    .{ "rgb(245, 245, 245)", {} },
+    .{ "rgb(255, 255, 255)", {} },
+    .{ "rgba(0, 0, 0, 0)", {} },
+    .{ "right", {} },
+    .{ "row", {} },
+    .{ "solid", {} },
+    .{ "space-between", {} },
+    .{ "stretch", {} },
+    .{ "table", {} },
+    .{ "top", {} },
+    .{ "transparent", {} },
+    .{ "underline", {} },
+    .{ "uppercase", {} },
+    .{ "visible", {} },
+});
+
+/// The longhands a computed style lists, as CSS.getComputedStyleForNode
+/// returns them, sorted by name.
+pub const computed_ids: []const Id = blk: {
+    @setEvalBranchQuota(1_000_000);
     const values = properties.values();
 
     var count: usize = 0;
@@ -61,20 +329,20 @@ pub const computed_names: []const []const u8 = blk: {
         if (v.initial != null and v.computed) count += 1;
     }
 
-    var names: [count][]const u8 = undefined;
+    var ids: [count]Id = undefined;
     var i: usize = 0;
-    for (keys, values) |k, v| {
+    for (values, 0..) |v, index| {
         if (v.initial != null and v.computed) {
-            names[i] = k;
+            ids[i] = @fromBackingInt(index);
             i += 1;
         }
     }
-    std.mem.sort([]const u8, &names, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
+    std.mem.sort(Id, &ids, {}, struct {
+        fn lessThan(_: void, a: Id, b: Id) bool {
+            return std.mem.lessThan(u8, knownName(a).?, knownName(b).?);
         }
     }.lessThan);
-    const final = names;
+    const final = ids;
     break :blk &final;
 };
 

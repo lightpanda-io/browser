@@ -37,7 +37,6 @@ pub const Proto = HtmlElement;
 // Create a different alias we can use when in such ambiguous cases.
 const MetaElement = Meta;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Meta) *Element {

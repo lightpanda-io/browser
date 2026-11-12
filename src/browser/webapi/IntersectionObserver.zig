@@ -56,8 +56,15 @@ _delay: i32 = 0,
 _track_visibility: bool = false,
 // these are RC'd (by us, and v8)
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
-// tracked targets that aren't reported yet
-_tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
+// tracked targets that aren't reported as intersecting yet
+_tracked: std.AutoHashMapUnmanaged(*Element, Tracked) = .{},
+
+const Tracked = enum {
+    // observed, not checked yet
+    unchecked,
+    // got its initial isIntersecting:false entry
+    not_intersecting,
+};
 
 const ObserverInit = struct {
     delay: i32 = 0,
@@ -245,13 +252,8 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
         try Frame.observers.registerIntersectionObserver(frame, self);
     }
 
-    try self._tracked.put(self._arena.allocator(), target, {});
-
-    // Check intersection for this new target and schedule delivery
-    try self.checkIntersection(target, frame);
-    if (self._pending_entries.items.len > 0) {
-        try Frame.observers.scheduleIntersectionDelivery(frame);
-    }
+    try self._tracked.put(self._arena.allocator(), target, .unchecked);
+    Frame.observers.scheduleIntersectionChecks(frame);
 }
 
 fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
@@ -369,19 +371,34 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         return;
     };
 
-    // Frameless documents (DOMParser, createHTMLDocument) aren't rendered.
     const node = target.asNode();
-    const connected = node.ownerFrame(frame) != null and node.isConnected();
-    const is_now_intersecting = connected and self.meetsThreshold(1.0);
-    if (!is_now_intersecting) {
-        // Not intersecting yet (e.g. observed while still detached) — keep
-        // tracking so a later attach is reported.
+    if (node.ownerFrame(frame) == null) {
+        // Frameless documents (DOMParser, createHTMLDocument) aren't rendered.
         return;
     }
 
-    // Building the entry is the expensive part — getBoundingClientRect walks the
-    // document to fake a position (O(node count)) — so it only runs here.
-    const data = try self.calculateIntersection(target, frame);
+    const is_now_intersecting = node.isConnected() and self.meetsThreshold(1.0);
+    const data: IntersectionData = blk: {
+        if (is_now_intersecting) {
+            // Building the entry is the expensive part — getBoundingClientRect walks the
+            // document to fake a position (O(node count)) — so it only runs here.
+            break :blk try self.calculateIntersection(target, frame);
+        }
+        if (tracked.value_ptr.* == .not_intersecting) {
+            // Keep tracking so a later attach is reported.
+            return;
+        }
+
+        // The first check always reports as (a) not intersecting and (b) with
+        // empty rects. This is true whether or not it is attached.
+        break :blk .{
+            .intersection_ratio = 0,
+            .intersection_rect = .{},
+            .bounding_client_rect = .{},
+            .root_bounds = .{},
+        };
+    };
+
     const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
     errdefer arena.release();
 
@@ -398,7 +415,11 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         ._intersection_ratio = data.intersection_ratio,
     };
     try self._pending_entries.append(self._arena.allocator(), entry);
-    _ = self._tracked.removeByPtr(tracked.key_ptr);
+    if (is_now_intersecting) {
+        _ = self._tracked.removeByPtr(tracked.key_ptr);
+    } else {
+        tracked.value_ptr.* = .not_intersecting;
+    }
 }
 
 pub fn checkIntersections(self: *IntersectionObserver, frame: *Frame) !void {

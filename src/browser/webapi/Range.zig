@@ -397,7 +397,6 @@ pub fn deleteContents(self: *Range, frame: *Frame) !void {
     if (self._proto.getCollapsed()) {
         return;
     }
-    frame.domChanged();
 
     const start_node = self._proto._start_container;
     const start_offset = self._proto._start_offset;
@@ -563,8 +562,6 @@ fn containedBetween(node: *Node, start_node: *Node, start_offset: u32, end_node:
 fn extractContents(self: *Range, frame: *Frame) !*DocumentFragment {
     const fragment = try DocumentFragment.init(self._proto._start_container.getDocument(frame), frame);
     if (self._proto.getCollapsed()) return fragment;
-
-    frame.domChanged();
 
     const start_node = self._proto._start_container;
     const start_offset = self._proto._start_offset;

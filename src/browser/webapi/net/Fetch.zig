@@ -243,7 +243,6 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     if (self._manual_redirect and HttpClient.isRedirectStatus(res._status)) {
         res._status = 0;
         res._status_text = "";
-        res._url = "";
         res._type = .opaqueredirect;
         res._is_redirected = false;
         self._headers_done = true;
@@ -417,4 +416,5 @@ const testing = @import("../../../testing.zig");
 test "WebApi: fetch" {
     try testing.htmlRunner("net/fetch.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
+    try testing.htmlRunner("net/fetch_readablestream_body.html", .{});
 }

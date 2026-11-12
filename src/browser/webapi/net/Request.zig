@@ -43,6 +43,9 @@ const Request = @This();
 _rc: lp.RC = .{},
 _url: [:0]const u8,
 _method: http.Method,
+// Set when the method isn't normalized: Fetch only uppercases DELETE, GET,
+// HEAD, OPTIONS, POST and PUT, so "patch" stays "patch".
+_method_name: ?[]const u8 = null,
 _headers: ?*Headers,
 _body: ?[]const u8,
 _body_stream: ?*ReadableStream = null, // drained into `_body` on first use.
@@ -132,11 +135,12 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         }
     }
 
-    const method = if (opts.method) |m|
-        try parseMethod(m)
-    else switch (input) {
-        .url => .GET,
-        .request => |r| r._method,
+    const method: http.Method, const method_name: ?[]const u8 = if (opts.method) |m| blk: {
+        const parsed = try parseMethod(m);
+        break :blk .{ parsed, if (isNormalizedMethod(parsed)) null else try arena.dupe(u8, m) };
+    } else switch (input) {
+        .url => .{ .GET, null },
+        .request => |r| .{ r._method, if (r._method_name) |n| try arena.dupe(u8, n) else null },
     };
 
     // Absent init members inherit from the input Request.
@@ -243,6 +247,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._url = url,
         ._arena = arena,
         ._method = method,
+        ._method_name = method_name,
         ._headers = headers,
         ._cache = cache,
         ._credentials = credentials,
@@ -284,12 +289,19 @@ fn parseMethod(method: []const u8) !http.Method {
     return method_lookup.get(method) orelse return error.TypeError;
 }
 
+fn isNormalizedMethod(method: http.Method) bool {
+    return switch (method) {
+        .GET, .POST, .DELETE, .PUT, .HEAD, .OPTIONS => true,
+        .PATCH, .PROPFIND => false,
+    };
+}
+
 pub fn getUrl(self: *const Request) []const u8 {
     return self._url;
 }
 
 pub fn getMethod(self: *const Request) []const u8 {
-    return @tagName(self._method);
+    return self._method_name orelse @tagName(self._method);
 }
 
 fn getCache(self: *const Request) []const u8 {
@@ -502,6 +514,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
         ._url = try arena.dupeSentinel(u8, self._url, 0),
         ._arena = arena,
         ._method = self._method,
+        ._method_name = if (self._method_name) |n| try arena.dupe(u8, n) else null,
         ._headers = if (self._headers) |h| try Headers.initGuarded(.{ .obj = h }, h._guard, exec) else null,
         ._cache = self._cache,
         ._credentials = self._credentials,

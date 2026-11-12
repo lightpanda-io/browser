@@ -254,6 +254,10 @@ fn connect(self: *WebSocket, protocols: []const []const u8) !void {
         return error.UnsafePort;
     }
 
+    if (exec.httpOwner().block_all) {
+        return error.UrlBlocked;
+    }
+
     const conn = http_client.network.newConnection() orelse {
         return error.NoFreeConnection;
     };
@@ -407,12 +411,7 @@ pub fn deliverEvents(self: *WebSocket) void {
                 }
             },
             .close_frame => self.handleCloseFrame(),
-            .local_close => {
-                self.dispatchCloseEvent(self._close_code, self._close_reason, false) catch |err| {
-                    log.debug(.websocket, "close event dispatch failed", .{ .err = err });
-                };
-                self.deactivate();
-            },
+            .local_close => self.disconnected(error.ClosedBeforeConnected),
             .disconnected => |err| self.disconnected(err),
         }
     }
@@ -632,15 +631,15 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     const reason = reason_ orelse "";
 
     if (self._ready_state == .connecting) {
-        // Connection not yet established - fail it. The close event is
-        // buffered like everything else; anything already received but
-        // undelivered (open, messages) is dropped.
-        self._ready_state = .closed;
-        self._close_code = code;
-        self._close_reason = try self._arena.dupe(u8, reason);
+        // Connection not yet established - fail it: CLOSING now, then
+        // error + an abnormal (1006) close event, buffered like everything
+        // else. Anything already received but undelivered (open, messages)
+        // is dropped.
+        self._ready_state = .closing;
         self.releaseTransport();
         self.clearEvents();
         self.bufferEvent(.local_close) catch {
+            self._ready_state = .closed;
             self.unlinkDispatch();
             self.deactivate();
         };
@@ -874,7 +873,14 @@ fn receivedData(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !voi
         if (message_len > self._http_client.max_response_size) {
             return error.MessageTooLarge;
         }
-        try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
+
+        if (meta.fin) {
+            // single-frame message or last fragment: the final size is known
+            try self._recv_buffer.ensureTotalCapacityPrecise(self._arena.allocator(), message_len);
+        } else {
+            // more fragments follow: amortize so many small fragments don't regrow each time
+            try self._recv_buffer.ensureUnusedCapacity(self._arena.allocator(), meta.len);
+        }
     }
 
     try self._recv_buffer.appendSlice(self._arena.allocator(), data);
@@ -899,10 +905,15 @@ fn receivedControl(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !
     if (data.len > self._control_buffer.len - self._control_len) {
         return error.ControlFrameTooLarge;
     }
+    if (meta.frame_type != .close) {
+        // we don't do anything with these
+        return;
+    }
+
     @memcpy(self._control_buffer[self._control_len..][0..data.len], data);
     self._control_len += data.len;
 
-    if (meta.bytes_left > 0 or meta.frame_type != .close) {
+    if (meta.bytes_left > 0) {
         return;
     }
 

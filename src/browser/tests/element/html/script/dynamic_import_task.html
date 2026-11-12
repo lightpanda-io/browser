@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<head></head>
+<meta name=lp-mode content=test>
+<script src="../../../testing.js"></script>
+
+<!--
+  import() of a module that needs no fetch (already evaluated, already
+  statically imported, or already fetched by a modulepreload hint) still
+  settles in a later task, like a module map hit does in browsers: a
+  setTimeout(fn, 0) queued before the import() runs first.
+
+  Each block starts after window.load so the hints below have settled.
+-->
+<link rel="modulepreload" href="dynamic_import_task_preload.js">
+<link rel="modulepreload" href="dynamic_import_task_missing.js">
+
+<script type="module">
+  import { val } from "./dynamic_import_task_static.js";
+  window.dynamic_import_task_static = val;
+</script>
+
+<script>
+  function importRace(start) {
+    return new Promise((resolve) => {
+      const order = [];
+      setTimeout(() => order.push('timeout'), 0);
+      start(order);
+      setTimeout(() => resolve(order.join(',')), 100);
+    });
+  }
+</script>
+
+<script id=evaluated>
+  // fetched and evaluated before window.load
+  import('./dynamic_import_task_evaluated.js');
+  testing.async().then((state) => {
+    window.addEventListener('load', async () => {
+      state.resolve(await importRace((order) => {
+        import('./dynamic_import_task_evaluated.js').then((m) => order.push(m.val));
+      }));
+    });
+    state.done((order) => testing.expectEqual('timeout,evaluated', order));
+  });
+</script>
+
+<script id=static_import>
+  testing.async().then((state) => {
+    window.addEventListener('load', async () => {
+      testing.expectEqual('static', window.dynamic_import_task_static);
+      state.resolve(await importRace((order) => {
+        import('./dynamic_import_task_static.js').then((m) => order.push(m.val));
+      }));
+    });
+    state.done((order) => testing.expectEqual('timeout,static', order));
+  });
+</script>
+
+<script id=modulepreload>
+  testing.async().then((state) => {
+    window.addEventListener('load', async () => {
+      state.resolve(await importRace((order) => {
+        import('./dynamic_import_task_preload.js').then((m) => order.push(m.val));
+        // the module body doesn't run inside the import() call either
+        order.push('ran:' + (window.dynamic_import_task_preload_ran === true));
+      }));
+    });
+    state.done((order) => testing.expectEqual('ran:false,timeout,preload', order));
+  });
+</script>
+
+<script id=failed_modulepreload>
+  testing.async().then((state) => {
+    window.addEventListener('load', async () => {
+      state.resolve(await importRace((order) => {
+        import('./dynamic_import_task_missing.js').then(() => order.push('resolved'), () => order.push('rejected'));
+      }));
+    });
+    state.done((order) => testing.expectEqual('timeout,rejected', order));
+  });
+</script>

@@ -179,18 +179,26 @@ fn handleClient(client: posix.socket_t) void {
     var msg_buf: [128 * 1024]u8 = undefined;
     var recv_buf = RecvBuffer{ .buf = &msg_buf };
 
+    // Set once we've sent a close frame (the close:CODE:REASON command); the
+    // client's close frame then completes that handshake.
+    var close_sent = false;
     while (true) {
         const frame = recv_buf.readFrame(client) orelse break;
 
-        // Close frame - echo it back before closing
+        // Close frame - echo it back before closing, unless it answers ours
         if (frame.opcode == 8) {
-            sendFrame(client, 8, "", frame.payload) catch {};
+            if (!close_sent) {
+                sendFrame(client, 8, "", frame.payload) catch {};
+            }
             break;
         }
 
         // Handle commands or echo
         if (frame.opcode == 1) { // Text
-            handleTextMessage(client, frame.payload, cookie_buf[0..cookie_len], origin_buf[0..origin_len]) catch break;
+            handleTextMessage(client, frame.payload, cookie_buf[0..cookie_len], origin_buf[0..origin_len]) catch |err| switch (err) {
+                error.CloseSent => close_sent = true,
+                else => break,
+            };
         } else if (frame.opcode == 2) { // Binary
             handleBinaryMessage(client, frame.payload) catch break;
         }
@@ -345,6 +353,7 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
             const code = std.fmt.parseInt(u16, rest[0..sep], 10) catch 1000;
             const reason = rest[sep + 1 ..];
             try sendCloseFrame(client, code, reason);
+            return error.CloseSent;
         }
         return;
     }

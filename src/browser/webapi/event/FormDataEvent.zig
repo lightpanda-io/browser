@@ -19,6 +19,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
@@ -65,7 +66,19 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, maybe_options: ?Options, trust
     );
 
     Event.populatePrototypes(event, options, trusted);
+
+    // Hold a ref on the FormData so it outlives this event even if its JS
+    // wrapper is collected first; released in deinit.
+    if (options.formData) |form_data| {
+        form_data.acquireRef();
+    }
     return event;
+}
+
+pub fn deinit(self: *FormDataEvent, page: *Page) void {
+    if (self._form_data) |form_data| {
+        form_data.releaseRef(page);
+    }
 }
 
 pub fn asEvent(self: *FormDataEvent) *Event {

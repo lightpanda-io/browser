@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script>
@@ -785,11 +786,19 @@
   form.addEventListener('formdata', (e) => {
     eventFired = true;
     receivedFormData = e.formData;
+    e.formData.append('added', 'in listener');
   });
 
   const fd = new FormData(form);
   testing.expectEqual(true, eventFired);
-  testing.expectEqual(fd, receivedFormData);
+
+  // The event has its own FormData; the constructed one gets a copy of the
+  // entries as the listeners left them.
+  testing.expectEqual(true, fd !== receivedFormData);
+  testing.expectEqual('hello', fd.get('field'));
+  testing.expectEqual('in listener', fd.get('added'));
+  receivedFormData.append('later', 'x');
+  testing.expectEqual(false, fd.has('later'));
 }
 </script>
 

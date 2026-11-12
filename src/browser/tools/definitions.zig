@@ -206,7 +206,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .classify => .{
-            .description = "Classify the page or an element subtree using TypeSafe System One (Jev). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ tools.jev.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
+            .description = "Classify the page or an element subtree using a decision model (Gemini Decisions or TypeSafe System One). `questions` is a JSON array of categories (returns the one that fits), or a JSON object of questions keyed by the name each answer comes back under: `true` for a preset (" ++ tools.decisions.Preset.names ++ "; an empty object `{}` asks all of them), a string for a yes/no question (returns its probability), `{question, options}` for a choice, or `{question, levels}` for a score on 2-10 levels ordered low to high (returns the `score` between level indices, the nearest `level`, and per-level `probabilities`). A missing answer is null.",
             .summary = "Classify page state using semantic questions or presets",
             .input_schema = minify(
                 \\{
@@ -221,7 +221,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .acceptCookies => .{
-            .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to TypeSafe System One (Jev), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selectors` the controls clicked in order, and `reason` why nothing happened when nothing did. A click that leaves a banner up (a confirmation, say) is followed by one more pick. A page with nothing to click costs no model call; passing `selectors` clicks them in order and asks nothing, which is how a recorded call replays. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
+            .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to a decision model (Gemini Decisions or TypeSafe System One), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selectors` the controls clicked in order, and `reason` why nothing happened when nothing did. A click that leaves a banner up (a confirmation, say) is followed by one more pick. A page with nothing to click costs no model call; passing `selectors` clicks them in order and asks nothing, which is how a recorded call replays. Otherwise needs " ++ zenai.decisions.env_hint ++ ".",
             .summary = "Dismiss a cookie consent banner",
             .input_schema = minify(
                 \\{
@@ -236,8 +236,8 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .login => .{
-            .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks TypeSafe System One (Jev) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`, and credentials only go to an https (or loopback) page whose form posts to an https URL. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ zenai.typesafe.env_var_name ++ ".",
-            .summary = "Sign in, picking the fields with Jev",
+            .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks a decision model (Gemini Decisions or TypeSafe System One) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`, and credentials only go to an https (or loopback) page whose form posts to an https URL. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ zenai.decisions.env_hint ++ ".",
+            .summary = "Sign in, picking the fields with a decision model",
             .input_schema = minify(
                 \\{
                 \\  "type": "object",

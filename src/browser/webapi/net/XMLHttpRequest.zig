@@ -229,13 +229,14 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !vo
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
-    // Abort any in-progress request
-    if (self._http_transfer) |transfer| {
-        transfer.cancel();
-        self._http_transfer = null;
-    }
+    // Abort any in-progress request, _send_flag unset as this should not fire
+    // any events.
     self._send_flag = false;
     self._upload_pending = false;
+    if (self._http_transfer) |transfer| {
+        self._http_transfer = null;
+        transfer.cancel();
+    }
 
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
@@ -568,6 +569,11 @@ fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execut
     else
         std.meta.stringToEnum(ResponseType, value) orelse return;
 
+    if (rt == .document and exec.js.global != .frame) {
+        // Workers have no DOM: "document" is ignored, not an error.
+        return;
+    }
+
     if (self._ready_state == .loading or self._ready_state == .done) {
         return error.InvalidStateError;
     }
@@ -876,7 +882,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     }
     // handleError can execute JS, which could .send() again: clear this now.
     self._http_transfer = null;
-    self.handleError(err);
+    if (self._send_flag) {
+        self.handleError(err);
+    }
     self.releaseSelfRef();
 }
 

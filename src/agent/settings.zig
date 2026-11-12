@@ -70,6 +70,14 @@ pub const Credential = struct {
         };
     }
 
+    /// The zenai backend: the env's settings for the provider (Vertex
+    /// project/location) plus the subscription's account id.
+    pub fn backend(self: *const Credential) zenai.provider.Backend {
+        var b = zenai.provider.fromEnv(lp.environ(), self.provider).backend;
+        if (b == .codex) b.codex.account_id = self.accountId();
+        return b;
+    }
+
     pub fn deinit(self: *Credential, allocator: std.mem.Allocator) void {
         switch (self.key) {
             .env => {},
@@ -79,14 +87,21 @@ pub const Credential = struct {
     }
 };
 
+/// `base_url` (`--base-url`), else what the env sets for `provider`
+/// (OPENAI_BASE_URL for `.openai_compatible`).
+pub fn baseUrl(provider: Config.AiProvider, base_url: ?[:0]const u8) ?[:0]const u8 {
+    return base_url orelse zenai.provider.fromEnv(lp.environ(), provider).base_url;
+}
+
 /// Probe a keyless local provider (Ollama, llama.cpp, LLMD): its env key is a
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
 pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Candidate {
-    const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
+    const env = zenai.provider.fromEnv(lp.environ(), tag);
+    const key = env.key orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), tag, key, .{ .base_url = base_url, .environ = lp.environ() }) catch return null;
+    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), env.backend, key, .{ .base_url = base_url }) catch return null;
     if (ids.len == 0) return null;
     return .{ .provider = tag, .key = key };
 }
@@ -192,15 +207,9 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     var buf: [zenai.provider.default_candidates.len]Candidate = undefined;
     const found = availableProviders(&buf);
     if (found.len == 0) {
-        if (detectLocalProvider(allocator, .ollama, opts.base_url)) |creds| {
+        for (zenai.provider.local_providers) |local| if (detectLocalProvider(allocator, local, opts.base_url)) |creds| {
             return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
-        }
-        if (detectLocalProvider(allocator, .llama_cpp, opts.base_url)) |creds| {
-            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
-        }
-        if (detectLocalProvider(allocator, .llmd, opts.base_url)) |creds| {
-            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
-        }
+        };
         std.debug.print(
             \\No API key detected. Set {s}, or run a local Ollama, llama.cpp or LLMD server with a loaded model.
             \\To use the basic REPL (without LLM integration), pass the --no-llm option.
@@ -353,7 +362,7 @@ pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembe
 pub fn resolveEffort(opts: Config.Agent, remembered: ?Remembered, will_repl: bool, provider: ?Config.AiProvider) Config.Effort {
     if (opts.effort) |e| return e;
     if (remembered) |r| if (r.effort) |e| return e;
-    if (provider) |p| if (zenai.provider.defaultEffort(p)) |e| return e;
+    if (provider) |p| if (zenai.provider.omitsEffort(p)) return .null;
     return if (will_repl) .low else .medium;
 }
 
@@ -397,14 +406,11 @@ pub fn reconcileModel(
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.provider, credential.keySlice(), .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.backend(), credential.keySlice(), .{ .base_url = baseUrl(credential.provider, base_url) }) catch &.{};
     if (ids.len == 0 or string.isOneOf(desired, ids)) return try allocator.dupe(u8, desired);
 
     if (!explicit) {
-        switch (credential.provider) {
-            .ollama, .llama_cpp, .llmd => {},
-            else => return try allocator.dupe(u8, desired),
-        }
+        if (!zenai.provider.info(credential.provider).local) return try allocator.dupe(u8, desired);
         std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(credential.provider), desired, ids[0] });
         return try allocator.dupe(u8, ids[0]);
     }
@@ -474,6 +480,17 @@ test "resolveSearchEngine: default auto, remembered wins" {
     try testing.expect(resolveSearchEngine(null) == .auto);
     try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = null }) == .auto);
     try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .keenable }) == .keenable);
+}
+
+test "resolveEffort: explicit null wins, Mistral omits by default" {
+    try testing.expect(resolveEffort(.{}, null, true, .anthropic) == .low);
+    try testing.expect(resolveEffort(.{}, null, false, .anthropic) == .medium);
+    try testing.expect(resolveEffort(.{}, null, true, .mistral) == .null);
+    try testing.expect(resolveEffort(.{ .effort = .high }, null, true, .mistral) == .high);
+    try testing.expect(resolveEffort(.{ .effort = .null }, .{ .model = "m", .effort = .high }, true, .anthropic) == .null);
+    try testing.expect(resolveEffort(.{}, .{ .model = "m", .effort = .null }, true, .anthropic) == .null);
+    try testing.expect(Config.Effort.null.level() == null);
+    try testing.expect(Config.Effort.xhigh.level().? == .xhigh);
 }
 
 test "resolveStream: default on, remembered wins" {

@@ -16,10 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The TypeSafe System One (Jev) substrate: what a page looks like to it, the
-//! presets every caller asks about, the one confidence gate, and what the
-//! tools built on it share — `askPage`, their JSON verdicts, and letting the
-//! page settle after a click. The question DSL that the `classify` tool
+//! The decision-model substrate (Gemini Decisions or TypeSafe System One, see
+//! `zenai.decisions`): what a page looks like to it, the presets every caller
+//! asks about, the one confidence gate, and what the tools built on it share
+//! — `askPage`, their JSON verdicts, and letting the page settle after a
+//! click. The question DSL that the `classify` tool
 //! exposes lives in classify.zig, which is one consumer of this among several
 //! — consent and login ask their own questions and classify nothing.
 
@@ -44,7 +45,7 @@ const requireFrame = tools.requireFrame;
 const settleAction = tools.settleAction;
 const log = lp.log;
 const NodeRegistry = lp.NodeRegistry;
-const Content = zenai.typesafe.Content;
+const Content = zenai.decisions.Content;
 
 pub const Preset = enum {
     isBlocked,
@@ -108,14 +109,14 @@ fn snakeCase(comptime camel: []const u8) []const u8 {
 }
 
 /// The question text for a preset named by key alone, for
-/// `zenai.typesafe.json`'s `Vocabulary`. Null for a key that names no preset.
+/// `zenai.decisions.json`'s `Vocabulary`. Null for a key that names no preset.
 pub fn presetDescription(key: []const u8) ?[]const u8 {
     const preset = Preset.fromString(key) orelse return null;
     return preset.description();
 }
 
 /// What an empty questions object asks for.
-pub fn allPresetQuestions(arena: std.mem.Allocator) error{OutOfMemory}!zenai.typesafe.Questions {
+pub fn allPresetQuestions(arena: std.mem.Allocator) error{OutOfMemory}!zenai.decisions.Questions {
     return presetQuestions(arena, std.enums.values(Preset));
 }
 
@@ -128,7 +129,7 @@ pub const gate = 0.5;
 
 /// One preset as a question, keyed by its own name so the answer comes back
 /// under `@tagName(preset)` and no caller has to spell the key itself.
-pub fn presetQuestion(preset: Preset) zenai.typesafe.QuestionEntry {
+pub fn presetQuestion(preset: Preset) zenai.decisions.QuestionEntry {
     return .{ .key = @tagName(preset), .value = .noulText(preset.description()) };
 }
 
@@ -137,8 +138,8 @@ pub fn presetQuestion(preset: Preset) zenai.typesafe.QuestionEntry {
 pub fn presetQuestions(
     arena: std.mem.Allocator,
     presets: []const Preset,
-) error{OutOfMemory}!zenai.typesafe.Questions {
-    const entries = try arena.alloc(zenai.typesafe.QuestionEntry, presets.len);
+) error{OutOfMemory}!zenai.decisions.Questions {
+    const entries = try arena.alloc(zenai.decisions.QuestionEntry, presets.len);
     for (presets, entries) |preset, *entry| entry.* = presetQuestion(preset);
     return .init(entries);
 }
@@ -156,7 +157,7 @@ const StateOpts = struct {
     ids: bool = false,
 };
 
-/// The page as Jev sees it: url, title, status, and the semantic tree of
+/// The page as the model sees it: url, title, status, and the semantic tree of
 /// `node` as text. The tree keeps what markdown drops and the questions turn
 /// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
 /// without node ids, is about as long.
@@ -177,9 +178,9 @@ fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: 
     return .{ .json = .{ .object = state } };
 }
 
-const AskedResponse = zenai.typesafe.Client.Response(zenai.typesafe.types.AskResponse);
+const AskedResponse = zenai.decisions.Response;
 
-/// One Jev request about the current page: `.failed` carries what to tell the
+/// One decision-model request about the current page: `.failed` carries what to tell the
 /// caller, so a key that is not set or an API that is down reads the same
 /// whichever tool asked.
 pub const Asked = union(enum) {
@@ -190,7 +191,7 @@ pub const Asked = union(enum) {
 pub const Ask = struct {
     /// Names the request in an error message, and nothing else.
     tool: Tool,
-    questions: zenai.typesafe.Questions,
+    questions: zenai.decisions.Questions,
     /// The subtree the model is shown.
     node: *DOMNode,
     state: StateOpts = .{},
@@ -210,13 +211,17 @@ pub fn askPage(
     // On a helper thread, pumping here until it answers: a blocking read on
     // this thread stops the page's timers and leaves its transfers
     // unserviced while curl's own timeout keeps counting against them.
-    const options: zenai.typesafe.types.AskOptions = .{};
-    const pool = &session.browser.app.typesafe;
-    var response = session.runPumped(zenai.typesafe.Pool.ask, .{ pool, arena, state, ask.questions, options, &detail }) catch |err| switch (err) {
+    const pool = &session.browser.app.decisions;
+    const options: zenai.decisions.AskOptions = .{};
+    var response = session.runPumped(zenai.decisions.Pool.ask, .{ pool, arena, state, ask.questions, options, &detail }) catch |err| switch (err) {
         error.MissingApiKey => return .{ .failed = .{
-            .text = arena.print("{s}: " ++ zenai.typesafe.env_var_name ++ " environment variable is not set", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
+            .text = arena.print("{s}: no decision model key is set; set " ++ zenai.decisions.env_hint, .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
             .is_error = true,
             .failure = .missing_api_key,
+        } },
+        error.UnknownProvider => return .{ .failed = .{
+            .text = arena.print("{s}: " ++ lp.App.decision_provider_env_var_name ++ " must be gemini or typesafe", .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
+            .is_error = true,
         } },
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => return .{ .failed = try apiFailed(arena, @tagName(ask.tool), err, detail) },
@@ -325,7 +330,7 @@ test "classify: the page is still serviced while the model is asked" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startSlow(aa);
+    const mock = try testing.MockDecisions.startSlow(aa);
     defer mock.stop();
 
     const before = try tickCount(aa, page.session, &registry);
@@ -350,7 +355,7 @@ test "classify: a page that navigates while the model is asked is not answered f
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startSlow(aa);
+    const mock = try testing.MockDecisions.startSlow(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -362,6 +367,46 @@ test "classify: a page that navigates while the model is asked is not answered f
 
     const url = try call(aa, page.session, &registry, "getUrl", null, .{ .source = .user });
     try std.testing.expect(std.mem.find(u8, url.text, "consent_banner.html") != null);
+}
+
+test "classify: Gemini answers through the same questions" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockDecisions.startAs(aa, .gemini);
+    defer mock.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"questions":{"isBlocked":true,"page_type":{"question":"What kind of page?","options":["product","catalog"]}}}
+    , .{});
+    const result = try call(aa, page.session, &registry, "classify", args, .{ .source = .user });
+    try std.testing.expect(!result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "0.95") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "\"product\"") != null);
+}
+
+test "classify: an input Gemini blocks is reported with its reason" {
+    var registry: NodeRegistry = .init(std.testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+
+    const aa = testing.arena_allocator;
+    const mock = try testing.MockDecisions.startBlocked(aa);
+    defer mock.stop();
+
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"questions":{"isBlocked":true}}
+    , .{});
+    const result = try call(aa, page.session, &registry, "classify", args, .{ .source = .user });
+    try std.testing.expect(result.is_error);
+    try std.testing.expect(std.mem.find(u8, result.text, "InputBlocked") != null);
+    try std.testing.expect(std.mem.find(u8, result.text, "blocked by the mock") != null);
 }
 
 /// The counter `ticking.html` advances from a 20ms interval.

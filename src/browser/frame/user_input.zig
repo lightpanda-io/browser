@@ -30,10 +30,12 @@ const Frame = @import("../Frame.zig");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const StyleManager = @import("../StyleManager.zig");
+const EventManager = @import("../EventManager.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
 const Range = @import("../webapi/Range.zig");
+const StaticRange = @import("../webapi/StaticRange.zig");
 const Element = @import("../webapi/Element.zig");
 const Document = @import("../webapi/Document.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
@@ -506,8 +508,8 @@ fn pressSequence(frame: *Frame, target: *Element, g: Gesture, chord_suppressed: 
 /// A disabled control gets the pointer events, contextmenu and auxclick, but
 /// no mouse events, click or focus, as in Chrome.
 fn mouseDown(frame: *Frame, target: *Element, g: Gesture) !void {
-    if (!target.isDisabled() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
-        focusForMouseDown(frame, target) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
+    if (!target.isDisabledFormControl() and !try emitMouse(frame, target, "mousedown", g, g.click_count)) {
+        focusForMouseDown(frame, target, g.modifiers.shift) catch |err| log.debug(.app, "mousedown focus", .{ .err = err });
     }
 }
 
@@ -525,7 +527,7 @@ fn releaseSequence(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
 /// `suppressed` drops the mouseup but keeps the click, as a cancelled
 /// pointerdown does.
 fn mouseUpAndClick(frame: *Frame, up_target: *Element, g: Gesture, suppressed: bool, click_target: ?*Element) !void {
-    if (!suppressed and !up_target.isDisabled()) {
+    if (!suppressed and !up_target.isDisabledFormControl()) {
         _ = try emitMouse(frame, up_target, "mouseup", g, g.click_count);
     }
 
@@ -536,7 +538,7 @@ fn mouseUpAndClick(frame: *Frame, up_target: *Element, g: Gesture, suppressed: b
     }
 
     if (g.button == mouse_button.main) {
-        if (click_el.isDisabled()) {
+        if (click_el.isDisabledFormControl()) {
             return;
         }
         _ = try emitPointer(frame, click_el, "click", g, g.click_count);
@@ -623,7 +625,7 @@ fn documentHit(frame: *Frame, x: f64, y: f64, width: f64, height: f64) !?*Elemen
     }
     const root = frame.document.getDocumentElement() orelse return null;
     const style_manager = &frame._style_manager;
-    if (style_manager.hasDisplayNone(root) or !style_manager.isHitTestable(root)) {
+    if (root.asNode().isInert(frame) or style_manager.hasDisplayNone(root) or !style_manager.isHitTestable(root)) {
         return null;
     }
     return root;
@@ -1372,9 +1374,10 @@ pub fn outermostEditingHost(target: *Element) ?*Element {
 
 /// Mousedown default action. A mousedown outside any focusable element moves
 /// focus to the body.
-fn focusForMouseDown(frame: *Frame, target: *Element) !void {
+fn focusForMouseDown(frame: *Frame, target: *Element, shift: bool) !void {
     if (outermostEditingHost(target)) |host| {
-        try host.focus(frame);
+        try host.focusWith(.none, frame);
+        try caretForMouseDown(frame, host, target, shift);
         return;
     }
 
@@ -1397,22 +1400,91 @@ fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     }
 }
 
+/// Mousedown in editable content, after focus. The caret goes where the press was.
+/// IF shift is pressed, the selection is extended to that point. We don't have
+/// proper layout, so we can't tell the exact position, so we put it at the end
+/// of the pressed element.
+fn caretForMouseDown(frame: *Frame, host: *Element, target: *Element, shift: bool) !void {
+    const owner = target.ownerFrame(frame) orelse return;
+    const event = try Event.initTrusted(comptime .wrap("selectstart"), .{ .bubbles = true, .cancelable = true }, owner.page);
+    const canceled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event);
+
+    // a focus or selectstart listener can move or remove either
+    if (!host.asNode().isConnected() or !host.asNode().contains(target.asNode())) {
+        return;
+    }
+    if (canceled) {
+        return caretOnFocus(host, owner);
+    }
+    const doc = owner.document;
+    const container, const offset = lastCaretPosition(target.asNode());
+    if (shift and selectionEditableIn(host, doc)) {
+        return doc._selection.extend(container, offset, owner);
+    }
+    try doc._selection.collapse(container, offset, owner);
+}
+
+/// Focusing an editing host the way focus() and Tab do. Put the caret at its
+/// first position, unless the selection is already in its editable content.
+pub fn caretOnFocus(el: *Element, frame: *Frame) !void {
+    if (outermostEditingHost(el) != el or selectionEditableIn(el, frame.document)) {
+        return;
+    }
+    const container, const offset = firstCaretPosition(el.asNode());
+    try frame.document._selection.collapse(container, offset, frame);
+}
+
+// The end of `root`'s content: after its last text, before a trailing <br>
+// (a line's placeholder or end), after a void or non-editable element.
+fn lastCaretPosition(root: *Node) struct { *Node, u32 } {
+    var container = root;
+    descend: while (true) {
+        var child = container.lastChild();
+        while (child) |c| : (child = c.previousSibling()) {
+            if (c.is(Node.CData.Text)) |t| {
+                if (isBlank(t.asCData().getData().str())) {
+                    continue;
+                }
+                return .{ c, @intCast(t.asCData().getLength()) };
+            }
+            const el = c.is(Element) orelse continue;
+            const index = container.getChildIndex(c).?;
+            if (el.getTag() == .br) {
+                if (c.previousSibling()) |prev| {
+                    if (prev.is(Node.CData.Text)) |t| {
+                        return .{ prev, @intCast(t.asCData().getLength()) };
+                    }
+                }
+                return .{ container, index };
+            }
+            if (el.isEditable() == false or dump.isVoidElement(el)) {
+                return .{ container, index + 1 };
+            }
+            container = c;
+            continue :descend;
+        }
+        return .{ container, 0 };
+    }
+}
+
 // Per the DOM dispatch algorithm, a click's activation target is the event
 // target itself when it has activation behavior, otherwise — for bubbling
-// events only — the nearest ancestor that has one.
-pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
-    if (isEditingHost(target)) {
+// events only — the nearest ancestor that has one. It never lies past where
+// the event path stops at a disabled form control.
+pub fn findClickActivationTarget(target: *Node, event: *Event) ?*Node {
+    const stop_at_disabled = EventManager.stopsAtDisabledFormControl(event);
+    if (isEditingHost(target) or (stop_at_disabled and EventManager.isDisabledFormControl(target))) {
         return null;
     }
     if (hasClickActivationBehavior(target)) {
         return target;
     }
-    if (!bubbles) {
+    if (!event._bubbles) {
         return null;
     }
     var node = target._parent;
     while (node) |n| : (node = n._parent) {
-        if (isEditingHost(n)) {
+        if (isEditingHost(n) or (stop_at_disabled and EventManager.isDisabledFormControl(n))) {
             return null;
         }
         if (hasClickActivationBehavior(n)) {
@@ -1850,7 +1922,8 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
         .line_break => .{ null, "\n", "insertLineBreak" },
         .delete => |dir| .{ null, null, if (dir == .forward) "deleteContentForward" else "deleteContentBackward" },
     };
-    if (!try allowEdit(frame, el, data, text, input_type)) {
+    // Like Chrome, a text control's beforeinput has no target range.
+    if (!try allowEdit(frame, el, data, text, input_type, null)) {
         return false;
     }
     if (!editable) {
@@ -1876,7 +1949,7 @@ pub fn applyEdit(frame: *Frame, ctl: anytype, edit: Edit) !bool {
 /// happened.
 fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !bool {
     const host_el = outermostEditingHost(target) orelse return false;
-    if (!try allowEdit(frame, host_el, text, text, "insertText")) {
+    if (!try allowEdit(frame, host_el, text, text, "insertText", insertTarget(host_el, frame.document))) {
         return false;
     }
     // a beforeinput or textInput listener can make it non-editable or remove it
@@ -1891,7 +1964,7 @@ fn insertIntoEditingHost(frame: *Frame, target: *Element, text: []const u8) !boo
 fn deleteInEditingHost(frame: *Frame, target: *Element, forward: bool) !void {
     const host_el = outermostEditingHost(target) orelse return;
     const input_type = if (forward) "deleteContentForward" else "deleteContentBackward";
-    if (!try allowEdit(frame, host_el, null, null, input_type)) {
+    if (!try allowEdit(frame, host_el, null, null, input_type, deleteTarget(frame, host_el, forward))) {
         return;
     }
 
@@ -1914,7 +1987,7 @@ fn breakInEditingHost(frame: *Frame, target: *Element, line_break: bool) !void {
         return;
     }
     const input_type = if (line_break) "insertLineBreak" else "insertParagraph";
-    if (!try allowEdit(frame, host_el, null, "\n", input_type)) {
+    if (!try allowEdit(frame, host_el, null, "\n", input_type, insertTarget(host_el, frame.document))) {
         return;
     }
     // a beforeinput or textInput listener can make it non-editable or remove it
@@ -4174,16 +4247,110 @@ fn isSelectAll(keyboard_event: *KeyboardEvent, key: KeyboardEvent.Key) bool {
     };
 }
 
+const TargetRange = struct {
+    start: *Node,
+    start_offset: u32,
+    end: *Node,
+    end_offset: u32,
+
+    fn caret(node: *Node, offset: u32) TargetRange {
+        return .{ .start = node, .start_offset = offset, .end = node, .end_offset = offset };
+    }
+
+    fn around(node: *Node) TargetRange {
+        const parent = node.parentNode().?;
+        const index = parent.getChildIndex(node).?;
+        return .{ .start = parent, .start_offset = index, .end = parent, .end_offset = index + 1 };
+    }
+};
+
+// What text or a break typed into `host_el` replaces: the selection, or the
+// host's first position, where insertAtSelection falls back to.
+fn insertTarget(host_el: *Element, doc: *Document) TargetRange {
+    if (selectionEditableIn(host_el, doc)) {
+        const range = doc._selection._range.?.asAbstractRange();
+        return .{
+            .start = range.getStartContainer(),
+            .start_offset = range.getStartOffset(),
+            .end = range.getEndContainer(),
+            .end_offset = range.getEndOffset(),
+        };
+    }
+    const container, const offset = firstCaretPosition(host_el.asNode());
+    return .caret(container, offset);
+}
+
+// What a delete in `host_el` removes, as Chrome reports it before the edit:
+// the selection, the character, the <br> or image, or, when two lines join,
+// from the end of the earlier one to the start of the later block. Nothing to
+// delete gives the caret. Follows deleteAtSelection and deleteBeyondText
+// without editing.
+fn deleteTarget(frame: *Frame, host_el: *Element, forward: bool) TargetRange {
+    const target = insertTarget(host_el, frame.document);
+    if (target.start != target.end or target.start_offset != target.end_offset) {
+        return target;
+    }
+    const host = host_el.asNode();
+    const style_manager = &frame._style_manager;
+    const container = target.start;
+    const offset = target.start_offset;
+    const root = lineRoot(style_manager, host, container);
+    const found = if (forward)
+        charAfter(style_manager, root, container, offset)
+    else
+        charBefore(style_manager, root, container, offset);
+    switch (found) {
+        .char => |c| {
+            const text = c.text.asCData().asNode();
+            return .{ .start = text, .start_offset = c.offset, .end = text, .end_offset = c.offset + c.len };
+        },
+        .edge, .unsupported => {},
+    }
+
+    const next = switch (neighbor(style_manager, host, container, offset, forward)) {
+        .none => return target,
+        .node => |n| n,
+    };
+    const node = next.node;
+    if (node.is(Element)) |el| {
+        if (style_manager.isBlockLevel(el)) {
+            return if (el.getTag() == .hr) .around(node) else target;
+        }
+    }
+    if (!next.crossed) {
+        // a <br>, an image, a non-editable inline on the caret's line
+        return .around(node);
+    }
+    if (forward) {
+        const block = lineRoot(style_manager, host, node.parentNode().?);
+        return .{ .start = container, .start_offset = offset, .end = block, .end_offset = 0 };
+    }
+    const block = lineRoot(style_manager, host, container);
+    const start: TargetRange = if (node.is(Node.CData.Text)) |t|
+        .caret(node, @intCast(t.asCData().getLength()))
+    else
+        .caret(node.parentNode().?, node.parentNode().?.getChildIndex(node).? + 1);
+    return .{ .start = start.start, .start_offset = start.start_offset, .end = block, .end_offset = 0 };
+}
+
 // pre-edit events for a trusted key's default action, can cancel the edit
-// (i.e. by returning false)
-fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8) !bool {
+// (i.e. by returning false). `target_range` is what the edit replaces, for
+// beforeinput's getTargetRanges().
+fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8, target_range: ?TargetRange) !bool {
     {
+        var ranges: [1]*StaticRange = undefined;
+        var target_ranges: []const *StaticRange = &.{};
+        if (target_range) |r| {
+            ranges[0] = try StaticRange.create(r.start, r.start_offset, r.end, r.end_offset, frame);
+            target_ranges = &ranges;
+        }
         const before = (try InputEvent.initTrusted(comptime .wrap("beforeinput"), .{
             .bubbles = true,
             .cancelable = true,
             .composed = true,
             .data = before_data,
             .inputType = input_type,
+            .targetRanges = target_ranges,
         }, frame)).asEvent();
         if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), before)) {
             return false;
@@ -4411,6 +4578,31 @@ test "user_input: dispatchTouchEvent a passive-only touchstart listener is not c
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
+test "user_input: Shift+click in an editing host extends the selection" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    const value = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p id="one">abc</p><p id="two">defgh</p></div>');
+        \\document.getElementById('host').focus();
+        \\getSelection().collapse(document.getElementById('one').firstChild, 1);
+        \\document.getElementById('two');
+    , null);
+    const target = try ls.local.jsValueToZig(*Element, value);
+    try triggerClick(frame, target, .{ .shift = true });
+    try testing.expect((try ls.local.compileAndRun(
+        \\const s = getSelection();
+        \\s.anchorNode.data === 'abc' && s.anchorOffset === 1 && s.focusNode.data === 'defgh' && s.focusOffset === 5
+    , null)).isTrue());
+}
+
 test "user_input: dispatchTouchEvent a non-passive listener makes touchstart cancelable" {
     const page = try testing.pageTest("mcp_actions.html", .{});
     defer page.close();
@@ -4459,6 +4651,113 @@ test "user_input: dispatchTouchEvent a closed-shadow touch target retargets to t
     _ = try dispatchTouchEvent(frame, target, .touchstart, .{ .x = 10, .y = 20 }, .{});
     const result = try ls.local.compileAndRun("window.eventTargetOK === true && window.touchTargetOK === true", null);
     try testing.expect(result.isTrue());
+}
+
+test "user_input: mouse hit testing skips inert flat-tree subtrees" {
+    for ([_][]const u8{
+        \\behind.innerHTML = '<button inert>Inert</button>';
+        \\const target = behind.firstChild, inert = target;
+        ,
+        \\behind.innerHTML = '<div inert><button style="pointer-events:auto">Inert</button></div>';
+        \\const inert = behind.firstChild, target = inert.firstChild;
+        ,
+        \\behind.innerHTML = '<div inert></div>';
+        \\const inert = behind.firstChild;
+        \\const shadow = inert.attachShadow({mode:'closed'});
+        \\shadow.innerHTML = '<button>Inert</button>';
+        \\const target = shadow.firstChild;
+        ,
+        \\behind.innerHTML = '<div><button>Slotted</button></div>';
+        \\const host = behind.firstChild, target = host.firstChild;
+        \\host.style.pointerEvents = 'none';
+        \\const shadow = host.attachShadow({mode:'open'});
+        \\shadow.innerHTML = '<slot inert></slot>';
+        \\const inert = shadow.firstChild;
+        ,
+    }) |setup| {
+        const page = try testing.pageTest("mcp_actions.html", .{});
+        defer page.close();
+        const frame = page.frame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun(
+            \\document.body.innerHTML = '<div id="behind" tabindex="0" style="width:400px;height:400px"></div>';
+            \\const behind = document.getElementById('behind');
+        , null);
+        _ = try ls.local.compileAndRun(setup, null);
+        const target = try ls.local.jsValueToZig(*Element, try ls.local.compileAndRun(
+            \\target.style.cssText = 'width:80px;height:20px;pointer-events:auto';
+            \\window.events = [];
+            \\for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            \\  behind.addEventListener(type, e => events.push({type, target:e.composedPath()[0], trusted:e.isTrusted}));
+            \\}
+            \\window.inertEvents = 0;
+            \\for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'focus']) {
+            \\  target.addEventListener(type, () => inertEvents++);
+            \\}
+            \\target;
+        , null));
+        const behind = frame.document.getElementById("behind").?;
+        const rect = target.boundingClientRectValues(frame);
+        const x = rect.x + 1;
+        const y = rect.y + 1;
+        try testing.expect((try frame.document.hitTest(x, y, frame)) == behind);
+        try testing.expect((try frame.document.hitTestVertical(y, frame)) == behind);
+        try triggerMouseMove(frame, x, y);
+        try triggerMousePress(frame, x, y, mouse_button.main, 1);
+        try triggerMouseRelease(frame, x, y, mouse_button.main, 1);
+        try testing.expect((try ls.local.compileAndRun(
+            \\inertEvents === 0 && document.activeElement === behind &&
+            \\events.map(e => e.type).join(',') === 'pointerdown,mousedown,pointerup,mouseup,click' &&
+            \\events.every(e => e.target === behind && e.trusted)
+        , null)).isTrue());
+
+        // Removing inert restores hit testing without changing layout.
+        _ = try ls.local.compileAndRun("inert.inert = false; events.length = 0", null);
+        try testing.expect((try mouseHitTest(frame, x, y)).target == target);
+        try triggerMousePress(frame, x, y, mouse_button.main, 1);
+        try triggerMouseRelease(frame, x, y, mouse_button.main, 1);
+        try testing.expect((try ls.local.compileAndRun(
+            \\events.map(e => e.type).join(',') === 'pointerdown,mousedown,pointerup,mouseup,click' &&
+            \\events.every(e => e.trusted) && inertEvents > 0
+        , null)).isTrue());
+    }
+}
+
+test "user_input: inert roots are excluded from mouse fallback and iframe descent" {
+    const page = try testing.pageTest("input_mouse_frames.html", .{});
+    defer page.close();
+    const main = page.frame().?;
+    const child = main.child_frames.items[0];
+    const iframe = child.iframe.?.asElement();
+    const rect = iframe.boundingClientRectValues(main);
+    const x = rect.x + 1;
+    const y = rect.y + 1;
+
+    // An inert iframe must not allow input into its document.
+    try iframe.setAttributeSafe(comptime .wrap("inert"), .wrap(""), main);
+    const excluded = try mouseHitTest(main, x, y);
+    try testing.expect(excluded.frame == main);
+    try testing.expect(excluded.target == main.document.getBody().?.asElement());
+    try iframe.removeAttribute(comptime .wrap("inert"), main);
+
+    // A non-inert iframe can contain an inert root. No root fallback may
+    // resurrect it, including at blank points beyond the root's faux box.
+    const root = child.document.getDocumentElement().?;
+    try root.setAttributeSafe(comptime .wrap("inert"), .wrap(""), child);
+    const hit = try mouseHitTest(main, x, y);
+    try testing.expect(hit.frame == child);
+    try testing.expect(hit.target == null);
+    try testing.expect((try documentHit(child, 299, 299, 300, 300)) == null);
+    try triggerMousePress(main, x, y, mouse_button.main, 1);
+    try testing.expect(main.page.input_pointer.down_target == null);
+    try testing.expect(main.document._active_element == null);
+    try testing.expect(child.document._active_element == null);
+
+    try root.removeAttribute(comptime .wrap("inert"), child);
+    try testing.expect((try mouseHitTest(main, x, y)).target != null);
+    try testing.expect((try documentHit(child, 299, 299, 300, 300)) == root);
 }
 
 test "user_input: mouse hit testing descends nested iframe viewports" {
@@ -5378,4 +5677,55 @@ test "user_input: element click inside an iframe reports the point in each docum
         "events.length === 2 && events.every(e => e.trusted && e.tag === 'IFRAME' && e.x === {d} && e.y === {d})",
         .{ child_rect.x + iframe.getClientLeft() + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop() + rect.y + rect.height / 2 },
     ), null)).isTrue());
+}
+
+test "user_input: trusted mouse events stop at a disabled form control" {
+    const page = try testing.pageTest("input_click_disabled_path.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Expected chains recorded in Chrome 157 with a real mouse.
+    const pointer_bubbles = "pointerdown@inner pointerdown@btn pointerdown@document pointerdown@window mousedown@inner " ++
+        "pointerup@inner pointerup@btn pointerup@document pointerup@window mouseup@inner click@inner";
+    const full = "pointerdown@{0s} {1s}pointerdown@document pointerdown@window mousedown@{0s} {2s}mousedown@document mousedown@window " ++
+        "pointerup@{0s} {3s}pointerup@document pointerup@window mouseup@{0s} {4s}mouseup@document mouseup@window " ++
+        "click@{0s} {5s}click@document click@window";
+
+    for ([_]struct { []const u8, []const u8 }{
+        // Mouse events stop at the disabled button; pointer events don't.
+        .{ "inner", pointer_bubbles },
+        // A disabled fieldset is not a disabled control itself.
+        .{ "fsInner", try std.fmt.allocPrint(testing.arena_allocator, full, .{ "fsInner", "pointerdown@fs ", "mousedown@fs ", "pointerup@fs ", "mouseup@fs ", "click@fs " }) },
+        .{ "fs", try std.fmt.allocPrint(testing.arena_allocator, full, .{ "fs", "", "", "", "", "" }) },
+    }) |case| {
+        const id, const expected = case;
+        try triggerClick(frame, frame.document.getElementById(id).?, .{});
+        const actual = try (try ls.local.compileAndRun("take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+        try testing.expectString(expected, actual);
+    }
+
+    const inner = frame.document.getElementById("inner").?;
+    const point = gesturePoint(frame, inner);
+    for (1..3) |count| {
+        try triggerMousePress(frame, point.x, point.y, mouse_button.main, @intCast(count));
+        try triggerMouseRelease(frame, point.x, point.y, mouse_button.main, @intCast(count));
+    }
+    const dbl = try (try ls.local.compileAndRun("take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString(pointer_bubbles ++ " " ++ pointer_bubbles ++ " dblclick@inner", dbl);
+
+    // composedPath() reports the cut path.
+    const composed = try (try ls.local.compileAndRun("innerClickPath", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString("inner", composed);
+
+    // A disabled form-associated custom element has no activation behavior,
+    // but the click still can't reach the label around it.
+    try triggerClick(frame, frame.document.getElementById("faceInner").?, .{});
+    try testing.expect(!(try ls.local.compileAndRun("take(); faceBox.checked", null)).toBool());
+
+    // An untrusted click propagates as usual.
+    const synthetic = try (try ls.local.compileAndRun("inner.click(); take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString("click@inner click@btn click@document click@window", synthetic);
 }

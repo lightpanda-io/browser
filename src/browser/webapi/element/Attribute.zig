@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const StyleManager = @import("../../StyleManager.zig");
 const Factory = @import("../../Factory.zig");
 
 const Node = @import("../Node.zig");
@@ -278,8 +279,8 @@ pub const List = struct {
             try owner.addElementId(parent, element, entry.value());
         }
         switch (change) {
-            .dom => owner.domChanged(),
-            .layout => owner.layoutObserversChanged(),
+            .dom => Frame.change.attributeSet(element, .wrap(name), old_value, .wrap(entry.value()), owner),
+            .layout => Frame.change.inertStyleSet(element, owner),
         }
         owner.attributeChange(element, .wrap(name), .wrap(entry.value()), old_value);
         return name;
@@ -393,7 +394,7 @@ pub const List = struct {
         std.mem.copyForwards(Entry, list_entries[index .. list_entries.len - 1], list_entries[index + 1 ..]);
         self._len -= 1;
 
-        owner.domChanged();
+        Frame.change.attributeRemoved(element, .wrap(name), .wrap(old_value), owner);
         owner.attributeRemove(element, .wrap(name), .wrap(old_value));
     }
 
@@ -459,6 +460,7 @@ pub const List = struct {
 
     fn getEntryWithNormalizedName(self: *const List, name: String) ?*Entry {
         const name_str = name.str();
+        StyleManager.fill_check.attributeRead(name_str);
         for (self._entries[0..self._len]) |*e| {
             if (std.mem.eql(u8, e.name(), name_str)) {
                 return e;
@@ -470,6 +472,7 @@ pub const List = struct {
     fn getEntryWithInternedName(self: *const List, comptime name: []const u8) ?*Entry {
         const static = comptime String.intern(name) orelse
             @compileError("not an interned attribute name: " ++ name);
+        StyleManager.fill_check.attributeRead(name);
 
         for (self._entries[0..self._len]) |*e| {
             if (e._name_ptr == static.ptr) {

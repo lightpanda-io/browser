@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=transform_stream_basic>
@@ -10,27 +11,31 @@
   }
 </script>
 
-<script id=transform_stream_with_transformer>
-  (async function() {
-    const ts = new TransformStream({
-      transform(chunk, controller) {
-        controller.enqueue(chunk.toUpperCase());
-      }
-    });
+<script id=transform_stream_with_transformer type=module>
+  const state = await testing.async();
 
-    const writer = ts.writable.getWriter();
-    const reader = ts.readable.getReader();
+  const ts = new TransformStream({
+    transform(chunk, controller) {
+      controller.enqueue(chunk.toUpperCase());
+    }
+  });
 
-    await writer.write('hello');
-    await writer.close();
+  const writer = ts.writable.getWriter();
+  const reader = ts.readable.getReader();
 
-    const result = await reader.read();
+  // Not awaited: transform() only runs once a read is pending.
+  writer.write('hello');
+  writer.close();
+
+  const result = await reader.read();
+  const result2 = await reader.read();
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(false, result.done);
     testing.expectEqual('HELLO', result.value);
-
-    const result2 = await reader.read();
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
 <script id=writable_stream_basic>
@@ -67,100 +72,98 @@
   }
 </script>
 
-<script id=text_encoder_stream_encode>
-  (async function() {
-    const tes = new TextEncoderStream();
+<script id=text_encoder_stream_encode type=module>
+  const state = await testing.async();
 
-    const writer = tes.writable.getWriter();
-    const reader = tes.readable.getReader();
+  const tes = new TextEncoderStream();
+  const writer = tes.writable.getWriter();
+  const reader = tes.readable.getReader();
 
-    await writer.write('hi');
-    await writer.close();
+  writer.write('hi');
+  writer.close();
 
-    const result = await reader.read();
+  const result = await reader.read();
+  const result2 = await reader.read();
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(false, result.done);
     testing.expectEqual(true, result.value instanceof Uint8Array);
     // 'hi' in UTF-8 is [104, 105]
-    testing.expectEqual(104, result.value[0]);
-    testing.expectEqual(105, result.value[1]);
-    testing.expectEqual(2, result.value.length);
-
-    const result2 = await reader.read();
+    testing.expectEqual([104, 105], Array.from(result.value));
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
-<script id=pipe_through_basic>
-  (async function() {
-    const input = new ReadableStream({
-      start(controller) {
-        controller.enqueue('hello');
-        controller.close();
-      }
-    });
+<script id=pipe_through_basic type=module>
+  const state = await testing.async();
 
-    const ts = new TransformStream({
-      transform(chunk, controller) {
-        controller.enqueue(chunk.toUpperCase());
-      }
-    });
+  const input = new ReadableStream({
+    start(controller) {
+      controller.enqueue('hello');
+      controller.close();
+    }
+  });
 
-    const output = input.pipeThrough(ts);
-    const reader = output.getReader();
+  const ts = new TransformStream({
+    transform(chunk, controller) {
+      controller.enqueue(chunk.toUpperCase());
+    }
+  });
 
-    const result = await reader.read();
+  const reader = input.pipeThrough(ts).getReader();
+  const result = await reader.read();
+  const result2 = await reader.read();
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(false, result.done);
     testing.expectEqual('HELLO', result.value);
-
-    const result2 = await reader.read();
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
-<script id=pipe_to_basic>
-  (async function() {
-    const chunks = [];
-    const input = new ReadableStream({
-      start(controller) {
-        controller.enqueue('a');
-        controller.enqueue('b');
-        controller.close();
-      }
-    });
+<script id=pipe_to_basic type=module>
+  const state = await testing.async();
 
-    const ws = new WritableStream({
-      write(chunk) {
-        chunks.push(chunk);
-      }
-    });
+  const chunks = [];
+  const input = new ReadableStream({
+    start(controller) {
+      controller.enqueue('a');
+      controller.enqueue('b');
+      controller.close();
+    }
+  });
 
-    await input.pipeTo(ws);
-    testing.expectEqual(2, chunks.length);
-    testing.expectEqual('a', chunks[0]);
-    testing.expectEqual('b', chunks[1]);
-  })();
+  await input.pipeTo(new WritableStream({ write(chunk) { chunks.push(chunk); } }));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['a', 'b'], chunks);
+  });
 </script>
 
-<script id=pipe_through_text_decoder>
-  (async function() {
-    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
-    const input = new ReadableStream({
-      start(controller) {
-        controller.enqueue(bytes);
-        controller.close();
-      }
-    });
+<script id=pipe_through_text_decoder type=module>
+  const state = await testing.async();
 
-    const output = input.pipeThrough(new TextDecoderStream());
-    const reader = output.getReader();
+  const bytes = new Uint8Array([104, 101, 108, 108, 111]);
+  const input = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    }
+  });
 
-    const result = await reader.read();
+  const reader = input.pipeThrough(new TextDecoderStream()).getReader();
+  const result = await reader.read();
+  const result2 = await reader.read();
+
+  state.resolve();
+  await state.done(() => {
     testing.expectEqual(false, result.done);
     testing.expectEqual('hello', result.value);
-
-    const result2 = await reader.read();
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
 <script id=transform_error_both_sides type=module>
@@ -172,9 +175,12 @@
   const ts = new TransformStream({ transform(chunk, controller) { controller.error(err); } });
   const writer = ts.writable.getWriter();
   const reader = ts.readable.getReader();
+  // The readable starts with backpressure: transform() only runs once a read
+  // is pending, so the read has to start before the write is awaited.
+  const read = reader.read().catch((e) => e);
   await writer.write('a').catch(() => {});
   const errors = [
-    await reader.read().catch((e) => e),
+    await read,
     await writer.write('b').catch((e) => e),
     await writer.close().catch((e) => e),
   ];
@@ -183,5 +189,43 @@
   await state.done(() => {
     testing.expectEqual([true, true, false], errors.map((e) => e === err));
     testing.expectEqual(true, errors[2] instanceof TypeError);
+  });
+</script>
+
+<script id=pipe_to_undefined_chunk type=module>
+  const state = await testing.async();
+
+  // undefined is a valid chunk: only `done` ends the pipe.
+  const chunks = [];
+  const input = new ReadableStream({
+    start(controller) {
+      controller.enqueue('a');
+      controller.enqueue(undefined);
+      controller.enqueue('b');
+      controller.close();
+    }
+  });
+  await input.pipeTo(new WritableStream({ write(chunk) { chunks.push(chunk); } }));
+
+  // The identity transform passes values through untouched.
+  const obj = { x: 1 };
+  const piped = [];
+  const reader = new ReadableStream({
+    start(controller) {
+      controller.enqueue(undefined);
+      controller.enqueue('c');
+      controller.enqueue(obj);
+      controller.close();
+    }
+  }).pipeThrough(new TransformStream()).getReader();
+  for (let r = await reader.read(); !r.done; r = await reader.read()) {
+    piped.push(r.value);
+  }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(['a', undefined, 'b'], chunks);
+    testing.expectEqual([undefined, 'c', obj], piped);
+    testing.expectEqual(true, piped[2] === obj);
   });
 </script>

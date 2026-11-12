@@ -244,7 +244,7 @@ fn deleteFromDocument(self: *Selection, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-fn extend(self: *Selection, node: *Node, _offset: ?u32, frame: *Frame) !void {
+pub fn extend(self: *Selection, node: *Node, _offset: ?u32, frame: *Frame) !void {
     const range = self._range orelse return error.InvalidState;
     const offset = _offset orelse 0;
 

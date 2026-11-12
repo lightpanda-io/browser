@@ -31,6 +31,8 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
     if (style_manager.cachedWidth(self, .box)) |width| {
         return width;
     }
+    const fill = StyleManager.fill_check.enter(style_manager);
+    defer StyleManager.fill_check.exit(fill);
 
     const own = self.getElementAxis(owner, .width);
     const width = blk: {
@@ -147,6 +149,8 @@ fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
     if (style_manager.cachedWidth(self, .row_shrink)) |ratio| {
         return ratio;
     }
+    const fill = StyleManager.fill_check.enter(style_manager);
+    defer StyleManager.fill_check.exit(fill);
 
     const row_width = boxWidth(self, owner);
     var total: f64 = 0;
@@ -284,6 +288,8 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     if (style_manager.cachedWidth(self, kind)) |width| {
         return width;
     }
+    const fill = StyleManager.fill_check.enter(style_manager);
+    defer StyleManager.fill_check.exit(fill);
 
     const in_row = style_manager.laysOutInRow(self);
     var widest: f64 = 0;
