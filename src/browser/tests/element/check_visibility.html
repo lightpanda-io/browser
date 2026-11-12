@@ -1328,3 +1328,262 @@
     sheet.remove();
   }
 </script>
+
+<script id="memo_class_reach">
+  {
+    // A class change drops what its selectors can reach: the element's
+    // subtree, or its parent's for a sibling combinator, or everything.
+    const sheet = document.createElement("style");
+    sheet.textContent = `
+      .cr-a { visibility: hidden }
+      .cr-p .cr-x { display: none }
+      .cr-s + .cr-t { display: none }
+      :is(.cr-i ~ .cr-j) { display: none }
+      .cr-list > :nth-child(1 of .cr-n) { display: none }
+      .cr-h:has(.cr-k) { display: none }
+      .zh:has(:is(.za .zb)) { display: none }
+    `;
+    document.head.appendChild(sheet);
+    const hidden = (el) => el.checkVisibility({ visibilityProperty: true }) === false;
+    const make = (html) => {
+      const div = document.createElement("div");
+      div.innerHTML = html;
+      document.body.appendChild(div);
+      return div;
+    };
+
+    // subject: the element and what inherits from it
+    {
+      const root = make("<div><span></span></div><p></p>");
+      const div = root.firstChild;
+      const span = div.firstChild;
+      const p = root.lastChild;
+      testing.expectEqual(false, hidden(span));
+      testing.expectEqual(false, hidden(p));
+      div.classList.add("cr-a");
+      testing.expectEqual(true, hidden(span));
+      testing.expectEqual(false, hidden(p));
+      div.classList.remove("cr-a");
+      testing.expectEqual(false, hidden(span));
+      root.remove();
+    }
+
+    // ancestor compound: the descendants
+    {
+      const root = make("<div><section><i class=cr-x></i></section></div>");
+      const i = root.querySelector("i");
+      testing.expectEqual(true, i.checkVisibility());
+      root.firstChild.className = "cr-p";
+      testing.expectEqual(false, i.checkVisibility());
+      root.firstChild.className = "";
+      testing.expectEqual(true, i.checkVisibility());
+      root.remove();
+    }
+
+    // sibling combinator: the later siblings, outside the element's subtree
+    {
+      const root = make("<p></p><p class=cr-t></p>");
+      const t = root.lastChild;
+      testing.expectEqual(true, t.checkVisibility());
+      root.firstChild.classList.add("cr-s");
+      testing.expectEqual(false, t.checkVisibility());
+      root.firstChild.classList.remove("cr-s");
+      testing.expectEqual(true, t.checkVisibility());
+      // inside :is(), the same
+      const j = root.appendChild(document.createElement("b"));
+      j.className = "cr-j";
+      testing.expectEqual(true, j.checkVisibility());
+      root.firstChild.classList.add("cr-i");
+      testing.expectEqual(false, j.checkVisibility());
+      root.remove();
+    }
+
+    // :nth-child(of S): a sibling's class moves the index
+    {
+      const root = make("<div class=cr-list><i></i><i class=cr-n></i></div>");
+      const second = root.firstChild.lastChild;
+      testing.expectEqual(false, second.checkVisibility());
+      root.firstChild.firstChild.classList.add("cr-n");
+      testing.expectEqual(true, second.checkVisibility());
+      root.remove();
+    }
+
+    // :has(): an ancestor, anywhere above
+    {
+      const root = make("<div class=cr-h><div><p></p></div></div>");
+      const h = root.firstChild;
+      testing.expectEqual(true, h.checkVisibility());
+      h.querySelector("p").classList.add("cr-k");
+      testing.expectEqual(false, h.checkVisibility());
+      root.remove();
+    }
+
+    // :is() inside :has(): every compound of it reaches the anchor, inside
+    // it or above it
+    {
+      const root = make("<div class=zh><section><p class=zb></p></section></div>");
+      const h = root.firstChild;
+      testing.expectEqual(true, h.checkVisibility());
+      h.firstChild.classList.add("za");
+      testing.expectEqual(false, h.checkVisibility());
+      h.firstChild.classList.remove("za");
+      testing.expectEqual(true, h.checkVisibility());
+      root.classList.add("za");
+      testing.expectEqual(false, h.checkVisibility());
+      root.remove();
+    }
+
+    // a class no selector names changes nothing, but collections see it
+    {
+      const root = make("<p></p>");
+      const live = root.getElementsByClassName("cr-unstyled");
+      testing.expectEqual(0, live.length);
+      root.firstChild.classList.add("cr-unstyled");
+      testing.expectEqual(1, live.length);
+      testing.expectEqual(true, root.firstChild.checkVisibility());
+      root.remove();
+    }
+
+    sheet.remove();
+  }
+</script>
+
+<script id="memo_class_attribute_selector">
+  {
+    // [class*=x] reads the whole string: any class change can reach it
+    const sheet = document.createElement("style");
+    sheet.textContent = "[class*=ca-z] + p { display: none }";
+    document.head.appendChild(sheet);
+    const root = document.createElement("div");
+    root.innerHTML = "<span></span><p></p>";
+    document.body.appendChild(root);
+    const p = root.lastChild;
+    testing.expectEqual(true, p.checkVisibility());
+    root.firstChild.className = "x-ca-zz";
+    testing.expectEqual(false, p.checkVisibility());
+    root.remove();
+    sheet.remove();
+  }
+</script>
+
+<script id="memo_tree_form_and_has_reach">
+  {
+    // A moved control or :has() subject reaches matches above its parent:
+    // the forms and fieldsets around it, the anchors up to the argument's
+    // depth, and what those reach (their later siblings).
+    const sheet = document.createElement("style");
+    sheet.textContent = `
+      .fs:invalid + .fs-after { display: none }
+      .lg:disabled { visibility: hidden }
+      .r:invalid ~ .rm { display: none }
+      .hd:has(> .hk) + .hm { display: none }
+      .h2:has(> div > .hk2) + .h2m { display: none }
+    `;
+    document.head.appendChild(sheet);
+    const hidden = (el) => el.checkVisibility({ visibilityProperty: true }) === false;
+    const make = (html) => {
+      const div = document.createElement("div");
+      div.innerHTML = html;
+      document.body.appendChild(div);
+      return div;
+    };
+
+    // the outer fieldset's validity, read through its later sibling
+    {
+      const root = make("<fieldset class=fs><fieldset><div></div></fieldset></fieldset><p class=fs-after></p>");
+      const after = root.lastChild;
+      testing.expectEqual(true, after.checkVisibility());
+      const input = document.createElement("input");
+      input.required = true;
+      root.querySelector("div").appendChild(input);
+      testing.expectEqual(false, after.checkVisibility());
+      input.remove();
+      testing.expectEqual(true, after.checkVisibility());
+      root.remove();
+    }
+
+    // a legend inserted ahead takes the first-legend exception away
+    {
+      const root = make("<fieldset disabled><legend><input class=lg></legend></fieldset>");
+      const input = root.querySelector("input");
+      testing.expectEqual(false, hidden(input));
+      const fieldset = root.firstChild;
+      fieldset.insertBefore(document.createElement("legend"), fieldset.firstChild);
+      testing.expectEqual(true, hidden(input));
+      root.remove();
+    }
+
+    // a radio group's validity reads every radio of the form owner
+    {
+      const root = make("<form><div><input type=radio name=g required class=r><b class=rm></b></div><section></section></form>");
+      const mark = root.querySelector(".rm");
+      testing.expectEqual(false, mark.checkVisibility());
+      const other = document.createElement("input");
+      other.type = "radio";
+      other.name = "g";
+      other.checked = true;
+      root.querySelector("section").appendChild(other);
+      testing.expectEqual(true, mark.checkVisibility());
+      root.remove();
+    }
+
+    // without a form, the group is every radio of that name in the document
+    {
+      const a = make("<div><input type=radio name=g2 required class=r><b class=rm></b></div>");
+      const b = make("<section></section>");
+      const mark = a.querySelector(".rm");
+      testing.expectEqual(false, mark.checkVisibility());
+      const other = document.createElement("input");
+      other.type = "radio";
+      other.name = "g2";
+      other.checked = true;
+      b.firstChild.appendChild(other);
+      testing.expectEqual(true, mark.checkVisibility());
+      a.remove();
+      b.remove();
+    }
+
+    // :has(> x): the parent anchors, and reaches its later sibling
+    {
+      const root = make("<div class=hd></div><p class=hm></p>");
+      const mark = root.lastChild;
+      testing.expectEqual(true, mark.checkVisibility());
+      const k = document.createElement("i");
+      k.className = "hk";
+      root.firstChild.appendChild(k);
+      testing.expectEqual(false, mark.checkVisibility());
+      k.remove();
+      testing.expectEqual(true, mark.checkVisibility());
+      root.remove();
+    }
+
+    // :has(> div > x): the grandparent anchors, and reaches its later sibling
+    {
+      const root = make("<section class=h2><div></div></section><p class=h2m></p>");
+      const anchor = root.firstChild;
+      const mark = root.lastChild;
+      testing.expectEqual(true, mark.checkVisibility());
+      const k = document.createElement("i");
+      k.className = "hk2";
+      anchor.firstChild.appendChild(k);
+      testing.expectEqual(false, mark.checkVisibility());
+      root.remove();
+    }
+
+    sheet.remove();
+  }
+</script>
+
+<script id="memo_frameless_document_attributes">
+  {
+    // A DOMParser document has no frame and no styles: its attribute
+    // writes stay out of the page's cascade
+    const doc = new DOMParser().parseFromString("<p></p><i hidden></i>", "text/html");
+    const p = doc.querySelector("p");
+    p.className = "x";
+    p.classList.add("y");
+    p.setAttribute("data-x", "1");
+    doc.querySelector("i").removeAttribute("hidden");
+    testing.expectEqual("x y", p.className);
+  }
+</script>
