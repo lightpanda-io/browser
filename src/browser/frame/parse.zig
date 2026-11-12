@@ -54,6 +54,9 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
         }
     }
 
+    // Also on error: a terminated parse can leave nodes behind.
+    defer Frame.change.fragmentParsed(node, frame);
+
     const previous_parse_mode = frame._parse_mode;
     frame._parse_mode = .fragment;
     defer frame._parse_mode = previous_parse_mode;

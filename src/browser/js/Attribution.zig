@@ -98,7 +98,7 @@ pub fn begin(self: *Attribution, kind: Kind, opts: BeginOpts) Tag {
 fn isACut(kind: Kind, delay_ms: ?u32) bool {
     return switch (kind) {
         .interval, .idle => true,
-        .timeout => (delay_ms orelse 0) >= short_timeout_ms,
+        .timeout, .callback => (delay_ms orelse 0) >= short_timeout_ms,
         else => false,
     };
 }

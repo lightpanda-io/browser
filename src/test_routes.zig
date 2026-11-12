@@ -82,6 +82,11 @@ pub const raw_responses = struct {
         .head = "HTTP/1.1 200 OK\r\nContent-Length: 262144\r\n\r\n",
         .body = &@as([256 * 1024]u8, @splat('a')),
     };
+    // A three-digit status outside 100..599, like LinkedIn's 999.
+    pub const status_999: RawResponse = .{
+        .head = "HTTP/1.1 999 Request denied\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\n",
+        .body = "denied",
+    };
 };
 
 fn serveRaw(req: *std.http.Server.Request, name: []const u8) !void {
@@ -97,6 +102,8 @@ fn serveRaw(req: *std.http.Server.Request, name: []const u8) !void {
         raw_responses.revalidated
     else if (std.mem.eql(u8, name, "large"))
         raw_responses.large
+    else if (std.mem.eql(u8, name, "status_999"))
+        raw_responses.status_999
     else
         return req.respond("unknown raw response", .{ .status = .not_found });
     try req.server.out.writeAll(r.head);
@@ -245,7 +252,9 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
-    if (std.mem.eql(u8, path, "/v1/systemone")) {
+    // Gemini's Decisions API takes the same questions and returns answers in
+    // a shape the TypeSafe ones parse as, so one mock serves both.
+    if (std.mem.eql(u8, path, "/v1/systemone") or std.mem.eql(u8, path, "/v1beta/decisions")) {
         return systemOne(req, req_allocator);
     }
 
@@ -1277,10 +1286,16 @@ fn systemOne(req: *std.http.Server.Request, arena: std.mem.Allocator) !void {
         \\}
     ;
 
-    const no_verify = bearer(req, no_verify_key);
+    if (hasKey(req, blocked_key)) {
+        return req.respond(
+            \\{"prompt_feedback": {"block_reason": "safety", "block_reason_message": "blocked by the mock"}}
+        , .{ .extra_headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
+    }
+
+    const no_verify = hasKey(req, no_verify_key);
     // Long enough that a caller blocking on the answer visibly stops its own
     // page, and short enough not to slow the suite down.
-    if (bearer(req, slow_key)) lp.io.sleep(.fromMilliseconds(400), .awake) catch {};
+    if (hasKey(req, slow_key)) lp.io.sleep(.fromMilliseconds(400), .awake) catch {};
 
     var body_buf: [64 * 1024]u8 = undefined;
     const body = if (req.head.method.requestHasBody())
@@ -1415,11 +1430,15 @@ pub const no_verify_key = "test-key-no-verify";
 /// The API key a test sets to answer slowly.
 pub const slow_key = "test-key-slow";
 
-fn bearer(req: *std.http.Server.Request, key: []const u8) bool {
+/// The API key a test sets for Gemini to refuse the input.
+pub const blocked_key = "test-key-blocked";
+
+/// TypeSafe sends the key as a bearer token, Gemini in `x-goog-api-key`.
+fn hasKey(req: *std.http.Server.Request, key: []const u8) bool {
     var it = req.iterateHeaders();
     while (it.next()) |h| {
-        if (!std.ascii.eqlIgnoreCase(h.name, "authorization")) continue;
-        return std.mem.endsWith(u8, h.value, key);
+        if (std.ascii.eqlIgnoreCase(h.name, "authorization")) return std.mem.endsWith(u8, h.value, key);
+        if (std.ascii.eqlIgnoreCase(h.name, "x-goog-api-key")) return std.mem.eql(u8, h.value, key);
     }
     return false;
 }

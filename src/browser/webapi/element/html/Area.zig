@@ -32,7 +32,6 @@ const Area = @This();
 
 pub const Proto = HtmlElement;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Area) *Element {
@@ -148,7 +147,9 @@ fn setPort(self: *Area, value: []const u8, frame: *Frame) !void {
 
 pub fn getSearch(self: *Area, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
-    return URL.getSearch(href);
+    // Per spec an empty query is "", not "?".
+    const search = URL.getSearch(href);
+    return if (search.len == 1) "" else search;
 }
 
 fn setSearch(self: *Area, value: []const u8, frame: *Frame) !void {
@@ -159,7 +160,9 @@ fn setSearch(self: *Area, value: []const u8, frame: *Frame) !void {
 
 pub fn getHash(self: *Area, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
-    return URL.getHash(href);
+    // Per spec an empty fragment is "", not "#".
+    const hash = URL.getHash(href);
+    return if (hash.len == 1) "" else hash;
 }
 
 fn setHash(self: *Area, value: []const u8, frame: *Frame) !void {

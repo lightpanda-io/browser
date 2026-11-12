@@ -355,10 +355,8 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
     return self._data.eql(other._data);
 }
 
-/// Text data can flip `:empty` but never a live collection, so only the style
-/// stamp moves.
 fn dataChanged(self: *CData, old: String, frame: *Frame) void {
-    frame.styleChanged();
+    Frame.change.textChanged(self, old, frame);
     if (self.asNode()._parent) |parent| {
         if (parent.is(Element.Html.Style)) |style| {
             style.childrenChanged(frame);

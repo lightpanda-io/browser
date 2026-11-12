@@ -31,7 +31,6 @@ const GradientElement = @import("GradientElement.zig");
 const RadialGradient = @This();
 
 pub const Proto = GradientElement;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *GradientElement else void = undefined,
 
 pub fn asElement(self: *RadialGradient) *Element {

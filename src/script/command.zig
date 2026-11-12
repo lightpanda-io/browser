@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
 const BrowserTool = lp.tools.Tool;
 const Schema = @import("Schema.zig");
 
@@ -39,10 +40,11 @@ const login_prompt_head =
 
 const login_prompt_tail =
     \\
-    \\The login and acceptCookies tools need a TYPESAFE_API_KEY that is not
-    \\set, so do this with fill, click and press. Handle any cookie banners or
-    \\popups first, then submit the form by clicking its submit button or
-    \\pressing Enter in a filled field.
+    \\The login and acceptCookies tools need a decision model key (
+++ zenai.decisions.env_hint ++
+    \\) that is not set, so do this with fill, click and press. Handle any
+    \\cookie banners or popups first, then submit the form by clicking its
+    \\submit button or pressing Enter in a filled field.
 ;
 
 const discover_login_prompt =
@@ -71,8 +73,9 @@ const logout_prompt =
 const accept_cookies_prompt =
     \\Find and dismiss the cookie consent banner on the current page.
     \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
-    \\The acceptCookies tool needs a TYPESAFE_API_KEY that is not set, so click
-    \\the button yourself.
+    \\The acceptCookies tool needs a decision model key (
+++ zenai.decisions.env_hint ++
+    \\) that is not set, so click the button yourself.
 ;
 
 /// The credentials the user gave, handed to the model as they were typed.
@@ -270,8 +273,8 @@ pub const Command = union(enum) {
         }
     }
 
-    /// How a model would drive a tool that asks Jev instead, for the REPL to
-    /// fall back to when there is no TypeSafe key. Not `LlmCommand` values:
+    /// How a model would drive a tool that asks the decision model instead,
+    /// for the REPL to fall back to when there is no decision model key. Not `LlmCommand` values:
     /// the slash name has to reach the tool, and `parseDiag` resolves
     /// `LlmCommand` first.
     pub fn fallbackPrompt(arena: std.mem.Allocator, tc: ToolCall) error{OutOfMemory}!?[]const u8 {
@@ -297,7 +300,7 @@ pub const Command = union(enum) {
     pub const bare_login_help =
         \\Bare /login uses $LP_PASSWORD with $LP_USERNAME (or $LP_EMAIL) when set.
         \\Otherwise, without 
-    ++ @import("zenai").typesafe.env_var_name ++
+    ++ zenai.decisions.env_hint ++
         \\ the model picks the LP_* variables for the
         \\site; with it, pass password=$LP_… username=$LP_….
     ;
@@ -510,14 +513,14 @@ fn fallbackFor(arena: std.mem.Allocator, tool: BrowserTool, args: []const u8) !?
     return Command.fallbackPrompt(arena, .{ .tool = tool, .args = value });
 }
 
-test "fallbackPrompt: only the tools that ask Jev have a prompt form" {
+test "fallbackPrompt: only the tools that ask the decision model have a prompt form" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
     // Both prompts tell the model why the tool is out of reach, by the
-    // variable's real name.
-    const key = @import("zenai").typesafe.env_var_name;
+    // variables' real names.
+    const key = zenai.decisions.env_hint;
     try testing.expect(std.mem.find(u8, (try fallbackFor(aa, .acceptCookies, "{}")).?, key) != null);
     const login = (try fallbackFor(aa, .login,
         \\{"password":"$LP_PASSWORD"}

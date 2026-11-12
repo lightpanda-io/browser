@@ -129,8 +129,7 @@ fn _assignSlottables(slot: *Slot, frame: *Frame) !void {
     }
 
     frame.signalSlotChange(slot);
-    // A slotted node inherits from its slot
-    frame.renderingChanged();
+    Frame.change.slotAssignmentChanged(slot, frame);
 
     const page = frame.page;
     for (old) |node| {

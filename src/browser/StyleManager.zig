@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
 const text_measure = @import("text_measure.zig");
@@ -26,6 +27,9 @@ const text_measure = @import("text_measure.zig");
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
+const Animation = @import("css/Animation.zig");
+const properties = @import("css/properties.zig");
+const DeclarationBlock = @import("css/DeclarationBlock.zig");
 const Element = @import("webapi/Element.zig");
 const popover = @import("webapi/element/popover.zig");
 
@@ -33,10 +37,8 @@ const Selector = @import("webapi/selector/Selector.zig");
 const SelectorParser = @import("webapi/selector/Parser.zig");
 const SelectorList = @import("webapi/selector/List.zig");
 
-const CSSRule = @import("webapi/css/CSSRule.zig");
-const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
+const RuleStore = @import("css/RuleStore.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
-const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -66,13 +68,22 @@ widths: WidthMemo = .{},
 // Inline writes of a property the layout memos read.
 layout_bumps: usize = 0,
 
-// Keyed by property name, pruning to what is (hopefully) one or few rules
-custom_rules: std.StringHashMapUnmanaged(LazyRules) = .empty,
+// The rules declaring each custom property and `content`, by property id,
+// pruning to what is (hopefully) one or few rules. Nothing memoizes `content`:
+// it only matters to scripts reading it back, often from a probe element.
+// @ant-design/cssinjs reads which styles a static CSS file already ships from a
+// `content` rule.
+lazy_rules: std.HashMapUnmanaged(properties.Id, LazyRules, IdContext, std.hash_map.default_max_load_percentage) = .empty,
 
-// The rules declaring `content`. Nothing memoizes it: it only matters to
-// scripts reading it back, often from a probe element. @ant-design/cssinjs reads
-// which styles a static CSS file already ships from a `content` rule.
-content_rules: LazyRules = .{},
+// The rules declaring each animation property, the shorthand apart from the
+// longhands. frame/css_animations.zig reads them to fire the animation events.
+animation_rules: std.enums.EnumArray(Animation.Property, LazyRules) = .initFill(.{}),
+
+// The @keyframes names. An animation-name without keyframes runs nothing.
+keyframes: std.StringHashMapUnmanaged(void) = .empty,
+
+// Whether a sheet's text says "keyframes", until the next sheetModified().
+keyframes_mentioned: ?bool = null,
 
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
@@ -97,6 +108,10 @@ dirty: bool = false,
 // A rule's selector reads the style attribute, so any inline style write can
 // change what it matches.
 reads_style_attribute: bool = false,
+
+// The attribute names the tracked selectors read. Nested selectors (:is,
+// :not, :has, ...) and pseudo-classes included.
+attribute_names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
 
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
@@ -130,46 +145,60 @@ fn assertOwns(self: *const StyleManager, el_: ?*const Element) void {
 pub const MAX_AT_RULE_NESTING: u8 = 32;
 
 fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet) !void {
-    if (sheet._css_rules) |css_rules| {
-        for (css_rules._rules.items) |rule| {
-            switch (rule._type) {
-                .style => |sr| {
-                    _ = try self.addRule(sr);
-                    try self.addNestedCssomRules(build_arena, sr, sr._selector_text, 0);
-                },
-                // Re-parse the stored source so an `@media` rule inserted via
-                // `insertRule` / `replaceSync` participates in the cascade
-                // when its query matches the viewport.
-                .media => try self.applyMediaAtRule(build_arena, rule._text, 0, NO_LAYER, null),
-                .layer => try self.applyLayerAtRule(build_arena, rule._text, 0, NO_LAYER, null),
-                else => {},
-            }
-        }
-        return;
-    }
-
-    const owner_node = sheet.getOwnerNode() orelse return;
-    if (owner_node.is(Element.Html.Style)) |style| {
-        const text = try style.asNode().getTextContentAlloc(self.arena.allocator());
-        var it = CssParser.parseStylesheet(text);
-        while (it.next()) |parsed_rule| {
-            switch (parsed_rule) {
-                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, 0, NO_LAYER),
-                .at_rule => |a| try self.applyAtRule(build_arena, a.keyword, a.text, 0, NO_LAYER, null),
-            }
+    // A <style> is parsed into its store on first use
+    try sheet.ensureParsed(self.frame);
+    for (sheet._store.entries()) |*entry| {
+        switch (entry._kind) {
+            .style => {
+                if (entry.text().len == 0) {
+                    // An invalid rule: its nested rules go with it
+                    continue;
+                }
+                _ = try self.addStoredRule(entry, entry.text());
+                try self.addNestedStoredRules(build_arena, entry, entry.text(), 0);
+            },
+            // The store keeps an at-rule as written: its body is parsed here
+            .media => try self.applyMediaAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+            .layer => try self.applyLayerAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+            .keyframes => try self.addKeyframes(entry.text()),
+            else => {},
         }
     }
 }
 
 /// Apply an at-rule that takes part in the cascade. Only `@media` and `@layer`
-/// do here. Other at-rules (`@keyframes`, `@supports`, `@font-face`, …) don't
-/// carry declarations relevant to the visibility filter and are skipped.
+/// do here, and `@keyframes` registers its name. Other at-rules (`@supports`,
+/// `@font-face`, …) don't carry declarations relevant to the visibility filter
+/// and are skipped.
 fn applyAtRule(self: *StyleManager, build_arena: Allocator, keyword: []const u8, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
     if (std.ascii.eqlIgnoreCase(keyword, "media")) {
         return self.applyMediaAtRule(build_arena, text, depth, layer, nest);
     }
     if (std.ascii.eqlIgnoreCase(keyword, "layer")) {
         return self.applyLayerAtRule(build_arena, text, depth, layer, nest);
+    }
+    // Any prefix, as CSSStyleSheet types the rule.
+    if (std.ascii.endsWithIgnoreCase(keyword, "keyframes")) {
+        return self.addKeyframes(text);
+    }
+}
+
+/// `text` is the whole `@keyframes <name> { … }` rule; the name can be a string.
+fn addKeyframes(self: *StyleManager, text: []const u8) Allocator.Error!void {
+    if (self.animationsEnabled() == false) {
+        return;
+    }
+    const open = std.mem.findScalar(u8, text, '{') orelse return;
+    const keyword_end = std.mem.findAny(u8, text[0..open], &std.ascii.whitespace) orelse return;
+    const name = std.mem.trim(u8, text[keyword_end..open], " \t\r\n\x0c\"'");
+    if (name.len == 0) {
+        return;
+    }
+    const arena = self.arena.allocator();
+    const gop = try self.keyframes.getOrPut(arena, name);
+    if (gop.found_existing == false) {
+        // A CSSOM rule's text goes with the rule
+        gop.key_ptr.* = try arena.dupe(u8, name);
     }
 }
 
@@ -470,11 +499,13 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
 
     // Lazy rules parse their selectors on first lookup, but the layer ranks
     // are only known now that every sheet has been read
-    var custom_it = self.custom_rules.valueIterator();
-    while (custom_it.next()) |property| {
+    var lazy_it = self.lazy_rules.valueIterator();
+    while (lazy_it.next()) |property| {
         property.stampRules(self);
     }
-    self.content_rules.stampRules(self);
+    for (&self.animation_rules.values) |*rules| {
+        rules.stampRules(self);
+    }
 }
 
 /// The rank finalizeLayerRanks still has to stamp for a packed priority, via
@@ -499,7 +530,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     if (selector_text.len == 0) {
         return;
     }
-    var sink: LazySink = .{ .allocator = build_arena };
+    var sink: LazySink = .{ .allocator = build_arena, .page = self.frame.page };
     const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &sink);
     _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), sink.declarations(), layer);
 
@@ -525,7 +556,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
-// Custom properties (keyed by name) and `content` are lazy rules instead: they
+// Custom properties and `content` are lazy rules instead, keyed by id: they
 // parse the selector on first lookup. Returns whether the rule set a tracked or
 // a custom property: nothing memoizes `content`.
 fn addSelectorRules(
@@ -537,10 +568,14 @@ fn addSelectorRules(
     layer: u16,
 ) !bool {
     var lazy = declared;
-    if (lazy.content != null and selectsOnlyPseudoElements(selector_text)) {
-        // Icon fonts declare it on hundreds of `::before` rules, and no element
-        // matches one.
-        lazy.content = null;
+    if (self.animationsEnabled() == false) {
+        lazy.animation = .{};
+    }
+    if ((lazy.declares(.content) or lazy.animation.isEmpty() == false) and selectsOnlyPseudoElements(selector_text)) {
+        // Icon fonts declare `content` on hundreds of `::before` rules, spinners
+        // an animation, and no element matches one.
+        lazy.dropContent();
+        lazy.animation = .{};
     }
 
     const relevant = props.isRelevant() or important.isRelevant();
@@ -549,20 +584,26 @@ fn addSelectorRules(
     }
 
     const arena = self.arena.allocator();
-    var changed = lazy.customs.len > 0;
+    var changed = lazy.declaresCustom();
 
     if (lazy.isEmpty() == false) {
         const priority = try self.nextPriority(layer);
         const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
-        for (lazy.customs) |custom| {
-            const gop = try self.custom_rules.getOrPut(arena, custom.name);
+        for (lazy.declared) |declaration| {
+            const gop = try self.lazy_rules.getOrPut(arena, declaration.id);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = .{};
             }
-            try gop.value_ptr.append(arena, selector_text, custom.value, if (custom.important) important_priority else priority);
+            try gop.value_ptr.append(arena, selector_text, declaration.value, if (declaration.important) important_priority else priority);
         }
-        if (lazy.content) |content| {
-            try self.content_rules.append(arena, selector_text, content.value, if (content.important) important_priority else priority);
+        for (std.enums.values(Animation.Property)) |property| {
+            const rules = self.animation_rules.getPtr(property);
+            if (lazy.animation.normal.get(property)) |value| {
+                try rules.append(arena, selector_text, value, priority);
+            }
+            if (lazy.animation.important.get(property)) |value| {
+                try rules.append(arena, selector_text, value, important_priority);
+            }
         }
     }
 
@@ -581,9 +622,7 @@ fn addSelectorRules(
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, important: Declarations, layer: u16) !void {
-    if (readsStyleAttribute(selector)) {
-        self.reads_style_attribute = true;
-    }
+    try self.collectAttributeNames(selector);
     const matched = unwrapWhere(selector);
     const placement = placeSelector(matched) orelse return;
     const rank_and_order = try self.nextPriority(layer);
@@ -602,42 +641,145 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Decla
     }
 }
 
-fn readsStyleAttribute(selector: Selector.Selector) bool {
-    if (compoundReadsStyleAttribute(selector.first)) {
-        return true;
-    }
+fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector) Allocator.Error!void {
+    try self.collectCompoundAttributeNames(selector.first);
     for (selector.segments) |segment| {
-        if (compoundReadsStyleAttribute(segment.compound)) {
-            return true;
-        }
+        try self.collectCompoundAttributeNames(segment.compound);
     }
-    return false;
 }
 
-fn compoundReadsStyleAttribute(compound: Selector.Compound) bool {
-    for (compound.parts) |part| {
-        const nested: []const Selector.Selector = switch (part) {
-            .attribute => |attr| {
+fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compound) Allocator.Error!void {
+    // By pointer: a short name's str() points into its String, which would be
+    // an issue, except these are all on the same self.arena, so we can copy the pointer.
+    const allocator = self.arena.allocator();
+    for (compound.parts) |*part| {
+        const nested: []const Selector.Selector = switch (part.*) {
+            .attribute => |*attr| {
                 if (attr.name.eql(comptime .wrap("style"))) {
-                    return true;
+                    self.reads_style_attribute = true;
                 }
+                try self.attribute_names.put(allocator, attr.name.str(), {});
                 continue;
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where, .has => |selectors| selectors,
                 .nth_child_of, .nth_last_child_of => |of| of.selectors,
-                else => continue,
+                else => {
+                    for (pseudoClassAttributes(pseudo)) |name| {
+                        try self.attribute_names.put(allocator, name, {});
+                    }
+                    continue;
+                },
             },
             else => continue,
         };
         for (nested) |selector| {
-            if (readsStyleAttribute(selector)) {
-                return true;
-            }
+            try self.collectAttributeNames(selector);
         }
     }
-    return false;
 }
+
+/// The attribute names that are read for a pseudo. For example, the :link
+/// pseudo class requires that we read the "href" attribute, thus we need to
+/// monitor changes to "href".
+fn pseudoClassAttributes(pseudo: Selector.PseudoClass) []const []const u8 {
+    return switch (pseudo) {
+        .link, .any_link => &.{"href"},
+        .lang => &.{"lang"},
+        .disabled, .enabled => &.{"disabled"},
+        .checked => &.{ "checked", "selected" },
+        .default => &.{ "checked", "selected", "form" },
+        .required, .optional => &.{ "required", "readonly", "disabled" },
+        .read_only, .read_write => &.{ "readonly", "disabled", "contenteditable" },
+        // Constraint validation (ValidityState); a form or fieldset checks
+        // the controls under it, name groups radios. checked, selected and
+        // value set a control's state while the user hasn't touched it.
+        .valid, .invalid, .in_range, .out_of_range => &.{ "required", "readonly", "disabled", "pattern", "min", "max", "step", "minlength", "maxlength", "multiple", "value", "checked", "selected", "form", "name" },
+        // Element state, the tree, or always_read (:target reads id)
+        .modal, .popover_open, .indeterminate, .placeholder_shown, .hover, .active, .focus, .focus_within, .focus_visible, .visited, .target, .root, .scope, .empty, .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type, .defined => &.{},
+        // Walked by collectCompoundAttributeNames
+        .not, .is, .where, .has, .nth_child_of, .nth_last_child_of => unreachable,
+    };
+}
+
+/// Attributes the engine reads whatever the rules: class and id selectors,
+/// inline style, the UA hidden-element rules (matchesUaDisplayNoneRule),
+/// img/iframe sizes (Element.getElementAxis) and SVG's font-size presentation
+/// attribute (computedFontSizeAt).
+const always_read = std.StaticStringMapWithEql(void, std.static_string_map.eqlAsciiIgnoreCase).initComptime(.{
+    .{"class"}, .{"id"},      .{"style"}, .{"hidden"}, .{"type"},
+    .{"open"},  .{"popover"}, .{"width"}, .{"height"}, .{"font-size"},
+});
+
+/// When an attribute changes, we only want to invalidate the caches if we care
+/// about that attribute. Some attributes we care about because a selector is
+/// using it (div[role=menu]), which is what the `attribute_names` field is
+/// tracking. But we implicitly always care about some attributes, like "hidden"
+/// or "open". But how do we make sure that `readsAttribute` is kept in sync?
+/// What if someone adds el.isAccessible() which the StyleManager starts to use
+/// and which accesses the "axs" attribute? This is what this debug-only code
+/// is for. A thread-local variable is set by the StyleManager before it reads
+/// anything, and then in Attribute.zig, when an attribute is read, and the
+/// thread local is set, we can make sure that the attribute is a known one.
+pub const fill_check = struct {
+    threadlocal var current: ?*const StyleManager = null;
+
+    pub fn enter(self: *const StyleManager) ?*const StyleManager {
+        if (comptime lp.IS_DEBUG == false) {
+            return null;
+        }
+        const previous = current;
+        current = self;
+        return previous;
+    }
+
+    pub fn exit(previous: ?*const StyleManager) void {
+        if (comptime lp.IS_DEBUG) {
+            current = previous;
+        }
+    }
+
+    pub fn attributeRead(name: []const u8) void {
+        if (comptime lp.IS_DEBUG == false) {
+            return;
+        }
+        const self = current orelse return;
+        if (self.readsAttribute(name) == false) {
+            std.debug.panic("StyleManager memo read untracked attribute '{s}': add it to always_read or pseudoClassAttributes", .{name});
+        }
+    }
+};
+
+/// Whether writing attribute `name` can change what a memo holds
+pub fn readsAttribute(self: *const StyleManager, name: []const u8) bool {
+    if (self.dirty) {
+        // doesn't matter, we're rebuilding anyways.
+        return true;
+    }
+    return always_read.has(name) or self.attribute_names.contains(name);
+}
+
+// Selector attribute names are lowercased, but a foreign element's attribute
+// keeps its case (viewBox). Ignoring the case can only cost us perf, not
+// correctness.
+const AttributeNameContext = struct {
+    pub fn hash(_: AttributeNameContext, name: []const u8) u64 {
+        var buf: [32]u8 = undefined;
+        var hasher: std.hash.Wyhash = .init(0);
+
+        var rest = name;
+        while (rest.len > 0) {
+            const n = @min(rest.len, buf.len);
+            hasher.update(std.ascii.lowerString(&buf, rest[0..n]));
+            rest = rest[n..];
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: AttributeNameContext, a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
@@ -653,13 +795,13 @@ comptime {
 /// Invalidates the memos an inline style write of `name` on `el` can change.
 /// This returns false when an individual memo cannot be cleared. The caller
 /// must report a full style change.
-pub fn inlineStyleWritten(self: *StyleManager, el: *Element, name: []const u8) bool {
+pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) bool {
     self.assertOwns(el);
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
 
-    var it = propertyReach(name).iterator();
+    var it = propertyReach(id).iterator();
     while (it.next()) |memo| {
         switch (memo) {
             .layout => self.layout_bumps += 1,
@@ -681,19 +823,19 @@ pub fn layoutVersion(self: *const StyleManager) usize {
     return self.frame.page.style_version + self.layout_bumps;
 }
 
-/// Lowercase property name -> the memos that read it. A name not in here
+/// Each known property's memos: the ones that read it. A property not listed
 /// reaches nothing. transform/z-index/custom properties...no memo reads them.
 /// Nothing substitutes var() (yet).
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
-    const layout_ignores = [_][]const u8{ "visibility", "opacity", "pointer-events", "touch-action", "overscroll-behavior-x", "overscroll-behavior-y" };
+    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y" };
 
     // font-size isn't cascaded by any group, but text wraps at it
     const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
     @setEvalBranchQuota(names.len * names.len * 100);
 
-    var kvs: [names.len]struct { []const u8, Memos } = undefined;
-    for (names, &kvs) |name, *kv| {
+    var result: [properties.known_count]Memos = @splat(.empty);
+    for (names) |name| {
         var memos: Memos = .empty;
         for (group_fields) |field| {
             const Spec = @FieldType(Declarations, field);
@@ -703,31 +845,26 @@ const property_reach = blk: {
                 }
             }
         }
-        for (layout_ignores) |ignored| {
-            if (std.mem.eql(u8, name, ignored)) {
-                break;
-            }
-        } else {
+        const id = @field(properties.Id, name);
+        if (std.mem.findScalar(properties.Id, &layout_ignores, id) == null) {
             memos.insert(.layout);
         }
-        kv.* = .{ name, memos };
+        result[@backingInt(id)] = memos;
     }
-    break :blk std.StaticStringMap(Memos).initComptime(kvs);
+    // An axis shorthand reaches what its longhands do
+    for (properties.axis_shorthands) |shorthand| {
+        result[@backingInt(shorthand.name)] = result[@backingInt(shorthand.x)].unionWith(result[@backingInt(shorthand.y)]);
+    }
+    break :blk result;
 };
 
-fn propertyReach(name: []const u8) Memos {
-    // A shorthand is shorter than its longhands, so nothing longer is read
-    var buf: [property_reach.max_len]u8 = undefined;
-    if (name.len > buf.len) {
+fn propertyReach(id: properties.Id) Memos {
+    const index = @backingInt(id);
+    if (index >= property_reach.len) {
+        // a custom property
         return .empty;
     }
-    const lower = std.ascii.lowerString(&buf, name);
-    if (CssParser.axisShorthand(lower)) |shorthand| {
-        const x_prop: Memos = property_reach.get(shorthand.x) orelse .empty;
-        const y_prop: Memos = property_reach.get(shorthand.y) orelse .empty;
-        return x_prop.unionWith(y_prop);
-    }
-    return property_reach.get(lower) orelse .empty;
+    return property_reach[index];
 }
 
 /// Rank and document-order bits of the next rule. A rule outside any layer
@@ -803,12 +940,9 @@ fn startsPseudoElement(after_colon: []const u8) bool {
 
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
-    self.cascadeChanged();
-}
-
-fn cascadeChanged(self: *StyleManager) void {
-    self.frame.styleChanged();
-    Frame.observers.scheduleResizeDelivery(self.frame);
+    self.keyframes_mentioned = null;
+    Frame.change.rulesChanged(self.frame);
+    Frame.css_animations.documentChanged(self.frame);
 }
 
 /// Rebuilds the rule list from all document stylesheets.
@@ -836,7 +970,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     inline for (group_fields, &caps) |field, *c| {
         c.* = @field(self, field).capacities();
     }
-    const custom_rules_count = self.custom_rules.count();
+    const lazy_rules_count = self.lazy_rules.count();
+    const attribute_names_count = self.attribute_names.count();
 
     self.arena.resetRetain();
     self.widths = .{};
@@ -845,13 +980,18 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.rule_layers = .empty;
     self.last_rule_sheet = null;
 
+    const arena = self.arena.allocator();
+
     inline for (group_fields, caps) |field, c| {
-        try @field(self, field).reset(self.arena.allocator(), c);
+        try @field(self, field).reset(arena, c);
     }
 
-    self.custom_rules = .empty;
-    try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
-    self.content_rules = .{};
+    self.lazy_rules = .empty;
+    try self.lazy_rules.ensureTotalCapacity(arena, lazy_rules_count);
+    self.animation_rules = .initFill(.{});
+    self.keyframes = .empty;
+    self.attribute_names = .empty;
+    try self.attribute_names.ensureTotalCapacity(arena, attribute_names_count);
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
@@ -1005,16 +1145,24 @@ pub fn whiteSpace(self: *StyleManager, el: *Element) text_measure.WhiteSpace {
         }
     }
     return .{
-        .collapse = switch (collapse) {
-            .inherit, .collapse, .preserve_breaks => true,
-            .preserve, .preserve_spaces, .break_spaces => false,
-        },
+        .collapse = !collapse.keepsSpaces(),
         .newlines = switch (collapse) {
             .preserve, .preserve_breaks, .break_spaces => true,
             .inherit, .collapse, .preserve_spaces => false,
         },
         .wrap = wrap != .nowrap,
     };
+}
+
+/// For tree walks that already know the parent's value, this returns null
+/// when it takes its parent value.
+pub fn ownKeepsSpaces(self: *StyleManager, el: *Element) ?bool {
+    self.rebuildIfDirty() catch return null;
+    const collapse = self.ownWhiteSpace(el).collapse;
+    if (collapse == .inherit) {
+        return null;
+    }
+    return collapse.keepsSpaces();
 }
 
 fn ownWhiteSpace(self: *StyleManager, el: *Element) WhiteSpace {
@@ -1684,6 +1832,11 @@ fn Group(comptime Spec: type) type {
         }
 
         fn compute(self: *const Self, el: *Element, frame: *Frame) Cascaded {
+            // Debug only check to make sure any attribute we access is known.
+            // Protects against adding reads to un-tracked attributes.
+            const previous = fill_check.enter(&frame._style_manager);
+            defer fill_check.exit(previous);
+
             var p: Cascaded = .{};
             var priorities: Priorities(Declared) = .initFill(0);
 
@@ -1821,47 +1974,40 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     return false;
 }
 
-/// The CSSOM twin of addRawRule; returns what addSelectorRules does.
-fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
-    return self.addRuleAs(style_rule, style_rule._selector_text);
-}
-
-/// Add a style rule's declarations under `selector_text`: its own selector,
-/// or for a nested rule, that selector resolved against its parent's.
-fn addRuleAs(self: *StyleManager, style_rule: *CSSStyleRule, selector_text: []const u8) !bool {
+/// The stored twin of addRawRule: add a style rule's declarations under
+/// `selector_text`, its own selector or, for a nested rule, that selector
+/// resolved against its parent's. Returns what addSelectorRules does.
+fn addStoredRule(self: *StyleManager, entry: *const RuleStore.Entry, selector_text: []const u8) !bool {
     if (selector_text.len == 0) {
         return false;
     }
-    const style = style_rule._style orelse return false;
-    const folded = extractDeclared(Declarations, style);
-    const lazy = try self.extractLazyDeclarations(style);
+    const folded = extractDeclared(Declarations, &entry._block, self.frame);
+    const lazy = try self.extractLazyDeclarations(&entry._block);
 
     // A custom rule holds selector_text until the property is looked up, but it
-    // doesn't need a copy: setSelectorText allocates the replacement from the
-    // frame arena and never frees the old one. Worst case we match a stale
-    // selector, which is what the rest of this file already does when a rule is
-    // mutated without going through sheetModified().
+    // doesn't need a copy: the sheet frees a rule's selector only along with
+    // sheetModified(), and every lookup rebuilds first.
     return self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), lazy, NO_LAYER);
 }
 
-/// The CSSOM counterpart to the nested rules addRawRule adds: a style rule
-/// keeps the rules nested in its block in `_rules`. `parent_selector` is the
-/// parent's selector, already resolved when the parent is itself nested.
-fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSSStyleRule, parent_selector: []const u8, depth: u8) Allocator.Error!void {
-    const nested_rules = parent._rules orelse return;
+/// The stored counterpart to the nested rules addRawRule adds.
+/// `parent_selector` is the parent's selector, already resolved when the
+/// parent is itself nested.
+fn addNestedStoredRules(self: *StyleManager, build_arena: Allocator, parent: *const RuleStore.Entry, parent_selector: []const u8, depth: u8) Allocator.Error!void {
+    const children = parent._children orelse return;
     if (depth >= MAX_AT_RULE_NESTING) {
         return;
     }
-    for (nested_rules._rules.items) |rule| {
-        switch (rule._type) {
-            .style => |sr| {
+    for (children.entries()) |*entry| {
+        switch (entry._kind) {
+            .style => {
                 // The arena, as in addRawRule.
-                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, sr._selector_text) orelse continue;
-                _ = try self.addRuleAs(sr, selector);
-                try self.addNestedCssomRules(build_arena, sr, selector, depth + 1);
+                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, entry.text()) orelse continue;
+                _ = try self.addStoredRule(entry, selector);
+                try self.addNestedStoredRules(build_arena, entry, selector, depth + 1);
             },
-            .media => try self.applyMediaAtRule(build_arena, rule._text, depth + 1, NO_LAYER, parent_selector),
-            .layer => try self.applyLayerAtRule(build_arena, rule._text, depth + 1, NO_LAYER, parent_selector),
+            .media => try self.applyMediaAtRule(build_arena, entry.text(), depth + 1, NO_LAYER, parent_selector),
+            .layer => try self.applyLayerAtRule(build_arena, entry.text(), depth + 1, NO_LAYER, parent_selector),
             else => {},
         }
     }
@@ -1870,34 +2016,34 @@ fn addNestedCssomRules(self: *StyleManager, build_arena: Allocator, parent: *CSS
 /// A style rule appended at or after the sheet that emitted the last rule is
 /// last in cascade order, so it joins the buckets directly. Anything else
 /// takes the rebuild path.
-pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) void {
+pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, index: u32) void {
     if (self.dirty or sheet._disabled) {
         // The pending rebuild reads the sheet's rules and picks it up.
         return;
     }
-    const style_rule = switch (rule._type) {
-        .style => |s| s,
-        else => return self.sheetModified(),
-    };
+    const entry = &sheet._store.entries()[index];
     // A rule with nested rules takes the rebuild path, which adds them.
-    if (style_rule._rules != null or !self.appendable(sheet, rule)) {
+    if (entry._kind != .style or entry._children != null or !self.appendable(sheet, index)) {
         return self.sheetModified();
     }
     const before = self.next_doc_order;
-    const changed = self.addRule(style_rule) catch return self.sheetModified();
+    const animations = self.animationRuleCount();
+    const changed = self.addStoredRule(entry, entry.text()) catch return self.sheetModified();
     if (self.next_doc_order != before) {
         self.last_rule_sheet = sheet;
+    }
+    if (self.animationRuleCount() != animations) {
+        Frame.css_animations.documentChanged(self.frame);
     }
     if (!changed) {
         // Nothing tracked changed, so every memoized answer still holds.
         return;
     }
-    self.cascadeChanged();
+    Frame.change.rulesChanged(self.frame);
 }
 
-fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) bool {
-    const rules = sheet._css_rules orelse return false;
-    if (rules._rules.last() != rule) {
+fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, index: u32) bool {
+    if (index + 1 != sheet._store.length()) {
         return false;
     }
     const sheets = self.frame.document._style_sheets orelse return false;
@@ -1913,36 +2059,30 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     return false;
 }
 
-/// The CSSOM counterpart to foldDeclarations' lazy branches. Names within one
+/// The stored counterpart to foldDeclarations' lazy branches. Names within one
 /// declaration block are already unique, so there is nothing to dedup here.
-///
-/// Unlike the selector text, both strings have to be copied: they can point
-/// into the Property itself (small string optimization), and setProperty /
-/// removeProperty destroy it without going through sheetModified(). We'd be
-/// left reading freed memory rather than something merely stale.
-fn extractLazyDeclarations(self: *StyleManager, style: *CSSStyleProperties) !LazyDeclarations {
+fn extractLazyDeclarations(self: *StyleManager, block: *const DeclarationBlock) !LazyDeclarations {
     const arena = self.arena.allocator();
 
-    var customs: std.ArrayList(LazyDeclaration) = .empty;
-    var content: ?LazyDeclaration = null;
-    var it = style.asCSSStyleDeclaration().iterator();
-    while (it.next()) |property| {
-        const name = property._name.str();
-        if (isCustomProperty(name)) {
-            try customs.append(arena, .{
-                .name = try arena.dupe(u8, name),
-                .value = try arena.dupe(u8, property._value.str()),
-                .important = property._important,
+    var declared: std.ArrayList(LazyDeclaration) = .empty;
+    var lazy_animation: LazyAnimation = .{};
+    var it = block.iterator(&self.frame.page.css_custom_names);
+    while (it.next()) |declaration| {
+        if (isLazy(declaration.id)) {
+            // Not duping declaration.value is risky, but ok. Any write to the
+            // declaration which would free the value also makes the StyleManager
+            // as dirty and a rebuild would happen 100% of the time before the
+            // freed value was accessed.
+            try declared.append(arena, .{
+                .id = declaration.id,
+                .value = declaration.value,
+                .important = declaration.important,
             });
-        } else if (std.ascii.eqlIgnoreCase(name, "content")) {
-            content = .{
-                .name = "content",
-                .value = try arena.dupe(u8, property._value.str()),
-                .important = property._important,
-            };
+        } else if (Animation.Property.fromId(declaration.id)) |animation_property| {
+            lazy_animation.declare(animation_property, declaration.value, declaration.important);
         }
     }
-    return .{ .customs = customs.items, .content = content };
+    return .{ .declared = declared.items, .animation = lazy_animation };
 }
 
 const BucketKey = union(enum) {
@@ -2054,14 +2194,14 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
     return best_key;
 }
 
-/// Extracts the tracked properties from a style declaration. The object holds
+/// Extracts the tracked properties from a declaration block. The block holds
 /// one entry per name in first-declared order, so folding it in order gives a
 /// shorthand and its longhands the same precedence as the source text.
-fn extractDeclared(comptime Declared: type, style: *CSSStyleProperties) Slots(Declared) {
+fn extractDeclared(comptime Declared: type, block: *const DeclarationBlock, frame: *const Frame) Slots(Declared) {
     var slots: Slots(Declared) = .{};
-    var it = style.asCSSStyleDeclaration().iterator();
-    while (it.next()) |property| {
-        slots.apply(property._name.str(), property._value.str(), property._important);
+    var it = block.iterator(&frame.page.css_custom_names);
+    while (it.next()) |declaration| {
+        slots.apply(declaration.id, declaration.value, declaration.important);
     }
     return slots;
 }
@@ -2294,6 +2434,13 @@ const SpaceCollapse = enum(u3) {
         }
         return null;
     }
+
+    fn keepsSpaces(self: SpaceCollapse) bool {
+        return switch (self) {
+            .inherit, .collapse, .preserve_breaks => false,
+            .preserve, .preserve_spaces, .break_spaces => true,
+        };
+    }
 };
 
 /// text-wrap-mode
@@ -2490,37 +2637,46 @@ const Visibility = struct {
         opacity_zero: ?bool = null,
         pointer_events_none: ??bool = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "display")) {
-                self.display = Display.parse(value);
-                self.box = Box.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-direction")) {
-                self.flex_column = isColumnDirection(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-wrap")) {
-                self.flex_wrap = isWrap(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-flow")) {
-                self.flex_column = false;
-                self.flex_wrap = false;
-                // Either order; an omitted one resets to row or nowrap
-                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
-                while (it.next()) |token| {
-                    if (isColumnDirection(token)) {
-                        self.flex_column = true;
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .display => {
+                    self.display = Display.parse(value);
+                    self.box = Box.parse(value);
+                },
+                .@"flex-direction" => {
+                    self.flex_column = isColumnDirection(value);
+                },
+                .@"flex-wrap" => {
+                    self.flex_wrap = isWrap(value);
+                },
+                .@"flex-flow" => {
+                    self.flex_column = false;
+                    self.flex_wrap = false;
+                    // Either order; an omitted one resets to row or nowrap
+                    var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                    while (it.next()) |token| {
+                        if (isColumnDirection(token)) {
+                            self.flex_column = true;
+                        }
+                        if (isWrap(token)) {
+                            self.flex_wrap = true;
+                        }
                     }
-                    if (isWrap(token)) {
-                        self.flex_wrap = true;
-                    }
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
-                self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
-            } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
-                self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
-            } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
-                self.pointer_events_none = parseInheritedFlag(value, &.{"none"}, &.{
-                    "auto",         "initial", "visiblePainted", "visibleFill", "visibleStroke",
-                    "visible",      "painted", "fill",           "stroke",      "all",
-                    "bounding-box",
-                });
+                },
+                .visibility => {
+                    self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
+                },
+                .opacity => {
+                    self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
+                },
+                .@"pointer-events" => {
+                    self.pointer_events_none = parseInheritedFlag(value, &.{"none"}, &.{
+                        "auto",         "initial", "visiblePainted", "visibleFill", "visibleStroke",
+                        "visible",      "painted", "fill",           "stroke",      "all",
+                        "bounding-box",
+                    });
+                },
+                else => {},
             }
         }
 
@@ -2623,57 +2779,78 @@ const Geometry = struct {
         left: ?Length = null,
         right: ?Length = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
-                self.overflow_x_scrolls = overflowScrolls(value);
-                self.overflow_x_clips = overflowClips(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-grow")) {
-                self.flex_grow = flexGrows(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "flex-shrink")) {
-                if (flexFactor(value)) |factor| {
-                    self.flex_no_shrink = factor == 0;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "flex")) {
-                self.flex_grow = flexShorthandGrows(value);
-                self.flex_no_shrink = flexShorthandNoShrink(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "margin")) {
-                const sides = boxSides(value) orelse return;
-                self.margin_left = sides.left;
-                self.margin_right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "margin-inline")) {
-                const sides = inlineSides(value) orelse return;
-                self.margin_left = sides.left;
-                self.margin_right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "inset")) {
-                const sides = boxSides(value) orelse return;
-                self.left = sides.left;
-                self.right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "inset-inline")) {
-                const sides = inlineSides(value) orelse return;
-                self.left = sides.left;
-                self.right = sides.right;
-            } else if (std.ascii.eqlIgnoreCase(name, "left") or std.ascii.eqlIgnoreCase(name, "inset-inline-start")) {
-                self.left = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "right") or std.ascii.eqlIgnoreCase(name, "inset-inline-end")) {
-                self.right = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "margin-left") or std.ascii.eqlIgnoreCase(name, "margin-inline-start")) {
-                self.margin_left = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "margin-right") or std.ascii.eqlIgnoreCase(name, "margin-inline-end")) {
-                self.margin_right = Length.parseMargin(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
-                self.overflow_y_scrolls = overflowScrolls(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-x")) {
-                self.overscroll_x_contains = overscrollContains(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "overscroll-behavior-y")) {
-                self.overscroll_y_contains = overscrollContains(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "width")) {
-                self.width = Length.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "height")) {
-                self.height = Length.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "min-width")) {
-                self.min_width = Length.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "max-width")) {
-                self.max_width = Length.parse(value);
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .@"overflow-x" => {
+                    self.overflow_x_scrolls = overflowScrolls(value);
+                    self.overflow_x_clips = overflowClips(value);
+                },
+                .@"flex-grow" => {
+                    self.flex_grow = flexGrows(value);
+                },
+                .@"flex-shrink" => {
+                    if (flexFactor(value)) |factor| {
+                        self.flex_no_shrink = factor == 0;
+                    }
+                },
+                .flex => {
+                    self.flex_grow = flexShorthandGrows(value);
+                    self.flex_no_shrink = flexShorthandNoShrink(value);
+                },
+                .margin => {
+                    const sides = boxSides(value) orelse return;
+                    self.margin_left = sides.left;
+                    self.margin_right = sides.right;
+                },
+                .@"margin-inline" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.margin_left = sides.left;
+                    self.margin_right = sides.right;
+                },
+                .inset => {
+                    const sides = boxSides(value) orelse return;
+                    self.left = sides.left;
+                    self.right = sides.right;
+                },
+                .@"inset-inline" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.left = sides.left;
+                    self.right = sides.right;
+                },
+                .left, .@"inset-inline-start" => {
+                    self.left = Length.parseMargin(value);
+                },
+                .right, .@"inset-inline-end" => {
+                    self.right = Length.parseMargin(value);
+                },
+                .@"margin-left", .@"margin-inline-start" => {
+                    self.margin_left = Length.parseMargin(value);
+                },
+                .@"margin-right", .@"margin-inline-end" => {
+                    self.margin_right = Length.parseMargin(value);
+                },
+                .@"overflow-y" => {
+                    self.overflow_y_scrolls = overflowScrolls(value);
+                },
+                .@"overscroll-behavior-x" => {
+                    self.overscroll_x_contains = overscrollContains(value);
+                },
+                .@"overscroll-behavior-y" => {
+                    self.overscroll_y_contains = overscrollContains(value);
+                },
+                .width => {
+                    self.width = Length.parse(value);
+                },
+                .height => {
+                    self.height = Length.parse(value);
+                },
+                .@"min-width" => {
+                    self.min_width = Length.parse(value);
+                },
+                .@"max-width" => {
+                    self.max_width = Length.parse(value);
+                },
+                else => {},
             }
         }
 
@@ -2799,8 +2976,8 @@ const TouchAction = struct {
         pan_x_blocked: ?bool = null,
         pan_y_blocked: ?bool = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (!std.ascii.eqlIgnoreCase(name, "touch-action")) return;
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            if (id != .@"touch-action") return;
             const pans = parse(value) orelse return;
             self.pan_x_blocked = !pans.x;
             self.pan_y_blocked = !pans.y;
@@ -2858,26 +3035,33 @@ const Text = struct {
         text_transform: ?TextTransform = null,
         white_space_collapse: ?SpaceCollapse = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "text-transform")) {
-                self.text_transform = TextTransform.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "white-space")) {
-                if (WhiteSpace.parse(value)) |white_space| {
-                    self.white_space_collapse = white_space.collapse;
-                    self.text_wrap_mode = white_space.wrap;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "white-space-collapse")) {
-                if (SpaceCollapse.parse(value)) |collapse| {
-                    self.white_space_collapse = collapse;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap-mode")) {
-                if (WrapMode.parse(value)) |mode| {
-                    self.text_wrap_mode = mode;
-                }
-            } else if (std.ascii.eqlIgnoreCase(name, "text-wrap")) {
-                if (WrapMode.parseTextWrap(value)) |mode| {
-                    self.text_wrap_mode = mode;
-                }
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .@"text-transform" => {
+                    self.text_transform = TextTransform.parse(value);
+                },
+                .@"white-space" => {
+                    if (WhiteSpace.parse(value)) |white_space| {
+                        self.white_space_collapse = white_space.collapse;
+                        self.text_wrap_mode = white_space.wrap;
+                    }
+                },
+                .@"white-space-collapse" => {
+                    if (SpaceCollapse.parse(value)) |collapse| {
+                        self.white_space_collapse = collapse;
+                    }
+                },
+                .@"text-wrap-mode" => {
+                    if (WrapMode.parse(value)) |mode| {
+                        self.text_wrap_mode = mode;
+                    }
+                },
+                .@"text-wrap" => {
+                    if (WrapMode.parseTextWrap(value)) |mode| {
+                        self.text_wrap_mode = mode;
+                    }
+                },
+                else => {},
             }
         }
     };
@@ -2939,12 +3123,16 @@ const Flow = struct {
         position: ?Position = null,
         floated: ?bool = null,
 
-        fn apply(self: *Declared, name: []const u8, value: []const u8) void {
-            if (std.ascii.eqlIgnoreCase(name, "position")) {
-                self.position = Position.parse(value);
-            } else if (std.ascii.eqlIgnoreCase(name, "float")) {
-                self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
-                    std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                .position => {
+                    self.position = Position.parse(value);
+                },
+                .float => {
+                    self.floated = std.ascii.eqlIgnoreCase(value, "left") or std.ascii.eqlIgnoreCase(value, "right") or
+                        std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end");
+                },
+                else => {},
             }
         }
     };
@@ -2980,9 +3168,9 @@ const Declarations = struct {
     text: Text.Declared = .{},
     flow: Flow.Declared = .{},
 
-    fn apply(self: *Declarations, name: []const u8, value: []const u8) void {
+    fn apply(self: *Declarations, id: properties.Id, value: []const u8) void {
         inline for (group_fields) |field| {
-            @field(self, field).apply(name, value);
+            @field(self, field).apply(id, value);
         }
     }
 
@@ -3013,11 +3201,10 @@ fn Priorities(comptime Declared: type) type {
     return std.enums.EnumArray(std.meta.FieldEnum(Declared), u64);
 }
 
-// custom_rules map is property_name -> LazyRules, loosely:
+// lazy_rules map is property id -> LazyRules, loosely:
 //    --color => [(:root, "#ff0"), (.card, "#000")]
 // So when code says "getComputedStyle(el).getPropertyValue("--color")
-// We end up with a relatively small number of rules. content_rules holds the
-// same for `content`.
+// We end up with a relatively small number of rules. `content` is one more id.
 const LazyRules = struct {
     rules: std.ArrayList(LazyRule) = .empty,
     parsed: ?[]const ParsedRule = null, // lazily parsed
@@ -3053,21 +3240,75 @@ const ParsedRule = struct {
     priority: u64, // packed the same way as a group Rule.priority
 };
 
-/// A lazy declaration on its way from a rule block into custom_rules or
-/// content_rules.
+/// A lazy declaration on its way from a rule block into lazy_rules.
 const LazyDeclaration = struct {
-    name: []const u8,
+    id: properties.Id,
     value: []const u8,
     important: bool,
 };
 
 /// The lazy declarations of one rule block.
 const LazyDeclarations = struct {
-    customs: []const LazyDeclaration = &.{},
-    content: ?LazyDeclaration = null,
+    // Custom properties and `content`, one per id
+    declared: []LazyDeclaration = &.{},
+    animation: LazyAnimation = .{},
 
     fn isEmpty(self: LazyDeclarations) bool {
-        return self.customs.len == 0 and self.content == null;
+        return self.declared.len == 0 and self.animation.isEmpty();
+    }
+
+    fn declares(self: LazyDeclarations, id: properties.Id) bool {
+        for (self.declared) |declaration| {
+            if (declaration.id == id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Unlike `content`, a custom property can change what a memo reads
+    fn declaresCustom(self: LazyDeclarations) bool {
+        for (self.declared) |declaration| {
+            if (declaration.id != .content) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn dropContent(self: *LazyDeclarations) void {
+        for (self.declared, 0..) |declaration, i| {
+            if (declaration.id == .content) {
+                // Each id goes to its own rules: the order doesn't matter
+                self.declared[i] = self.declared[self.declared.len - 1];
+                self.declared.len -= 1;
+                return;
+            }
+        }
+    }
+};
+
+/// A block's animation declarations, normal and !important ones apart. The
+/// last of a property wins, and a shorthand drops the longhands before it.
+const LazyAnimation = struct {
+    normal: std.enums.EnumArray(Animation.Property, ?[]const u8) = .initFill(null),
+    important: std.enums.EnumArray(Animation.Property, ?[]const u8) = .initFill(null),
+
+    fn declare(self: *LazyAnimation, property: Animation.Property, value: []const u8, important: bool) void {
+        const values = if (important) &self.important else &self.normal;
+        if (property == .shorthand) {
+            values.* = .initFill(null);
+        }
+        values.set(property, value);
+    }
+
+    fn isEmpty(self: *const LazyAnimation) bool {
+        for (self.normal.values, self.important.values) |normal, important| {
+            if (normal != null or important != null) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -3126,55 +3367,89 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
         return .{};
     }
     if (el.existingStyle(frame)) |style| {
-        return extractDeclared(Declared, style);
+        return extractDeclared(Declared, style.asCSSStyleDeclaration().declarationBlock(), frame);
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
     // Without a sink nothing allocates
     return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr), null) catch unreachable;
 }
 
-/// The lazy declarations of one block. Custom properties go by name, so a
-/// block declaring the same one twice keeps only the winner.
+/// The lazy declarations of one block. They go by id, so a block declaring
+/// the same one twice keeps only the winner.
 const LazySink = struct {
     allocator: Allocator,
-    customs: std.StringArrayHashMapUnmanaged(LazyDeclaration) = .empty,
-    content: ?LazyDeclaration = null,
+    page: *Page, // Its custom property names are numbered on the page, like the CSSOM's.
+    declared: std.ArrayHashMapUnmanaged(properties.Id, LazyDeclaration, IdArrayContext, false) = .empty,
+    animation: LazyAnimation = .{},
 
     fn declarations(self: *const LazySink) LazyDeclarations {
-        return .{ .customs = self.customs.values(), .content = self.content };
+        return .{ .declared = self.declared.values(), .animation = self.animation };
     }
 };
+
+/// For the maps keyed by property id. Ids are small and dense, so a multiply
+/// spreads them; the default hashes their bytes with Wyhash, which costs a
+/// custom property about as much as hashing its name. The map takes the slot
+/// from the low bits and the fingerprint from the top 7, so both need mixing.
+const IdContext = struct {
+    pub fn hash(_: IdContext, id: properties.Id) u64 {
+        const h = @as(u64, @backingInt(id)) *% 0x9e3779b97f4a7c15;
+        return h ^ (h >> 32);
+    }
+
+    pub fn eql(_: IdContext, a: properties.Id, b: properties.Id) bool {
+        return a == b;
+    }
+};
+
+const IdArrayContext = struct {
+    pub fn hash(_: IdArrayContext, id: properties.Id) u32 {
+        return @truncate(IdContext.hash(.{}, id));
+    }
+
+    pub fn eql(_: IdArrayContext, a: properties.Id, b: properties.Id, _: usize) bool {
+        return a == b;
+    }
+};
+
+/// Custom properties and `content`: kept as declared, and resolved only when
+/// a script reads one.
+fn isLazy(id: properties.Id) bool {
+    return id == .content or properties.knownName(id) == null;
+}
 
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
 // materialized object was built from: a normal declaration never overrides an
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
-// case-sensitive. Custom properties and `content` go to `lazy` when there is
-// one.
+// case-sensitive. Custom properties, `content` and the animation properties go
+// to `lazy` when there is one.
 fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, lazy: ?*LazySink) !Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = declarations;
     while (it.next()) |declaration| {
-        if (isCustomProperty(declaration.name)) {
+        const id = trackedId(declaration.name) orelse blk: {
+            if (isCustomProperty(declaration.name) == false) {
+                continue;
+            }
+            const page = (lazy orelse continue).page;
+            break :blk (try page.css_custom_names.intern(page.arena, declaration.name)) orelse continue;
+        };
+        if (isLazy(id)) {
             const sink = lazy orelse continue;
-            const gop = try sink.customs.getOrPut(sink.allocator, declaration.name);
+            const gop = try sink.declared.getOrPut(sink.allocator, id);
             if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
                 continue;
             }
-            gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
+            gop.value_ptr.* = .{ .id = id, .value = declaration.value, .important = declaration.important };
             continue;
         }
-        if (std.ascii.eqlIgnoreCase(declaration.name, "content")) {
+        if (Animation.Property.fromId(id)) |property| {
             const sink = lazy orelse continue;
-            if (sink.content) |earlier| {
-                if (earlier.important and !declaration.important) {
-                    continue;
-                }
-            }
-            sink.content = .{ .name = "content", .value = declaration.value, .important = declaration.important };
+            sink.animation.declare(property, declaration.value, declaration.important);
             continue;
         }
-        slots.apply(declaration.name, declaration.value, declaration.important);
+        slots.apply(id, declaration.value, declaration.important);
     }
     return slots;
 }
@@ -3187,31 +3462,55 @@ fn Slots(comptime Declared: type) type {
 
         slots: [Declared.names.len]Slot = @splat(.{}),
 
-        fn apply(self: *Self, name: []const u8, value: []const u8, important: bool) void {
-            if (CssParser.axisShorthand(name)) |shorthand| {
+        const ids = blk: {
+            var result: [Declared.names.len]properties.Id = undefined;
+            for (Declared.names, &result) |name, *id| {
+                id.* = @field(properties.Id, name);
+            }
+            break :blk result;
+        };
+
+        // Each known property's slot, or `untracked`.
+        const untracked = std.math.maxInt(u8);
+        const slot_of = blk: {
+            std.debug.assert(Declared.names.len < untracked);
+            var result: [properties.known_count]u8 = @splat(untracked);
+            for (ids, 0..) |id, i| {
+                // A name in two groups' lists would only reach the last
+                std.debug.assert(result[@backingInt(id)] == untracked);
+                result[@backingInt(id)] = i;
+            }
+            break :blk result;
+        };
+
+        fn apply(self: *Self, id: properties.Id, value: []const u8, important: bool) void {
+            if (properties.axisShorthand(id)) |longhands| {
                 const values = CssParser.splitAxisPair(value) orelse return;
-                self.apply(shorthand.x, values.x, important);
-                self.apply(shorthand.y, values.y, important);
+                self.apply(longhands.x, values.x, important);
+                self.apply(longhands.y, values.y, important);
                 return;
             }
-            for (Declared.names, &self.slots) |tracked, *slot| {
-                if (std.ascii.eqlIgnoreCase(name, tracked)) {
-                    slot.apply(value, important);
-                    return;
-                }
+            const index = @backingInt(id);
+            if (index >= slot_of.len) {
+                // a custom property
+                return;
+            }
+            const slot = slot_of[index];
+            if (slot != untracked) {
+                self.slots[slot].apply(value, important);
             }
         }
 
         fn props(self: Self, comptime importance: Importance) Declared {
             var p: Declared = .{};
-            for (Declared.names, self.slots) |name, s| {
+            for (ids, self.slots) |id, s| {
                 const value = s.value orelse continue;
                 switch (importance) {
                     .any => {},
                     .normal => if (s.important) continue,
                     .important => if (s.important == false) continue,
                 }
-                p.apply(name, value);
+                p.apply(id, value);
             }
             return p;
         }
@@ -3219,6 +3518,31 @@ fn Slots(comptime Declared: type) type {
 }
 
 const Importance = enum { any, normal, important };
+
+/// This is an optimized version of properties.idOf. It's the same thing, except
+/// limited to keys that the cascade reads. That sounds like a micro-optimization
+/// right? But it actually shows up in profiling.
+const tracked_ids = blk: {
+    @setEvalBranchQuota(1_000_000);
+    const Tracked = Slots(Declarations);
+    var kvs: []const struct { []const u8, properties.Id } = &.{};
+    for (0..properties.known_count) |i| {
+        const id: properties.Id = @fromBackingInt(i);
+        if (Tracked.slot_of[i] != Tracked.untracked or properties.axisShorthand(id) != null or id == .content or Animation.Property.fromId(id) != null) {
+            kvs = kvs ++ .{.{ properties.knownName(id).?, id }};
+        }
+    }
+    break :blk std.StaticStringMap(properties.Id).initComptime(kvs);
+};
+
+/// The id of a property the cascade reads, by its name in any case, or null.
+fn trackedId(name: []const u8) ?properties.Id {
+    var buf: [tracked_ids.max_len]u8 = undefined;
+    if (name.len > buf.len) {
+        return null;
+    }
+    return tracked_ids.get(std.ascii.lowerString(&buf, name));
+}
 
 const Slot = struct {
     value: ?[]const u8 = null,
@@ -3237,18 +3561,18 @@ const Slot = struct {
     }
 };
 
-/// Resolved value of an element's inline `style=` declaration for `property_name`,
+/// Resolved value of an element's inline `style=` declaration of `id`,
 /// or null when the element has no such declaration. Reads the element's parsed
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 /// Null too when a tracked property's normal declaration loses to an
 /// !important stylesheet rule.
-pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+pub fn inlineStyleValue(self: *StyleManager, el: *Element, id: properties.Id) ?[]const u8 {
     self.assertOwns(el);
     const style = el.inlineStyle(self.frame) orelse return null;
     const declaration = style.asCSSStyleDeclaration();
-    const value = declaration.declaredValue(property_name, self.frame) orelse return null;
-    if (declaration.declaredImportant(property_name) == false and self.importantRuleWins(el, property_name.str(), value)) {
+    const value = declaration.declaredValue(id, self.frame) orelse return null;
+    if (declaration.declaredImportant(id) == false and self.importantRuleWins(el, id, value)) {
         return null;
     }
     return value;
@@ -3256,10 +3580,10 @@ pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String
 
 // Folds the one declaration the way the inline style is folded for layout, so
 // a shorthand checks its longhands and a value we don't parse checks nothing.
-fn importantRuleWins(self: *StyleManager, el: *Element, name: []const u8, value: []const u8) bool {
+fn importantRuleWins(self: *StyleManager, el: *Element, id: properties.Id, value: []const u8) bool {
     self.rebuildIfDirty() catch return false;
     var slots: Slots(Declarations) = .{};
-    slots.apply(name, value, false);
+    slots.apply(id, value, false);
     const declared = slots.props(.any);
     inline for (group_fields) |field| {
         if (@field(self, field).importantRuleWins(@field(declared, field), el, self.frame)) {
@@ -3269,28 +3593,52 @@ fn importantRuleWins(self: *StyleManager, el: *Element, name: []const u8, value:
     return false;
 }
 
-/// Computed value of a custom property (`--x`) on `el`, or null when nothing
+/// The id of custom property `name` as `el` can see it, null when nothing
+/// declares it for `el`: no rule, and no style attribute on its flat-tree
+/// ancestors. Unlike numbering it, a miss leaves the page's names as they are.
+pub fn customPropertyId(self: *StyleManager, el: *Element, name: []const u8) ?properties.Id {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+
+    // The rebuild numbered every sheet's custom names
+    const custom_names = &self.frame.page.css_custom_names;
+    if (custom_names.lookup(name)) |id| {
+        return id;
+    }
+
+    // A style attribute's are numbered once it's parsed
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
+        if (elem.inlineStyle(self.frame) == null) {
+            continue;
+        }
+        if (custom_names.lookup(name)) |id| {
+            return id;
+        }
+    }
+    return null;
+}
+
+/// Computed value of custom property `id` on `el`, or null when nothing
 /// declares it. The value is returned as-is, no var substitution
-pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+pub fn customPropertyValue(self: *StyleManager, el: *Element, id: properties.Id) ?[]const u8 {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
 
     // Only the rules declaring this name; usually a handful, often none. An
     // element can still shadow them with an inline declaration, so a miss here
     // means walking for inline styles, not returning early.
-    const property = self.custom_rules.getPtr(property_name.str());
-    const rules = self.parsedRules(property) catch |err| blk: {
+    const rules = self.parsedRules(self.lazy_rules.getPtr(id)) catch |err| blk: {
         log.err(.browser, "StyleManager customProperty", .{ .err = err });
         break :blk &.{};
     };
 
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.asNode().flatTreeParentElement(self.frame)) {
-        if (self.lazyWinner(elem, property_name, rules, null)) |winner| {
+        if (self.lazyWinner(elem, id, rules, null)) |winner| {
             return winner.value;
         }
     }
-
     return null;
 }
 
@@ -3300,12 +3648,12 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
 
-    const rules = self.parsedRules(&self.content_rules) catch |err| blk: {
+    const rules = self.parsedRules(self.lazy_rules.getPtr(.content)) catch |err| blk: {
         log.err(.browser, "StyleManager content", .{ .err = err });
         break :blk &.{};
     };
     var before: ?u16 = null;
-    while (self.lazyWinner(el, comptime .wrap("content"), rules, before)) |winner| {
+    while (self.lazyWinner(el, .content, rules, before)) |winner| {
         if (std.ascii.eqlIgnoreCase(winner.value, "revert-layer") == false) {
             return winner.value;
         }
@@ -3316,10 +3664,159 @@ pub fn contentValue(self: *StyleManager, el: *Element) ?[]const u8 {
     return null;
 }
 
+/// The animation longhands `el` ends up with. One rule can set the name and
+/// another the duration, so each longhand takes its own winner, the shorthand's
+/// or its own declaration's.
+pub fn animation(self: *StyleManager, el: *Element) Animation {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+
+    // The style attribute, folded like a rule block: in order, the -webkit-
+    // names aliased, and a shorthand dropping the longhands before it.
+    var inline_declared: LazyAnimation = .{};
+    if (el.inlineStyle(self.frame)) |style| {
+        var it = style.asCSSStyleDeclaration().declarationBlock().iterator(&self.frame.page.css_custom_names);
+        while (it.next()) |declaration| {
+            const animation_property = Animation.Property.fromId(declaration.id) orelse continue;
+            const value = declaration.value;
+            if (std.ascii.eqlIgnoreCase(value, "revert-layer")) {
+                // Back to the rules, every one of them in an earlier layer
+                continue;
+            }
+            inline_declared.declare(animation_property, value, declaration.important);
+        }
+    }
+
+    var result: Animation = .{};
+    const shorthand = self.animationWinner(el, .shorthand, &inline_declared);
+    for (std.enums.values(Animation.Longhand)) |longhand| {
+        const own = self.animationWinner(el, switch (longhand) {
+            .name => .name,
+            .duration => .duration,
+            .delay => .delay,
+            .iteration_count => .iteration_count,
+        }, &inline_declared);
+        // Equal priorities are one block, where the longhand came last: a
+        // shorthand after it dropped it.
+        if (own) |winner| {
+            if (shorthand == null or winner.priority >= shorthand.?.priority) {
+                result.sources.set(longhand, .{ .list = winner.value });
+                continue;
+            }
+        }
+        if (shorthand) |winner| {
+            result.sources.set(longhand, .{ .shorthand = winner.value });
+        }
+    }
+    return result;
+}
+
+/// `inline_declared` is `el`'s style attribute: lazyWinner reads it by the
+/// standard name alone, missing the -webkit- names and the shorthand's order.
+fn animationWinner(self: *StyleManager, el: *Element, property: Animation.Property, inline_declared: *const LazyAnimation) ?LazyWinner {
+    // Nothing beats an !important inline declaration
+    if (inline_declared.important.get(property)) |value| {
+        return .{ .value = value, .layer = INLINE_LAYER, .priority = INLINE_IMPORTANT_PRIORITY };
+    }
+
+    const rules = self.parsedRules(self.animation_rules.getPtr(property)) catch |err| blk: {
+        log.err(.browser, "StyleManager animation", .{ .err = err });
+        break :blk &.{};
+    };
+    var winner: ?LazyWinner = null;
+    // Stopping at INLINE_LAYER keeps lazyWinner off the style attribute
+    var before: ?u16 = INLINE_LAYER;
+    while (self.lazyWinner(el, property.standardId(), rules, before)) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate.value, "revert-layer") == false) {
+            winner = candidate;
+            break;
+        }
+        before = candidate.layer;
+    }
+
+    // A normal inline declaration beats every normal rule
+    if (inline_declared.normal.get(property)) |value| {
+        if (winner == null or winner.?.priority < INLINE_PRIORITY) {
+            return .{ .value = value, .layer = INLINE_LAYER, .priority = INLINE_PRIORITY };
+        }
+    }
+    return winner;
+}
+
+/// Only frame/css_animations.zig reads the animation rules and @keyframes,
+/// and only with the experimental feature on: without it, they aren't kept.
+/// The feature is set per session, so a page's rules never miss a change.
+fn animationsEnabled(self: *const StyleManager) bool {
+    return self.frame._session.experimental_features.animation;
+}
+
+fn animationRuleCount(self: *const StyleManager) usize {
+    var n: usize = 0;
+    for (self.animation_rules.values) |rules| {
+        n += rules.rules.items.len;
+    }
+    return n;
+}
+
+/// Whether a @keyframes rule has `name`.
+pub fn hasKeyframes(self: *StyleManager, name: []const u8) bool {
+    if (self.rebuildForKeyframes() == false) {
+        return false;
+    }
+    return self.keyframes.contains(name);
+}
+
+pub fn hasAnyKeyframes(self: *StyleManager) bool {
+    if (self.rebuildForKeyframes() == false) {
+        return false;
+    }
+    return self.keyframes.count() > 0;
+}
+
+/// False when no sheet can hold keyframes. The animation check asks on every
+/// page: one without keyframes would pay a rebuild nothing else may need.
+fn rebuildForKeyframes(self: *StyleManager) bool {
+    if (self.dirty and !self.sheetsMentionKeyframes()) {
+        return false;
+    }
+    self.rebuildIfDirty() catch return false;
+    return true;
+}
+
+/// The sheets `parseSheet` reads, searched as text.
+fn sheetsMentionKeyframes(self: *StyleManager) bool {
+    if (self.keyframes_mentioned) |mentioned| {
+        return mentioned;
+    }
+    const mentioned = self.searchSheetsForKeyframes() catch true;
+    self.keyframes_mentioned = mentioned;
+    return mentioned;
+}
+
+fn searchSheetsForKeyframes(self: *StyleManager) !bool {
+    const sheets = self.frame.document._style_sheets orelse return false;
+    for (sheets._sheets.items) |sheet| {
+        if (sheet._disabled) {
+            continue;
+        }
+        try sheet.ensureParsed(self.frame);
+        for (sheet._store.entries()) |*entry| {
+            if (entry._kind == .style) {
+                continue;
+            }
+            if (std.ascii.findIgnoreCase(entry.text(), "keyframes") != null) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 const LazyWinner = struct {
     value: []const u8,
     // Where it is in the layer order; see layerOrder.
     layer: u16,
+    priority: u64,
 };
 
 /// The style attribute cascades after every layer, unlayered rules included.
@@ -3337,7 +3834,7 @@ fn layerOrder(priority: u64) u16 {
 
 /// The declaration of a lazy property that wins on `el`, from the matching
 /// rules and its inline style. With `before`, only those from earlier layers.
-fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
+fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
     const limit = before orelse std.math.maxInt(u16);
 
     var winner: ?LazyWinner = null;
@@ -3353,17 +3850,17 @@ fn lazyWinner(self: *StyleManager, el: *Element, property_name: String, rules: [
         if (matchesSelector(el, rule.selector, self.frame) == false) {
             continue;
         }
-        winner = .{ .value = rule.value, .layer = layer };
+        winner = .{ .value = rule.value, .layer = layer, .priority = rule.priority };
         priority = rule.priority;
     }
 
     if (limit > INLINE_LAYER) {
         if (el.inlineStyle(self.frame)) |style| {
             const declaration = style.asCSSStyleDeclaration();
-            if (declaration.declaredValue(property_name, self.frame)) |value| {
-                const inline_priority = if (declaration.declaredImportant(property_name)) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
+            if (declaration.storedDeclaration(id)) |declared| {
+                const inline_priority = if (declared.important) INLINE_IMPORTANT_PRIORITY else INLINE_PRIORITY;
                 if (inline_priority > priority) {
-                    winner = .{ .value = value, .layer = INLINE_LAYER };
+                    winner = .{ .value = declared.value, .layer = INLINE_LAYER, .priority = inline_priority };
                 }
             }
         }
@@ -3427,7 +3924,7 @@ fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
     const current = element orelse return DEFAULT_FONT_SIZE;
     const parent = current.asNode().flatTreeParentElement(self.frame);
 
-    if (self.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {
+    if (self.inlineStyleValue(current, .@"font-size")) |raw| {
         if (self.parseFontSize(raw, parent, depth + 1)) |size| {
             return size;
         }
@@ -3505,6 +4002,8 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
 }
 
 const testing = @import("../testing.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
+
 test "StyleManager: important cascade across external sheets, inline styles and layers" {
     try testing.htmlRunner("css/important_cascade.html", .{ .load_resources = .{ .stylesheet = true } });
 }
@@ -3527,6 +4026,40 @@ test "StyleManager: position" {
 
 test "StyleManager: inline style writes" {
     try testing.htmlRunner("css/inline_style_writes.html", .{});
+}
+
+test "StyleManager: animation events" {
+    try testing.htmlRunner("css/animation_events.html", .{ .experimental_features = .{ .animation = true } });
+}
+
+test "StyleManager: hasKeyframes rebuilds only when a sheet mentions keyframes" {
+    testing.test_session.experimental_features.animation = true;
+    defer testing.test_session.experimental_features = .{};
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { color: red }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(false, sm.hasAnyKeyframes());
+    try testing.expectEqual(true, sm.dirty);
+
+    try style_el.asNode().setTextContent("@keyframes fade { to { opacity: 0 } }", frame);
+    try testing.expectEqual(true, sm.hasKeyframes("fade"));
+    try testing.expectEqual(false, sm.dirty);
+
+    const sheet = style_el._sheet orelse return error.NoSheet;
+    _ = try sheet.insertRule("@-webkit-keyframes spin { to { opacity: 1 } }", 0, frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(true, sm.hasKeyframes("spin"));
 }
 
 test "StyleManager: text-transform without rules skips the memo" {
@@ -3812,7 +4345,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         try std.testing.expectEqual(expected[i].flow, inlineDeclared(Flow.Declared, el, frame).props(.any));
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
-        const materialized = extractDeclared(Declarations, try el.getOrCreateStyle(frame)).props(.any);
+        const materialized = extractDeclared(Declarations, (try el.getOrCreateStyle(frame)).asCSSStyleDeclaration().declarationBlock(), frame).props(.any);
         try std.testing.expectEqual(expected[i], materialized);
         i += 1;
     }
@@ -3930,6 +4463,115 @@ test "StyleManager: memo: an inline write it doesn't cascade keeps it" {
     try testing.expectEqual(true, sm.hasDisplayNone(div));
 }
 
+test "StyleManager: memo: validity pseudo-classes read only listed attributes" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    // One control per validity path. fill_check panics on any attribute
+    // read that pseudoClassAttributes doesn't list.
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<form id=f><fieldset>
+        \\<input required pattern="\d+" minlength=2 maxlength=4 value=abc>
+        \\<input type=email multiple value="a@b, c">
+        \\<input type=url value=x>
+        \\<input type=number min=1 max=5 step=2 value=4>
+        \\<input type=range min=1 max=5>
+        \\<input type=date min=2020-01-01 max=2020-12-31 value=2019-01-01>
+        \\<input type=time step=60 value=10:00:30>
+        \\<input type=month value=2020-01><input type=week value=2020-W01>
+        \\<input type=datetime-local value=2020-01-01T00:00>
+        \\<input type=checkbox required><input type=radio name=r required>
+        \\<input type=file required><input type=hidden required>
+        \\<input readonly required><input disabled required>
+        \\<input list=l><datalist id=l><option value=1></datalist>
+        \\<textarea required minlength=2 maxlength=4>a</textarea>
+        \\<select required><option value="">-</option><option>a</option></select>
+        \\<select multiple required><option selected>a</option></select>
+        \\<button>b</button><button type=reset>r</button><output></output>
+        \\</fieldset></form>
+        \\<input form=f required>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(":invalid, :out-of-range { display: none } :valid, :in-range { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+
+    // Too long and too short only apply once the user edited the value
+    const first = (try doc.querySelector(comptime .wrap("input"), frame)).?;
+    try first.as(Element.Html.Input).setUserValue("abcde", frame);
+    const textarea = (try doc.querySelector(comptime .wrap("textarea"), frame)).?;
+    try textarea.as(Element.Html.TextArea).setUserValue("abcde", frame);
+
+    var it: TreeWalker.Full = .init(body, .{});
+    while (it.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        _ = sm.hasDisplayNone(el);
+        _ = sm.hasVisibilityHiddenInherited(el);
+    }
+
+    // A listed name flips :invalid
+    try testing.expectEqual(true, sm.hasDisplayNone(first));
+    try first.setAttribute(comptime .wrap("pattern"), comptime .wrap("[a-z]+"), frame);
+    try first.setAttribute(comptime .wrap("maxlength"), comptime .wrap("8"), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(first));
+}
+
+test "StyleManager: memo: attribute writes no selector reads keep it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div data-open><p class=a></p></div>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("div:not([data-open]) .a { display: none } :has(> [aria-busy=true]) { visibility: hidden } :disabled { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?.as(Element);
+    const p = div.asNode().firstChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+
+    // A foreign element's attribute keeps its case: names match ignoring it
+    try testing.expectEqual(false, sm.readsAttribute("viewBox"));
+    try testing.expectEqual(true, sm.readsAttribute("Data-Open"));
+    try testing.expectEqual(true, sm.readsAttribute("HIDDEN"));
+
+    // Unread names and same-value writes keep the memo
+    const version = frame.page.style_version;
+    try div.setAttribute(comptime .wrap("data-track"), comptime .wrap("1"), frame);
+    try div.setAttribute(comptime .wrap("aria-label"), comptime .wrap("x"), frame);
+    try div.setAttribute(comptime .wrap("title"), comptime .wrap("x"), frame);
+    try div.setAttribute(comptime .wrap("href"), comptime .wrap("/x"), frame);
+    try div.removeAttribute(comptime .wrap("data-track"), frame);
+    try div.setAttribute(comptime .wrap("data-open"), comptime .wrap(""), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // Names read inside :not() and :has() drop it
+    try div.removeAttribute(comptime .wrap("data-open"), frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(div));
+    try p.setAttribute(comptime .wrap("aria-busy"), comptime .wrap("true"), frame);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(div));
+
+    // Names a pseudo-class reads: :disabled reads disabled
+    try p.setAttribute(comptime .wrap("disabled"), comptime .wrap(""), frame);
+    try testing.expect(frame.page.style_version != version);
+
+    // Names the engine reads whatever the rules
+    const before = frame.page.style_version;
+    try div.setAttribute(comptime .wrap("hidden"), comptime .wrap(""), frame);
+    try testing.expect(frame.page.style_version != before);
+    try testing.expectEqual(true, sm.hasDisplayNone(div));
+}
+
 test "StyleManager: memo: an inline write drops only the memos that read it" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -3975,7 +4617,7 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     // No memo reads a custom property
     sm.cacheWidth(div, .box, 100);
     try style.setProperty("--offset", "4px", null, frame);
-    try testing.expectString("4px", sm.customPropertyValue(p, comptime .wrap("--offset")).?);
+    try testing.expectString("4px", sm.customPropertyValue(p, sm.customPropertyId(p, "--offset").?).?);
     try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
 
     // None of it touched another frame's memos
@@ -4048,7 +4690,7 @@ test "StyleManager: memo: a descendant overrides inherited visibility and pointe
     // Deepest first resolves the whole path in one walk; top-down hits the
     // memo one level up each time
     for ([_][4]*Element{ .{ u, s, i, b }, .{ b, i, s, u } }) |order| {
-        frame.styleChanged();
+        frame.page.style_version += 1; // drop the memo
         for (order) |el| {
             try testing.expectEqual(el == b, sm.isHidden(el, .{ .check_visibility = true }));
             try testing.expectEqual(el == b, sm.hasPointerEventsNone(el));
@@ -4110,7 +4752,7 @@ test "StyleManager: memo: probing a deep tree stays linear" {
     const DEPTH = 1000;
     const top = try buildDivChain(frame, DEPTH);
 
-    frame.styleChanged();
+    frame.page.style_version += 1; // drop the memo
     const before = sm.visibility.cascades;
     var current: ?*Element = top;
     while (current) |el| {
@@ -4217,7 +4859,62 @@ test "StyleManager: content rules no element matches aren't kept" {
     _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
 
     try testing.expectString("\"probe\"", sm.contentValue(probe).?);
-    try testing.expectEqual(1, sm.content_rules.rules.items.len);
+    try testing.expectEqual(1, sm.lazy_rules.get(.content).?.rules.items.len);
+}
+
+test "StyleManager: animation rules no element matches aren't kept" {
+    testing.test_session.experimental_features.animation = true;
+    defer testing.test_session.experimental_features = .{};
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.spinner::before { animation: spin 1s infinite }
+        \\.dot-a:after, .dot-b::after { animation-name: pulse }
+        \\.probe { animation: fade 1s }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    try testing.expectEqual(1, sm.animation(probe).count());
+    try testing.expectEqual(1, sm.animation_rules.get(.shorthand).rules.items.len);
+    try testing.expectEqual(0, sm.animation_rules.get(.name).rules.items.len);
+}
+
+test "StyleManager: animations aren't kept without the experimental feature" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"probe\"></div>");
+    const probe = body.firstChild().?.as(Element);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\@keyframes fade { to { opacity: 0 } }
+        \\.probe { animation: fade 1s; display: block }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), probe.asNode(), frame);
+
+    // The rebuild still cascades the rest of the block
+    try testing.expectEqual(false, sm.hasDisplayNone(probe));
+    try testing.expectEqual(0, sm.animation(probe).count());
+    try testing.expectEqual(0, sm.animation_rules.get(.shorthand).rules.items.len);
+    try testing.expectEqual(0, sm.keyframes.count());
 }
 
 test "StyleManager: ruleInserted: a content rule keeps the memos" {

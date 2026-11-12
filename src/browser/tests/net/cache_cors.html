@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<script id=cache_cors_blocks_hit type=module>
+  {
+    const state = await testing.async();
+    await fetch('http://localhost:9582/raw/cacheable', { mode: 'no-cors' });
+
+    let error = null;
+    let body = null;
+    try {
+      const response = await fetch('http://localhost:9582/raw/cacheable', { mode: 'cors' });
+      body = await response.text();
+    } catch (e) {
+      error = e.toString();
+    }
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(null, body);
+      testing.expectEqual(true, error.startsWith('TypeError:'));
+    });
+  }
+</script>

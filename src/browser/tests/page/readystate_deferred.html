@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script id=readystate_deferred>
+  // "The end": readiness becomes interactive once parsing finishes, before
+  // deferred and module scripts run; DOMContentLoaded waits for them.
+  // https://html.spec.whatwg.org/multipage/parsing.html#the-end
+  const order = [];
+  document.addEventListener('readystatechange', () => {
+    order.push('readystatechange:' + document.readyState);
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    order.push('DOMContentLoaded:' + document.readyState);
+  });
+
+  testing.onload(() => {
+    testing.expectEqual([
+      'inline:loading',
+      'readystatechange:interactive',
+      'module1:interactive',
+      'defer:interactive',
+      'module2:interactive',
+      'DOMContentLoaded:interactive',
+      'readystatechange:complete',
+    ], order);
+  });
+</script>
+<script type=module>
+  order.push('module1:' + document.readyState);
+</script>
+<script defer src="readystate_deferred.js?delay_ms=30"></script>
+<script type=module>
+  order.push('module2:' + document.readyState);
+</script>
+<script>
+  order.push('inline:' + document.readyState);
+</script>

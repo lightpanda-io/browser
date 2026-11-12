@@ -649,6 +649,13 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer, authored_headers: []con
     fetch_transfer.submit() catch {};
 }
 
+pub fn validateIfNeeded(transfer: *Transfer) !void {
+    if (!(transfer._cors_cross_origin and transfer.req.request_mode == .cors)) {
+        return;
+    }
+    try validateResponse(transfer);
+}
+
 pub fn validateResponse(transfer: *Transfer) !void {
     const req = &transfer.req;
     errdefer lp.metrics.cors_response.incr(.blocked);

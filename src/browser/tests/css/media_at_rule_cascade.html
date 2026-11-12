@@ -53,6 +53,10 @@
   @media (prefers-color-scheme: dark) {
     #not-hidden-unsupported { display: none; }
   }
+  /* An empty query list matches everything (Stitches emits these). */
+  @media {
+    #hidden-by-empty-media { display: none; }
+  }
   /* visibility:hidden inside @media. */
   @media (min-width: 1px) {
     #visibility-hidden-cascade { visibility: hidden; }
@@ -105,6 +109,7 @@
   <div id="hidden-by-screen">screen-hit</div>
   <div id="hidden-by-nested">nested-hit</div>
   <div id="not-hidden-unsupported">unsupported</div>
+  <div id="hidden-by-empty-media">empty media</div>
   <div id="visibility-hidden-cascade">visibility</div>
   <div id="commented-prelude">commented-prelude</div>
   <div id="commented-query">commented-query</div>
@@ -171,6 +176,12 @@
 <script id=cascade_unsupported_feature_is_false>
 {
   testing.expectTrue($('#not-hidden-unsupported').checkVisibility());
+}
+</script>
+
+<script id=cascade_empty_query_list_matches>
+{
+  testing.expectFalse($('#hidden-by-empty-media').checkVisibility());
 }
 </script>
 

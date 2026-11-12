@@ -125,7 +125,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, exec: *const Exec
 
         try ls.toLocal(transform_fn).call(void, .{ chunk, self._controller });
     } else {
-        try self._readable._controller.enqueue(.{ .string = try chunk.toStringSlice() });
+        try self._readable._controller.enqueueValue(chunk);
     }
 }
 

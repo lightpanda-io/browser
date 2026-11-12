@@ -3909,6 +3909,166 @@ test "cdp.input: text for an editing host stays out of a contenteditable=false i
     );
 }
 
+test "cdp.input: beforeinput in an editing host reports what the edit replaces" {
+    // Chrome 157: one StaticRange, empty again after dispatch; input has none.
+    const record =
+        \\window.R = (r) => (r.startContainer.nodeType === 3 ? r.startContainer.data : r.startContainer.nodeName) + ':' + r.startOffset + '-' +
+        \\  (r.endContainer.nodeType === 3 ? r.endContainer.data : r.endContainer.nodeName) + ':' + r.endOffset;
+        \\window.ranges = null;
+        \\document.addEventListener('beforeinput', (e) => {
+        \\  window.ranges = e.getTargetRanges().map(R).join(',');
+        \\  window.beforeEvent = e;
+        \\});
+        \\// no input when there's nothing to delete
+        \\document.addEventListener('input', (e) => { window.inputRanges = e.getTargetRanges().length; });
+        \\document.body.insertAdjacentHTML('beforeend', '<div id="host" contenteditable></div>');
+        \\const host = document.getElementById('host');
+        \\host.focus();
+        \\
+    ;
+    const cases = [_]struct { html: []const u8, caret: []const u8, input: EditingHostInput, ranges: []const u8 }{
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 3)", .input = .{ .key = "x" }, .ranges = "abc:3-abc:3" },
+        .{ .html = "<p>abcd</p>", .caret = "setBaseAndExtent(host.firstChild.firstChild, 1, host.firstChild.firstChild, 3)", .input = .{ .key = "x" }, .ranges = "abcd:1-abcd:3" },
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 3)", .input = .{ .insert_text = "xy" }, .ranges = "abc:3-abc:3" },
+        .{ .html = "<p><br></p>", .caret = "collapse(host.firstChild, 0)", .input = .{ .key = "x" }, .ranges = "P:0-P:0" },
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 3)", .input = backspace, .ranges = "abc:2-abc:3" },
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 1)", .input = delete, .ranges = "abc:1-abc:2" },
+        .{ .html = "<p>a\u{1F44B}</p>", .caret = "collapse(host.firstChild.firstChild, 3)", .input = backspace, .ranges = "a\u{1F44B}:1-a\u{1F44B}:3" },
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 0)", .input = backspace, .ranges = "abc:0-abc:0" },
+        .{ .html = "<p>abcd</p>", .caret = "setBaseAndExtent(host.firstChild.firstChild, 1, host.firstChild.firstChild, 3)", .input = backspace, .ranges = "abcd:1-abcd:3" },
+        .{ .html = "<p>ab</p><p>cd</p>", .caret = "collapse(host.lastChild.firstChild, 0)", .input = backspace, .ranges = "ab:2-P:0" },
+        .{ .html = "<p>ab</p><p>cd</p>", .caret = "collapse(host.firstChild.firstChild, 2)", .input = delete, .ranges = "ab:2-P:0" },
+        .{ .html = "<p>ab<br>cd</p>", .caret = "collapse(host.firstChild.lastChild, 0)", .input = backspace, .ranges = "P:1-P:2" },
+        .{ .html = "<p>a<b>bc</b>d</p>", .caret = "collapse(host.firstChild.lastChild, 0)", .input = backspace, .ranges = "bc:1-bc:2" },
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 1)", .input = .{ .enter = 0 }, .ranges = "abc:1-abc:1" },
+        .{ .html = "<p>abc</p>", .caret = "collapse(host.firstChild.firstChild, 1)", .input = .{ .enter = 8 }, .ranges = "abc:1-abc:1" },
+    };
+    for (cases) |c| {
+        const setup = try std.fmt.allocPrint(testing.allocator, "{s}host.innerHTML = '{s}';\ngetSelection().{s};", .{ record, c.html, c.caret });
+        defer testing.allocator.free(setup);
+        const expected = try std.fmt.allocPrint(testing.allocator,
+            \\window.ranges === '{s}' && !window.inputRanges && window.beforeEvent.getTargetRanges().length === 0
+        , .{c.ranges});
+        defer testing.allocator.free(expected);
+        expectEditingHostInput(setup, c.input, expected) catch |err| {
+            std.debug.print("case: {s} {s}\n", .{ c.html, c.caret });
+            return err;
+        };
+    }
+}
+
+test "cdp.input: beforeinput in a text control has no target range" {
+    try expectEditingHostInput(
+        \\document.body.insertAdjacentHTML('beforeend', '<textarea id="ta">abc</textarea>');
+        \\const ta = document.getElementById('ta');
+        \\ta.focus();
+        \\ta.setSelectionRange(3, 3);
+        \\document.addEventListener('beforeinput', (e) => { window.ranges = e.getTargetRanges().length; });
+    , .{ .key = "x" },
+        \\ta.value === 'abcx' && window.ranges === 0
+    );
+}
+
+// Presses the mouse in the middle of the element `selector` matches, after
+// `setup`, and checks `expected`, a JS expression. `window.seen` records
+// focus and selectstart with the selection's anchor at the time.
+fn expectEditingHostPress(setup: []const u8, selector: []const u8, expected: []const u8) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(setup, null);
+    _ = try ls.local.compileAndRun(
+        \\window.seen = [];
+        \\window.anchor = () => { const s = getSelection(); return s.anchorNode ? (s.anchorNode.data || s.anchorNode.nodeName) + ':' + s.anchorOffset : 'none'; };
+        \\for (const t of ['focus', 'selectstart']) {
+        \\  document.addEventListener(t, () => window.seen.push(t + '@' + anchor()), true);
+        \\}
+    , null);
+
+    const rect = try std.fmt.allocPrint(testing.allocator, "window.pressRect = document.querySelector('{s}').getBoundingClientRect()", .{selector});
+    defer testing.allocator.free(rect);
+    _ = try ls.local.compileAndRun(rect, null);
+    const x = try (try ls.local.compileAndRun("pressRect.x + pressRect.width / 2", null)).toF64();
+    const y = try (try ls.local.compileAndRun("pressRect.y + pressRect.height / 2", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = x, .y = y, .button = "left", .clickCount = 1 },
+    });
+
+    try testing.expect((try ls.local.compileAndRun(expected, null)).isTrue());
+}
+
+test "cdp.input: a press in an editing host puts the caret at the end of the pressed element" {
+    // Chrome: focus, then selectstart, then the caret; for a press in the
+    // middle of a short line that's the line's end.
+    try expectEditingHostPress(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p>one</p><p id="two">two<br></p></div>');
+    , "#two",
+        \\document.activeElement.id === 'host' &&
+        \\window.seen.join(',') === 'focus@none,selectstart@none' &&
+        \\anchor() === 'two:3' && getSelection().isCollapsed
+    );
+}
+
+test "cdp.input: a press in an empty line of an editing host puts the caret before its placeholder" {
+    try expectEditingHostPress(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p id="p"><br></p></div>');
+    , "#p",
+        \\anchor() === 'P:0'
+    );
+}
+
+test "cdp.input: a press in an editing host moves an existing caret" {
+    try expectEditingHostPress(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p id="p">hello world</p></div>');
+        \\document.getElementById('host').focus();
+        \\getSelection().collapse(document.getElementById('p').firstChild, 2);
+    , "#p",
+        \\window.seen.join(',') === 'selectstart@hello world:2' && anchor() === 'hello world:11'
+    );
+}
+
+test "cdp.input: a cancelled selectstart leaves the caret where focus puts it" {
+    try expectEditingHostPress(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p id="p">hello</p></div>');
+        \\document.addEventListener('selectstart', (e) => e.preventDefault());
+    , "#p",
+        \\document.activeElement.id === 'host' && anchor() === 'hello:0'
+    );
+}
+
+test "cdp.input: a cancelled mousedown in an editing host places no caret" {
+    try expectEditingHostPress(
+        \\document.body.insertAdjacentHTML('afterbegin', '<div id="host" contenteditable><p id="p">hello</p></div>');
+        \\document.addEventListener('mousedown', (e) => e.preventDefault());
+    , "#p",
+        \\document.activeElement.id !== 'host' && window.seen.length === 0 && anchor() === 'none'
+    );
+}
+
 const backspace: EditingHostInput = .{ .raw_key = .{ .key = "Backspace", .code = "Backspace" } };
 const delete: EditingHostInput = .{ .raw_key = .{ .key = "Delete", .code = "Delete" } };
 const ctrl_a: EditingHostInput = .{ .raw_key = .{ .key = "a", .code = "KeyA", .modifiers = 2 } };

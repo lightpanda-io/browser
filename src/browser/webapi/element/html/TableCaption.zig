@@ -29,7 +29,6 @@ const TableCaption = @This();
 
 pub const Proto = HtmlElement;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *TableCaption) *Element {

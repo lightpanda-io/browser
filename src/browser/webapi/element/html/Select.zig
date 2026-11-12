@@ -269,7 +269,7 @@ pub fn reset(self: *Select, frame: *Frame) void {
         }
     }
     self.resetToDefaultSelection();
-    frame.domChanged();
+    Frame.change.stateChanged(self.asElement(), .selectedness, frame);
 }
 
 // HTML's "ask for a reset". Every path that selects an option in a
@@ -335,7 +335,7 @@ pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
         option._selected = is_match;
         matched = matched or is_match;
     }
-    frame.domChanged();
+    Frame.change.stateChanged(self.asElement(), .selectedness, frame);
 }
 
 /// The position of `option` in the list of options, or null when the option
@@ -368,7 +368,7 @@ pub fn setSelectedIndex(self: *Select, index: i32, frame: *Frame) !void {
     while (it.next()) |option| : (current_index += 1) {
         option._selected = current_index == index;
     }
-    frame.domChanged();
+    Frame.change.stateChanged(self.asElement(), .selectedness, frame);
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-type

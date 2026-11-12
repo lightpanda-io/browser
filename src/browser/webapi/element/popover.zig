@@ -79,7 +79,7 @@ pub fn show(el: *Element, frame: *Frame) !void {
     }
 
     try frame.document._open_popovers.append(frame.page_arena, el);
-    frame.domChanged();
+    Frame.change.stateChanged(el, .popover_open, frame);
     _ = try fireToggle(el, comptime .wrap("toggle"), "closed", "open", false, frame);
 }
 
@@ -157,7 +157,7 @@ fn hideUnrelatedAutos(el: *Element, frame: *Frame) !void {
 
 fn hideOne(el: *Element, frame: *Frame) !void {
     removeFromOpen(el, frame);
-    frame.domChanged();
+    Frame.change.stateChanged(el, .popover_open, frame);
     _ = try fireToggle(el, comptime .wrap("beforetoggle"), "open", "closed", false, frame);
     _ = try fireToggle(el, comptime .wrap("toggle"), "open", "closed", false, frame);
 }

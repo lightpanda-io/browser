@@ -35,7 +35,7 @@ const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
-const jev = @import("jev.zig");
+const decisions = @import("decisions.zig");
 const URL = @import("../URL.zig");
 const Element = @import("../webapi/Element.zig");
 const Form = @import("../webapi/element/html/Form.zig");
@@ -52,23 +52,23 @@ const resolveBySelector = tools.resolveBySelector;
 const selectorFor = tools.selectorFor;
 const settleAction = tools.settleAction;
 const NodeRegistry = lp.NodeRegistry;
-const askPage = jev.askPage;
-const internalUnlessOom = jev.internalUnlessOom;
-const unusableAnswer = jev.unusableAnswer;
-const compact = jev.compact;
-const verdict = jev.verdict;
-const unverified = jev.unverified;
-const clickAndSettle = jev.clickAndSettle;
-const settleAndFollow = jev.settleAndFollow;
+const askPage = decisions.askPage;
+const internalUnlessOom = decisions.internalUnlessOom;
+const unusableAnswer = decisions.unusableAnswer;
+const compact = decisions.compact;
+const verdict = decisions.verdict;
+const unverified = decisions.unverified;
+const clickAndSettle = decisions.clickAndSettle;
+const settleAndFollow = decisions.settleAndFollow;
 const Frame = lp.Frame;
 
-const Questions = zenai.typesafe.Questions;
-const QuestionEntry = zenai.typesafe.QuestionEntry;
-const ChoiceEntry = zenai.typesafe.ChoiceEntry;
+const Questions = zenai.decisions.Questions;
+const QuestionEntry = zenai.decisions.QuestionEntry;
+const ChoiceEntry = zenai.decisions.ChoiceEntry;
 
 /// The question ids, which also key the answers.
-pub const wall_key = @tagName(jev.Preset.isLoginWall);
-pub const error_key = @tagName(jev.Preset.isErrorPage);
+pub const wall_key = @tagName(decisions.Preset.isLoginWall);
+pub const error_key = @tagName(decisions.Preset.isErrorPage);
 pub const user_key = "userField";
 pub const password_key = "passwordField";
 pub const submit_key = "submit";
@@ -150,7 +150,7 @@ pub const Picks = struct {
 pub fn picks(
     candidates: []const choose.Candidate,
     asked: Questions,
-    response: zenai.typesafe.types.AskResponse,
+    response: zenai.decisions.types.AskResponse,
 ) choose.Error!Picks {
     var out: Picks = .{};
     if (asked.has(user_key)) {
@@ -161,12 +161,12 @@ pub fn picks(
     // or nothing at all, and both come to the same act: Enter in the field.
     out.submit = try pickOf(candidates, response, asked, submit_key);
     if (asked.has(multi_step_key)) {
-        out.multi_step = (response.noul(multi_step_key) orelse 0) >= jev.gate;
+        out.multi_step = (response.noul(multi_step_key) orelse 0) >= decisions.gate;
     }
     return out;
 }
 
-fn pickOf(candidates: []const choose.Candidate, response: zenai.typesafe.types.AskResponse, asked: Questions, key: []const u8) choose.Error!?choose.Candidate {
+fn pickOf(candidates: []const choose.Candidate, response: zenai.decisions.types.AskResponse, asked: Questions, key: []const u8) choose.Error!?choose.Candidate {
     const scored = try choose.best(candidates, response, asked, key) orelse return null;
     return scored.candidate;
 }
@@ -174,7 +174,7 @@ fn pickOf(candidates: []const choose.Candidate, response: zenai.typesafe.types.A
 /// The page after the submit: did the sign-in wall go, and did an error take
 /// its place.
 fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
-    return jev.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
+    return decisions.presetQuestions(arena, &.{ .isLoginWall, .isErrorPage });
 }
 
 /// `input[type=password]` and nothing else: the one place a password is
@@ -516,7 +516,7 @@ fn verifyLogin(
 
     outcome.loginWall = response.value.noul(wall_key);
     outcome.errorPage = response.value.noul(error_key);
-    outcome.loggedIn = (outcome.loginWall orelse 1) < jev.gate and (outcome.errorPage orelse 1) < jev.gate;
+    outcome.loggedIn = (outcome.loginWall orelse 1) < decisions.gate and (outcome.errorPage orelse 1) < decisions.gate;
     return loginVerdict(arena, outcome, if (outcome.loggedIn) null else "submitted, but the page still shows a sign-in form or an error");
 }
 
@@ -757,28 +757,30 @@ test "login: the recorded selectors are filled and submitted without the model" 
     try std.testing.expect(std.mem.find(u8, tree.text, "*****") != null);
 }
 
-test "login: Jev picks the identifier, the password field and the submit control" {
-    var registry: NodeRegistry = .init(std.testing.allocator);
-    defer registry.deinit();
+test "login: the decision model picks the identifier, the password field and the submit control" {
+    for (std.enums.values(testing.MockDecisions.Provider)) |provider| {
+        var registry: NodeRegistry = .init(std.testing.allocator);
+        defer registry.deinit();
 
-    var page = try testing.pageTest("login_form.html", .{});
-    defer page.close();
+        var page = try testing.pageTest("login_form.html", .{});
+        defer page.close();
 
-    const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
-    defer mock.stop();
+        const aa = testing.arena_allocator;
+        const mock = try testing.MockDecisions.startAs(aa, provider);
+        defer mock.stop();
 
-    // decideOnly, so nothing is typed and the decoy newsletter form is the
-    // only thing that could have been picked by mistake.
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
-        \\{"username":"ada","password":"hunter2","decideOnly":true}
-    , .{});
-    const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
-    try std.testing.expect(!result.is_error);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"usernameSelector\":\"#user\"") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+        // decideOnly, so nothing is typed and the decoy newsletter form is the
+        // only thing that could have been picked by mistake.
+        const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+            \\{"username":"ada","password":"hunter2","decideOnly":true}
+        , .{});
+        const result = try call(aa, page.session, &registry, "login", args, .{ .source = .user });
+        try std.testing.expect(!result.is_error);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"usernameSelector\":\"#user\"") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"passwordSelector\":\"#pass\"") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"submitSelector\":\"#submit\"") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"submitted\":true") == null);
+    }
 }
 
 test "login: the password waits for the step that asks for it" {
@@ -789,7 +791,7 @@ test "login: the password waits for the step that asks for it" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
+    const mock = try testing.MockDecisions.start(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -819,7 +821,7 @@ test "login: a later step that asks for the password in the clear is refused" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
+    const mock = try testing.MockDecisions.start(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -865,7 +867,7 @@ test "login: a verification that fails still reports that credentials went out" 
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.startFailingVerification(aa);
+    const mock = try testing.MockDecisions.startFailingVerification(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,
@@ -912,7 +914,7 @@ test "login: the password field is checked again after the username went in" {
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
+    const mock = try testing.MockDecisions.start(aa);
     defer mock.stop();
 
     const args = try std.json.parseFromSliceLeaky(std.json.Value, aa,

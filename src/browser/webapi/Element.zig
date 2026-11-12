@@ -22,10 +22,11 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
+const layout = @import("../layout.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
-const layout = @import("../layout.zig");
 const text_measure = @import("../text_measure.zig");
+const user_input = @import("../frame/user_input.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
@@ -608,8 +609,6 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
         return error.NoModificationAllowed;
     }
 
-    frame.domChanged();
-
     // Observers of the parent must see a single mutation record replacing
     // this node with the parsed nodes.
     const notify = Frame.observers.hasMutationObservers(frame);
@@ -811,6 +810,12 @@ pub fn hasAttributeInterned(self: *const Element, comptime name: []const u8) boo
     return self._attributes.hasInterned(name);
 }
 
+/// Only HTML elements take the inert attribute. This is the element's own
+/// attribute; Node.isInert also checks its flat-tree ancestors.
+pub fn hasInertAttribute(self: *const Element) bool {
+    return self._namespace == .html and self.hasAttributeSafe(comptime .wrap("inert"));
+}
+
 // Per HTML "concept-fe-disabled", only listed elements participate in the
 // disabled concept. Anything else (e.g. <div disabled>) has no disabled
 // state and never matches :disabled / :enabled.
@@ -823,6 +828,13 @@ pub fn hasDisabledConcept(self: *const Element) bool {
         },
         else => false,
     };
+}
+
+/// Chrome's IsDisabledFormControl: a disabled control, where trusted mouse
+/// events stop. A disabled <fieldset> disables its descendants but is not one
+/// itself.
+pub fn isDisabledFormControl(self: *const Element) bool {
+    return self.getTag() != .fieldset and self.isDisabled();
 }
 
 pub fn isDisabled(self: *const Element) bool {
@@ -982,8 +994,7 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     const page = frame.page;
     try page.element_shadow_roots.put(page.arena, self, shadow_root);
     self._flags.shadow_host = true;
-    // The host's children leave the flat tree until a slot takes them
-    frame.renderingChanged();
+    Frame.change.shadowAttached(self, frame);
     return shadow_root;
 }
 
@@ -1096,7 +1107,7 @@ pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     const page = frame.page;
     const gop = try page.element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
+        gop.value_ptr.* = try CSSStyleProperties.init(.{ .inline_style = self }, owner);
     }
     self._flags.has_inline_style = true;
     return gop.value_ptr.*;
@@ -1227,7 +1238,6 @@ pub fn replaceWith(self: *Element, nodes: js.Variadic(Node.NodeOrText), frame: *
 pub fn remove(self: *Element, frame: *Frame) void {
     const node = self.asNode();
     const parent = node._parent orelse return;
-    frame.domChanged();
     frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
@@ -1344,7 +1354,17 @@ pub fn isFocusable(self: *Element, frame: *Frame) bool {
     return self.isVisible(frame);
 }
 
+/// What focusing an editing host does to the selection.
+pub const FocusCaret = enum {
+    none,
+    restore,
+};
+
 pub fn focus(self: *Element, frame: *Frame) !void {
+    return self.focusWith(.restore, frame);
+}
+
+pub fn focusWith(self: *Element, caret: FocusCaret, frame: *Frame) !void {
     if (self.asNode().isConnected() == false) {
         // a disconnected node cannot take focus
         return;
@@ -1368,6 +1388,11 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     doc.setActiveElement(self, owner);
 
     const old_related: ?*EventTarget = if (old_active) |old| try blurFocusedArea(old, new_target, owner) else null;
+
+    if (caret == .restore) {
+        // Place caret before the focus events fire
+        try user_input.caretOnFocus(self, owner);
+    }
 
     const FocusEvent = @import("event/FocusEvent.zig");
 
@@ -2114,13 +2139,13 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     const style_manager = &owner._style_manager;
 
     if (self.inlineStyle(frame)) |style| {
-        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
     }
 
     while (current.flatParent(frame)) |parent| {
         if (parent.is(Element)) |el| {
             if (el.inlineStyle(frame)) |style| {
-                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
             }
         }
         x += lineOffset(current, parent, style_manager, frame);
@@ -3064,5 +3089,5 @@ test "Element: div chain slot size" {
     // fit in existing padding. Debug is larger from the _proto_canary fields.
     const Div = @import("element/html/Div.zig");
     const slot = comptime Factory.chainOffsetOf(Div, Div) + @sizeOf(Div);
-    try testing.expectEqual(if (comptime lp.IS_DEBUG) 120 else 74, slot);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 112 else 73, slot);
 }

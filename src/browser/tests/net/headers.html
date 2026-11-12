@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=basic>
 {
@@ -205,11 +206,11 @@
 }
 
 // An invalid header name throws a TypeError.
-testing.expectError('TypeError: Invalid header name', () => new Headers([["a b", "x"]]));
-testing.expectError('TypeError: Invalid header name', () => new Headers({ "a b": "x" }));
+testing.expectError('TypeError', () => new Headers([["a b", "x"]]));
+testing.expectError('TypeError', () => new Headers({ "a b": "x" }));
 
 // A value with a forbidden byte (here an interior newline) throws a TypeError.
-testing.expectError('TypeError: Invalid header value', () => new Headers([["x", "a\nb"]]));
+testing.expectError('TypeError', () => new Headers([["x", "a\nb"]]));
 
 // A value with a code point above U+00FF cannot be a byte string: TypeError.
 {

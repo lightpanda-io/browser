@@ -27,7 +27,6 @@ const Comment = @This();
 
 pub const Proto = CData;
 
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {
