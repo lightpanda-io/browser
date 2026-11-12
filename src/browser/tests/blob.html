@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <meta charset="UTF-8">
-<meta name=lp-mode content=test>
 <script src="./testing.js"></script>
 
 <script id=basic type=module>
@@ -20,6 +19,7 @@
 
   state.resolve();
   await state.done(() => {
+    console.warn('a')
     testing.expectEqual(expected1.length, blob1.size);
     testing.expectEqual("text/html", blob1.type);
     testing.expectEqual(expected1, text1);

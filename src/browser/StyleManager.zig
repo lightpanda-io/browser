@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
 const text_measure = @import("text_measure.zig");
@@ -138,49 +137,117 @@ fn assertOwns(self: *const StyleManager, el_: ?*const Element) void {
     std.debug.assert(el.ownerFrame(self.frame) == self.frame);
 }
 
-/// Hard cap on `@media` / `@layer` nesting depth. CSS allows arbitrarily-deep
-/// at-rule nesting; without a cap a hostile inline stylesheet could blow the
-/// Zig stack via the mutually-recursive `applyMediaAtRule` / `applyLayerAtRule`
-/// `applyInnerRules` frames. 32 is well past anything seen in the wild.
+/// Hard cap on rule nesting depth: `@media` / `@layer` blocks and nested
+/// style rules. CSS allows arbitrarily-deep nesting; without a cap a hostile
+/// stylesheet could blow the Zig stack via the recursive parse and
+/// `addStoredRules`. 32 is well past anything seen in the wild.
 pub const MAX_AT_RULE_NESTING: u8 = 32;
 
 fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet) !void {
     // A <style> is parsed into its store on first use
     try sheet.ensureParsed(self.frame);
-    for (sheet._store.entries()) |*entry| {
+    try self.addStoredRules(build_arena, &sheet._store, 0, NO_LAYER, null);
+}
+
+/// Adds a store's rules in cascade order.
+fn addStoredRules(self: *StyleManager, build_arena: Allocator, store: *const RuleStore, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    if (depth >= MAX_AT_RULE_NESTING) {
+        return;
+    }
+    for (store.entries()) |*entry| {
         switch (entry._kind) {
             .style => {
-                if (entry.text().len == 0) {
+                const selector = if (nest) |parent|
+                    // The arena, not build_arena: a custom property's rule
+                    // keeps its selector text past the rebuild.
+                    try CssParser.resolveNestedSelector(self.arena.allocator(), parent, entry.text()) orelse continue
+                else
+                    entry.text();
+                if (selector.len == 0) {
                     // An invalid rule: its nested rules go with it
                     continue;
                 }
-                _ = try self.addStoredRule(entry, entry.text());
-                try self.addNestedStoredRules(build_arena, entry, entry.text(), 0);
+                _ = try self.addStoredRule(entry, selector, layer);
+                if (entry._children) |children| {
+                    try self.addStoredRules(build_arena, children, depth + 1, layer, selector);
+                }
             },
-            // The store keeps an at-rule as written: its body is parsed here
-            .media => try self.applyMediaAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
-            .layer => try self.applyLayerAtRule(build_arena, entry.text(), 0, NO_LAYER, null),
+            .media => try self.applyMediaRule(build_arena, entry, depth, layer, nest),
+            .layer => try self.applyLayerRule(build_arena, entry, depth, layer, nest),
             .keyframes => try self.addKeyframes(entry.text()),
+            // `@supports` isn't evaluated: its rules are dropped. The others
+            // (`@font-face`, …) hold nothing the cascade reads.
             else => {},
         }
     }
 }
 
-/// Apply an at-rule that takes part in the cascade. Only `@media` and `@layer`
-/// do here, and `@keyframes` registers its name. Other at-rules (`@supports`,
-/// `@font-face`, …) don't carry declarations relevant to the visibility filter
-/// and are skipped.
-fn applyAtRule(self: *StyleManager, build_arena: Allocator, keyword: []const u8, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
-    if (std.ascii.eqlIgnoreCase(keyword, "media")) {
-        return self.applyMediaAtRule(build_arena, text, depth, layer, nest);
+/// Apply an `@media` rule: when its query matches the current viewport, its
+/// rules as if they lived where the rule does. A non-matching one drops them.
+fn applyMediaRule(self: *StyleManager, build_arena: Allocator, entry: *const RuleStore.Entry, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    // Without a block, it's nothing
+    const children = entry._children orelse return;
+    if (MediaQuery.matches(CssParser.atRulePrelude(entry.text()), self.frame.page.getViewport()) == false) {
+        return;
     }
-    if (std.ascii.eqlIgnoreCase(keyword, "layer")) {
-        return self.applyLayerAtRule(build_arena, text, depth, layer, nest);
+    try self.applyGroupRules(build_arena, entry, children, depth + 1, layer, nest);
+}
+
+/// Apply an `@layer` rule (css-cascade-5). Layers have two forms:
+/// 1 - Block form which may or may not have a name. We register the layer and
+//      add its rules.
+/// 2 - Statement form only registes the name for ordering.
+///
+/// The layer parameter is the enclosing layer, or NO_LAYER at the top level.
+/// Priority is not assigned here, we need all the layers parsed to do that
+/// (since a layer statement can alter the ordering). So we'll do one final pass
+// in finalizerLayerRanks. `nest` is as for addStoredRules.
+fn applyLayerRule(self: *StyleManager, build_arena: Allocator, entry: *const RuleStore.Entry, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    const prelude = CssParser.atRulePrelude(entry.text());
+    const children = entry._children orelse {
+        // Statement form: `@layer <name>, <name>;`. One invalid name
+        // invalidates the whole statement. Validate everything before
+        // registering anything.
+        var names = prelude;
+        if (std.mem.findScalar(u8, names, ';')) |semi| {
+            names = names[0..semi];
+        }
+
+        var check = std.mem.splitScalar(u8, names, ',');
+        while (check.next()) |raw| {
+            if (isValidLayerName(std.mem.trim(u8, raw, &std.ascii.whitespace)) == false) {
+                return;
+            }
+        }
+
+        var it = std.mem.splitScalar(u8, names, ',');
+        while (it.next()) |raw| {
+            _ = try self.registerLayerPath(build_arena, layer, std.mem.trim(u8, raw, &std.ascii.whitespace));
+        }
+        return;
+    };
+
+    if (prelude.len != 0 and isValidLayerName(prelude) == false) {
+        // An invalid layer name invalidates the whole rule.
+        return;
     }
-    // Any prefix, as CSSStyleSheet types the rule.
-    if (std.ascii.endsWithIgnoreCase(keyword, "keyframes")) {
-        return self.addKeyframes(text);
+
+    const id = if (prelude.len == 0)
+        try self.internAnonymousLayer(build_arena, layer)
+    else
+        try self.registerLayerPath(build_arena, layer, prelude);
+
+    try self.applyGroupRules(build_arena, entry, children, depth + 1, id, nest);
+}
+
+/// The rules of a grouping rule that applies. One nested in a style rule
+/// first adds its own declarations, which are that rule's: `.a { @media (…) {
+/// color: red } }` is `@media (…) { .a { color: red } }`.
+fn applyGroupRules(self: *StyleManager, build_arena: Allocator, entry: *const RuleStore.Entry, children: *const RuleStore, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    if (nest) |selector| {
+        _ = try self.addStoredRule(entry, selector, layer);
     }
+    try self.addStoredRules(build_arena, children, depth, layer, nest);
 }
 
 /// `text` is the whole `@keyframes <name> { … }` rule; the name can be a string.
@@ -200,148 +267,6 @@ fn addKeyframes(self: *StyleManager, text: []const u8) Allocator.Error!void {
         // A CSSOM rule's text goes with the rule
         gop.key_ptr.* = try arena.dupe(u8, name);
     }
-}
-
-/// Apply an `@media` at-rule by evaluating its query against the current
-/// viewport and, if it matches, parsing the inner block as if its declarations
-/// lived at the top level. Non-matching queries silently drop the inner
-/// rules. Inline-only by design: external `<link rel="stylesheet">` is out
-/// of scope for the headless engine.
-///
-/// `nest` is the selector of the style rule the at-rule is nested in (CSS
-/// Nesting), whose block the inner block then is; null at the top level.
-fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
-    if (depth >= MAX_AT_RULE_NESTING) {
-        return;
-    }
-
-    const block = atRuleBlock(text, "@media") orelse return;
-    const query = std.mem.trim(u8, block.prelude, &std.ascii.whitespace);
-
-    if (MediaQuery.matches(query, self.frame.page.getViewport()) == false) {
-        return;
-    }
-
-    try self.applyAtRuleBody(build_arena, block.body, depth + 1, layer, nest);
-}
-
-/// Apply an `@layer` rule (css-cascade-5). Layers have two forms:
-/// 1 - Block form which may or may not have a name. We register the layer and
-//      parse the inner block. This can recurse.
-/// 2 - Statement form only registes the name for ordering.
-///
-/// The layer parameter is the enclosing layer, or NO_LAYER at the top level.
-/// Priority is not assigned here, we need all the layers parsed to do that
-/// (since a layer statement can alter the ordering). So we'll do one final pass
-// in finalizerLayerRanks. `nest` is as for applyMediaAtRule.
-fn applyLayerAtRule(self: *StyleManager, build_arena: Allocator, text: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
-    if (depth >= MAX_AT_RULE_NESTING) {
-        return;
-    }
-    if (std.ascii.startsWithIgnoreCase(text, "@layer") == false) {
-        return;
-    }
-
-    const block = atRuleBlock(text, "@layer") orelse {
-        // Statement form: `@layer <name>, <name>;`. One invalid name
-        // invalidates the whole statement. Validate everything before
-        // registering anything.
-        var names = text["@layer".len..];
-        if (std.mem.findScalar(u8, names, ';')) |semi| {
-            names = names[0..semi];
-        }
-
-        var check = std.mem.splitScalar(u8, names, ',');
-        while (check.next()) |raw| {
-            if (isValidLayerName(std.mem.trim(u8, raw, &std.ascii.whitespace)) == false) {
-                return;
-            }
-        }
-
-        var it = std.mem.splitScalar(u8, names, ',');
-        while (it.next()) |raw| {
-            _ = try self.registerLayerPath(build_arena, layer, std.mem.trim(u8, raw, &std.ascii.whitespace));
-        }
-        return;
-    };
-
-    const prelude = std.mem.trim(u8, block.prelude, &std.ascii.whitespace);
-    if (prelude.len != 0 and isValidLayerName(prelude) == false) {
-        // An invalid layer name invalidates the whole rule.
-        return;
-    }
-
-    const id = if (prelude.len == 0)
-        try self.internAnonymousLayer(build_arena, layer)
-    else
-        try self.registerLayerPath(build_arena, layer, prelude);
-
-    try self.applyAtRuleBody(build_arena, block.body, depth + 1, id, nest);
-}
-
-/// The block of an at-rule nested in a style rule is a block of that rule:
-/// `.a { @media (…) { color: red } }` is `@media (…) { .a { color: red } }`.
-fn applyAtRuleBody(self: *StyleManager, build_arena: Allocator, body: []const u8, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
-    if (nest) |selector| {
-        return self.addRawRule(build_arena, selector, body, depth, layer);
-    }
-    return self.applyInnerRules(build_arena, body, depth, layer);
-}
-
-/// Parse a conditional at-rule's inner block, adding style rules to the
-/// cascade and recursing into nested `@media` / `@layer`. `layer` is the
-/// enclosing cascade layer (NO_LAYER when unlayered); `depth` is the nesting
-/// depth of the *nested* at-rules (callers pass their own depth + 1).
-fn applyInnerRules(self: *StyleManager, build_arena: Allocator, inner: []const u8, depth: u8, layer: u16) Allocator.Error!void {
-    var it = CssParser.parseStylesheet(inner);
-    while (it.next()) |nested_rule| {
-        switch (nested_rule) {
-            .style => |s| try self.addRawRule(build_arena, s.selector, s.block, depth, layer),
-            .at_rule => |nested| try self.applyAtRule(build_arena, nested.keyword, nested.text, depth, layer, null),
-        }
-    }
-}
-
-/// Split a block at-rule into its prelude and inner block: for
-/// `@media <query> { <body> }` returns `.{ .prelude = "<query>", .body = "<body>" }`.
-/// Returns `null` when `text` doesn't start with `keyword`, or when it carries
-/// no block — notably the statement form (`@layer a, b;`), which declares
-/// ordering only.
-///
-/// `CssParser.RulesIterator.consumeAtRule` always emits a span starting at `@`;
-/// for unclosed blocks it runs to EOF, so the closing `}` is located explicitly
-/// rather than assumed to be the final byte. The opening `{` is found with a
-/// comment-aware scan so a `/* { */` in the prelude doesn't split the rule at
-/// the wrong place; the block's own trivia is handled by the CssParser re-parse
-/// in `applyInnerRules`, so only this outer boundary needs the special-case scan.
-fn atRuleBlock(text: []const u8, keyword: []const u8) ?struct { prelude: []const u8, body: []const u8 } {
-    if (std.ascii.startsWithIgnoreCase(text, keyword) == false) {
-        return null;
-    }
-
-    const rest = text[keyword.len..];
-    const open = indexOfOpenBraceSkippingComments(rest) orelse return null;
-
-    // Search only past the opening brace — the matching `}` lives there, and
-    // any returned position is naturally `> open` (since `rest[open] == '{'`).
-    const close = open + (std.mem.findScalarLast(u8, rest[open..], '}') orelse return null);
-    return .{ .prelude = rest[0..open], .body = rest[open + 1 .. close] };
-}
-
-/// Find the first `{` in `s` that is not inside a CSS `/* ... */` comment.
-/// An unclosed comment returns `null` (treat the whole rule as malformed).
-fn indexOfOpenBraceSkippingComments(s: []const u8) ?usize {
-    var i: usize = 0;
-    while (i < s.len) {
-        if (i + 1 < s.len and s[i] == '/' and s[i + 1] == '*') {
-            const close = std.mem.find(u8, s[i + 2 ..], "*/") orelse return null;
-            i = i + 2 + close + 2;
-            continue;
-        }
-        if (s[i] == '{') return i;
-        i += 1;
-    }
-    return null;
 }
 
 /// Register a (possibly dotted) layer name declared inside `parent`,
@@ -524,36 +449,6 @@ fn layerRank(self: *const StyleManager, priority: u64) u64 {
     return rank;
 }
 
-/// `depth` bounds the recursion through nested rules and at-rules, as
-/// MAX_AT_RULE_NESTING does for at-rules alone.
-fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, depth: u8, layer: u16) Allocator.Error!void {
-    if (selector_text.len == 0) {
-        return;
-    }
-    var sink: LazySink = .{ .allocator = build_arena, .page = self.frame.page };
-    const folded = try foldDeclarations(Declarations, CssParser.parseStyleBlock(block_text), &sink);
-    _ = try self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), sink.declarations(), layer);
-
-    // CSS Nesting: the rules nested in the block follow their parent in
-    // cascade order. Most blocks have none, and every nested rule needs a `{`.
-    if (depth >= MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block_text, '{') == null) {
-        return;
-    }
-    var it = CssParser.parseStyleBlock(block_text);
-    while (it.nextItem()) |item| {
-        switch (item) {
-            .declaration => {},
-            .rule => |nested| {
-                // The arena, not build_arena: a custom property's rule keeps
-                // its selector text past the rebuild.
-                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), selector_text, nested.selector) orelse continue;
-                try self.addRawRule(build_arena, selector, nested.block, depth + 1, layer);
-            },
-            .at_rule => |nested| try self.applyAtRule(build_arena, nested.keyword, nested.text, depth + 1, layer, selector_text),
-        }
-    }
-}
-
 // Tracked rules get one group Rule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
 // Custom properties and `content` are lazy rules instead, keyed by id: they
@@ -562,8 +457,9 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
-    props: Declarations,
-    important: Declarations,
+    // By pointer: inlined, by value would copy them for every rule
+    props: *const Declarations,
+    important: *const Declarations,
     declared: LazyDeclarations,
     layer: u16,
 ) !bool {
@@ -621,7 +517,7 @@ fn addSelectorRules(
 // One priority per selector, shared by every group it lands in: doc_order
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
-fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: Declarations, important: Declarations, layer: u16) !void {
+fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, layer: u16) !void {
     try self.collectAttributeNames(selector);
     const matched = unwrapWhere(selector);
     const placement = placeSelector(matched) orelse return;
@@ -876,10 +772,6 @@ fn nextPriority(self: *StyleManager, layer: u16) !u64 {
     const priority = (rank << RANK_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER);
     self.next_doc_order += 1;
     return priority;
-}
-
-fn isCustomProperty(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "--");
 }
 
 /// Whether every selector of a list ends in a pseudo-element. A scan rather
@@ -1974,10 +1866,10 @@ fn matchesUaDisplayNoneRule(el: *Element, frame: *Frame) bool {
     return false;
 }
 
-/// The stored twin of addRawRule: add a style rule's declarations under
-/// `selector_text`, its own selector or, for a nested rule, that selector
-/// resolved against its parent's. Returns what addSelectorRules does.
-fn addStoredRule(self: *StyleManager, entry: *const RuleStore.Entry, selector_text: []const u8) !bool {
+/// Add a rule's declarations under `selector_text`: a style rule's own
+/// selector or, for a nested rule, that selector resolved against its parent's.
+/// Returns what addSelectorRules does.
+fn addStoredRule(self: *StyleManager, entry: *const RuleStore.Entry, selector_text: []const u8, layer: u16) !bool {
     if (selector_text.len == 0) {
         return false;
     }
@@ -1987,30 +1879,9 @@ fn addStoredRule(self: *StyleManager, entry: *const RuleStore.Entry, selector_te
     // A custom rule holds selector_text until the property is looked up, but it
     // doesn't need a copy: the sheet frees a rule's selector only along with
     // sheetModified(), and every lookup rebuilds first.
-    return self.addSelectorRules(selector_text, folded.props(.normal), folded.props(.important), lazy, NO_LAYER);
-}
-
-/// The stored counterpart to the nested rules addRawRule adds.
-/// `parent_selector` is the parent's selector, already resolved when the
-/// parent is itself nested.
-fn addNestedStoredRules(self: *StyleManager, build_arena: Allocator, parent: *const RuleStore.Entry, parent_selector: []const u8, depth: u8) Allocator.Error!void {
-    const children = parent._children orelse return;
-    if (depth >= MAX_AT_RULE_NESTING) {
-        return;
-    }
-    for (children.entries()) |*entry| {
-        switch (entry._kind) {
-            .style => {
-                // The arena, as in addRawRule.
-                const selector = try CssParser.resolveNestedSelector(self.arena.allocator(), parent_selector, entry.text()) orelse continue;
-                _ = try self.addStoredRule(entry, selector);
-                try self.addNestedStoredRules(build_arena, entry, selector, depth + 1);
-            },
-            .media => try self.applyMediaAtRule(build_arena, entry.text(), depth + 1, NO_LAYER, parent_selector),
-            .layer => try self.applyLayerAtRule(build_arena, entry.text(), depth + 1, NO_LAYER, parent_selector),
-            else => {},
-        }
-    }
+    const normal = folded.props(.normal);
+    const important = folded.props(.important);
+    return self.addSelectorRules(selector_text, &normal, &important, lazy, layer);
 }
 
 /// A style rule appended at or after the sheet that emitted the last rule is
@@ -2028,7 +1899,7 @@ pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, index: u32) void
     }
     const before = self.next_doc_order;
     const animations = self.animationRuleCount();
-    const changed = self.addStoredRule(entry, entry.text()) catch return self.sheetModified();
+    const changed = self.addStoredRule(entry, entry.text(), NO_LAYER) catch return self.sheetModified();
     if (self.next_doc_order != before) {
         self.last_rule_sheet = sheet;
     }
@@ -2059,7 +1930,7 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, index: u32) bool
     return false;
 }
 
-/// The stored counterpart to foldDeclarations' lazy branches. Names within one
+/// The lazy declarations of a block. Names within one
 /// declaration block are already unique, so there is nothing to dedup here.
 fn extractLazyDeclarations(self: *StyleManager, block: *const DeclarationBlock) !LazyDeclarations {
     const arena = self.arena.allocator();
@@ -3370,22 +3241,8 @@ fn inlineDeclared(comptime Declared: type, el: *Element, frame: *Frame) Slots(De
         return extractDeclared(Declared, style.asCSSStyleDeclaration().declarationBlock(), frame);
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
-    // Without a sink nothing allocates
-    return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr), null) catch unreachable;
+    return foldDeclarations(Declared, CssParser.parseDeclarationsList(attr));
 }
-
-/// The lazy declarations of one block. They go by id, so a block declaring
-/// the same one twice keeps only the winner.
-const LazySink = struct {
-    allocator: Allocator,
-    page: *Page, // Its custom property names are numbered on the page, like the CSSOM's.
-    declared: std.ArrayHashMapUnmanaged(properties.Id, LazyDeclaration, IdArrayContext, false) = .empty,
-    animation: LazyAnimation = .{},
-
-    fn declarations(self: *const LazySink) LazyDeclarations {
-        return .{ .declared = self.declared.values(), .animation = self.animation };
-    }
-};
 
 /// For the maps keyed by property id. Ids are small and dense, so a multiply
 /// spreads them; the default hashes their bytes with Wyhash, which costs a
@@ -3402,16 +3259,6 @@ const IdContext = struct {
     }
 };
 
-const IdArrayContext = struct {
-    pub fn hash(_: IdArrayContext, id: properties.Id) u32 {
-        return @truncate(IdContext.hash(.{}, id));
-    }
-
-    pub fn eql(_: IdArrayContext, a: properties.Id, b: properties.Id, _: usize) bool {
-        return a == b;
-    }
-};
-
 /// Custom properties and `content`: kept as declared, and resolved only when
 /// a script reads one.
 fn isLazy(id: properties.Id) bool {
@@ -3419,36 +3266,16 @@ fn isLazy(id: properties.Id) bool {
 }
 
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
-// materialized object was built from: a normal declaration never overrides an
+// materialized object is built from: a normal declaration never overrides an
 // earlier !important one, and an empty value removes the property. The tracked
-// properties are matched case-insensitively; a custom property's name is
-// case-sensitive. Custom properties, `content` and the animation properties go
-// to `lazy` when there is one.
-fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator, lazy: ?*LazySink) !Slots(Declared) {
+// properties are matched case-insensitively.
+fn foldDeclarations(comptime Declared: type, declarations: CssParser.DeclarationsIterator) Slots(Declared) {
     var slots: Slots(Declared) = .{};
     var it = declarations;
     while (it.next()) |declaration| {
-        const id = trackedId(declaration.name) orelse blk: {
-            if (isCustomProperty(declaration.name) == false) {
-                continue;
-            }
-            const page = (lazy orelse continue).page;
-            break :blk (try page.css_custom_names.intern(page.arena, declaration.name)) orelse continue;
-        };
-        if (isLazy(id)) {
-            const sink = lazy orelse continue;
-            const gop = try sink.declared.getOrPut(sink.allocator, id);
-            if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
-                continue;
-            }
-            gop.value_ptr.* = .{ .id = id, .value = declaration.value, .important = declaration.important };
-            continue;
-        }
-        if (Animation.Property.fromId(id)) |property| {
-            const sink = lazy orelse continue;
-            sink.animation.declare(property, declaration.value, declaration.important);
-            continue;
-        }
+        // Custom properties, `content` and the animation properties have no
+        // slot: they're read from the parsed object.
+        const id = trackedId(declaration.name) orelse continue;
         slots.apply(id, declaration.value, declaration.important);
     }
     return slots;
@@ -3501,7 +3328,7 @@ fn Slots(comptime Declared: type) type {
             }
         }
 
-        fn props(self: Self, comptime importance: Importance) Declared {
+        fn props(self: *const Self, comptime importance: Importance) Declared {
             var p: Declared = .{};
             for (ids, self.slots) |id, s| {
                 const value = s.value orelse continue;
@@ -3843,11 +3670,21 @@ fn searchSheetsForKeyframes(self: *StyleManager) !bool {
             continue;
         }
         try sheet.ensureParsed(self.frame);
-        for (sheet._store.entries()) |*entry| {
-            if (entry._kind == .style) {
-                continue;
-            }
-            if (std.ascii.findIgnoreCase(entry.text(), "keyframes") != null) {
+        if (storeMentionsKeyframes(&sheet._store)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn storeMentionsKeyframes(store: *const RuleStore) bool {
+    for (store.entries()) |*entry| {
+        if (entry._kind != .style and std.ascii.findIgnoreCase(entry.text(), "keyframes") != null) {
+            return true;
+        }
+        // A grouping rule's text is only its prelude
+        if (entry._children) |children| {
+            if (storeMentionsKeyframes(children)) {
                 return true;
             }
         }

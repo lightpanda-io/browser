@@ -28,6 +28,7 @@ const StyleManager = @import("../../StyleManager.zig");
 
 const GenericRule = @import("GenericRule.zig");
 const CSSStyleRule = @import("CSSStyleRule.zig");
+const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
 /// A view of one entry in a RuleStore. The sheet keeps one view per rule
@@ -117,10 +118,48 @@ pub fn getType(self: *CSSRule) u16 {
 }
 
 pub fn getCssText(self: *CSSRule, frame: *Frame) ![]const u8 {
-    return switch (self._type) {
-        .style => self.subtype(CSSStyleRule).getCssText(frame),
-        .generic => self.entry().text(),
+    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+    try writeCssText(self.entry(), &buf, frame);
+    return buf.written();
+}
+
+fn writeCssText(rule: *const RuleStore.Entry, buf: *std.Io.Writer.Allocating, frame: *Frame) std.Io.Writer.Error!void {
+    if (rule._kind == .style) {
+        return writeStyleRule(rule, buf, frame);
+    }
+    const children = rule._children orelse {
+        // kept as written
+        return buf.writer.writeAll(rule.text());
     };
+    // A grouping rule. As Chrome writes it: one child a line, not re-indented.
+    try buf.writer.print("{s} {{\n", .{rule.text()});
+    if (rule._block.length() > 0) {
+        // Nested in a style rule, its declarations are that rule's
+        try buf.writer.writeAll("  ");
+        try CSSStyleDeclaration.formatBlock(&rule._block, &buf.writer, frame);
+        try buf.writer.writeByte('\n');
+    }
+    for (children.entries()) |*child| {
+        try buf.writer.writeAll("  ");
+        try writeCssText(child, buf, frame);
+        try buf.writer.writeByte('\n');
+    }
+    try buf.writer.writeByte('}');
+}
+
+fn writeStyleRule(rule: *const RuleStore.Entry, buf: *std.Io.Writer.Allocating, frame: *Frame) !void {
+    try buf.writer.print("{s} {{ ", .{rule.text()});
+    const start = buf.written().len;
+    try CSSStyleDeclaration.formatBlock(&rule._block, &buf.writer, frame);
+    if (rule._children) |children| {
+        for (children.entries()) |*child| {
+            if (buf.written().len > start) {
+                try buf.writer.writeByte(' ');
+            }
+            try writeCssText(child, buf, frame);
+        }
+    }
+    try buf.writer.writeAll(" }");
 }
 
 fn getParentRule(_: *const CSSRule) ?*CSSRule {

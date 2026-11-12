@@ -355,7 +355,7 @@ const StyleRule = struct {
 /// `cssRules` after `insertRule` -- if the rule is missing they fall back to
 /// per-render `<style>` element injection, which leaks unboundedly. See
 /// lightpanda-io/browser#2459.
-const AtRule = struct {
+pub const AtRule = struct {
     /// At-keyword without the leading `@` (e.g., `"keyframes"`, `"media"`,
     /// `"-webkit-keyframes"`). Borrowed from the input slice; copy if you
     /// need to outlive the input.
@@ -364,12 +364,30 @@ const AtRule = struct {
     /// brace (block at-rules) or semicolon (statement at-rules). Borrowed
     /// from the input slice.
     text: []const u8,
+    /// Between the keyword and the block (or the `;`), trimmed.
+    prelude: []const u8,
+    /// Inside the braces; null for a statement at-rule. An unclosed block
+    /// runs to the end of the input.
+    block: ?[]const u8,
 };
 
 pub const Rule = union(enum) {
     style: StyleRule,
     at_rule: AtRule,
 };
+
+/// What follows an at-rule's name, trimmed: the `<query>` of `@media <query>`.
+/// For the prelude of an entry's stored text; a parsed AtRule has `prelude`.
+pub fn atRulePrelude(text: []const u8) []const u8 {
+    var i: usize = 1; // the `@`
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+            else => break,
+        }
+    }
+    return std.mem.trim(u8, text[@min(i, text.len)..], &std.ascii.whitespace);
+}
 
 /// An item of a style rule's block. With CSS Nesting, a block holds style
 /// rules and at-rules next to its declarations. A nested style rule's
@@ -454,8 +472,8 @@ pub const RulesIterator = struct {
     }
 };
 
-/// Consume a full at-rule (statement or block form) and return its keyword
-/// (without `@`) and full source span. The caller peeked the `at_keyword`.
+/// Consume a full at-rule (statement or block form). The caller peeked the
+/// `at_keyword`.
 fn consumeAtRule(stream: *TokenStream, input: []const u8) AtRule {
     const at_span = stream.next() orelse unreachable; // caller peeked an at_keyword
     const start = at_span.start;
@@ -463,37 +481,32 @@ fn consumeAtRule(stream: *TokenStream, input: []const u8) AtRule {
         .at_keyword => |name| name,
         else => "",
     };
-    var end = at_span.end;
-    var depth: usize = 0;
-    var saw_block = false;
 
-    while (true) {
-        const peeked = stream.peek() orelse break;
-        if (!saw_block and isSemicolon(peeked.token) and depth == 0) {
-            const semi = stream.next() orelse break;
-            end = semi.end;
+    // The prelude ends at the first `{` or `;`
+    var end = input.len;
+    var prelude_end = input.len;
+    var block: ?[]const u8 = null;
+    while (stream.next()) |span| {
+        if (isSemicolon(span.token)) {
+            prelude_end = span.start;
+            end = span.end;
             break;
         }
-
-        const span = stream.next() orelse break;
-        if (isWhitespaceOrComment(span.token)) {
-            end = span.end;
-            continue;
-        }
-
-        end = span.end;
         if (span.token == .curly_bracket_block) {
-            depth += 1;
-            saw_block = true;
-        } else if (span.token == .close_curly_bracket) {
-            if (depth > 0) depth -= 1;
-            if (saw_block and depth == 0) break;
+            prelude_end = span.start;
+            const body = consumeBlockBody(stream, input, span.end);
+            block = body;
+            // Past the `}`, unless it was unclosed
+            end = @min(span.end + body.len + 1, input.len);
+            break;
         }
     }
 
     return .{
         .keyword = keyword,
         .text = input[start..end],
+        .prelude = std.mem.trim(u8, input[at_span.end..prelude_end], &std.ascii.whitespace),
+        .block = block,
     };
 }
 
@@ -732,6 +745,55 @@ test "RulesIterator: surfaces block at-rules" {
     try testing.expectEqualStrings(".test2", rule.style.selector);
     try testing.expectEqualStrings(" color: green; ", rule.style.block);
     try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: at-rule prelude and block" {
+    var it = RulesIterator.init(
+        \\@media(min-width:1px){.a{color:red}}
+        \\@supports (content: "{") { .b { color: red } }
+        \\@media screen /* { */ { .c {} }
+        \\@layer a, b;
+        \\@layer { }
+        \\@media print { .d { color: red }
+    );
+
+    var at = (it.next() orelse return error.MissingRule).at_rule;
+    try testing.expectEqualStrings("(min-width:1px)", at.prelude);
+    try testing.expectEqualStrings(".a{color:red}", at.block.?);
+    try testing.expectEqualStrings("@media(min-width:1px){.a{color:red}}", at.text);
+
+    // A `{` in a string or a comment doesn't open the block
+    at = (it.next() orelse return error.MissingRule).at_rule;
+    try testing.expectEqualStrings("(content: \"{\")", at.prelude);
+    try testing.expectEqualStrings(" .b { color: red } ", at.block.?);
+
+    at = (it.next() orelse return error.MissingRule).at_rule;
+    try testing.expectEqualStrings("screen /* { */", at.prelude);
+    try testing.expectEqualStrings(" .c {} ", at.block.?);
+
+    at = (it.next() orelse return error.MissingRule).at_rule;
+    try testing.expectEqualStrings("a, b", at.prelude);
+    try testing.expectEqual(null, at.block);
+    try testing.expectEqualStrings("@layer a, b;", at.text);
+
+    at = (it.next() orelse return error.MissingRule).at_rule;
+    try testing.expectEqualStrings("", at.prelude);
+    try testing.expectEqualStrings(" ", at.block.?);
+
+    // Unclosed: the block runs to the end
+    at = (it.next() orelse return error.MissingRule).at_rule;
+    try testing.expectEqualStrings("print", at.prelude);
+    try testing.expectEqualStrings(" .d { color: red }", at.block.?);
+    try testing.expectEqualStrings("@media print { .d { color: red }", at.text);
+
+    try testing.expectEqual(null, it.next());
+}
+
+test "atRulePrelude" {
+    try testing.expectEqualStrings("(min-width: 1px)", atRulePrelude("@media (min-width: 1px)"));
+    try testing.expectEqualStrings("(x)", atRulePrelude("@media(x)"));
+    try testing.expectEqualStrings("a, b;", atRulePrelude("@layer a, b;"));
+    try testing.expectEqualStrings("", atRulePrelude("@layer"));
 }
 
 test "RulesIterator: surfaces vendor-prefixed at-rules" {

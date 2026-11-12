@@ -151,11 +151,14 @@ pub fn markDetached(self: *RuleStore) void {
 }
 
 pub const Entry = struct {
-    // Rules nested in a style rule's block (CSS Nesting).
+    // A grouping rule's rules, or those nested in a style rule's block (CSS
+    // Nesting). Always set for a grouping rule with a block.
     _children: ?*RuleStore = null,
-    // A style rule's declarations; empty for an at-rule.
+    // A style rule's declarations, or those of a grouping rule nested in a
+    // style rule. Otherwise empty.
     _block: DeclarationBlock = .{},
-    // A style rule's selector, or an at-rule's source as written.
+    // A style rule's selector; a grouping rule's keyword and prelude
+    // (`@media <query>`, see initPrelude); any other at-rule's source as written.
     _text_ptr: [*]const u8,
     _text_len: u32,
     // Unique within the sheet, so a view finds its rule after inserts and
@@ -172,6 +175,33 @@ pub const Entry = struct {
             return error.StringTooLarge;
         }
         const owned = try allocator.dupe(u8, text_);
+        return .{
+            ._id = id,
+            ._kind = kind,
+            ._text_ptr = owned.ptr,
+            ._text_len = @intCast(owned.len),
+        };
+    }
+
+    /// A grouping rule (@media, @supports, @layer): its keyword, lowercased
+    /// as Chrome serializes it, then its prelude.
+    pub fn initPrelude(allocator: Allocator, kind: Kind, prelude: []const u8, id: u32) !Entry {
+        const name = switch (kind) {
+            .media => "@media",
+            .supports => "@supports",
+            .layer => "@layer",
+            else => unreachable,
+        };
+        const len = name.len + @intFromBool(prelude.len > 0) + prelude.len;
+        if (len > std.math.maxInt(u32)) {
+            return error.StringTooLarge;
+        }
+        const owned = try allocator.alloc(u8, len);
+        @memcpy(owned[0..name.len], name);
+        if (prelude.len > 0) {
+            owned[name.len] = ' ';
+            @memcpy(owned[name.len + 1 ..], prelude);
+        }
         return .{
             ._id = id,
             ._kind = kind,
@@ -348,6 +378,17 @@ test "RuleStore: appendSlice sizing" {
     try list.appendSlice(allocator, &.{try .init(allocator, .style, ".e", 4)});
     try testing.expectEqual(6, list._cap);
     try testing.expectEqual(5, list.length());
+}
+
+test "RuleStore: Entry.initPrelude" {
+    const allocator = testing.allocator;
+    var media = try Entry.initPrelude(allocator, .media, "(min-width: 1px)", 1);
+    defer media.deinit(allocator);
+    try testing.expectEqual("@media (min-width: 1px)", media.text());
+
+    var layer = try Entry.initPrelude(allocator, .layer, "", 2);
+    defer layer.deinit(allocator);
+    try testing.expectEqual("@layer", layer.text());
 }
 
 test "RuleStore: Kind" {
