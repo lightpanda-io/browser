@@ -875,6 +875,58 @@
   }
 </script>
 
+<script id=xhr_upload_events_resend_in_handler type=module>
+  {
+    // open() + send() from the upload loadstart handler: the inner send()
+    // makes the request, so the outer one must not make a second. Two
+    // transfers would deliver two responses (two 'load'), and abort() could
+    // only ever reach the last one.
+    const state = await testing.async();
+    let pending = 2;
+    const run = (abort_after_send) => {
+      const req = new XMLHttpRequest();
+      const log = [];
+      recordUploadEvents(req, log);
+      let resent = false;
+      req.upload.addEventListener('loadstart', () => {
+        if (resent) return;
+        resent = true;
+        req.open('POST', 'http://127.0.0.1:9582/xhr');
+        req.send('bar!');
+      });
+      // Long enough for a second transfer to deliver its response.
+      req.addEventListener('loadend', () => setTimeout(() => {
+        if (--pending === 0) state.resolve();
+      }, 50));
+      req.open('POST', 'http://127.0.0.1:9582/xhr');
+      req.send('foo');
+      if (abort_after_send) req.abort();
+      return log;
+    };
+    const completed = run(false);
+    const aborted = run(true);
+
+    await state.done(() => {
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.loadstart 0/4 true',
+        'upload.progress 4/4 true',
+        'upload.load 4/4 true',
+        'upload.loadend 4/4 true',
+        'load',
+      ], completed.filter((l) => !l.startsWith('readystatechange')));
+      // abort() reaches the only request there is: nothing completes later.
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.loadstart 0/4 true',
+        'upload.abort 0/0 false',
+        'upload.loadend 0/0 false',
+        'abort',
+      ], aborted.filter((l) => !l.startsWith('readystatechange')));
+    });
+  }
+</script>
+
 <script id=xhr_upload_events_network_error type=module>
   {
     const state = await testing.async();

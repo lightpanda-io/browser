@@ -56,6 +56,10 @@ _http_transfer: ?*Transfer = null,
 // send from the onload callback
 _active_requests: u8 = 0,
 _send_flag: bool = false,
+// Bumped by every send(), so a send() that ran JS can tell whether a handler
+// called open() and send() again: _ready_state and _send_flag alone look the
+// same as if nothing had happened.
+_send_id: u32 = 0,
 // The spec's upload listener flag with its upload complete flag unset: send()
 // had a body and upload listeners, and the upload hasn't finished yet.
 _upload_pending: bool = false,
@@ -335,6 +339,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     const exec = self._exec;
 
     self._send_flag = true;
+    self._send_id +%= 1;
+    const send_id = self._send_id;
 
     // https://xhr.spec.whatwg.org/#the-send()-method step 11.5: the upload
     // loadstart is fired from send() itself, and only for an async request.
@@ -342,11 +348,16 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     if (self._upload_pending) {
         const total = self._request_body.?.len;
         self._upload.?._proto.dispatch(.load_start, .{ .total = total, .length_computable = total != 0 }, exec) catch |err| {
-            self._send_flag = false;
+            if (self._send_id == send_id) {
+                self._send_flag = false;
+            }
             return err;
         };
-        // A loadstart handler can abort() or open() again.
-        if (self._ready_state != .opened or !self._send_flag) {
+        // A loadstart handler can abort() or open() again, and after open()
+        // it can send() again: that send() made the request, this one is
+        // over. Carrying on would start a second transfer and overwrite
+        // _http_transfer, leaving the first one out of abort()'s reach.
+        if (self._send_id != send_id or self._ready_state != .opened or !self._send_flag) {
             return;
         }
     }
