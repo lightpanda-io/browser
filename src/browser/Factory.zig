@@ -219,7 +219,7 @@ fn PrototypeChain(comptime types: []const type) type {
             assert(index < types.len);
 
             const ptr = self.get(index);
-            ptr.* = if (comptime @hasField(types[index], "_proto"))
+            ptr.* = if (comptime hasStoredProto(types[index]))
                 .{ ._proto = undefined, ._type = typeInit(types[index], self.get(index + 1)) }
             else
                 .{ ._type = typeInit(types[index], self.get(index + 1)) };
@@ -253,7 +253,7 @@ fn AutoPrototypeChain(comptime types: []const type) type {
 
         // Same, for a node chain: stamps the Node with its document.
         fn createOwned(allocator: std.mem.Allocator, owner: u32, leaf_value: anytype) !*@TypeOf(leaf_value) {
-            comptime assert(types[1] == Node);
+            comptime assert(types[0] == Node);
             const chain = try PrototypeChain(types).allocate(allocator);
 
             chain.setRoot();
@@ -263,7 +263,7 @@ fn AutoPrototypeChain(comptime types: []const type) type {
             }
 
             chain.setLeaf(types.len - 1, leaf_value);
-            chain.get(1)._owner = owner;
+            chain.get(0)._owner = owner;
             return chain.get(types.len - 1);
         }
     };
@@ -349,7 +349,7 @@ pub fn node(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(ch
     comptime assert(@TypeOf(child) != Document);
     const allocator = self._recycling.allocator();
     return try AutoPrototypeChain(
-        &.{ EventTarget, Node, @TypeOf(child) },
+        &.{ Node, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
@@ -360,54 +360,52 @@ pub const DocumentOpts = struct {
 
 // A Document with no more specific type (`new Document()`, XHR's responseXML).
 pub fn genericDocument(self: *Factory, opts: DocumentOpts) !*Document {
-    const chain = try self.documentChain(&.{ EventTarget, Node, Document }, opts);
-    return chain.get(2);
+    const chain = try self.documentChain(&.{ Node, Document }, opts);
+    return chain.get(1);
 }
 
-// Documents: {EventTarget, Node, Document, [Leaf]}. The Document is registered
+// Documents: {Node, Document, [Leaf]}. The Document is registered
 // in the browser's table as it is built, so it knows its page and slot from
 // the start.
 fn documentChain(self: *Factory, comptime types: []const type, opts: DocumentOpts) !PrototypeChain(types) {
-    comptime assert(types[1] == Node and types[2] == Document);
+    comptime assert(types[0] == Node and types[1] == Document);
     const chain = try PrototypeChain(types).allocate(self._recycling.allocator());
-    const doc = chain.get(2);
+    const doc = chain.get(1);
     const index = try self.registerDocument(doc);
 
     chain.setRoot();
-    chain.setMiddle(1);
-    chain.get(1)._owner = index;
+    chain.get(0)._owner = index;
 
     doc.* = .{
         ._proto = undefined,
-        ._type = if (comptime types.len == 3) .generic else typeInit(Document, chain.get(3)),
+        ._type = if (comptime types.len == 2) .generic else typeInit(Document, chain.get(2)),
         ._page = self._page,
         ._index = index,
         ._url = opts.url,
         ._charset = opts.charset,
     };
-    setProto(doc, chain.get(1));
+    setProto(doc, chain.get(0));
     return chain;
 }
 
-// CData nodes: {EventTarget, Node, CData, [Text,] Leaf}.
+// CData nodes: {Node, CData, [Text,] Leaf}.
 // CData is special, it's _type is a bare tag, not a tagged union. A website can
 // have tens of thousands of Text nodes, and this allows a few optimization to
 // both reduce the # of allocations and the size
 pub fn cdataNode(self: *Factory, owner: *const Document, cd: Node.CData, leaf: anytype) !*Node.CData {
-    const types = comptime prototypeTypes(@TypeOf(leaf));
-    comptime assert(types[0] == EventTarget and types[1] == Node and types[2] == Node.CData);
+    const types = comptime chainTypes(@TypeOf(leaf));
+    comptime assert(types[0] == Node and types[1] == Node.CData);
 
     const chain = try PrototypeChain(types).allocate(self._recycling.allocator());
     chain.setRoot();
-    chain.setMiddle(1);
-    chain.get(1)._owner = owner._index;
+    chain.get(0)._owner = owner._index;
 
-    const cd_ptr = chain.get(2);
+    const cd_ptr = chain.get(1);
     cd_ptr.* = cd;
-    setProto(cd_ptr, chain.get(1));
+    setProto(cd_ptr, chain.get(0));
 
     // only the CDATASection chain has a middle here (its Text)
-    inline for (3..types.len - 1) |i| {
+    inline for (2..types.len - 1) |i| {
         const ptr = chain.get(i);
         ptr.* = .{};
         setProto(ptr, chain.get(i - 1));
@@ -416,15 +414,16 @@ pub fn cdataNode(self: *Factory, owner: *const Document, cd: Node.CData, leaf: a
     return cd_ptr;
 }
 
-// The full type list for a leaf. Walks the Proto chain.
-// For example CData.Text -> [_]type{EventTarget, Node, CData, Text}).
-fn prototypeTypes(comptime Leaf: type) []const type {
+// The types that get a slot of their own in the chain allocation for a leaf:
+// its prototype types, minus any that its child embeds. For example
+// CData.Text -> [_]type{Node, CData, Text}, since Node embeds its EventTarget.
+fn chainTypes(comptime Leaf: type) []const type {
     comptime {
         var types: []const type = &.{Leaf};
         var T = Leaf;
-        while (reflect.Proto(T)) |P| {
-            T = P;
-            types = &[_]type{P} ++ types;
+        while (hasEmbeddedProto(T) == false) {
+            T = reflect.Proto(T) orelse break;
+            types = &[_]type{T} ++ types;
         }
         return types;
     }
@@ -435,9 +434,12 @@ fn prototypeTypes(comptime Leaf: type) []const type {
 pub fn chainOffsetOf(comptime Leaf: type, comptime T: type) usize {
     comptime {
         var offset: usize = 0;
-        for (prototypeTypes(Leaf)) |C| {
+        for (chainTypes(Leaf)) |C| {
             offset = std.mem.alignForward(usize, offset, @alignOf(C));
             if (C == T) return offset;
+            if (hasEmbeddedProto(C) and reflect.Proto(C).? == T) {
+                return offset + @offsetOf(C, "_proto");
+            }
             offset += @sizeOf(C);
         }
         @compileError(@typeName(T) ++ " is not in the prototype chain of " ++ @typeName(Leaf));
@@ -453,6 +455,9 @@ fn protoOffset(comptime T: type) usize {
 // Get the Proto of a value.
 pub fn protoOf(value: anytype) *reflect.Proto(reflect.Struct(@TypeOf(value))).? {
     const T = reflect.Struct(@TypeOf(value));
+    if (comptime hasEmbeddedProto(T)) {
+        return &value._proto;
+    }
     const proto: *reflect.Proto(T).? = @ptrFromInt(@intFromPtr(value) - comptime protoOffset(T));
     if (comptime lp.IS_DEBUG) {
         // In debug, we'll assert that our offset and the _proto field agree.
@@ -471,8 +476,18 @@ fn setProto(ptr: anytype, proto: anytype) void {
     }
 }
 
+// `_proto: *Parent`, the parent is the previous member of the chain
 fn hasStoredProto(comptime T: type) bool {
-    return @hasField(T, "_proto") and @FieldType(T, "_proto") != void;
+    const P = reflect.Proto(T) orelse return false;
+    return @hasField(T, "_proto") and @FieldType(T, "_proto") == *P;
+}
+
+// `_proto: Parent`, the parent is a field of T rather than a member of the
+// chain, which starts at T. Worth it when the parent fits in T's padding (Node
+// and its 1-byte EventTarget).
+fn hasEmbeddedProto(comptime T: type) bool {
+    const P = reflect.Proto(T) orelse return false;
+    return @hasField(T, "_proto") and @FieldType(T, "_proto") == P;
 }
 
 // Generic contiguous chain from explicit values, for chains whose middles
@@ -509,36 +524,36 @@ fn ChainedLeaf(comptime Values: type) type {
 }
 
 pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const chain = try self.documentChain(&.{ EventTarget, Node, Document, @TypeOf(child) }, .{});
-    chain.setLeaf(3, child);
-    return chain.get(3);
+    const chain = try self.documentChain(&.{ Node, Document, @TypeOf(child) }, .{});
+    chain.setLeaf(2, child);
+    return chain.get(2);
 }
 
 pub fn documentFragment(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._recycling.allocator();
     return try AutoPrototypeChain(
-        &.{ EventTarget, Node, Node.DocumentFragment, @TypeOf(child) },
+        &.{ Node, Node.DocumentFragment, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
 pub fn element(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._recycling.allocator();
     return try AutoPrototypeChain(
-        &.{ EventTarget, Node, Element, @TypeOf(child) },
+        &.{ Node, Element, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
 pub fn htmlElement(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._recycling.allocator();
     return try AutoPrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Html, @TypeOf(child) },
+        &.{ Node, Element, Element.Html, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
 pub fn htmlMediaElement(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._recycling.allocator();
     return try AutoPrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Html, Element.Html.Media, @TypeOf(child) },
+        &.{ Node, Element, Element.Html, Element.Html.Media, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
@@ -561,13 +576,13 @@ pub fn svgElement(self: *Factory, owner: *const Document, tag_name: []const u8, 
         }
     }
     chain.setLeaf(types.len - 1, child);
-    chain.get(1)._owner = owner._index;
+    chain.get(0)._owner = owner._index;
     return chain.get(types.len - 1);
 }
 
 fn svgPrototypeTypes(comptime Child: type) []const type {
-    const types = prototypeTypes(Child);
-    if (types.len < 5 or types[0] != EventTarget or types[3] != Element.Svg) {
+    const types = chainTypes(Child);
+    if (types.len < 4 or types[0] != Node or types[2] != Element.Svg) {
         @compileError(@typeName(Child) ++ " is not an SVG prototype chain");
     }
     return types;
@@ -640,13 +655,13 @@ fn destroyChain(
     const new_size = current_size + @sizeOf(S);
     const new_align = std.mem.Alignment.max(old_align, std.mem.Alignment.of(S));
 
-    if (comptime reflect.Proto(S) != null) {
+    if (comptime reflect.Proto(S) != null and hasEmbeddedProto(S) == false) {
         self.destroyChain(protoOf(value), new_size, new_align);
     } else {
-        // no proto so this is the head of the chain.
+        // no proto (or it's embedded in S) so this is the head of the chain.
         // we use this as the ptr to the start of the chain.
         // and we have summed up the length.
-        assert(@hasDecl(S, "_prototype_root"));
+        assert(@hasDecl(S, "_prototype_root") or hasEmbeddedProto(S));
 
         const memory_ptr: [*]u8 = @ptrCast(@constCast(value));
         const len = std.mem.alignForward(usize, new_size, new_align.toByteUnits());

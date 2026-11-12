@@ -24,9 +24,10 @@ pub fn Proto(comptime T: type) ?type {
     }
 
     if (@hasField(T, "_proto")) {
-        // If the field also has a _proto: *Parent field, it must be the same type
+        // If the field also has a _proto field, it must be the same type: a
+        // *Parent, or a Parent when T embeds it
         const F = @FieldType(T, "_proto");
-        if (F != *T.Proto and F != void) {
+        if (F != *T.Proto and F != T.Proto and F != void) {
             @compileError(@typeName(T) ++ ": _proto field and Proto decl disagree");
         }
     }
