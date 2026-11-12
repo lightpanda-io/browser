@@ -1296,3 +1296,34 @@
     sheet.remove();
   }
 </script>
+
+<script id="memo_detached_changes">
+  {
+    // Changes while detached don't drop the cascade: the element can't be
+    // in it. Read before, changed while out, read after reinserting.
+    const sheet = document.createElement("style");
+    sheet.textContent = ".d-hide { visibility: hidden } .d-off > b { display: none }";
+    document.head.appendChild(sheet);
+    const hidden = (el) => el.checkVisibility({ visibilityProperty: true }) === false;
+    const root = document.createElement("div");
+    root.innerHTML = "<div class=d-hide><span></span><b></b></div><p></p>";
+    document.body.appendChild(root);
+    const box = root.firstChild;
+    const span = box.firstChild;
+    const b = box.lastChild;
+    testing.expectEqual(true, hidden(span));
+    testing.expectEqual(true, b.checkVisibility());
+
+    box.remove();
+    box.className = "d-off";
+    span.textContent = "now visible";
+    box.insertAdjacentHTML("beforeend", "<b></b>");
+    root.insertBefore(box, root.firstChild);
+    testing.expectEqual(false, hidden(span));
+    testing.expectEqual(false, b.checkVisibility());
+    testing.expectEqual(false, box.lastChild.checkVisibility());
+
+    root.remove();
+    sheet.remove();
+  }
+</script>
