@@ -380,6 +380,18 @@ pub fn releaseImport(self: *ScriptManagerBase, url: [:0]const u8) void {
     self.imported_modules.removeByPtr(entry.key_ptr);
 }
 
+// True when getAsyncImport(url) would settle from what this manager already
+// holds (a failed fetch, or a finished modulepreload hint) instead of starting
+// a request.
+pub fn hasSettledImport(self: *const ScriptManagerBase, url: []const u8) bool {
+    const entry = self.imported_modules.get(url) orelse return false;
+    return switch (entry.state) {
+        .err => true,
+        .done => entry.hint,
+        .loading => false,
+    };
+}
+
 pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
     // A <link rel=modulepreload> hint may already be fetching/fetched this module
     if (self.imported_modules.getEntry(url)) |entry| {

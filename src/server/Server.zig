@@ -1589,7 +1589,7 @@ test "Client: http invalid handshake" {
 }
 
 test "Client: http handshake origin" {
-    testing.expectLog(&.{ .serve, .serve, .serve, .serve, .serve });
+    testing.expectLog(&.{ .serve, .serve, .serve, .serve });
 
     const with_origin =
         "GET / HTTP/1.1\r\n" ++
@@ -1618,10 +1618,10 @@ test "Client: http handshake origin" {
             "Origin not allowed", res);
     }
 
-    // The first one is enough; we never get far enough to see the second.
+    // A second one can't ride along unchecked: the request is malformed.
     try assertHTTPError(
-        403,
-        "Origin not allowed",
+        400,
+        "Invalid request",
         "GET / HTTP/1.1\r\n" ++
             "Connection: upgrade\r\n" ++
             "Upgrade: websocket\r\n" ++
@@ -3714,6 +3714,20 @@ test "server: unix listener accepts a client and removes owned socket on shutdow
     try testing.expectEqual(0, std.c.connect(client, @ptrCast(&address), @intCast(@offsetOf(posix.sockaddr.un, "path") + path.len + 1)));
     try server.accept(lp.datetime.milliTimestamp(.boot));
     try testing.expect(server.http_connections.first != null);
+
+    // There's no name to rebind on a unix socket, and its clients (curl
+    // --unix-socket, for one) send the bare `Host: localhost` that the TCP
+    // listener refuses.
+    const conn: *Connection = @fieldParentPtr("node", server.http_connections.first.?);
+    const timeout = std.mem.toBytes(posix.timeval{ .sec = 5, .usec = 0 });
+    try posix.setsockopt(client, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+    try sys_net.writeAll(client, "GET /json/version HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    try LoopTest.pollReadable(conn.socket);
+    _ = server.runOnce();
+    var buf: [512]u8 = undefined;
+    const n = try posix.read(client, &buf);
+    try testing.expect(std.mem.startsWith(u8, buf[0..n], "HTTP/1.1 200 OK\r\n"));
+
     server.deinit();
     live = false;
     try testing.expect(std.c.access(path.ptr, 0) != 0);

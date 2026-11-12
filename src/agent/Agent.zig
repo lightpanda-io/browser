@@ -162,6 +162,8 @@ app_dir: ?[]const u8,
 /// other settings doesn't clobber the remembered provider.
 no_llm_persisted: bool,
 model_base_url: ?[:0]const u8,
+/// Backs the `X-HF-Bill-To` header the AI client borrows; see `extraHeaders`.
+hf_bill_header: [1]std.http.Header = undefined,
 /// Cached chat-model ids for the current provider, backed by
 /// `model_completion_arena`; invalidated on `/provider` switch.
 model_completions: ?ModelCompletions,
@@ -193,6 +195,9 @@ synthetic_tool_call_id: u32 = 0,
 /// and the navigation a read tool's `url` made.
 save_calls: std.ArrayList(SavedCall) = .empty,
 capturing_for_save: bool = false,
+/// Set while the model repairs a `--save` script whose replay came back
+/// empty: it may read the page the replay left, not act on it or leave it.
+save_repair: bool = false,
 prompt_target: ?PromptTarget = null,
 /// Aggregate Anthropic/OpenAI/Gemini token usage across every model call.
 /// Printed as a structured `$usage ...` line on stderr at the end of `--task`
@@ -385,7 +390,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     try self.ts.init(app);
     errdefer self.ts.deinit();
 
-    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
+    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.backend(), c.keySlice(), .{ .base_url = settings.baseUrl(c.provider, opts.base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider) }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
 
     if (opts.trace) |path| {
@@ -789,11 +794,11 @@ fn runRepl(self: *Agent) void {
                 var tc = parsed;
                 if (tc.tool == .login and tc.args == null) {
                     const names = browser_tools.lpEnvNames(aa) catch continue :repl;
-                    const has_key = zenai.typesafe.Client.envApiKey(lp.environ()) != null;
+                    const has_key = zenai.decisions.envProvider(lp.environ(), App.decision_provider_env_var_name) != null;
                     switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
                         .args => |args| tc.args = args,
                         .prompt => |prompt| {
-                            self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                            self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
                             _ = self.runPromptTurn(aa, tc.name(), prompt, line);
                             continue :repl;
                         },
@@ -816,7 +821,7 @@ fn runRepl(self: *Agent) void {
                         self.printCommandResult(tc, result);
                         continue :repl;
                     };
-                    self.terminal.printInfo("no " ++ zenai.typesafe.env_var_name ++ "; asking the model instead", .{});
+                    self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         self.printCommandResult(tc, result);
                     }
@@ -981,7 +986,7 @@ const provider_off_keyword = "null";
 
 /// Keyless local providers (placeholder key), so reachability needs a live probe.
 /// Parallel to `local_completable`.
-const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp, .llmd };
+const local_providers = zenai.provider.local_providers;
 
 /// Send a prebuilt prompt as a turn, the way `/logout` and the fallback for
 /// `/acceptCookies` and `/login` do. False when there is no model to send to.
@@ -1107,15 +1112,15 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     };
     // Ollama's key is a placeholder, so probe the server instead of trusting it.
     if (provider == .ollama and settings.detectLocalProvider(self.allocator, .ollama, self.model_base_url) == null) {
-        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.ollama_default_base_url});
+        self.terminal.printError("no Ollama server with a pulled model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.ollama).?});
         return;
     }
     if (provider == .llama_cpp and settings.detectLocalProvider(self.allocator, .llama_cpp, self.model_base_url) == null) {
-        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
+        self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.llama_cpp).?});
         return;
     }
     if (provider == .llmd and settings.detectLocalProvider(self.allocator, .llmd, self.model_base_url) == null) {
-        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llmd_default_base_url});
+        self.terminal.printError("no LLMD server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.defaultBaseUrl(.llmd).?});
         return;
     }
     self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {
@@ -1179,17 +1184,20 @@ fn disableProvider(self: *Agent) void {
 
 /// `HF_BILL_TO` org for routed requests; null for non-HF providers. Without it,
 /// requests bill the token owner's personal account instead of the org.
-fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
-    if (provider != .huggingface) return null;
-    const v = std.c.getenv("HF_BILL_TO") orelse return null;
-    return std.mem.span(v);
+/// `X-HF-Bill-To` from HF_BILL_TO for Hugging Face, so the router bills that
+/// org instead of the token owner. The result borrows `self`.
+fn extraHeaders(self: *Agent, provider: Config.AiProvider) []const std.http.Header {
+    if (provider != .huggingface) return &.{};
+    const v = std.c.getenv("HF_BILL_TO") orelse return &.{};
+    self.hf_bill_header = .{.{ .name = "X-HF-Bill-To", .value = std.mem.span(v) }};
+    return &self.hf_bill_header;
 }
 
 /// `credential` transfers ownership of its key resources on success; on error
 /// the caller still owns them. The previous credential is released only after
 /// the old client is gone.
 fn setProvider(self: *Agent, credential: settings.Credential) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.provider, credential.keySlice(), .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credential.provider), .environ = lp.environ(), .account_id = credential.accountId() });
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.backend(), credential.keySlice(), .{ .base_url = settings.baseUrl(credential.provider, self.model_base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(credential.provider) });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
@@ -1209,10 +1217,10 @@ fn setProvider(self: *Agent, credential: settings.Credential) !void {
     } else {
         self.terminal.printInfo("provider: {s}", .{@tagName(credential.provider)});
     }
-    if (zenai.provider.defaultEffort(credential.provider)) |e| if (e != self.effort) {
-        self.effort = e;
-        self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credential.provider) });
-    };
+    if (zenai.provider.omitsEffort(credential.provider) and self.effort != .null) {
+        self.effort = .null;
+        self.terminal.printInfo("effort: null ({s} default)", .{@tagName(credential.provider)});
+    }
     self.reportSaved("model", self.model);
     // Prime the completion cache on the command, not on a `/model` keystroke.
     _ = completionModels(self, self.allocator);
@@ -1242,6 +1250,8 @@ const SavedCall = struct {
     navigated: bool = false,
     /// Pinned prompt args as the call ran (conversation arena).
     args: ?std.json.Value = null,
+    /// An `extract` that matched nothing, so its selectors are wrong for the page.
+    no_data: bool = false,
 };
 
 /// Active `/click the sign in…`-style turn: one target call, read-only tools only.
@@ -1419,7 +1429,7 @@ fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8,
     }
 
     const resolved = self.resolveSavePathAndMode(arena, filename) orelse return;
-    self.synthesizeSaveTo(arena, resolved.path, resolved.mode, prompt);
+    self.synthesizeSaveTo(arena, resolved.path, resolved.mode, prompt, .none);
 }
 
 /// One-shot `--task ... --save`: overwrites the destination without the REPL's
@@ -1429,13 +1439,14 @@ fn saveOneShot(self: *Agent) void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
     const path = save.ensureJsExtension(arena.allocator(), self.one_shot_save.?) catch self.one_shot_save.?;
-    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?);
+    self.synthesizeSaveTo(arena.allocator(), path, .replace, self.one_shot_task.?, .replay);
 }
+
+const SaveCheck = enum { none, replay };
 
 /// LLM synthesis + write for an already-resolved destination. Shared by the
 /// interactive `/save` and one-shot `--save`.
-fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8) void {
-    const provider_client = self.ai_client.?;
+fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mode: save.Mode, prompt: ?[]const u8, check: SaveCheck) void {
     self.refreshAuthIfNeeded();
 
     // Only update feeds the saved script back to the model; append stays
@@ -1464,59 +1475,16 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     const user_msg = self.buildSaveSynthesisMessage(ma, path, previous_script, prompt) catch return self.failSave("out of memory");
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSave("out of memory");
 
-    self.http_interrupt.reset();
-    self.terminal.spinner.start();
     self.trace_phase = "save";
     defer self.trace_phase = "turn";
-    var result = ModelCall.run(
-        self.ts.session,
-        provider_client,
-        self.model,
-        &self.conversation.messages,
-        self.allocator,
-        ma,
-        .{ .context = @ptrCast(self), .callFn = handleToolCall },
-        .{
-            .tools = &.{},
-            .max_turns = 1,
-            .max_tokens = 8192,
-            .tool_choice = .none,
-            .effort = bumpedEffort(self.effort),
-            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
-            .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
-            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
-        },
-    ) catch |err| {
-        self.terminal.spinner.cancel();
-        if (self.cancel_requested.load(.acquire)) {
-            self.resetAfterCancel(baseline);
-            return;
-        }
-        log.err(.app, "AI save synthesis error", .{ .err = err });
-        return self.abortSave(baseline, @errorName(err));
+    var script = switch (self.synthesizeScript(arena, .blind)) {
+        .script => |s| s,
+        .cancelled => return self.resetAfterCancel(baseline),
+        .failed => |reason| return self.abortSave(baseline, reason),
     };
-    self.terminal.spinner.stop();
-    defer result.deinit();
-    self.total_usage.add(result.usage);
-
-    if (result.cancelled) {
-        self.resetAfterCancel(baseline);
-        return;
+    if (check == .replay) {
+        script = self.replayAndRepair(arena, script) orelse return self.resetAfterCancel(baseline);
     }
-
-    // `stripCodeFence` accepts an unclosed block, so a truncated script is
-    // indistinguishable from a complete one once it is on disk.
-    if (result.finish_reason == .max_tokens) {
-        return self.abortSave(baseline, "the model ran out of output tokens mid-script");
-    }
-
-    const raw = result.text orelse return self.abortSave(baseline, "the model returned no script");
-
-    // `result.text` lives in the conversation arena, freed by the rollback
-    // below; copy into the command arena first (scrubbing may return its input
-    // as-is).
-    const owned = arena.dupe(u8, save.stripCodeFence(raw)) catch return self.abortSave(baseline, "out of memory");
-    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return self.abortSave(baseline, "out of memory");
 
     // The save turn is a meta-action; keep it out of the ongoing conversation.
     self.conversation.rollback(baseline);
@@ -1531,6 +1499,216 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
     };
     self.save_buffer.reset();
     self.terminal.printInfo("Saved synthesized script to {s}", .{path});
+}
+
+const Synthesis = union(enum) {
+    /// In the command arena, so it outlives the conversation rollback.
+    script: []const u8,
+    cancelled,
+    failed: []const u8,
+};
+
+const SynthesisMode = enum {
+    blind,
+    /// A few turns with the read-only tools, to check selectors on the page.
+    inspect,
+};
+
+const max_repair_turns = 8;
+
+/// The model's reply stays in the conversation, so a repair turn can follow it.
+fn synthesizeScript(self: *Agent, arena: std.mem.Allocator, mode: SynthesisMode) Synthesis {
+    const inspect = mode == .inspect;
+    self.save_repair = inspect;
+    defer self.save_repair = false;
+    self.http_interrupt.reset();
+    self.terminal.spinner.start();
+    var result = ModelCall.run(
+        self.ts.session,
+        self.ai_client.?,
+        self.model,
+        &self.conversation.messages,
+        self.allocator,
+        self.conversation.arena.allocator(),
+        .{ .context = @ptrCast(self), .callFn = handleToolCall },
+        .{
+            // The full list, as in a prompt turn; `toolOutcome` refuses the rest.
+            .tools = if (inspect) globalTools() else &.{},
+            .max_turns = if (inspect) max_repair_turns else 1,
+            .max_tokens = 8192,
+            .tool_choice = if (inspect) .auto else .none,
+            .effort = bumpedEffort(self.effort).level(),
+            .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
+            .before_request = .{ .context = @ptrCast(self), .callFn = beforeRequest },
+            .after_response = .{ .context = @ptrCast(self), .callFn = afterResponse },
+        },
+    ) catch |err| {
+        self.terminal.spinner.cancel();
+        if (self.cancel_requested.load(.acquire)) return .cancelled;
+        log.err(.app, "AI save synthesis error", .{ .err = err });
+        return .{ .failed = @errorName(err) };
+    };
+    self.terminal.spinner.stop();
+    defer result.deinit();
+    self.total_usage.add(result.usage);
+
+    if (result.cancelled) return .cancelled;
+
+    // `extractCodeBlock` accepts an unclosed block, so a truncated script is
+    // indistinguishable from a complete one once it is on disk.
+    if (result.finish_reason == .max_tokens) return .{ .failed = "the model ran out of output tokens mid-script" };
+
+    const raw = result.text orelse return .{ .failed = "the model returned no script" };
+
+    // `result.text` lives in the conversation arena, freed by the rollback;
+    // copy into the command arena first (scrubbing may return its input as-is).
+    // A model may explain itself before the script, after tool calls above all.
+    const code = save.extractCodeBlock(raw);
+    const owned = arena.dupe(u8, code) catch return .{ .failed = "out of memory" };
+    const script = browser_tools.reverseSubstituteEnvVars(arena, owned) catch return .{ .failed = "out of memory" };
+    return .{ .script = script };
+}
+
+const max_replay_feedback_bytes = 4096;
+const replay_timeout_ms = 60_000;
+
+/// Replays a synthesized script once with no model; when the replay fails or
+/// returns nothing, the model gets one turn to fix it on the page the replay
+/// ended on. A fix is kept only when its own replay passes. A script that
+/// acts on a page is written unchecked rather than replayed. Null when the
+/// user cancelled.
+fn replayAndRepair(self: *Agent, arena: std.mem.Allocator, script: []const u8) ?[]const u8 {
+    if (!readsOnly(script)) return script;
+    const session = self.ts.session;
+    const before = browser_tools.pageIds(arena, session) catch return script;
+    defer browser_tools.closePagesOpenedSince(arena, session, &self.ts.registry, before);
+
+    const replay = self.replayScript(arena, script);
+    const problem = switch (replay) {
+        .ok => return script,
+        .unchecked => |reason| {
+            self.terminal.printWarning("can't replay the script ({s}); saving it unchecked", .{reason});
+            return script;
+        },
+        .cancelled => return null,
+        .failed, .empty => |p| p,
+    };
+    const empty = replay == .empty;
+    self.terminal.printWarning("the script's replay {s}; asking the model to check it", .{firstLine(problem)});
+
+    const diagnosis: []const u8 = if (empty)
+        "An empty result is right when the page holds nothing that matches, as when the run above found nothing either: then reply with the script unchanged. Otherwise the script reads the page wrong"
+    else
+        "The run above found the answer, so the script reads the page wrong";
+    const last_page = browser_tools.lastPageOpenedSince(session, before);
+    const page_note: []const u8 = if (last_page != null)
+        "The page the replay ended on is open, as it is now. It kept loading after the script read it, so if it holds what the script missed, make the script wait for it (goto with waitUntil: \"networkidle\", or waitForSelector)"
+    else
+        "The replay opened no page; the browser holds the page this session last loaded";
+    const feedback = self.conversation.arena.allocator().print(
+        \\I replayed that script once with no model, in this browser session (its
+        \\cookies and storage carry over), and it {s}
+        \\
+        \\{s}. {s}.
+        \\Read it with the read-only tools and try your extract schema on it before
+        \\you answer. Check each selector and each filter against what the page
+        \\actually holds, not against what it usually looks like. Then reply with the
+        \\script in full, with the same output rules: the script alone, no
+        \\explanation.
+    , .{ problem, diagnosis, page_note }) catch return script;
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = feedback }) catch return script;
+
+    // The repair's tool calls read the replay's page, not `pages[0]`.
+    session.setToolFrameOverride(last_page);
+    const repair = self.synthesizeScript(arena, .inspect);
+    session.setToolFrameOverride(null);
+    const fixed = switch (repair) {
+        .script => |s| s,
+        .cancelled => return null,
+        .failed => |reason| {
+            self.terminal.printWarning("the fix failed ({s}); keeping the first script", .{reason});
+            return script;
+        },
+    };
+    const ws = &std.ascii.whitespace;
+    if (empty and std.mem.eql(u8, std.mem.trim(u8, fixed, ws), std.mem.trim(u8, script, ws))) {
+        self.terminal.printInfo("the model kept the script: the empty result is the answer", .{});
+        return script;
+    }
+    if (!readsOnly(fixed)) {
+        self.terminal.printWarning("the fix acts on a page, so it can't be checked; keeping the first script", .{});
+        return script;
+    }
+    switch (self.replayScript(arena, fixed)) {
+        .ok => return fixed,
+        .cancelled => return null,
+        .unchecked => |reason| {
+            self.terminal.printWarning("can't replay the fixed script ({s}); keeping the first script", .{reason});
+            return script;
+        },
+        .failed, .empty => |p| {
+            self.terminal.printWarning("the fixed script's replay {s}; keeping the first script", .{firstLine(p)});
+            return script;
+        },
+    }
+}
+
+/// Whether the script calls no tool `BrowserTool.replaySafe` rules out. A
+/// script that fails before its first act would otherwise be "repaired"; the
+/// read-only Runtime still refuses any act this text match misses.
+fn readsOnly(script: []const u8) bool {
+    inline for (comptime std.enums.values(BrowserTool)) |tool| {
+        if (comptime !tool.replaySafe()) {
+            if (std.mem.find(u8, script, "." ++ @tagName(tool) ++ "(") != null) return false;
+        }
+    }
+    return true;
+}
+
+fn firstLine(text: []const u8) []const u8 {
+    return text[0 .. std.mem.findScalar(u8, text, '\n') orelse text.len];
+}
+
+const Replay = union(enum) {
+    ok,
+    /// Why the replay couldn't run: the script acts on a page, or the
+    /// runtime couldn't start.
+    unchecked: []const u8,
+    cancelled,
+    /// Completes "it …" in a sentence, then the script's console output.
+    failed: []const u8,
+    /// Same, for a run that returned an empty value, which may be the answer.
+    empty: []const u8,
+};
+
+fn replayScript(self: *Agent, arena: std.mem.Allocator, script: []const u8) Replay {
+    const runtime = self.beginScriptRuntime() catch |err| return .{ .unchecked = @errorName(err) };
+    defer self.endScriptRuntime(runtime);
+
+    runtime.timeout_ms = replay_timeout_ms;
+    runtime.read_only = true;
+
+    self.terminal.beginTool("replay", "saved script");
+    // Captured, which keeps the replay's output off stdout.
+    const captured = runtime.runCaptured(arena, script, "replay", max_replay_feedback_bytes);
+    self.terminal.endTool();
+    if (self.cancel_requested.load(.acquire)) return .cancelled;
+    if (runtime.refused) |tool| return .{ .unchecked = arena.print("it calls {s}", .{@tagName(tool)}) catch "it acts on a page" };
+
+    const done = captured catch |err| return .{ .failed = arena.print("failed: {s}", .{@errorName(err)}) catch "failed" };
+    const output = std.mem.trim(u8, done.returned, &std.ascii.whitespace);
+    const logged = std.mem.trim(u8, done.console, &std.ascii.whitespace);
+    const empty = !done.timed_out and done.message == null and browser_tools.isEmptyJson(arena, output);
+    const verdict: []const u8 = if (done.timed_out)
+        arena.print("timed out after {d} s.", .{replay_timeout_ms / 1000}) catch "timed out."
+    else if (done.message) |m|
+        arena.print("failed: {s}", .{m}) catch "failed."
+    else if (empty)
+        arena.print("returned an empty result: {s}", .{output[0..@min(output.len, max_replay_feedback_bytes)]}) catch "returned an empty result."
+    else
+        return .ok;
+    const problem = if (logged.len == 0) verdict else arena.print("{s}\n\nIts console output:\n{s}", .{ verdict, logged }) catch verdict;
+    return if (empty) .{ .empty = problem } else .{ .failed = problem };
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1787,21 +1965,11 @@ fn runScript(self: *Agent, path: []const u8) bool {
         return false;
     };
 
-    const runtime = ScriptRuntime.init(self.allocator, self.ts.browser.app, self.ts.session, &self.ts.registry) catch |err| {
+    const runtime = self.beginScriptRuntime() catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
         return false;
     };
-    defer runtime.deinit();
-    self.script_runtime_mutex.lockUncancelable(lp.io);
-    self.active_script_runtime = runtime;
-    self.script_runtime_mutex.unlock(lp.io);
-    defer {
-        self.script_runtime_mutex.lockUncancelable(lp.io);
-        self.active_script_runtime = null;
-        self.script_runtime_mutex.unlock(lp.io);
-        self.ts.browser.env.cancelTerminate();
-        self.cancel_requested.store(false, .release);
-    }
+    defer self.endScriptRuntime(runtime);
 
     var output: ScriptOutput = .{ .terminal = &self.terminal };
     runtime.console_observer = .{ .context = @ptrCast(&output), .notify = ScriptOutput.observe };
@@ -1821,6 +1989,24 @@ fn runScript(self: *Agent, path: []const u8) bool {
     // a green bullet (like /goto); one that printed already showed its result.
     if (!output.emitted) self.terminal.printScriptDone("script", name);
     return true;
+}
+
+/// A script runtime on the agent's session, registered so Ctrl-C cancels it.
+fn beginScriptRuntime(self: *Agent) !*ScriptRuntime {
+    const runtime = try ScriptRuntime.init(self.allocator, self.ts.browser.app, self.ts.session, &self.ts.registry);
+    self.script_runtime_mutex.lockUncancelable(lp.io);
+    self.active_script_runtime = runtime;
+    self.script_runtime_mutex.unlock(lp.io);
+    return runtime;
+}
+
+fn endScriptRuntime(self: *Agent, runtime: *ScriptRuntime) void {
+    self.script_runtime_mutex.lockUncancelable(lp.io);
+    self.active_script_runtime = null;
+    self.script_runtime_mutex.unlock(lp.io);
+    self.ts.browser.env.cancelTerminate();
+    self.cancel_requested.store(false, .release);
+    runtime.deinit();
 }
 
 fn readScriptSource(allocator: std.mem.Allocator, path: []const u8, from_stdin: bool) ![]u8 {
@@ -1854,7 +2040,7 @@ fn recordSlashToolCall(
     tool_calls[0] = .{
         .id = try ma.print("lp-slash-{d}", .{self.synthetic_tool_call_id}),
         .name = try ma.dupe(u8, tool_name),
-        .arguments = if (args) |v| try zenai.json.dupeValue(ma, v) else null,
+        .arguments = if (args) |v| try zenai.json.valueToString(ma, v) else "{}",
     };
 
     // capToolOutput returns its input unchanged under the cap; dupe so content
@@ -1974,7 +2160,7 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             // Per-turn reasoning budget; resolved from --effort / .lp-agent.zon
             // / mode default, adjustable at runtime via /effort. Ignored by
             // non-thinking models.
-            .effort = self.effort,
+            .effort = self.effort.level(),
             .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
             // Suppressed turns (e.g. `--save` capture) must keep stdout clean;
             // streaming would bypass the `suppress_answer` guard in `runTurn`.
@@ -2000,23 +2186,29 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
 
     if (input.capture_for_save) {
         // When the LLM tries multiple `extract` schemas in one turn, only the
-        // last successful one is the answer; earlier probes are noise.
-        var last_extract_idx: ?usize = null;
+        // last one that found data is the answer; earlier probes are noise.
+        // With none that found data, the last successful one is kept, marked.
+        var last_extract: ?usize = null;
+        var last_with_data: ?usize = null;
         for (result.tool_calls_made, 0..) |tc, i| {
             const t = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
-            if (!tc.is_error and t == .extract) last_extract_idx = i;
+            if (tc.is_error or t != .extract) continue;
+            last_extract = i;
+            const no_data = i < self.save_calls.items.len and self.save_calls.items[i].no_data;
+            if (!no_data) last_with_data = i;
         }
+        const answer_extract = last_with_data orelse last_extract;
 
         var recorded_any = false;
         for (result.tool_calls_made, 0..) |tc, i| {
             if (tc.is_error) continue;
             const tool = std.meta.stringToEnum(BrowserTool, tc.name) orelse continue;
-            if (last_extract_idx) |idx| {
+            if (answer_extract) |idx| {
                 if (tool == .extract and idx != i) continue;
             }
             const ca = self.conversation.arena.allocator();
             const saved: SavedCall = if (i < self.save_calls.items.len) self.save_calls.items[i] else .{};
-            const call_args = saved.args orelse tc.arguments;
+            const call_args = saved.args orelse (zenai.provider.ToolCall.parseArguments(ca, tc.arguments) catch null);
             const args = browser_tools.normalizeArgs(ca, tool, call_args) catch call_args;
             // Fall back to the navigation a read tool performed, so a
             // markdown/tree-driven turn isn't lost from `/save`.
@@ -2029,6 +2221,9 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
             if (!recorded_any) {
                 if (input.record_comment) |c| self.recordSaveComment(c);
                 recorded_any = true;
+            }
+            if (tool == .extract and saved.no_data) {
+                self.recordSaveComment("This extract returned no data: its selectors match nothing on the page.");
             }
             self.recordSaveCommand(to_record);
         }
@@ -2071,7 +2266,8 @@ fn processUserMessage(self: *Agent, input: TurnInput) !?[]const u8 {
                 // .low caps thinking so reasoning models still emit an answer;
                 // `.null` and `.none` are kept as chosen.
                 .effort = switch (self.effort) {
-                    .null, .none => self.effort,
+                    .null => null,
+                    .none => .none,
                     else => .low,
                 },
                 .cancel = .{ .context = @ptrCast(self), .checkFn = checkCancel },
@@ -2171,15 +2367,16 @@ fn capToolOutput(allocator: std.mem.Allocator, tool_name: []const u8, output: []
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
-fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) zenai.provider.Client.ToolHandler.Result {
+fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []const u8, args_json: []const u8) zenai.provider.Client.ToolHandler.Result {
     const self: *Agent = @ptrCast(@alignCast(ctx));
     // Close any assistant text streamed this turn before the tool spinner shows.
     self.endStreamedText();
+    const arguments: ?std.json.Value = zenai.provider.ToolCall.parseArguments(allocator, args_json) catch null;
     // The spinner doesn't render args, and `agentToolDone` skips the body line
     // at low verbosity — don't pay for the stringify when nobody reads it.
     const needs_args = self.terminal.spinner.isEnabled() or self.terminal.verbosity != .low;
     // Stringify the pre-substitution args so $LP_* placeholders the model
-    // emitted stay redacted in the UI.
+    // emitted stay redacted in the UI, on one line however the model spaced them.
     const args_str: []const u8 = if (needs_args) (if (arguments) |v|
         std.json.Stringify.valueAlloc(allocator, v, .{}) catch ""
     else
@@ -2204,12 +2401,24 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
             .replay_args = kept_replay,
             .navigated = saved.navigated,
             .args = saved.args,
+            .no_data = saved.no_data,
         }) catch {};
     }
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
     return outcome;
+}
+
+const ReadOnlyRefusal = enum { other_tool, navigation };
+
+/// Why `tool` can't run in a turn limited to reading the current page, as a
+/// prompt request or a `--save` repair is; null when it can.
+fn readOnlyRefusal(tool: ?BrowserTool, args: ?std.json.Value) ?ReadOnlyRefusal {
+    const t = tool orelse return .other_tool;
+    if (t.group() != .reading) return .other_tool;
+    if (t.navigatesToUrl() and urlArg(args) != null) return .navigation;
+    return null;
 }
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
@@ -2225,11 +2434,18 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
                 args = try pinArgs(self.conversation.arena.allocator(), args, t.cmd.args);
                 saved.args = args;
             }
-        } else if (tool == null or tool.?.group() != .reading) {
-            return .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.cmd.tool)}) catch "Error: tool not available", .is_error = true };
-        } else if (tool.?.navigatesToUrl() and urlArg(args) != null) {
-            return .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true };
-        }
+        } else if (readOnlyRefusal(tool, args)) |refusal| return switch (refusal) {
+            .other_tool => .{ .content = allocator.print("Error: only {s} and the read-only tools are available for this request.", .{@tagName(t.cmd.tool)}) catch "Error: tool not available", .is_error = true },
+            .navigation => .{ .content = "Error: read the current page; this request must not navigate.", .is_error = true },
+        };
+    }
+
+    if (self.save_repair) {
+        const tool = std.meta.stringToEnum(BrowserTool, tool_name);
+        if (tool != .extract) if (readOnlyRefusal(tool, args)) |refusal| return switch (refusal) {
+            .other_tool => .{ .content = "Error: only the read-only tools and extract are available while fixing the script.", .is_error = true },
+            .navigation => .{ .content = "Error: read the page that is open; don't navigate.", .is_error = true },
+        };
     }
 
     const result = try browser_tools.call(allocator, self.ts.session, &self.ts.registry, tool_name, args, .{
@@ -2243,6 +2459,7 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     saved.selector = result.selector;
     saved.replay_args = result.replay_args;
     saved.navigated = result.navigated;
+    saved.no_data = result.no_data;
     if (is_target and !result.is_error) {
         const t = &self.prompt_target.?;
         t.done = true;
@@ -2286,7 +2503,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     const ids: []const []const u8 = if (auth.descriptorFor(resolved.credential.provider)) |desc|
         models_dev.modelIds(arena.allocator(), desc.models_dev_id, auth.dataDir(arena.allocator()))
     else
-        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.provider, resolved.credential.keySlice(), .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
+        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.backend(), resolved.credential.keySlice(), .{ .base_url = settings.baseUrl(resolved.credential.provider, opts.base_url) }) catch |err| {
             if (resolved.credential.provider == .vertex and !settings.vertexProjectMode()) {
                 std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
             }
@@ -2359,9 +2576,9 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
             lp.io,
             self.allocator,
             arena,
-            cred.provider,
+            cred.backend(),
             cred.keySlice(),
-            .{ .base_url = self.model_base_url, .environ = lp.environ() },
+            .{ .base_url = settings.baseUrl(cred.provider, self.model_base_url) },
         ) catch &.{};
     self.model_completions = .{ .provider = cred.provider, .ids = ids };
     return ids;
@@ -2492,4 +2709,14 @@ test "replayArgs: a backendNodeId still becomes the resolved selector" {
     const rewritten = replayArgs(aa, args, .{ .selector = "#main" }).?;
     try std.testing.expect(rewritten.object.get("backendNodeId") == null);
     try std.testing.expectEqualStrings("#main", rewritten.object.get("selector").?.string);
+}
+
+test "readsOnly: scripts that act on a page are not replayed" {
+    try std.testing.expect(readsOnly(
+        \\const page = new Page();
+        \\await page.goto("https://example.com");
+        \\return page.extract({ title: "h1" });
+    ));
+    try std.testing.expect(!readsOnly("page.fill(\"#q\", \"x\");\npage.click(\"button\");"));
+    try std.testing.expect(!readsOnly("return page.evaluate(\"document.title\");"));
 }

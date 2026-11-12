@@ -38,3 +38,17 @@
   testing.expectEqual(0, frag.children.length);
   testing.expectEqual('x', frag.textContent);
 </script>
+
+<script id=outerHTML_void>
+{
+  const tags = ['area', 'base', 'basefont', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
+  for (const tag of tags) {
+    testing.expectEqual(`<${tag}>`, document.createElement(tag).outerHTML);
+  }
+
+  const frameset = document.createElement('frameset');
+  frameset.appendChild(document.createElement('frame')).name = 'nav';
+  frameset.appendChild(document.createElement('frame')).name = 'main';
+  testing.expectEqual('<frameset><frame name="nav"><frame name="main"></frameset>', frameset.outerHTML);
+}
+</script>

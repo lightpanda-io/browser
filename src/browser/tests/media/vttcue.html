@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<script src="..//testing.js"></script>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
 
 <script id=basic>
   {
@@ -75,10 +77,12 @@
     const cue = new VTTCue(0, 1, "test");
 
     // invalid enum values are ignored
+    testing.beginBrowserLog("Chrome warns on invalid AlignSetting/DirectionSetting values");
     for (const invalid of ["start\u0000", "centre", "middle", "auto"]) {
       cue.align = invalid;
       cue.vertical = invalid;
     }
+    testing.endBrowserLog();
     testing.expectEqual("center", cue.align);
     testing.expectEqual("", cue.vertical);
 
@@ -91,7 +95,13 @@
 
 <!-- lineAlign and positionAlign are in the spec, WPT and Firefox; Chrome doesn't have them. -->
 <script id=line_and_position_align>
-  {
+  testing.diverges("Chrome has no VTTCue.lineAlign/positionAlign", () => {
+    testing.expectEqual(true, "lineAlign" in VTTCue.prototype);
+    testing.expectEqual(true, "positionAlign" in VTTCue.prototype);
+  });
+
+  // Elsewhere, assignments would create plain expandos that read back fine.
+  if ("lineAlign" in VTTCue.prototype) {
     const cue = new VTTCue(0, 1, "test");
     testing.expectEqual("start", cue.lineAlign);
     testing.expectEqual("auto", cue.positionAlign);
@@ -140,7 +150,7 @@
 
 <!-- Regions are in the spec, WPT and Firefox; Chrome doesn't expose them. -->
 <script id=region>
-  {
+  testing.diverges("Chrome has no VTTCue.region or VTTRegion", () => {
     const cue = new VTTCue(0, 1, "test");
     testing.expectEqual(null, cue.region);
     const region = new VTTRegion();
@@ -149,7 +159,7 @@
     cue.region = null;
     testing.expectEqual(null, cue.region);
     testing.expectError("TypeError", () => { cue.region = {}; });
-  }
+  });
 </script>
 
 <script id=getCueAsHTML>
@@ -181,8 +191,8 @@
 <!-- The cue text tokenizer collapses whitespace in a start tag's annotation
      (spec, Firefox); Chrome keeps it as-is. -->
 <script id=annotation_whitespace>
-  {
+  testing.diverges("Chrome keeps whitespace in a cue tag annotation", () => {
     const frag = new VTTCue(0, 1, "<v  a \t b >x</v>").getCueAsHTML();
     testing.expectEqual("a b", frag.firstChild.getAttribute("title"));
-  }
+  });
 </script>

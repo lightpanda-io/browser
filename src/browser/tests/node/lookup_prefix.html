@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <div id="host" xmlns:foo="http://example.com/foo" xmlns:bar="http://example.com/bar">
@@ -8,17 +9,42 @@
 <script id="lookupPrefix">
   {
     const host = document.getElementById('host');
-
-    // Resolves a prefix declared via an xmlns: attribute on the element.
-    testing.expectEqual('foo', host.lookupPrefix('http://example.com/foo'));
-    testing.expectEqual('bar', host.lookupPrefix('http://example.com/bar'));
-
-    // A descendant inherits the declaration by walking up to the ancestor.
     const child = document.getElementById('child');
-    testing.expectEqual('foo', child.lookupPrefix('http://example.com/foo'));
+
+    // Our attributes carry no namespace, so a parsed xmlns:* attribute on an
+    // HTML element counts as a declaration. The HTML parser leaves it
+    // un-namespaced, so it declares nothing.
+    testing.diverges('Chrome ignores un-namespaced xmlns:* attributes', () => {
+      testing.expectEqual('foo', host.lookupPrefix('http://example.com/foo'));
+      testing.expectEqual('bar', host.lookupPrefix('http://example.com/bar'));
+      testing.expectEqual('http://example.com/foo', host.lookupNamespaceURI('foo'));
+      testing.expectEqual('foo', child.lookupPrefix('http://example.com/foo'));
+    });
 
     // Unknown namespace returns null.
     testing.expectEqual(null, host.lookupPrefix('http://example.com/missing'));
+  }
+</script>
+
+<script id="lookupPrefix-xml">
+  {
+    const XMLNS = 'http://www.w3.org/2000/xmlns/';
+    const doc = document.implementation.createDocument(null, 'root');
+    const root = doc.documentElement;
+    root.setAttributeNS(XMLNS, 'xmlns:foo', 'http://example.com/foo');
+    root.setAttributeNS(XMLNS, 'xmlns:bar', 'http://example.com/bar');
+
+    // Resolves a prefix declared via an xmlns: attribute on the element.
+    testing.expectEqual('foo', root.lookupPrefix('http://example.com/foo'));
+    testing.expectEqual('bar', root.lookupPrefix('http://example.com/bar'));
+    testing.expectEqual('http://example.com/foo', root.lookupNamespaceURI('foo'));
+
+    // A descendant inherits the declaration by walking up to the ancestor.
+    const child = root.appendChild(doc.createElement('child'));
+    testing.expectEqual('foo', child.lookupPrefix('http://example.com/foo'));
+
+    // Unknown namespace returns null.
+    testing.expectEqual(null, root.lookupPrefix('http://example.com/missing'));
   }
 </script>
 

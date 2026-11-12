@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 100px;">Target Element</div>
 
@@ -37,21 +38,30 @@
 <script id=detached type=module>
   const state = await testing.async();
 
-  // never attached
-  let neverAttached = 0;
+  // The first check always reports, so a target that isn't connected gets
+  // one non-intersecting entry, with zero rects (rootBounds included).
+  const neverAttached = [];
   const div = document.createElement('div');
   new IntersectionObserver((entries) => {
-    neverAttached += 1;
+    neverAttached.push(...entries);
   }).observe(div);
 
   // has a parent, but never connected
-  let neverConnected = 0;
+  const neverConnected = [];
   const div1 = document.createElement('div');
   const div2 = document.createElement('div');
   new IntersectionObserver((entries) => {
-    neverConnected += 1;
+    neverConnected.push(...entries);
   }).observe(div1);
   div2.appendChild(div1);
+
+  // connected when observed, removed in the same task: checked after the script
+  const removed = [];
+  const div5 = document.body.appendChild(document.createElement('div'));
+  new IntersectionObserver((entries) => {
+    for (const entry of entries) removed.push(entry.isIntersecting);
+  }).observe(div5);
+  div5.remove();
 
   // observed inside a detached subtree, reported once the subtree is connected
   const seen = [];
@@ -67,8 +77,19 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(0, neverAttached);
-    testing.expectEqual(0, neverConnected);
+    const zero = { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+    for (const entries of [neverAttached, neverConnected]) {
+      testing.expectEqual(1, entries.length);
+      const entry = entries[0];
+      testing.expectEqual(false, entry.isIntersecting);
+      testing.expectEqual(0, entry.intersectionRatio);
+      testing.expectEqual(zero, entry.boundingClientRect.toJSON());
+      testing.expectEqual(zero, entry.intersectionRect.toJSON());
+      testing.expectEqual(zero, entry.rootBounds.toJSON());
+    }
+    testing.expectEqual(div, neverAttached[0].target);
+    testing.expectEqual(div1, neverConnected[0].target);
+    testing.expectEqual([false], removed);
     testing.expectEqual([true], seen);
   });
 </script>
@@ -104,6 +125,8 @@
   let count = 0;
   const observer = new IntersectionObserver(() => { count += 1; });
   observer.observe(target);
+  // one microtask for the check, one for the delivery
+  await Promise.resolve();
   await Promise.resolve();
   testing.diverges('Lightpanda delivers in a microtask, not at the next rendering update', () => {
     testing.expectEqual(1, count);

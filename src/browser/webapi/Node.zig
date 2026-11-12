@@ -370,8 +370,6 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
         return child;
     }
 
-    frame.domChanged();
-
     const previous_root = child.getRootNode(.{});
 
     // Check if we're adopting the node to a different document
@@ -756,7 +754,6 @@ pub fn removeChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     var it = self.childrenIterator();
     while (it.next()) |n| {
         if (n == child) {
-            frame.domChanged();
             frame.removeNode(self, child, .{ .reconnect_to = null });
             return child;
         }
@@ -778,8 +775,6 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
 
     // special case: if nodes are the same, ignore the change.
     if (new_node == ref_node_) {
-        frame.domChanged();
-
         if (Frame.observers.hasMutationObservers(frame)) {
             const parent = new_node._parent.?;
             const previous_sibling = new_node.previousSibling();
@@ -803,7 +798,6 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
     const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
-    frame.domChanged();
     if (new_node._parent) |parent| {
         frame.removeNode(parent, new_node, .{
             .reconnect_to = if (adopting_to_new_document) null else self,
@@ -831,7 +825,6 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
 pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Frame) !*Node {
     try ensurePreInsertValidity(self, new_child, old_child, .replace);
 
-    frame.domChanged();
     const notify = Frame.observers.hasMutationObservers(frame);
 
     if (new_child == old_child) {
@@ -994,8 +987,6 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
             ref = node.nextSibling();
         }
     }
-
-    frame.domChanged();
 
     // self and node share a *composed* root, so the connectedness won't
     // change — but the move can still cross tree scopes (document <->
@@ -1570,7 +1561,6 @@ fn replaceAll(self: *Node, node_: ?*Node, frame: *Frame) !void {
         try ensurePreInsertValidity(self, node, null, .insert);
     }
 
-    frame.domChanged();
     const notify = Frame.observers.hasMutationObservers(frame);
 
     var added: std.ArrayList(*Node) = .empty;
@@ -1638,8 +1628,6 @@ fn removeAllChildrenCollecting(self: *Node, notify: bool, frame: *Frame) !std.Ar
 
 /// Shared implementation in Element and DocumentFragment
 pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpts, frame: *Frame) !void {
-    frame.domChanged();
-
     // Observers of this subtree get one combined "replace all" mutation
     // record; per-node notification is suppressed for the removals here and
     // for the parser insertions (fragment parsing never notifies).
@@ -1665,8 +1653,6 @@ pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpt
 }
 
 pub fn replaceAllWithFragment(self: *Node, fragment: *Node, frame: *Frame) !void {
-    frame.domChanged();
-
     const notify = Frame.observers.hasMutationObservers(frame);
     var added: std.ArrayList(*Node) = .empty;
     if (notify) {
@@ -1777,7 +1763,7 @@ pub fn isInert(self: *Node, frame: *const Frame) bool {
     var current: ?*Node = self;
     while (current) |node| : (current = node.flatTreeParent(frame)) {
         if (node.is(Element)) |el| {
-            if (el._namespace == .html and el.hasAttributeSafe(comptime .wrap("inert"))) {
+            if (el.hasInertAttribute()) {
                 return true;
             }
         }
@@ -2060,5 +2046,5 @@ test "Node: text chain slot size" {
     // in existing padding. Debug is larger from the _proto_canary fields.
     const Text = @import("cdata/Text.zig");
     const slot = comptime Factory.chainOffsetOf(Text, Text) + @sizeOf(Text);
-    try testing.expectEqual(if (comptime lp.IS_DEBUG) 104 else 73, slot);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 96 else 72, slot);
 }

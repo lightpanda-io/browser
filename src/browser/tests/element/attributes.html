@@ -33,6 +33,10 @@
   testing.expectEqual('sHow', an1.value);
   testing.expectEqual(el1.getAttributeNode('class'), an1);
   testing.expectEqual(null, an1.namespaceURI);
+  testing.expectEqual(true, an1.specified);
+  testing.expectEqual(true, 'specified' in Attr.prototype);
+  testing.expectEqual(true, el1.attributes[0].specified);
+  testing.expectEqual(true, document.createAttribute('data-x').specified);
 
   const script_id_node = $('#attributes').getAttributeNode('id')
   testing.withError((err) => {

@@ -78,11 +78,13 @@ const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const framing = @import("frame/framing.zig");
 pub const parse = @import("frame/parse.zig");
+pub const change = @import("frame/change.zig");
 pub const preload = @import("frame/preload.zig");
 pub const resource_load = @import("frame/resource_load.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
+pub const css_animations = @import("frame/css_animations.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -143,9 +145,6 @@ _queued_events_1: std.ArrayList(QueuedEvent) = .empty,
 _queued_events_2: std.ArrayList(QueuedEvent) = .empty,
 _queued_events: *std.ArrayList(QueuedEvent) = undefined,
 
-// Held while a dispatch of queued events is pending.
-_queued_events_hold: JS.Attribution.Hold = .{},
-
 _image_decodes: Element.Html.Image.Decodes = .{},
 
 _focus_fixup_pending: bool = false,
@@ -172,6 +171,8 @@ _message_ports: std.DoublyLinkedList = .{},
 _resize: observers.Resize = .{},
 _mutation: observers.Mutation = .{},
 _intersection: observers.Intersection = .{},
+
+_css_animations: css_animations.State = .{},
 
 // Slots that need slotchange events to be fired, in signal order. Delivered
 // by deliverMutations because there is specific timing with for these events
@@ -1168,7 +1169,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         }
 
         // `:target` matches off the fragment, which just changed.
-        target.styleChanged();
+        change.documentStateChanged(.target, target);
 
         // Updating the document for the new entry fires popstate right away
         // (the entry's state is null), then hashchange in a queued task.
@@ -1435,8 +1436,8 @@ pub fn abortDocumentLoad(self: *Frame) void {
 }
 
 // The navigation parser is on the stack, i.e. an inline script is running from
-// inside parser.parse(). Narrower than `_load_state == .parsing`, which stays
-// true through deferred and async scripts.
+// inside parser.parse(). Narrower than `_load_state == .parsing`, which also
+// covers waiting for the response body.
 fn parserIsRunning(self: *const Frame) bool {
     return switch (self._parse_state) {
         .html => true,
@@ -1497,18 +1498,50 @@ fn releaseParentLoadDelay(self: *Frame) void {
     }
 }
 
+// The parser has finished. Readiness becomes interactive,
+fn documentIsInteractive(self: *Frame) void {
+    if (self._load_state == .parsing) {
+        self._load_state = .interactive;
+    }
+
+    // Not only the first time: document.open() resets readiness to loading.
+    if (self.document._ready_state != .loading or self.loadEventsAborted()) {
+        return;
+    }
+    self.document._ready_state = .interactive;
+    self.window._performance.markNavigation(.dom_interactive);
+    self.dispatchReadyStateChange() catch |err| switch (err) {
+        error.JsException => {}, // already logged
+        // logged by whatever requested the terminate (watchdog, runaway loop)
+        error.ExecutionTerminated => log.debug(.frame, "document is interactive", .{ .err = err, .type = self._type, .url = self.url }),
+        else => log.err(.frame, "document is interactive", .{ .err = err, .type = self._type, .url = self.url }),
+    };
+}
+
 pub fn documentIsLoaded(self: *Frame) void {
-    if (self._load_state != .parsing or self.loadEventsAborted()) {
+    switch (self._load_state) {
+        .parsing, .interactive => {},
         // Ideally, documentIsLoaded would only be called once, but if a
         // script is dynamically added from an async script after
         // documentIsLoaded is already called, then ScriptManager will call
         // it again.
+        .waiting, .load, .complete => return,
+    }
+
+    // A script open()ed the document: closing it finishes the load.
+    if (self.document._script_created_parser != null) {
+        return;
+    }
+
+    self.documentIsInteractive();
+
+    // A readystatechange handler can open() the document, or open() and
+    // close() it, which runs documentIsLoaded itself.
+    if (self._load_state != .interactive or self.document._script_created_parser != null or self.loadEventsAborted()) {
         return;
     }
 
     self._load_state = .load;
-    self.document._ready_state = .interactive;
-    self.window._performance.markNavigation(.dom_interactive);
     self._documentIsLoaded() catch |err| switch (err) {
         error.JsException => {}, // already logged
         // logged by whatever requested the terminate (watchdog, runaway loop)
@@ -1518,9 +1551,6 @@ pub fn documentIsLoaded(self: *Frame) void {
 }
 
 fn _documentIsLoaded(self: *Frame) !void {
-    try self.dispatchReadyStateChange();
-    if (self.loadEventsAborted()) return;
-
     const perf = self.window._performance;
     perf.markNavigation(.dom_content_loaded_event_start);
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self.page);
@@ -1597,7 +1627,7 @@ pub fn pendingLoadCompleted(self: *Frame) void {
 // will re-trigger DOMContentLoaded and load.
 pub fn scriptCreatedParserDone(self: *Frame) void {
     switch (self._load_state) {
-        .parsing, .load => {},
+        .parsing, .interactive, .load => {},
         .waiting => self._load_state = .parsing,
         .complete => {
             self._load_state = .parsing;
@@ -1623,9 +1653,11 @@ fn documentIsComplete(self: *Frame) void {
 
     // documentIsComplete could be called directly, without first calling
     // documentIsLoaded, if there were _only_ async scripts
-    if (self._load_state == .parsing) {
+    if (self._load_state == .parsing or self._load_state == .interactive) {
         self.documentIsLoaded();
         if (self._load_state == .complete) return;
+        // Left open by a script: close() finishes the load, as in Chrome.
+        if (self.document._script_created_parser != null) return;
     }
 
     self._load_state = .complete;
@@ -2032,7 +2064,13 @@ fn frameDone(self: *Frame) !void {
                     parser.parseWithEncoding(raw_html, self.charset);
                 }
             }
-            self._script_manager.staticScriptsDone();
+            // Deferred and module scripts run after readiness is interactive.
+            self.documentIsInteractive();
+            // A readystatechange handler that open()s and close()s the
+            // document has already released them.
+            if (self._script_manager.base.static_scripts_done == false) {
+                self._script_manager.staticScriptsDone();
+            }
         },
         .text => |*buf| {
             try buf.appendSlice(self.page_arena, "</pre></body></html>");
@@ -2291,6 +2329,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     }
     new_frame.iframe = iframe;
     iframe._blank_only = !loading;
+    new_frame._http_owner.block_all = !loading;
     iframe._window = new_frame.window;
     errdefer iframe._window = null;
 
@@ -2463,31 +2502,6 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
     return popup;
 }
 
-pub fn domChanged(self: *Frame) void {
-    self.page.dom_version += 1;
-    self.renderingChanged();
-}
-
-/// A style change that is also our "rendering opportunity": re-evaluate the
-/// layout observers. Both are no-ops unless something they track changed.
-pub fn renderingChanged(self: *Frame) void {
-    self.styleChanged();
-    self.layoutObserversChanged();
-}
-
-/// A change that can move a box without changing any selector match or
-/// cascaded value, like an inline transform: only the layout observers look.
-pub fn layoutObserversChanged(self: *Frame) void {
-    observers.scheduleIntersectionChecks(self);
-    observers.scheduleResizeChecks(self);
-}
-
-/// Stamps the cascade: any change that can alter a selector match or cascade
-/// result, including non-tree state that live collections never see.
-pub fn styleChanged(self: *Frame) void {
-    self.page.style_version += 1;
-}
-
 fn getIdMap(frame: *Frame, node: *Node) *IdMap {
     return idMapForRoot(node.getRootNode(.{})) orelse {
         // Detached nodes should not have IDs registered
@@ -2607,15 +2621,7 @@ fn queueEvent(self: *Frame, event: QueuedEvent) !void {
                 try f.dispatchQueuedEvents();
                 return null;
             }
-        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents", .finalizer = struct {
-            fn dropped(ctx: *anyopaque) void {
-                const f: *Frame = @ptrCast(@alignCast(ctx));
-                f._queued_events_hold.release();
-            }
-        }.dropped });
-    }
-    if (self._queued_events_hold.settle == null) {
-        self._queued_events_hold = self.page.settle.hold(queued.task);
+        }.cleanup, 0, .{ .name = "frame.dispatchQueuedEvents" });
     }
 }
 
@@ -2797,12 +2803,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         break :blk new_sheet;
     };
 
-    // Parse first, only swap `_href` on success. `replaceRules` itself is
-    // not atomic (clears rules before the insert loop), so a mid-parse
-    // OOM still drops the old rules — full atomicity would require a
-    // scratch-list pattern in `CSSStyleSheet.replaceRules`. Keeping
-    // `_href` consistent with what the sheet actually contains is the
-    // minimum.
+    // Parse first, only swap `_href` on success: a parse failure in `replaceRules`
+    // leaves the old rules, so `_href` stays consistent with them.
     const content_type: ?Mime = if (response.content_type) |value|
         Mime.parse(value) catch null
     else
@@ -2839,9 +2841,6 @@ fn fireElementEvent(self: *Frame, el: *Element, name: String, opts: Event.Option
 
 fn dispatchQueuedEvents(self: *Frame) !void {
     const has_dom_load_listener = self._event_manager.has_dom_load_listener;
-
-    // Events queued during this dispatch take a new hold for the next one.
-    self._queued_events_hold.release();
 
     // Swap buffers - new additions during dispatch go to the other buffer
     const to_process = self._queued_events;
@@ -3074,6 +3073,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     const old_id_map = idMapForRoot(old_root);
 
     child._parent = null;
+    change.childRemoved(parent, child, previous_sibling, next_sibling, self);
 
     // deferred: the id maps are only updated further down
     defer if (opts.move == false and self._form_associated.items.len != 0) {
@@ -3177,8 +3177,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
                 removeStyleSheet(sheet_owner, sheet);
                 style._sheet = null;
             }
-            // Unconditional: with no materialized sheet the manager still holds
-            // the rules it parsed straight from the element's text.
+            // Unconditional: a <style> whose `type` changed lost its `_sheet`
+            // while the sheet stayed in the list (and so in the cascade).
             if (sheet_owner) |owner| {
                 owner._style_manager.sheetModified();
             }
@@ -3271,7 +3271,6 @@ const MoveChildrenNotify = enum { records, silent_parent };
 // regardless — the spec's insert algorithm notes it "intentionally does not
 // pay attention to suppressObservers".
 pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
-    self.domChanged();
     const notify = observers.hasMutationObservers(self);
 
     var moved: std.ArrayList(*Node) = .empty;
@@ -3374,6 +3373,11 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         },
     }
     child._parent = parent;
+    if (comptime from_parser) {
+        change.parserInserted(parent, child, self);
+    } else {
+        change.childInserted(parent, child, self);
+    }
 
     // deferred: the id maps are only updated further down.
     defer if (self._form_associated.items.len != 0) {
@@ -3424,9 +3428,6 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     // The parser path does its own (limited) notification and
     // connected-callback work, then returns.
     if (comptime from_parser) {
-        // Not domChanged: live collections keep their cursors mid-parse.
-        self.styleChanged();
-
         // Main-document parser insertions notify per node: scripts running
         // during parsing can observe the document. Fragment parses
         // (innerHTML et al.) stay silent; Node.setHTML queues one combined
@@ -3453,6 +3454,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                     }
                 }
                 if (rootIsConnected(root)) {
+                    css_animations.documentChanged(self);
                     // Build.connected, parser side (JS side is in nodeIsReady).
                     // Called here, not on pop, so void elements get it too.
                     // The document may have no frame (DOMParser).
@@ -3468,6 +3470,11 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
 
     const parent_root = parent.getRootNode(.{});
     const parent_is_connected = rootIsConnected(parent_root);
+    if (parent_is_connected) {
+        if (child.is(Element)) |el| {
+            css_animations.elementChanged(self, el);
+        }
+    }
 
     // Mutation records queue synchronously at insertion, before any script
     // runs: an inserted script can observe its own record via takeRecords.
@@ -3564,6 +3571,7 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     }
 
     observers.notifyAttributeChange(self, element, name, old_value);
+    css_animations.elementChanged(self, element);
 
     // Handle slot assignment changes
     if (name.eql(comptime .wrap("slot"))) {
@@ -3603,6 +3611,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
     }
 
     observers.notifyAttributeChange(self, element, name, old_value);
+    css_animations.elementChanged(self, element);
 
     // Handle slot assignment changes
     if (name.eql(comptime .wrap("slot"))) {
@@ -3845,6 +3854,10 @@ const LoadState = enum {
 
     // the main HTML is being parsed (or downloaded)
     parsing,
+
+    // the main HTML has been parsed; deferred and module scripts may still be
+    // pending. Corresponds to readyState "interactive"
+    interactive,
 
     // the main HTML has been parsed and the JavaScript (including deferred
     // scripts) have been loaded. Corresponds to the DOMContentLoaded event

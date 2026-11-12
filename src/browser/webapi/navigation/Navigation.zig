@@ -678,7 +678,7 @@ pub fn navigateInner(
         frame.url = new_url;
         try frame.window._location._url.setHref(new_url, &frame.js.execution);
         // `:target` matches off the fragment, which might have just changed.
-        frame.styleChanged();
+        Frame.change.documentStateChanged(.target, frame);
 
         frame._session.notification.dispatch(.frame_navigated_within_document, &.{
             .url = new_url,

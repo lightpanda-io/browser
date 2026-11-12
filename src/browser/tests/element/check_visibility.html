@@ -749,6 +749,101 @@
   }
 </script>
 
+<script id="memo_tree_entry_points">
+  {
+    // Every way into or out of the tree reaches both the live collections
+    // and the cascade memo (:empty).
+    const parent = document.createElement("div");
+    parent.className = "memo-badge";
+    document.body.appendChild(parent);
+    const children = parent.childNodes;
+    const items = parent.getElementsByTagName("i");
+    const check = (count) => {
+      testing.expectEqual(count, children.length);
+      testing.expectEqual(count, items.length);
+      testing.expectEqual(count > 0, parent.checkVisibility());
+    };
+    const i = () => document.createElement("i");
+    check(0);
+
+    const child = parent.appendChild(i());
+    check(1);
+    parent.removeChild(child);
+    check(0);
+
+    parent.insertBefore(i(), null);
+    check(1);
+    parent.insertBefore(i(), parent.firstChild);
+    check(2);
+    parent.replaceChild(i(), parent.firstChild);
+    check(2);
+    parent.firstChild.replaceWith();
+    check(1);
+    parent.firstChild.replaceWith(i(), i());
+    check(2);
+    parent.replaceChildren();
+    check(0);
+
+    // moveBefore: the node moves in from a sibling, keeping its state
+    const other = document.body.appendChild(document.createElement("div"));
+    const moved = other.appendChild(i());
+    parent.moveBefore(moved, null);
+    check(1);
+    other.moveBefore(moved, null);
+    check(0);
+    other.remove();
+
+    parent.innerHTML = "<i></i>";
+    check(1);
+    parent.innerHTML = "";
+    check(0);
+
+    parent.insertAdjacentHTML("beforeend", "<i></i><i></i>");
+    check(2);
+    parent.firstChild.outerHTML = "";
+    check(1);
+    parent.replaceChildren();
+    check(0);
+    parent.replaceChildren(i());
+    check(1);
+
+    const range = document.createRange();
+    range.selectNodeContents(parent);
+    range.deleteContents();
+    check(0);
+    parent.append(i());
+    check(1);
+    range.selectNodeContents(parent);
+    range.extractContents();
+    check(0);
+
+    parent.append(i());
+    check(1);
+    document.adoptNode(parent.firstChild);
+    check(0);
+
+    // an empty text node doesn't count for :empty, but it is a child
+    parent.appendChild(document.createTextNode(""));
+    testing.expectEqual(1, children.length);
+    parent.normalize();
+    testing.expectEqual(0, children.length);
+
+    parent.remove();
+  }
+</script>
+
+<script id="memo_document_write">
+  {
+    // document.write from a parsing script inserts after it, through the leaves
+    const written = document.getElementsByTagName("lp-written");
+    testing.expectEqual(0, written.length);
+    document.write("<lp-written></lp-written>");
+    testing.expectEqual(1, written.length);
+    written[0].remove();
+    testing.expectEqual(0, written.length);
+  }
+</script>
+
 <style id="style-insert-rule-layers">
   @layer base {
     .layered-hide { display: none; }

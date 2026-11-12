@@ -128,7 +128,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
     switch (frame._load_state) {
-        .load, .parsing => {
+        .parsing, .interactive, .load => {
             // The page is in progress, events will be dispatch later.
             return cmd.sendResult(null, .{});
         },

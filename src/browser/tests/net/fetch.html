@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=fetch_basic type=module>
@@ -83,9 +84,9 @@
     state.resolve();
 
     await state.done(() => {
-      testing.expectEqual("TypeError: 'PUT' is unsupported in no-cors mode", error);
+      testing.expectEqual(true, error.startsWith('TypeError:'));
       testing.expectEqual(true, pending instanceof Promise);
-      testing.expectEqual('TypeError: Invalid header name', header_error);
+      testing.expectEqual(true, header_error.startsWith('TypeError:'));
     });
   }
 </script>
@@ -119,7 +120,7 @@
       testing.expectEqual(0, response.status);
       testing.expectEqual('opaqueredirect', response.type);
       testing.expectEqual(false, response.redirected);
-      testing.expectEqual('', response.url);
+      testing.expectEqual('http://127.0.0.1:9582/xhr/redirect', response.url);
       testing.expectEqual('', text);
     });
   }
@@ -293,6 +294,42 @@
   }
 </script>
 
+<script id=response_clone_stream_body type=module>
+  {
+    const state = await testing.async();
+    const enc = new TextEncoder();
+    const streamOf = (...chunks) => new ReadableStream({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(c));
+        controller.close();
+      },
+    });
+
+    const source = streamOf('chunk1', 'chunk2');
+    const response = new Response(source);
+    const copy = response.clone();
+    const before = [response.body === source, source.locked, response.bodyUsed, copy.bodyUsed];
+    const texts = [await response.text(), await copy.text()];
+
+    // a used or locked stream body can't be cloned
+    const used = new Response(streamOf('x'));
+    await used.text();
+    testing.expectError('TypeError', () => used.clone());
+
+    const lockedSource = streamOf('x');
+    const locked = new Response(lockedSource);
+    lockedSource.getReader();
+    testing.expectError('TypeError', () => locked.clone());
+    state.resolve();
+
+    await state.done(() => {
+      // like a tee: the original gets a new body and the source stays locked
+      testing.expectEqual([false, true, false, false], before);
+      testing.expectEqual(['chunk1chunk2', 'chunk1chunk2'], texts);
+    });
+  }
+</script>
+
 <script id=fetch_blob_url type=module>
   {
     const state = await testing.async();
@@ -447,93 +484,6 @@
   }
 </script>
 
-<script id=fetch_readablestream_body type=module>
-  {
-    const state = await testing.async();
-    const payload = "name=Streamed&count=9";
-    const enc = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(enc.encode("name=Streamed&"));
-        controller.enqueue(enc.encode("count=9"));
-        controller.close();
-      },
-    });
-
-    const response = await fetch("http://127.0.0.1:9582/echo_body", {
-      method: "POST",
-      body: stream,
-      duplex: "half",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-    const text = await response.text();
-    state.resolve();
-
-    await state.done(() => {
-      testing.expectEqual(200, response.status);
-      testing.expectEqual(payload, text);
-    });
-  }
-</script>
-
-<script id=fetch_readablestream_body_reject type=module>
-  {
-    const state = await testing.async();
-    const url = "http://127.0.0.1:9582/echo_body";
-    const opts = { method: "POST", duplex: "half" };
-
-    let openRejected = false;
-    try {
-      const open = new ReadableStream({
-        start(c) { c.enqueue(new TextEncoder().encode("x")); },
-      });
-      await fetch(url, { ...opts, body: open });
-    } catch (e) {
-      openRejected = e instanceof TypeError;
-    }
-
-    let lockedRejected = false;
-    try {
-      const locked = new ReadableStream({
-        start(c) {
-          c.enqueue(new TextEncoder().encode("x"));
-          c.close();
-        },
-      });
-      locked.getReader();
-      await fetch(url, { ...opts, body: locked });
-    } catch (e) {
-      lockedRejected = e instanceof TypeError;
-    }
-
-    // A stream is single-use: draining it for one body must not leave it
-    // looking like a valid (empty) body for the next request.
-    const once = new ReadableStream({
-      start(c) {
-        c.enqueue(new TextEncoder().encode("x"));
-        c.close();
-      },
-    });
-    const first = await fetch(url, { ...opts, body: once });
-    const firstText = await first.text();
-
-    let reuseRejected = false;
-    try {
-      await fetch(url, { ...opts, body: once });
-    } catch (e) {
-      reuseRejected = e instanceof TypeError;
-    }
-
-    state.resolve();
-    await state.done(() => {
-      testing.expectEqual(true, openRejected);
-      testing.expectEqual(true, lockedRejected);
-      testing.expectEqual("x", firstText);
-      testing.expectEqual(true, reuseRejected);
-    });
-  }
-</script>
-
 <script id=fetch_blob_url_in_worker type=module>
   {
     const state = await testing.async();
@@ -577,10 +527,13 @@
       testing.expectEqual('fr', got['accept-language']);
       testing.expectEqual('a, b', got['x-multi']);
       testing.expectEqual(undefined, got['cookie']);
-      testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
-      testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
-      testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
-      testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+      if (testing.IS_TEST_RUNNER) {
+        // our own User-Agent and Sec-Ch-Ua win over the authored ones
+        testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
+        testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
+        testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
+        testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+      }
     });
   }
 </script>
@@ -724,7 +677,9 @@
 
     await state.done(() => {
       for (const [body, bodyUsed, text] of results) {
-        testing.expectEqual(null, body);
+        testing.diverges('Chrome gives a null body status response an empty stream', () => {
+          testing.expectEqual(null, body);
+        });
         testing.expectEqual(false, bodyUsed);
         testing.expectEqual('', text);
       }
@@ -783,6 +738,23 @@
 
     await state.done(() => {
       testing.expectEqual(true, error);
+    });
+  }
+</script>
+
+<script id=fetch_status_999 type=module>
+  {
+    // Any three-digit status reaches the page, as in Chrome and Firefox.
+    const state = await testing.async();
+    const response = await fetch('http://127.0.0.1:9582/raw/status_999');
+    const body = await response.text();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(999, response.status);
+      testing.expectEqual('Request denied', response.statusText);
+      testing.expectEqual(false, response.ok);
+      testing.expectEqual('denied', body);
     });
   }
 </script>

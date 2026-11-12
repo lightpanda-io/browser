@@ -47,25 +47,49 @@ const Tokenizer = @import("Tokenizer.zig");
 /// Returns true if `query` matches the given viewport. Comma-separated
 /// queries are evaluated independently and combined with OR.
 pub fn matches(query: []const u8, viewport: Viewport) bool {
-    // Reject any input with an unbalanced `/* ...` before parsing. Every
-    // downstream scanner is comment-aware but only on the assumption that
-    // each comment is closed; an unterminated one would otherwise silently
-    // swallow the rest of the input and could flip a partially-parsed query
-    // to `true`.
-    if (hasUnterminatedComment(query)) return false;
+    if (hasUnterminatedComment(query)) {
+        // Reject any input with an unbalanced `/* ...` before parsing. Every
+        // downstream scanner is comment-aware but only on the assumption that
+        // each comment is closed; an unterminated one would otherwise silently
+        // swallow the rest of the input and could flip a partially-parsed query
+        // to `true`.
+        return false;
+    }
 
-    var rest = trimWsAndComments(query);
-    if (rest.len == 0) return false;
+    if (trimWsAndComments(query).len == 0) {
+        // An empty media query list matches everything
+        return true;
+    }
 
-    while (rest.len > 0) {
-        const cut = nextTopLevelComma(rest);
-        const piece = trimWsAndComments(rest[0..cut]);
-        if (piece.len > 0 and matchesSingle(piece, viewport)) return true;
-        if (cut == rest.len) break;
-        rest = rest[cut + 1 ..];
+    var it = ListIterator.init(query);
+    while (it.next()) |piece| {
+        if (matchesSingle(piece, viewport)) {
+            return true;
+        }
     }
     return false;
 }
+
+/// The queries of a comma-separated media query list
+const ListIterator = struct {
+    rest: []const u8,
+
+    fn init(list: []const u8) ListIterator {
+        return .{ .rest = list };
+    }
+
+    fn next(self: *ListIterator) ?[]const u8 {
+        while (self.rest.len > 0) {
+            const cut = nextTopLevelComma(self.rest);
+            const piece = trimWsAndComments(self.rest[0..cut]);
+            self.rest = if (cut == self.rest.len) "" else self.rest[cut + 1 ..];
+            if (piece.len > 0) {
+                return piece;
+            }
+        }
+        return null;
+    }
+};
 
 /// Returns true if `s` contains an opening `/*` without a matching `*/`.
 /// Called once at the top of `matches`; lets every other scanner trust that
@@ -370,9 +394,20 @@ fn parseLengthPx(value: []const u8) ?f64 {
 
 const testing = std.testing;
 
-test "MediaQuery: empty query is false" {
-    try testing.expect(!matches("", Viewport.default));
-    try testing.expect(!matches("   ", Viewport.default));
+test "MediaQuery: empty query list is true" {
+    try testing.expect(matches("", Viewport.default));
+    try testing.expect(matches("   ", Viewport.default));
+    try testing.expect(matches("/* c */", Viewport.default));
+    try testing.expect(!matches(",", Viewport.default));
+    try testing.expect(!matches(" , ", Viewport.default));
+}
+
+test "MediaQuery: ListIterator" {
+    var it = ListIterator.init(" screen , (min-width: calc(1px, 2px)) /* c */,, print ");
+    try testing.expectEqualStrings("screen", it.next().?);
+    try testing.expectEqualStrings("(min-width: calc(1px, 2px))", it.next().?);
+    try testing.expectEqualStrings("print", it.next().?);
+    try testing.expect(it.next() == null);
 }
 
 test "MediaQuery: bare media types" {

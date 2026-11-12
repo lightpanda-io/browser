@@ -20,6 +20,13 @@
 }
 </script>
 
+<script id=matchMedia_empty_query_list>
+{
+  testing.expectEqual(true, window.matchMedia('').matches);
+  testing.expectEqual(true, window.matchMedia('  ').matches);
+  testing.expectEqual(false, window.matchMedia(',').matches);
+}
+</script>
 <script id=matchMedia_min_width_above_viewport>
 {
   const mql = window.matchMedia('(min-width: 3000px)');

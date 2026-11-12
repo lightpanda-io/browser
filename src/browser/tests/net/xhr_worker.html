@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=xhr_in_worker type=module>
@@ -43,17 +44,18 @@
   }
 </script>
 
-<script id=xhr_document_in_worker_unsupported type=module>
+<script id=xhr_document_in_worker_ignored type=module>
   {
     const state = await testing.async();
     const worker = new Worker('./xhr-worker.js');
     worker.onmessage = (e) => state.resolve(e.data);
-    worker.postMessage({ kind: 'document_unsupported' });
+    worker.postMessage({ kind: 'document_ignored' });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker xhr error: ' + data.err);
       testing.expectEqual(200, data.status);
-      testing.expectEqual(true, data.threw);
+      testing.expectEqual('', data.response_type);
+      testing.expectEqual(true, data.is_text);
     });
   }
 </script>

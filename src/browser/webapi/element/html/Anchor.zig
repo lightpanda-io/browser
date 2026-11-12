@@ -31,7 +31,6 @@ const HtmlElement = @import("../Html.zig");
 const Anchor = @This();
 
 pub const Proto = HtmlElement;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Anchor) *Element {
@@ -125,7 +124,9 @@ fn setPort(self: *Anchor, value: []const u8, frame: *Frame) !void {
 
 pub fn getSearch(self: *Anchor, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
-    return URL.getSearch(href);
+    // Per spec an empty query is "", not "?".
+    const search = URL.getSearch(href);
+    return if (search.len == 1) "" else search;
 }
 
 fn setSearch(self: *Anchor, value: []const u8, frame: *Frame) !void {
@@ -136,7 +137,9 @@ fn setSearch(self: *Anchor, value: []const u8, frame: *Frame) !void {
 
 pub fn getHash(self: *Anchor, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
-    return URL.getHash(href);
+    // Per spec an empty fragment is "", not "#".
+    const hash = URL.getHash(href);
+    return if (hash.len == 1) "" else hash;
 }
 
 fn setHash(self: *Anchor, value: []const u8, frame: *Frame) !void {

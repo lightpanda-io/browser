@@ -27,6 +27,7 @@ const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const Window = @import("webapi/Window.zig");
 const Element = @import("webapi/Element.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 
@@ -276,8 +277,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             // Per spec, only a MouseEvent "click" is an activation event, and
             // the activation target is the nearest inclusive ancestor with
             // activation behavior (ancestors only for bubbling events).
-            if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
-                if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
+            if (event.is(MouseEvent) != null) {
+                if (Frame.user_input.findClickActivationTarget(target, event)) |activation_target| {
                     Frame.user_input.handleClick(frame, activation_target, target, event._is_trusted) catch |err| {
                         log.debug(.event, "frame.click", .{ .err = err });
                     };
@@ -297,6 +298,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     const built = buildEventPath(target, event, frame, &path_buffer);
     path_len = built.len;
     node_path_len = path_len;
+    if (path_len == 0) {
+        return;
+    }
     if (built.crosses_shadow_root) {
         event._needs_retargeting = true;
     }
@@ -391,6 +395,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             }
         }
     }
+}
+
+/// Chrome stops a trusted mousedown, mouseup, click or dblclick at the first
+/// disabled form control on its path, the target included (Blink's
+/// EventPath::AdjustForDisabledFormControl).
+pub fn stopsAtDisabledFormControl(event: *Event) bool {
+    if (!event._is_trusted or event.is(MouseEvent) == null) {
+        return false;
+    }
+    const typ = event._type_string;
+    return typ.eql(comptime .wrap("click")) or typ.eql(comptime .wrap("mousedown")) or
+        typ.eql(comptime .wrap("mouseup")) or typ.eql(comptime .wrap("dblclick"));
 }
 
 /// Whether a listener on the path could call preventDefault: any but a
@@ -578,6 +594,11 @@ pub fn buildEventPath(target: *Node, event: *Event, frame: ?*Frame, buffer: []*E
         return .{ .len = 0, .crosses_shadow_root = false };
     }
 
+    const stop_at_disabled = stopsAtDisabledFormControl(event);
+    if (stop_at_disabled and isDisabledFormControl(target)) {
+        return .{ .len = 0, .crosses_shadow_root = false };
+    }
+
     const target_root = target.getRootNode(.{});
     const related = event._dispatch_related_target;
 
@@ -604,6 +625,9 @@ pub fn buildEventPath(target: *Node, event: *Event, frame: ?*Frame, buffer: []*E
             }
             scope_root = n.getRootNode(.{});
         }
+        if (stop_at_disabled and isDisabledFormControl(n)) {
+            break;
+        }
 
         if (n.is(ShadowRoot) != null) {
             path.crosses_shadow_root = true;
@@ -615,6 +639,11 @@ pub fn buildEventPath(target: *Node, event: *Event, frame: ?*Frame, buffer: []*E
     }
 
     return path;
+}
+
+pub fn isDisabledFormControl(node: *Node) bool {
+    const el = node.is(Element) orelse return false;
+    return el.isDisabledFormControl();
 }
 
 // DOM spec "get the parent" for a node on the event path: an assigned
@@ -725,7 +754,7 @@ const ActivationState = struct {
             return null;
         }
 
-        const activation_node = Frame.user_input.findClickActivationTarget(target, event._bubbles) orelse return null;
+        const activation_node = Frame.user_input.findClickActivationTarget(target, event) orelse return null;
         const input = activation_node.is(Element.Html.Input) orelse return null;
         if (input._input_type != .checkbox and input._input_type != .radio) {
             return null;
@@ -762,7 +791,7 @@ const ActivationState = struct {
             }
             // Listeners ran between setChecked and here, so `:checked` state
             // built during dispatch has to be stamped as stale.
-            frame.styleChanged();
+            Frame.change.stateChanged(input.asElement(), .checked, frame);
             return;
         }
 

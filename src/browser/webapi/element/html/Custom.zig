@@ -512,7 +512,7 @@ fn upgradeBuiltIn(element: *Element, definition: *CustomElementDefinition, frame
 
     element._flags.builtin_undefined = false;
     try frame.setCustomizedBuiltInDefinition(element, definition);
-    frame.styleChanged(); // the element now matches :defined
+    Frame.change.stateChanged(element, .defined, frame);
     try enqueueUpgradeReactions(element, definition, frame);
 }
 

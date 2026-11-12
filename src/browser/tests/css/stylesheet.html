@@ -749,6 +749,23 @@
 }
 </script>
 
+<script id="CSSStyleSheet_atrule_is_css_rule">
+{
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('@page { margin: 1cm; } @keyframes spin { from {} to {} } .a { color: red; }');
+
+    testing.expectEqual(CSSRule.PAGE_RULE, sheet.cssRules[0].type);
+    testing.expectEqual(CSSRule.KEYFRAMES_RULE, sheet.cssRules[1].type);
+
+    const keyframes = sheet.cssRules[1];
+    testing.expectTrue(keyframes instanceof CSSRule);
+    testing.expectFalse(keyframes instanceof CSSStyleRule);
+    testing.expectTrue(keyframes === sheet.cssRules[1]);
+    testing.expectTrue(sheet.cssRules[2] instanceof CSSStyleRule);
+    testing.expectTrue(sheet.cssRules[2] === sheet.cssRules[2]);
+}
+</script>
+
 <script id="CSSStyleSheet_replaceSync_preserves_atrules">
 {
     // replaceSync goes through the same parser path; at-rules in the

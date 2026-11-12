@@ -1644,7 +1644,7 @@ fn hiddenState(node: *DOMNode, frame: *Frame) Hidden {
 /// owns it.
 fn hidesSubtree(node: *DOMNode) bool {
     const elt = node.is(DOMNode.Element) orelse return false;
-    return isAriaHidden(elt) or hasInertAttribute(elt);
+    return isAriaHidden(elt) or elt.hasInertAttribute();
 }
 
 /// Like Chrome, aria-hidden doesn't apply to <html>, <body> or <option>.
@@ -1655,11 +1655,6 @@ fn isAriaHidden(elt: *DOMNode.Element) bool {
     }
     const aria_hidden = elt.getAttributeInterned("aria-hidden") orelse "";
     return std.ascii.eqlIgnoreCase(aria_hidden, "true");
-}
-
-/// Like `Node.isInert`, only HTML elements take the attribute.
-fn hasInertAttribute(elt: *DOMNode.Element) bool {
-    return elt._namespace == .html and elt.hasAttributeSafe(comptime .wrap("inert"));
 }
 
 /// Chrome's ignored reason for a node outside the AX tree. aria-hidden on the
@@ -1674,7 +1669,7 @@ fn outOfTreeReason(node: *DOMNode, frame: *Frame) []const u8 {
         if (aria_hidden == null and isAriaHidden(elt)) {
             aria_hidden = if (n == node) "ariaHiddenElement" else "ariaHiddenSubtree";
         }
-        if (hasInertAttribute(elt)) {
+        if (elt.hasInertAttribute()) {
             outermost = "inertElement";
         } else if (elt.ownerFrame(frame)) |owner| {
             if (owner._style_manager.hasDisplayNone(elt)) outermost = "notRendered";

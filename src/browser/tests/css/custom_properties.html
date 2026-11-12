@@ -58,6 +58,7 @@
   <div id="imp-specific" class="imp-specific">imp-specific</div>
   <div id="imp-sheet" class="imp-sheet" style="--imp: inline">imp-sheet</div>
   <div id="imp-inline" class="imp-sheet" style="--imp: inline !important">imp-inline</div>
+  <div id="attr-only" style="--attr-only: from-attr"><span id="attr-only-child">attr-only</span></div>
   <style id="dyn"></style>
 </body>
 
@@ -81,6 +82,14 @@
   // Undeclared names resolve to the empty string.
   testing.expectEqual('', card.getPropertyValue('--nope'));
   testing.expectEqual('', getComputedStyle($('#plain')).getPropertyValue('--nope'));
+}
+</script>
+
+<script id=custom_property_style_attribute_only>
+{
+  // Declared only in an ancestor's style attribute, which nothing read before.
+  testing.expectEqual('from-attr', getComputedStyle($('#attr-only-child')).getPropertyValue('--attr-only'));
+  testing.expectEqual('', getComputedStyle($('#attr-only-child')).getPropertyValue('--attr-only-nope'));
 }
 </script>
 

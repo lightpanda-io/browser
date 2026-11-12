@@ -61,7 +61,7 @@ const State = struct {
 
 fn shouldAddSpacing(tag: Element.Tag) bool {
     return switch (tag) {
-        .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table => true,
+        .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table, .hr => true,
         else => false,
     };
 }
@@ -93,6 +93,16 @@ fn classLanguage(el: *Element) ?[]const u8 {
     return null;
 }
 
+/// CommonMark allows at most nine digits in a list marker.
+const max_list_start = 999_999_999;
+
+/// The number of an `<ol>`'s first item: its `start` attribute, or 1.
+fn listStart(ol: *Element) usize {
+    const start = ol.getAttributeSafe(comptime .wrap("start")) orelse return 1;
+    const value = std.fmt.parseInt(u32, std.mem.trim(u8, start, &std.ascii.whitespace), 10) catch return 1;
+    return @min(value, max_list_start);
+}
+
 fn longestBacktickRun(text: []const u8) usize {
     var longest: usize = 0;
     var run: usize = 0;
@@ -102,6 +112,61 @@ fn longestBacktickRun(text: []const u8) usize {
     }
     return longest;
 }
+
+/// Passes a blockquote's content on as it is written, with the `> ` marker on
+/// every line. Newlines wait for the next text, so the ones at either end of
+/// the quote are dropped.
+const QuoteWriter = struct {
+    parent: *std.Io.Writer,
+    newlines: usize = 0,
+    at_line_start: bool = true,
+    has_text: bool = false,
+    writer: std.Io.Writer,
+
+    const vtable = std.Io.Writer.VTable{ .drain = drain };
+
+    fn init(parent: *std.Io.Writer) QuoteWriter {
+        return .{ .parent = parent, .writer = .{ .vtable = &vtable, .buffer = &.{} } };
+    }
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *QuoteWriter = @alignCast(@fieldParentPtr("writer", w));
+        var total: usize = 0;
+        for (data[0 .. data.len - 1]) |bytes| {
+            try self.consume(bytes);
+            total += bytes.len;
+        }
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| {
+            try self.consume(pattern);
+            total += pattern.len;
+        }
+        return total;
+    }
+
+    fn consume(self: *QuoteWriter, bytes: []const u8) std.Io.Writer.Error!void {
+        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var first = true;
+        while (lines.next()) |line| : (first = false) {
+            if (!first and self.has_text) self.newlines += 1;
+            if (line.len == 0) continue;
+            if (self.newlines > 0) {
+                try self.parent.writeByte('\n');
+                for (1..self.newlines) |_| try self.parent.writeAll(">\n");
+                self.newlines = 0;
+                self.at_line_start = true;
+            }
+            if (self.at_line_start) try self.parent.writeAll("> ");
+            try self.parent.writeAll(line);
+            self.at_line_start = false;
+            self.has_text = true;
+        }
+    }
+
+    fn finish(self: *QuoteWriter) std.Io.Writer.Error!void {
+        try self.parent.writeAll(if (self.has_text) "\n" else ">\n");
+    }
+};
 
 // Iterative else large trees will stackoverflow
 const Context = struct {
@@ -126,6 +191,7 @@ const Context = struct {
         block_anchor: struct { href: []const u8, label: ?[]const u8 },
         inline_anchor: struct { href: []const u8, standalone: bool },
         inline_code: struct { ticks: usize, href: ?[]const u8 },
+        blockquote: *QuoteWriter,
     };
 
     fn deinit(self: *Context) void {
@@ -238,7 +304,7 @@ const Context = struct {
             },
             .ol => {
                 if (self.state.list_depth < self.state.list_stack.len) {
-                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = 1 };
+                    self.state.list_stack[self.state.list_depth] = .{ .type = .ordered, .index = listStart(el) };
                     self.state.list_depth += 1;
                 }
             },
@@ -269,8 +335,17 @@ const Context = struct {
                 try self.writer.writeByte(' ');
             },
             .blockquote => {
-                try self.writer.writeAll("> ");
-                self.state.last_char_was_newline = false;
+                // A table row has to stay on one line.
+                if (self.state.in_table) {
+                    try self.writer.writeAll("> ");
+                    self.state.last_char_was_newline = false;
+                } else {
+                    const quote = try self.frame.local_arena.create(QuoteWriter);
+                    quote.* = .init(self.writer);
+                    self.writer = &quote.writer;
+                    self.state.last_char_was_newline = true;
+                    return self.open(.init(self.tree.content(el, boxed)), .{ .blockquote = quote });
+                }
             },
             .pre => {
                 try self.writer.writeAll("```");
@@ -428,6 +503,12 @@ const Context = struct {
                 self.state.last_char_was_newline = false;
                 return;
             },
+            .blockquote => |quote| {
+                try quote.finish();
+                self.writer = quote.parent;
+                self.state.last_char_was_newline = true;
+                return;
+            },
         };
 
         switch (tag) {
@@ -448,7 +529,6 @@ const Context = struct {
                 try self.writer.writeAll("~~");
                 self.state.last_char_was_newline = false;
             },
-            .blockquote => {},
             .ul, .ol => {
                 if (self.state.list_depth > 0) self.state.list_depth -= 1;
             },
@@ -706,6 +786,21 @@ test "browser.markdown: ordered list" {
     , "1. First\n2. Second\n");
 }
 
+test "browser.markdown: ordered list start" {
+    try testMarkdownHTML(
+        \\<ol start="3"><li>Third</li><li>Fourth</li></ol>
+    , "3. Third\n4. Fourth\n");
+}
+
+test "browser.markdown: ordered list start out of range" {
+    try testMarkdownHTML(
+        \\<ol start="18446744073709551615"><li>a</li><li>b</li></ol>
+    , "1. a\n2. b\n");
+    try testMarkdownHTML(
+        \\<ol start="1234567890"><li>a</li></ol>
+    , "999999999. a\n");
+}
+
 test "browser.markdown: table" {
     try testMarkdownHTML(
         \\<table><thead><tr><th>Head 1</th><th>Head 2</th></tr></thead>
@@ -759,8 +854,32 @@ test "browser.markdown: nested lists" {
     );
 }
 
+test "browser.markdown: hr after a paragraph" {
+    try testMarkdownHTML("<p>Intro</p><hr><p>Next</p>", "\nIntro\n\n---\n\nNext\n");
+}
+
 test "browser.markdown: blockquote" {
     try testMarkdownHTML("<blockquote>Hello world</blockquote>", "\n> Hello world\n");
+}
+
+test "browser.markdown: blockquote with paragraphs" {
+    try testMarkdownHTML(
+        \\<blockquote><p>One</p><p>Two</p></blockquote><p>After</p>
+    , "\n> One\n>\n> Two\n\nAfter\n");
+}
+
+test "browser.markdown: blockquote in a table cell stays on the row" {
+    try testMarkdownHTML(
+        \\<table><tr><td><blockquote>q</blockquote></td><td>x</td></tr></table>
+    , "\n| > q | x |\n|---|---|\n");
+}
+
+test "browser.markdown: blockquote text is passed on as it is written" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    var quote: QuoteWriter = .init(&out.writer);
+    try quote.writer.writeAll("One\n\nTwo");
+    try std.testing.expectEqualStrings("> One\n>\n> Two", out.written());
 }
 
 test "browser.markdown: links" {
