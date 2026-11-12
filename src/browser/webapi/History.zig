@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const URL = @import("../URL.zig");
 
 const Navigation = @import("navigation/Navigation.zig");
 const PopStateEvent = @import("event/PopStateEvent.zig");
@@ -60,9 +61,13 @@ pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     const session = target._session;
     const arena = session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena.allocator(), target.url, u, .{})
+        try URL.resolve(arena.allocator(), target.url, u, .{})
     else
         try arena.dupeSentinel(u8, target.url, 0);
+
+    if (!URL.isSameOrigin(url, target.url)) {
+        return error.SecurityError;
+    }
 
     const json = try Navigation.serializeState(state, arena.allocator());
 
@@ -97,9 +102,13 @@ fn replaceState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const 
     const session = target._session;
     const arena = session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena.allocator(), target.url, u, .{})
+        try URL.resolve(arena.allocator(), target.url, u, .{})
     else
         try arena.dupeSentinel(u8, target.url, 0);
+
+    if (!URL.isSameOrigin(url, target.url)) {
+        return error.SecurityError;
+    }
 
     const json = try Navigation.serializeState(state, arena.allocator());
 
