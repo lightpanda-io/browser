@@ -411,12 +411,7 @@ pub fn deliverEvents(self: *WebSocket) void {
                 }
             },
             .close_frame => self.handleCloseFrame(),
-            .local_close => {
-                self.dispatchCloseEvent(self._close_code, self._close_reason, false) catch |err| {
-                    log.debug(.websocket, "close event dispatch failed", .{ .err = err });
-                };
-                self.deactivate();
-            },
+            .local_close => self.disconnected(error.ClosedBeforeConnected),
             .disconnected => |err| self.disconnected(err),
         }
     }
@@ -636,15 +631,15 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     const reason = reason_ orelse "";
 
     if (self._ready_state == .connecting) {
-        // Connection not yet established - fail it. The close event is
-        // buffered like everything else; anything already received but
-        // undelivered (open, messages) is dropped.
-        self._ready_state = .closed;
-        self._close_code = code;
-        self._close_reason = try self._arena.dupe(u8, reason);
+        // Connection not yet established - fail it: CLOSING now, then
+        // error + an abnormal (1006) close event, buffered like everything
+        // else. Anything already received but undelivered (open, messages)
+        // is dropped.
+        self._ready_state = .closing;
         self.releaseTransport();
         self.clearEvents();
         self.bufferEvent(.local_close) catch {
+            self._ready_state = .closed;
             self.unlinkDispatch();
             self.deactivate();
         };

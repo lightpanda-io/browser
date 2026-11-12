@@ -1107,7 +1107,7 @@ pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     const page = frame.page;
     const gop = try page.element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
+        gop.value_ptr.* = try CSSStyleProperties.init(.{ .inline_style = self }, owner);
     }
     self._flags.has_inline_style = true;
     return gop.value_ptr.*;
@@ -2139,13 +2139,13 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     const style_manager = &owner._style_manager;
 
     if (self.inlineStyle(frame)) |style| {
-        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
     }
 
     while (current.flatParent(frame)) |parent| {
         if (parent.is(Element)) |el| {
             if (el.inlineStyle(frame)) |style| {
-                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
             }
         }
         x += lineOffset(current, parent, style_manager, frame);

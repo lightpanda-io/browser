@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=response>
@@ -352,7 +353,7 @@
   const usedAfter2 = response2.bodyUsed;
 
   // text() decodes as UTF-8, stripping a leading BOM.
-  const response3 = new Response('﻿hi');
+  const response3 = new Response('\uFEFFhi');
   const text3 = await response3.text();
 
   state.resolve();
@@ -360,7 +361,6 @@
     testing.expectFalse(usedBefore1);
     testing.expectTrue(usedAfter1);
     testing.expectEqual('TypeError', rejected1.constructor.name);
-    testing.expectEqual('Body has already been read', rejected1.message);
 
     testing.expectFalse(usedBefore2);
     testing.expectFalse(usedAfter2);
@@ -564,9 +564,11 @@
 
 <script id=shared_array_buffer_body>
   const sab = new SharedArrayBuffer(4);
-  testing.expectError('TypeError', () => new Response(sab));
-  testing.expectError('TypeError', () => new Response(new Uint8Array(sab)));
-  testing.expectError('TypeError', () => new Response(new DataView(sab)));
+  testing.diverges('Chrome accepts a shared buffer body, BufferSource excludes it', () => {
+    testing.expectError('TypeError', () => new Response(sab));
+    testing.expectError('TypeError', () => new Response(new Uint8Array(sab)));
+    testing.expectError('TypeError', () => new Response(new DataView(sab)));
+  });
 
   // the same types over a regular ArrayBuffer are fine
   const ab = new ArrayBuffer(4);

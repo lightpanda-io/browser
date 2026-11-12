@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const StyleManager = @import("../../StyleManager.zig");
 const Factory = @import("../../Factory.zig");
 
 const Node = @import("../Node.zig");
@@ -459,6 +460,7 @@ pub const List = struct {
 
     fn getEntryWithNormalizedName(self: *const List, name: String) ?*Entry {
         const name_str = name.str();
+        StyleManager.fill_check.attributeRead(name_str);
         for (self._entries[0..self._len]) |*e| {
             if (std.mem.eql(u8, e.name(), name_str)) {
                 return e;
@@ -470,6 +472,7 @@ pub const List = struct {
     fn getEntryWithInternedName(self: *const List, comptime name: []const u8) ?*Entry {
         const static = comptime String.intern(name) orelse
             @compileError("not an interned attribute name: " ++ name);
+        StyleManager.fill_check.attributeRead(name);
 
         for (self._entries[0..self._len]) |*e| {
             if (e._name_ptr == static.ptr) {
