@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -26,7 +25,6 @@ const RuleStore = @import("../../css/RuleStore.zig");
 
 const CSSRule = @import("CSSRule.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
-const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
 const CSSStyleProperties = @import("CSSStyleProperties.zig");
 
 const CSSStyleRule = @This();
@@ -85,30 +83,6 @@ fn getCssRules(self: *CSSStyleRule, frame: *Frame) !*CSSRuleList {
     return rules;
 }
 
-pub fn getCssText(self: *CSSStyleRule, frame: *Frame) ![]const u8 {
-    var buf = std.Io.Writer.Allocating.init(frame.local_arena);
-    try writeCssText(self.asCSSRule().entry(), &buf, frame);
-    return buf.written();
-}
-
-fn writeCssText(entry: *const RuleStore.Entry, buf: *std.Io.Writer.Allocating, frame: *Frame) !void {
-    try buf.writer.print("{s} {{ ", .{entry.text()});
-    const start = buf.written().len;
-    try CSSStyleDeclaration.formatBlock(&entry._block, &buf.writer, frame);
-    if (entry._children) |children| {
-        for (children.entries()) |*child| {
-            if (buf.written().len > start) {
-                try buf.writer.writeByte(' ');
-            }
-            switch (child._kind) {
-                .style => try writeCssText(child, buf, frame),
-                else => try buf.writer.writeAll(child.text()),
-            }
-        }
-    }
-    try buf.writer.writeAll(" }");
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleRule);
 
@@ -119,6 +93,5 @@ pub const JsApi = struct {
 
     pub const selectorText = bridge.accessor(CSSStyleRule.getSelectorText, CSSStyleRule.setSelectorText, .{});
     pub const style = bridge.accessor(CSSStyleRule.getStyle, null, .{});
-    pub const cssText = bridge.accessor(CSSStyleRule.getCssText, null, .{});
     pub const cssRules = bridge.accessor(CSSStyleRule.getCssRules, null, .{});
 };

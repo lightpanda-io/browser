@@ -272,7 +272,7 @@ fn parseInto(self: *CSSStyleSheet, text: []const u8, mode: enum { append, replac
 fn parseRule(self: *CSSStyleSheet, parsed_rule: Parser.Rule, frame: *Frame) CSSError!Entry {
     return switch (parsed_rule) {
         .style => |s| self.parseStyleRule(s.selector, s.block, 0, frame),
-        .at_rule => |a| self.parseAtRule(a.keyword, a.text, frame),
+        .at_rule => |a| self.parseAtRule(a, 0, false, frame),
     };
 }
 
@@ -288,30 +288,72 @@ fn parseStyleRule(self: *CSSStyleSheet, selector: []const u8, block: []const u8,
     if (depth >= StyleManager.MAX_AT_RULE_NESTING or std.mem.findScalar(u8, block, '{') == null) {
         return entry;
     }
-    var it = Parser.parseStyleBlock(block);
-    while (it.nextItem()) |item| {
-        var nested = switch (item) {
-            .declaration => continue,
-            .rule => |r| try self.parseStyleRule(r.selector, r.block, depth + 1, frame),
-            .at_rule => |a| try self.parseAtRule(a.keyword, a.text, frame),
-        };
-        errdefer self.freeEntry(&nested, frame);
-        // Created on the first nested rule: most rules have none.
-        const children = entry._children orelse blk: {
-            const children = try RuleStore.init(allocator, self);
-            entry._children = children;
-            break :blk children;
-        };
-        try children.append(allocator, nested);
-    }
-    if (entry._children) |children| {
-        try children.trim(allocator);
-    }
+    try self.parseNestedRules(&entry, block, depth, frame);
     return entry;
 }
 
-fn parseAtRule(self: *CSSStyleSheet, keyword: []const u8, text: []const u8, frame: *Frame) CSSError!Entry {
-    return Entry.init(frame._factory.storageAllocator(), .ofAtRule(keyword), text, try self.nextRuleId());
+/// An at-rule. For grouping ones (@media, @supports, @layer) we keep the prelude
+/// as text, and the block as children rules. For all others, we keep the source
+/// as written.
+fn parseAtRule(self: *CSSStyleSheet, rule: Parser.AtRule, depth: u8, in_style: bool, frame: *Frame) CSSError!Entry {
+    const allocator = frame._factory.storageAllocator();
+    const kind: RuleStore.Kind = .ofAtRule(rule.keyword);
+    const body = switch (kind) {
+        .media, .supports, .layer => rule.block,
+        else => null,
+    } orelse return Entry.init(allocator, kind, rule.text, try self.nextRuleId());
+
+    var entry = try Entry.initPrelude(allocator, kind, rule.prelude, try self.nextRuleId());
+    errdefer self.freeEntry(&entry, frame);
+    entry._children = try RuleStore.init(allocator, self);
+
+    if (depth >= StyleManager.MAX_AT_RULE_NESTING) {
+        return entry;
+    }
+    if (in_style) {
+        entry._block = try CSSStyleDeclaration.parseBlock(body, frame);
+        try self.parseNestedRules(&entry, body, depth, frame);
+        return entry;
+    }
+    var it = Parser.parseStylesheet(body);
+    while (it.next()) |parsed_rule| {
+        try self.appendChild(&entry, switch (parsed_rule) {
+            .style => |r| try self.parseStyleRule(r.selector, r.block, depth + 1, frame),
+            .at_rule => |a| try self.parseAtRule(a, depth + 1, false, frame),
+        }, frame);
+    }
+    try entry._children.?.trim(allocator);
+    return entry;
+}
+
+/// The rules in a style block (a style rule's, or that of an at-rule nested
+/// in one), as children of `entry`.
+fn parseNestedRules(self: *CSSStyleSheet, entry: *Entry, block: []const u8, depth: u8, frame: *Frame) CSSError!void {
+    var it = Parser.parseStyleBlock(block);
+    while (it.nextItem()) |item| {
+        try self.appendChild(entry, switch (item) {
+            .declaration => continue,
+            .rule => |r| try self.parseStyleRule(r.selector, r.block, depth + 1, frame),
+            .at_rule => |a| try self.parseAtRule(a, depth + 1, true, frame),
+        }, frame);
+    }
+    if (entry._children) |children| {
+        try children.trim(frame._factory.storageAllocator());
+    }
+}
+
+/// Takes ownership of `child`: freed if it can't be appended.
+fn appendChild(self: *CSSStyleSheet, entry: *Entry, child: Entry, frame: *Frame) CSSError!void {
+    var owned = child;
+    errdefer self.freeEntry(&owned, frame);
+    const allocator = frame._factory.storageAllocator();
+    // A style rule's is created on its first nested rule: most have none.
+    const children = entry._children orelse blk: {
+        const children = try RuleStore.init(allocator, self);
+        entry._children = children;
+        break :blk children;
+    };
+    try children.append(allocator, owned);
 }
 
 fn nextRuleId(self: *CSSStyleSheet) !u32 {
