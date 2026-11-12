@@ -388,6 +388,22 @@ pub fn evict(self: *SqliteCache, url: []const u8, scope: CacheScope) void {
     log.debug(.cache, "evict", .{ .url = url });
 }
 
+// Removes every entry at this scope. Used to clear a Browser's private
+// entries on close; never called with the public scope.
+pub fn clearScope(self: *SqliteCache, scope: CacheScope) void {
+    const conn = self.pool.acquire() catch |err| {
+        log.err(.cache, "sqlite acquire", .{ .err = err });
+        return;
+    };
+    defer self.pool.release(conn);
+
+    conn.exec("delete from cache where scope = $1", .{scopeToInt(scope)}) catch |err| {
+        log.err(.cache, "clear scope", .{ .err = err });
+        return;
+    };
+    log.debug(.cache, "clear scope", .{ .scope = scope, .removed = conn.changes() });
+}
+
 fn deleteEntry(conn: Sqlite.Conn, url: []const u8, scope: CacheScope) void {
     conn.exec("delete from cache where url = $1 and scope = $2", .{ url, scopeToInt(scope) }) catch |err| {
         log.err(.cache, "delete from cache", .{ .url = url, .err = err });

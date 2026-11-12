@@ -110,6 +110,14 @@ pub fn evict(self: *Cache, url: []const u8, scope: CacheScope) void {
     };
 }
 
+/// Removes every entry at this scope. Called when the Browser owning it closes.
+pub fn clearScope(self: *Cache, scope: CacheScope) void {
+    return switch (self.kind) {
+        .noop => {},
+        inline else => |*c| c.clearScope(scope),
+    };
+}
+
 pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewResponse) !void {
     switch (self.kind) {
         .noop => {},
