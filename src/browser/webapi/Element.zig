@@ -3089,5 +3089,5 @@ test "Element: div chain slot size" {
     // fit in existing padding. Debug is larger from the _proto_canary fields.
     const Div = @import("element/html/Div.zig");
     const slot = comptime Factory.chainOffsetOf(Div, Div) + @sizeOf(Div);
-    try testing.expectEqual(if (comptime lp.IS_DEBUG) 112 else 73, slot);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 96 else 65, slot);
 }

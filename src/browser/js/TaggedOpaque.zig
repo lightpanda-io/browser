@@ -22,6 +22,8 @@ const js = @import("js.zig");
 
 const reflect = @import("../reflect.zig");
 const Factory = @import("../Factory.zig");
+const Node = @import("../webapi/Node.zig");
+const EventTarget = @import("../webapi/EventTarget.zig");
 
 const v8 = js.v8;
 const bridge = js.bridge;
@@ -84,13 +86,13 @@ const Allocator = std.mem.Allocator;
 // That answers the "is it a T" question. But we need to actually turn it into
 // T (e.g. the HTMLElement into a Node). This is simple pointer math since our
 // Factory allocates the whole chain in one block. We store the base address
-// (e.g. the address of the EventTarget) and know the offset between that and
-// the target (e.g. the Node). Factory.chainOffsetOf is used throughout the code
+// (e.g. the address of the Node) and know the offset between that and the
+// target (e.g. the Element). Factory.chainOffsetOf is used throughout the code
 // for this purpose.
 const TaggedOpaque = @This();
 
-// Address of the start of the instance's prototype chain allocation (where
-// the root prototype lives), e.g. the address of EventTarget for an Anchor.
+// Address of the start of the instance's prototype chain allocation, e.g. the
+// address of the Node for an Anchor.
 base: usize,
 
 // The instance's most specific type, as a rank (see above).
@@ -210,6 +212,12 @@ pub fn is(self: TaggedOpaque, comptime T: type) bool {
 pub fn as(self: TaggedOpaque, comptime T: type) ?*T {
     if (self.is(T) == false) {
         return null;
+    }
+    if (comptime T == EventTarget) {
+        if (self.is(Node)) {
+            // Node is optimized with EventTarget embedded into it.
+            return @ptrFromInt(self.base + comptime Factory.chainOffsetOf(Node, EventTarget));
+        }
     }
     return @ptrFromInt(self.base + comptime Factory.chainOffsetOf(T, T));
 }
@@ -342,8 +350,6 @@ test "TaggedOpaque: expanded form" {
 }
 
 test "TaggedOpaque: as" {
-    const EventTarget = @import("../webapi/EventTarget.zig");
-    const Node = @import("../webapi/Node.zig");
     const Element = @import("../webapi/Element.zig");
     const Document = @import("../webapi/Document.zig");
     const Html = Element.Html;
