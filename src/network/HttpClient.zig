@@ -1435,6 +1435,11 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
 fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
     transfer.setCachedResponse(cached, cache_state);
+
+    CorsGate.validateIfNeeded(transfer) catch |err| {
+        return transfer.failAsync(err);
+    };
+
     if (self.interceptResponse(transfer, .cached)) {
         return;
     }
@@ -1833,10 +1838,7 @@ fn processMessages(self: *Client) !bool {
 }
 
 fn enforceCorsResponse(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) bool {
-    if (!(transfer._cors_cross_origin and transfer.req.request_mode == .cors)) {
-        return false;
-    }
-    CorsGate.validateResponse(transfer) catch |err| {
+    CorsGate.validateIfNeeded(transfer) catch |err| {
         self.removeConn(msg.conn);
         transfer._conn = null;
         transfer.failAsync(err);
@@ -2379,11 +2381,9 @@ pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
         }
     }
 
-    if (transfer._cors_cross_origin and transfer.req.request_mode == .cors) {
-        CorsGate.validateResponse(transfer) catch |err| {
-            return transfer.failAsync(err);
-        };
-    }
+    CorsGate.validateIfNeeded(transfer) catch |err| {
+        return transfer.failAsync(err);
+    };
 
     if (self.interceptResponse(transfer, .final)) {
         return;
