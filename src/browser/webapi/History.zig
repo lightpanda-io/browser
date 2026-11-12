@@ -58,17 +58,20 @@ fn setScrollRestoration(self: *History, str: []const u8) void {
 // The URL resolves against the frame's document, not the caller's. Per the
 // pushState/replaceState spec: an unparseable URL, a different origin, or
 // one carrying credentials all throw SecurityError.
-fn resolveHistoryUrl(target: *Frame, _url: ?[]const u8) ![:0]const u8 {
+fn resolveHistoryUrl(target: *Frame, url_: ?[]const u8) ![:0]const u8 {
     const arena = target._session.arena;
-    const url = if (_url) |u| blk: {
-        const resolved = URL.resolve(arena.allocator(), target.url, u, .{}) catch return error.SecurityError;
-        if (!URL.isSameOrigin(resolved, target.url) or URL.getUsername(resolved).len > 0 or URL.getPassword(resolved).len > 0) {
-            return error.SecurityError;
-        }
-        break :blk resolved;
-    } else try arena.dupeSentinel(u8, target.url, 0);
+    const url = url_ orelse {
+        return arena.dupeSentinel(u8, target.url, 0);
+    };
 
-    return url;
+    const resolved = URL.resolve(arena.allocator(), target.url, url, .{}) catch |err| switch (err) {
+        error.TypeError => return error.SecurityError,
+        else => return err,
+    };
+    if (!URL.isSameOrigin(resolved, target.url) or URL.getUsername(resolved).len > 0 or URL.getPassword(resolved).len > 0) {
+        return error.SecurityError;
+    }
+    return resolved;
 }
 
 pub fn pushState(self: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8) !void {
