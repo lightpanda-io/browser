@@ -27,6 +27,7 @@ const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 const EventManagerBase = @import("EventManagerBase.zig");
 const PageStatus = @import("PageStatus.zig");
+const properties = @import("css/properties.zig");
 
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
@@ -73,8 +74,9 @@ session: *Session,
 // a cached lookup on Frame 2. We picked the latter.
 dom_version: usize = 0,
 
-// Superset of dom_version that also moves for non-tree state (see
-// Frame.styleChanged); validates the StyleManager memo.
+// Moves for every change that can alter a selector match or cascaded value,
+// non-tree state included, but not for attribute writes no selector reads
+// (see frame/change.zig); validates the StyleManager memo.
 style_version: usize = 0,
 
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage
@@ -119,6 +121,9 @@ attribute_lookup: Element.Attribute.List.Lookup = .empty,
 // This is both a memory optimization (deduping attribute names) and a performance
 // optimization (since we can compare strings by just their pointer)
 attribute_names: std.StringHashMapUnmanaged(void) = .empty,
+
+// The custom property names (`--name`) declared on this Page.
+css_custom_names: properties.CustomNames = .{},
 
 // Same as attribute_lookup, but instead of individual attributes, this is for
 // the return of elements.attributes.

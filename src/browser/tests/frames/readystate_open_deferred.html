@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script id=open_deferred>
+  // A deferred script that open()s without close() leaves the load pending:
+  // the closing close() runs the new document's readiness steps and load once.
+  var order = [];
+  var loads = 0;
+
+  testing.onload(() => {
+    testing.expectEqual([
+      'defer:interactive',
+      'open:loading',
+      'before-close:loading:0',
+      'readystatechange:interactive',
+      'DOMContentLoaded:interactive',
+      'readystatechange:complete',
+    ], order);
+    testing.expectEqual(1, loads);
+    const doc = document.getElementById('frame').contentDocument;
+    testing.expectEqual('written', doc.getElementById('x').textContent);
+  });
+</script>
+<iframe id=frame src="support/readystate_open_deferred.html" onload="loads += 1"></iframe>

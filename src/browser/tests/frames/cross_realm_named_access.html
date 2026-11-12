@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<div id="abc"></div>
+<iframe id="f" srcdoc="<div id=abc></div>"></iframe>
+
+<script id="named_access_uses_the_holder_window">
+  testing.onload(() => {
+    const iwin = $('#f').contentWindow;
+    const child_abc = iwin.document.getElementById('abc');
+
+    testing.expectEqual(child_abc, iwin.abc);
+    testing.expectTrue(iwin.abc instanceof iwin.HTMLDivElement);
+    testing.expectEqual($('#abc'), abc);
+  });
+</script>
+<script id="named_access_after_in_place_navigation" type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const onceLoad = () => new Promise((r) => { iframe.onload = () => r(); });
+
+  let loaded = onceLoad();
+  iframe.srcdoc = '<div id=before></div>';
+  document.body.appendChild(iframe);
+  await loaded;
+
+  const iwin = iframe.contentWindow;
+  const before = iwin.before;
+  const before_el = iwin.document.getElementById('before');
+
+  loaded = onceLoad();
+  iframe.srcdoc = '<div id=after></div>';
+  await loaded;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(before_el, before);
+    testing.expectEqual(true, iwin === iframe.contentWindow);
+    testing.expectEqual(undefined, iwin.before);
+    testing.expectEqual(iwin.document.getElementById('after'), iwin.after);
+  });
+</script>

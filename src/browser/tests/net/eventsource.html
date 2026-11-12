@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=constants type=module>
@@ -6,14 +7,9 @@
   testing.expectEqual(1, EventSource.OPEN);
   testing.expectEqual(2, EventSource.CLOSED);
 
-  let threw = false;
-  try {
-    new EventSource('http://this is invalid/');
-  } catch (e) {
-    threw = true;
-    testing.expectEqual('SyntaxError', e.name);
-  }
-  testing.expectTrue(threw, 'invalid URL must throw');
+  testing.diverges("Chrome's URL parser allows a space in the host", () => {
+    testing.expectError('SyntaxError', () => new EventSource('http://this is invalid/'));
+  });
 </script>
 
 <script id=simple type=module>

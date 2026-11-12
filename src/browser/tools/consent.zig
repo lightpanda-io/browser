@@ -29,7 +29,7 @@ const lp = @import("../../lightpanda.zig");
 const zenai = @import("zenai");
 
 const choose = @import("choose.zig");
-const jev = @import("jev.zig");
+const decisions = @import("decisions.zig");
 
 const tools = @import("../tools.zig");
 const ToolError = tools.ToolError;
@@ -40,19 +40,19 @@ const requireFrame = tools.requireFrame;
 const resolveBySelector = tools.resolveBySelector;
 const selectorFor = tools.selectorFor;
 const NodeRegistry = lp.NodeRegistry;
-const askPage = jev.askPage;
-const internalUnlessOom = jev.internalUnlessOom;
-const unusableAnswer = jev.unusableAnswer;
-const compact = jev.compact;
-const verdict = jev.verdict;
-const unverified = jev.unverified;
-const clickAndSettle = jev.clickAndSettle;
+const askPage = decisions.askPage;
+const internalUnlessOom = decisions.internalUnlessOom;
+const unusableAnswer = decisions.unusableAnswer;
+const compact = decisions.compact;
+const verdict = decisions.verdict;
+const unverified = decisions.unverified;
+const clickAndSettle = decisions.clickAndSettle;
 
-const Questions = zenai.typesafe.Questions;
-const QuestionEntry = zenai.typesafe.QuestionEntry;
+const Questions = zenai.decisions.Questions;
+const QuestionEntry = zenai.decisions.QuestionEntry;
 
 /// The question ids, which also key the answers.
-pub const wall_key = @tagName(jev.Preset.isConsentWall);
+pub const wall_key = @tagName(decisions.Preset.isConsentWall);
 pub const control_key = "control";
 
 pub const Prefer = enum {
@@ -76,14 +76,14 @@ pub fn questions(
     prefer: Prefer,
 ) error{OutOfMemory}!Questions {
     const entries = try arena.alloc(QuestionEntry, 2);
-    entries[0] = jev.presetQuestion(.isConsentWall);
+    entries[0] = decisions.presetQuestion(.isConsentWall);
     entries[1] = .{ .key = control_key, .value = try choose.question(arena, prefer.instructions(), candidates, &.{}) };
     return .init(entries);
 }
 
 /// Just the banner question, for the re-read that verifies a click.
 fn verifyQuestions(arena: std.mem.Allocator) error{OutOfMemory}!Questions {
-    return jev.presetQuestions(arena, &.{.isConsentWall});
+    return decisions.presetQuestions(arena, &.{.isConsentWall});
 }
 
 /// What the tool reports. `dismissed` is what we did, `verified` is whether
@@ -176,12 +176,12 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
         const wall = response.value.noul(wall_key);
         if (outcome.attempts == 0) {
             outcome.consentWall = wall;
-            if ((wall orelse 0) < jev.gate) {
+            if ((wall orelse 0) < decisions.gate) {
                 return verdict(arena, &outcome, "those controls are not a consent banner");
             }
         } else {
             outcome.consentWallAfter = wall;
-            if ((wall orelse 1) < jev.gate) {
+            if ((wall orelse 1) < decisions.gate) {
                 outcome.verified = true;
                 return consentVerdict(arena, &outcome, null);
             }
@@ -302,28 +302,30 @@ test "acceptCookies: a recorded control that is gone clicks nothing and asks not
     try std.testing.expectEqual(null, result.replay_args);
 }
 
-test "acceptCookies: the control Jev picks is clicked and the re-read verifies it" {
-    var registry: NodeRegistry = .init(std.testing.allocator);
-    defer registry.deinit();
+test "acceptCookies: the control the decision model picks is clicked and the re-read verifies it" {
+    for (std.enums.values(testing.MockDecisions.Provider)) |provider| {
+        var registry: NodeRegistry = .init(std.testing.allocator);
+        defer registry.deinit();
 
-    var page = try testing.pageTest("consent_banner.html", .{});
-    defer page.close();
+        var page = try testing.pageTest("consent_banner.html", .{});
+        defer page.close();
 
-    const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
-    defer mock.stop();
+        const aa = testing.arena_allocator;
+        const mock = try testing.MockDecisions.startAs(aa, provider);
+        defer mock.stop();
 
-    const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
-    try std.testing.expect(!result.is_error);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
-    try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
-    // What `--save` writes into the script, so the next run clicks it directly.
-    try std.testing.expectEqualStrings("{\"selectors\":[\"#accept\"]}", result.replay_args.?);
+        const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
+        try std.testing.expect(!result.is_error);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"dismissed\":true") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "\"verified\":true") != null);
+        try std.testing.expect(std.mem.find(u8, result.text, "Accept all cookies") != null);
+        // What `--save` writes into the script, so the next run clicks it directly.
+        try std.testing.expectEqualStrings("{\"selectors\":[\"#accept\"]}", result.replay_args.?);
 
-    const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
-    try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
-    try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+        const tree = try call(aa, page.session, &registry, "tree", null, .{ .source = .user });
+        try std.testing.expect(std.mem.find(u8, tree.text, "Accept all cookies") == null);
+        try std.testing.expect(std.mem.find(u8, tree.text, "Headline") != null);
+    }
 }
 
 test "acceptCookies: a click that moves the page is followed by a pick on the page it went to" {
@@ -334,7 +336,7 @@ test "acceptCookies: a click that moves the page is followed by a pick on the pa
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
+    const mock = try testing.MockDecisions.start(aa);
     defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
@@ -354,7 +356,7 @@ test "acceptCookies: a confirmation the first click raises is picked from afresh
     defer page.close();
 
     const aa = testing.arena_allocator;
-    const mock = try testing.MockJev.start(aa);
+    const mock = try testing.MockDecisions.start(aa);
     defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
@@ -377,11 +379,12 @@ test "acceptCookies: a missing key is reported so the REPL can ask a model inste
     defer page.close();
 
     const aa = testing.arena_allocator;
-    _ = testing.unsetenv(@constCast(zenai.typesafe.env_var_name));
+    const mock = testing.MockDecisions.startWithoutKey();
+    defer mock.stop();
 
     const result = try call(aa, page.session, &registry, "acceptCookies", null, .{ .source = .user });
     try std.testing.expect(result.is_error);
     // What `/acceptCookies` reads to fall back to the prompt it used to send.
     try std.testing.expectEqual(.missing_api_key, result.failure);
-    try std.testing.expect(std.mem.find(u8, result.text, zenai.typesafe.env_var_name) != null);
+    try std.testing.expect(std.mem.find(u8, result.text, zenai.decisions.env_hint) != null);
 }

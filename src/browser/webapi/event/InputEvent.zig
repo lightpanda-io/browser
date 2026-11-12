@@ -16,15 +16,20 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Page = @import("../../Page.zig");
 
+const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
-const UIEvent = @import("UIEvent.zig");
+const ShadowRoot = @import("../ShadowRoot.zig");
+const StaticRange = @import("../StaticRange.zig");
 const DataTransfer = @import("../DataTransfer.zig");
+
+const UIEvent = @import("UIEvent.zig");
 
 const String = lp.String;
 
@@ -37,12 +42,14 @@ _data: ?[]const u8,
 _data_transfer: ?*DataTransfer = null,
 _input_type: []const u8,
 _is_composing: bool,
+_target_ranges: []const *StaticRange = &.{},
 
 const InputEventOptions = struct {
     data: ?[]const u8 = null,
     dataTransfer: ?*DataTransfer = null,
     inputType: ?[]const u8 = null,
     isComposing: bool = false,
+    targetRanges: []const *StaticRange = &.{},
 };
 
 const Options = Event.inheritOptions(
@@ -75,6 +82,7 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
             ._data_transfer = opts.dataTransfer,
             ._input_type = if (opts.inputType) |it| try arena.dupe(u8, it) else "",
             ._is_composing = opts.isComposing,
+            ._target_ranges = try arena.dupe(*StaticRange, opts.targetRanges),
         },
     );
 
@@ -99,6 +107,9 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
     if (opts.dataTransfer) |dt| {
         dt.acquireRef();
     }
+    for (event._target_ranges) |range| {
+        range.asAbstractRange().acquireRef();
+    }
 
     return event;
 }
@@ -106,6 +117,9 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
 pub fn deinit(self: *InputEvent, page: *Page) void {
     if (self._data_transfer) |dt| {
         dt.releaseRef(page);
+    }
+    for (self._target_ranges) |range| {
+        range.asAbstractRange().releaseRef(page);
     }
 }
 
@@ -129,6 +143,48 @@ fn getIsComposing(self: *const InputEvent) bool {
     return self._is_composing;
 }
 
+fn getTargetRanges(self: *InputEvent, frame: *Frame) ![]const *StaticRange {
+    const event = self.asEvent();
+    if (event._dispatch_target != null and event._event_phase == .none) {
+        // empty once the event has been dispatched
+        return &.{};
+    }
+    const listener: ?*Node = if (event._current_target) |current| current.is(Node) else null;
+
+    var visible: std.ArrayList(*StaticRange) = .empty;
+    for (self._target_ranges) |range| {
+        const r = range.asAbstractRange();
+        // A range into a shadow tree which the listener is outside of is excluded
+        if (visibleFrom(r.getStartContainer(), listener) and visibleFrom(r.getEndContainer(), listener)) {
+            try visible.append(frame.call_arena, range);
+        }
+    }
+    return visible.items;
+}
+
+fn visibleFrom(node: *Node, listener: ?*Node) bool {
+    const root = node.getRootNode(.{});
+    if (root.is(ShadowRoot) == null) {
+        // not inside of a shadow tree, nothing to exclude
+        return true;
+    }
+    var n = listener orelse return false;
+    while (true) {
+        const listener_root = n.getRootNode(.{});
+        if (listener_root == root) {
+            // both inside the same root, nothing to exclude
+            // (could be a shadowroot or not, doens't matter)
+            return true;
+        }
+        const shadow = listener_root.is(ShadowRoot) orelse {
+            // the listener _is_ in a shadowroot, but it isn't
+            // the same one as the node. Exclude it.
+            return false;
+        };
+        n = shadow._host.asNode();
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(InputEvent);
 
@@ -142,6 +198,7 @@ pub const JsApi = struct {
     pub const dataTransfer = bridge.accessor(InputEvent.getDataTransfer, null, .{});
     pub const inputType = bridge.accessor(InputEvent.getInputType, null, .{});
     pub const isComposing = bridge.accessor(InputEvent.getIsComposing, null, .{});
+    pub const getTargetRanges = bridge.function(InputEvent.getTargetRanges, .{});
 };
 
 const testing = @import("../../../testing.zig");

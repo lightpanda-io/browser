@@ -101,17 +101,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
 }
 
 pub fn initWithCharset(form_: ?*Form, submitter: ?*Element, charset: []const u8, exec: *const Execution) !*FormData {
-    const arena = try exec.getArena(.small, "FormData");
-    errdefer arena.release();
-
-    const form_data = try arena.create(FormData);
-    form_data.* = .{
-        ._rc = .{},
-        ._arena = arena,
-        ._entries = .empty,
-    };
-
-    const form = form_ orelse return form_data;
+    const form = form_ orelse return create(exec);
 
     const frame = switch (exec.js.global) {
         .frame => |f| f,
@@ -126,24 +116,63 @@ pub fn initWithCharset(form_: ?*Form, submitter: ?*Element, charset: []const u8,
     form._constructing_entry_list = true;
     defer form._constructing_entry_list = false;
 
-    form_data._entries = try collectForm(arena.allocator(), form, submitter, charset, frame);
+    // The formdata event gets its own FormData over the entry list.
+    const event_data = try create(exec);
+    event_data.acquireRef();
+    defer event_data.releaseRef(exec.page);
 
-    // Hold a reference on each entry's File for the FormData's lifetime; released
-    // in deinit.
-    for (form_data._entries.items) |entry| {
+    event_data._entries = try collectForm(event_data._arena.allocator(), form, submitter, charset, frame);
+
+    // Hold a reference on each entry's File for the FormData's lifetime;
+    // released in deinit.
+    for (event_data._entries.items) |entry| {
         switch (entry.value) {
             .file => |file| file.acquireRef(),
             else => {},
         }
     }
 
-    const form_data_event = try (@import("../event/FormDataEvent.zig")).initTrusted(
+    const event = try (@import("../event/FormDataEvent.zig")).initTrusted(
         comptime .wrap("formdata"),
-        .{ .bubbles = true, .cancelable = false, .formData = form_data },
+        .{ .bubbles = true, .cancelable = false, .formData = event_data },
         frame,
     );
-    try frame._event_manager.dispatch(form.asNode().asEventTarget(), form_data_event.asEvent());
+    try frame._event_manager.dispatch(form.asNode().asEventTarget(), event.asEvent());
 
+    return event_data.clone(exec);
+}
+
+fn create(exec: *const Execution) !*FormData {
+    const arena = try exec.getArena(.small, "FormData");
+    errdefer arena.release();
+
+    const form_data = try arena.create(FormData);
+    form_data.* = .{
+        ._rc = .{},
+        ._arena = arena,
+        ._entries = .empty,
+    };
+    return form_data;
+}
+
+fn clone(self: *FormData, exec: *const Execution) !*FormData {
+    const form_data = try create(exec);
+    errdefer form_data.deinit(exec.page);
+
+    const allocator = form_data._arena.allocator();
+    try form_data._entries.ensureTotalCapacity(allocator, self._entries.items.len);
+    for (self._entries.items) |*entry| {
+        const name = try String.init(allocator, entry.name.str(), .{});
+        const value: Entry.Value = switch (entry.value) {
+            .string => |*str| .{ .string = try String.init(allocator, str.str(), .{}) },
+            .file => |file| blk: {
+                file.acquireRef();
+                break :blk .{ .file = file };
+            },
+            .no_file => .no_file,
+        };
+        form_data._entries.appendAssumeCapacity(.{ .name = name, .value = value });
+    }
     return form_data;
 }
 

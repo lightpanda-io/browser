@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
 <div id="target1">Test1</div>
 <div id="target2">Test2</div>
 
-<meta name=lp-mode content=test>
-<script src="../testing.js"></script>
 <script id="observe_multiple_targets" type=module>
   const state = await testing.async();
   const element1 = document.getElementById('target1');

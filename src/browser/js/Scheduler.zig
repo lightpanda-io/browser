@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const Attribution = @import("Attribution.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -53,10 +54,16 @@ blocking: u32,
 
 resets: u32,
 
-pub fn init(allocator: Allocator) Scheduler {
+// The Env's attribution and the Page's settle.
+attribution: *Attribution,
+settle: *Attribution.Settle,
+
+pub fn init(allocator: Allocator, attribution: *Attribution, settle: *Attribution.Settle) Scheduler {
     return .{
         ._sequence = 0,
         .allocator = allocator,
+        .attribution = attribution,
+        .settle = settle,
         .generation = 0,
         .blocking = 0,
         .resets = 0,
@@ -84,6 +91,11 @@ const AddOpts = struct {
     front: bool = false, // run before any other tasks, multi-fronts are FIFO amongst themselves
     blocks_done: bool = true,
     finalizer: ?Finalizer = null,
+    // Attribution of the task (see Attribution.begin); `name` is its label.
+    kind: Attribution.Kind = .callback,
+    cut: bool = false,
+    // The task this one continues. Defaulting to the current one.
+    parent: ??Attribution.Tag = null,
 };
 pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts: AddOpts) !void {
     if (comptime lp.IS_DEBUG) {
@@ -96,6 +108,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     }
 
     const run_at = lp.datetime.milliTimestamp(.boot) + run_in_ms;
+    const tag, const hold = self.attribute(run_in_ms, opts);
     const task: Task = .{
         .ctx = ctx,
         .callback = cb,
@@ -103,6 +116,8 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         .key = self.nextKey(run_at),
         .finalizer = opts.finalizer,
         .blocks_done = opts.blocks_done,
+        .tag = tag,
+        .hold = hold,
     };
 
     if (opts.front) {
@@ -116,6 +131,23 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     if (opts.blocks_done) {
         self.blocking += 1;
     }
+}
+
+// The task's tag, and a settle hold when it's tracked.
+fn attribute(self: *Scheduler, run_in_ms: u32, opts: AddOpts) struct { Attribution.Tag, Attribution.Hold } {
+    const tag = self.attribution.begin(opts.kind, .{
+        .label = opts.name,
+        .delay_ms = run_in_ms,
+        .cut = opts.cut,
+        .parent = opts.parent,
+    });
+    return .{ tag, self.settle.hold(tag) };
+}
+
+fn runTask(self: *Scheduler, task: *Task) !?u32 {
+    const scope = self.attribution.enter(task.tag);
+    defer scope.exit();
+    return task.callback(task.ctx);
 }
 
 pub fn run(self: *Scheduler) !void {
@@ -134,7 +166,10 @@ pub fn run(self: *Scheduler) !void {
         self.generation +%= 1;
 
         const resets = self.resets;
-        const repeat_in_ms = task.callback(task.ctx) catch |err| {
+        // Settled is only checked between tasks, and work this task starts
+        // takes its own holds.
+        task.hold.release();
+        const repeat_in_ms = self.runTask(&task) catch |err| {
             log.debug(.scheduler, "task.callback", .{ .name = task.name, .err = err });
             continue;
         };
@@ -233,21 +268,23 @@ fn popReady(self: *Scheduler, cutoff: u64) ?Task {
 }
 
 fn finalizeTasks(self: *Scheduler) void {
-    for (self.front.pending()) |task| {
-        if (task.finalizer) |func| {
-            func(task.ctx);
-        }
+    for (self.front.pending()) |*task| {
+        finalize(task);
     }
-    for (self.immediate.pending()) |task| {
-        if (task.finalizer) |func| {
-            func(task.ctx);
-        }
+    for (self.immediate.pending()) |*task| {
+        finalize(task);
     }
     var it = self.timed.iterator();
     while (it.next()) |t| {
-        if (t.finalizer) |func| {
-            func(t.ctx);
-        }
+        var task = t;
+        finalize(&task);
+    }
+}
+
+fn finalize(task: *Task) void {
+    task.hold.release();
+    if (task.finalizer) |func| {
+        func(task.ctx);
     }
 }
 
@@ -258,6 +295,8 @@ const Task = struct {
     blocks_done: bool,
     callback: Callback,
     finalizer: ?Finalizer,
+    tag: Attribution.Tag,
+    hold: Attribution.Hold,
 
     fn runAt(self: Task) u64 {
         return self.key >> SEQ_BITS;
@@ -333,7 +372,9 @@ const Finalizer = *const fn (ctx: *anyopaque) void;
 
 const testing = @import("../../testing.zig");
 test "Scheduler: immediates are FIFO, front runs first" {
-    var s = Scheduler.init(testing.arena_allocator);
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    var s = Scheduler.init(testing.arena_allocator, frame.js.attribution, &frame.page.settle);
     var ran: std.ArrayList(u8) = .empty;
     var t1: TestTask = .{ .id = 1, .ran = &ran };
     var t2: TestTask = .{ .id = 2, .ran = &ran };
@@ -349,7 +390,9 @@ test "Scheduler: immediates are FIFO, front runs first" {
 }
 
 test "Scheduler: due timed tasks run before newer immediates" {
-    var s = Scheduler.init(testing.arena_allocator);
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    var s = Scheduler.init(testing.arena_allocator, frame.js.attribution, &frame.page.settle);
     var ran: std.ArrayList(u8) = .empty;
     var t1: TestTask = .{ .id = 1, .ran = &ran };
     var t2: TestTask = .{ .id = 2, .ran = &ran };
@@ -362,7 +405,9 @@ test "Scheduler: due timed tasks run before newer immediates" {
 }
 
 test "Scheduler: blocksCompletion" {
-    var s = Scheduler.init(testing.arena_allocator);
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    var s = Scheduler.init(testing.arena_allocator, frame.js.attribution, &frame.page.settle);
     var ran: std.ArrayList(u8) = .empty;
     var t1: TestTask = .{ .id = 1, .ran = &ran, .repeat = 20 };
     var t2: TestTask = .{ .id = 2, .ran = &ran };
@@ -388,6 +433,8 @@ test "Scheduler: immediate queue reclaims consumed prefix" {
         .finalizer = null,
         .blocks_done = false,
         .callback = undefined,
+        .tag = .{ .id = 0, .tracked = false },
+        .hold = .{},
     };
 
     // keep 2 tasks live at all times so pop never fully drains
@@ -402,7 +449,9 @@ test "Scheduler: immediate queue reclaims consumed prefix" {
 }
 
 test "Scheduler: tasks added during a run wait for the next run" {
-    var s = Scheduler.init(testing.arena_allocator);
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    var s = Scheduler.init(testing.arena_allocator, frame.js.attribution, &frame.page.settle);
     var ran: std.ArrayList(u8) = .empty;
     var t2: TestTask = .{ .id = 2, .ran = &ran };
     var t3: TestTask = .{ .id = 3, .ran = &ran };

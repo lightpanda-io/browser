@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<script id=srcdoc_open>
+  // document.open() from an inline script is a no-op while the parser that ran
+  // it is still going, srcdoc included.
+  testing.onload(() => {
+    const doc = document.getElementById('frame').contentDocument;
+    testing.expectEqual('a', doc.getElementById('a').textContent);
+    testing.expectEqual('b', doc.getElementById('b').textContent);
+    testing.expectEqual('complete', doc.readyState);
+  });
+</script>
+<iframe id=frame srcdoc="<p id=a>a</p><script>document.open()</script><p id=b>b</p>"></iframe>

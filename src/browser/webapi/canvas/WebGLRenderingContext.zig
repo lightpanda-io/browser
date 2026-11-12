@@ -33,6 +33,8 @@ pub fn registerTypes() []const type {
 
 const WebGLRenderingContext = @This();
 
+_pad: bool = false,
+
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
 /// https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Using_Extensions#extension_list

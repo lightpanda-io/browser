@@ -272,7 +272,8 @@ jobs:
     env:
       MAX_VmHWM: 26000 # 25MB (KB)
       MAX_CG_PEAK: 8000 # 8MB (KB)
-      MAX_AVG_DURATION: 17
+      MAX_AVG_DURATION: 18
+      GOCACHE: /tmp/gocache
 
       # How to give cgroups access to the user actions-runner on the host:
       # $ sudo apt install cgroup-tools
@@ -285,7 +286,7 @@ jobs:
       CG: actions-runner/lpd_${{ github.run_id }}_${{ github.run_attempt }}
 
     # use a self host runner.
-    runs-on: lpd-bench-hetzner
+    runs-on: lpd-bench-aws
     timeout-minutes: 15
 
     steps:

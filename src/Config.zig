@@ -243,10 +243,11 @@ pub const LoadResources = packed struct(u6) {
     none: bool = false,
 };
 
-pub const ExperimentalFeatures = packed struct(u3) {
+pub const ExperimentalFeatures = packed struct(u4) {
     cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
     privatecache: bool = false,
+    animation: bool = false,
 };
 
 const DisabledFeatures = packed struct(u1) {
@@ -357,7 +358,25 @@ pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 /// levels. Maps to each provider's native thinking/reasoning knob. Resolved
 /// in `Agent.init` (explicit flag > remembered > mode default), so there is
 /// no Config-level accessor like `agentVerbosity`.
-pub const Effort = zenai.provider.Effort;
+pub const Effort = enum {
+    /// Send no effort field; the model default applies. Explicit, unlike an
+    /// unset `--effort`, which falls back to the provider or mode default.
+    null,
+    none,
+    minimal,
+    low,
+    medium,
+    high,
+    xhigh,
+
+    /// The wire level for zenai, or null to send none.
+    pub fn level(self: Effort) ?zenai.provider.Effort {
+        return switch (self) {
+            .null => null,
+            inline else => |e| @field(zenai.provider.Effort, @tagName(e)),
+        };
+    }
+};
 const SearchEngine = @import("browser/tools/search.zig").Engine;
 
 /// Controls how chatty `agent` mode is on stderr.
@@ -884,7 +903,7 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 
 // The --advertise-host value when the operator set one. Unlike
 // advertiseHost() there is no fallback: only an explicit choice may widen the
-// WebSocket Host check (see isAllowedHost in server/http.zig).
+// Host check (see isAllowedHost in server/http.zig).
 pub fn explicitAdvertiseHost(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         .serve => |opts| opts.advertise_host,

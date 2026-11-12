@@ -703,7 +703,7 @@ const testing = @import("../../testing.zig");
 // Page. This is to ensure that, if v8 doesn't finalize the value, we can
 // release on Page teardown.
 pub const FinalizerCallback = struct {
-    resolved_ptr_id: usize,
+    identity_key: usize,
     finalizer_ptr_id: usize,
     release_ref: *const fn (ptr_id: usize, page: *Page) void,
 
@@ -735,7 +735,7 @@ pub const FinalizerCallback = struct {
         // (see `browser` above) — its teardown already reset every Global.
         identity: *js.Identity,
         finalizer_ptr_id: usize,
-        resolved_ptr_id: usize,
+        identity_key: usize,
         next: ?*FinalizerCallback.Identity = null,
         done: bool = false,
     };
@@ -743,7 +743,7 @@ pub const FinalizerCallback = struct {
     // Called during Page teardown to force cleanup regardless of identities.
     pub fn deinit(self: *FinalizerCallback, page: *Page) void {
         // Mark all identities as done so stale V8 weak callbacks
-        // won't find the wrong FC if resolved_ptr_id is reused.
+        // won't find the wrong FC if identity_key is reused.
         var id = self.identities;
         while (id) |identity| {
             identity.done = true;

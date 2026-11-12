@@ -370,3 +370,16 @@
   testing.expectEqual('http://h.com/p', a.href);
 }
 </script>
+
+<a href="#" id=empty_hash></a>
+<a href="?" id=empty_search></a>
+<a href="foo?#" id=empty_both></a>
+<script id=empty_hash_and_search>
+  // https://html.spec.whatwg.org/#dom-hyperlink-hash: an empty fragment or
+  // query reads as "", not "#" or "?".
+  testing.expectEqual('', $('#empty_hash').hash);
+  testing.expectEqual('', $('#empty_search').search);
+  testing.expectEqual('', $('#empty_both').search);
+  testing.expectEqual('', $('#empty_both').hash);
+  testing.expectEqual(true, $('#empty_hash').href.endsWith('#'));
+</script>

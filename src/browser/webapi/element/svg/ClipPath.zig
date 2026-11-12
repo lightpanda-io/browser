@@ -32,7 +32,6 @@ const Svg = @import("../Svg.zig");
 const ClipPath = @This();
 
 pub const Proto = Svg;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Svg else void = undefined,
 
 pub fn asElement(self: *ClipPath) *Element {

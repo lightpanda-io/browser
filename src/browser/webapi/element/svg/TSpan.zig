@@ -28,7 +28,6 @@ const TextPositioning = @import("TextPositioning.zig");
 const TSpan = @This();
 
 pub const Proto = TextPositioning;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *TextPositioning else void = undefined,
 
 pub fn asElement(self: *TSpan) *Element {

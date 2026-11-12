@@ -186,7 +186,7 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, args.query, &detail, session.http_client })) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, args.query, &detail, session.http_client, &session.browser.app.http_client })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -216,7 +216,7 @@ fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime e: an
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, query, &detail, session.http_client }) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, query, &detail, session.http_client, &session.browser.app.http_client }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
@@ -245,8 +245,11 @@ fn apiSearch(
     query: []const u8,
     detail: *Failure,
     url_filter: anytype,
+    http_client: *std.http.Client,
 ) ![]const u8 {
     var init_options = e.init_options;
+    // Reuses the connection an earlier search left open, and the CA bundle.
+    init_options.http_client = http_client;
     // The cascade (or the model) is the retry; honoring a Retry-After (60 s
     // per sleep on the public endpoint) would stall the shared browser thread.
     init_options.retry_policy = .disabled;
@@ -260,12 +263,12 @@ fn apiSearch(
     defer client.deinit();
 
     var response = client.search(query, e.options) catch |err| {
-        if (client.last_error.status) |status| {
+        if (client.transport.last_error.status) |status| {
             log.debug(.browser, @tagName(e.tag) ++ " non-2xx", .{
                 .status = status,
-                .message = client.last_error.message,
+                .message = client.transport.last_error.message,
             });
-            detail.* = try client.last_error.dupe(arena);
+            detail.* = try client.transport.last_error.dupe(arena);
         }
         return err;
     };

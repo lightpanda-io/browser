@@ -236,6 +236,7 @@ pub const GlobalScope = union(enum) {
                 .root_frame_id = worker.page.frame._frame_id,
                 .loader_id = worker._loader_id,
                 .log_page = &worker.page.log_context,
+                .block_all = worker._frame._http_owner.block_all,
             },
         };
     }

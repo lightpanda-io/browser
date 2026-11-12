@@ -28,7 +28,6 @@ const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 const Rect = @This();
 
 pub const Proto = Geometry;
-_pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Geometry else void = undefined,
 
 pub fn asElement(self: *Rect) *Element {

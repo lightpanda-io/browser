@@ -611,12 +611,29 @@ const StreamConsumer = struct {
     }
 };
 
-pub fn clone(self: *const Response, exec: *const Execution) !*Response {
-    try self.checkUnusable(exec.js.local.?);
+pub fn clone(self: *Response, exec: *const Execution) !*Response {
+    const local = exec.js.local.?;
+    try self.checkUnusable(local);
+
+    switch (self._body) {
+        // No stream tee: a stream body is drained so each copy owns its bytes.
+        // Same as Request.clone().
+        .stream => |stream| {
+            const drained = stream.collectBodyBytes(self._arena.allocator(), .lenient) catch |err| switch (err) {
+                error.TypeError => return local.typeError("Failed to read ReadableStream body"),
+                else => return err,
+            };
+            try lockStream(stream, exec);
+            self._body = .{ .bytes = drained };
+        },
+        .empty, .bytes, .errored => {},
+    }
+
     const session = exec.session;
     const body_len = switch (self._body) {
         .bytes => |b| b.len,
-        .empty, .stream, .errored => 0,
+        .empty, .errored => 0,
+        .stream => unreachable,
     };
     const arena = try session.getPinnedArena(body_len + self._url.len + 256, "Response.clone");
     errdefer arena.release();
@@ -624,7 +641,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
     const body: Body = switch (self._body) {
         .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
         .empty => .empty,
-        .stream => .empty, // TODO: implement stream tee for proper cloning
+        .stream => unreachable,
         .errored => .errored,
     };
     const status_text = try arena.dupe(u8, self._status_text);

@@ -338,47 +338,27 @@ fn runScript(server: *Server, arena: std.mem.Allocator, script: []const u8, name
 
     // A long-lived session would keep every page a script opens, so those are
     // closed after it, on success and on error. Cookies and storage stay.
-    var before: std.ArrayList(u32) = .empty;
-    for (session.pages.items) |page| try before.append(arena, page.frame._frame_id);
-    defer closePagesOpenedSince(arena, session, &active.registry, before.items);
+    const before = try browser_tools.pageIds(arena, session);
+    defer browser_tools.closePagesOpenedSince(arena, session, &active.registry, before);
 
     const runtime = lp.Runtime.init(server.allocator, server.app, session, &active.registry) catch |err|
         return .{ .fail = @errorName(err) };
     defer runtime.deinit();
 
-    var console: std.Io.Writer.Allocating = .init(arena);
-    var capped: lp.LimitedWriter = .init(&console.writer, max_run_console_bytes);
-    runtime.console_sink = &capped.writer;
     var stream: ConsoleStream = .{ .server = server };
     runtime.console_observer = .{ .context = &stream, .notify = ConsoleStream.observe };
-    // Separate from the console so the cap can't drop it.
-    var returned: std.Io.Writer.Allocating = .init(arena);
-    runtime.result_sink = &returned.writer;
-
     runtime.timeout_ms = timeout_ms;
-    const message = try runtime.runSource(script, name);
+    const run = try runtime.runCaptured(arena, script, name, max_run_console_bytes);
 
-    var output = console.toArrayList();
-    if (capped.truncated) {
-        if (!std.mem.endsWith(u8, output.items, "\n")) try output.append(arena, '\n');
-        try output.print(arena, "[console output truncated at {d} bytes]\n", .{max_run_console_bytes});
-    }
-    try output.appendSlice(arena, returned.written());
-    if (runtime.timed_out) {
+    var output: std.ArrayList(u8) = .empty;
+    try output.appendSlice(arena, run.console);
+    try output.appendSlice(arena, run.returned);
+    if (run.timed_out) {
         try output.print(arena, "script timed out after {d} ms\n", .{timeout_ms});
-    } else if (message) |m| {
+    } else if (run.message) |m| {
         try output.print(arena, "{s}\n", .{m});
     }
-    return if (runtime.timed_out or message != null) .{ .fail = output.items } else .{ .ok = output.items };
-}
-
-fn closePagesOpenedSince(arena: std.mem.Allocator, session: *lp.Session, registry: *lp.NodeRegistry, before: []const u32) void {
-    var opened: std.ArrayList(u32) = .empty;
-    for (session.pages.items) |page| {
-        const id = page.frame._frame_id;
-        if (std.mem.findScalar(u32, before, id) == null) opened.append(arena, id) catch return;
-    }
-    for (opened.items) |id| browser_tools.closePage(session, registry, id);
+    return if (run.timed_out or run.message != null) .{ .fail = output.items } else .{ .ok = output.items };
 }
 
 /// The session tools need a transport that routes by session id (HTTP's

@@ -191,8 +191,7 @@ fn setDesignMode(self: *Document, value: []const u8, frame: *Frame) void {
         return;
     if (on != self._design_mode) {
         self._design_mode = on;
-        // :read-write now matches differently
-        frame.styleChanged();
+        Frame.change.documentStateChanged(.design_mode, frame);
     }
 }
 
@@ -828,8 +827,9 @@ pub fn setActiveElement(self: *Document, element: ?*Element, frame: *Frame) void
     if (self._active_element == element) {
         return;
     }
+    const old = self._active_element;
     self._active_element = element;
-    frame.styleChanged();
+    Frame.change.focusChanged(old, element, frame);
 }
 
 pub fn getStyleSheets(self: *Document, frame: *Frame) !*StyleSheetList {
@@ -890,7 +890,6 @@ pub fn append(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Fram
     try validateDocumentNodes(self, nodes.values);
 
     const parent = self.asNode();
-    frame.domChanged();
 
     for (nodes.values) |node_or_text| {
         const child = try node_or_text.toNode(self);
@@ -914,7 +913,6 @@ pub fn prepend(self: *Document, nodes: js.Variadic(Node.NodeOrText), frame: *Fra
     try validateDocumentNodes(self, nodes.values);
 
     const parent = self.asNode();
-    frame.domChanged();
 
     var i = nodes.values.len;
     while (i > 0) {
@@ -1028,8 +1026,8 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
     //
-    // Hidden subtrees still count towards the index so positions agree with
-    // getBoundingClientRect; the hidden verdict just rides down the stack.
+    // Hidden and inert subtrees still count towards the index so positions
+    // agree with getBoundingClientRect; the exclusion rides down the stack.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1040,16 +1038,16 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    const Entry = struct { node: *Node, hidden: bool };
+    const Entry = struct { node: *Node, excluded: bool };
     var stack: std.ArrayList(Entry) = .empty;
-    try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
+    try stack.append(frame.local_arena, .{ .node = root, .excluded = false });
 
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
         const entry = stack.pop() orelse break;
         const node = entry.node;
-        var hidden = entry.hidden;
+        var excluded = entry.excluded;
         const pos = preorder_index * 5.0;
 
         if (pos > y) {
@@ -1059,10 +1057,10 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            hidden = hidden or style_manager.hasDisplayNone(element);
+            excluded = excluded or style_manager.hasDisplayNone(element) or element.hasInertAttribute();
             // Unlike display:none, a child can opt back in, so the subtree is
             // still walked.
-            if (!hidden and style_manager.isHitTestable(element)) {
+            if (!excluded and style_manager.isHitTestable(element)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -1082,7 +1080,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
+            try stack.append(frame.local_arena, .{ .node = c, .excluded = excluded });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }
@@ -1361,7 +1359,13 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         break :blk joined.items;
     };
 
-    if (self._current_script == null or frame._load_state != .parsing) {
+    const inline_write = self._current_script != null and switch (frame._load_state) {
+        .parsing => true,
+        // a deferred script, unless it explicitly opened the document
+        .interactive => self._script_created_parser == null,
+        else => false,
+    };
+    if (inline_write == false) {
         if (self._script_created_parser == null or looksLikeNewDocument(html)) {
             _ = try self.open(frame);
         }
@@ -1452,8 +1456,6 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         // always append, JS run earlier might have deatched the previous node
         try frame.appendNode(parent, child, .{});
     }
-
-    frame.domChanged();
 }
 
 pub fn open(self: *Document, call_frame: *Frame) !*Document {

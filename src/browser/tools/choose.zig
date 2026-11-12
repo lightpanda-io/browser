@@ -16,7 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Picking one element on the page with TypeSafe System One (Jev).
+//! Picking one element on the page with a decision model (Gemini Decisions or
+//! TypeSafe System One).
 //!
 //! The candidates are the question's options, keyed by the node id the state
 //! carries too. The model writes no text, so an option id is the only way it
@@ -37,8 +38,8 @@ const NodeRegistry = lp.NodeRegistry;
 const interactive = @import("../interactive.zig");
 const truncateUtf8 = @import("../../string.zig").truncateUtf8;
 
-const Question = zenai.typesafe.Question;
-const ChoiceEntry = zenai.typesafe.ChoiceEntry;
+const Question = zenai.decisions.Question;
+const ChoiceEntry = zenai.decisions.ChoiceEntry;
 
 /// Option id for "nothing here does that". A choice answer is validated as the
 /// argmax over the options offered, so without this one the model has to name
@@ -155,15 +156,15 @@ pub const Scored = struct {
     probability: f64,
 };
 
-pub const Error = zenai.typesafe.types.ChoiceError || error{OutOfMemory};
+pub const Error = zenai.decisions.types.ChoiceError || error{OutOfMemory};
 
 /// The candidate the model chose, or null when it chose `none_key` or one of
 /// the caller's `extra` options: nothing on the page is what it wants done.
 /// `choice` has already checked the pick is the argmax, so it outranks `none`.
 pub fn best(
     candidates: []const Candidate,
-    response: zenai.typesafe.types.AskResponse,
-    questions: zenai.typesafe.Questions,
+    response: zenai.decisions.types.AskResponse,
+    questions: zenai.decisions.Questions,
     id: []const u8,
 ) Error!?Scored {
     const chosen = try response.choice(id, questions);
@@ -258,7 +259,7 @@ test "browser.choose: best is the candidate the model chose, or none" {
         .{ .key = "12", .element = undefined, .name = "b", .info = .{ .string = "b" } },
     };
     const q = try question(aa, "Which one?", &candidates, &.{});
-    const questions: zenai.typesafe.Questions = .init(&.{.{ .key = "pick", .value = q }});
+    const questions: zenai.decisions.Questions = .init(&.{.{ .key = "pick", .value = q }});
 
     const picked = try answerFixture(aa, "pick", "12", &.{
         .{ .key = "11", .value = 0.25 },
@@ -286,7 +287,7 @@ test "browser.choose: best rejects an answer that is not the argmax" {
         .{ .key = "11", .element = undefined, .name = "a", .info = .{ .string = "a" } },
     };
     const q = try question(aa, "Which one?", &candidates, &.{});
-    const questions: zenai.typesafe.Questions = .init(&.{.{ .key = "pick", .value = q }});
+    const questions: zenai.decisions.Questions = .init(&.{.{ .key = "pick", .value = q }});
 
     const response = try answerFixture(aa, "pick", "11", &.{
         .{ .key = "11", .value = 0.2 },
@@ -300,9 +301,9 @@ fn answerFixture(
     arena: std.mem.Allocator,
     id: []const u8,
     choice: []const u8,
-    probabilities: []const zenai.typesafe.types.Probabilities.Entry,
-) !zenai.typesafe.types.AskResponse {
-    const answers = try arena.alloc(zenai.typesafe.types.Answers.Entry, 1);
+    probabilities: []const zenai.decisions.types.Probabilities.Entry,
+) !zenai.decisions.types.AskResponse {
+    const answers = try arena.alloc(zenai.decisions.types.Answers.Entry, 1);
     answers[0] = .{ .key = id, .value = .{ .choice = .{
         .choice = choice,
         .probabilities = .init(probabilities),

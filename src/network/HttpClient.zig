@@ -479,9 +479,20 @@ pub fn blocksUrl(self: *const Client, url: []const u8) bool {
 /// so that no call site can apply one without the other.
 fn isUrlBlocked(self: *const Client, transfer: *const Transfer) bool {
     const req = &transfer.req;
-    if (req.internal) return false;
+    if (req.internal) {
+        return false;
+    }
+
+    if (transfer.owner) |owner| {
+        if (owner.block_all) {
+            return true;
+        }
+    }
+
     if (self.url_blocklist) |*blocklist| {
-        if (blocklist.isBlocked(req.url)) return true;
+        if (blocklist.isBlocked(req.url)) {
+            return true;
+        }
     }
     return if (self.network.adblocker) |*blocker| blocker.isBlocked(transfer) else false;
 }
@@ -1466,6 +1477,11 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
 fn serveCached(self: *Client, transfer: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
     transfer.setCachedResponse(cached, cache_state);
+
+    CorsGate.validateIfNeeded(transfer) catch |err| {
+        return transfer.failAsync(err);
+    };
+
     if (self.interceptResponse(transfer, .cached)) {
         return;
     }
@@ -1864,10 +1880,7 @@ fn processMessages(self: *Client) !bool {
 }
 
 fn enforceCorsResponse(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) bool {
-    if (!(transfer._cors_cross_origin and transfer.req.request_mode == .cors)) {
-        return false;
-    }
-    CorsGate.validateResponse(transfer) catch |err| {
+    CorsGate.validateIfNeeded(transfer) catch |err| {
         self.removeConn(msg.conn);
         transfer._conn = null;
         transfer.failAsync(err);
@@ -2410,11 +2423,9 @@ pub fn cancelAuthChallenge(self: *Client, transfer: *Transfer) !void {
         }
     }
 
-    if (transfer._cors_cross_origin and transfer.req.request_mode == .cors) {
-        CorsGate.validateResponse(transfer) catch |err| {
-            return transfer.failAsync(err);
-        };
-    }
+    CorsGate.validateIfNeeded(transfer) catch |err| {
+        return transfer.failAsync(err);
+    };
 
     if (self.interceptResponse(transfer, .final)) {
         return;
@@ -2609,6 +2620,11 @@ pub const Owner = struct {
 
     // Entered around delivery, so the consumer's callbacks log as its page.
     log_page: ?*log.PageContext = null,
+
+    // Refuse every request made through this owner. Weird, right? Currently
+    // only used when `--load-resources iframe` isn't on.  Let's the iframe
+    // window load, but doesn't let the iframe make requests.
+    block_all: bool = false,
 
     fn logScope(self: *const Owner) log.PageScope {
         return log.enterPage(self.log_page);
@@ -2969,6 +2985,17 @@ pub const Transfer = struct {
         self.state = .created;
     }
 
+    fn leaveGate(self: *Transfer) void {
+        if (self.state != .parked) {
+            return;
+        }
+        switch (self.state.parked) {
+            .cors => self.client.cors.remove(self),
+            .robots => self.client.robots.remove(self),
+            .intercept_auth, .intercept_request, .intercept_response => {},
+        }
+    }
+
     // Decrement the interception counter iff this transfer is currently
     // parked for CDP interception.
     fn leaveIntercept(self: *Transfer) void {
@@ -3126,15 +3153,7 @@ pub const Transfer = struct {
             self._dispatch_queued = false;
         }
 
-        // And for the robots gate: RobotsGate.pending holds a raw *Transfer
-        // while we're parked.
-        if (self.state == .parked) {
-            switch (self.state.parked) {
-                .cors => self.client.cors.remove(self),
-                .robots => self.client.robots.remove(self),
-                .intercept_auth, .intercept_request, .intercept_response => {},
-            }
-        }
+        self.leaveGate();
 
         // A pending revalidation entry owns cache resources (possibly an
         // open file). It's resolved at completion; if we die first, release.
@@ -3219,6 +3238,11 @@ pub const Transfer = struct {
 
         const page_scope = self.logScope();
         defer page_scope.exit();
+
+        // the error_callback can run JS which could pump the network
+        // and resolve whatever gate we're parked on. Leave it so the gate
+        // doesn't resume a dying transfer.
+        self.leaveGate();
 
         // error_callback can run JS that tears this transfer down again
         // (e.g. an XHR abort handler navigates -> abortRequests -> kill).
@@ -7029,6 +7053,18 @@ test "HttpClient: privatecache caches Set-Cookie responses" {
 
         try testing.htmlRunner("net/cache_set_cookie_" ++ mode[1] ++ ".html", .{});
     }
+}
+
+test "HttpClient: a cors-mode fetch is blocked even when the response is a cache hit" {
+    const client = &testing.test_browser.http_client;
+    const previous = client.cache;
+    defer client.cache = previous;
+
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    client.cache = &cache;
+
+    try testing.htmlRunner("net/cache_cors.html", .{});
 }
 
 test "HttpClient: a Range request and a URL with userinfo skip the cache" {

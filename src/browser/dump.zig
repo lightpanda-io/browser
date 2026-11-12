@@ -456,7 +456,7 @@ pub fn isVoidElement(el: *Node.Element) bool {
     }
 
     return switch (el.getTag()) {
-        .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track, .wbr => true,
+        .area, .base, .basefont, .br, .col, .embed, .frame, .hr, .img, .input, .link, .meta, .param, .source, .track, .wbr => true,
         else => false,
     };
 }

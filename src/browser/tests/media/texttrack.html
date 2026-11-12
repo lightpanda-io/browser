@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <body></body>
 
@@ -19,7 +20,9 @@
   testing.expectEqual(track, video.textTracks[0]);
   testing.expectError("TypeError", () => video.addTextTrack("bogus"));
 
+  testing.beginBrowserLog("Chrome warns on an invalid TextTrackMode");
   track.mode = "nope";
+  testing.endBrowserLog();
   testing.expectEqual("hidden", track.mode);
   track.mode = "disabled";
   testing.expectEqual(null, track.cues);
@@ -145,7 +148,9 @@
     testing.expectEqual("backwards", cues[1].text);
 
     testing.expectEqual(20, cues[2].position);
-    testing.expectEqual("line-left", cues[2].positionAlign);
+    testing.diverges("Chrome has no VTTCue.positionAlign", () => {
+      testing.expectEqual("line-left", cues[2].positionAlign);
+    });
     testing.expectEqual(50, cues[2].size);
     testing.expectEqual("Second\nline", cues[2].text);
   });
@@ -213,9 +218,11 @@
   await state.done(() => {
     testing.expectEqual("load", evt);
     const cues = el.track.cues;
-    // a later region with the same id replaces the earlier one
-    testing.expectEqual(4, cues[0].region.lines);
-    testing.expectEqual("r1", cues[0].region.id);
-    testing.expectEqual(null, cues[1].region);
+    testing.diverges("Chrome has no VTTCue.region", () => {
+      // a later region with the same id replaces the earlier one
+      testing.expectEqual(4, cues[0].region.lines);
+      testing.expectEqual("r1", cues[0].region.id);
+      testing.expectEqual(null, cues[1].region);
+    });
   });
 </script>

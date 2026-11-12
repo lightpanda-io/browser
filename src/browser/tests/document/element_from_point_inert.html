@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="inert_subtree_hit_testing">
+{
+  const behind = document.createElement('div');
+  behind.style.cssText = 'width:400px;height:400px';
+  behind.innerHTML = '<div inert><button style="pointer-events:auto;width:80px;height:20px">Inert</button></div><button>After</button>';
+  document.body.appendChild(behind);
+  const inert = behind.firstChild;
+  const button = inert.firstChild;
+  const after = behind.lastChild;
+  const r = button.getBoundingClientRect();
+  const x = r.x + 1, y = r.y + 1;
+  testing.expectEqual(behind, document.elementFromPoint(x, y));
+  testing.expectFalse(document.elementsFromPoint(x, y).includes(inert));
+  testing.expectFalse(document.elementsFromPoint(x, y).includes(button));
+
+  // Skipped subtrees must still contribute to the positions of later nodes.
+  const a = after.getBoundingClientRect();
+  testing.expectEqual(after, document.elementFromPoint(a.x + 1, a.y + 1));
+  inert.inert = false;
+  testing.expectEqual(button, document.elementFromPoint(x, y));
+  button.inert = true;
+  testing.expectEqual(inert, document.elementFromPoint(x, y));
+  behind.remove();
+}
+</script>
+
+<script id="inert_shadow_and_slot_hit_testing">
+{
+  const host = document.createElement('div');
+  host.style.cssText = 'width:400px;height:400px';
+  host.innerHTML = '<button style="width:80px;height:20px">Slotted</button>';
+  document.body.appendChild(host);
+  const root = host.attachShadow({mode:'open'});
+  root.innerHTML = '<slot inert></slot>';
+  const slot = root.firstChild;
+  const button = host.firstChild;
+  const r = button.getBoundingClientRect();
+  const x = r.x + 1, y = r.y + 1;
+  testing.expectEqual(host, document.elementFromPoint(x, y));
+  testing.expectEqual(host, root.elementFromPoint(x, y));
+  testing.expectFalse(root.elementsFromPoint(x, y).includes(slot));
+  testing.expectFalse(root.elementsFromPoint(x, y).includes(button));
+  slot.inert = false;
+  testing.expectEqual(button, document.elementFromPoint(x, y));
+  host.inert = true;
+  testing.expectEqual(document.body, document.elementFromPoint(x, y));
+  testing.expectEqual(document.body, root.elementFromPoint(x, y));
+  host.remove();
+}
+</script>
+
+<script id="inert_only_applies_to_html_elements">
+{
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('inert', '');
+  svg.style.cssText = 'width:80px;height:20px';
+  document.body.appendChild(svg);
+  const r = svg.getBoundingClientRect();
+  testing.expectEqual(svg, document.elementFromPoint(r.x + 1, r.y + 1));
+  svg.remove();
+
+  // Foreign elements can share the implementation's HTML wrapper types.
+  const foreign = document.createElementNS('urn:test', 'container');
+  foreign.setAttribute('inert', '');
+  const button = document.createElement('button');
+  button.textContent = 'Active';
+  foreign.appendChild(button);
+  document.body.appendChild(foreign);
+  const b = button.getBoundingClientRect();
+  testing.expectEqual(button, document.elementFromPoint(b.x + 1, b.y + 1));
+  foreign.remove();
+}
+</script>
