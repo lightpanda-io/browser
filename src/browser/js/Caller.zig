@@ -1058,11 +1058,11 @@ pub const Function = struct {
 pub const FastFunction = struct {
     pub const Options = struct {
         static: bool = false,
-        /// Whether the fast variant needs to setup `Caller`. Disabling this
-        /// improves performance but its not possible always. Hence approach
-        /// with caution; keep it on if unsure.
-        setup_caller: bool = true,
         exposed: Function.Opts.Exposed = .both,
+        /// `.unsafe` skips `Caller`, handle scope and context; see `createUnsafe`.
+        mode: Mode = .safe,
+
+        pub const Mode = enum { safe, unsafe };
     };
 
     /// Takes a type, can be an optional type, and unwraps it.
@@ -1142,23 +1142,23 @@ pub const FastFunction = struct {
     /// * Object parameters (excluding the receiver) can be nullable,
     /// * Lightpanda globals are allowed as the last argument (same as regular variant),
     /// * Return value must be of type void, bool, i32, u32, i64, u64, f32, f64 or error unions of said types.
-    pub fn isEligible(comptime Fn: type, comptime options: Function.Opts) bool {
-        // I think there's no reason to generate a fast variant for noop function.
-        if (comptime options.noop) {
-            return false;
-        }
-        // Web IDL [CEReactions] are not supported atm.
-        if (comptime options.ce_reactions) {
-            return false;
-        }
-        // Embedded receivers are not supported atm.
-        if (comptime options.embedded_receiver) {
-            return false;
-        }
-        // Cache is disabled for fast functions atm.
-        if (comptime options.cache != null) {
-            return false;
-        }
+    pub fn isEligible(comptime Fn: type, comptime options: Options) bool {
+        //// I think there's no reason to generate a fast variant for noop function.
+        //if (comptime options.noop) {
+        //    return false;
+        //}
+        //// Web IDL [CEReactions] are not supported atm.
+        //if (comptime options.ce_reactions) {
+        //    return false;
+        //}
+        //// Embedded receivers are not supported atm.
+        //if (comptime options.embedded_receiver) {
+        //    return false;
+        //}
+        //// Cache is disabled for fast functions atm.
+        //if (comptime options.cache != null) {
+        //    return false;
+        //}
 
         const info = @typeInfo(Fn).@"fn";
         // Let's first check the return type.
@@ -1304,8 +1304,16 @@ pub const FastFunction = struct {
         return .{ MaybeReceiver, params, MaybeGlobal, Return, returns_error };
     }
 
-    /// Creates a constant `v8.CFunction`.
+    /// Creates a constant `v8.CFunction`; `options.mode` picks the variant.
     pub fn create(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        return switch (options.mode) {
+            .safe => createSafe(function, options),
+            .unsafe => createUnsafe(function, options),
+        };
+    }
+
+    /// Creates a constant `v8.CFunction`; equipped for JS execution.
+    fn createSafe(comptime function: anytype, comptime options: Options) *const v8.CFunction {
         // Bunch of comptime-known stuff.
         const Fn = @TypeOf(function);
         // zig fmt: off
@@ -1422,6 +1430,109 @@ pub const FastFunction = struct {
             list[0] = .{ .type = v8.kCTypeInfoType_V8Value };
             for (jsp, 1..) |t, i| list[i] = toCTypeEnum(t.?);
             list[list.len - 1] = .{ .type = v8.kCTypeInfoType_CallbackOptions };
+            break :blk list;
+        };
+        const func_info: *const v8.CFunctionInfo = &.{
+            .return_info = toCTypeEnum(Return),
+            .arg_count = args.len,
+            .arg_info = &args,
+        };
+
+        return &.{ .address = @ptrCast(&func), .type_info = func_info };
+    }
+
+    /// Creates a constant `v8.CFunction`; NOT-equipped for JS execution, does
+    /// NOT setup a `Caller` and does NOT create a handle scope. You might take
+    /// advantage of it on _very certain_ situations. Approach with caution!
+    ///
+    /// On top of `isEligible`, these are enforced in comptime:
+    /// * No error returns; throwing needs a handle scope and a `Local`,
+    /// * No global argument; reaching one needs the context,
+    /// * No object arguments other than the receiver; a mismatch has to throw.
+    ///
+    /// What's NOT enforced is the body of `function`. It runs without the
+    /// detached-context and termination checks, with `call_depth` not raised
+    /// and no arena reset afterwards. So it must not create JS values, throw,
+    /// dispatch events, settle promises, mutate the DOM or allocate from
+    /// `call_arena` / `local_arena`.
+    pub fn createUnsafe(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        // Bunch of comptime-known stuff.
+        const Fn = @TypeOf(function);
+        // zig fmt: off
+        const MaybeReceiver,
+        const jsp,
+        const MaybeGlobal,
+        const Return,
+        const returns_error
+            = artifacts(Fn, options.static);
+        // zig fmt: on
+
+        if (returns_error) {
+            @compileError("unsafe fast functions cannot return errors: " ++ @typeName(Fn));
+        }
+        if (MaybeGlobal != null) {
+            @compileError("unsafe fast functions cannot take a global: " ++ @typeName(Fn));
+        }
+        for (jsp) |param_type| {
+            if (isPointer(param_type.?)) {
+                @compileError("unsafe fast functions cannot take objects: " ++ @typeName(Fn));
+            }
+        }
+
+        // Attaches the receiver and arguments for given `function` and calls
+        // it; nothing else.
+        const unsafe_call = struct {
+            inline fn wrap(c_args: anytype) Return {
+                var args: ParameterTypes(Fn) = undefined;
+                // To track where to insert to args.
+                comptime var offset = 0;
+
+                if (comptime MaybeReceiver) |Receiver| {
+                    // Cannot fail if we have a receiver.
+                    args[0] = TaggedOpaque.fromJS(Receiver, @ptrCast(c_args[0].?)) catch unreachable;
+                    offset += 1;
+                }
+                // Only primitives are left; V8 has converted them already.
+                inline for (jsp, 0..) |_, i| {
+                    args[offset + i] = c_args[i + 1];
+                }
+
+                return @call(.auto, function, args);
+            }
+        }.wrap;
+
+        // Same switch as `createSafe`, but without `v8.FastApiCallbackOptions`:
+        // we don't need the isolate, and omitting it saves V8 from building
+        // the options struct on every call.
+        const func = switch (comptime jsp.len) {
+            0 => struct {
+                fn wrap(recv: ?*const v8.Value) callconv(.c) Return {
+                    return unsafe_call(.{recv});
+                }
+            }.wrap,
+            1 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: jsp[0].?) callconv(.c) Return {
+                    return unsafe_call(.{ recv, a0 });
+                }
+            }.wrap,
+            2 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: jsp[0].?, a1: jsp[1].?) callconv(.c) Return {
+                    return unsafe_call(.{ recv, a0, a1 });
+                }
+            }.wrap,
+            3 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: jsp[0].?, a1: jsp[1].?, a2: jsp[2].?) callconv(.c) Return {
+                    return unsafe_call(.{ recv, a0, a1, a2 });
+                }
+            }.wrap,
+            else => @compileError("exceeded argument limit for fast functions"),
+        };
+
+        const args = comptime blk: {
+            // [receiver] + [JS arguments].
+            var list: [jsp.len + 1]v8.CTypeInfo = undefined;
+            list[0] = .{ .type = v8.kCTypeInfoType_V8Value };
+            for (jsp, 1..) |t, i| list[i] = toCTypeEnum(t.?);
             break :blk list;
         };
         const func_info: *const v8.CFunctionInfo = &.{
