@@ -80,6 +80,9 @@ dom_version: usize = 0,
 // frame/change.zig); validates the StyleManager memo.
 style_version: usize = 0,
 
+// The next Element._style_slot to hand out.
+next_style_slot: u32 = 1,
+
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage
 // captures the current value so delivery targets only channels that existed
 // when it was called

@@ -175,6 +175,8 @@ _flags: Flags = .{},
 _attributes: Attribute.List = .{},
 // Only valid when _type == .html (see Html.embedded_in_proto).
 _html: Html = undefined,
+// The element's index into the StyleManager records, 0 until claimed
+_style_slot: u32 = 0,
 // In debug, set so that we can check that we have a proper contiguous block
 // of memory for the entire chain (and thus, simple pointer arithmetics will
 // work to resolve the proto).
@@ -3091,5 +3093,5 @@ test "Element: div chain slot size" {
     // fit in existing padding. Debug is larger from the _proto_canary fields.
     const Div = @import("element/html/Div.zig");
     const slot = comptime Factory.chainOffsetOf(Div, Div) + @sizeOf(Div);
-    try testing.expectEqual(if (comptime lp.IS_DEBUG) 72 else 56, slot);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 80 else 60, slot);
 }

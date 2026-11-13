@@ -2982,6 +2982,8 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
+        // Another document, maybe another StyleManager: el's records stay behind
+        el._style_slot = 0;
         el._attributes.adopt(node._owner, self);
         Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
 
