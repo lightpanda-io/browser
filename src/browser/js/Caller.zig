@@ -1143,23 +1143,6 @@ pub const FastFunction = struct {
     /// * Lightpanda globals are allowed as the last argument (same as regular variant),
     /// * Return value must be of type void, bool, i32, u32, i64, u64, f32, f64 or error unions of said types.
     pub fn isEligible(comptime Fn: type, comptime options: Options) bool {
-        //// I think there's no reason to generate a fast variant for noop function.
-        //if (comptime options.noop) {
-        //    return false;
-        //}
-        //// Web IDL [CEReactions] are not supported atm.
-        //if (comptime options.ce_reactions) {
-        //    return false;
-        //}
-        //// Embedded receivers are not supported atm.
-        //if (comptime options.embedded_receiver) {
-        //    return false;
-        //}
-        //// Cache is disabled for fast functions atm.
-        //if (comptime options.cache != null) {
-        //    return false;
-        //}
-
         const info = @typeInfo(Fn).@"fn";
         // Let's first check the return type.
         const Return = info.return_type orelse return false;
@@ -1207,13 +1190,6 @@ pub const FastFunction = struct {
         return if (comptime isJavaScriptObject(T)) ?*const v8.Value else T;
     }
 
-    fn isPrimitive(comptime T: type) bool {
-        return switch (T) {
-            bool, i32, u32, i64, u64, f32, f64 => true,
-            else => false,
-        };
-    }
-
     inline fn isPointer(comptime T: type) bool {
         const Inner = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
         return switch (@typeInfo(Inner)) {
@@ -1251,14 +1227,6 @@ pub const FastFunction = struct {
         if (!v8.v8__Value__IsObject(value)) return error.InvalidArgument;
         const Pointer = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
         return TaggedOpaque.fromJS(Pointer, @ptrCast(value));
-    }
-
-    fn isErrorUnion(comptime T: type) struct { type, bool } {
-        return switch (@typeInfo(T)) {
-            .error_union => |info| .{ info.payload, true },
-            .error_set => unreachable,
-            else => .{ T, false },
-        };
     }
 
     /// Infers artifacts for fast function signature and body out of given
