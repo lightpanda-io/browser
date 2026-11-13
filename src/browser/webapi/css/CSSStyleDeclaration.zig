@@ -77,7 +77,7 @@ fn applyDeclarations(self: *CSSStyleDeclaration, declarations: CssParser.Declara
     while (it.next()) |declaration| {
         try self.applyParsedDeclaration(declaration, frame);
     }
-    try self.storage().trim(frame._factory.storageAllocator());
+    try self.storage().trim(frame.page.recycling);
 }
 
 pub fn length(self: *const CSSStyleDeclaration) u32 {
@@ -686,7 +686,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, id: properties.Id, value: []const
         break :blk try normalizePropertyValue(frame.local_arena, id, value);
     };
 
-    const allocator = frame._factory.storageAllocator();
+    const allocator = frame.page.recycling;
     if (self.findProperty(id)) |existing| {
         if (!std.mem.eql(u8, existing.value(), normalized_value)) {
             try existing.setValue(allocator, normalized_value);
@@ -740,7 +740,7 @@ fn removeDeclared(self: *CSSStyleDeclaration, id: properties.Id, frame: *Frame) 
     const index = self.storage().findIndex(id) orelse return null;
     // freed with the entry
     const old_value = try frame.call_arena.dupe(u8, self.storage().entries()[index].value());
-    self.storage().removeAt(frame._factory.storageAllocator(), index);
+    self.storage().removeAt(frame.page.recycling, index);
     return old_value;
 }
 
@@ -789,7 +789,7 @@ pub fn styleAttributeChanged(self: *CSSStyleDeclaration, text: ?[]const u8, fram
 
 // Keeps the capacity: a new set of declarations usually follows.
 fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
-    self.storage().clear(frame._factory.storageAllocator());
+    self.storage().clear(frame.page.recycling);
 }
 
 fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
@@ -880,7 +880,7 @@ fn storage(self: *const CSSStyleDeclaration) *DeclarationBlock {
 /// A style rule's block as a sheet stores it.
 pub fn parseBlock(text: []const u8, frame: *Frame) !DeclarationBlock {
     var parsed: CSSStyleDeclaration = .{};
-    errdefer parsed._declarations.deinit(frame._factory.storageAllocator());
+    errdefer parsed._declarations.deinit(frame.page.recycling);
     try parsed.applyDeclarations(CssParser.parseStyleBlock(text), frame);
     return parsed._declarations;
 }

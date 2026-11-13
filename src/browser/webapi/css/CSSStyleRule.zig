@@ -52,7 +52,7 @@ fn getSelectorText(self: *CSSStyleRule) []const u8 {
 
 fn setSelectorText(self: *CSSStyleRule, text: []const u8, frame: *Frame) !void {
     const rule = self.asCSSRule();
-    try rule.entry().setText(frame._factory.storageAllocator(), text);
+    try rule.entry().setText(frame.page.recycling, text);
     rule.changed(frame);
 }
 
@@ -73,7 +73,7 @@ fn getCssRules(self: *CSSStyleRule, frame: *Frame) !*CSSRuleList {
     const rule = self.asCSSRule();
     const entry = rule.entry();
     const children = entry._children orelse blk: {
-        const children = try RuleStore.init(frame._factory.storageAllocator(), rule._store._sheet);
+        const children = try RuleStore.init(frame.page.recycling, rule._store._sheet);
         children._detached = rule._store._detached;
         entry._children = children;
         break :blk children;

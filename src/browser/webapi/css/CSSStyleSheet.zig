@@ -163,7 +163,7 @@ fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
 /// The view of the rule at `index` in `list`, one of this sheet's.
 pub fn ruleView(self: *CSSStyleSheet, store: *RuleStore, index: u32, frame: *Frame) !*CSSRule {
     const entry = &store.entries()[index];
-    const gop = try self._rule_views.getOrPut(frame._factory.storageAllocator(), entry._id);
+    const gop = try self._rule_views.getOrPut(frame.page.recycling, entry._id);
     if (gop.found_existing) {
         const view = gop.value_ptr.*;
         view._hint = index;
@@ -199,7 +199,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
     if (index != requested_index) {
         log.debug(.not_implemented, "insertRule clamped index", .{});
     }
-    try self._store.insert(frame._factory.storageAllocator(), index, entry);
+    try self._store.insert(frame.page.recycling, index, entry);
     if (self.ownerStyleManager(frame)) |style_manager| {
         style_manager.ruleInserted(self, index);
     }
@@ -266,7 +266,7 @@ fn parseInto(self: *CSSStyleSheet, text: []const u8, mode: enum { append, replac
         self.rulesModified(frame);
         try self.removeAll(frame);
     }
-    try self._store.appendSlice(frame._factory.storageAllocator(), parsed.items);
+    try self._store.appendSlice(frame.page.recycling, parsed.items);
 }
 
 fn parseRule(self: *CSSStyleSheet, parsed_rule: Parser.Rule, frame: *Frame) CSSError!Entry {
@@ -279,8 +279,7 @@ fn parseRule(self: *CSSStyleSheet, parsed_rule: Parser.Rule, frame: *Frame) CSSE
 /// A style rule from source: its declarations, and the rules nested in its
 /// block (CSS Nesting) as child rules.
 fn parseStyleRule(self: *CSSStyleSheet, selector: []const u8, block: []const u8, depth: u8, frame: *Frame) CSSError!Entry {
-    const allocator = frame._factory.storageAllocator();
-    var entry = try Entry.init(allocator, .style, selector, try self.nextRuleId());
+    var entry = try Entry.init(frame.page.recycling, .style, selector, try self.nextRuleId());
     errdefer self.freeEntry(&entry, frame);
     entry._block = try CSSStyleDeclaration.parseBlock(block, frame);
 
@@ -296,7 +295,7 @@ fn parseStyleRule(self: *CSSStyleSheet, selector: []const u8, block: []const u8,
 /// as text, and the block as children rules. For all others, we keep the source
 /// as written.
 fn parseAtRule(self: *CSSStyleSheet, rule: Parser.AtRule, depth: u8, in_style: bool, frame: *Frame) CSSError!Entry {
-    const allocator = frame._factory.storageAllocator();
+    const allocator = frame.page.recycling;
     const kind: RuleStore.Kind = .ofAtRule(rule.keyword);
     const body = switch (kind) {
         .media, .supports, .layer => rule.block,
@@ -338,7 +337,7 @@ fn parseNestedRules(self: *CSSStyleSheet, entry: *Entry, block: []const u8, dept
         }, frame);
     }
     if (entry._children) |children| {
-        try children.trim(frame._factory.storageAllocator());
+        try children.trim(frame.page.recycling);
     }
 }
 
@@ -346,7 +345,7 @@ fn parseNestedRules(self: *CSSStyleSheet, entry: *Entry, block: []const u8, dept
 fn appendChild(self: *CSSStyleSheet, entry: *Entry, child: Entry, frame: *Frame) CSSError!void {
     var owned = child;
     errdefer self.freeEntry(&owned, frame);
-    const allocator = frame._factory.storageAllocator();
+    const allocator = frame.page.recycling;
     // A style rule's is created on its first nested rule: most have none.
     const children = entry._children orelse blk: {
         const children = try RuleStore.init(allocator, self);
@@ -372,7 +371,7 @@ fn removeRule(self: *CSSStyleSheet, store: *RuleStore, index: u32, frame: *Frame
     };
 
     // Reserved first, so nothing can fail once the entry is taken.
-    try self._detached_store.ensureUnusedCapacity(frame._factory.storageAllocator(), 1);
+    try self._detached_store.ensureUnusedCapacity(frame.page.recycling, 1);
     self.detach(view, store.take(index));
 }
 
@@ -393,7 +392,7 @@ fn removeAll(self: *CSSStyleSheet, frame: *Frame) !void {
     // The most rules that we can possibly detach is the smallest of these two
     const viewed = @min(rule_views_count, store.length());
     if (viewed > 0) {
-        try self._detached_store.ensureUnusedCapacity(frame._factory.storageAllocator(), viewed);
+        try self._detached_store.ensureUnusedCapacity(frame.page.recycling, viewed);
     }
 
     for (store.entries()) |*entry| {
@@ -427,7 +426,7 @@ fn freeEntry(self: *CSSStyleSheet, entry: *Entry, frame: *Frame) void {
         // nor anything nested in it can have one
         std.debug.assert(self._rule_views.contains(entry._id) == false);
     }
-    const allocator = frame._factory.storageAllocator();
+    const allocator = frame.page.recycling;
     if (entry._children) |children| {
         for (children.entries()) |*child| {
             self.freeEntry(child, frame);

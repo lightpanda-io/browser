@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const RecyclingAllocator = @import("../RecyclingAllocator.zig");
+
 const js = @import("js/js.zig");
 
 const Frame = @import("Frame.zig");
@@ -104,6 +106,9 @@ factory: Factory,
 // objects allocate out of this.
 _arena: *lp.Arena,
 arena: Allocator,
+
+_recycling: RecyclingAllocator,
+recycling: Allocator,
 
 // Lazily-created per-node state, kept out of the nodes themselves because
 // few nodes ever need it. Keyed by node pointer and held by the Page, not a
@@ -290,13 +295,17 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     self.* = .{
         .session = session,
         .frame = undefined,
+        .factory = undefined,
+        .recycling = undefined,
         ._arena = arena,
         .arena = arena.allocator(),
-        .factory = Factory.init(self, arena.allocator(), &session.browser.documents),
+        ._recycling = .init(arena.allocator()),
         .globals = .init(session.browser.app.allocator),
         .event_listeners = .init(arena.allocator()),
         .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
+    self.recycling = self._recycling.allocator();
+    self.factory = Factory.init(self, arena.allocator(), &session.browser.documents);
     self.queued_navigation = &self.queued_navigation_1;
 
     try Frame.init(&self.frame, frame_id, self, .{});

@@ -21,8 +21,6 @@ const lp = @import("lightpanda");
 
 const reflect = @import("reflect.zig");
 
-const RecyclingAllocator = @import("../RecyclingAllocator.zig");
-
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const DocumentRegistry = @import("DocumentRegistry.zig");
@@ -52,7 +50,7 @@ const Factory = @This();
 
 _page: *Page,
 _arena: Allocator,
-_recycling: RecyclingAllocator,
+_recycling: Allocator,
 _documents: std.ArrayList(u32) = .empty, // ids of the documents _we_ created
 _document_registry: *DocumentRegistry, // &browser.documents
 
@@ -60,7 +58,7 @@ pub fn init(page: *Page, arena: Allocator, document_registry: *DocumentRegistry)
     return .{
         ._page = page,
         ._arena = arena,
-        ._recycling = .init(arena),
+        ._recycling = page.recycling,
         ._document_registry = document_registry,
     };
 }
@@ -71,10 +69,6 @@ pub fn deinit(self: *Factory) void {
     }
 }
 
-pub fn storageAllocator(self: *Factory) Allocator {
-    return self._recycling.allocator();
-}
-
 fn registerDocument(self: *Factory, doc: *Document) !u32 {
     const index = try self._document_registry.register(doc);
     try self._documents.append(self._arena, index);
@@ -83,7 +77,7 @@ fn registerDocument(self: *Factory, doc: *Document) !u32 {
 
 // this is a root object
 pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
-    return self.eventTargetWithAllocator(self._recycling.allocator(), child);
+    return self.eventTargetWithAllocator(self._recycling, child);
 }
 
 pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {
@@ -348,7 +342,7 @@ pub fn abstractRange(_: *const Factory, arena: *lp.Arena, child: anytype, frame:
 }
 
 pub fn domRect(self: *Factory, rect: DOMRectReadOnly.Data) !*DOMRect {
-    const chain = try PrototypeChain(&.{ DOMRectReadOnly, DOMRect }).allocate(self._recycling.allocator());
+    const chain = try PrototypeChain(&.{ DOMRectReadOnly, DOMRect }).allocate(self._recycling);
 
     const base = chain.get(0);
     base.* = .{
@@ -365,7 +359,7 @@ pub fn domRect(self: *Factory, rect: DOMRectReadOnly.Data) !*DOMRect {
 
 pub fn node(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     comptime assert(@TypeOf(child) != Document);
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     return try AutoPrototypeChain(
         &.{ Node, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
@@ -387,7 +381,7 @@ pub fn genericDocument(self: *Factory, opts: DocumentOpts) !*Document {
 // the start.
 fn documentChain(self: *Factory, comptime types: []const type, opts: DocumentOpts) !PrototypeChain(types) {
     comptime assert(types[0] == Node and types[1] == Document);
-    const chain = try PrototypeChain(types).allocate(self._recycling.allocator());
+    const chain = try PrototypeChain(types).allocate(self._recycling);
     const doc = chain.get(1);
     const index = try self.registerDocument(doc);
 
@@ -414,7 +408,7 @@ pub fn cdataNode(self: *Factory, owner: *const Document, cd: Node.CData, leaf: a
     const types = comptime chainTypes(@TypeOf(leaf));
     comptime assert(types[0] == Node and types[1] == Node.CData);
 
-    const chain = try PrototypeChain(types).allocate(self._recycling.allocator());
+    const chain = try PrototypeChain(types).allocate(self._recycling);
     chain.setRoot();
     chain.get(0)._owner = owner._index;
 
@@ -540,7 +534,7 @@ fn isEmbeddedInProto(comptime T: type) bool {
 // any field that must point at another chain member, patching the latter on
 // the result.
 pub fn chained(self: *Factory, values: anytype) !*ChainedLeaf(@TypeOf(values)) {
-    return chainedWithAllocator(self._recycling.allocator(), values);
+    return chainedWithAllocator(self._recycling, values);
 }
 
 pub fn chainedWithAllocator(allocator: Allocator, values: anytype) !*ChainedLeaf(@TypeOf(values)) {
@@ -574,28 +568,28 @@ pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
 }
 
 pub fn documentFragment(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     return try AutoPrototypeChain(
         &.{ Node, Node.DocumentFragment, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
 pub fn element(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     return try AutoPrototypeChain(
         &.{ Node, Element, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
 pub fn htmlElement(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     return try AutoPrototypeChain(
         &.{ Node, Element, Element.Html, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
 }
 
 pub fn htmlMediaElement(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     return try AutoPrototypeChain(
         &.{ Node, Element, Element.Html, Element.Html.Media, @TypeOf(child) },
     ).createOwned(allocator, owner._index, child);
@@ -603,7 +597,7 @@ pub fn htmlMediaElement(self: *Factory, owner: *const Document, child: anytype) 
 
 pub fn svgElement(self: *Factory, owner: *const Document, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
     const types = comptime svgPrototypeTypes(@TypeOf(child));
-    const chain = try PrototypeChain(types).allocate(self._recycling.allocator());
+    const chain = try PrototypeChain(types).allocate(self._recycling);
 
     chain.setRoot();
     inline for (1..types.len - 1) |i| {
@@ -641,17 +635,17 @@ pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !
 pub fn idbOpenRequest(self: *Factory, child: anytype) !*@TypeOf(child) {
     return try AutoPrototypeChain(
         &.{ EventTarget, IDBRequest, @TypeOf(child) },
-    ).create(self._recycling.allocator(), child);
+    ).create(self._recycling, child);
 }
 
 pub fn taskSignal(self: *Factory, child: anytype) !*@TypeOf(child) {
     return try AutoPrototypeChain(
         &.{ EventTarget, AbortSignal, @TypeOf(child) },
-    ).create(self._recycling.allocator(), child);
+    ).create(self._recycling, child);
 }
 
 pub fn textTrackCue(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     const TextTrackCue = @import("webapi/media/TextTrackCue.zig");
 
     return try AutoPrototypeChain(
@@ -681,7 +675,7 @@ pub fn destroy(self: *Factory, value: anytype) void {
 }
 
 pub fn destroyStandalone(self: *Factory, value: anytype) void {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     allocator.destroy(value);
 }
 
@@ -692,7 +686,7 @@ fn destroyChain(
     old_align: std.mem.Alignment,
 ) void {
     const S = reflect.Struct(@TypeOf(value));
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
 
     // aligns the old size to the alignment of this element
     if (comptime isEmbeddedInProto(S)) {
@@ -719,7 +713,7 @@ fn destroyChain(
 }
 
 fn createT(self: *Factory, comptime T: type) !*T {
-    const allocator = self._recycling.allocator();
+    const allocator = self._recycling;
     return try allocator.create(T);
 }
 
