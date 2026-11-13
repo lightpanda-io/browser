@@ -798,7 +798,7 @@ fn runRepl(self: *Agent) void {
                     switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
                         .args => |args| tc.args = args,
                         .prompt => |prompt| {
-                            self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
+                            self.terminal.printInfo("no decision model key (" ++ App.decision_env_hint ++ "); asking the model instead", .{});
                             _ = self.runPromptTurn(aa, tc.name(), prompt, line);
                             continue :repl;
                         },
@@ -821,7 +821,7 @@ fn runRepl(self: *Agent) void {
                         self.printCommandResult(tc, result);
                         continue :repl;
                     };
-                    self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
+                    self.terminal.printInfo("no decision model key (" ++ App.decision_env_hint ++ "); asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         self.printCommandResult(tc, result);
                     }
