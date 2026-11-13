@@ -59,6 +59,11 @@ _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
 _http_transfer: ?*Transfer = null,
 
+// Set by deinit, when the frame that created the worker is destroyed. Another
+// frame can keep the Worker object past that: the struct lives as long as the
+// Page, and its methods do nothing once this is set.
+_destroyed: bool = false,
+
 // Event handlers
 
 const WorkerOptions = struct {
@@ -72,7 +77,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     errdefer arena.release();
 
     const resolved_url = try URL.resolve(arena.allocator(), frame.base(), url, .{ .encoding = frame.charset });
-    const self = try frame.page.factory.eventTargetWithAllocator(arena.allocator(), Worker{
+    const self = try frame._factory.eventTarget(Worker{
         ._arena = arena,
         ._proto = undefined,
         ._frame = frame,
@@ -82,11 +87,15 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         ._frame_id = session.nextFrameId(),
         ._loader_id = session.nextLoaderId(),
     });
+    errdefer frame._factory.destroy(self);
+
     const dedicated_worker = try DedicatedWorkerGlobalScope.init(self, resolved_url);
     errdefer dedicated_worker.deinit();
 
     self._worker_scope = dedicated_worker;
     try frame.trackWorker(self);
+    // The errdefers above free what Frame.deinit would deinit again.
+    errdefer frame.removeWorker(self);
 
     if (session.load_resources.worker == false) {
         frame.page.status.noteSkipped(.worker);
@@ -112,7 +121,6 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .shutdown_callback = httpShutdownCallback,
     }) catch |err| {
         log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
-        frame.removeWorker(self);
         return err;
     };
 
@@ -124,7 +132,6 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 
     transfer.submit() catch |err| {
         log.debug(.browser, "Worker request", .{ .url = resolved_url, .err = err });
-        frame.removeWorker(self);
         return err;
     };
     return self;
@@ -133,6 +140,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 // Called from Frame.deinit when the frame is destroyed, so we don't need to
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
+    self._destroyed = true;
     // No pending frame for workers, so we can abort all frames.
     if (self._http_transfer) |res| {
         res.cancel();
@@ -316,6 +324,9 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
 }
 
 pub fn terminate(self: *Worker) void {
+    if (self._destroyed) {
+        return;
+    }
     // Abort any pending script fetch
     if (self._http_transfer) |resp| {
         resp.cancel();
@@ -324,8 +335,16 @@ pub fn terminate(self: *Worker) void {
 }
 
 // Posts a message from the frame to the worker.
-pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value) !void {
-    try self._worker_scope.receiveMessage(data, try MessagePort.transferList(transfer));
+pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value, exec: *js.Execution) !void {
+    const ports = try MessagePort.transferList(transfer);
+    if (self._destroyed) {
+        // Dropped, as for a terminated worker. It's still serialized, into the
+        // caller's realm, so the transferred ports detach and bad data throws.
+        const cloned = try MessagePort.cloneMessage(data, ports, exec);
+        cloned.release();
+        return;
+    }
+    try self._worker_scope.receiveMessage(data, ports);
 }
 
 // Called internally by DedicatedWorkerGlobalScope when it wants to post a message to us
