@@ -792,11 +792,14 @@
     }, {once: true});
     navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
 
+    const expected = new URL('navigate_event_target.html?intercept-cross-document', original).href;
     const r = navigation.navigate('navigate_event_target.html?intercept-cross-document');
+    let href_before_restore;
     Promise.all([
       r.committed.then(() => 'resolved', (err) => err),
       r.finished.then(() => 'resolved', (err) => err),
     ]).then((results) => {
+      href_before_restore = location.href;
       history.replaceState(null, '', original);
       release();
       state.resolve(results);
@@ -806,7 +809,7 @@
       testing.expectFalse(same_document_in_event);
       // intercept() kept the navigation in this document: no real load, so
       // the promises settle instead of hanging forever.
-      testing.expectEqual(original, location.href);
+      testing.expectEqual(expected, href_before_restore);
       testing.expectEqual('resolved', committed);
       testing.expectEqual('cross-document boom', finished.message);
       testing.expectEqual(finished, error_event.error);
