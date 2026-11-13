@@ -32,6 +32,8 @@ const NodeRegistry = @import("../../NodeRegistry.zig");
 const Method = @import("../http.zig").Connection.Method;
 const json_input = @import("../json_input.zig");
 
+const AXNode = @import("../cdp/AXNode.zig");
+
 const BiDi = @import("BiDi.zig");
 const input = @import("input.zig");
 const storage = @import("storage.zig");
@@ -78,6 +80,9 @@ pub const Command = union(enum) {
     get_element_rect: ElementId,
     is_element_enabled: ElementId,
     is_element_selected: ElementId,
+    is_element_displayed: ElementId,
+    get_computed_role: ElementId,
+    get_computed_label: ElementId,
     element_click: ElementId,
     element_clear: ElementId,
     element_send_keys: SendKeys,
@@ -262,6 +267,9 @@ const routes = [_]Route{
     .init(.GET, "/element/{id}/rect", .get_element_rect),
     .init(.GET, "/element/{id}/enabled", .is_element_enabled),
     .init(.GET, "/element/{id}/selected", .is_element_selected),
+    .init(.GET, "/element/{id}/displayed", .is_element_displayed),
+    .init(.GET, "/element/{id}/computedrole", .get_computed_role),
+    .init(.GET, "/element/{id}/computedlabel", .get_computed_label),
     .init(.POST, "/element/{id}/click", .element_click),
     .init(.POST, "/element/{id}/clear", .element_clear),
     .init(.POST, "/element/{id}/value", .element_send_keys),
@@ -375,6 +383,9 @@ pub fn process(cmd: *BiDi.Command) !void {
         .get_element_rect => |p| return getElementRect(cmd, p),
         .is_element_enabled => |p| return isElementEnabled(cmd, p),
         .is_element_selected => |p| return isElementSelected(cmd, p),
+        .is_element_displayed => |p| return isElementDisplayed(cmd, p),
+        .get_computed_role => |p| return getComputedRole(cmd, p),
+        .get_computed_label => |p| return getComputedLabel(cmd, p),
         .element_click => |p| return elementClick(cmd, p),
         .element_clear => |p| return elementClear(cmd, p),
         .element_send_keys => |p| return elementSendKeys(cmd, p),
@@ -689,6 +700,43 @@ fn isElementSelected(cmd: *BiDi.Command, p: ElementId) !void {
         return cmd.sendResult(option.getSelected());
     }
     return cmd.sendResult(false);
+}
+
+// GET /session/{id}/element/{id}/displayed.
+fn isElementDisplayed(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    var element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    const list_start: ?*Node = if (element.is(Html.Option) != null)
+        element.asNode().parentNode()
+    else if (element.is(Html.OptGroup) != null)
+        element.asNode()
+    else
+        null;
+    if (list_start) |start| {
+        if (Html.Select.listPosition(start)) |pos| {
+            element = pos.select.asElement();
+        }
+    }
+    return cmd.sendResult(element.checkVisibility(.{ .checkOpacity = true, .visibilityProperty = true }, frame));
+}
+
+// GET /session/{id}/element/{id}/computedrole
+fn getComputedRole(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+    return cmd.sendResult(try AXNode.fromNode(element.asNode()).getRole());
+}
+
+// GET /session/{id}/element/{id}/computedlabel
+fn getComputedLabel(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    var labels: Html.Label.LabelByForIndex = .{};
+    var aw: std.Io.Writer.Allocating = .init(cmd.arena);
+    const name = try AXNode.fromNode(element.asNode()).writeNameInto(&aw, frame, &labels);
+    return cmd.sendResult(name orelse "");
 }
 
 // POST /session/{id}/element/{id}/click.

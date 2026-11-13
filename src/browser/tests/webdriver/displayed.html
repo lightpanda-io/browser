@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>webdriver displayed</title>
+<style>.gone { display: none }</style>
+<p id=plain>plain</p>
+<div class=gone><span id=gone_child>gone</span></div>
+<div style="opacity: 0"><span id=faded_child>faded</span></div>
+<div id=hidden style="visibility: hidden">
+  <span id=hidden_child>hidden</span>
+  <span id=shown_again style="visibility: visible">shown</span>
+</div>
+<input id=secret type=hidden>
+<select id=pick>
+  <optgroup id=group><option id=opt>A</option></optgroup>
+</select>
+<select class=gone>
+  <optgroup id=gone_group><option id=gone_opt>B</option></optgroup>
+</select>
+<label for=named>Your name</label><input id=named>
+<button id=save aria-label="Save draft">S</button>
+<nav id=menu></nav>
+<div id=landmark role="region main">x</div>

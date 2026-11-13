@@ -2215,6 +2215,56 @@ test "server: HTTP history commands" {
     try testing.expectEqual("{\"value\":\",#pushed\"}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"return pops.join()\",\"args\":[]}")));
 }
 
+test "server: HTTP element displayed, role and label" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/displayed.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "#plain", "true" },
+        .{ "#gone_child", "false" },
+        .{ "#faded_child", "false" },
+        .{ "#hidden", "false" },
+        .{ "#hidden_child", "false" },
+        .{ "#shown_again", "true" },
+        .{ "#secret", "false" },
+        // an option or optgroup is displayed when its <select> is
+        .{ "#group", "true" },
+        .{ "#opt", "true" },
+        .{ "#gone_group", "false" },
+        .{ "#gone_opt", "false" },
+    };
+    for (cases) |case| {
+        const id = try findElement(&c, &session_id, "css selector", case[0]);
+        const expected = try testing.arena_allocator.print("{{\"value\":{s}}}", .{case[1]});
+        testing.expectEqual(expected, try elementCommand(&c, &session_id, id, "/displayed")) catch |err| {
+            std.debug.print("displayed: {s}\n", .{case[0]});
+            return err;
+        };
+    }
+
+    const named = try findElement(&c, &session_id, "css selector", "#named");
+    try testing.expectEqual("{\"value\":\"textbox\"}", try elementCommand(&c, &session_id, named, "/computedrole"));
+    try testing.expectEqual("{\"value\":\"Your name\"}", try elementCommand(&c, &session_id, named, "/computedlabel"));
+
+    const save = try findElement(&c, &session_id, "css selector", "#save");
+    try testing.expectEqual("{\"value\":\"button\"}", try elementCommand(&c, &session_id, save, "/computedrole"));
+    try testing.expectEqual("{\"value\":\"Save draft\"}", try elementCommand(&c, &session_id, save, "/computedlabel"));
+
+    const menu = try findElement(&c, &session_id, "css selector", "#menu");
+    try testing.expectEqual("{\"value\":\"navigation\"}", try elementCommand(&c, &session_id, menu, "/computedrole"));
+    try testing.expectEqual("{\"value\":\"\"}", try elementCommand(&c, &session_id, menu, "/computedlabel"));
+
+    // an explicit role is a fallback list: the first token wins
+    const landmark = try findElement(&c, &session_id, "css selector", "#landmark");
+    try testing.expectEqual("{\"value\":\"region\"}", try elementCommand(&c, &session_id, landmark, "/computedrole"));
+}
+
 test "server: HTTP element commands" {
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
     defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
