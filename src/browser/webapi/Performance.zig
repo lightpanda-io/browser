@@ -672,7 +672,7 @@ fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
 // The event is queued rather than fired inline: addResource runs from the
 // HTTP layer, with no JS on the stack.
 fn scheduleBufferFull(self: *Performance) !void {
-    if (self._buffer_full_pending) {
+    if (self._buffer_full_pending or !self._exec.isLive()) {
         return;
     }
     if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL) == false) {
@@ -727,7 +727,9 @@ fn fireBufferFull(self: *Performance) !void {
 }
 
 pub fn scheduleDelivery(self: *Performance) !void {
-    if (self._delivery_scheduled) {
+    // The observers are notified from a task of the owner, which another frame
+    // can outlive while it keeps this object: nothing to notify then.
+    if (self._delivery_scheduled or !self._exec.isLive()) {
         return;
     }
     self._delivery_scheduled = true;

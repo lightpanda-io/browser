@@ -95,8 +95,14 @@ pub fn historyHandling(target: *const Frame) NavigationKind {
     return .{ .replace = null };
 }
 
+// The frame to navigate, unless it was destroyed: navigating a document that
+// isn't active anymore does nothing.
+fn liveFrame(self: *const Location) ?*Frame {
+    return if (self._frame.isLive()) self._frame else null;
+}
+
 pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     const new_url = try U.setPathname(target.url, pathname, frame.call_arena);
     return target.scheduleNavigation(new_url, .{
         .reason = .script,
@@ -105,7 +111,7 @@ pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !
 }
 
 fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     const new_url = try U.setSearch(target.url, search, frame.call_arena);
     return target.scheduleNavigation(new_url, .{
         .reason = .script,
@@ -114,7 +120,7 @@ fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
 }
 
 fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     const old_url = target.url;
     const base_end = std.mem.findScalar(u8, old_url, '#') orelse old_url.len;
     // Includes the leading '#'; empty when the URL has no fragment.
@@ -163,17 +169,19 @@ fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) !?[]
 }
 
 pub fn assign(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target = self.liveFrame() orelse return;
     const target_url = try self.parseFromCaller(url, frame) orelse return;
-    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(self._frame) }, .{ .script = self._frame });
+    return target.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(target) }, .{ .script = target });
 }
 
 pub fn replace(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
+    const target = self.liveFrame() orelse return;
     const target_url = try self.parseFromCaller(url, frame) orelse return;
-    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = self._frame });
+    return target.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = target });
 }
 
 pub fn reload(self: *const Location) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     return target.scheduleNavigation(target.url, .{ .reason = .script, .kind = .reload }, .{ .script = target });
 }
 

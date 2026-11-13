@@ -110,6 +110,10 @@ pub fn close(self: *BroadcastChannel) void {
         return;
     }
     self._closed = true;
+    if (!self._exec.isLive()) {
+        // The registry went with the channel's frame.
+        return;
+    }
     self._exec.getBroadcastChannels().remove(&self._node);
 }
 

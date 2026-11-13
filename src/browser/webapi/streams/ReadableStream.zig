@@ -156,7 +156,9 @@ pub const BodyChunks = enum {
 /// `error.TypeError`. The queue is only consumed once every chunk has
 /// converted, so a rejected body leaves the stream as it was.
 pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator, comptime chunks: BodyChunks) ![]const u8 {
-    if (self._collected or self.getLocked()) {
+    // The chunks are read in the stream's realm, which is gone once its frame
+    // navigated away or was torn down.
+    if (self._collected or self.getLocked() or !self._execution.isLive()) {
         return error.TypeError;
     }
     switch (self._state) {
@@ -208,9 +210,14 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         return;
     }
 
+    const exec = self._execution;
+    if (!exec.isLive()) {
+        // pull() runs in the stream's realm: its frame is gone.
+        return;
+    }
+
     self._pulling = true;
 
-    const exec = self._execution;
     if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStream.callPullIfNeeded", .url = exec.url.* });
