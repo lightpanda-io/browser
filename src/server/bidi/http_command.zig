@@ -46,6 +46,8 @@ const Allocator = std.mem.Allocator;
 
 // The key of a WebDriver element reference: {"element-6066-…": "<sharedId>"}
 pub const element_key = "element-6066-11e4-a52e-4f735466cecf";
+// And of a shadow root reference: {"shadow-6066-…": "<sharedId>"}
+pub const shadow_key = "shadow-6066-11e4-a52e-4f735466cecf";
 
 pub const Command = union(enum) {
     navigate_to: NavigateTo,
@@ -71,6 +73,9 @@ pub const Command = union(enum) {
     find_elements: Find,
     find_element_from_element: FindFrom,
     find_elements_from_element: FindFrom,
+    find_element_from_shadow_root: FindFrom,
+    find_elements_from_shadow_root: FindFrom,
+    get_element_shadow_root: ElementId,
     get_active_element,
     get_element_text: ElementId,
     get_element_tag_name: ElementId,
@@ -262,6 +267,9 @@ const routes = [_]Route{
     .init(.GET, "/element/active", .get_active_element),
     .init(.POST, "/element/{id}/element", .find_element_from_element),
     .init(.POST, "/element/{id}/elements", .find_elements_from_element),
+    .init(.GET, "/element/{id}/shadow", .get_element_shadow_root),
+    .init(.POST, "/shadow/{id}/element", .find_element_from_shadow_root),
+    .init(.POST, "/shadow/{id}/elements", .find_elements_from_shadow_root),
     .init(.GET, "/element/{id}/text", .get_element_text),
     .init(.GET, "/element/{id}/name", .get_element_tag_name),
     .init(.GET, "/element/{id}/rect", .get_element_rect),
@@ -370,10 +378,13 @@ pub fn process(cmd: *BiDi.Command) !void {
         .take_screenshot => return takeScreenshot(cmd),
         .perform_actions => |p| return performActions(cmd, p),
         .release_actions => return releaseActions(cmd),
-        .find_element => |p| return findElement(cmd, p.using, p.value, null),
-        .find_elements => |p| return findElements(cmd, p.using, p.value, null),
-        .find_element_from_element => |p| return findElement(cmd, p.using, p.value, p.id),
-        .find_elements_from_element => |p| return findElements(cmd, p.using, p.value, p.id),
+        .find_element => |p| return findElement(cmd, p.using, p.value, .document),
+        .find_elements => |p| return findElements(cmd, p.using, p.value, .document),
+        .find_element_from_element => |p| return findElement(cmd, p.using, p.value, .{ .element = p.id }),
+        .find_elements_from_element => |p| return findElements(cmd, p.using, p.value, .{ .element = p.id }),
+        .find_element_from_shadow_root => |p| return findElement(cmd, p.using, p.value, .{ .shadow_root = p.id }),
+        .find_elements_from_shadow_root => |p| return findElements(cmd, p.using, p.value, .{ .shadow_root = p.id }),
+        .get_element_shadow_root => |p| return getElementShadowRoot(cmd, p),
         .get_active_element => return getActiveElement(cmd),
         .get_element_text => |p| return getElementText(cmd, p),
         .get_element_tag_name => |p| return getElementTagName(cmd, p),
@@ -533,8 +544,16 @@ fn releaseActions(cmd: *BiDi.Command) !void {
     return input.release(cmd);
 }
 
-// POST /session/{id}/element, POST /session/{id}/element/{id}/element
-fn findElement(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]const u8) !void {
+// Where a search starts
+const From = union(enum) {
+    document,
+    element: []const u8,
+    shadow_root: []const u8,
+};
+
+// POST /session/{id}/element, POST /session/{id}/element/{id}/element,
+// POST /session/{id}/shadow/{id}/element
+fn findElement(cmd: *BiDi.Command, using: Using, value: []const u8, from: From) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const root = (try findRoot(cmd, frame, from)) orelse return;
     const nodes = (try locate(cmd, root, using, value, 1, frame)) orelse return;
@@ -544,8 +563,9 @@ fn findElement(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]con
     return cmd.sendResult(try Reference.initFromCommand(cmd, nodes[0]));
 }
 
-// POST /session/{id}/elements, POST /session/{id}/element/{id}/elements
-fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]const u8) !void {
+// POST /session/{id}/elements, POST /session/{id}/element/{id}/elements,
+// POST /session/{id}/shadow/{id}/elements
+fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: From) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const root = (try findRoot(cmd, frame, from)) orelse return;
     const nodes = (try locate(cmd, root, using, value, std.math.maxInt(u32), frame)) orelse return;
@@ -557,11 +577,29 @@ fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]co
     return cmd.sendResult(references);
 }
 
-// The document, or the element a "from element" search starts at.
-fn findRoot(cmd: *BiDi.Command, frame: *Frame, from: ?[]const u8) !?*Node {
-    const id = from orelse return frame.window._document.asNode();
-    const element = (try requireElement(cmd, id, frame)) orelse return null;
-    return element.asNode();
+fn findRoot(cmd: *BiDi.Command, frame: *Frame, from: From) !?*Node {
+    switch (from) {
+        .document => return frame.window._document.asNode(),
+        .element => |id| {
+            const element = (try requireElement(cmd, id, frame)) orelse return null;
+            return element.asNode();
+        },
+        .shadow_root => |id| {
+            const shadow_root = (try requireShadowRoot(cmd, id, frame)) orelse return null;
+            return shadow_root.asNode();
+        },
+    }
+}
+
+// GET /session/{id}/element/{id}/shadow. Closed roots included: the spec
+// asks for the element's shadow root, not what script's shadowRoot exposes.
+fn getElementShadowRoot(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+    const shadow_root = element.hostedShadowRoot(frame) orelse {
+        return cmd.sendError("no such shadow root", "element has no shadow root");
+    };
+    return cmd.sendResult(try Reference.initFromCommand(cmd, shadow_root.asNode()));
 }
 
 fn locate(cmd: *BiDi.Command, root: *Node, using: Using, value: []const u8, max: u32, frame: *Frame) !?[]const *Node {
@@ -1011,14 +1049,19 @@ fn noSuchAlert(cmd: *BiDi.Command) !void {
     return cmd.sendError("no such alert", "no user prompt is open");
 }
 
-// {"element-6066-…": "<sharedId>"}: a WebDriver element reference is the
-// node registry's id, the same one BiDi hands out.
+// {"element-6066-…": "<sharedId>"}, or {"shadow-6066-…": "<sharedId>"} for a
+// shadow root: a WebDriver reference is the node registry's id, the same one
+// BiDi hands out.
 pub const Reference = struct {
+    key: []const u8,
     shared_id: []const u8,
 
     pub fn init(arena: Allocator, registry: *NodeRegistry, node: *Node) !Reference {
         const registered = try registry.register(node);
-        return .{ .shared_id = try arena.print("{d}", .{registered.id}) };
+        return .{
+            .key = if (node.is(Node.ShadowRoot) != null) shadow_key else element_key,
+            .shared_id = try arena.print("{d}", .{registered.id}),
+        };
     }
 
     fn initFromCommand(cmd: *BiDi.Command, node: *Node) !Reference {
@@ -1027,7 +1070,7 @@ pub const Reference = struct {
 
     pub fn jsonStringify(self: Reference, jws: anytype) !void {
         try jws.beginObject();
-        try jws.objectField(element_key);
+        try jws.objectField(self.key);
         try jws.write(self.shared_id);
         try jws.endObject();
     }
@@ -1039,6 +1082,34 @@ pub const ReferenceError = error{
     // the element is no longer in a document
     StaleElement,
 };
+
+pub const ShadowRootReferenceError = error{
+    NoSuchShadowRoot,
+    DetachedShadowRoot,
+};
+
+pub fn shadowRootFromReference(registry: *const NodeRegistry, id: []const u8, frame: *const Frame) ShadowRootReferenceError!*Node.ShadowRoot {
+    const node = remote_value.nodeFromSharedId(registry, .{ .string = id }) catch return error.NoSuchShadowRoot;
+    const shadow_root = node.is(Node.ShadowRoot) orelse return error.NoSuchShadowRoot;
+    const host = shadow_root.getHost().asNode();
+    if (host.isConnected() == false or host.getDocument(frame) != frame.window._document) {
+        return error.DetachedShadowRoot;
+    }
+    return shadow_root;
+}
+
+fn requireShadowRoot(cmd: *BiDi.Command, id: []const u8, frame: *const Frame) !?*Node.ShadowRoot {
+    return shadowRootFromReference(&cmd.bidi.node_registry, id, frame) catch |err| switch (err) {
+        error.NoSuchShadowRoot => {
+            try cmd.sendError("no such shadow root", "unknown shadow root reference");
+            return null;
+        },
+        error.DetachedShadowRoot => {
+            try cmd.sendError("detached shadow root", "shadow root's host is not in the current document");
+            return null;
+        },
+    };
+}
 
 pub fn elementFromReference(registry: *const NodeRegistry, id: []const u8, frame: *const Frame) ReferenceError!*Node.Element {
     // ids are dropped on navigation
@@ -1138,6 +1209,12 @@ test "bidi.http_command: parse" {
         try testing.expectEqual("7", command.find_elements_from_element.id);
         try testing.expectEqual(.link_text, command.find_elements_from_element.using);
         try testing.expectEqual("go", command.find_elements_from_element.value);
+    }
+
+    {
+        const command = try parse(arena, .POST, "/shadow/9/element", "{\"using\":\"css selector\",\"value\":\"b\"}");
+        try testing.expectEqual("9", command.find_element_from_shadow_root.id);
+        try testing.expectEqual(.css, command.find_element_from_shadow_root.using);
     }
 
     {
