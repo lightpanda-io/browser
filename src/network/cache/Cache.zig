@@ -35,8 +35,6 @@ kind: union(enum) {
     noop: void,
     sqlite: SqliteCache,
 },
-/// Whether responses with a Set-Cookie are stored (with it stripped).
-set_cookie: bool = false,
 
 pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
     const cache_path = config.httpCacheDir() orelse {
@@ -56,10 +54,7 @@ pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
         return err;
     };
 
-    return .{
-        .kind = .{ .sqlite = sqlite },
-        .set_cookie = config.experimentalFeatures().privatecache,
-    };
+    return .{ .kind = .{ .sqlite = sqlite } };
 }
 
 pub fn deinit(self: *Cache) void {
@@ -83,31 +78,44 @@ pub fn get(self: *Cache, arena: std.mem.Allocator, body_allocator: std.mem.Alloc
     };
 }
 
-/// Stores the response if it is cacheable; returns whether it did. The
-/// candidate's names and values only need to outlive the call.
-pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !bool {
+/// Stores the response if it is cacheable; returns the scope it actually
+/// landed under (null if not stored). A request Cookie, Authorization, or
+/// Proxy-Authorization header, a response Set-Cookie, or `Cache-Control:
+/// private` force the candidate's own scope; every other cacheable response
+/// lands in the public scope instead, regardless of what scope the
+/// candidate carried. The candidate's names and values only need to outlive
+/// the call.
+pub fn put(self: *Cache, arena: std.mem.Allocator, candidate: CacheCandidate, body: []const u8) !?CacheScope {
     switch (self.kind) {
-        .noop => return false,
+        .noop => return null,
         inline else => |*c| {
-            const req = try tryCache(arena, candidate, self.set_cookie) orelse return false;
+            const req = try tryCache(arena, candidate) orelse return null;
             log.debug(.cache, "put", .{ .put = req });
             try c.put(req, body);
-            return true;
+            return req.scope;
         },
     }
 }
 
-pub fn putScriptCache(self: *Cache, url: []const u8, body: []const u8, bytes: []const u8) !void {
+pub fn putScriptCache(self: *Cache, url: []const u8, scope: CacheScope, body: []const u8, bytes: []const u8) !void {
     return switch (self.kind) {
         .noop => {},
-        inline else => |*c| c.putScriptCache(url, body, bytes),
+        inline else => |*c| c.putScriptCache(url, scope, body, bytes),
     };
 }
 
-pub fn evict(self: *Cache, url: []const u8) void {
+pub fn evict(self: *Cache, url: []const u8, scope: CacheScope) void {
     return switch (self.kind) {
         .noop => {},
-        inline else => |*c| c.evict(url),
+        inline else => |*c| c.evict(url, scope),
+    };
+}
+
+/// Removes every entry at this scope. Called when the Browser owning it closes.
+pub fn clearScope(self: *Cache, scope: CacheScope) void {
+    return switch (self.kind) {
+        .noop => {},
+        inline else => |*c| c.clearScope(scope),
     };
 }
 
@@ -198,14 +206,28 @@ pub const ResponseDirectives = struct {
     }
 };
 
+pub const CacheScope = union(enum) {
+    public,
+    private: u32,
+
+    pub fn format(self: CacheScope, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .public => try writer.writeAll("public"),
+            .private => |id| try writer.print("private({d})", .{id}),
+        }
+    }
+};
+
 pub const CacheGetRequest = struct {
     url: []const u8,
+    scope: CacheScope,
     timestamp: u64,
     request_headers: []const Http.Header,
 };
 
 pub const CachePutRequest = struct {
     url: [:0]const u8,
+    scope: CacheScope,
     content_type: []const u8,
 
     status: u16,
@@ -223,8 +245,9 @@ pub const CachePutRequest = struct {
     last_modified: ?[]const u8 = null,
 
     pub fn format(self: CachePutRequest, writer: *std.Io.Writer) !void {
-        try writer.print("url={s} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
+        try writer.print("url={s} | scope={f} | status={d} | content_type={s} | max_age={d} | etag={s} | last-modified={s} | vary=[", .{
             self.url,
+            self.scope,
             self.status,
             self.content_type,
             self.cache_control.max_age,
@@ -248,6 +271,7 @@ pub const CachePutRequest = struct {
 
 pub const RenewResponse = struct {
     url: []const u8,
+    scope: CacheScope,
     timestamp: u64,
     headers: []const Http.Header,
     /// Request Headers of the revalidation, which the merged Vary may name.
@@ -306,11 +330,16 @@ pub const CacheGetResult = union(enum) {
     revalidate: CachedResponse,
     /// Cache Miss.
     miss,
-    /// Stale entry with no revalidators. Must call `evict()` and should be treated as a miss.
-    stale,
+    /// Stale entry with no revalidators, at this scope. Must call `evict()`
+    /// with it and should be treated as a miss.
+    stale: CacheScope,
 };
 
 pub const CachedResponse = struct {
+    // The scope this entry was actually matched at (public or the caller's
+    // own), not necessarily the one the caller asked for: a `renew` or
+    // `evict` of this entry must target this scope, not the caller's.
+    scope: CacheScope,
     status: u16,
     content_type: []const u8,
     etag: ?[]const u8,
@@ -341,7 +370,6 @@ const ResponseHeaders = struct {
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
     has_set_cookie: bool = false,
-    has_authorization: bool = false,
 
     fn parse(headers: []const Http.Header) ResponseHeaders {
         var self: ResponseHeaders = .{};
@@ -374,8 +402,6 @@ const ResponseHeaders = struct {
                         self.directives = .parse(h.value);
                     } else if (std.mem.eql(u8, h.name, "last-modified")) {
                         self.last_modified = h.value;
-                    } else if (std.mem.eql(u8, h.name, "authorization")) {
-                        self.has_authorization = true;
                     }
                 },
                 else => {},
@@ -389,6 +415,7 @@ const ResponseHeaders = struct {
 pub const CacheCandidate = struct {
     timestamp: u64,
     url: [:0]const u8,
+    scope: CacheScope,
     status: u16,
     content_type: ?[]const u8, // from ResponseHead, can be truncated
     headers: []const Http.Header,
@@ -423,7 +450,23 @@ fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u6
     return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
-fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: bool) !?CachePutRequest {
+// Authorization, Proxy-Authorization, and Cookie are request headers that
+// mark the request itself as tied to a session or credential: a response to
+// one of these can't be assumed safe to share with a different Browser just
+// because the response itself doesn't say so.
+fn hasPrivateRequestHeader(request_headers: []const Http.Header) bool {
+    for (request_headers) |h| {
+        if (std.mem.eql(u8, h.name, "authorization") or
+            std.mem.eql(u8, h.name, "proxy-authorization") or
+            std.mem.eql(u8, h.name, "cookie"))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
     const url = candidate.url;
     const status = candidate.status;
     const response: ResponseHeaders = .parse(candidate.headers);
@@ -436,26 +479,20 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
         return null;
     }
 
-    if (response.has_set_cookie and set_cookie == false) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_cookies" });
-        return null;
-    }
-
-    if (response.has_authorization) {
-        log.debug(.cache, "no store", .{ .url = url, .reason = "has_authorization" });
-        return null;
-    }
-
     if (response.vary) |v| if (std.mem.eql(u8, v, "*")) {
         log.debug(.cache, "no store", .{ .url = url, .vary = v, .reason = "vary" });
         return null;
     };
 
+    // Authorization/Proxy-Authorization/Cookie on the request, Set-Cookie on
+    // the response, and `Cache-Control: private` don't bar storage anymore,
+    // only sharing: the entry lands in the requesting Browser's own private
+    // scope instead of the public one.
+    const is_private = hasPrivateRequestHeader(candidate.request_headers) or response.has_set_cookie or response.directives.private;
+
     const cc: CacheControl = blk: {
         const directives = response.directives;
-        // "private" bars shared cache, which is how our caching works - tied
-        // to the app while the cookie jar is on the Session. Safer not to cache.
-        if (directives.no_store or directives.private) {
+        if (directives.no_store) {
             break :blk null;
         }
         const timestamp = candidate.timestamp;
@@ -494,12 +531,13 @@ fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate, set_cookie: boo
 
     return .{
         .url = try arena.dupeSentinel(u8, url, 0),
+        .scope = if (is_private) candidate.scope else .public,
         .content_type = if (candidate.content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
         .status = status,
         .stored_at = candidate.timestamp,
         .age_at_store = if (response.age) |a| parseDeltaSeconds(a) orelse 0 else 0,
         .cache_control = cc,
-        .headers = if (set_cookie) try withoutSetCookie(arena, candidate.headers) else candidate.headers,
+        .headers = candidate.headers,
         .request_headers = candidate.request_headers,
         .etag = if (response.etag) |e| try arena.dupe(u8, e) else null,
         .last_modified = if (response.last_modified) |lm| try arena.dupe(u8, lm) else null,
@@ -604,7 +642,8 @@ const TestResponse = struct {
     etag: ?[]const u8 = null,
     last_modified: ?[]const u8 = null,
     set_cookie: ?[]const u8 = null,
-    set_cookie_mode: bool = false,
+    // A single request header to spell out, e.g. authorization/proxy-authorization.
+    request_header: ?Http.Header = null,
 
     fn run(self: TestResponse, arena: std.mem.Allocator) !?CachePutRequest {
         var headers: std.ArrayList(Http.Header) = .empty;
@@ -624,11 +663,12 @@ const TestResponse = struct {
         return tryCache(arena, .{
             .timestamp = test_now,
             .url = "https://example.com",
+            .scope = .{ .private = 7 }, // the caller's own scope, used only when the response is actually private
             .status = self.status,
             .content_type = "text/html",
             .headers = headers.items,
-            .request_headers = &.{},
-        }, self.set_cookie_mode);
+            .request_headers = if (self.request_header) |h| &.{h} else &.{},
+        });
     }
 };
 
@@ -753,6 +793,7 @@ test "Cache: tryCache vary headers" {
     const wildcard = try tryCache(arena.allocator(), .{
         .timestamp = test_now,
         .url = "https://example.com",
+        .scope = .public,
         .status = 200,
         .content_type = "text/html",
         .headers = &.{
@@ -760,74 +801,103 @@ test "Cache: tryCache vary headers" {
             .{ .name = "vary", .value = "*" },
         },
         .request_headers = &request_headers,
-    }, false);
+    });
     try testing.expectEqual(null, wildcard);
 }
 
-test "Cache: tryCache with Set-Cookie" {
+test "Cache: tryCache with Set-Cookie, Cookie, Authorization, Proxy-Authorization, or Cache-Control: private goes to the caller's own scope" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const response: TestResponse = .{ .cache_control = "max-age=300", .set_cookie = "a=1" };
-    try testing.expectEqual(null, try response.run(arena.allocator()));
+    // Set-Cookie: stored, kept intact, and scoped to the caller (not public).
+    const with_cookie: TestResponse = .{ .cache_control = "max-age=300", .set_cookie = "a=1" };
+    const cookie_result = (try with_cookie.run(arena.allocator())).?;
+    try testing.expectEqual(7, cookie_result.scope.private);
+    try testing.expectEqual(2, cookie_result.headers.len);
 
-    var strip = response;
-    strip.set_cookie_mode = true;
-    const stripped = (try strip.run(arena.allocator())).?;
-    try testing.expectEqual(1, stripped.headers.len);
-    try testing.expectEqual("cache-control", stripped.headers[0].name);
+    // Cache-Control: private behaves the same way.
+    const private: TestResponse = .{ .cache_control = "private, max-age=300" };
+    const private_result = (try private.run(arena.allocator())).?;
+    try testing.expectEqual(7, private_result.scope.private);
 
-    // private and no-store aren't stored either way
-    for ([_][]const u8{ "private, max-age=300", "no-store, max-age=300" }) |cc| {
-        var private: TestResponse = .{ .cache_control = cc, .set_cookie = "a=1", .set_cookie_mode = true };
-        try testing.expectEqual(null, try private.run(arena.allocator()));
-        private.set_cookie_mode = false;
-        try testing.expectEqual(null, try private.run(arena.allocator()));
-    }
+    // Authorization and Proxy-Authorization are request headers, not
+    // response ones: a request carrying either, even to a plain response,
+    // must land in the caller's own scope rather than the shared public one.
+    const with_authorization: TestResponse = .{
+        .cache_control = "max-age=300",
+        .request_header = .{ .name = "authorization", .value = "Bearer abc" },
+    };
+    const authorization_result = (try with_authorization.run(arena.allocator())).?;
+    try testing.expectEqual(7, authorization_result.scope.private);
+
+    const with_proxy_authorization: TestResponse = .{
+        .cache_control = "max-age=300",
+        .request_header = .{ .name = "proxy-authorization", .value = "Basic abc" },
+    };
+    const proxy_authorization_result = (try with_proxy_authorization.run(arena.allocator())).?;
+    try testing.expectEqual(7, proxy_authorization_result.scope.private);
+
+    // Cookie is also a request header: a request carrying a session cookie
+    // must land in the caller's own scope too, even if the response never
+    // says Set-Cookie or private.
+    const with_cookie_request: TestResponse = .{
+        .cache_control = "max-age=300",
+        .request_header = .{ .name = "cookie", .value = "session=abc" },
+    };
+    const cookie_request_result = (try with_cookie_request.run(arena.allocator())).?;
+    try testing.expectEqual(7, cookie_request_result.scope.private);
+
+    // no-store is still never stored, regardless of scope.
+    const no_store: TestResponse = .{ .cache_control = "no-store, max-age=300" };
+    try testing.expectEqual(null, try no_store.run(arena.allocator()));
+
+    // Nothing private about this one: it goes to the public scope even
+    // though the caller's own scope was private.
+    const plain: TestResponse = .{ .cache_control = "max-age=300" };
+    const plain_result = (try plain.run(arena.allocator())).?;
+    try testing.expect(plain_result.scope == .public);
 }
 
 test "Cache: renew strips a 304's Set-Cookie" {
-    for ([_]bool{ false, true }) |mode| {
-        var arena = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
 
-        var cache: Cache = .{
-            .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0) },
-            .set_cookie = mode,
-        };
-        defer cache.deinit();
+    var cache: Cache = .{ .kind = .{ .sqlite = try SqliteCache.init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
 
-        const stored = try cache.put(arena.allocator(), .{
-            .timestamp = test_now,
-            .url = "https://example.com",
-            .status = 200,
-            .content_type = "text/html",
-            .headers = &.{
-                .{ .name = "cache-control", .value = "no-cache" },
-                .{ .name = "etag", .value = "\"v1\"" },
-            },
-            .request_headers = &.{},
-        }, "hello");
-        try testing.expectEqual(true, stored);
+    const stored = try cache.put(arena.allocator(), .{
+        .timestamp = test_now,
+        .url = "https://example.com",
+        .scope = .public,
+        .status = 200,
+        .content_type = "text/html",
+        .headers = &.{
+            .{ .name = "cache-control", .value = "no-cache" },
+            .{ .name = "etag", .value = "\"v1\"" },
+        },
+        .request_headers = &.{},
+    }, "hello");
+    try testing.expect(stored != null);
 
-        try cache.renew(arena.allocator(), .{
-            .url = "https://example.com",
-            .timestamp = test_now + 10,
-            .headers = &.{
-                .{ .name = "cache-control", .value = "max-age=600" },
-                .{ .name = "set-cookie", .value = "a=1" },
-            },
-            .request_headers = &.{},
-        });
+    try cache.renew(arena.allocator(), .{
+        .url = "https://example.com",
+        .scope = .public,
+        .timestamp = test_now + 10,
+        .headers = &.{
+            .{ .name = "cache-control", .value = "max-age=600" },
+            .{ .name = "set-cookie", .value = "a=1" },
+        },
+        .request_headers = &.{},
+    });
 
-        const result = try cache.get(arena.allocator(), arena.allocator(), .{
-            .url = "https://example.com",
-            .timestamp = test_now + 10,
-            .request_headers = &.{},
-        });
-        const has_set_cookie = for (result.hit.headers) |h| {
-            if (std.mem.eql(u8, h.name, "set-cookie")) break true;
-        } else false;
-        try testing.expectEqual(false, has_set_cookie);
-    }
+    const result = try cache.get(arena.allocator(), arena.allocator(), .{
+        .url = "https://example.com",
+        .scope = .public,
+        .timestamp = test_now + 10,
+        .request_headers = &.{},
+    });
+    const has_set_cookie = for (result.hit.headers) |h| {
+        if (std.mem.eql(u8, h.name, "set-cookie")) break true;
+    } else false;
+    try testing.expectEqual(false, has_set_cookie);
 }

@@ -191,6 +191,8 @@ blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 intercepted: usize = 0,
 
 cache: *Cache,
+// This Browser's identity for private cache entries.
+scope: Cache.CacheScope,
 
 // Cached config decisions, resolved once at init.
 serve_mode: bool,
@@ -205,7 +207,7 @@ robots: RobotsGate,
 cors: CorsGate,
 url_blocklist: ?UrlBlocklist,
 
-pub fn init(self: *Client, app: *lp.App) !void {
+pub fn init(self: *Client, app: *lp.App, scope: Cache.CacheScope) !void {
     const config = app.config;
     const allocator = app.allocator;
 
@@ -236,6 +238,7 @@ pub fn init(self: *Client, app: *lp.App) !void {
         .network = network,
         .allocator = app.allocator,
         .cache = &network.cache,
+        .scope = scope,
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -1305,6 +1308,13 @@ pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn cacheScopeMetric(scope: Cache.CacheScope) @TypeOf(lp.metrics.http_cache_scope).Tag {
+    return switch (scope) {
+        .public => .public,
+        .private => .private,
+    };
+}
+
 // Returns true if the request was served from the cache (response buffered
 // for dispatch). On a miss the transfer is tagged so completion can store
 // the response; on an expired-with-validators entry the request becomes a
@@ -1356,6 +1366,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const cache_result = cache.get(arena.allocator(), self.allocator, .{
         .url = key,
+        .scope = self.scope,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = try transfer.cacheRequestHeaders(),
     }) catch |e| blk: {
@@ -1366,6 +1377,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     switch (cache_result) {
         .hit => |cached| {
             lp.metrics.http_cache.incr(.hit);
+            lp.metrics.http_cache_scope.incr(cacheScopeMetric(cached.scope));
             try self.serveCached(transfer, cached, .local);
             return true;
         },
@@ -1390,9 +1402,9 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
             transfer._cache_intent = .store;
             return false;
         },
-        .stale => {
+        .stale => |scope| {
             lp.metrics.http_cache.incr(.miss);
-            cache.evict(key);
+            cache.evict(key, scope);
             transfer._cache_intent = .store;
             return false;
         },
@@ -1421,6 +1433,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
 
     cache.renew(transfer.arena.allocator(), .{
         .url = transfer._cache_key,
+        .scope = stale.scope,
         .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
         .request_headers = request_headers,
@@ -1429,6 +1442,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     };
 
     lp.metrics.http_cache.incr(.revalidated);
+    lp.metrics.http_cache_scope.incr(cacheScopeMetric(stale.scope));
     try self.serveCached(transfer, stale, .validated);
     return true;
 }
@@ -1468,20 +1482,22 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const rh = &(transfer.res.header orelse return);
 
-    const stored = storeResponse(cache, transfer, rh) catch |err| {
+    const stored_scope = storeResponse(cache, self.scope, transfer, rh) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
         return;
     };
-    if (stored) {
-        transfer.script_cache = .{ .key = transfer._cache_key, .bytes = null };
+    if (stored_scope) |scope| {
+        lp.metrics.http_cache_scope.incr(cacheScopeMetric(scope));
+        transfer.script_cache = .{ .key = transfer._cache_key, .scope = scope, .bytes = null };
     }
 }
 
-fn storeResponse(cache: *Cache, transfer: *Transfer, rh: *http.ResponseHead) !bool {
+fn storeResponse(cache: *Cache, scope: Cache.CacheScope, transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CacheScope {
     const arena = transfer.arena.allocator();
     return cache.put(arena, .{
         .timestamp = lp.datetime.timestamp(.real),
         .url = transfer._cache_key,
+        .scope = scope,
         .status = rh.status,
         .content_type = rh.contentType(),
         .headers = transfer.res.headers,
@@ -1542,6 +1558,7 @@ const SyncContext = struct {
         if (script_cache) |sc| {
             self.script_cache = .{
                 .key = try allocator.dupe(u8, sc.key),
+                .scope = sc.scope,
                 .bytes = if (sc.bytes) |b| try allocator.dupe(u8, b) else null,
             };
         }
@@ -3816,7 +3833,7 @@ pub const Transfer = struct {
         self.setResponseHead(cached.status, cached.content_type);
         self.setResponseHeaders(cached.headers);
         self._from_cache = true;
-        self.script_cache = .{ .key = self._cache_key, .bytes = cached.script_cache };
+        self.script_cache = .{ .key = self._cache_key, .scope = cached.scope, .bytes = cached.script_cache };
         self._timing.cache = cache_state;
         self._content_length = body.len;
         // A revalidated entry keeps the size of the 304 that crossed the wire.
@@ -5028,6 +5045,9 @@ const CacheIntent = union(enum) {
 pub const ScriptCache = struct {
     // any update to the cache is aimed here
     key: []const u8,
+    // the scope the entry actually lives under, not necessarily this
+    // Browser's own: a public entry must be updated at its public scope.
+    scope: Cache.CacheScope,
 
     // existing cached script bytes. When null, ScriptManagerBase will
     // potentially create it and then use `key` to update the database
@@ -5286,6 +5306,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.http_active = 0;
     client.ws_active = 0;
     client.cache = &Cache.noop;
+    client.scope = .public;
     client.serve_mode = false;
     client.obey_robots = false;
     client.http_version = .auto;
@@ -6996,21 +7017,16 @@ test "HttpClient: encodedDataLength of a cache hit is the stored body, of a reva
     try testing.expectEqual(raw.not_modified.head.len, try e.fetch("http://127.0.0.1:9582/raw/revalidated", null));
 }
 
-test "HttpClient: privatecache caches Set-Cookie responses" {
+test "HttpClient: Set-Cookie responses are cached privately" {
     const client = &testing.test_browser.http_client;
     const previous = client.cache;
     defer client.cache = previous;
 
-    inline for (.{ .{ false, "skip" }, .{ true, "strip" } }) |mode| {
-        var cache: Cache = .{
-            .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) },
-            .set_cookie = mode[0],
-        };
-        defer cache.deinit();
-        client.cache = &cache;
+    var cache: Cache = .{ .kind = .{ .sqlite = try @import("cache/SqliteCache.zig").init(testing.allocator, .memory, 0) } };
+    defer cache.deinit();
+    client.cache = &cache;
 
-        try testing.htmlRunner("net/cache_set_cookie_" ++ mode[1] ++ ".html", .{});
-    }
+    try testing.htmlRunner("net/cache_set_cookie.html", .{});
 }
 
 test "HttpClient: a cors-mode fetch is blocked even when the response is a cache hit" {

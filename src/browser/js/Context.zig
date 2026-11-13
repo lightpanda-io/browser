@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const HttpClient = @import("../../network/HttpClient.zig");
+const Cache = @import("../../network/cache/Cache.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
@@ -151,6 +152,7 @@ const PendingCodeCache = struct {
     // Owned (env.allocator): a static import's source is freed as soon as
     // it's compiled.
     key: []const u8,
+    scope: Cache.CacheScope,
     text: []const u8,
 
     fn deinit(self: PendingCodeCache, allocator: Allocator) void {
@@ -551,7 +553,7 @@ fn queueModuleCodeCache(self: *Context, url: []const u8, sc: HttpClient.ScriptCa
     const text = try allocator.dupe(u8, src);
     errdefer allocator.free(text);
 
-    try self.pending_code_caches.append(allocator, .{ .url = url, .key = key, .text = text });
+    try self.pending_code_caches.append(allocator, .{ .url = url, .key = key, .scope = sc.scope, .text = text });
 }
 
 fn flushModuleCodeCaches(self: *Context, local: *const js.Local) void {
@@ -578,7 +580,7 @@ fn flushModuleCodeCaches(self: *Context, local: *const js.Local) void {
         };
         defer code_cache.deinit();
 
-        self.script_manager.client.cache.putScriptCache(pending.key, pending.text, code_cache.bytes()) catch |err| {
+        self.script_manager.client.cache.putScriptCache(pending.key, pending.scope, pending.text, code_cache.bytes()) catch |err| {
             log.warn(.cache, "put module script cache", .{ .url = pending.url, .err = err });
         };
     }
