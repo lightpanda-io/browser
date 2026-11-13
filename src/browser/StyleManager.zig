@@ -203,6 +203,11 @@ fn Records(comptime T: type) type {
             return if (e.stamp == self.generation) e.value else null;
         }
 
+        fn getPtr(self: *const Self, el: *const Element) ?*T {
+            const e = self.entry(el) orelse return null;
+            return if (e.stamp == self.generation) &e.value else null;
+        }
+
         pub fn contains(self: *const Self, el: *const Element) bool {
             return self.get(el) != null;
         }
@@ -2357,36 +2362,46 @@ const WidthMemo = struct {
     detached: bool = false,
     viewport_width: u32 = 0,
     viewport_height: u32 = 0,
-    map: std.AutoHashMapUnmanaged(*Element, Entry) = .empty,
+    map: Records(Entry) = .{},
 
+    // The kinds cached so far, by WidthKind
     const Entry = struct {
-        box: ?f64 = null,
-        content: ?f64 = null,
-        full_content: ?f64 = null,
-        scrollable_content: ?f64 = null,
-        row_shrink: ?f64 = null,
+        widths: [kinds]f64,
+        set: u8 = 0,
+
+        const kinds = @typeInfo(WidthKind).@"enum".field_names.len;
+        comptime {
+            std.debug.assert(kinds <= 8);
+        }
     };
 };
 
 pub fn cachedWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind) ?f64 {
     const memo = self.freshWidthMemo() orelse return null;
-    const entry = memo.map.get(el) orelse return null;
-    return @field(entry, @tagName(kind));
+    const entry = memo.map.getPtr(el) orelse return null;
+    const i = @backingInt(kind);
+    return if (entry.set & (1 << i) != 0) entry.widths[i] else null;
 }
 
 pub fn cacheWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind, width: f64) void {
     const memo = self.freshWidthMemo() orelse return;
-    const gop = memo.map.getOrPut(self.arena.allocator(), el) catch |err| {
+    const i = @backingInt(kind);
+    if (memo.map.getPtr(el)) |entry| {
+        entry.widths[i] = width;
+        entry.set |= 1 << i;
+        return;
+    }
+    const index = self.claimSlot(el) orelse return;
+    var entry: WidthMemo.Entry = .{ .widths = undefined };
+    entry.widths[i] = width;
+    entry.set |= 1 << i;
+    memo.map.put(self.arena.allocator(), index, entry) catch |err| {
         log.warn(.browser, "StyleManager width memo", .{ .err = err });
         return;
     };
-    if (gop.found_existing == false) {
-        gop.value_ptr.* = .{};
-        if (memo.detached == false and el.asNode().isConnected() == false) {
-            memo.detached = true;
-        }
+    if (memo.detached == false and el.asNode().isConnected() == false) {
+        memo.detached = true;
     }
-    @field(gop.value_ptr, @tagName(kind)) = width;
 }
 
 // Whether the width memo holds entries the next read keeps
@@ -2405,7 +2420,7 @@ fn freshWidthMemo(self: *StyleManager) ?*WidthMemo {
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
         memo.detached = false;
-        memo.map.clearRetainingCapacity();
+        memo.map.clear();
         memo.version = version;
         memo.viewport_width = viewport.width;
         memo.viewport_height = viewport.height;
@@ -6270,6 +6285,30 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
         }
     }
     try testing.expectEqual(computed, Geometry.Stored.pack(computed).unpack());
+}
+
+test "StyleManager: records: the width memo keeps each kind apart" {
+    try testing.expectEqual(56, @sizeOf(Records(WidthMemo.Entry).Entry));
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+    sm.cacheWidth(div, .box, 120);
+    sm.cacheWidth(div, .row_shrink, 0.5);
+    try testing.expectEqual(120, sm.cachedWidth(div, .box));
+    try testing.expectEqual(0.5, sm.cachedWidth(div, .row_shrink));
+    try testing.expectEqual(null, sm.cachedWidth(div, .content));
+    try testing.expectEqual(1, sm.widths.map.count());
+
+    // A layout change clears them all at once
+    sm.layout_bumps += 1;
+    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+    sm.cacheWidth(div, .content, 80);
+    try testing.expectEqual(80, sm.cachedWidth(div, .content));
+    try testing.expectEqual(null, sm.cachedWidth(div, .row_shrink));
 }
 
 test "StyleManager: records: the generation wraps" {
