@@ -33,6 +33,10 @@ const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
+const HttpClient = @import("../network/HttpClient.zig");
+const Geolocation = @import("webapi/geolocation/Geolocation.zig");
+const PermissionState = @import("webapi/Permissions.zig").State;
+const PermissionOverrides = @import("PermissionOverrides.zig");
 pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
@@ -50,6 +54,9 @@ const ArenaPool = App.ArenaPool;
 const Session = @This();
 
 browser: *Browser,
+http_client: *HttpClient,
+permissions: PermissionOverrides = .{},
+geolocation_override: ?Geolocation.Override = null,
 arena: *lp.Arena,
 // Session history, one per top-level browsing context, keyed by its root
 // frame id. Outlives the Page: a root navigation's replacement Page reuses the
@@ -174,6 +181,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .idb = IdbManager.init(allocator),
         .cache_store = CacheStore.init(allocator),
         .browser = browser,
+        .http_client = &browser.http_client,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
         ._console_messages = .init(allocator),
@@ -183,7 +191,32 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     errdefer self._console_messages.deinit();
 }
 
+// The client is borrowed and must outlive the session. Install it before
+// creating pages: their script managers retain the same client pointer.
+// A custom client is exclusive to this session until teardown releases it.
+pub fn setHttpClient(self: *Session, client: *HttpClient) void {
+    lp.assert(self.pages.items.len == 0, "Session.setHttpClient with live pages", .{});
+    if (self.http_client == client) return;
+    if (self.http_client != &self.browser.http_client) self.http_client.session_source = null;
+    if (client != &self.browser.http_client) {
+        lp.assert(client.session_source == null, "Client already installed in a session", .{});
+        client.session_source = &self.browser.http_client;
+    }
+    self.http_client = client;
+}
+
+pub fn setPermission(self: *Session, name: []const u8, state: PermissionState) !void {
+    try self.permissions.set(self.browser.allocator, name, state);
+}
+
+pub fn clearPermissions(self: *Session) void {
+    self.permissions.clear(self.browser.allocator);
+}
+
 pub fn deinit(self: *Session) void {
+    defer {
+        if (self.http_client != &self.browser.http_client) self.http_client.session_source = null;
+    }
     if (self._console_capture) {
         self.notification.unregister(.console_message, self);
     }
@@ -196,7 +229,7 @@ pub fn deinit(self: *Session) void {
     // They still carry this notification and can outlive it, so clear the pointer here or
     // Transfer.kill's later notify() dispatches through a freed Notification
     // once the caller runs notification.deinit() after this returns.
-    var transfer_it = self.browser.http_client.transfers.valueIterator();
+    var transfer_it = self.http_client.transfers.valueIterator();
     while (transfer_it.next()) |t| {
         if (t.*.req.notification == self.notification) {
             t.*.req.notification = null;
@@ -204,6 +237,7 @@ pub fn deinit(self: *Session) void {
     }
 
     self.cookie_jar.deinit();
+    self.permissions.deinit(self.browser.allocator);
 
     {
         // Every context is disposed; this GC must not arm a termination.
@@ -632,7 +666,7 @@ pub fn idleSlice(self: *Session) u31 {
 
     if (self.pages.items.len == 0) {
         // no page, we don't want the watchdog to kill us.
-        self.browser.http_client.heartbeat.disarm();
+        self.http_client.watchdogHeartbeat().disarm();
         return quiet_ms;
     }
     const page = self.pages.items[0];
@@ -1180,7 +1214,7 @@ test "Session: a root navigation whose submit fails commits an error document" {
     const handle = try session.createPage();
     const live = handle.page().?;
 
-    const client = &session.browser.http_client;
+    const client = session.http_client;
     client.test_fail_submit = error.TestSubmitFailure;
     defer client.test_fail_submit = null;
 
@@ -1268,4 +1302,129 @@ test "Session: console capture runs no page JS" {
     try testing.expectEqualSlices(u8, "[log] head [object Object] 10n Symbol(s)\n", session.drainConsoleMessages());
     const probed = try ls.local.exec("globalThis.probed", null);
     try testing.expectEqual(0, try probed.toF64());
+}
+
+test "Session: permission and coordinate overrides belong to their session" {
+    const browser = testing.test_session.browser;
+    const first_notification = try Notification.init(testing.allocator);
+    defer first_notification.deinit();
+    const second_notification = try Notification.init(testing.allocator);
+    defer second_notification.deinit();
+    var first: Session = undefined;
+    try first.init(browser, first_notification);
+    defer first.deinit();
+    var second: Session = undefined;
+    try second.init(browser, second_notification);
+    defer second.deinit();
+    try first.setPermission("geolocation", .granted);
+    try second.setPermission("geolocation", .denied);
+    first.geolocation_override = .{ .latitude = 1, .longitude = 2, .accuracy = 3 };
+    second.geolocation_override = .{ .latitude = 4, .longitude = 5, .accuracy = 6 };
+    first.clearPermissions();
+    try testing.expectEqual(null, first.permissions.get("geolocation"));
+    try testing.expectEqual(.denied, second.permissions.get("geolocation").?);
+    try testing.expectEqual(1, first.geolocation_override.?.latitude);
+    try testing.expectEqual(4, second.geolocation_override.?.latitude);
+}
+
+test "Session: navigator reads its own network client" {
+    const browser = testing.test_session.browser;
+    const notification = try Notification.init(testing.allocator);
+    defer notification.deinit();
+    var client: HttpClient = undefined;
+    try client.init(browser.app);
+    defer client.deinit();
+    try client.setUserAgentOverride("SessionBot/1.0");
+    try client.setAcceptLanguageOverride("fr-FR,fr;q=0.9");
+    var session: Session = undefined;
+    try session.init(browser, notification);
+    defer session.deinit();
+    session.setHttpClient(&client);
+    const page = try session.createPage();
+    const frame = page.frame().?;
+    const js = @import("js/js.zig");
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        try testing.expect((try scope.local.exec("navigator.userAgent === 'SessionBot/1.0' && navigator.language === 'fr-FR'", null)).toBool());
+    }
+    try testing.expect(!std.mem.eql(u8, browser.http_client.getUserAgent(), "SessionBot/1.0"));
+    try testing.expect(client.watchdogHeartbeat() == browser.http_client.watchdogHeartbeat());
+    var page_runner = session.runner(.{});
+    _ = try page_runner.tickForFrame(frame._frame_id, 0, .{ .until = .done });
+    try testing.expect(client.watchdogHeartbeat().last_activity.load(.acquire) > 0);
+    const default_requests = browser.http_client.next_request_id;
+    try page.navigate("http://127.0.0.1:9582/src/browser/tests/hi.html", .{});
+    try page_runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+    try testing.expect(client.next_request_id > 0);
+    try testing.expectEqual(default_requests, browser.http_client.next_request_id);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html", page.frame().?.url);
+}
+
+test "Session: pages share permission overrides only within their session" {
+    const js = @import("js/js.zig");
+    const browser = testing.test_session.browser;
+    const first_notification = try Notification.init(testing.allocator);
+    defer first_notification.deinit();
+    const second_notification = try Notification.init(testing.allocator);
+    defer second_notification.deinit();
+    var first: Session = undefined;
+    try first.init(browser, first_notification);
+    defer first.deinit();
+    var second: Session = undefined;
+    try second.init(browser, second_notification);
+    defer second.deinit();
+
+    const a = try first.createPage();
+    const b = try first.createPage();
+    const other = try second.createPage();
+    const expectPermission = struct {
+        fn check(page: PageHandle, expected: []const u8) !void {
+            var ls: js.Local.Scope = undefined;
+            page.frame().?.js.localScope(&ls);
+            defer ls.deinit();
+            _ = try ls.local.exec(
+                "globalThis.permissionState = null; navigator.permissions.query({name: 'geolocation'}).then(p => permissionState = p.state)",
+                null,
+            );
+            ls.local.runMicrotasks();
+            const state = try ls.local.exec("permissionState", null);
+            try testing.expectEqual(expected, try state.toStringSlice());
+        }
+    }.check;
+
+    try expectPermission(a, "prompt");
+    try expectPermission(b, "prompt");
+    try first.setPermission("geolocation", .granted);
+    try expectPermission(a, "granted");
+    try expectPermission(b, "granted");
+    try expectPermission(other, "prompt");
+    try second.setPermission("geolocation", .denied);
+    try expectPermission(other, "denied");
+    try expectPermission(b, "granted");
+
+    a.close();
+    try expectPermission(b, "granted");
+    try expectPermission(try first.createPage(), "granted");
+    first.clearPermissions();
+    try expectPermission(b, "prompt");
+    try expectPermission(other, "denied");
+}
+
+test "Session: releasing a borrowed client removes its browser binding" {
+    const browser = testing.test_session.browser;
+    const notification = try Notification.init(testing.allocator);
+    defer notification.deinit();
+    var client: HttpClient = undefined;
+    try client.init(browser.app);
+    defer client.deinit();
+    var session: Session = undefined;
+    try session.init(browser, notification);
+    session.setHttpClient(&client);
+    try testing.expectEqual(&browser.http_client, client.session_source.?);
+    session.deinit();
+    try testing.expectEqual(null, client.session_source);
+    try testing.expect(client.watchdogHeartbeat() == &client.heartbeat);
+    _ = try client.tick(0);
 }
