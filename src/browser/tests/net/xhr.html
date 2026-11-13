@@ -704,6 +704,263 @@
   }
 </script>
 
+<script>
+  // Records every upload event, plus the XHR's own readyState changes and
+  // terminal events, into one ordered log.
+  function recordUploadEvents(req, log) {
+    for (const type of ['loadstart', 'progress', 'load', 'error', 'abort', 'timeout', 'loadend']) {
+      req.upload.addEventListener(type, (e) => {
+        log.push(`upload.${type} ${e.loaded}/${e.total} ${e.lengthComputable}`);
+      });
+    }
+    req.onreadystatechange = () => log.push(`readystatechange ${req.readyState}`);
+    for (const type of ['load', 'error', 'abort']) {
+      req.addEventListener(type, () => log.push(type));
+    }
+  }
+</script>
+
+<script id=xhr_upload_events type=module>
+  {
+    // https://xhr.spec.whatwg.org/#the-send()-method: loadstart is fired on
+    // the upload object from send() itself; progress, load and loadend once
+    // the request body has been transmitted, before the response headers.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    const log = [];
+    recordUploadEvents(req, log);
+    // The response isn't processed yet.
+    req.upload.addEventListener('load', () => log.push(`status ${req.status}`));
+    req.addEventListener('loadend', () => state.resolve());
+
+    req.open('POST', 'http://127.0.0.1:9582/xhr');
+    req.send('x'.repeat(1000));
+    log.push('send returned');
+
+    await state.done(() => {
+      testing.expectEqual([
+        'readystatechange 1',
+        'upload.loadstart 0/1000 true',
+        'send returned',
+        'upload.progress 1000/1000 true',
+        'upload.load 1000/1000 true',
+        'status 0',
+        'upload.loadend 1000/1000 true',
+        'readystatechange 2',
+        'readystatechange 3',
+        'readystatechange 4',
+        'load',
+      ], log);
+    });
+  }
+</script>
+
+<script id=xhr_upload_events_blob type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    const log = [];
+    req.upload.onprogress = (e) => log.push(`${e.loaded}/${e.total}`);
+    req.upload.onload = () => log.push('load');
+    req.onloadend = () => state.resolve();
+
+    req.open('PUT', 'http://127.0.0.1:9582/xhr');
+    req.send(new Blob(['x'.repeat(1000)]));
+
+    await state.done(() => {
+      testing.expectEqual(['1000/1000', 'load'], log);
+    });
+  }
+</script>
+
+<script id=xhr_upload_events_not_fired type=module>
+  {
+    // No upload events without a request body (GET, or no body), for a
+    // listener added after send() (the "upload listener flag" is computed at
+    // send() time), or for a synchronous request.
+    const state = await testing.async();
+    const fired = [];
+    const listen = (req, name) => {
+      for (const type of ['loadstart', 'progress', 'load', 'loadend']) {
+        req.upload.addEventListener(type, () => fired.push(`${name}: ${type}`));
+      }
+    };
+    let pending = 3;
+    const async_req = () => {
+      const req = new XMLHttpRequest();
+      req.onloadend = () => { if (--pending === 0) state.resolve(); };
+      return req;
+    };
+
+    const get = async_req();
+    listen(get, 'get');
+    get.open('GET', 'http://127.0.0.1:9582/xhr');
+    get.send('ignored');
+
+    const no_body = async_req();
+    listen(no_body, 'no body');
+    no_body.open('POST', 'http://127.0.0.1:9582/xhr');
+    no_body.send();
+
+    const late = async_req();
+    late.open('POST', 'http://127.0.0.1:9582/xhr');
+    late.send('foo');
+    listen(late, 'late');
+
+    const sync = new XMLHttpRequest();
+    listen(sync, 'sync');
+    sync.open('POST', 'http://127.0.0.1:9582/xhr', false);
+    sync.send('foo');
+
+    await state.done(() => {
+      testing.expectEqual([], fired);
+      testing.expectEqual(200, sync.status);
+    });
+  }
+</script>
+
+<script id=xhr_upload_events_abort type=module>
+  {
+    // https://xhr.spec.whatwg.org/#request-error-steps: an unfinished upload
+    // gets abort and loadend (0/0) before the XHR itself does.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    const log = [];
+    recordUploadEvents(req, log);
+    req.addEventListener('loadend', () => state.resolve());
+
+    req.open('POST', 'http://127.0.0.1:9582/xhr');
+    req.send('foo');
+    req.abort();
+
+    await state.done(() => {
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.abort 0/0 false',
+        'upload.loadend 0/0 false',
+        'abort',
+      ], log.filter((l) => !l.startsWith('readystatechange')));
+    });
+  }
+</script>
+
+<script id=xhr_upload_events_abort_in_handler type=module>
+  {
+    // abort() from an upload handler: from loadstart, the request is never
+    // made; from load, the response is never processed.
+    const state = await testing.async();
+    let pending = 2;
+    const run = (abort_on) => {
+      const req = new XMLHttpRequest();
+      const log = [];
+      recordUploadEvents(req, log);
+      req.upload.addEventListener(abort_on, () => req.abort());
+      // Long enough for an un-cancelled request to deliver its response.
+      req.addEventListener('loadend', () => setTimeout(() => {
+        if (--pending === 0) state.resolve();
+      }, 50));
+      req.open('POST', 'http://127.0.0.1:9582/xhr');
+      req.send('foo');
+      return log;
+    };
+    const from_loadstart = run('loadstart');
+    const from_load = run('load');
+
+    await state.done(() => {
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.abort 0/0 false',
+        'upload.loadend 0/0 false',
+        'abort',
+      ], from_loadstart.filter((l) => !l.startsWith('readystatechange')));
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.progress 3/3 true',
+        'upload.load 3/3 true',
+        'abort',
+        'upload.loadend 3/3 true',
+      ], from_load.filter((l) => !l.startsWith('readystatechange')));
+    });
+  }
+</script>
+
+<script id=xhr_upload_events_resend_in_handler type=module>
+  {
+    // open() + send() from the upload loadstart handler: the inner send()
+    // makes the request, so the outer one must not make a second. Two
+    // transfers would deliver two responses (two 'load'), and abort() could
+    // only ever reach the last one.
+    const state = await testing.async();
+    let pending = 2;
+    const run = (abort_after_send) => {
+      const req = new XMLHttpRequest();
+      const log = [];
+      recordUploadEvents(req, log);
+      let resent = false;
+      req.upload.addEventListener('loadstart', () => {
+        if (resent) return;
+        resent = true;
+        req.open('POST', 'http://127.0.0.1:9582/xhr');
+        req.send('bar!');
+      });
+      // Long enough for a second transfer to deliver its response.
+      req.addEventListener('loadend', () => setTimeout(() => {
+        if (--pending === 0) state.resolve();
+      }, 50));
+      req.open('POST', 'http://127.0.0.1:9582/xhr');
+      req.send('foo');
+      if (abort_after_send) req.abort();
+      return log;
+    };
+    const completed = run(false);
+    const aborted = run(true);
+
+    await state.done(() => {
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.loadstart 0/4 true',
+        'upload.progress 4/4 true',
+        'upload.load 4/4 true',
+        'upload.loadend 4/4 true',
+        'load',
+      ], completed.filter((l) => !l.startsWith('readystatechange')));
+      // abort() reaches the only request there is: nothing completes later.
+      testing.expectEqual([
+        'upload.loadstart 0/3 true',
+        'upload.loadstart 0/4 true',
+        'upload.abort 0/0 false',
+        'upload.loadend 0/0 false',
+        'abort',
+      ], aborted.filter((l) => !l.startsWith('readystatechange')));
+    });
+  }
+</script>
+
+<script id=xhr_upload_events_network_error type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    const log = [];
+    recordUploadEvents(req, log);
+    req.addEventListener('loadend', () => state.resolve());
+
+    // Nothing listens on port 65534: a network error, not an HTTP one.
+    req.open('POST', 'http://127.0.0.1:65534/');
+    req.send('foo');
+
+    await state.done(() => {
+      testing.expectEqual([
+        'readystatechange 1',
+        'upload.loadstart 0/3 true',
+        'readystatechange 4',
+        'upload.error 0/0 false',
+        'upload.loadend 0/0 false',
+        'error',
+      ], log);
+    });
+  }
+</script>
+
 <script id=xhr_send_flag type=module>
   {
     // Per spec, calling send() while a request is already in flight throws
