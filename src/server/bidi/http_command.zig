@@ -90,6 +90,10 @@ pub const Command = union(enum) {
     add_cookie: AddCookie,
     delete_cookie: CookieName,
     delete_all_cookies,
+    dismiss_alert,
+    accept_alert,
+    get_alert_text,
+    send_alert_text: AlertText,
 };
 
 // A command's path parameters are its leading fields (see `parse`); the rest
@@ -273,6 +277,10 @@ const routes = [_]Route{
     .init(.DELETE, "/cookie", .delete_all_cookies),
     .init(.GET, "/cookie/{name}", .get_named_cookie),
     .init(.DELETE, "/cookie/{name}", .delete_cookie),
+    .init(.POST, "/alert/dismiss", .dismiss_alert),
+    .init(.POST, "/alert/accept", .accept_alert),
+    .init(.GET, "/alert/text", .get_alert_text),
+    .init(.POST, "/alert/text", .send_alert_text),
 };
 
 pub const ParseError = error{
@@ -379,6 +387,7 @@ pub fn process(cmd: *BiDi.Command) !void {
         .add_cookie => |p| return addCookie(cmd, p),
         .delete_cookie => |p| return deleteCookies(cmd, p.name),
         .delete_all_cookies => return deleteCookies(cmd, null),
+        .dismiss_alert, .accept_alert, .get_alert_text, .send_alert_text => return noSuchAlert(cmd),
     }
 }
 
@@ -942,6 +951,18 @@ fn deleteCookies(cmd: *BiDi.Command, name: ?[]const u8) !void {
     return cmd.sendDone();
 }
 
+// POST /session/{id}/alert/text
+const AlertText = struct {
+    text: []const u8,
+};
+
+// POST /session/{id}/alert/dismiss, /alert/accept, GET and POST /alert/text.
+// alert(), confirm() and prompt() never block: they return as soon as they're
+// called. So there's never a prompt open to act on.
+fn noSuchAlert(cmd: *BiDi.Command) !void {
+    return cmd.sendError("no such alert", "no user prompt is open");
+}
+
 // {"element-6066-…": "<sharedId>"}: a WebDriver element reference is the
 // node registry's id, the same one BiDi hands out.
 pub const Reference = struct {
@@ -1158,6 +1179,12 @@ test "bidi.http_command: parse" {
     try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/window", "{\"handle\":17}"));
     try testing.expect(try parse(arena, .DELETE, "/window", "") == .close_window);
     try testing.expect(try parse(arena, .DELETE, "/actions", "") == .release_actions);
+
+    try testing.expect(try parse(arena, .POST, "/alert/dismiss", "{}") == .dismiss_alert);
+    try testing.expect(try parse(arena, .POST, "/alert/accept", "{}") == .accept_alert);
+    try testing.expect(try parse(arena, .GET, "/alert/text", "") == .get_alert_text);
+    try testing.expectEqual("hi", (try parse(arena, .POST, "/alert/text", "{\"text\":\"hi\"}")).send_alert_text.text);
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/alert/text", "{}"));
 
     // a known path with the wrong method is an unknown command too
     try testing.expectError(error.UnknownCommand, parse(arena, .PUT, "/url", ""));
