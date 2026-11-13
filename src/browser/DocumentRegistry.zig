@@ -60,6 +60,7 @@ pub fn register(self: *DocumentRegistry, doc: *Document) !u32 {
 }
 
 pub fn release(self: *DocumentRegistry, index: u32) void {
+    self.items.items[index]._ids.deinit();
     // The slot keeps its stale pointer; nothing resolves it until reused.
     // Failing to record it only loses the slot.
     self.free.append(self.allocator, index) catch {};

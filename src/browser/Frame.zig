@@ -545,15 +545,7 @@ pub fn deinit(self: *Frame) void {
 
         observers.deinit(self, page);
 
-        var document = self.window._document;
-        document._selection.releaseRef(page);
-
-        if (document._fonts) |f| {
-            f.releaseRef(page);
-        }
-
-        // Release our reference to location.
-        self.window._location.releaseRef(page);
+        self.window.deinit(page);
         page.event_listeners.removeTarget(self.window.asEventTarget());
     }
 
@@ -2527,7 +2519,7 @@ fn rootIsConnected(root: *Node) bool {
 }
 
 pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
-    return self.getIdMap(parent).add(self.page_arena, element, id);
+    return self.getIdMap(parent).add(element, id);
 }
 
 pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
@@ -3433,7 +3425,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
             if (idMapForRoot(root)) |id_map| {
                 if (child.firstChild() == null) {
                     if (el.getId()) |id| {
-                        try id_map.add(self.page_arena, el, id);
+                        try id_map.add(el, id);
                     }
                 } else {
                     // The adoption agency inserts a fresh element holding
@@ -3441,7 +3433,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                     var tw = TreeWalker.Full.Elements.init(child, .{});
                     while (tw.next()) |sub| {
                         if (sub.getId()) |id| {
-                            try id_map.add(self.page_arena, sub, id);
+                            try id_map.add(sub, id);
                         }
                     }
                 }
@@ -3511,7 +3503,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                 var tw = TreeWalker.Full.Elements.init(child, .{});
                 while (tw.next()) |el| {
                     if (el.getId()) |id| {
-                        try new_id_map.add(self.page_arena, el, id);
+                        try new_id_map.add(el, id);
                     }
                 }
                 // but beause it was and stays connected, we don't trigger
@@ -3531,7 +3523,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            try new_id_map.add(self.page_arena, el, id);
+            try new_id_map.add(el, id);
         }
 
         if (should_invoke_connected) {

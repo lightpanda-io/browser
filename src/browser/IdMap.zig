@@ -34,6 +34,8 @@ _lookup: std.StringHashMapUnmanaged(Entry) = .empty,
 // number of ids carried by more than 1 element
 _duplicated: u32 = 0,
 
+_allocator: Allocator,
+
 const Entry = struct {
     // ids aren't necessarily unique, and that impacts querySelectorAll and what
     // happens when a duplicate is added or removed from the tree
@@ -45,8 +47,18 @@ const Entry = struct {
     first: ?*Element,
 };
 
-pub fn add(self: *IdMap, allocator: Allocator, element: *Element, id: []const u8) !void {
-    const gop = try self._lookup.getOrPut(allocator, id);
+pub fn init(allocator: Allocator) IdMap {
+    return .{
+        ._allocator = allocator,
+    };
+}
+
+pub fn deinit(self: *IdMap) void {
+    self._lookup.deinit(self._allocator);
+}
+
+pub fn add(self: *IdMap, element: *Element, id: []const u8) !void {
+    const gop = try self._lookup.getOrPut(self._allocator, id);
     if (gop.found_existing == false) {
         gop.value_ptr.* = .{ .count = 1, .first = element };
         return;
@@ -110,8 +122,8 @@ pub fn moved(self: *IdMap, subtree: *Node) void {
     }
 }
 
-pub fn clear(self: *IdMap, allocator: Allocator) void {
-    self._lookup.clearAndFree(allocator);
+pub fn clear(self: *IdMap) void {
+    self._lookup.clearRetainingCapacity();
     self._duplicated = 0;
 }
 

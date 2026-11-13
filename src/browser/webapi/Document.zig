@@ -82,7 +82,7 @@ _iframe_load_in_progress: bool = false,
 _mute_iframe_load: bool = false,
 _current_script: ?*Element.Html.Script = null,
 _current_script_is_module: bool = false,
-_ids: IdMap = .{},
+_ids: IdMap,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _implementation: ?*DOMImplementation = null,
@@ -112,6 +112,13 @@ _modal_dialogs: std.ArrayList(*Element.Html.Dialog) = .empty,
 // Incremented during custom element reactions when parsing. When > 0,
 // document.open/close/write/writeln must throw InvalidStateError.
 _throw_on_dynamic_markup_insertion_counter: u32 = 0,
+
+pub fn deinit(self: *Document, page: *Page) void {
+    self._selection.releaseRef(page);
+    if (self._fonts) |f| {
+        f.releaseRef(page);
+    }
+}
 
 pub const Type = union(enum) {
     generic,
@@ -1508,7 +1515,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     }
 
     // reset the document
-    self._ids.clear(frame.page_arena);
+    self._ids.clear();
     self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._modal_dialogs = .empty;
