@@ -525,15 +525,28 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
-    var flow: Flow = .{ .in_row = style_manager.laysOutInRow(parent) };
+    if (style_manager.laysOutInRow(parent)) {
+        // A row's children all sit at its top (see Flow.at): nothing to
+        // stack, so nothing to cache.
+        return 0;
+    }
+
+    var flow: Flow = .{ .in_row = false };
+    var next = parent.asNode().flatFirstChild(owner);
     // How many children, from the first, have their offset cached. A failed
     // cache ends it, so a cached prefix never has a hole.
     var position: u32 = 0;
     var placed: u32 = 0;
+    if (resumePoint(self, parent, owner)) |point| {
+        flow.offset = point.offset;
+        next = point.next;
+        position = point.position;
+        // The siblings replayed up to there keep the offsets they have
+        placed = style_manager.getCachedPlaced(parent);
+    }
     defer style_manager.setCachePlaced(parent, placed);
 
-    var children: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
-    while (children.next()) |node| {
+    while (next) |node| : (next = node.flatNextSibling(owner)) {
         const el = node.is(Element) orelse continue;
         const offset = flow.at(el, owner);
         if (placed == position) {
@@ -549,6 +562,53 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
         flow.advance(el, owner);
     }
     return 0;
+}
+
+// Where boxOffset's walk can start instead of at the parent's first child.
+const ResumePoint = struct {
+    next: ?*Node, // the first sibling to place
+    position: u32, // its index among the parent's element children
+    offset: f64, // Flow.offset there, the line empty
+};
+
+// The nearest sibling before self whose cached offset gives the flow's state
+// after it, so reading a parent's children in order, or one just appended,
+// doesn't stack them all again. Null to start from the first child.
+fn resumePoint(self: *Element, parent: *Element, owner: *Frame) ?ResumePoint {
+    const style_manager = &owner._style_manager;
+    if (style_manager.getCachedPlaced(parent) == 0) {
+        return null;
+    }
+    const self_node = self.asNode();
+    if (self_node._flags.assigned_slot or self_node.isOutsideFlatTree()) {
+        // Slotted nodes aren't DOM siblings, the others aren't laid out
+        return null;
+    }
+
+    // A line-level box sits at its line's top whatever the line's height, so
+    // the line-level sibling right before it is enough.
+    var adjacent = style_manager.isBlockLevel(self) == false;
+    var previous = self_node.previousSibling();
+    while (previous) |node| : (previous = node.previousSibling()) {
+        const el = node.is(Element) orelse continue;
+        if (style_manager.isBlockLevel(el) == false) {
+            if (adjacent) {
+                if (style_manager.getCachedPlacement(el, parent)) |placement| {
+                    return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset };
+                }
+                adjacent = false;
+            }
+            continue;
+        }
+        adjacent = false;
+        if (style_manager.hasDisplayNone(el)) {
+            continue;
+        }
+        // A block ends its line: the next box goes right below it
+        const placement = style_manager.getCachedPlacement(el, parent) orelse continue;
+        return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset + boxHeight(el, owner) };
+    }
+    return null;
 }
 
 /// The declared height, else the content's

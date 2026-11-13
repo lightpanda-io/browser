@@ -147,6 +147,9 @@ dropped_fills: usize = 0,
 // treeChanged's visited elements, our tests want to count work, not time
 walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
+// setCacheOffset calls, likewise
+offsets_placed: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
 last_rule_sheet: ?*CSSStyleSheet = null,
@@ -2516,11 +2519,30 @@ pub fn setCacheLayout(self: *StyleManager, el: *Element, comptime kind: LayoutKi
 
 /// el's top, from parent's top. parent is el's flat-tree parent.
 pub fn getCachedOffset(self: *StyleManager, el: *Element, parent: *Element) ?f64 {
+    const placement = self.getCachedPlacement(el, parent) orelse return null;
+    return placement.offset;
+}
+
+pub const CachedOffset = struct {
+    offset: f64,
+    // el's index among parent's element children
+    position: u32,
+};
+
+/// Like getCachedOffset, with where el sits among its siblings.
+pub fn getCachedPlacement(self: *StyleManager, el: *Element, parent: *Element) ?CachedOffset {
     const memo = self.freshLayoutMemo() orelse return null;
     const entry = memo.map.getPtr(el) orelse return null;
     const offset = entry.get(.offset) orelse return null;
     const placed = if (memo.map.getPtr(parent)) |p| p.placed else 0;
-    return if (entry.position < placed) offset else null;
+    return if (entry.position < placed) .{ .offset = offset, .position = entry.position } else null;
+}
+
+/// How many of parent's first element children have their offset cached.
+pub fn getCachedPlaced(self: *StyleManager, parent: *Element) u32 {
+    const memo = self.freshLayoutMemo() orelse return 0;
+    const entry = memo.map.getPtr(parent) orelse return 0;
+    return entry.placed;
 }
 
 /// Caches el's offset, el being its parent's index-th element child. Only
@@ -2528,6 +2550,9 @@ pub fn getCachedOffset(self: *StyleManager, el: *Element, parent: *Element) ?f64
 pub fn setCacheOffset(self: *StyleManager, el: *Element, index: u32, offset: f64) bool {
     _ = self.freshLayoutMemo() orelse return false;
     const entry = self.layoutEntry(el) orelse return false;
+    if (comptime lp.IS_TEST) {
+        self.offsets_placed += 1;
+    }
     entry.put(.offset, offset);
     entry.position = index;
     return true;
@@ -6572,6 +6597,78 @@ test "StyleManager: records: the generation wraps" {
     memo.clear();
     try testing.expectEqual(1, memo.generation);
     try testing.expectEqual(false, memo.contains(div));
+}
+
+test "StyleManager: memo: reading tops in order stacks each sibling once" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    // blocks, a line of inline boxes (as tall as its tallest), a hidden block
+    // and an out-of-flow box, with text between
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div id=p><div style="height:10px"></div> <div style="height:20px"></div>text<span style="display:inline-block;height:7px"></span> <span style="display:inline-block;height:30px"></span><span style="display:inline-block;height:9px"></span><div style="height:40px"></div><div style="display:none;height:99px"></div><span style="display:inline-block;height:6px"></span><div style="position:absolute;height:99px"></div><div style="height:50px"></div><div style="height:60px"></div></div>
+    );
+    const p = doc.getElementById("p").?;
+    var els: [11]*Element = undefined;
+    var count: usize = 0;
+    var it = p.asNode().childrenIterator();
+    while (it.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        els[count] = el;
+        count += 1;
+    }
+    try testing.expectEqual(els.len, count);
+    const expected = [els.len]f64{ 0, 10, 30, 30, 30, 60, 100, 100, 100, 106, 156 };
+
+    // Last first: one walk from the first child places them all
+    _ = layout.boxTop(p, frame);
+    sm.offsets_placed = 0;
+    try testing.expectEqual(156, layout.boxTop(els[10], frame));
+    try testing.expectEqual(els.len, sm.offsets_placed);
+    for (els, expected) |el, top| {
+        try testing.expectEqual(top, layout.boxTop(el, frame));
+    }
+    try testing.expectEqual(els.len, sm.offsets_placed);
+
+    // In order, from nothing: each read continues from the sibling before it
+    sm.layout_bumps += 1;
+    _ = layout.boxTop(p, frame);
+    sm.offsets_placed = 0;
+    for (els, expected) |el, top| {
+        try testing.expectEqual(top, layout.boxTop(el, frame));
+    }
+    try testing.expectEqual(els.len, sm.offsets_placed);
+
+    // A height write keeps the offsets up to its element: the read after it
+    // continues from there, and one further down from the nearest block
+    // before it that is still placed.
+    sm.offsets_placed = 0;
+    const style = (try els[1].getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("height", "25px", null, frame);
+    try testing.expectEqual(35, layout.boxTop(els[2], frame));
+    try testing.expectEqual(1, sm.offsets_placed);
+    try testing.expectEqual(161, layout.boxTop(els[10], frame));
+    try testing.expectEqual(9, sm.offsets_placed);
+    try testing.expectEqual(111, layout.boxTop(els[9], frame));
+    try testing.expectEqual(65, layout.boxTop(els[5], frame));
+    try testing.expectEqual(9, sm.offsets_placed);
+
+    // A row's children all sit at its top
+    const p_style = (try p.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try p_style.setProperty("display", "flex", null, frame);
+    _ = layout.boxTop(p, frame);
+    sm.offsets_placed = 0;
+    for (els) |el| {
+        try testing.expectEqual(0, layout.boxTop(el, frame));
+    }
+    try testing.expectEqual(0, sm.offsets_placed);
 }
 
 test "StyleManager: memo: a height write moves only what's stacked below it" {
