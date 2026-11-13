@@ -370,7 +370,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(DOMTokenList.length, null, .{});
+    pub const length = bridge.fastAccessor(DOMTokenList.length, null, .{ .getter = .safe });
     pub const item = bridge.function(_item, .{});
     fn _item(self: *const DOMTokenList, index: i32, frame: *Frame) !?[]const u8 {
         if (index < 0) {

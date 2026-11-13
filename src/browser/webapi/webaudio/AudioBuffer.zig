@@ -179,10 +179,10 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(AudioBuffer.constructor, .{});
-    pub const sampleRate = bridge.accessor(AudioBuffer.sampleRate, null, .{});
-    pub const length = bridge.accessor(AudioBuffer.frameCount, null, .{});
-    pub const duration = bridge.accessor(AudioBuffer.getDuration, null, .{});
-    pub const numberOfChannels = bridge.accessor(AudioBuffer.numberOfChannels, null, .{});
+    pub const sampleRate = bridge.fastAccessor(AudioBuffer.sampleRate, null, .{ .getter = .unsafe });
+    pub const length = bridge.fastAccessor(AudioBuffer.frameCount, null, .{ .getter = .unsafe });
+    pub const duration = bridge.fastAccessor(AudioBuffer.getDuration, null, .{ .getter = .unsafe });
+    pub const numberOfChannels = bridge.fastAccessor(AudioBuffer.numberOfChannels, null, .{ .getter = .unsafe });
     pub const getChannelData = bridge.function(AudioBuffer.getChannelData, .{});
     pub const copyFromChannel = bridge.function(AudioBuffer.copyFromChannel, .{});
     pub const copyToChannel = bridge.function(AudioBuffer.copyToChannel, .{});

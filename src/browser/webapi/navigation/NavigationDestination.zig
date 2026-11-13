@@ -72,7 +72,7 @@ pub const JsApi = struct {
     pub const url = bridge.accessor(NavigationDestination.getUrl, null, .{});
     pub const key = bridge.accessor(NavigationDestination.getKey, null, .{});
     pub const id = bridge.accessor(NavigationDestination.getId, null, .{});
-    pub const index = bridge.accessor(NavigationDestination.getIndex, null, .{});
-    pub const sameDocument = bridge.accessor(NavigationDestination.getSameDocument, null, .{});
+    pub const index = bridge.fastAccessor(NavigationDestination.getIndex, null, .{ .getter = .safe });
+    pub const sameDocument = bridge.fastAccessor(NavigationDestination.getSameDocument, null, .{ .getter = .unsafe });
     pub const getState = bridge.function(NavigationDestination.getState, .{});
 };

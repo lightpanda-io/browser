@@ -122,7 +122,7 @@ pub const JsApi = struct {
         pub const callable = JsApi.callable;
     };
 
-    pub const length = bridge.accessor(HTMLAllCollection.length, null, .{});
+    pub const length = bridge.fastAccessor(HTMLAllCollection.length, null, .{ .getter = .safe });
     pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, struct {
         fn wrap(self: *HTMLAllCollection, name: []const u8) !u32 {

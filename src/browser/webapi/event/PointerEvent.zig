@@ -201,18 +201,18 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(PointerEvent.init, .{});
-    pub const pointerId = bridge.accessor(PointerEvent.getPointerId, null, .{});
+    pub const pointerId = bridge.fastAccessor(PointerEvent.getPointerId, null, .{ .getter = .unsafe });
     pub const pointerType = bridge.accessor(PointerEvent.getPointerType, null, .{});
-    pub const width = bridge.accessor(PointerEvent.getWidth, null, .{});
-    pub const height = bridge.accessor(PointerEvent.getHeight, null, .{});
-    pub const pressure = bridge.accessor(PointerEvent.getPressure, null, .{});
-    pub const tangentialPressure = bridge.accessor(PointerEvent.getTangentialPressure, null, .{});
-    pub const tiltX = bridge.accessor(PointerEvent.getTiltX, null, .{});
-    pub const tiltY = bridge.accessor(PointerEvent.getTiltY, null, .{});
-    pub const twist = bridge.accessor(PointerEvent.getTwist, null, .{});
-    pub const altitudeAngle = bridge.accessor(PointerEvent.getAltitudeAngle, null, .{});
-    pub const azimuthAngle = bridge.accessor(PointerEvent.getAzimuthAngle, null, .{});
-    pub const isPrimary = bridge.accessor(PointerEvent.getIsPrimary, null, .{});
+    pub const width = bridge.fastAccessor(PointerEvent.getWidth, null, .{ .getter = .unsafe });
+    pub const height = bridge.fastAccessor(PointerEvent.getHeight, null, .{ .getter = .unsafe });
+    pub const pressure = bridge.fastAccessor(PointerEvent.getPressure, null, .{ .getter = .unsafe });
+    pub const tangentialPressure = bridge.fastAccessor(PointerEvent.getTangentialPressure, null, .{ .getter = .unsafe });
+    pub const tiltX = bridge.fastAccessor(PointerEvent.getTiltX, null, .{ .getter = .unsafe });
+    pub const tiltY = bridge.fastAccessor(PointerEvent.getTiltY, null, .{ .getter = .unsafe });
+    pub const twist = bridge.fastAccessor(PointerEvent.getTwist, null, .{ .getter = .unsafe });
+    pub const altitudeAngle = bridge.fastAccessor(PointerEvent.getAltitudeAngle, null, .{ .getter = .unsafe });
+    pub const azimuthAngle = bridge.fastAccessor(PointerEvent.getAzimuthAngle, null, .{ .getter = .unsafe });
+    pub const isPrimary = bridge.fastAccessor(PointerEvent.getIsPrimary, null, .{ .getter = .unsafe });
 };
 
 const testing = @import("../../../testing.zig");

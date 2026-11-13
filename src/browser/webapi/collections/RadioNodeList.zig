@@ -124,7 +124,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(RadioNodeList.getLength, null, .{});
+    pub const length = bridge.fastAccessor(RadioNodeList.getLength, null, .{ .getter = .safe });
     pub const @"[]" = bridge.indexed(RadioNodeList.getAtIndex, null, .{ .null_as_undefined = true });
     pub const item = bridge.function(RadioNodeList.getAtIndex, .{});
     pub const value = bridge.accessor(RadioNodeList.getValue, RadioNodeList.setValue, .{});

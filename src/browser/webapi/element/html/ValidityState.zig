@@ -171,15 +171,15 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const valueMissing = bridge.accessor(ValidityState.getValueMissing, null, .{});
-    pub const typeMismatch = bridge.accessor(ValidityState.getTypeMismatch, null, .{});
-    pub const patternMismatch = bridge.accessor(ValidityState.getPatternMismatch, null, .{});
-    pub const tooLong = bridge.accessor(ValidityState.getTooLong, null, .{});
-    pub const tooShort = bridge.accessor(ValidityState.getTooShort, null, .{});
-    pub const rangeUnderflow = bridge.accessor(ValidityState.getRangeUnderflow, null, .{});
-    pub const rangeOverflow = bridge.accessor(ValidityState.getRangeOverflow, null, .{});
-    pub const stepMismatch = bridge.accessor(ValidityState.getStepMismatch, null, .{});
-    pub const badInput = bridge.accessor(ValidityState.getBadInput, null, .{});
-    pub const customError = bridge.accessor(ValidityState.getCustomError, null, .{});
-    pub const valid = bridge.accessor(ValidityState.getValid, null, .{});
+    pub const valueMissing = bridge.fastAccessor(ValidityState.getValueMissing, null, .{ .getter = .unsafe });
+    pub const typeMismatch = bridge.fastAccessor(ValidityState.getTypeMismatch, null, .{ .getter = .unsafe });
+    pub const patternMismatch = bridge.fastAccessor(ValidityState.getPatternMismatch, null, .{ .getter = .safe });
+    pub const tooLong = bridge.fastAccessor(ValidityState.getTooLong, null, .{ .getter = .unsafe });
+    pub const tooShort = bridge.fastAccessor(ValidityState.getTooShort, null, .{ .getter = .unsafe });
+    pub const rangeUnderflow = bridge.fastAccessor(ValidityState.getRangeUnderflow, null, .{ .getter = .unsafe });
+    pub const rangeOverflow = bridge.fastAccessor(ValidityState.getRangeOverflow, null, .{ .getter = .unsafe });
+    pub const stepMismatch = bridge.fastAccessor(ValidityState.getStepMismatch, null, .{ .getter = .unsafe });
+    pub const badInput = bridge.fastAccessor(ValidityState.getBadInput, null, .{ .getter = .unsafe });
+    pub const customError = bridge.fastAccessor(ValidityState.getCustomError, null, .{ .getter = .unsafe });
+    pub const valid = bridge.fastAccessor(ValidityState.getValid, null, .{ .getter = .safe });
 };

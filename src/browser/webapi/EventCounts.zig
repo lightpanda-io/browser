@@ -142,7 +142,7 @@ pub const JsApi = struct {
 
     pub const get = bridge.function(EventCounts.get, .{});
     pub const has = bridge.function(EventCounts.has, .{});
-    pub const size = bridge.accessor(EventCounts.getSize, null, .{});
+    pub const size = bridge.fastAccessor(EventCounts.getSize, null, .{ .getter = .unsafe });
     pub const keys = bridge.function(EventCounts.keys, .{});
     pub const values = bridge.function(EventCounts.values, .{});
     pub const entries = bridge.function(EventCounts.entries, .{});

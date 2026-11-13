@@ -83,7 +83,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(CSSRuleList.length, null, .{});
+    pub const length = bridge.fastAccessor(CSSRuleList.length, null, .{ .getter = .safe });
     pub const @"[]" = bridge.indexed(CSSRuleList.item, null, .{ .null_as_undefined = true });
     pub const symbol_iterator = bridge.iterator(CSSRuleList.values, .{});
 };

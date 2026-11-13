@@ -140,7 +140,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(AudioDecoder.init, .{});
     pub const state = bridge.accessor(AudioDecoder.getState, null, .{});
-    pub const decodeQueueSize = bridge.accessor(AudioDecoder.getDecodeQueueSize, null, .{});
+    pub const decodeQueueSize = bridge.fastAccessor(AudioDecoder.getDecodeQueueSize, null, .{ .getter = .unsafe });
     pub const ondequeue = EventTarget.handlerAccessor(AudioDecoder, "dequeue");
     pub const configure = bridge.function(AudioDecoder.configure, .{});
     pub const decode = bridge.fastFunction(AudioDecoder.decode, .{});

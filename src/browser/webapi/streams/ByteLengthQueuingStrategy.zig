@@ -59,6 +59,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(ByteLengthQueuingStrategy.init, .{});
-    pub const highWaterMark = bridge.accessor(ByteLengthQueuingStrategy.getHighWaterMark, null, .{});
+    pub const highWaterMark = bridge.fastAccessor(ByteLengthQueuingStrategy.getHighWaterMark, null, .{ .getter = .unsafe });
     pub const size = bridge.function(ByteLengthQueuingStrategy.size, .{ .null_as_undefined = true });
 };

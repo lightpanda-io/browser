@@ -163,7 +163,7 @@ pub const JsApi = struct {
         pub const manage = false;
     };
 
-    pub const length = bridge.accessor(HTMLFormControlsCollection.length, null, .{});
+    pub const length = bridge.fastAccessor(HTMLFormControlsCollection.length, null, .{ .getter = .safe });
     pub const @"[int]" = bridge.indexed(HTMLFormControlsCollection.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLFormControlsCollection.namedItem, null, null, null, struct {
         fn wrap(self: *HTMLFormControlsCollection, name: []const u8) !u32 {

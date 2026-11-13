@@ -720,7 +720,7 @@ pub const JsApi = struct {
     pub const pipeTo = bridge.function(ReadableStream.pipeTo, .{});
     pub const tee = bridge.function(ReadableStream.tee, .{});
     pub const values = bridge.function(ReadableStream.getAsyncIterator, .{});
-    pub const locked = bridge.accessor(ReadableStream.getLocked, null, .{});
+    pub const locked = bridge.fastAccessor(ReadableStream.getLocked, null, .{ .getter = .unsafe });
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };
 

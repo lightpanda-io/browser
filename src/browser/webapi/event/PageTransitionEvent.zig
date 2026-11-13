@@ -85,5 +85,5 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(PageTransitionEvent.init, .{});
-    pub const persisted = bridge.accessor(PageTransitionEvent.getPersisted, null, .{});
+    pub const persisted = bridge.fastAccessor(PageTransitionEvent.getPersisted, null, .{ .getter = .unsafe });
 };

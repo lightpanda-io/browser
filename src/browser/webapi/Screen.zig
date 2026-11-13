@@ -65,9 +65,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.accessor(Screen.getWidth, null, .{});
-    pub const height = bridge.accessor(Screen.getHeight, null, .{});
-    pub const availWidth = bridge.accessor(Screen.getWidth, null, .{});
+    pub const width = bridge.fastAccessor(Screen.getWidth, null, .{ .getter = .safe });
+    pub const height = bridge.fastAccessor(Screen.getHeight, null, .{ .getter = .safe });
+    pub const availWidth = bridge.fastAccessor(Screen.getWidth, null, .{ .getter = .safe });
     pub const availHeight = bridge.property(1040, .{ .template = false });
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
