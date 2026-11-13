@@ -122,7 +122,7 @@ pub const Reply = union(enum) {
 // GET /session/{id}); never both.
 pub const Origin = union(enum) {
     socket: posix.socket_t,
-    session: struct { id: [36]u8, worker: *Server.Worker },
+    session: struct { id: [36]u8, worker: *Server.Worker, accept_insecure_certs: bool },
 };
 
 const InputMessage = struct {
@@ -176,6 +176,10 @@ pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
 
     try self.browser.init(app, .{});
     errdefer self.browser.deinit();
+
+    if (origin == .session and origin.session.accept_insecure_certs) {
+        try self.browser.http_client.setTlsVerify(false);
+    }
 
     self.notification = try Notification.init(allocator);
     errdefer self.notification.deinit();

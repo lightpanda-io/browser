@@ -30,6 +30,7 @@ const Selector = @import("../../browser/webapi/selector/Selector.zig");
 const xpath = @import("../../browser/xpath/Evaluator.zig");
 const XPathParser = @import("../../browser/xpath/Parser.zig");
 const Notification = @import("../../Notification.zig");
+const http = @import("../../network/http.zig");
 
 const BiDi = @import("BiDi.zig");
 const script = @import("script.zig");
@@ -302,7 +303,8 @@ fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]co
             return;
         }
         ctx.pending_navigate = null;
-        return cmd.sendError("unknown error", "navigation failed");
+        var buf: [128]u8 = undefined;
+        return cmd.sendError(navigationErrorCode(cmd.reply(), err), navigationErrorMessage(&buf, err));
     };
 
     if (wait == .none) {
@@ -726,7 +728,21 @@ fn onFrameNavigateFailed(ptr: *anyopaque, msg: *const Notification.FrameNavigate
         .url = msg.url,
     });
 
-    try rejectPending(bidi, ctx, "navigation failed");
+    const pending = ctx.pending_navigate orelse return;
+    ctx.pending_navigate = null;
+    var buf: [128]u8 = undefined;
+    return bidi.replyError(pending.reply, navigationErrorCode(pending.reply, msg.err), navigationErrorMessage(&buf, msg.err));
+}
+
+fn navigationErrorCode(reply: BiDi.Reply, err: anyerror) []const u8 {
+    if (reply == .http and http.errorReason(err) == .tls) {
+        return "insecure certificate";
+    }
+    return "unknown error";
+}
+
+fn navigationErrorMessage(buf: []u8, err: anyerror) []const u8 {
+    return std.fmt.bufPrint(buf, "navigation failed: {s}", .{@errorName(err)}) catch "navigation failed";
 }
 
 fn onFrameDOMContentLoaded(ptr: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
@@ -788,6 +804,17 @@ const Info = struct {
 };
 
 const testing = @import("testing.zig");
+test "bidi.browsing_context: navigation error code" {
+    try testing.expectEqual("insecure certificate", navigationErrorCode(.http, error.PeerFailedVerification));
+    try testing.expectEqual("insecure certificate", navigationErrorCode(.http, error.SslCacertBadfile));
+    try testing.expectEqual("unknown error", navigationErrorCode(.http, error.CouldntResolveHost));
+    // BiDi has no "insecure certificate"
+    try testing.expectEqual("unknown error", navigationErrorCode(.{ .bidi = 1 }, error.PeerFailedVerification));
+
+    var buf: [128]u8 = undefined;
+    try testing.expectEqual("navigation failed: PeerFailedVerification", navigationErrorMessage(&buf, error.PeerFailedVerification));
+}
+
 test "bidi.browsing_context: locateNodes" {
     testing.silenceLog(&.{.not_implemented});
     var ctx = try testing.context();

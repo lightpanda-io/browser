@@ -576,14 +576,14 @@ pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Orig
         .protocol = protocol,
         .session_id = switch (origin) {
             .socket => null,
-            .session => |id| id,
+            .session => |session| session.id,
         },
     };
     self.workers.append(&worker.node);
     if (origin == .session) {
         lp.assert(self.protocols.webdriver, "spawnWorker session without webdriver", .{});
         // because we sized self.sessions to config.maxConnections()
-        self.sessions.putAssumeCapacityNoClobber(origin.session, worker);
+        self.sessions.putAssumeCapacityNoClobber(origin.session.id, worker);
     }
 
     lp.metrics.serve_connections.incr(protocol);
@@ -1373,7 +1373,12 @@ pub const Worker = struct {
     // whose websocket, if any, comes later (see attachConnection).
     pub const Origin = union(enum) {
         socket: posix.socket_t,
-        session: [36]u8,
+        session: Session,
+
+        pub const Session = struct {
+            id: [36]u8,
+            accept_insecure_certs: bool,
+        };
     };
 
     pub fn linkDropping(self: *const Worker) bool {
@@ -1419,7 +1424,11 @@ pub const Worker = struct {
                 defer allocator.destroy(bidi);
                 try bidi.init(server.app, &self.inbox, switch (origin) {
                     .socket => |socket| .{ .socket = socket },
-                    .session => |id| .{ .session = .{ .id = id, .worker = self } },
+                    .session => |session| .{ .session = .{
+                        .id = session.id,
+                        .worker = self,
+                        .accept_insecure_certs = session.accept_insecure_certs,
+                    } },
                 });
                 defer bidi.deinit();
                 self.run(.init(.{ .bidi = bidi }, &self.inbox), bidi.link);
@@ -1923,6 +1932,26 @@ test "server: HTTP session bootstrap" {
         var path_buf: [64]u8 = undefined;
         const res = try c2.upgradeRequest(try std.mem.print(&path_buf, "/session/{s}", .{&session_id}));
         try testing.expectEqual("HTTP/1.1 404 \r\nConnection: Close\r\nContent-Length: 9\r\n\r\nNot found", res);
+    }
+}
+
+test "server: HTTP session acceptInsecureCerts" {
+    const cases = [_]struct { []const u8, bool }{
+        .{ "{\"capabilities\":{\"alwaysMatch\":{\"acceptInsecureCerts\":true}}}", true },
+        .{ "{\"capabilities\":{\"alwaysMatch\":{\"acceptInsecureCerts\":false}}}", false },
+        .{ "{\"capabilities\":{\"firstMatch\":[{\"acceptInsecureCerts\":true},{}]}}", true },
+        // only the first firstMatch is the one we match
+        .{ "{\"capabilities\":{\"firstMatch\":[{},{\"acceptInsecureCerts\":true}]}}", false },
+        // alwaysMatch wins
+        .{ "{\"capabilities\":{\"alwaysMatch\":{\"acceptInsecureCerts\":false},\"firstMatch\":[{\"acceptInsecureCerts\":true}]}}", false },
+    };
+    for (cases) |case| {
+        const session = try postHTTPSession(case[0]);
+        defer deleteHTTPSession(&session.id, true) catch |err| @panic(@errorName(err));
+        testing.expectEqual(case[1], session.capabilities.get("acceptInsecureCerts").?.bool) catch |err| {
+            std.debug.print("body: {s}\n", .{case[0]});
+            return err;
+        };
     }
 }
 
@@ -3033,24 +3062,9 @@ fn writeSessionCommand(c: *TestClient, method: []const u8, session_id: *const [3
 
 // POST /session; asserts the response and whether it advertised a websocket
 fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
-    var c = try createTestClient();
-    defer c.deinit();
-
-    const res = try c.httpRequest(try testing.arena_allocator.print("POST /session HTTP/1.1\r\n" ++
-        "Content-Type: application/json;charset=UTF-8\r\n" ++
-        "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body }));
-    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-
-    const json = res[std.mem.find(u8, res, "\r\n\r\n").? + 4 ..];
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
-
-    const value = parsed.value.object.get("value").?.object;
-    const id = value.get("sessionId").?.string;
-    try testing.expectEqual(36, id.len);
-
-    const capabilities = value.get("capabilities").?.object;
-    try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
+    const session = try postHTTPSession(body);
+    const id: []const u8 = &session.id;
+    const capabilities = session.capabilities;
     try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
     if (expect_ws_url) {
         const ws_url = capabilities.get("webSocketUrl").?.string;
@@ -3060,7 +3074,32 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     } else {
         try testing.expectEqual(null, capabilities.get("webSocketUrl"));
     }
-    return id[0..36].*;
+    return session.id;
+}
+
+const PostedSession = struct {
+    id: [36]u8,
+    capabilities: std.json.ObjectMap,
+};
+
+// POST /session; asserts it succeeded. The capabilities live in the test arena.
+fn postHTTPSession(body: []const u8) !PostedSession {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const res = try c.httpRequest(try testing.arena_allocator.print("POST /session HTTP/1.1\r\n" ++
+        "Content-Type: application/json;charset=UTF-8\r\n" ++
+        "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body }));
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, responseBody(res), .{});
+    const value = parsed.object.get("value").?.object;
+    const id = value.get("sessionId").?.string;
+    try testing.expectEqual(36, id.len);
+
+    const capabilities = value.get("capabilities").?.object;
+    try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
+    return .{ .id = id[0..36].*, .capabilities = capabilities };
 }
 
 fn deleteHTTPSession(session_id: *const [36]u8, expect_live: bool) !void {

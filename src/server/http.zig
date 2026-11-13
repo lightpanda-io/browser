@@ -791,7 +791,10 @@ fn upgradeBiDi(server: *Server, conn: *Connection, req: *Connection.Request) !Se
 
 // POST /session (webdriver)
 fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
-    const Capability = struct { webSocketUrl: ?bool = null };
+    const Capability = struct {
+        webSocketUrl: ?bool = null,
+        acceptInsecureCerts: ?bool = null,
+    };
     const parsed = std.json.parseFromSliceLeaky(struct {
         capabilities: ?struct {
             alwaysMatch: ?Capability = null,
@@ -809,7 +812,24 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     var session_id: [36]u8 = undefined;
     uuidv4(&session_id);
 
-    const worker = server.spawnWorker(.bidi, .{ .session = session_id }) catch |err| {
+    const accept_insecure_certs = blk: {
+        const caps = parsed.capabilities orelse break :blk false;
+        if (caps.alwaysMatch) |always| {
+            if (always.acceptInsecureCerts) |accept| {
+                break :blk accept;
+            }
+        }
+        const first_match = caps.firstMatch orelse break :blk false;
+        if (first_match.len == 0) {
+            break :blk false;
+        }
+        break :blk first_match[0].acceptInsecureCerts orelse false;
+    };
+
+    const worker = server.spawnWorker(.bidi, .{ .session = .{
+        .id = session_id,
+        .accept_insecure_certs = accept_insecure_certs,
+    } }) catch |err| {
         log.err(.serve, "worker spawn", .{ .err = err });
         return serveWebDriverError(server, conn, req, "session not created", "failed to start the session");
     };
@@ -842,6 +862,7 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     return serveWebDriver(server, conn, req, .ok, .{
         .sessionId = &session_id,
         .capabilities = bidi_session.Capabilities{
+            .acceptInsecureCerts = accept_insecure_certs,
             .userAgent = server.app.config.http_headers.user_agent,
             .webSocketUrl = url,
         },
