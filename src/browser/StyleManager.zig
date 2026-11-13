@@ -967,12 +967,11 @@ pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
     if (self.dirty) {
         return true;
     }
-    const page = self.frame.page;
     var memos: Memos = .empty;
     var budget: usize = 0;
     inline for (group_fields) |field| {
         const group = &@field(self, field);
-        if (group.detached and group.memo_version == page.style_version + group.bumps) {
+        if (group.detached and group.fresh(self.frame)) {
             memos.insert(@field(Memo, field));
             budget += group.memo.count();
         }
@@ -1077,12 +1076,11 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
 
     // Boxes can move
     self.layout_bumps += 1;
-    const page = self.frame.page;
     var memos: Memos = .empty;
     var budget: usize = 0;
     inline for (group_fields) |field| {
         const group = &@field(self, field);
-        if (group.memo.count() != 0 and group.memo_version == page.style_version + group.bumps) {
+        if (group.memo.count() != 0 and group.fresh(self.frame)) {
             memos.insert(@field(Memo, field));
             budget += group.memo.count();
         }
@@ -1123,12 +1121,11 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
     }
 
     // A memo the next read clears anyway holds nothing to drop
-    const page = self.frame.page;
     var memos: Memos = .empty;
     var budget: usize = 0;
     inline for (group_fields) |field| {
         const group = &@field(self, field);
-        if (group.memo.count() != 0 and group.memo_version == page.style_version + group.bumps) {
+        if (group.memo.count() != 0 and group.fresh(self.frame)) {
             memos.insert(@field(Memo, field));
             budget += group.memo.count();
         }
@@ -1518,14 +1515,47 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
     while (it.next()) |memo| {
         switch (memo) {
             .layout => self.layout_bumps += 1,
-            .geometry => {
-                // geometry properties aren't inherited. el1.style.width = '100px'
-                // might change the bounding rect of its parent or children,
-                // but they don't change their actual styles. We don't need
-                // to invalidate the entire geometry group for any of them.
-                _ = self.geometry.memo.remove(el);
+            inline else => |m| {
+                const group = &@field(self, @tagName(m));
+                // A stale memo: the next read clears it
+                if (group.fresh(self.frame)) switch (m) {
+                    // Entries hold the element's own values. el1.style.width =
+                    // '100px' might change the bounding rect of its parent or
+                    // children, but not their styles.
+                    .geometry, .text => _ = group.memo.remove(el),
+                    // Entries hold resolved values: el's reach its descendants
+                    .visibility, .touch_action, .flow => self.dropInherited(&group.memo, el.asNode()),
+                    .layout => unreachable,
+                };
             },
-            inline else => |group| @field(self, @tagName(group)).bumps += 1,
+        }
+    }
+}
+
+/// Drops `root`'s entry and those of everything that inherits from it.
+fn dropInherited(self: *StyleManager, memo: anytype, root: *Node) void {
+    var tw = TreeWalker.Full.init(root, .{});
+    while (tw.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        if (comptime lp.IS_TEST) {
+            self.walked += 1;
+        }
+        if (memo.remove(el) == false) {
+            // inheritedProps stores an element with its whole ancestor chain,
+            // so if there's nothing removed here, none of the descendants
+            // can be cached either, stop here.
+            tw.skipChildren();
+            continue;
+        }
+        if (el.hostedShadowRoot(self.frame)) |shadow| {
+            self.dropInherited(memo, shadow.asNode());
+        }
+        if (el.is(Element.Html.Slot)) |slot| {
+            for (slot._assigned.items) |assigned| {
+                // also a DOM child of the host: whichever visit comes first
+                // finds it cached
+                self.dropInherited(memo, assigned);
+            }
         }
     }
 }
@@ -2453,12 +2483,9 @@ fn Group(comptime Spec: type) type {
         // skip the cascade on the many pages without one.
         has_important: bool = false,
 
-        // Valid while Page.style_version + bumps == memo_version.
+        // Valid while Page.style_version == memo_version.
         memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
         memo_version: usize = 0,
-
-        // Inline writes of a property this group declares (invalidate).
-        bumps: usize = 0,
 
         // Entries put, ever: see StyleManager.dropped
         fills: usize = 0,
@@ -2568,19 +2595,28 @@ fn Group(comptime Spec: type) type {
                 self.detached = self.path.items[self.path.items.len - 1].el.asNode().isConnected() == false;
             }
             self.fills += self.path.items.len;
+            var storing = true;
             var it = std.mem.reverseIterator(self.path.items);
             while (it.next()) |step| {
                 above = .resolve(step.own, above);
-                memo.put(allocator, step.el, above) catch |err| {
-                    log.warn(.browser, "StyleManager memo", .{ .err = err });
-                };
+                if (storing) {
+                    // Not below an ancestor that isn't stored: dropInherited
+                    // stops at an uncached element
+                    memo.put(allocator, step.el, above) catch |err| {
+                        log.warn(.browser, "StyleManager memo", .{ .err = err });
+                        storing = false;
+                    };
+                }
             }
             return above;
         }
 
+        fn fresh(self: *const Self, frame: *const Frame) bool {
+            return self.memo_version == frame.page.style_version;
+        }
+
         fn freshMemo(self: *Self, frame: *Frame) *std.AutoHashMapUnmanaged(*Element, Computed) {
-            // Both terms only grow, so the sum moves whenever either does
-            const version = frame.page.style_version + self.bumps;
+            const version = frame.page.style_version;
             if (self.memo_version != version) {
                 self.memo.clearRetainingCapacity();
                 self.detached = false;
@@ -5626,7 +5662,6 @@ test "StyleManager: memo: a style attribute write drops what its declarations re
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
     _ = sm.geometryProps(div);
     const version = frame.page.style_version;
-    const visibility_bumps = sm.visibility.bumps;
     var layout_version = sm.layoutVersion();
 
     // No memo reads a custom property or a transform
@@ -5638,7 +5673,7 @@ test "StyleManager: memo: a style attribute write drops what its declarations re
     try div.setAttribute(comptime .wrap("style"), .wrap("--x: 1; transform: translateX(3px); width: 10px"), frame);
     try testing.expectEqual(false, sm.geometry.memo.contains(div));
     try testing.expect(sm.layoutVersion() != layout_version);
-    try testing.expectEqual(visibility_bumps, sm.visibility.bumps);
+    try testing.expectEqual(true, sm.visibility.memo.contains(p));
 
     // The same width, written differently: only the custom property changed
     _ = sm.geometryProps(div);
@@ -5656,9 +5691,9 @@ test "StyleManager: memo: a style attribute write drops what its declarations re
     try testing.expectEqual(false, sm.geometry.memo.contains(div));
     try testing.expect(sm.layoutVersion() != layout_version);
 
-    // Visibility is inherited: the group goes
+    // Visibility is inherited: the element's subtree goes
     try div.setAttribute(comptime .wrap("style"), .wrap("visibility: hidden"), frame);
-    try testing.expect(sm.visibility.bumps != visibility_bumps);
+    try testing.expectEqual(false, sm.visibility.memo.contains(p));
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(p));
     try div.removeAttribute(comptime .wrap("style"), frame);
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
@@ -5825,7 +5860,6 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     try style.setProperty("opacity", "0", null, frame);
     try testing.expectEqual(true, sm.isHidden(p, .{ .check_opacity = true }));
     try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
-    try testing.expectEqual(0, sm.geometry.bumps);
 
     // display reaches both
     try style.setProperty("display", "none", null, frame);
@@ -5834,13 +5868,12 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
 
     // A shorthand reaches what its longhands do: overflow-x clips the width
     sm.cacheWidth(div, .box, 100);
-    const visibility_bumps = sm.visibility.bumps;
     try testing.expectEqual(false, sm.clipsOverflowX(div));
     try testing.expectEqual(false, sm.clipsOverflowX(p));
     try style.setProperty("overflow", "hidden", null, frame);
     try testing.expectEqual(true, sm.clipsOverflowX(div));
     try testing.expectEqual(null, sm.cachedWidth(div, .box));
-    try testing.expectEqual(visibility_bumps, sm.visibility.bumps);
+    try testing.expectEqual(true, sm.visibility.memo.contains(div));
     // geometry isn't inherited: only the written element's entry goes
     try testing.expect(sm.geometry.memo.contains(p));
     try testing.expectEqual(false, sm.clipsOverflowX(p));
@@ -5853,6 +5886,108 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
 
     // None of it touched another frame's memos
     try testing.expectEqual(version, frame.page.style_version);
+}
+
+test "StyleManager: memo: an inherited inline write drops the element's subtree" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p style=\"color: red\"><b style=\"color: red\"></b></p><p><i></i></p></div><section><span></span></section>");
+    const div = body.firstChild().?.as(Element);
+    const p1 = div.asNode().firstChild().?.as(Element);
+    const b = p1.asNode().firstChild().?.as(Element);
+    const p2 = p1.asNode().nextSibling().?.as(Element);
+    const i = p2.asNode().firstChild().?.as(Element);
+    const span = div.asNode().nextSibling().?.firstChild().?.as(Element);
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    const version = frame.page.style_version;
+
+    // p2's subtree is never read
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(b));
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(span));
+    try testing.expectEqual(false, sm.inFixedBox(b));
+    try testing.expectEqual(false, sm.visibility.memo.contains(p2));
+
+    // div and what's cached under it; the walk stops at p2, not at i
+    sm.walked = 0;
+    try style.setProperty("visibility", "hidden", null, frame);
+    try testing.expectEqual(4, sm.walked);
+    try testing.expectEqual(false, sm.visibility.memo.contains(div));
+    try testing.expectEqual(false, sm.visibility.memo.contains(b));
+    try testing.expectEqual(true, sm.visibility.memo.contains(body.as(Element)));
+    try testing.expectEqual(true, sm.visibility.memo.contains(span));
+    // flow doesn't declare visibility
+    try testing.expectEqual(true, sm.flow.memo.contains(b));
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
+
+    try style.setProperty("position", "fixed", null, frame);
+    try testing.expectEqual(true, sm.inFixedBox(b));
+
+    // An uncached element: nothing under it is cached
+    sm.walked = 0;
+    try (try span.getOrCreateStyle(frame)).asCSSStyleDeclaration().setProperty("position", "fixed", null, frame);
+    try testing.expectEqual(1, sm.walked);
+
+    // Text entries hold the element's own values: only its entry goes
+    try testing.expectEqual(.inherit, sm.ownTextTransform(b));
+    try testing.expectEqual(.inherit, sm.ownTextTransform(p1));
+    try testing.expectEqual(.inherit, sm.ownTextTransform(div));
+    try style.setProperty("text-transform", "uppercase", null, frame);
+    try testing.expectEqual(false, sm.text.memo.contains(div));
+    try testing.expectEqual(true, sm.text.memo.contains(b));
+    try testing.expectEqual(.uppercase, sm.textTransform(b));
+
+    try testing.expectEqual(version, frame.page.style_version);
+}
+
+test "StyleManager: memo: an inherited inline write reaches the flat tree" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const host = try doc.createElement("div", null, frame);
+    _ = try body.appendChild(host.asNode(), frame);
+    const shadow = try host.attachShadow(.{ .mode = .open }, frame);
+    try Frame.parse.htmlAsChildren(frame, shadow.asNode(), "<h2><slot><b>unused fallback</b></slot></h2>");
+    try Frame.parse.htmlAsChildren(frame, host.asNode(), "<p>one</p><span slot=\"none\">orphan</span>");
+    const h2 = shadow.asNode().firstChild().?.as(Element);
+    const slot = h2.asNode().firstChild().?.as(Element);
+    const fallback = slot.asNode().firstChild().?.as(Element);
+    const p = host.asNode().firstChild().?.as(Element);
+    const orphan = p.asNode().nextSibling().?.as(Element);
+
+    // p inherits through the slot; the unused fallback and the orphan, outside
+    // the flat tree, from their DOM parents
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
+    _ = sm.hasVisibilityHiddenInherited(fallback);
+    _ = sm.hasVisibilityHiddenInherited(orphan);
+    for ([_]*Element{ h2, slot, fallback, p, orphan }) |el| {
+        try testing.expectEqual(true, sm.visibility.memo.contains(el));
+    }
+
+    try (try h2.getOrCreateStyle(frame)).asCSSStyleDeclaration().setProperty("visibility", "hidden", null, frame);
+    try testing.expectEqual(false, sm.visibility.memo.contains(p));
+    try testing.expectEqual(false, sm.visibility.memo.contains(fallback));
+    try testing.expectEqual(true, sm.visibility.memo.contains(orphan));
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(p));
+
+    try (try host.getOrCreateStyle(frame)).asCSSStyleDeclaration().setProperty("pointer-events", "none", null, frame);
+    for ([_]*Element{ h2, slot, p, orphan }) |el| {
+        try testing.expectEqual(false, sm.visibility.memo.contains(el));
+    }
+    try testing.expectEqual(true, sm.hasPointerEventsNone(p));
 }
 
 test "StyleManager: memo: inherited values, any query order" {
