@@ -438,6 +438,7 @@ pub const Commands = cli.Builder(.{
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             .{ .name = "cdp_max_http_message_size", .type = u32, .default = 1024 * 1024 },
+            .{ .name = "cdp_shared_browser", .type = bool },
             .{ .name = "http_session_timeout", .type = u32, .default = 60 },
             .{ .name = "remote_allow_origins", .type = []const u8, .multiple = true },
             .{ .name = "disable_metrics", .type = bool },
@@ -1025,6 +1026,14 @@ pub fn cdpMaxMessageSize(self: *const Config) u32 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_message_size,
         else => unreachable,
+    };
+}
+
+// New CDP connections join the running browser rather than start their own.
+pub fn cdpSharedBrowser(self: *const Config) bool {
+    return switch (self.mode) {
+        .serve => |opts| opts.cdp_shared_browser,
+        else => false,
     };
 }
 

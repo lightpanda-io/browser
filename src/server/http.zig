@@ -754,6 +754,13 @@ fn gateOpen(server: *const Server, gate: Route.Gate) bool {
 
 // GET / (cdp)
 fn upgradeCDP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    if (server.sharedWorker()) |worker| {
+        if (server.guestsFull()) {
+            lp.metrics.serve_connection_limit.incr();
+            return serveHTTPResponse(server, conn, req, .{ .static = service_unavailable_response });
+        }
+        return upgrade(server, conn, req, .{ .guest = worker });
+    }
     return upgradeSpawn(server, conn, req, .cdp);
 }
 
@@ -1103,6 +1110,8 @@ pub fn buildJSONVersionResponse(app: *const App, ws_url: []const u8) ![]const u8
 const Upgrade = union(enum) {
     spawn: Driver.Protocol,
     attach: *Server.Worker,
+    // a CDP connection joining a running browser (--cdp-shared-browser)
+    guest: *Server.Worker,
 };
 
 // Shared upgrade path: validate the WebSocket headers, write the 101, and
@@ -1134,6 +1143,7 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target:
     switch (target) {
         .spawn => |protocol| server.upgradeConnection(conn, protocol),
         .attach => |worker| server.attachConnection(worker, conn),
+        .guest => |worker| server.attachGuest(worker, conn),
     }
     return .upgraded;
 }

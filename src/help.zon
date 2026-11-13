@@ -40,6 +40,12 @@
     \\  --cdp-max-pending-connections <INT>
     \\          Maximum pending connections in the accept queue.
     \\          Defaults to 128.
+    \\  --cdp-shared-browser
+    \\          Lets CDP clients share one browser, like several clients of one
+    \\          Chrome. The first connection starts the browser; later ones
+    \\          join it, see its page in Target.getTargets and attach their
+    \\          own sessions to it. The browser ends with the first connection.
+    \\          Defaults to false (each connection gets its own browser).
     \\  --cookie <PATH>
     \\          Path to a file to load cookies from (read-only). Either a JSON
     \\          array in the CDP/Puppeteer format, or a Netscape cookie file (the

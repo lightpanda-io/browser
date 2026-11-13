@@ -63,6 +63,9 @@ send_depth: u32,
 send_timeout_ms: i32,
 max_inbox_backlog: usize,
 peer_closed: bool,
+// A CDP connection that joined another connection's worker. Its control
+// frames are tagged with the link so they don't pass for the worker's own.
+guest: bool = false,
 
 pub fn init(
     self: *Link,
@@ -298,13 +301,14 @@ fn handleMessage(self: *Link, msg: WS.Message, pushed: *bool) !bool {
         .ping => {
             const arena = try self.arena_pool.acquire(.tiny, "ws ping");
             errdefer arena.release();
-            self.inbox.push(arena, .{ .ping = try arena.dupe(u8, msg.data) });
+            const body = try arena.dupe(u8, msg.data);
+            self.inbox.push(arena, if (self.guest) .{ .guest_ping = .{ .link = self, .body = body } } else .{ .ping = body });
             pushed.* = true;
             return true;
         },
         .close => {
             const arena = try self.arena_pool.acquire(.tiny, "ws close");
-            self.inbox.push(arena, .close);
+            self.inbox.push(arena, if (self.guest) .{ .guest_gone = .{ .link = self, .reply_close = true } } else .close);
             pushed.* = true;
             return true;
         },
@@ -324,12 +328,17 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     const input = json_input.parseLeaky(CDP.InputMessage, arena.allocator(), &raw, .{
         .ignore_unknown_fields = true,
     }) catch {
-        self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
+        if (self.guest) {
+            // a guest only takes itself down
+            self.inbox.push(arena, .{ .guest_gone = .{ .link = self, .reply_close = false } });
+        } else {
+            self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
+        }
         pushed.* = true;
         return false;
     };
 
-    self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input } });
+    self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input, .link = self } });
     pushed.* = true;
     return true;
 }

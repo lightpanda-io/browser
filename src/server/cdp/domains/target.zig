@@ -92,11 +92,19 @@ fn targetInfo(target: *const CDP.Target) ?TargetInfo {
 /// Clients such as Browser Use track a tab's URL and title only through this
 /// event, as Chrome sends it whenever either changes.
 pub fn sendTargetInfoChanged(target: *const CDP.Target, frame_id: u32) !void {
-    if (!target.cdp.target_discover) return;
+    const clients = target.cdp.clients.items;
+    for (clients) |client| {
+        if (client.target_discover) break;
+    } else return; // nobody listens; skip the title lookup
+
     const main = target.mainFrame() orelse return;
     if (main._frame_id != frame_id) return;
     const info = targetInfo(target) orelse return;
-    try target.cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+    for (clients) |client| {
+        if (client.target_discover) {
+            try CDP.sendEventTo(client, "Target.targetInfoChanged", .{ .targetInfo = info });
+        }
+    }
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -245,7 +253,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     }, .{});
 
     // attach to the target only if auto attach is set.
-    if (cmd.cdp.target_auto_attach) {
+    if (cmd.cdp.currentClient().target_auto_attach) {
         try doAttachtoTarget(cmd, target);
     }
 
@@ -317,9 +325,10 @@ fn attachToTarget(cmd: *CDP.Command) !void {
 
 fn attachToBrowserTarget(cmd: *CDP.Command) !void {
     const cdp = cmd.cdp;
+    const client = cdp.currentClient();
     // Browser-target sessions are independent from page-target sessions and
     // can be created before a browser context exists.
-    const session_id = cdp.browser_session_id orelse cdp.browser_session_id_gen.next();
+    const session_id = client.browser_session_id orelse cdp.browser_session_id_gen.next();
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
@@ -333,7 +342,7 @@ fn attachToBrowserTarget(cmd: *CDP.Command) !void {
         },
     }, .{});
 
-    cdp.browser_session_id = session_id;
+    client.browser_session_id = session_id;
 
     return cmd.sendResult(.{ .sessionId = session_id }, .{});
 }
@@ -450,7 +459,7 @@ fn setDiscoverTargets(cmd: *CDP.Command) !void {
         filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
-    cmd.cdp.target_discover = params.discover and filterIncludesPage(params.filter);
+    cmd.cdp.currentClient().target_discover = params.discover and filterIncludesPage(params.filter);
     return cmd.sendResult(null, .{});
 }
 
@@ -494,13 +503,17 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     }
 
     // set a flag to send Target.attachedToTarget events
-    cmd.cdp.target_auto_attach = params.autoAttach;
+    const client = cmd.cdp.currentClient();
+    client.target_auto_attach = params.autoAttach;
 
-    if (cmd.cdp.target_auto_attach == false) {
-        // detach from all currently attached targets.
+    if (client.target_auto_attach == false) {
+        // detach from all currently attached targets (this client's: a guest
+        // can't take the primary session away from its owner).
         if (cmd.browser_context) |bc| {
             for (bc.targets.items) |target| {
                 const session_id = target.session_id orelse continue;
+                const attached = bc.attached_sessions.get(session_id) orelse continue;
+                if (attached.client != client) continue;
                 target.fetchDisableForSession(session_id);
                 try cmd.sendEvent("Target.detachedFromTarget", .{
                     .sessionId = session_id,
@@ -1489,7 +1502,7 @@ test "cdp.target: setAutoAttach on a page session doesn't attach new pages" {
 
     try ctx.processMessage(.{ .id = 3, .method = "Target.setAutoAttach", .sessionId = first_session_id, .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false, .flatten = true } });
     try ctx.expectSentResult(null, .{ .id = 3, .session_id = first_session_id });
-    try testing.expectEqual(false, ctx.cdp().target_auto_attach);
+    try testing.expectEqual(false, ctx.cdp().primary.target_auto_attach);
 
     try ctx.processMessage(.{ .id = 4, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
     const second = bc.targets.items[1];
