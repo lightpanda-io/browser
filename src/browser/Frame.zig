@@ -1186,9 +1186,40 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         return;
     }
 
-    if (try fireNavigateEvent(originator, target, resolved_url, false, opts) == .canceled) {
+    const nav_result = try fireNavigateEvent(originator, target, resolved_url, false, opts);
+    if (nav_result == .canceled) {
         // don't defer this, the caller is responsible for freeing it on error
         arena.release();
+        return;
+    }
+
+    // intercept() turns even a cross-document navigation into one that stays
+    // in this document, driven by the handlers, like a same-document one.
+    if (nav_result == .fired and nav_result.fired.intercepted) {
+        target.url = try target.page_arena.dupeSentinel(u8, resolved_url, 0);
+
+        const location = try Location.init(target.url, target);
+        location.acquireRef();
+        target.window._location.releaseRef(target.page);
+        target.window._location = location;
+
+        session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = target.url,
+            .frame_id = target._frame_id,
+            .navigation_type = .other,
+        });
+
+        if (target.parent == null) {
+            try session.navigationFor(target).updateEntries(target.url, opts.kind, target, true);
+        }
+
+        // `:target` matches off the fragment, which might have just changed.
+        change.documentStateChanged(.target, target);
+
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+
+        try session.navigationFor(target).commitSameDocument(nav_result.fired.signal, target);
         return;
     }
 
