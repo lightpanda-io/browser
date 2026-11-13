@@ -217,7 +217,7 @@ const CssAnimation = struct {
     released: bool = false,
 
     fn start(frame: *Frame, element: *Element, timing: Animation.Timing) !void {
-        const allocator = frame._factory.storageAllocator();
+        const allocator = frame.page.recycling;
         // Its own copy: the rule text goes with the next stylesheet change
         const name = try allocator.dupe(u8, timing.name);
         errdefer allocator.free(name);
@@ -318,7 +318,7 @@ const CssAnimation = struct {
     }
 
     fn destroy(self: *CssAnimation) void {
-        self.frame._factory.storageAllocator().free(self.name);
+        self.frame.page.recycling.free(self.name);
         self.frame._factory.destroy(self);
     }
 };

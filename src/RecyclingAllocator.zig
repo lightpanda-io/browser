@@ -15,10 +15,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-// Allocator for the Factory. Almost everything allocated here lives until the
-// child arena goes: DOM nodes are never destroyed. The frees that do happen
-// are mostly GC-finalized wrappers (collections, iterators), in batches.
 //
 // So an allocation is a plain allocation from the child (an arena), and a freed
 // slot goes on the free list for its class, to be handed to the next
