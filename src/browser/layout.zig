@@ -49,6 +49,8 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
         }
         if (style_manager.isFlexRowItem(self)) {
             const row = style_manager.boxParent(self).?;
+            // The row's items size each other
+            style_manager.setSizesOthers(row);
             const item = flexBase(self, boxWidth(row, owner), owner);
             // Snapped to Chrome's 1/64px layout unit, past the float error
             const shrunk = @round(item.base * (1 - rowShrinkRatio(row, owner)) * 64) / 64;
@@ -62,7 +64,11 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
             .fixed => |width| width,
             .percent => |fraction| fraction * containingBlockWidth(self, owner),
             .fill => fillWidth(self, owner),
-            .grow, .shrink => @max(own.value, contentWidth(self, .clipped, owner)),
+            .grow, .shrink => shrunk: {
+                // The boxes inside it take their width from its content's
+                style_manager.setSizesOthers(self);
+                break :shrunk @max(own.value, contentWidth(self, .clipped, owner));
+            },
             .contents => unreachable,
         };
         break :blk clampWidth(self, width, .box, owner);
@@ -106,6 +112,8 @@ const FlexBase = struct {
 // No flex-basis (yet?)/
 fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
     const style_manager = &owner._style_manager;
+    // Its content decides how the row's other items shrink and grow
+    style_manager.setSizesOthers(self);
     const own = self.getElementAxis(owner, .width);
     const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
         .fixed => |width| width,
@@ -149,6 +157,7 @@ fn flexMinWidth(self: *Element, base: f64, owner: *Frame) f64 {
 // items to a new line instead, so it shrinks nothing.
 fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
+    style_manager.setSizesOthers(self);
     if (style_manager.flexWraps(self)) {
         return 0;
     }
@@ -261,6 +270,7 @@ fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
 fn growShare(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     const parent = style_manager.boxParent(self) orelse return 0;
+    style_manager.setSizesOthers(parent);
     const row_width = boxWidth(parent, owner);
     var taken: f64 = 0;
     var growers: f64 = 0;
