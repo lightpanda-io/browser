@@ -145,7 +145,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
             // Dispatch network events only for complete page, ie. w/ real nav
             // done.
             if (frame._load_state == .complete) {
-                const http_client = frame._session.browser.http_client;
+                const http_client = frame._session.http_client;
                 const http_active = http_client.http_active;
                 const http_buffered = http_client.dispatch_count;
                 const total_network_activity = http_active + http_buffered + http_client.intercepted;
@@ -1149,7 +1149,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
 
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
-    const viewport = cmd.cdp.browser.getViewport();
+    const viewport = if (cmd.browser_context) |bc| bc.session.getViewport() else cmd.cdp.browser.getViewport();
 
     var opts: lp.screenshot.Opts = .fromViewport(viewport, params.captureBeyondViewport orelse false);
     if (params.clip) |clip| {
@@ -1232,7 +1232,7 @@ fn printToPDF(cmd: *CDP.Command) !void {
 fn getLayoutMetrics(cmd: *CDP.Command) !void {
     // The viewport override lives on the Browser, so read it there directly:
     // it stays correct even when no page is currently loaded.
-    const viewport = cmd.cdp.browser.getViewport();
+    const viewport = if (cmd.browser_context) |bc| bc.session.getViewport() else cmd.cdp.browser.getViewport();
     const width = viewport.width;
     const height = viewport.height;
 
@@ -1301,7 +1301,7 @@ test "cdp.page: close detaches the target like Target.closeTarget" {
 
     try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     const target = try testing.firstTarget(bc);
     const target_id = target.target_id.?;
     const session_id = try testing.arena_allocator.dupe(u8, target.session_id.?);
@@ -1740,7 +1740,7 @@ test "cdp.page: setLifecycleEventsEnabled reports the initial about:blank as loa
 
     try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     const target = try testing.firstTarget(bc);
     const session_id = target.session_id.?;
 
@@ -1756,7 +1756,7 @@ test "cdp.page: lifecycle settled follows load once the page's tracked work is d
 
     try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 2, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     const session_id = (try testing.firstTarget(bc)).session_id.?;
     try ctx.processMessage(.{ .id = 3, .method = "Page.setLifecycleEventsEnabled", .sessionId = session_id, .params = .{ .enabled = true } });
 
@@ -1809,7 +1809,7 @@ test "cdp.frame: isolated world survives the in-place first navigation" {
 
     try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     const target = try testing.firstTarget(bc);
     const session_id = target.session_id.?;
     const root = target.mainFrame() orelse unreachable;
@@ -1853,7 +1853,7 @@ test "cdp.frame: isolated world follows the in-place first navigation's origin" 
 
     try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     const target = try testing.firstTarget(bc);
     const session_id = target.session_id.?;
     const root = target.mainFrame() orelse unreachable;
@@ -2459,7 +2459,7 @@ test "cdp.page: setDocumentContent refuses while the document is still loading" 
     while (true) : (attempts += 1) {
         _ = try runner.tickForFrame(page_frame_id, 20, .{});
         const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
-        if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
+        if (bc.session.http_client.findTransfer(frame._req_id)) |transfer| {
             if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }
@@ -2499,7 +2499,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
     while (true) : (attempts += 1) {
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = target.mainFrame() orelse unreachable;
-        if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
+        if (bc.session.http_client.findTransfer(frame._req_id)) |transfer| {
             if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }
@@ -2609,7 +2609,7 @@ test "cdp.frame: reload replays POST navigation" {
     // navigations, but we need the first navigation to be POST.
     const cdp_inst = ctx.cdp();
     _ = try cdp_inst.createBrowserContext();
-    var bc = &cdp_inst.browser_context.?;
+    var bc = cdp_inst.browser_context.?;
     bc.id = "BID-A6";
     _ = try (try bc.createTarget()).attachPrimarySession("SID-X");
     const target = try testing.firstTarget(bc);
@@ -2662,7 +2662,7 @@ test "cdp.frame: reload after POST→redirect drops the POST" {
 
     const cdp_inst = ctx.cdp();
     _ = try cdp_inst.createBrowserContext();
-    var bc = &cdp_inst.browser_context.?;
+    var bc = cdp_inst.browser_context.?;
     bc.id = "BID-A6R";
     _ = try (try bc.createTarget()).attachPrimarySession("SID-XR");
     const target = try testing.firstTarget(bc);
@@ -2935,7 +2935,7 @@ test "cdp.frame: first navigation replaces the bootstrap about:blank global" {
     // A fresh, attached target sitting on its bootstrap about:blank document.
     try ctx.processMessage(.{ .id = 69, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
     try ctx.processMessage(.{ .id = 70, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     const target = try testing.firstTarget(bc);
     {
         const frame = target.mainFrame() orelse unreachable;
@@ -3016,7 +3016,7 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
 
     const cdp_inst = ctx.cdp();
     _ = try cdp_inst.createBrowserContext();
-    var bc = &cdp_inst.browser_context.?;
+    var bc = cdp_inst.browser_context.?;
     bc.id = "BID-A18";
     _ = try (try bc.createTarget()).attachPrimarySession("SID-A18");
     const target = try testing.firstTarget(bc);
@@ -3067,7 +3067,7 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
 
     const cdp_inst = ctx.cdp();
     _ = try cdp_inst.createBrowserContext();
-    var bc = &cdp_inst.browser_context.?;
+    var bc = cdp_inst.browser_context.?;
     bc.id = "BID-A18B";
     _ = try (try bc.createTarget()).attachPrimarySession("SID-A18B");
     const target = try testing.firstTarget(bc);

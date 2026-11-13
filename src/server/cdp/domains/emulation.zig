@@ -108,9 +108,8 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         });
     }
 
-    // The override is stored on the Browser so it persists across page
-    // navigations. Browser.closeSession clears it with the context's session.
-    const browser = &cmd.cdp.browser;
+    // The override belongs to the context's Session and survives its page navigations.
+    const browser = (cmd.browser_context orelse return error.BrowserContextNotLoaded).session;
 
     // CDP convention: a 0 width/height means "don't override that dimension",
     // so keep the current value for any dimension passed as 0.
@@ -129,7 +128,7 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
 }
 
 fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.setViewportOverride(null);
+    (cmd.browser_context orelse return error.BrowserContextNotLoaded).session.setViewportOverride(null);
     return cmd.sendResult(null, .{});
 }
 
@@ -157,7 +156,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const http_client = &cmd.cdp.browser.http_client;
+    const http_client = cmd.httpClient();
 
     // Applied even when the user agent is refused below: Playwright always
     // sends a Mozilla user agent alongside the locale it was asked for.
@@ -189,7 +188,7 @@ fn setGeolocationOverride(cmd: *CDP.Command) !void {
     // back to all-null defaults rather than erroring.
     const params = (try cmd.params(Params)) orelse Params{};
 
-    const browser = &cmd.cdp.browser;
+    const browser = (cmd.browser_context orelse return error.BrowserContextNotLoaded).session;
     if (params.latitude) |lat| {
         if (params.longitude) |lon| {
             browser.geolocation_override = .{
@@ -205,7 +204,7 @@ fn setGeolocationOverride(cmd: *CDP.Command) !void {
 }
 
 fn clearGeolocationOverride(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.geolocation_override = null;
+    (cmd.browser_context orelse return error.BrowserContextNotLoaded).session.geolocation_override = null;
     return cmd.sendResult(null, .{});
 }
 
@@ -433,7 +432,7 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
     try expectJs(frame, "navigator.language === 'de-DE' && navigator.languages.join() === 'de-DE,de,en'");
-    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser.http_client.getAcceptLanguage());
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser_context.?.session.http_client.getAcceptLanguage());
 
     // A Mozilla user agent is refused, the language still applies.
     try ctx.processMessage(.{
@@ -443,7 +442,7 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
     try expectJs(frame, "navigator.language === 'fr-FR' && navigator.languages.length === 1");
-    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser.http_client.getUserAgent());
+    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser_context.?.session.http_client.getUserAgent());
 
     try ctx.processMessage(.{
         .id = 3,
@@ -515,8 +514,8 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
 
     // The override lives on the Browser, so it persists across page
     // navigations rather than being lost with the page.
-    try testing.expectEqual(375, bc.session.browser.getViewport().width);
-    try testing.expectEqual(812, bc.session.browser.getViewport().height);
+    try testing.expectEqual(375, bc.session.getViewport().width);
+    try testing.expectEqual(812, bc.session.getViewport().height);
 
     try ctx.processMessage(.{
         .id = 9,
@@ -532,7 +531,7 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-OLD", .url = "cdp/dom1.html" });
-    const browser = &ctx.cdp().browser;
+    const browser = bc.session;
     const defaults = browser.getViewport();
 
     try ctx.processMessage(.{
@@ -565,11 +564,11 @@ test "cdp.Emulation: context disposal clears viewport overrides" {
 
     try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-EMULATION-OLD" } });
     try ctx.expectSentResult(null, .{ .id = 4 });
-    try testing.expectEqual(null, browser.viewport_override);
-    try std.testing.expectEqualDeep(defaults, browser.getViewport());
+    try testing.expectEqual(null, ctx.cdp().browser_context);
 
     const fresh = try ctx.loadBrowserContext(.{ .id = "BID-EMULATION-NEW", .url = "cdp/dom1.html" });
-    try testing.expectEqual(null, browser.viewport_override);
+    try testing.expectEqual(null, fresh.session.viewport_override);
+    try std.testing.expectEqualDeep(defaults, fresh.session.getViewport());
     try expectJs((try testing.firstTarget(fresh)).mainFrame().?, "innerWidth === 1920 && innerHeight === 1080 && devicePixelRatio === 1 && screen.width === innerWidth && screen.height === innerHeight");
 }
 
@@ -578,7 +577,7 @@ test "cdp.Emulation: setGeolocationOverride and clear" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO", .url = "cdp/dom1.html" });
-    const browser = bc.session.browser;
+    const browser = bc.session;
 
     try ctx.processMessage(.{
         .id = 1,

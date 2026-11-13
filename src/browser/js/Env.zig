@@ -520,6 +520,7 @@ pub fn runMicrotasks(self: *Env) void {
         var i: usize = 0;
         while (i < self.contexts.items.len) : (i += 1) {
             const ctx = self.contexts.items[i];
+            if (ctx.page.destroying) continue;
             // Reporting a rejection runs the page's listeners, which can queue
             // microtasks: checkpoint again, a bounded number of times.
             var rounds: u8 = 0;
@@ -556,7 +557,7 @@ const max_rejection_rounds = 16;
 // case page code may have run and queued microtasks, and the context is still
 // alive.
 fn reportRejectedPromises(self: *Env, ctx: *Context) bool {
-    if (ctx.rejected_promises.items.len == 0) {
+    if (ctx.page.destroying or ctx.rejected_promises.items.len == 0) {
         return false;
     }
 
@@ -570,7 +571,7 @@ fn reportRejectedPromises(self: *Env, ctx: *Context) bool {
             break;
         }
         // A listener removed the frame this context belonged to.
-        if (std.mem.findScalar(*Context, self.contexts.items, ctx) == null) {
+        if (std.mem.findScalar(*Context, self.contexts.items, ctx) == null or ctx.page.destroying) {
             return false;
         }
 
@@ -629,6 +630,7 @@ pub fn runMacrotasks(self: *Env) !void {
     var i: usize = 0;
     while (i < self.contexts.items.len) : (i += 1) {
         const ctx = self.contexts.items[i];
+        if (ctx.page.destroying) continue;
         if (comptime lp.IS_TEST == false) {
             // I hate this comptime check as much as you do. But we have tests
             // which rely on short execution before shutdown. In real world, it's
@@ -646,8 +648,10 @@ pub fn runMacrotasks(self: *Env) !void {
     }
 }
 
-pub fn hasMacrotasks(self: *Env) bool {
+pub fn hasMacrotasks(self: *Env, session: ?*lp.Session) bool {
     for (self.contexts.items) |ctx| {
+        if (ctx.page.destroying) continue;
+        if (session != null and ctx.page.session != session.?) continue;
         if (ctx.scheduler.blocksCompletion()) {
             return true;
         }
@@ -658,6 +662,7 @@ pub fn hasMacrotasks(self: *Env) bool {
 pub fn msToNextTask(self: *Env) ?u64 {
     var next_task: u64 = std.math.maxInt(u64);
     for (self.contexts.items) |ctx| {
+        if (ctx.page.destroying) continue;
         const candidate = ctx.scheduler.msToNext() orelse continue;
         next_task = @min(candidate, next_task);
     }

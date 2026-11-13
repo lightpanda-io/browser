@@ -101,9 +101,11 @@ fn configureCDP(cmd: *CDP.Command) !void {
     }
     if (params.obeyRobots) |value| {
         try cmd.cdp.browser.http_client.obeyRobots(value);
+        for (cmd.cdp.browser_contexts.items) |bc| try bc.session.http_client.obeyRobots(value);
     }
     if (params.httpVersion) |value| {
         cmd.cdp.browser.http_client.setHttpVersion(value);
+        for (cmd.cdp.browser_contexts.items) |bc| bc.session.http_client.setHttpVersion(value);
     }
 
     return cmd.sendResult(null, .{});
@@ -212,7 +214,7 @@ fn dump(cmd: anytype) !void {
             if (params.maxBytes != null) {
                 return error.InvalidParams;
             }
-            const opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true);
+            const opts: lp.screenshot.Opts = .fromViewport(frame.page.getViewport(), true);
             const prepared = try lp.screenshot.preparePng(cmd.arena, state, opts, frame);
             return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
         },
@@ -313,7 +315,7 @@ fn getStructuredData(cmd: anytype) !void {
 fn getContentSignal(cmd: anytype) !void {
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
-    const network = target.cdp.browser.http_client.network;
+    const network = target.session.http_client.network;
 
     const empty: []const Robots.ContentSignal = &.{};
     const robots_url = lp.URL.getRobotsUrl(cmd.arena, frame.url) catch {

@@ -490,7 +490,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
 
         // WebSocket connection doesn't count as pending work, but we much prefer
         // waiting on on activity than a blind sleep.
-        const http_client = &test_session.browser.http_client;
+        const http_client = test_session.http_client;
         const waited = http_client.activity().ws_conns > 0 and try http_client.tick(@intCast(sleep_ms));
         if (waited == false) {
             lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};

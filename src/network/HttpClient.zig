@@ -83,6 +83,10 @@ handles: http.Handles,
 // tell "parked, waiting for work" from "stuck between waits". Registered
 // with App.watchdog by Browser.init.
 heartbeat: Watchdog.Heartbeat = .{},
+session_source: ?*Client = null,
+wakeup_mutex: std.Io.Mutex = .init,
+polling_client: ?*Client = null,
+wakeup_pending: bool = false,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -204,6 +208,44 @@ http_version: lp.Config.HttpVersion,
 robots: RobotsGate,
 cors: CorsGate,
 url_blocklist: ?UrlBlocklist,
+
+pub fn watchdogHeartbeat(self: *Client) *Watchdog.Heartbeat {
+    return &(self.session_source orelse self).heartbeat;
+}
+
+fn currentDriver(self: *Client) ?*Driver {
+    const source = self.session_source orelse self;
+    return if (source.driver) |*driver| driver else null;
+}
+
+// The default client's callers can wake the selected session client's poll.
+// Hold the lock through wakeup so the selected client's handles stay alive.
+pub fn wakeup(self: *Client) !void {
+    const source = self.session_source orelse self;
+    source.wakeup_mutex.lockUncancelable(lp.io);
+    defer source.wakeup_mutex.unlock(lp.io);
+    source.wakeup_pending = true;
+    try (source.polling_client orelse source).handles.wakeup();
+}
+
+fn poll(self: *Client, timeout_ms: u32) !void {
+    const source = self.session_source orelse self;
+    source.wakeup_mutex.lockUncancelable(lp.io);
+    if (source.wakeup_pending) {
+        source.wakeup_pending = false;
+        source.wakeup_mutex.unlock(lp.io);
+        return;
+    }
+    lp.assert(source.polling_client == null, "Concurrent session client polls", .{});
+    source.polling_client = self;
+    source.wakeup_mutex.unlock(lp.io);
+    defer {
+        source.wakeup_mutex.lockUncancelable(lp.io);
+        source.polling_client = null;
+        source.wakeup_mutex.unlock(lp.io);
+    }
+    try self.handles.poll(&.{}, @intCast(timeout_ms));
+}
 
 pub fn init(self: *Client, app: *lp.App) !void {
     const config = app.config;
@@ -811,7 +853,7 @@ fn hasPendingTeardown(self: *Client) bool {
         if (comptime lp.IS_TEST) {
             if (self.test_inbox) |test_inbox| break :blk test_inbox;
         }
-        const driver = &(self.driver orelse return false);
+        const driver = self.currentDriver() orelse return false;
         break :blk driver.inbox;
     };
     return inbox.contains(isSyncWaitInterrupt);
@@ -838,12 +880,12 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (dispatched == false and processed == false and self.dispatch_queue.first == null and self.ws_dispatch_queue.first == null) {
         // Nothing was dispatched, no messages were processed and nothing is
         // waiting for dispatch. We need to wait for I/O.
-        if (running > 0 or self.driver != null or self.delayed_queue.first != null) {
+        if (running > 0 or self.currentDriver() != null or self.delayed_queue.first != null) {
             {
-                self.heartbeat.enterWait();
-                defer self.heartbeat.exitWait();
+                self.watchdogHeartbeat().enterWait();
+                defer self.watchdogHeartbeat().exitWait();
                 // The network layer will wake this up if there's acticity.
-                try self.handles.poll(&.{}, @intCast(self.clampToDelayed(timeout_ms)));
+                try self.poll(self.clampToDelayed(timeout_ms));
             }
             // poll only waits, so we do the perform -> process dance again
             _ = try self.handles.perform();
@@ -1682,7 +1724,7 @@ pub fn drainTerminal(self: *Client) !void {
 // only — NOT from perform, because perform recurses through
 // processOneMessage's redirect path.
 fn drainInbox(self: *Client, mode: DrainMode) !void {
-    const driver = &(self.driver orelse return);
+    const driver = self.currentDriver() orelse return;
     const inbox = driver.inbox;
     while (true) {
         const msg = switch (mode) {
@@ -7079,4 +7121,57 @@ test "HttpClient: Vary sees the jar's cookies" {
     try testing.expectEqual("text/html", headers[0].value);
     try testing.expectEqual("cookie", headers[1].name);
     try testing.expectEqual("who=a", headers[1].value);
+}
+
+test "HttpClient: borrowed session clients follow driver attachment and wakeups" {
+    const browser = testing.test_session.browser;
+    var client: Client = undefined;
+    try client.init(browser.app);
+    defer client.deinit();
+    client.session_source = &browser.http_client;
+    defer client.session_source = null;
+    var driver: Driver = .{ .impl = .{ .cdp = undefined }, .browser = browser, .inbox = undefined, .scope = .cdp };
+    try testing.expectEqual(null, client.currentDriver());
+    driver.attach();
+    defer driver.detach();
+    try testing.expect(client.currentDriver() != null);
+    driver.detach();
+    try testing.expectEqual(null, client.currentDriver());
+
+    driver.wakeup();
+    try testing.expect(browser.http_client.wakeup_pending);
+    const before_poll = lp.datetime.milliTimestamp(.boot);
+    try client.poll(10000);
+    try testing.expect(lp.datetime.milliTimestamp(.boot) - before_poll < 5000);
+    try testing.expectEqual(false, browser.http_client.wakeup_pending);
+
+    const Poll = struct {
+        client: *Client,
+        err: ?anyerror = null,
+        fn run(self: *@This()) void {
+            self.client.poll(10000) catch |err| {
+                self.err = err;
+            };
+        }
+    };
+    var poll_state: Poll = .{ .client = &client };
+    const started = lp.datetime.milliTimestamp(.boot);
+    const thread = try std.Thread.spawn(.{}, Poll.run, .{&poll_state});
+    var joined = false;
+    defer if (!joined) thread.join();
+    var ready = false;
+    while (lp.datetime.milliTimestamp(.boot) - started < 5000) {
+        browser.http_client.wakeup_mutex.lockUncancelable(lp.io);
+        ready = browser.http_client.polling_client == &client;
+        browser.http_client.wakeup_mutex.unlock(lp.io);
+        if (ready) break;
+        std.Thread.yield() catch {};
+    }
+    try testing.expect(ready);
+    driver.wakeup();
+    thread.join();
+    joined = true;
+    if (poll_state.err) |err| return err;
+    try testing.expect(lp.datetime.milliTimestamp(.boot) - started < 5000);
+    try testing.expectEqual(null, browser.http_client.polling_client);
 }

@@ -221,7 +221,7 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const client = &bc.cdp.browser.http_client;
+    const client = bc.session.http_client;
     if (!bc.cdp.disable_set_cache_disabled) {
         client.disableCache(params.cacheDisabled);
     }
@@ -234,7 +234,7 @@ fn setBlockedURLs(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.cdp.browser.http_client.setBlockedUrlPatterns(params.urlPatterns);
+    try bc.session.http_client.setBlockedUrlPatterns(params.urlPatterns);
     return cmd.sendResult(null, .{});
 }
 
@@ -338,14 +338,14 @@ fn clearBrowserCache(cmd: *CDP.Command) !void {
     // include an empty `"params":{}` object on every command for ergonomics.
     // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const network = bc.cdp.browser.http_client.network;
+    const network = bc.session.http_client.network;
     try network.cache.clear();
     return cmd.sendResult(null, .{});
 }
 
 fn canClearBrowserCache(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const network = bc.cdp.browser.http_client.network;
+    const network = bc.session.http_client.network;
     return cmd.sendResult(.{ .result = network.cache.active() != null }, .{});
 }
 
@@ -871,7 +871,7 @@ test "cdp.network setExtraHTTPHeaders" {
         .params = .{ .headers = .{ .food = "bars" } },
     });
 
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
@@ -912,7 +912,7 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
         .params = .{ .headers = .{ .@"User-Agent" = "Mozilla/5.0" } },
     });
 
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
 }
 
@@ -928,7 +928,7 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
         .params = .{ .headers = .{ .@"User-Agent" = "CustomBot/2.0" } },
     });
 
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
@@ -949,7 +949,7 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via 
         .params = .{ .headers = .{ .@"User-Agent:Mozilla/5.0 (X" = "Y)" } },
     });
 
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
 }
 
@@ -1268,10 +1268,10 @@ test "cdp.Network: canClearBrowserCache" {
 test "cdp.Network: setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CD1" });
 
     var cache: Cache = undefined;
-    const client = &ctx.cdp().browser.http_client;
+    const client = bc.session.http_client;
     client.cache = &cache;
 
     try ctx.processMessage(.{
@@ -1286,10 +1286,10 @@ test "cdp.Network: setCacheDisabled" {
 test "cdp.Network: configured CDP ignores setCacheDisabled" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CD2" });
 
     var cache: Cache = undefined;
-    const client = &ctx.cdp().browser.http_client;
+    const client = bc.session.http_client;
     client.cache = &cache;
     defer client.cache = &testing.base.test_app.network.cache;
 
@@ -1321,7 +1321,7 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
     });
     const page = try bc.session.createPage();
     const target = try testing.firstTarget(bc);
-    const client = &bc.cdp.browser.http_client;
+    const client = bc.session.http_client;
     defer client.setBlockedUrls(&.{}) catch unreachable;
 
     try ctx.processMessage(.{
@@ -1408,7 +1408,7 @@ test "cdp.Network: a bad port fails before connecting, redirect hop included" {
         .session_id = "SID-PORT",
     });
     const page = try bc.session.createPage();
-    const client = &bc.cdp.browser.http_client;
+    const client = bc.session.http_client;
 
     try ctx.processMessage(.{
         .id = 1,
@@ -1460,7 +1460,7 @@ test "cdp.Network: loadingFinished reports the bytes received, not the decoded b
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-ED", .session_id = "SID-ED" });
     const page = try bc.session.createPage();
-    const client = &bc.cdp.browser.http_client;
+    const client = bc.session.http_client;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -1491,7 +1491,7 @@ test "cdp.Network: POST body exposed as postData" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-PD", .session_id = "SID-PD" });
     const page = try bc.session.createPage();
-    const client = &bc.cdp.browser.http_client;
+    const client = bc.session.http_client;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -1561,7 +1561,7 @@ const EchoDriver = struct {
     }
 
     fn run(bc: *CDP.BrowserContext, frame_id: u32, body: []const u8, partial: ?u32) ![14]u8 {
-        const client = &bc.cdp.browser.http_client;
+        const client = bc.session.http_client;
         var request_id: [14]u8 = undefined;
         _ = std.mem.print(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
 
@@ -1805,7 +1805,7 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-REDIRECT", .session_id = "SID-REDIRECT" });
     const page = try bc.session.createPage();
-    const client = &bc.cdp.browser.http_client;
+    const client = bc.session.http_client;
 
     try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
     try ctx.expectSentResult(null, .{ .id = 1 });
@@ -1919,7 +1919,7 @@ test "cdp.Network: worker requests emit network events" {
 
     const cdp = ctx.cdp();
     _ = try cdp.createBrowserContext();
-    var bc = &cdp.browser_context.?;
+    var bc = cdp.browser_context.?;
     bc.id = "BID-NW";
     _ = try (try bc.createTarget()).attachPrimarySession("SID-NW");
     (try testing.firstTarget(bc)).target_id = "TID-NW-0000000".*;

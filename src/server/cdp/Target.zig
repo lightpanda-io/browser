@@ -198,7 +198,7 @@ pub fn init(bc: *BrowserContext, group_id: js.Inspector.GroupId) !*Target {
 // Frees everything the target holds, its page excepted (see `close`).
 pub fn deinit(self: *Target) void {
     const allocator = self.cdp.allocator;
-    const http_client = &self.cdp.browser.http_client;
+    const http_client = self.session.http_client;
 
     // abort all intercepted requests: some of these might callback into the
     // page/scriptmanager. intercept_state stores ids.

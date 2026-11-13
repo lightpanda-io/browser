@@ -337,7 +337,7 @@ test "cdp.Storage: setCookies takes back the cookies getCookies gave" {
     session.expires = -1;
     try ctx.processMessage(.{ .id = 5, .method = "Storage.setCookies", .params = .{ .cookies = &[_]CdpCookie{session} } });
     try ctx.expectSentResult(null, .{ .id = 5 });
-    const jar = &ctx.cdp().browser_context.?.session.cookie_jar;
+    const jar = ctx.cdp().browser_context.?.session.cookie_jar;
     try testing.expectEqual(1, jar.len);
     var it = jar.iterator();
     try testing.expectEqual(null, it.next().?.expires);

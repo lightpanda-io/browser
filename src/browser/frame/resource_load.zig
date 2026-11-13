@@ -76,7 +76,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         return;
     };
 
-    const transfer = try session.browser.http_client.newRequest(.{
+    const transfer = try session.http_client.newRequest(.{
         .ctx = load,
         .url = resolved,
         .method = .GET,
@@ -133,7 +133,7 @@ pub fn beacon(frame: *Frame, in_flight: *usize, url: [:0]const u8, body: []const
     });
     errdefer root._factory.destroy(load);
 
-    const transfer = try frame._session.browser.http_client.newRequest(.{
+    const transfer = try frame._session.http_client.newRequest(.{
         .ctx = load,
         .url = url,
         .method = .POST,
