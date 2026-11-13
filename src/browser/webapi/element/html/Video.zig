@@ -80,6 +80,6 @@ pub const JsApi = struct {
     pub const playsInline = reflect.boolean("playsinline");
 
     pub const poster = bridge.accessor(Video.getPoster, Video.setPoster, .{ .ce_reactions = true });
-    pub const videoWidth = bridge.accessor(Video.getVideoWidth, null, .{});
-    pub const videoHeight = bridge.accessor(Video.getVideoHeight, null, .{});
+    pub const videoWidth = bridge.fastAccessor(Video.getVideoWidth, null, .{ .getter = .unsafe });
+    pub const videoHeight = bridge.fastAccessor(Video.getVideoHeight, null, .{ .getter = .unsafe });
 };

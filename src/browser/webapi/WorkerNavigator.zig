@@ -132,12 +132,12 @@ pub const JsApi = struct {
     pub const platform = bridge.accessor(WorkerNavigator.getPlatform, null, .{});
     pub const language = bridge.accessor(WorkerNavigator.getLanguage, null, .{});
     pub const languages = bridge.accessor(WorkerNavigator.getLanguages, null, .{});
-    pub const onLine = bridge.accessor(WorkerNavigator.getOnLine, null, .{});
-    pub const hardwareConcurrency = bridge.accessor(WorkerNavigator.getHardwareConcurrency, null, .{});
-    pub const deviceMemory = bridge.accessor(WorkerNavigator.getDeviceMemory, null, .{});
+    pub const onLine = bridge.fastAccessor(WorkerNavigator.getOnLine, null, .{ .getter = .unsafe });
+    pub const hardwareConcurrency = bridge.fastAccessor(WorkerNavigator.getHardwareConcurrency, null, .{ .getter = .unsafe });
+    pub const deviceMemory = bridge.fastAccessor(WorkerNavigator.getDeviceMemory, null, .{ .getter = .unsafe });
     pub const vendor = bridge.accessor(WorkerNavigator.getVendor, null, .{});
     pub const product = bridge.accessor(WorkerNavigator.getProduct, null, .{});
-    pub const globalPrivacyControl = bridge.accessor(WorkerNavigator.getGlobalPrivacyControl, null, .{});
+    pub const globalPrivacyControl = bridge.fastAccessor(WorkerNavigator.getGlobalPrivacyControl, null, .{ .getter = .unsafe });
 
     pub const permissions = bridge.accessor(WorkerNavigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(WorkerNavigator.getStorage, null, .{});

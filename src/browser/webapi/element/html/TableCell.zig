@@ -77,7 +77,7 @@ pub const JsApi = struct {
     pub const abbr = reflect.string("abbr");
 
     pub const colSpan = reflect.unsignedLong("colspan", .{ .default = 1, .clamp = .{ .min = 1, .max = 1000 } });
-    pub const cellIndex = bridge.accessor(TableCell.getCellIndex, null, .{});
+    pub const cellIndex = bridge.fastAccessor(TableCell.getCellIndex, null, .{ .getter = .unsafe });
     pub const rowSpan = reflect.unsignedLong("rowspan", .{ .default = 1, .clamp = .{ .min = 0, .max = 65534 } });
 };
 

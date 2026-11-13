@@ -173,11 +173,11 @@ pub const Lookup = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const length = bridge.accessor(Lookup.getLength, null, .{});
+        pub const length = bridge.fastAccessor(Lookup.getLength, null, .{ .getter = .unsafe });
         pub const getItem = bridge.function(Lookup.getItem, .{});
         pub const setItem = bridge.function(Lookup.setItem, .{});
         pub const removeItem = bridge.function(Lookup.removeItem, .{});
-        pub const clear = bridge.function(Lookup.clear, .{});
+        pub const clear = bridge.fastFunction(Lookup.clear, .{});
         pub const key = bridge.function(Lookup.key, .{});
         pub const @"[str]" = bridge.namedIndexed(Lookup.getItem, Lookup.setItem, Lookup.removeItem, Lookup.keys, Lookup.hasItem, .{ .null_as_undefined = true });
         pub const @"[int]" = bridge.indexedReadWrite(_getByIndex, _setByIndex, _removeByIndex, _indexHas, null, .{ .null_as_undefined = true });

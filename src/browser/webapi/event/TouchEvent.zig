@@ -197,10 +197,10 @@ pub const JsApi = struct {
     pub const touches = bridge.accessor(TouchEvent.getTouches, null, .{});
     pub const targetTouches = bridge.accessor(TouchEvent.getTargetTouches, null, .{});
     pub const changedTouches = bridge.accessor(TouchEvent.getChangedTouches, null, .{});
-    pub const altKey = bridge.accessor(TouchEvent.getAltKey, null, .{});
-    pub const metaKey = bridge.accessor(TouchEvent.getMetaKey, null, .{});
-    pub const ctrlKey = bridge.accessor(TouchEvent.getCtrlKey, null, .{});
-    pub const shiftKey = bridge.accessor(TouchEvent.getShiftKey, null, .{});
+    pub const altKey = bridge.fastAccessor(TouchEvent.getAltKey, null, .{ .getter = .unsafe });
+    pub const metaKey = bridge.fastAccessor(TouchEvent.getMetaKey, null, .{ .getter = .unsafe });
+    pub const ctrlKey = bridge.fastAccessor(TouchEvent.getCtrlKey, null, .{ .getter = .unsafe });
+    pub const shiftKey = bridge.fastAccessor(TouchEvent.getShiftKey, null, .{ .getter = .unsafe });
 };
 
 const testing = @import("../../../testing.zig");

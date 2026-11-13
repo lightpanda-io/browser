@@ -1934,7 +1934,7 @@ pub const JsApi = struct {
     pub const pathname = bridge.accessor(URLPattern.getPathname, null, .{});
     pub const search = bridge.accessor(URLPattern.getSearch, null, .{});
     pub const hash = bridge.accessor(URLPattern.getHash, null, .{});
-    pub const hasRegExpGroups = bridge.accessor(URLPattern.getHasRegExpGroups, null, .{});
+    pub const hasRegExpGroups = bridge.fastAccessor(URLPattern.getHasRegExpGroups, null, .{ .getter = .unsafe });
     pub const @"test" = bridge.function(URLPattern.testFn, .{});
     pub const exec = bridge.function(URLPattern.execFn, .{});
     pub const compareComponent = bridge.function(URLPattern.compareComponent, .{ .static = true });

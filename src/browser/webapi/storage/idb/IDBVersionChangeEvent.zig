@@ -87,6 +87,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(IDBVersionChangeEvent.init, .{});
-    pub const oldVersion = bridge.accessor(IDBVersionChangeEvent.getOldVersion, null, .{});
+    pub const oldVersion = bridge.fastAccessor(IDBVersionChangeEvent.getOldVersion, null, .{ .getter = .unsafe });
     pub const newVersion = bridge.accessor(IDBVersionChangeEvent.getNewVersion, null, .{ .null_as_undefined = true });
 };

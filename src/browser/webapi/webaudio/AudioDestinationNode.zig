@@ -78,5 +78,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const maxChannelCount = bridge.accessor(AudioDestinationNode.getMaxChannelCount, null, .{});
+    pub const maxChannelCount = bridge.fastAccessor(AudioDestinationNode.getMaxChannelCount, null, .{ .getter = .unsafe });
 };

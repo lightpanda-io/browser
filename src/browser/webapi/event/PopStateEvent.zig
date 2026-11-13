@@ -92,5 +92,5 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(PopStateEvent.init, .{});
     pub const state = bridge.accessor(PopStateEvent.getState, null, .{});
-    pub const hasUAVisualTransition = bridge.accessor(PopStateEvent.hasUAVisualTransition, null, .{});
+    pub const hasUAVisualTransition = bridge.fastAccessor(PopStateEvent.hasUAVisualTransition, null, .{ .getter = .unsafe });
 };

@@ -145,7 +145,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(NodeList.length, null, .{});
+    pub const length = bridge.fastAccessor(NodeList.length, null, .{ .getter = .safe });
     pub const @"[]" = bridge.indexed(NodeList.indexedGet, getIndexes, .{ .null_as_undefined = true });
     pub const item = bridge.function(NodeList.getAtIndex, .{});
     pub const keys = bridge.function(NodeList.keys, .{});

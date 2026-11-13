@@ -271,8 +271,8 @@ pub const ResizeObserverSize = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const inlineSize = bridge.accessor(ResizeObserverSize.getInlineSize, null, .{});
-        pub const blockSize = bridge.accessor(ResizeObserverSize.getBlockSize, null, .{});
+        pub const inlineSize = bridge.fastAccessor(ResizeObserverSize.getInlineSize, null, .{ .getter = .unsafe });
+        pub const blockSize = bridge.fastAccessor(ResizeObserverSize.getBlockSize, null, .{ .getter = .unsafe });
     };
 };
 
@@ -286,8 +286,8 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(ResizeObserver.init, .{});
     pub const observe = bridge.function(ResizeObserver.observe, .{});
-    pub const unobserve = bridge.function(ResizeObserver.unobserve, .{});
-    pub const disconnect = bridge.function(ResizeObserver.disconnect, .{});
+    pub const unobserve = bridge.fastFunction(ResizeObserver.unobserve, .{});
+    pub const disconnect = bridge.fastFunction(ResizeObserver.disconnect, .{});
 };
 
 const testing = @import("../../testing.zig");

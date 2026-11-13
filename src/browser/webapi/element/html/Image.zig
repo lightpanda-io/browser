@@ -542,9 +542,9 @@ pub const JsApi = struct {
     pub const longDesc = reflect.url("longdesc");
     pub const border = reflect.stringNullToEmpty("border");
 
-    pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
-    pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
-    pub const complete = bridge.accessor(Image.getComplete, null, .{});
+    pub const naturalWidth = bridge.fastAccessor(Image.getNaturalWidth, null, .{ .getter = .unsafe });
+    pub const naturalHeight = bridge.fastAccessor(Image.getNaturalHeight, null, .{ .getter = .unsafe });
+    pub const complete = bridge.fastAccessor(Image.getComplete, null, .{ .getter = .unsafe });
     pub const decode = bridge.function(Image.decode, .{});
 };
 

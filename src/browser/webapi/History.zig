@@ -204,13 +204,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = 0;
     };
 
-    pub const length = bridge.accessor(History.getLength, null, .{});
+    pub const length = bridge.fastAccessor(History.getLength, null, .{ .getter = .unsafe });
     pub const scrollRestoration = bridge.accessor(History.getScrollRestoration, History.setScrollRestoration, .{});
     pub const state = bridge.accessor(History.getState, null, .{});
     pub const pushState = bridge.function(History.pushState, .{});
     pub const replaceState = bridge.function(History.replaceState, .{});
-    pub const back = bridge.function(History.back, .{});
-    pub const forward = bridge.function(History.forward, .{});
+    pub const back = bridge.fastFunction(History.back, .{});
+    pub const forward = bridge.fastFunction(History.forward, .{});
     pub const go = bridge.function(History.go, .{});
 };
 

@@ -53,8 +53,8 @@ const StorageEstimate = struct {
             pub const name = "StorageEstimate";
             pub var class_id: bridge.ClassId = undefined;
         };
-        pub const quota = bridge.accessor(getQuota, null, .{});
-        pub const usage = bridge.accessor(getUsage, null, .{});
+        pub const quota = bridge.fastAccessor(getQuota, null, .{ .getter = .unsafe });
+        pub const usage = bridge.fastAccessor(getUsage, null, .{ .getter = .unsafe });
     };
 };
 

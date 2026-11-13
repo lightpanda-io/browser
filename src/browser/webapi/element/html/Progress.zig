@@ -93,7 +93,7 @@ pub const JsApi = struct {
 
     pub const max = bridge.accessor(Progress.getMax, Progress.setMax, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Progress.getValue, Progress.setValue, .{ .ce_reactions = true });
-    pub const position = bridge.accessor(Progress.getPosition, null, .{});
+    pub const position = bridge.fastAccessor(Progress.getPosition, null, .{ .getter = .unsafe });
 
     pub const labels = bridge.accessor(Progress.getLabels, null, .{});
 };

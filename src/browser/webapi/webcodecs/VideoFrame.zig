@@ -954,22 +954,22 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VideoFrame.constructor, .{});
     pub const format = bridge.accessor(VideoFrame.getFormat, null, .{});
-    pub const codedWidth = bridge.accessor(VideoFrame.getCodedWidth, null, .{});
-    pub const codedHeight = bridge.accessor(VideoFrame.getCodedHeight, null, .{});
+    pub const codedWidth = bridge.fastAccessor(VideoFrame.getCodedWidth, null, .{ .getter = .unsafe });
+    pub const codedHeight = bridge.fastAccessor(VideoFrame.getCodedHeight, null, .{ .getter = .unsafe });
     pub const codedRect = bridge.accessor(VideoFrame.getCodedRect, null, .{});
     pub const visibleRect = bridge.accessor(VideoFrame.getVisibleRect, null, .{});
-    pub const rotation = bridge.accessor(VideoFrame.getRotation, null, .{});
-    pub const flip = bridge.accessor(VideoFrame.getFlip, null, .{});
-    pub const displayWidth = bridge.accessor(VideoFrame.getDisplayWidth, null, .{});
-    pub const displayHeight = bridge.accessor(VideoFrame.getDisplayHeight, null, .{});
+    pub const rotation = bridge.fastAccessor(VideoFrame.getRotation, null, .{ .getter = .unsafe });
+    pub const flip = bridge.fastAccessor(VideoFrame.getFlip, null, .{ .getter = .unsafe });
+    pub const displayWidth = bridge.fastAccessor(VideoFrame.getDisplayWidth, null, .{ .getter = .unsafe });
+    pub const displayHeight = bridge.fastAccessor(VideoFrame.getDisplayHeight, null, .{ .getter = .unsafe });
     pub const duration = bridge.accessor(VideoFrame.getDuration, null, .{});
-    pub const timestamp = bridge.accessor(VideoFrame.getTimestamp, null, .{});
+    pub const timestamp = bridge.fastAccessor(VideoFrame.getTimestamp, null, .{ .getter = .unsafe });
     pub const colorSpace = bridge.accessor(VideoFrame.getColorSpace, null, .{});
     pub const metadata = bridge.function(VideoFrame.metadata, .{});
     pub const allocationSize = bridge.function(VideoFrame.allocationSize, .{});
     pub const copyTo = bridge.function(VideoFrame.copyTo, .{});
     pub const clone = bridge.function(VideoFrame.clone, .{});
-    pub const close = bridge.function(VideoFrame.close, .{});
+    pub const close = bridge.fastFunction(VideoFrame.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

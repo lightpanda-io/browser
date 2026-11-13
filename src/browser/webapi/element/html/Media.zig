@@ -458,15 +458,15 @@ pub const JsApi = struct {
     pub const autoplay = reflect.boolean("autoplay");
     pub const controls = reflect.boolean("controls");
     pub const loop = reflect.boolean("loop");
-    pub const muted = bridge.accessor(Media.getMuted, Media.setMuted, .{});
+    pub const muted = bridge.fastAccessor(Media.getMuted, Media.setMuted, .{ .getter = .unsafe, .setter = .unsafe });
     pub const preload = bridge.accessor(Media.getPreload, Media.setPreload, .{ .ce_reactions = true });
-    pub const volume = bridge.accessor(Media.getVolume, Media.setVolume, .{});
-    pub const playbackRate = bridge.accessor(Media.getPlaybackRate, Media.setPlaybackRate, .{});
-    pub const currentTime = bridge.accessor(Media.getCurrentTime, Media.setCurrentTime, .{});
-    pub const duration = bridge.accessor(Media.getDuration, null, .{});
-    pub const paused = bridge.accessor(Media.getPaused, null, .{});
-    pub const ended = bridge.accessor(Media.getEnded, null, .{});
-    pub const seeking = bridge.accessor(Media.getSeeking, null, .{});
+    pub const volume = bridge.fastAccessor(Media.getVolume, Media.setVolume, .{ .getter = .unsafe, .setter = .safe });
+    pub const playbackRate = bridge.fastAccessor(Media.getPlaybackRate, Media.setPlaybackRate, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const currentTime = bridge.fastAccessor(Media.getCurrentTime, Media.setCurrentTime, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const duration = bridge.fastAccessor(Media.getDuration, null, .{ .getter = .unsafe });
+    pub const paused = bridge.fastAccessor(Media.getPaused, null, .{ .getter = .unsafe });
+    pub const ended = bridge.fastAccessor(Media.getEnded, null, .{ .getter = .unsafe });
+    pub const seeking = bridge.fastAccessor(Media.getSeeking, null, .{ .getter = .unsafe });
     pub const readyState = bridge.accessor(Media.getReadyState, null, .{});
     pub const networkState = bridge.accessor(Media.getNetworkState, null, .{});
     pub const @"error" = bridge.accessor(Media.getError, null, .{});
@@ -476,8 +476,8 @@ pub const JsApi = struct {
 
     pub const canPlayType = bridge.function(Media.canPlayType, .{});
     pub const play = bridge.function(Media.play, .{});
-    pub const pause = bridge.function(Media.pause, .{});
-    pub const load = bridge.function(Media.load, .{});
+    pub const pause = bridge.fastFunction(Media.pause, .{});
+    pub const load = bridge.fastFunction(Media.load, .{});
 };
 
 const testing = @import("../../../../testing.zig");

@@ -339,18 +339,18 @@ pub const JsApi = struct {
     pub const platform = bridge.accessor(Navigator.getPlatform, null, .{});
     pub const language = bridge.accessor(Navigator.getLanguage, null, .{});
     pub const languages = bridge.accessor(Navigator.getLanguages, null, .{});
-    pub const onLine = bridge.accessor(Navigator.getOnLine, null, .{});
-    pub const cookieEnabled = bridge.accessor(Navigator.getCookieEnabled, null, .{});
-    pub const hardwareConcurrency = bridge.accessor(Navigator.getHardwareConcurrency, null, .{});
-    pub const deviceMemory = bridge.accessor(Navigator.getDeviceMemory, null, .{});
-    pub const maxTouchPoints = bridge.accessor(Navigator.getMaxTouchPoints, null, .{});
+    pub const onLine = bridge.fastAccessor(Navigator.getOnLine, null, .{ .getter = .unsafe });
+    pub const cookieEnabled = bridge.fastAccessor(Navigator.getCookieEnabled, null, .{ .getter = .unsafe });
+    pub const hardwareConcurrency = bridge.fastAccessor(Navigator.getHardwareConcurrency, null, .{ .getter = .unsafe });
+    pub const deviceMemory = bridge.fastAccessor(Navigator.getDeviceMemory, null, .{ .getter = .unsafe });
+    pub const maxTouchPoints = bridge.fastAccessor(Navigator.getMaxTouchPoints, null, .{ .getter = .unsafe });
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
-    pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
+    pub const webdriver = bridge.fastAccessor(Navigator.getWebdriver, null, .{ .getter = .unsafe });
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
-    pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
+    pub const globalPrivacyControl = bridge.fastAccessor(Navigator.getGlobalPrivacyControl, null, .{ .getter = .unsafe });
 
-    pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
+    pub const javaEnabled = bridge.fastFunction(Navigator.javaEnabled, .{});
     pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});

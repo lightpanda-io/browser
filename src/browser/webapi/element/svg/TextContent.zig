@@ -285,7 +285,7 @@ pub const JsApi = struct {
 
     pub const textLength = bridge.accessor(TextContent.getTextLength, null, .{});
     pub const lengthAdjust = bridge.accessor(TextContent.getLengthAdjust, null, .{});
-    pub const getNumberOfChars = bridge.function(TextContent.getNumberOfChars, .{});
-    pub const getComputedTextLength = bridge.function(TextContent.getComputedTextLength, .{});
-    pub const getSubStringLength = bridge.function(TextContent.getSubStringLength, .{});
+    pub const getNumberOfChars = bridge.fastFunction(TextContent.getNumberOfChars, .{});
+    pub const getComputedTextLength = bridge.fastFunction(TextContent.getComputedTextLength, .{});
+    pub const getSubStringLength = bridge.fastFunction(TextContent.getSubStringLength, .{});
 };

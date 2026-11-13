@@ -136,7 +136,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(File.init, .{});
     pub const name = bridge.accessor(File.getName, null, .{});
-    pub const lastModified = bridge.accessor(File.getLastModified, null, .{});
+    pub const lastModified = bridge.fastAccessor(File.getLastModified, null, .{ .getter = .unsafe });
 };
 
 const testing = @import("../../testing.zig");

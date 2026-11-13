@@ -243,9 +243,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(PointList.getLength, null, .{});
-    pub const numberOfItems = bridge.accessor(PointList.getNumberOfItems, null, .{});
-    pub const clear = bridge.function(PointList.clear, .{});
+    pub const length = bridge.fastAccessor(PointList.getLength, null, .{ .getter = .safe });
+    pub const numberOfItems = bridge.fastAccessor(PointList.getNumberOfItems, null, .{ .getter = .safe });
+    pub const clear = bridge.fastFunction(PointList.clear, .{});
     pub const initialize = bridge.function(PointList.initialize, .{});
     pub const getItem = bridge.function(PointList.getItem, .{});
     pub const insertItemBefore = bridge.function(PointList.insertItemBefore, .{});

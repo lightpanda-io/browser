@@ -455,7 +455,7 @@ pub const JsApi = struct {
     pub const getReader = bridge.function(ReadableStream.getReader, .{});
     pub const pipeThrough = bridge.function(ReadableStream.pipeThrough, .{});
     pub const pipeTo = bridge.function(ReadableStream.pipeTo, .{});
-    pub const locked = bridge.accessor(ReadableStream.getLocked, null, .{});
+    pub const locked = bridge.fastAccessor(ReadableStream.getLocked, null, .{ .getter = .unsafe });
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };
 

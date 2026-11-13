@@ -26,8 +26,12 @@ const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
+const Node = @import("../webapi/Node.zig");
+const Document = @import("../webapi/Document.zig");
+const DOMException = @import("../webapi/DOMException.zig");
 
 const js = @import("js.zig");
+const bridge = @import("bridge.zig");
 const Local = @import("Local.zig");
 const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
@@ -486,35 +490,51 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
     return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-// Per Web IDL, exceptions belong to the operation's relevant realm — the
-// receiver's — which differs from the calling realm for cross-realm calls
-// (v8 API callbacks run in the caller's context, and our JS wrappers are
-// shared across the page's contexts). For DOM nodes, the relevant realm is
-// the node document's frame; otherwise fall back to the calling realm.
-fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
-    if (@TypeOf(info) != FunctionCallbackInfo) {
+// Upcast a Node-descendant instance to *Node by walking the Proto chain.
+// Not every node type defines an asNode() helper (e.g. Comment, Text), but
+// inheritsOrIs guarantees Node is in the chain
+fn protoNode(comptime T: type, instance: *T) *Node {
+    if (T == Node) {
+        return instance;
+    }
+    return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
+}
+
+/// What call-site we're in?
+const Site = enum { function, property, fast };
+
+/// Per Web IDL, exceptions belong to the operation's relevant realm — the
+/// receiver's — which differs from the calling realm for cross-realm calls
+/// (v8 API callbacks run in the caller's context, and our JS wrappers are
+/// shared across the page's contexts). For DOM nodes, the relevant realm is
+/// the node document's frame; otherwise fall back to the calling realm.
+fn errorLocal(comptime T: type, local: *const Local, comptime site: Site, info_or_ptr: anytype) Local {
+    if (comptime site == .property) {
         return local.*;
     }
 
     const frame = switch (local.ctx.global) {
-        .frame => |f| f,
+        .frame => |frame| frame,
         .worker => return local.*,
     };
 
-    const Node = @import("../webapi/Node.zig");
-    const Document = @import("../webapi/Document.zig");
-
     const is_node_type = comptime blk: {
         if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "JsApi")) break :blk false;
-        break :blk @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
+        break :blk bridge.inheritsOrIs(T.JsApi, Node.JsApi);
     };
     if (comptime !is_node_type) {
         return local.*;
     }
 
-    const instance = TaggedOpaque.fromJS(*T, info.getThis()) catch return local.*;
-    const node = protoNode(T, instance);
+    const receiver = switch (comptime site) {
+        .function => TaggedOpaque.fromJS(*T, info_or_ptr.getThis()) catch return local.*,
+        // Already handled.
+        .property => unreachable,
+        // Fast variant passes `receiver` as null if the function is static.
+        .fast => info_or_ptr orelse return local.*,
+    };
 
+    const node = protoNode(T, receiver);
     const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
         .document => node.subtype(Document),
         else => return local.*,
@@ -534,30 +554,27 @@ fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
     };
 }
 
-// Upcast a Node-descendant instance to *Node by walking the Proto chain.
-// Not every node type defines an asNode() helper (e.g. Comment, Text), but
-// inheritsOrIs guarantees Node is in the chain
-fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
-    if (T == @import("../webapi/Node.zig")) {
-        return instance;
-    }
-    return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
-}
-
-fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {
+/// Converts a Zig error to JS error, then either throws it or, if function
+/// returns a promise, rejects with error.
+fn handleError(comptime T: type, comptime Fn: type, local: *const Local, err: anyerror, info_or_ptr: anytype) void {
     const isolate = local.isolate;
+    const site: Site = switch (@TypeOf(info_or_ptr)) {
+        FunctionCallbackInfo => .function,
+        PropertyCallbackInfo => .property,
+        ?*T => .fast,
+        else => @compileError("unsupported info type: " ++ @typeName(@TypeOf(info_or_ptr))),
+    };
 
-    if (comptime lp.IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
+    if (comptime lp.IS_DEBUG and site == .function) {
         if (log.enabled(.js, .debug)) {
-            const DOMException = @import("../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
-                // This isn't a DOMException, let's log it
-                logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+                // This isn't a DOMException, let's log it.
+                logFunctionCallError(local, @typeName(T), @typeName(Fn), err, info_or_ptr);
             }
         }
     }
 
-    // early exit
+    // Early exit.
     switch (err) {
         error.TryCatchRethrow => return,
         // A JS exception is already pending in the isolate (e.g. a value's
@@ -570,7 +587,8 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         else => {},
     }
 
-    const err_local = errorLocal(T, local, info);
+    // Get to correct realm.
+    const err_local = errorLocal(T, local, site, info_or_ptr);
     const env = local.ctx.env;
     const message = env.error_message orelse "";
     env.error_message = null;
@@ -594,13 +612,23 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         };
     };
 
-    if (comptime returnsPromise(F) and @TypeOf(info) == FunctionCallbackInfo) {
-        rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info);
-        return;
-    }
+    switch (comptime site) {
+        .function => {
+            if (comptime returnsPromise(Fn)) {
+                return rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info_or_ptr);
+            }
 
-    const js_exception = isolate.throwException(js_err);
-    info.getReturnValue().setValueHandle(js_exception);
+            const js_exception = isolate.throwException(js_err);
+            info_or_ptr.getReturnValue().setValueHandle(js_exception);
+        },
+        // Properties cannot return promises(?).
+        .property => {
+            const js_exception = isolate.throwException(js_err);
+            info_or_ptr.getReturnValue().setValueHandle(js_exception);
+        },
+        // Fast functions cannot return promises.
+        .fast => _ = isolate.throwException(js_err),
+    }
 }
 
 // An operation that returns a promise must not throw. It rejects.
@@ -623,7 +651,6 @@ fn returnsPromise(comptime F: type) bool {
 
 // Convert a Zig error to a DOMException. If the error is unknown, return null.
 fn domExceptionToJs(local: *const Local, err: anyerror) ?*const v8.Value {
-    const DOMException = @import("../webapi/DOMException.zig");
     const ex = DOMException.fromError(err) orelse return null;
     const value = local.zigValueToJs(ex, .{}) catch return local.isolate.createError("internal error");
     return value.handle;
@@ -897,7 +924,7 @@ pub const Function = struct {
             if (try_catch.hasCaught()) {
                 if (local.ctx.env.terminatePending() == false) {
                     if (try_catch.exceptionValue()) |exception| {
-                        const err_local = errorLocal(T, local, info);
+                        const err_local = errorLocal(T, local, .function, info);
                         rejectOperation(&err_local, exception, info);
                         return null;
                     }
@@ -1027,6 +1054,465 @@ pub const Function = struct {
     };
 };
 
+/// V8 Fast API integration.
+pub const FastFunction = struct {
+    pub const Options = struct {
+        static: bool = false,
+        exposed: Function.Opts.Exposed = .both,
+        /// `.unsafe` skips `Caller`, handle scope and context; see `createUnsafe`.
+        mode: Mode = .safe,
+
+        pub const Mode = enum { safe, unsafe };
+    };
+
+    /// Takes a type, can be an optional type, and unwraps it.
+    fn UnwrapOptional(comptime T: type) type {
+        return switch (@typeInfo(T)) {
+            .optional => |info| info.child,
+            else => T,
+        };
+    }
+
+    /// Returns whether `T` is a global object.
+    fn isGlobal(comptime T: type) bool {
+        return switch (T) {
+            // zig fmt: off
+            *js.Execution, *const js.Execution,
+            *Page, *const Page,
+            *Frame, *const Frame,
+            => true,
+            // zig fmt: on
+            else => false,
+        };
+    }
+
+    /// Returns whether `T` is a JS object.
+    fn isJavaScriptObject(comptime T: type) bool {
+        return switch (@typeInfo(UnwrapOptional(T))) {
+            .pointer => |info| {
+                const is_js_object = info.size == .one and
+                    @typeInfo(info.child) == .@"struct" and
+                    @hasDecl(info.child, "JsApi");
+                return is_js_object;
+            },
+            else => false,
+        };
+    }
+
+    /// Checks whether a parameter is valid, exluding global objects.
+    pub fn isValidParameter(Parameter: ?type) bool {
+        if (Parameter) |T| {
+            return switch (T) {
+                // Primitives cannot be nullable, maybe we can support this some
+                // other way around.
+                bool, i32, u32, i64, u64, f32, f64 => true,
+                else => isJavaScriptObject(T),
+            };
+        }
+        return false;
+    }
+
+    /// Returns whether this is a valid receiver (self) type.
+    /// Beware, it does not check if it's function is static or not.
+    fn isValidReceiver(comptime T: type) bool {
+        if (@typeInfo(T) == .optional) {
+            return false;
+        }
+        return isJavaScriptObject(T);
+    }
+
+    /// Returns whether the return type of the function is valid.
+    fn isValidReturn(comptime T: type) bool {
+        // Unwraps from the error union; optionals are not allowed.
+        const Unwrap = switch (@typeInfo(T)) {
+            .optional => return false,
+            .error_union => |info| info.payload,
+            else => T,
+        };
+        return switch (Unwrap) {
+            void, bool, i32, u32, i64, u64, f32, f64 => true,
+            else => false,
+        };
+    }
+
+    /// Checks whether a fast variant of a function can be created.
+    ///
+    /// Conditions for a function to eligible:
+    /// * Parameters must be of type bool, i32, u32, i64, u64, f32, f64 or Object,
+    /// * Object parameters (excluding the receiver) can be nullable,
+    /// * Lightpanda globals are allowed as the last argument (same as regular variant),
+    /// * Return value must be of type void, bool, i32, u32, i64, u64, f32, f64 or error unions of said types.
+    pub fn isEligible(comptime Fn: type, comptime options: Options) bool {
+        const info = @typeInfo(Fn).@"fn";
+        // Let's first check the return type.
+        const Return = info.return_type orelse return false;
+        if (comptime !isValidReturn(Return)) {
+            return false;
+        }
+
+        // If the function is non-static, check if the receiver type is given
+        // and valid.
+        var params = info.param_types;
+        if (comptime !options.static) {
+            if (params.len == 0) {
+                // Receiver is missing.
+                return false;
+            }
+            const Receiver = params[0] orelse return false;
+            if (comptime !isValidReceiver(Receiver)) {
+                // Invalid receiver type.
+                return false;
+            }
+            params = params[1..];
+        }
+        // Check if there's a trailing global.
+        if (comptime params.len > 0) {
+            const Parameter = params[params.len - 1] orelse return false;
+            // Skip last parameter if its a global.
+            if (comptime isGlobal(Parameter)) {
+                params = params[0 .. params.len - 1];
+            }
+        }
+
+        // JavaScript-side arguments.
+        inline for (params) |Parameter| {
+            if (comptime isValidParameter(Parameter) == false) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// Does conversion from Zig args to fast function args.
+    fn Arg(comptime ParamTypeEntry: ?type) type {
+        const T = ParamTypeEntry.?;
+        return if (comptime isJavaScriptObject(T)) ?*const v8.Value else T;
+    }
+
+    inline fn isPointer(comptime T: type) bool {
+        const Inner = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
+        return switch (@typeInfo(Inner)) {
+            .pointer => |ptr| ptr.size == .one and @typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "JsApi"),
+            else => false,
+        };
+    }
+
+    fn toCTypeEnum(comptime T: type) v8.CTypeInfo {
+        // Treat pointers as V8 values; we can change this in the future.
+        if (comptime isPointer(T)) {
+            return .{ .type = v8.kCTypeInfoType_V8Value };
+        }
+        // Primitives.
+        return switch (T) {
+            void => .{ .type = v8.kCTypeInfoType_Void },
+            bool => .{ .type = v8.kCTypeInfoType_Bool },
+            u8 => unreachable, // u8 as return type is not supported by V8.
+            i32 => .{ .type = v8.kCTypeInfoType_Int32 },
+            u32 => .{ .type = v8.kCTypeInfoType_Uint32 },
+            i64 => .{ .type = v8.kCTypeInfoType_Int64 },
+            u64 => .{ .type = v8.kCTypeInfoType_Uint64 },
+            f32 => .{ .type = v8.kCTypeInfoType_Float32 },
+            f64 => .{ .type = v8.kCTypeInfoType_Float64 },
+            else => unreachable,
+        };
+    }
+
+    /// Mirrors `.optional` / `.pointer` branches from `Local.jsValueToZig`.
+    fn toZigObject(comptime T: type, handle: ?*const v8.Value) error{InvalidArgument}!T {
+        const value = handle.?;
+        if (@typeInfo(T) == .optional) {
+            if (v8.v8__Value__IsNullOrUndefined(value)) return null;
+        }
+        if (!v8.v8__Value__IsObject(value)) return error.InvalidArgument;
+        const Pointer = if (@typeInfo(T) == .optional) @typeInfo(T).optional.child else T;
+        return TaggedOpaque.fromJS(Pointer, @ptrCast(value));
+    }
+
+    /// Infers artifacts for fast function signature and body out of given
+    /// function. Receiver and global types are null if the function is static
+    /// and does not include a global, respectively. Should be called after a
+    /// call to `isEligible` since this function unwraps unconditionally.
+    /// Following is returned in the said order.
+    ///
+    /// [ receiver-type-or-null, parameters, global-type-or-null, return-type-without-error-union, returns-error ]
+    fn artifacts(
+        comptime Fn: type,
+        comptime is_static: bool,
+    ) struct { ?type, []const ?type, ?type, type, bool } {
+        const info = @typeInfo(Fn).@"fn";
+
+        const Return, const returns_error = switch (@typeInfo(info.return_type.?)) {
+            .error_union => |error_union| .{ error_union.payload, true },
+            else => .{ info.return_type.?, false },
+        };
+
+        var params = info.param_types;
+        const MaybeReceiver: ?type = blk: {
+            if (is_static) {
+                break :blk null;
+            }
+            const Receiver = params[0].?;
+            params = params[1..];
+            break :blk Receiver;
+        };
+
+        const MaybeGlobal: ?type = blk: {
+            if (params.len == 0) {
+                break :blk null;
+            }
+            const Parameter = params[params.len - 1].?;
+            if (isGlobal(Parameter)) {
+                params = params[0 .. params.len - 1];
+                break :blk Parameter;
+            }
+            break :blk null;
+        };
+
+        return .{ MaybeReceiver, params, MaybeGlobal, Return, returns_error };
+    }
+
+    /// Creates a constant `v8.CFunction`; `options.mode` picks the variant.
+    pub fn create(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        return switch (options.mode) {
+            .safe => createSafe(function, options),
+            .unsafe => createUnsafe(function, options),
+        };
+    }
+
+    /// Creates a constant `v8.CFunction`; equipped for JS execution.
+    fn createSafe(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        // Bunch of comptime-known stuff.
+        const Fn = @TypeOf(function);
+        // zig fmt: off
+        const MaybeReceiver,
+        const jsp,
+        const MaybeGlobal,
+        const Return,
+        const returns_error
+            = artifacts(Fn, options.static);
+        // zig fmt: on
+
+        const Opts = *const v8.FastApiCallbackOptions;
+
+        // This initializes a `Caller`, attaches necessary types for given
+        // `function` and calls it.
+        const safe_call = struct {
+            inline fn wrap(c_args: anytype, opts: Opts) Return {
+                const isolate = opts.isolate.?;
+                const js_isolate = js.Isolate{ .handle = isolate };
+                // V8 doesn't create `HandleScope` for fast calls, so here we
+                // manually create one.
+                var hs: js.HandleScope = undefined;
+                hs.init(js_isolate);
+                defer hs.deinit();
+                // Get context.
+                const ctx, const v8_context = Context.fromIsolate(.{ .handle = isolate }) orelse {
+                    throwDetachedError(isolate);
+                    return std.mem.zeroes(Return);
+                };
+                // Check if execution is terminating.
+                if (refuseIfTerminating(ctx, isolate)) {
+                    return std.mem.zeroes(Return);
+                }
+                // Init `Caller`.
+                var caller: Caller = undefined;
+                caller.initWithContext(ctx, v8_context);
+                defer caller.deinit();
+
+                var args: ParameterTypes(Fn) = undefined;
+                // To track where to insert to args.
+                comptime var offset = 0;
+
+                // Set and retrieve receiver; since needed for error handling.
+                const Self = if (comptime MaybeReceiver) |Receiver| @typeInfo(Receiver).pointer.child else void;
+                const receiver: ?*Self = blk: {
+                    if (comptime MaybeReceiver) |Receiver| {
+                        // Cannot fail if we have a receiver.
+                        args[0] = TaggedOpaque.fromJS(Receiver, @ptrCast(c_args[0].?)) catch unreachable;
+                        offset += 1;
+                        break :blk @constCast(args[0]);
+                    }
+                    break :blk null;
+                };
+                // Set global argument.
+                if (comptime MaybeGlobal) |Global| {
+                    args[args.len - 1] = getGlobalArg(Global, ctx);
+                }
+
+                inline for (jsp, 0..) |param_type, i| {
+                    const c_arg = c_args[i + 1];
+                    args[offset + i] = blk: {
+                        const ParamType = param_type.?;
+                        if (comptime isPointer(ParamType)) {
+                            break :blk toZigObject(ParamType, c_arg) catch |err| {
+                                handleError(Self, Fn, &caller.local, err, receiver);
+                                return std.mem.zeroes(Return);
+                            };
+                        }
+                        // Primitive.
+                        break :blk c_arg;
+                    };
+                }
+
+                // Invoke passed function.
+                if (comptime returns_error) {
+                    return @call(.auto, function, args) catch |err| {
+                        handleError(Self, Fn, &caller.local, err, receiver);
+                        return std.mem.zeroes(Return);
+                    };
+                }
+                return @call(.auto, function, args);
+            }
+        }.wrap;
+
+        // Zig doesn't allow us to build parameter lists in comptime. So we
+        // switch on the JS argument count and prefer a wrapper depending on it.
+        const func = switch (comptime jsp.len) {
+            0 => struct {
+                fn wrap(recv: ?*const v8.Value, opts: Opts) callconv(.c) Return {
+                    return safe_call(.{recv}, opts);
+                }
+            }.wrap,
+            1 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(jsp[0].?), opts: Opts) callconv(.c) Return {
+                    return safe_call(.{ recv, a0 }, opts);
+                }
+            }.wrap,
+            2 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(jsp[0].?), a1: Arg(jsp[1].?), opts: Opts) callconv(.c) Return {
+                    return safe_call(.{ recv, a0, a1 }, opts);
+                }
+            }.wrap,
+            3 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: Arg(jsp[0].?), a1: Arg(jsp[1].?), a2: Arg(jsp[2].?), opts: Opts) callconv(.c) Return {
+                    return safe_call(.{ recv, a0, a1, a2 }, opts);
+                }
+            }.wrap,
+            else => @compileError("exceeded argument limit for fast functions"),
+        };
+
+        const args = comptime blk: {
+            // [receiver] + [JS arguments] + [v8.FastApiCallbackOptions].
+            var list: [jsp.len + 2]v8.CTypeInfo = undefined;
+            list[0] = .{ .type = v8.kCTypeInfoType_V8Value };
+            for (jsp, 1..) |t, i| list[i] = toCTypeEnum(t.?);
+            list[list.len - 1] = .{ .type = v8.kCTypeInfoType_CallbackOptions };
+            break :blk list;
+        };
+        const func_info: *const v8.CFunctionInfo = &.{
+            .return_info = toCTypeEnum(Return),
+            .arg_count = args.len,
+            .arg_info = &args,
+        };
+
+        return &.{ .address = @ptrCast(&func), .type_info = func_info };
+    }
+
+    /// Creates a constant `v8.CFunction`; NOT-equipped for JS execution, does
+    /// NOT setup a `Caller` and does NOT create a handle scope. You might take
+    /// advantage of it on _very certain_ situations. Approach with caution!
+    ///
+    /// On top of `isEligible`, these are enforced in comptime:
+    /// * No error returns; throwing needs a handle scope and a `Local`,
+    /// * No global argument; reaching one needs the context,
+    /// * No object arguments other than the receiver; a mismatch has to throw.
+    ///
+    /// What's NOT enforced is the body of `function`. It runs without the
+    /// detached-context and termination checks, with `call_depth` not raised
+    /// and no arena reset afterwards. So it must not create JS values, throw,
+    /// dispatch events, settle promises, mutate the DOM or allocate from
+    /// `call_arena` / `local_arena`.
+    pub fn createUnsafe(comptime function: anytype, comptime options: Options) *const v8.CFunction {
+        // Bunch of comptime-known stuff.
+        const Fn = @TypeOf(function);
+        // zig fmt: off
+        const MaybeReceiver,
+        const jsp,
+        const MaybeGlobal,
+        const Return,
+        const returns_error
+            = artifacts(Fn, options.static);
+        // zig fmt: on
+
+        if (returns_error) {
+            @compileError("unsafe fast functions cannot return errors: " ++ @typeName(Fn));
+        }
+        if (MaybeGlobal != null) {
+            @compileError("unsafe fast functions cannot take a global: " ++ @typeName(Fn));
+        }
+        for (jsp) |param_type| {
+            if (isPointer(param_type.?)) {
+                @compileError("unsafe fast functions cannot take objects: " ++ @typeName(Fn));
+            }
+        }
+
+        // Attaches the receiver and arguments for given `function` and calls
+        // it; nothing else.
+        const unsafe_call = struct {
+            inline fn wrap(c_args: anytype) Return {
+                var args: ParameterTypes(Fn) = undefined;
+                // To track where to insert to args.
+                comptime var offset = 0;
+
+                if (comptime MaybeReceiver) |Receiver| {
+                    // Cannot fail if we have a receiver.
+                    args[0] = TaggedOpaque.fromJS(Receiver, @ptrCast(c_args[0].?)) catch unreachable;
+                    offset += 1;
+                }
+                // Only primitives are left; V8 has converted them already.
+                inline for (jsp, 0..) |_, i| {
+                    args[offset + i] = c_args[i + 1];
+                }
+
+                return @call(.auto, function, args);
+            }
+        }.wrap;
+
+        // Same switch as `createSafe`, but without `v8.FastApiCallbackOptions`:
+        // we don't need the isolate, and omitting it saves V8 from building
+        // the options struct on every call.
+        const func = switch (comptime jsp.len) {
+            0 => struct {
+                fn wrap(recv: ?*const v8.Value) callconv(.c) Return {
+                    return unsafe_call(.{recv});
+                }
+            }.wrap,
+            1 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: jsp[0].?) callconv(.c) Return {
+                    return unsafe_call(.{ recv, a0 });
+                }
+            }.wrap,
+            2 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: jsp[0].?, a1: jsp[1].?) callconv(.c) Return {
+                    return unsafe_call(.{ recv, a0, a1 });
+                }
+            }.wrap,
+            3 => struct {
+                fn wrap(recv: ?*const v8.Value, a0: jsp[0].?, a1: jsp[1].?, a2: jsp[2].?) callconv(.c) Return {
+                    return unsafe_call(.{ recv, a0, a1, a2 });
+                }
+            }.wrap,
+            else => @compileError("exceeded argument limit for fast functions"),
+        };
+
+        const args = comptime blk: {
+            // [receiver] + [JS arguments].
+            var list: [jsp.len + 1]v8.CTypeInfo = undefined;
+            list[0] = .{ .type = v8.kCTypeInfoType_V8Value };
+            for (jsp, 1..) |t, i| list[i] = toCTypeEnum(t.?);
+            break :blk list;
+        };
+        const func_info: *const v8.CFunctionInfo = &.{
+            .return_info = toCTypeEnum(Return),
+            .arg_count = args.len,
+            .arg_info = &args,
+        };
+
+        return &.{ .address = @ptrCast(&func), .type_info = func_info };
+    }
+};
+
 // If we call a method in javascript: cat.lives('nine');
 //
 // Then we'd expect a Zig function with 2 parameters: a self and the string.
@@ -1049,7 +1535,6 @@ fn argToZig(comptime T: type, local: *const Local, js_val: js.Value) !T {
             // the termination, is pending; propagate it untouched
             return err;
         }
-        const DOMException = @import("../webapi/DOMException.zig");
         if (DOMException.fromError(err) != null) {
             return err;
         }

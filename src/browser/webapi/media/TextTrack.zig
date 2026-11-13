@@ -223,8 +223,8 @@ pub const JsApi = struct {
     pub const mode = bridge.accessor(TextTrack.getModeString, TextTrack.setModeString, .{});
     pub const cues = bridge.accessor(TextTrack.getCues, null, .{});
     pub const activeCues = bridge.accessor(TextTrack.getActiveCues, null, .{});
-    pub const addCue = bridge.function(TextTrack.addCue, .{});
-    pub const removeCue = bridge.function(TextTrack.removeCue, .{});
+    pub const addCue = bridge.fastFunction(TextTrack.addCue, .{});
+    pub const removeCue = bridge.fastFunction(TextTrack.removeCue, .{});
     pub const oncuechange = EventTarget.handlerAccessor(TextTrack, "cuechange");
 };
 

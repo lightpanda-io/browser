@@ -62,7 +62,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(TextTrackCueList.getLength, null, .{});
+    pub const length = bridge.fastAccessor(TextTrackCueList.getLength, null, .{ .getter = .unsafe });
     pub const @"[]" = bridge.indexed(TextTrackCueList.item, getIndexes, .{ .null_as_undefined = true });
     pub const getCueById = bridge.function(TextTrackCueList.getCueById, .{});
 

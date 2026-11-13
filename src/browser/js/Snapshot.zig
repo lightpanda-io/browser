@@ -421,10 +421,10 @@ fn hasGatedMember(comptime JsApi: type) bool {
 
 fn memberExposed(value: anytype) Caller.Function.Opts.Exposed {
     const T = @TypeOf(value);
-    if (T == bridge.Accessor or T == bridge.Function) {
-        return value.exposed;
-    }
-    return .both;
+    return switch (T) {
+        bridge.Accessor, bridge.FastAccessor, bridge.Function, bridge.FastFunction => value.exposed,
+        else => .both,
+    };
 }
 
 fn countExternalReferences() comptime_int {
@@ -472,6 +472,15 @@ fn countExternalReferences() comptime_int {
                     continue;
                 }
                 count += 1;
+            } else if (T == bridge.FastFunction) {
+                // slow callback + v8.CFunction
+                count += 2;
+            } else if (T == bridge.FastAccessor) {
+                // slow callback + v8.CFunction, for each side that has them
+                if (value.getter != null) count += 1;
+                if (value.setter != null) count += 1;
+                if (value.fast_getter != null) count += 1;
+                if (value.fast_setter != null) count += 1;
             } else if (T == bridge.Iterator) {
                 count += 1;
             } else if (T == bridge.Indexed) {
@@ -565,6 +574,31 @@ fn collectExternalReferences() *const ExternalReferences {
                 }
                 references[idx] = @bitCast(@intFromPtr(value.func));
                 idx += 1;
+            } else if (T == bridge.FastFunction) {
+                references[idx] = @bitCast(@intFromPtr(value.slow));
+                idx += 1;
+                // V8 stores a pointer to the v8.CFunction itself (not its
+                // .address) as a Foreign in the template's C function overloads.
+                references[idx] = @bitCast(@intFromPtr(value.fast));
+                idx += 1;
+            } else if (T == bridge.FastAccessor) {
+                if (value.getter) |getter| {
+                    references[idx] = @bitCast(@intFromPtr(getter));
+                    idx += 1;
+                }
+                if (value.setter) |setter| {
+                    references[idx] = @bitCast(@intFromPtr(setter));
+                    idx += 1;
+                }
+                // Same as `bridge.FastFunction`: the v8.CFunction itself.
+                if (value.fast_getter) |fast_getter| {
+                    references[idx] = @bitCast(@intFromPtr(fast_getter));
+                    idx += 1;
+                }
+                if (value.fast_setter) |fast_setter| {
+                    references[idx] = @bitCast(@intFromPtr(fast_setter));
+                    idx += 1;
+                }
             } else if (T == bridge.Iterator) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
                 idx += 1;
@@ -842,7 +876,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         if (comptime flatten) {
             // [Global] flattening only mirrors non-static accessors/methods onto itself
             switch (definition) {
-                bridge.Accessor, bridge.Function => if (value.static) continue,
+                bridge.Accessor, bridge.FastAccessor, bridge.Function, bridge.FastFunction => if (value.static) continue,
                 else => continue,
             }
         }
@@ -858,6 +892,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     // later in this function.
                     continue;
                 }
+                attachAccessorProperty(name, value, isolate, template, signature, define_on orelse prototype);
+            },
+            bridge.FastAccessor => {
                 attachAccessorProperty(name, value, isolate, template, signature, define_on orelse prototype);
             },
             bridge.Function => {
@@ -876,6 +913,26 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                 // A member may override its JS-visible name (see Response.json_static)
                 const fn_name = value.js_name orelse name;
                 const js_name = v8.v8__String__NewFromUtf8(isolate, fn_name.ptr, v8.kNormal, @intCast(fn_name.len));
+                v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
+                if (value.static and !own_properties) {
+                    v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
+                } else {
+                    // Web IDL: operations on the interface prototype object
+                    // (and mirrored onto [Global] instances) are enumerable.
+                    v8.v8__Template__Set(@ptrCast(define_on orelse member_template), js_name, @ptrCast(function_template), v8.None);
+                }
+            },
+            bridge.FastFunction => {
+                const func_signature = if (value.static) null else signature;
+                const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                    .callback = value.slow,
+                    .signature = func_signature,
+                    .length = value.arity,
+                    .behavior = v8.kConstructorBehavior_Throw,
+                    .side_effect_type = v8.kSideEffectType_HasSideEffect,
+                    .c_function = value.fast,
+                }).?;
+                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 v8.v8__FunctionTemplate__SetClassName(function_template, js_name);
                 if (value.static and !own_properties) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
@@ -1033,12 +1090,20 @@ const unforgeables: []const Unforgeable = blk: {
 // and define_on != null. This is the "flattening" pass, and it defines all of
 // the functions/accessors on directly on the global instance. Thus, globals have
 // it defined on both their prototype (first pass) and their own instance (2nd pass).
-fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
+fn attachAccessorProperty(comptime name: [:0]const u8, value: anytype, isolate: *v8.Isolate, template: *const v8.FunctionTemplate, signature: anytype, target: anytype) void {
+    // `bridge.Accessor` or `bridge.FastAccessor`. The latter may carry a
+    // v8.CFunction per side and has none of the former's extra options.
+    const is_fast = switch (@TypeOf(value)) {
+        bridge.Accessor => false,
+        bridge.FastAccessor => true,
+        else => |T| @compileError("not an accessor: " ++ @typeName(T)),
+    };
     const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
     const getter_signature = if (value.static) null else signature;
     const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
         .callback = value.getter,
         .signature = getter_signature,
+        .c_function = if (is_fast) value.fast_getter else null,
     }).?;
     // WebIDL: getter function's .name should be "get X"
     const getter_name_str = "get " ++ name;
@@ -1050,6 +1115,7 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, i
             .callback = setter,
             .signature = getter_signature,
             .length = 1,
+            .c_function = if (is_fast) value.fast_setter else null,
         }).?;
         const setter_name_str = "set " ++ name;
         const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));
@@ -1061,7 +1127,7 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, i
     if (value.setter == null) {
         attribute |= v8.ReadOnly;
     }
-    if (value.deletable == false) {
+    if (!is_fast and value.deletable == false) {
         attribute |= v8.DontDelete;
     }
 

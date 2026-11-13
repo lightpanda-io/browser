@@ -117,7 +117,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(TextTrackList.getLength, null, .{});
+    pub const length = bridge.fastAccessor(TextTrackList.getLength, null, .{ .getter = .safe });
     pub const @"[]" = bridge.indexed(TextTrackList.item, getIndexes, .{ .null_as_undefined = true });
     pub const getTrackById = bridge.function(TextTrackList.getTrackById, .{});
     pub const onchange = EventTarget.handlerAccessor(TextTrackList, "change");

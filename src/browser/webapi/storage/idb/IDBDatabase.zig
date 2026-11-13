@@ -262,12 +262,12 @@ pub const JsApi = struct {
     };
 
     pub const name = bridge.accessor(IDBDatabase.getName, null, .{});
-    pub const version = bridge.accessor(IDBDatabase.getVersion, null, .{});
+    pub const version = bridge.fastAccessor(IDBDatabase.getVersion, null, .{ .getter = .unsafe });
     pub const objectStoreNames = bridge.accessor(IDBDatabase.getObjectStoreNames, null, .{});
     pub const createObjectStore = bridge.function(IDBDatabase.createObjectStore, .{});
     pub const deleteObjectStore = bridge.function(IDBDatabase.deleteObjectStore, .{});
     pub const transaction = bridge.function(IDBDatabase.transaction, .{});
-    pub const close = bridge.function(IDBDatabase.close, .{});
+    pub const close = bridge.fastFunction(IDBDatabase.close, .{});
     pub const onerror = EventTarget.handlerAccessor(IDBDatabase, "error");
     pub const onabort = EventTarget.handlerAccessor(IDBDatabase, "abort");
 };

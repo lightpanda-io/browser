@@ -228,14 +228,14 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(NavigateEvent.init, .{});
     pub const navigationType = bridge.accessor(NavigateEvent.getNavigationType, null, .{});
     pub const destination = bridge.accessor(NavigateEvent.getDestination, null, .{});
-    pub const canIntercept = bridge.accessor(NavigateEvent.getCanIntercept, null, .{});
-    pub const userInitiated = bridge.accessor(NavigateEvent.getUserInitiated, null, .{});
-    pub const hashChange = bridge.accessor(NavigateEvent.getHashChange, null, .{});
+    pub const canIntercept = bridge.fastAccessor(NavigateEvent.getCanIntercept, null, .{ .getter = .unsafe });
+    pub const userInitiated = bridge.fastAccessor(NavigateEvent.getUserInitiated, null, .{ .getter = .unsafe });
+    pub const hashChange = bridge.fastAccessor(NavigateEvent.getHashChange, null, .{ .getter = .unsafe });
     pub const signal = bridge.accessor(NavigateEvent.getSignal, null, .{});
     pub const formData = bridge.accessor(NavigateEvent.getFormData, null, .{});
     pub const downloadRequest = bridge.accessor(NavigateEvent.getDownloadRequest, null, .{});
     pub const info = bridge.accessor(NavigateEvent.getInfo, null, .{});
-    pub const hasUAVisualTransition = bridge.accessor(NavigateEvent.getHasUAVisualTransition, null, .{});
+    pub const hasUAVisualTransition = bridge.fastAccessor(NavigateEvent.getHasUAVisualTransition, null, .{ .getter = .unsafe });
     pub const sourceElement = bridge.accessor(NavigateEvent.getSourceElement, null, .{});
     pub const intercept = bridge.function(NavigateEvent.intercept, .{});
     pub const scroll = bridge.function(NavigateEvent.scroll, .{});

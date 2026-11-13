@@ -116,7 +116,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(DOMStringList.length, null, .{});
+    pub const length = bridge.fastAccessor(DOMStringList.length, null, .{ .getter = .unsafe });
     pub const contains = bridge.function(DOMStringList.contains, .{});
     pub const item = bridge.function(_item, .{});
     fn _item(self: *const DOMStringList, index: i32) ?[]const u8 {

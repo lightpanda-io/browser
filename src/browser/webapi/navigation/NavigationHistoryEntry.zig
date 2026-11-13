@@ -105,9 +105,9 @@ pub const JsApi = struct {
     };
 
     pub const id = bridge.accessor(NavigationHistoryEntry.id, null, .{});
-    pub const index = bridge.accessor(NavigationHistoryEntry.index, null, .{});
+    pub const index = bridge.fastAccessor(NavigationHistoryEntry.index, null, .{ .getter = .safe });
     pub const key = bridge.accessor(NavigationHistoryEntry.key, null, .{});
-    pub const sameDocument = bridge.accessor(NavigationHistoryEntry.sameDocument, null, .{});
+    pub const sameDocument = bridge.fastAccessor(NavigationHistoryEntry.sameDocument, null, .{ .getter = .safe });
     pub const url = bridge.accessor(NavigationHistoryEntry.url, null, .{});
     pub const getState = bridge.function(NavigationHistoryEntry.getState, .{});
     pub const ondispose = EventTarget.handlerAccessor(NavigationHistoryEntry, "dispose");

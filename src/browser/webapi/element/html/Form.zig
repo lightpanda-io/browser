@@ -388,12 +388,12 @@ pub const JsApi = struct {
     pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{ .ce_reactions = true });
     pub const noValidate = reflect.boolean("novalidate");
     pub const elements = bridge.accessor(Form.getElements, null, .{});
-    pub const length = bridge.accessor(Form.getLength, null, .{});
-    pub const submit = bridge.function(Form.submit, .{});
-    pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
+    pub const length = bridge.fastAccessor(Form.getLength, null, .{ .getter = .safe });
+    pub const submit = bridge.fastFunction(Form.submit, .{});
+    pub const requestSubmit = bridge.fastFunction(Form.requestSubmit, .{});
     pub const reset = bridge.function(Form.reset, .{ .ce_reactions = true });
-    pub const checkValidity = bridge.function(Form.checkValidity, .{});
-    pub const reportValidity = bridge.function(Form.reportValidity, .{});
+    pub const checkValidity = bridge.fastFunction(Form.checkValidity, .{});
+    pub const reportValidity = bridge.fastFunction(Form.reportValidity, .{});
 };
 
 const testing = @import("../../../../testing.zig");

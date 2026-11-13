@@ -102,10 +102,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(DataTransferItemList.getLength, null, .{});
+    pub const length = bridge.fastAccessor(DataTransferItemList.getLength, null, .{ .getter = .unsafe });
     pub const add = bridge.function(DataTransferItemList.add, .{});
-    pub const remove = bridge.function(DataTransferItemList.remove, .{});
-    pub const clear = bridge.function(DataTransferItemList.clear, .{});
+    pub const remove = bridge.fastFunction(DataTransferItemList.remove, .{});
+    pub const clear = bridge.fastFunction(DataTransferItemList.clear, .{});
     pub const @"[]" = bridge.indexed(DataTransferItemList.item, getIndexes, .{ .null_as_undefined = true });
     pub const symbol_iterator = bridge.iterator(DataTransferItemList.iterator, .{});
 

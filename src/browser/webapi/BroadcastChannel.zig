@@ -241,7 +241,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(BroadcastChannel.getName, null, .{});
     pub const postMessage = bridge.function(BroadcastChannel.postMessage, .{});
-    pub const close = bridge.function(BroadcastChannel.close, .{});
+    pub const close = bridge.fastFunction(BroadcastChannel.close, .{});
 
     pub const onmessage = EventTarget.handlerAccessor(BroadcastChannel, "message");
     pub const onmessageerror = EventTarget.handlerAccessor(BroadcastChannel, "messageerror");

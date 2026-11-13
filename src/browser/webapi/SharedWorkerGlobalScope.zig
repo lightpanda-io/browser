@@ -381,6 +381,6 @@ pub const JsApi = struct {
     };
 
     pub const name = bridge.accessor(SharedWorkerGlobalScope.getName, null, .{});
-    pub const close = bridge.function(SharedWorkerGlobalScope.close, .{});
+    pub const close = bridge.fastFunction(SharedWorkerGlobalScope.close, .{});
     pub const onconnect = EventTarget.handlerAccessor(SharedWorkerGlobalScope, "connect");
 };

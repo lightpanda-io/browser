@@ -515,12 +515,12 @@ pub const IntersectionObserverEntry = struct {
         };
 
         pub const target = bridge.accessor(IntersectionObserverEntry.getTarget, null, .{});
-        pub const time = bridge.accessor(IntersectionObserverEntry.getTime, null, .{});
+        pub const time = bridge.fastAccessor(IntersectionObserverEntry.getTime, null, .{ .getter = .unsafe });
         pub const boundingClientRect = bridge.accessor(IntersectionObserverEntry.getBoundingClientRect, null, .{});
         pub const intersectionRect = bridge.accessor(IntersectionObserverEntry.getIntersectionRect, null, .{});
         pub const rootBounds = bridge.accessor(IntersectionObserverEntry.getRootBounds, null, .{});
-        pub const intersectionRatio = bridge.accessor(IntersectionObserverEntry.getIntersectionRatio, null, .{});
-        pub const isIntersecting = bridge.accessor(IntersectionObserverEntry.getIsIntersecting, null, .{});
+        pub const intersectionRatio = bridge.fastAccessor(IntersectionObserverEntry.getIntersectionRatio, null, .{ .getter = .unsafe });
+        pub const isIntersecting = bridge.fastAccessor(IntersectionObserverEntry.getIsIntersecting, null, .{ .getter = .unsafe });
     };
 };
 
@@ -538,12 +538,12 @@ pub const JsApi = struct {
     pub const rootMargin = bridge.accessor(IntersectionObserver.getRootMargin, null, .{});
     pub const scrollMargin = bridge.accessor(IntersectionObserver.getScrollMargin, null, .{});
     pub const thresholds = bridge.accessor(IntersectionObserver.getThresholds, null, .{});
-    pub const delay = bridge.accessor(IntersectionObserver.getDelay, null, .{});
-    pub const trackVisibility = bridge.accessor(IntersectionObserver.getTrackVisibility, null, .{});
+    pub const delay = bridge.fastAccessor(IntersectionObserver.getDelay, null, .{ .getter = .unsafe });
+    pub const trackVisibility = bridge.fastAccessor(IntersectionObserver.getTrackVisibility, null, .{ .getter = .unsafe });
 
-    pub const observe = bridge.function(IntersectionObserver.observe, .{});
-    pub const unobserve = bridge.function(IntersectionObserver.unobserve, .{});
-    pub const disconnect = bridge.function(IntersectionObserver.disconnect, .{});
+    pub const observe = bridge.fastFunction(IntersectionObserver.observe, .{});
+    pub const unobserve = bridge.fastFunction(IntersectionObserver.unobserve, .{});
+    pub const disconnect = bridge.fastFunction(IntersectionObserver.disconnect, .{});
     pub const takeRecords = bridge.function(IntersectionObserver.takeRecords, .{});
 };
 

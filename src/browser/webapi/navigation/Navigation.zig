@@ -838,8 +838,8 @@ pub const JsApi = struct {
     };
 
     pub const activation = bridge.accessor(Navigation.getActivation, null, .{});
-    pub const canGoBack = bridge.accessor(Navigation.getCanGoBack, null, .{});
-    pub const canGoForward = bridge.accessor(Navigation.getCanGoForward, null, .{});
+    pub const canGoBack = bridge.fastAccessor(Navigation.getCanGoBack, null, .{ .getter = .unsafe });
+    pub const canGoForward = bridge.fastAccessor(Navigation.getCanGoForward, null, .{ .getter = .unsafe });
     pub const currentEntry = bridge.accessor(Navigation.getCurrentEntry, null, .{});
     pub const transition = bridge.accessor(Navigation.getTransition, null, .{});
     pub const back = bridge.function(Navigation.back, .{});

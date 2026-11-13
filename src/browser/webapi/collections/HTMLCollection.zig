@@ -211,7 +211,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(HTMLCollection.length, null, .{});
+    pub const length = bridge.fastAccessor(HTMLCollection.length, null, .{ .getter = .safe });
     pub const @"[int]" = bridge.indexedFull(HTMLCollection.getAtIndex, setAtIndex, deleteAtIndex, queryAtIndex, defineAtIndex, getIndexes, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexedFull(struct {
         pub fn wrap(self: *HTMLCollection, name: []const u8) !?*Element {

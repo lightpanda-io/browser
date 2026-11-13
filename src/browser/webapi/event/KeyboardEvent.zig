@@ -543,21 +543,21 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(KeyboardEvent.init, .{});
-    pub const altKey = bridge.accessor(KeyboardEvent.getAltKey, null, .{});
-    pub const ctrlKey = bridge.accessor(KeyboardEvent.getCtrlKey, null, .{});
-    pub const isComposing = bridge.accessor(KeyboardEvent.getIsComposing, null, .{});
+    pub const altKey = bridge.fastAccessor(KeyboardEvent.getAltKey, null, .{ .getter = .unsafe });
+    pub const ctrlKey = bridge.fastAccessor(KeyboardEvent.getCtrlKey, null, .{ .getter = .unsafe });
+    pub const isComposing = bridge.fastAccessor(KeyboardEvent.getIsComposing, null, .{ .getter = .unsafe });
     pub const key = bridge.accessor(struct {
         fn keyAsString(self: *const KeyboardEvent) []const u8 {
             return self._key.asString();
         }
     }.keyAsString, null, .{});
     pub const code = bridge.accessor(KeyboardEvent.getCode, null, .{});
-    pub const location = bridge.accessor(KeyboardEvent.getLocation, null, .{});
-    pub const metaKey = bridge.accessor(KeyboardEvent.getMetaKey, null, .{});
-    pub const repeat = bridge.accessor(KeyboardEvent.getRepeat, null, .{});
-    pub const shiftKey = bridge.accessor(KeyboardEvent.getShiftKey, null, .{});
-    pub const charCode = bridge.accessor(KeyboardEvent.getCharCode, null, .{});
-    pub const keyCode = bridge.accessor(KeyboardEvent.getKeyCode, null, .{});
+    pub const location = bridge.fastAccessor(KeyboardEvent.getLocation, null, .{ .getter = .unsafe });
+    pub const metaKey = bridge.fastAccessor(KeyboardEvent.getMetaKey, null, .{ .getter = .unsafe });
+    pub const repeat = bridge.fastAccessor(KeyboardEvent.getRepeat, null, .{ .getter = .unsafe });
+    pub const shiftKey = bridge.fastAccessor(KeyboardEvent.getShiftKey, null, .{ .getter = .unsafe });
+    pub const charCode = bridge.fastAccessor(KeyboardEvent.getCharCode, null, .{ .getter = .unsafe });
+    pub const keyCode = bridge.fastAccessor(KeyboardEvent.getKeyCode, null, .{ .getter = .unsafe });
     pub const getModifierState = bridge.function(KeyboardEvent.getModifierState, .{});
     pub const initKeyboardEvent = bridge.function(KeyboardEvent.initKeyboardEvent, .{});
 

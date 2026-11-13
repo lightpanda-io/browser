@@ -446,15 +446,15 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(AudioData.init, .{});
     pub const format = bridge.accessor(AudioData.getFormat, null, .{});
-    pub const sampleRate = bridge.accessor(AudioData.getSampleRate, null, .{});
-    pub const numberOfFrames = bridge.accessor(AudioData.getNumberOfFrames, null, .{});
-    pub const numberOfChannels = bridge.accessor(AudioData.getNumberOfChannels, null, .{});
-    pub const duration = bridge.accessor(AudioData.getDuration, null, .{});
-    pub const timestamp = bridge.accessor(AudioData.getTimestamp, null, .{});
+    pub const sampleRate = bridge.fastAccessor(AudioData.getSampleRate, null, .{ .getter = .unsafe });
+    pub const numberOfFrames = bridge.fastAccessor(AudioData.getNumberOfFrames, null, .{ .getter = .unsafe });
+    pub const numberOfChannels = bridge.fastAccessor(AudioData.getNumberOfChannels, null, .{ .getter = .unsafe });
+    pub const duration = bridge.fastAccessor(AudioData.getDuration, null, .{ .getter = .unsafe });
+    pub const timestamp = bridge.fastAccessor(AudioData.getTimestamp, null, .{ .getter = .unsafe });
     pub const allocationSize = bridge.function(AudioData.allocationSize, .{});
     pub const copyTo = bridge.function(AudioData.copyTo, .{});
     pub const clone = bridge.function(AudioData.clone, .{});
-    pub const close = bridge.function(AudioData.close, .{});
+    pub const close = bridge.fastFunction(AudioData.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

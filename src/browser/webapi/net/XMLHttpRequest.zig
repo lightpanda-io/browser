@@ -989,14 +989,14 @@ pub const JsApi = struct {
 
     pub const onreadystatechange = EventTarget.handlerAccessor(XMLHttpRequest, "readystatechange");
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
-    pub const timeout = bridge.accessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{});
-    pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{});
+    pub const timeout = bridge.fastAccessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{ .getter = .unsafe, .setter = .safe });
+    pub const withCredentials = bridge.fastAccessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{ .getter = .unsafe, .setter = .safe });
     pub const open = bridge.function(XMLHttpRequest.open, .{});
     pub const send = bridge.function(XMLHttpRequest.send, .{});
     pub const responseType = bridge.accessor(XMLHttpRequest.getResponseType, XMLHttpRequest.setResponseType, .{});
     pub const status = bridge.accessor(XMLHttpRequest.getStatus, null, .{});
     pub const statusText = bridge.accessor(XMLHttpRequest.getStatusText, null, .{});
-    pub const readyState = bridge.accessor(XMLHttpRequest.getReadyState, null, .{});
+    pub const readyState = bridge.fastAccessor(XMLHttpRequest.getReadyState, null, .{ .getter = .unsafe });
     pub const response = bridge.accessor(XMLHttpRequest.getResponse, null, .{});
     pub const responseText = bridge.accessor(XMLHttpRequest.getResponseText, null, .{});
     pub const responseXML = bridge.accessor(XMLHttpRequest.getResponseXML, null, .{});
@@ -1005,7 +1005,7 @@ pub const JsApi = struct {
     pub const overrideMimeType = bridge.function(XMLHttpRequest.overrideMimeType, .{});
     pub const getResponseHeader = bridge.function(XMLHttpRequest.getResponseHeader, .{});
     pub const getAllResponseHeaders = bridge.function(XMLHttpRequest.getAllResponseHeaders, .{});
-    pub const abort = bridge.function(XMLHttpRequest.abort, .{});
+    pub const abort = bridge.fastFunction(XMLHttpRequest.abort, .{});
 };
 
 const testing = @import("../../../testing.zig");

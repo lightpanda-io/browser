@@ -104,6 +104,6 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const baseVal = bridge.accessor(AnimatedNumber.getBaseVal, AnimatedNumber.setBaseVal, .{});
-    pub const animVal = bridge.accessor(AnimatedNumber.getAnimVal, null, .{});
+    pub const baseVal = bridge.fastAccessor(AnimatedNumber.getBaseVal, AnimatedNumber.setBaseVal, .{ .getter = .unsafe, .setter = .safe });
+    pub const animVal = bridge.fastAccessor(AnimatedNumber.getAnimVal, null, .{ .getter = .unsafe });
 };

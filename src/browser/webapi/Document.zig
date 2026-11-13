@@ -2152,7 +2152,7 @@ pub const JsApi = struct {
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
     pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
-    pub const childElementCount = bridge.accessor(Document.getChildElementCount, null, .{});
+    pub const childElementCount = bridge.fastAccessor(Document.getChildElementCount, null, .{ .getter = .unsafe });
     pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
     pub const hidden = bridge.property(false, .{ .template = false, .readonly = true });
     pub const visibilityState = bridge.property("visible", .{ .template = false, .readonly = true });
@@ -2165,7 +2165,7 @@ pub const JsApi = struct {
             return frame.window;
         }
     }.defaultView, null, .{});
-    pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const hasFocus = bridge.fastFunction(Document.hasFocus, .{});
     pub const fullscreenEnabled = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreen = bridge.property(false, .{ .template = false, .readonly = true });
     pub const fullscreenElement = bridge.accessor(Document.getFullscreenElement, null, .{});

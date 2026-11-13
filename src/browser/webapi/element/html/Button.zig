@@ -214,11 +214,11 @@ pub const JsApi = struct {
     pub const labels = bridge.accessor(Button.getLabels, null, .{});
     pub const popoverTargetElement = bridge.accessor(Button.getPopoverTargetElement, Button.setPopoverTargetElement, .{ .ce_reactions = true });
     pub const popoverTargetAction = bridge.accessor(Button.getPopoverTargetAction, Button.setPopoverTargetAction, .{ .ce_reactions = true });
-    pub const willValidate = bridge.accessor(Button.getWillValidate, null, .{});
+    pub const willValidate = bridge.fastAccessor(Button.getWillValidate, null, .{ .getter = .unsafe });
     pub const validity = bridge.accessor(Button.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Button.getValidationMessage, null, .{});
-    pub const checkValidity = bridge.function(Button.checkValidity, .{});
-    pub const reportValidity = bridge.function(Button.reportValidity, .{});
+    pub const checkValidity = bridge.fastFunction(Button.checkValidity, .{});
+    pub const reportValidity = bridge.fastFunction(Button.reportValidity, .{});
     pub const setCustomValidity = bridge.function(Button.setCustomValidity, .{});
 };
 

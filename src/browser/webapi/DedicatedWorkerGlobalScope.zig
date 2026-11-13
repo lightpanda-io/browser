@@ -226,9 +226,9 @@ pub const JsApi = struct {
     };
 
     pub const postMessage = bridge.function(DedicatedWorkerGlobalScope.postMessage, .{});
-    pub const close = bridge.function(DedicatedWorkerGlobalScope.close, .{});
+    pub const close = bridge.fastFunction(DedicatedWorkerGlobalScope.close, .{});
     pub const onmessage = EventTarget.handlerAccessor(DedicatedWorkerGlobalScope, "message");
     pub const onmessageerror = EventTarget.handlerAccessor(DedicatedWorkerGlobalScope, "messageerror");
     pub const requestAnimationFrame = bridge.function(DedicatedWorkerGlobalScope.requestAnimationFrame, .{});
-    pub const cancelAnimationFrame = bridge.function(DedicatedWorkerGlobalScope.cancelAnimationFrame, .{});
+    pub const cancelAnimationFrame = bridge.fastFunction(DedicatedWorkerGlobalScope.cancelAnimationFrame, .{});
 };

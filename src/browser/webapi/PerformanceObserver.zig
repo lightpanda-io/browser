@@ -215,7 +215,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(PerformanceObserver.init, .{});
 
     pub const observe = bridge.function(PerformanceObserver.observe, .{});
-    pub const disconnect = bridge.function(PerformanceObserver.disconnect, .{});
+    pub const disconnect = bridge.fastFunction(PerformanceObserver.disconnect, .{});
     pub const takeRecords = bridge.function(PerformanceObserver.takeRecords, .{});
     pub const supportedEntryTypes = bridge.accessor(PerformanceObserver.getSupportedEntryTypes, null, .{ .static = true });
 };
