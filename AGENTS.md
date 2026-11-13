@@ -28,8 +28,6 @@ The suite is split across processes that run at the same time, each claiming the
 zig fmt --check ./    # Exact command CI runs
 ```
 
-Passing the directory is what makes the check recursive: a `./**/*.zig` glob only descends when the shell has `globstar` set, so under bash it silently skips the nested files that make up most of the tree.
-
 `zig build` depends on the fmt step, so a local build catches drift too.
 
 ## Conventions
