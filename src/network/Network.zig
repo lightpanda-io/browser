@@ -130,7 +130,11 @@ pub fn init(app: *App) !Network {
 
         .cache = cache,
         .robot_store = RobotStore.init(allocator, config.robotStoreEntryLimit()),
-        .cors_store = CorsStore.init(allocator, config.corsStoreEntryLimit()),
+        .cors_store = blk: {
+            var store = CorsStore.init(allocator, config.corsStoreEntryLimit());
+            store.wildcard_authorization = config.corsWildcardAuthorization();
+            break :blk store;
+        },
         .web_bot_auth = web_bot_auth,
         .rate_limiter = if (config.httpNavDelay()) |ms| RateLimiter.init(allocator, ms, config.httpNavBurst()) else null,
         .adblocker = adblocker,
