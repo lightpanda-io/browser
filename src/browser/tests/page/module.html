@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <meta charset="UTF-8">
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=meta type=module>
@@ -82,7 +83,7 @@
     await import("./modules/nonexistent.js");
     testing.expectFail("error expected");
   } catch(e) {
-    testing.expectEqual(true, e.toString().includes("Abort"), {script_id: 'import-404'});
+    testing.expectEqual(true, e.toString().includes("TypeError"), {script_id: 'import-404'});
   }
 </script>
 

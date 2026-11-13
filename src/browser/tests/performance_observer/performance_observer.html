@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <!--
@@ -82,8 +83,9 @@
 </script>
 
 <script id="supported_entry_types">
-  // The types we implement (Chrome lists many more).
-  testing.expectEqual(['mark', 'measure', 'navigation', 'resource'], PerformanceObserver.supportedEntryTypes);
+  testing.diverges("Chrome supports more", () => {
+    testing.expectEqual(['mark', 'measure', 'navigation', 'resource'], PerformanceObserver.supportedEntryTypes);
+  });
 </script>
 
 <script id="list_get_entries_by_type" type=module>
