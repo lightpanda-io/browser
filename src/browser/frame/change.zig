@@ -60,7 +60,9 @@ pub fn attributeRemoved(element: *Element, name: String, old: String, frame: *Fr
 }
 
 fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]const u8, frame: *Frame) void {
-    frame.page.dom_version += 1;
+    if (liveCollectionsRead(element, name)) {
+        frame.page.dom_version += 1;
+    }
     // A frameless document (DOMParser, XHR) has no styles
     const owner = element.ownerFrame(frame) orelse return;
     if (owner._style_manager.readsAttribute(name.str()) == false) {
@@ -224,6 +226,23 @@ fn detachedHandled(node: *Node, frame: *Frame) bool {
     return owner._style_manager.detachedChanged(node);
 }
 
+// Whether the attribute write can impact a live collection (the thing that
+// cares about dom_version). e.g. a NodeLive(.{.class = "x"}) cares about the
+// class atribute, so if that's changed, we bump the dom_version.
+// (The big win here is ignoring every data-*, aria-* and style write)
+fn liveCollectionsRead(element: *Element, name: String) bool {
+    if (element.asNode()._parent == null) {
+        // cannot be in a collection
+        return false;
+    }
+    inline for (.{ "class", "name", "id", "href", "form", "type" }) |read| {
+        if (name.eql(comptime .wrap(read))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn domChanged(frame: *Frame) void {
     frame.page.dom_version += 1;
     renderingChanged(frame);
@@ -247,4 +266,40 @@ fn layoutObserversChanged(frame: *Frame) void {
 /// result, including non-tree state that live collections never see.
 fn styleChanged(frame: *Frame) void {
     frame.page.style_version += 1;
+}
+
+const testing = @import("../../testing.zig");
+test "change: only attributes a live collection reads move dom_version" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const div = try doc.createElement("div", null, frame);
+    _ = try html.appendChild(div.asNode(), frame);
+
+    const version = frame.page.dom_version;
+    try div.setAttribute(comptime .wrap("style"), comptime .wrap("color: red"), frame);
+    try div.setAttribute(comptime .wrap("data-x"), comptime .wrap("1"), frame);
+    try div.setAttribute(comptime .wrap("aria-label"), comptime .wrap("x"), frame);
+    try div.removeAttribute(comptime .wrap("data-x"), frame);
+    try testing.expectEqual(version, frame.page.dom_version);
+
+    inline for (.{ "class", "name", "id", "href", "form", "type" }) |name| {
+        const before = frame.page.dom_version;
+        try div.setAttribute(comptime .wrap(name), comptime .wrap("v"), frame);
+        try testing.expect(frame.page.dom_version != before);
+    }
+
+    // A parentless element is in no collection, whatever the name
+    const fresh = try doc.createElement("a", null, frame);
+    const detached = frame.page.dom_version;
+    try fresh.setAttribute(comptime .wrap("class"), comptime .wrap("c"), frame);
+    try fresh.setAttribute(comptime .wrap("href"), comptime .wrap("/x"), frame);
+    try testing.expectEqual(detached, frame.page.dom_version);
+
+    // and inserting it is the change collections see
+    _ = try html.appendChild(fresh.asNode(), frame);
+    try testing.expect(frame.page.dom_version != detached);
 }
