@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 60px;">Target Element</div>
 <div id="hidden" style="width: 50px; display: none;">Hidden</div>
@@ -40,20 +41,28 @@
   }
 </script>
 
-<script id="no_initial_for_zero_size" type=module>
+<script id="initial_for_zero_size" type=module>
   {
-    // A display:none element has no box, so observe() delivers nothing.
+    // observe() delivers an initial 0x0 entry even for a display:none element.
     const state = await testing.async();
     const hidden = document.getElementById('hidden');
     let hiddenCount = 0;
-    const hiddenObserver = new ResizeObserver(() => { hiddenCount += 1; });
+    let hiddenEntries = null;
+    const hiddenObserver = new ResizeObserver((entries) => {
+        hiddenCount += 1;
+        hiddenEntries = entries;
+    });
     hiddenObserver.observe(hidden);
     await testing.nextFrame();
     hiddenObserver.disconnect();
 
     state.resolve();
     await state.done(() => {
-        testing.expectEqual(0, hiddenCount);
+        testing.expectEqual(1, hiddenCount);
+        testing.expectEqual(1, hiddenEntries.length);
+        testing.expectEqual(hidden, hiddenEntries[0].target);
+        testing.expectEqual(0, hiddenEntries[0].contentRect.width);
+        testing.expectEqual(0, hiddenEntries[0].contentRect.height);
     });
   }
 </script>
