@@ -40,7 +40,7 @@
             .hash = "N-V-__8AALc_rgC04POe18O0LKFRm4ouQpLtL3riscEmWp-Q",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#787ac315d02984c9096ced5e5634051ada207aa9",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#cf8584407dec96af96fa13e8903101c8fe658979",
             .hash = "zenai-0.0.0-iOY_VKPxCQAMgq7lo5oNaJalWylYKd6uPJfjT3fTJwSE",
         },
         .isocline = .{
