@@ -2265,6 +2265,89 @@ test "server: HTTP element displayed, role and label" {
     try testing.expectEqual("{\"value\":\"region\"}", try elementCommand(&c, &session_id, landmark, "/computedrole"));
 }
 
+test "server: HTTP shadow roots" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/shadow.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const open_host = try findElement(&c, &session_id, "css selector", "#open_host");
+    const open_root = try shadowRootReference(elementCommand(&c, &session_id, open_host, "/shadow"));
+
+    // a document search doesn't reach into a shadow tree
+    {
+        const res = try findElements(&c, &session_id, "css selector", "#in_open");
+        try testing.expectEqual(0, (try elementReferences(responseBody(res))).len);
+    }
+
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/element", "css selector", ".inner");
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
+        const inner = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+        try testing.expectEqual("{\"value\":\"open text\"}", try elementCommand(&c, &session_id, inner, "/text"));
+    }
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/elements", "css selector", ".inner");
+        try testing.expectEqual(2, (try elementReferences(res)).len);
+    }
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/elements", "tag name", "span");
+        try testing.expectEqual(1, (try elementReferences(res)).len);
+    }
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/elements", "link text", "shadow link");
+        try testing.expectEqual(1, (try elementReferences(res)).len);
+    }
+
+    // closed roots too: the spec reads the element's shadow root, not what
+    // script's shadowRoot exposes
+    {
+        const closed_host = try findElement(&c, &session_id, "css selector", "#closed_host");
+        const closed_root = try shadowRootReference(elementCommand(&c, &session_id, closed_host, "/shadow"));
+        const res = try shadowFind(&c, &session_id, closed_root, "/elements", "css selector", ".inner");
+        try testing.expectEqual(1, (try elementReferences(res)).len);
+    }
+
+    {
+        const plain = try findElement(&c, &session_id, "css selector", "#plain");
+        const path = try testing.arena_allocator.print("/element/{s}/shadow", .{plain});
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"no such shadow root\"") != null);
+
+        // an element reference isn't a shadow root reference
+        const find = try sessionCommand(&c, "POST", &session_id, try testing.arena_allocator.print("/shadow/{s}/element", .{plain}), "{\"using\":\"css selector\",\"value\":\"span\"}");
+        try testing.expect(std.mem.find(u8, find, "\"error\":\"no such shadow root\"") != null);
+
+        // nor the other way around
+        const text = try sessionCommand(&c, "GET", &session_id, try testing.arena_allocator.print("/element/{s}/text", .{open_root}), "");
+        try testing.expect(std.mem.find(u8, text, "\"error\":\"no such element\"") != null);
+    }
+
+    // through execute, both ways
+    {
+        const body = try testing.arena_allocator.print(
+            \\{{"script":"return arguments[0].querySelector('a').textContent","args":[{{"{s}":"{s}"}}]}}
+        , .{ http_command.shadow_key, open_root });
+        try testing.expectEqual("{\"value\":\"shadow link\"}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", body)));
+
+        const res = responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"return document.getElementById('open_host').shadowRoot\",\"args\":[]}"));
+        try testing.expectEqual(open_root, try shadowRootReference(res));
+    }
+
+    // the host leaving the document detaches its root
+    {
+        _ = try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"document.getElementById('open_host').remove()\",\"args\":[]}");
+        const res = try sessionCommand(&c, "POST", &session_id, try testing.arena_allocator.print("/shadow/{s}/element", .{open_root}), "{\"using\":\"css selector\",\"value\":\"span\"}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"detached shadow root\"") != null);
+    }
+}
+
 test "server: HTTP element commands" {
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
     defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
@@ -2762,6 +2845,18 @@ fn elementReferences(body: []const u8) ![]const []const u8 {
         reference.* = value.object.get(http_command.element_key).?.string;
     }
     return references;
+}
+
+fn shadowFind(c: *TestClient, session_id: *const [36]u8, root: []const u8, suffix: []const u8, using: []const u8, value: []const u8) ![]const u8 {
+    const path = try testing.arena_allocator.print("/shadow/{s}{s}", .{ root, suffix });
+    const body = try testing.arena_allocator.print("{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    return responseBody(try sessionCommand(c, "POST", session_id, path, body));
+}
+
+// The id out of a {"value": {"shadow-6066-…": id}} body.
+fn shadowRootReference(body: anyerror![]const u8) ![]const u8 {
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, try body, .{});
+    return parsed.object.get("value").?.object.get(http_command.shadow_key).?.string;
 }
 
 fn elementCommand(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8) ![]const u8 {
