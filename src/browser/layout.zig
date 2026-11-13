@@ -394,10 +394,11 @@ pub fn LineText(comptime mode: ContentMode) type {
             return w.lines().width;
         }
 
-        /// Like end, with the space before what comes next.
-        pub fn endBefore(self: *Self) f64 {
-            const space = if (self.wrap) |w| w.space else 0;
-            return self.end() + space;
+        /// The text's width so far, with the space before what comes next.
+        /// The line goes on: more text can follow.
+        pub fn widthBefore(self: *const Self) f64 {
+            const w = self.wrap orelse return 0;
+            return w.lines().width + w.space;
         }
     };
 }

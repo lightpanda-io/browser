@@ -2025,9 +2025,7 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
 
     while (true) {
         if (current.is(Element)) |el| {
-            if (el.inlineStyle(frame)) |style| {
-                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
-            }
+            x += el.translateX(frame);
             // Placed against its containing block, not its line (see
             // layout.boxTop)
             if (layout.Anchor.horizontal(el, owner)) |anchor| {
@@ -2038,56 +2036,90 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
             x += layout.relativeShift(el, .horizontal, owner);
         }
         const parent = current.flatParent(frame) orelse return x;
-        x += lineOffset(current, parent, owner, frame);
+        if (current.is(Element)) |el| {
+            if (LineCursor.Mode.of(el, owner)) |mode| {
+                var cursor: LineCursor = .init(parent, mode, frame);
+                x += cursor.offsetOf(current, owner);
+            }
+        }
         current = parent;
     }
 }
 
-fn lineOffset(node: *Node, parent: *Node, owner: *Frame, frame: *Frame) f64 {
-    const el = node.is(Element) orelse return 0;
-    const style_manager = &owner._style_manager;
-    const in_row = style_manager.isFlexRowItem(el) or style_manager.isTableCell(el);
-    if (in_row == false and style_manager.isBlockLevel(el)) {
-        return 0;
+/// An inline style's transform: translateX
+pub fn translateX(self: *Element, frame: *Frame) f64 {
+    const style = self.inlineStyle(frame) orelse return 0;
+    return CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
+}
+
+/// How far a parent's children sit from its left edge, one after the other:
+/// asked in document order, each sibling is measured once (a hit test asks
+/// for many children of one parent).
+pub const LineCursor = struct {
+    mode: Mode,
+    next: ?*Node,
+    frame: *Frame,
+    x: f64 = 0,
+    // Text before the box on its line, unwrapped. A row's text is an item of
+    // its own we don't place.
+    text: ?layout.LineText(.full) = null,
+
+    pub const Mode = enum {
+        // a flex row's item, a table cell: beside every sibling before it
+        row,
+        // an inline-level box: after the boxes and text on its line
+        line,
+
+        /// Null for a block-level box: on a line of its own, at its
+        /// parent's left edge.
+        pub fn of(el: *Element, owner: *Frame) ?Mode {
+            const style_manager = &owner._style_manager;
+            if (style_manager.isFlexRowItem(el) or style_manager.isTableCell(el)) {
+                return .row;
+            }
+            return if (style_manager.isBlockLevel(el)) null else .line;
+        }
+    };
+
+    pub fn init(parent: *Node, mode: Mode, frame: *Frame) LineCursor {
+        var self: LineCursor = .{ .mode = mode, .next = parent.flatFirstChild(frame), .frame = frame };
+        if (mode == .line) {
+            if (parent.is(Element)) |p| {
+                self.text = .{ .parent = p };
+            }
+        }
+        return self;
     }
 
-    // Text before el on its line, unwrapped. A row's text is an item of its
-    // own we don't place.
-    var text: ?layout.LineText(.full) = null;
-    if (in_row == false) {
-        if (parent.is(Element)) |p| {
-            text = .{ .parent = p };
-        }
-    }
-    var x: f64 = 0.0;
-    var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
-    while (siblings.next()) |s| {
-        if (s == node) break;
-        const sibling = s.is(Element) orelse {
-            if (text) |*t| {
-                if (s.is(Node.CData.Text)) |data| {
-                    t.add(data.ownData(), owner);
+    /// `node` is a child of the parent, at or after the last one asked for.
+    pub fn offsetOf(self: *LineCursor, node: *Node, owner: *Frame) f64 {
+        const style_manager = &owner._style_manager;
+        while (self.next) |s| : (self.next = s.flatNextSibling(self.frame)) {
+            if (s == node) break;
+            const sibling = s.is(Element) orelse {
+                if (self.text) |*t| {
+                    if (s.is(Node.CData.Text)) |data| {
+                        t.add(data.ownData(), owner);
+                    }
                 }
+                continue;
+            };
+            if (style_manager.hasDisplayNone(sibling) or style_manager.isOutOfFlow(sibling)) {
+                continue;
             }
-            continue;
-        };
-        if (style_manager.hasDisplayNone(sibling) or style_manager.isOutOfFlow(sibling)) {
-            continue;
-        }
-        if (in_row == false and style_manager.isBlockLevel(sibling)) {
-            x = 0;
-            if (text) |*t| {
-                _ = t.end();
+            if (self.mode == .line and style_manager.isBlockLevel(sibling)) {
+                // A block ends the line
+                self.x = 0;
+                if (self.text) |*t| {
+                    _ = t.end();
+                }
+                continue;
             }
-            continue;
+            self.x += layout.boxWidth(sibling, owner);
         }
-        x += layout.boxWidth(sibling, owner);
+        return self.x + if (self.text) |*t| t.widthBefore() else 0;
     }
-    if (text) |*t| {
-        x += t.endBefore();
-    }
-    return x;
-}
+};
 
 pub fn getElementsByTagName(self: *Element, tag_name: []const u8, frame: *Frame) !Node.GetElementsByTagNameResult {
     return self.asNode().getElementsByTagName(tag_name, frame);
