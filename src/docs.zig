@@ -180,7 +180,7 @@ fn writeAgentCommands(w: *Writer) Writer.Error!void {
 /// The methods `new Page()` carries in a PandaScript, i.e. the recorded tools
 /// plus the runtime's own page methods, and the `console` global.
 fn writePandascriptBuiltins(w: *Writer) Writer.Error!void {
-    const table_head = "| Method | Call | Summary |\n|---|---|---|\n";
+    const table_head = "| Method | Call | Returns | Summary |\n|---|---|---|---|\n";
     try w.writeAll(banner);
     for (std.enums.values(Tool.Group)) |g| {
         if (!hasRecorded(g)) continue;
@@ -189,14 +189,15 @@ fn writePandascriptBuiltins(w: *Writer) Writer.Error!void {
             if (s.tool.group() != g or !s.tool.isRecorded()) continue;
             try w.print("| [`{s}`]({f}) | `", .{ s.tool_name, Anchor{ .page = browser_tools_page, .name = s.tool_name } });
             try lp.skill.writeSignature(w, s);
-            try w.print("` | {f} |\n", .{Cell{ .s = s.summary }});
+            // Non-null: `scriptReturns` covers every recorded tool.
+            try w.print("` | {f} | {f} |\n", .{ Cell{ .s = Schema.scriptReturns(s.tool).? }, Cell{ .s = s.summary } });
         }
         try w.writeAll("\n");
     }
 
     try w.writeAll("## Page lifecycle\n\n" ++ table_head);
     for (lp.Runtime.page_methods) |m| {
-        try w.print("| `{s}` | `page.{s}()` | {f} |\n", .{ m.name, m.name, Cell{ .s = m.summary } });
+        try w.print("| `{s}` | `page.{s}()` | {f} | {f} |\n", .{ m.name, m.name, Cell{ .s = m.returns }, Cell{ .s = m.summary } });
     }
 
     try w.writeAll("\n## Console\n\n| Method | Writes to |\n|---|---|\n");
@@ -435,9 +436,12 @@ test "docs: pandascript-builtins lists exactly the recorded tools" {
         var buf: [64]u8 = undefined;
         const call = try std.mem.print(&buf, "page.{s}(", .{@tagName(t)});
         try testing.expectEqual(@intFromBool(t.isRecorded()), std.mem.count(u8, out, call));
+        try testing.expectEqual(t.isRecorded(), Schema.scriptReturns(t) != null);
     }
     try testing.expect(std.mem.find(u8, out, "`page.extract(schema)`") != null);
-    try testing.expect(std.mem.find(u8, out, "backendNodeId") == null);
+    try testing.expect(std.mem.find(u8, out, "| `Clicked element (<target>)` |") != null);
+    // No signature takes a node id; the one mention is what `waitForSelector` returns.
+    try testing.expectEqual(1, std.mem.count(u8, out, "backendNodeId"));
     for (lp.Runtime.page_methods) |m| {
         var buf: [64]u8 = undefined;
         try testing.expect(std.mem.find(u8, out, try std.mem.print(&buf, "`page.{s}()`", .{m.name})) != null);
