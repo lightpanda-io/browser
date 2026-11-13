@@ -398,8 +398,12 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
     const signal = try AbortSignal.init(&frame.js.execution);
     // Same-origin navigations are interceptable whether or not they're
     // same-document — that's what lets a listener turn a cross-document
-    // link click into client-side routing.
-    const can_intercept = frame.isSameOrigin(params.url);
+    // link click into client-side routing. A traversal landing on a
+    // different document can't be intercepted: the entry it's going to
+    // already belongs to another document, so there's nothing for a
+    // handler to drive it to.
+    const can_intercept = frame.isSameOrigin(params.url) and
+        (params.navigation_type != .traverse or params.same_document);
     const event = try NavigateEvent.initTrusted(.{
         // A traversal to another document can't be canceled.
         .cancelable = params.navigation_type != .traverse or params.same_document,
