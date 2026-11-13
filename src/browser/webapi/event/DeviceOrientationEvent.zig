@@ -99,5 +99,5 @@ pub const JsApi = struct {
     pub const alpha = bridge.accessor(DeviceOrientationEvent.getAlpha, null, .{});
     pub const beta = bridge.accessor(DeviceOrientationEvent.getBeta, null, .{});
     pub const gamma = bridge.accessor(DeviceOrientationEvent.getGamma, null, .{});
-    pub const absolute = bridge.accessor(DeviceOrientationEvent.getAbsolute, null, .{});
+    pub const absolute = bridge.fastAccessor(DeviceOrientationEvent.getAbsolute, null, .{ .getter = .unsafe });
 };

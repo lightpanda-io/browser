@@ -100,6 +100,6 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(AnimationEvent.init, .{});
     pub const animationName = bridge.accessor(AnimationEvent.getAnimationName, null, .{});
-    pub const elapsedTime = bridge.accessor(AnimationEvent.getElapsedTime, null, .{});
+    pub const elapsedTime = bridge.fastAccessor(AnimationEvent.getElapsedTime, null, .{ .getter = .unsafe });
     pub const pseudoElement = bridge.accessor(AnimationEvent.getPseudoElement, null, .{});
 };

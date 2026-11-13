@@ -104,7 +104,7 @@ pub const JsApi = struct {
     };
 
     pub const media = bridge.accessor(MediaQueryList.getMedia, null, .{});
-    pub const matches = bridge.accessor(MediaQueryList.getMatches, null, .{});
+    pub const matches = bridge.fastAccessor(MediaQueryList.getMatches, null, .{ .getter = .unsafe });
     pub const addListener = bridge.function(MediaQueryList.addListener, .{});
     pub const removeListener = bridge.function(MediaQueryList.removeListener, .{});
     pub const onchange = EventTarget.handlerAccessor(MediaQueryList, "change");

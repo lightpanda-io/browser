@@ -234,14 +234,14 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VTTCue.constructor, .{});
     pub const text = bridge.accessor(VTTCue.getText, VTTCue.setText, .{});
-    pub const region = bridge.accessor(VTTCue.getRegion, VTTCue.setRegion, .{});
+    pub const region = bridge.fastAccessor(VTTCue.getRegion, VTTCue.setRegion, .{ .setter = .safe });
     pub const vertical = bridge.accessor(VTTCue.getVertical, VTTCue.setVertical, .{});
-    pub const snapToLines = bridge.accessor(VTTCue.getSnapToLines, VTTCue.setSnapToLines, .{});
+    pub const snapToLines = bridge.fastAccessor(VTTCue.getSnapToLines, VTTCue.setSnapToLines, .{ .getter = .unsafe, .setter = .unsafe });
     pub const line = bridge.accessor(VTTCue.getLine, VTTCue.setLine, .{});
     pub const lineAlign = bridge.accessor(VTTCue.getLineAlign, VTTCue.setLineAlign, .{});
     pub const position = bridge.accessor(VTTCue.getPosition, VTTCue.setPosition, .{});
     pub const positionAlign = bridge.accessor(VTTCue.getPositionAlign, VTTCue.setPositionAlign, .{});
-    pub const size = bridge.accessor(VTTCue.getSize, VTTCue.setSize, .{});
+    pub const size = bridge.fastAccessor(VTTCue.getSize, VTTCue.setSize, .{ .getter = .unsafe, .setter = .safe });
     pub const @"align" = bridge.accessor(VTTCue.getAlign, VTTCue.setAlign, .{});
     pub const getCueAsHTML = bridge.function(VTTCue.getCueAsHTML, .{});
 };

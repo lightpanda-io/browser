@@ -1910,7 +1910,7 @@ pub const JsApi = struct {
     pub const parentElement = bridge.accessor(Node.parentElement, null, .{});
     pub const appendChild = bridge.function(Node.appendChild, .{ .ce_reactions = true });
     pub const childNodes = bridge.accessor(Node.childNodes, null, .{ .cache = .{ .private = "child_nodes" } });
-    pub const isConnected = bridge.accessor(Node.isConnected, null, .{});
+    pub const isConnected = bridge.fastAccessor(Node.isConnected, null, .{ .getter = .unsafe });
     pub const ownerDocument = bridge.accessor(Node.ownerDocument, null, .{});
     pub const hasChildNodes = bridge.fastFunction(Node.hasChildNodes, .{});
     pub const isSameNode = bridge.function(_isSameNode, .{});

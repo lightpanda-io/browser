@@ -127,7 +127,7 @@ pub const JsApi = struct {
     };
 
     pub const brands = bridge.accessor(NavigatorUAData.getBrands, null, .{});
-    pub const mobile = bridge.accessor(NavigatorUAData.getMobile, null, .{});
+    pub const mobile = bridge.fastAccessor(NavigatorUAData.getMobile, null, .{ .getter = .unsafe });
     pub const platform = bridge.accessor(NavigatorUAData.getPlatform, null, .{});
     pub const toJSON = bridge.function(NavigatorUAData.toJSON, .{});
     pub const getHighEntropyValues = bridge.function(NavigatorUAData.getHighEntropyValues, .{});

@@ -736,12 +736,12 @@ pub const JsApi = struct {
     };
 
     pub const anchorNode = bridge.accessor(Selection.getAnchorNode, null, .{});
-    pub const anchorOffset = bridge.accessor(Selection.getAnchorOffset, null, .{});
+    pub const anchorOffset = bridge.fastAccessor(Selection.getAnchorOffset, null, .{ .getter = .unsafe });
     pub const direction = bridge.accessor(Selection.getDirection, null, .{});
     pub const focusNode = bridge.accessor(Selection.getFocusNode, null, .{});
-    pub const focusOffset = bridge.accessor(Selection.getFocusOffset, null, .{});
-    pub const isCollapsed = bridge.accessor(Selection.getIsCollapsed, null, .{});
-    pub const rangeCount = bridge.accessor(Selection.getRangeCount, null, .{});
+    pub const focusOffset = bridge.fastAccessor(Selection.getFocusOffset, null, .{ .getter = .unsafe });
+    pub const isCollapsed = bridge.fastAccessor(Selection.getIsCollapsed, null, .{ .getter = .unsafe });
+    pub const rangeCount = bridge.fastAccessor(Selection.getRangeCount, null, .{ .getter = .unsafe });
     pub const @"type" = bridge.accessor(Selection.getType, null, .{});
 
     pub const addRange = bridge.fastFunction(Selection.addRange, .{});

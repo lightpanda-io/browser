@@ -322,7 +322,7 @@ pub const JsApi = struct {
 
     pub const @"type" = bridge.accessor(Transform.getType, null, .{});
     pub const matrix = bridge.accessor(Transform.getMatrix, null, .{});
-    pub const angle = bridge.accessor(Transform.getAngle, null, .{});
+    pub const angle = bridge.fastAccessor(Transform.getAngle, null, .{ .getter = .unsafe });
     pub const setMatrix = bridge.function(Transform.setMatrix, .{});
     pub const setTranslate = bridge.fastFunction(Transform.setTranslate, .{});
     pub const setScale = bridge.fastFunction(Transform.setScale, .{});

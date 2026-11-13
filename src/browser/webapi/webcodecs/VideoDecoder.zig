@@ -158,7 +158,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VideoDecoder.init, .{});
     pub const state = bridge.accessor(VideoDecoder.getState, null, .{});
-    pub const decodeQueueSize = bridge.accessor(VideoDecoder.getDecodeQueueSize, null, .{});
+    pub const decodeQueueSize = bridge.fastAccessor(VideoDecoder.getDecodeQueueSize, null, .{ .getter = .unsafe });
     pub const ondequeue = EventTarget.handlerAccessor(VideoDecoder, "dequeue");
     pub const configure = bridge.function(VideoDecoder.configure, .{});
     pub const decode = bridge.fastFunction(VideoDecoder.decode, .{});

@@ -1439,8 +1439,8 @@ const CrossOriginWindow = struct {
         pub const top = bridge.accessor(CrossOriginWindow.getTop, null, .{});
         pub const parent = bridge.accessor(CrossOriginWindow.getParent, null, .{});
         pub const opener = bridge.accessor(CrossOriginWindow.getOpener, null, .{});
-        pub const closed = bridge.accessor(CrossOriginWindow.getClosed, null, .{});
-        pub const length = bridge.accessor(CrossOriginWindow.getFramesLength, null, .{});
+        pub const closed = bridge.fastAccessor(CrossOriginWindow.getClosed, null, .{ .getter = .unsafe });
+        pub const length = bridge.fastAccessor(CrossOriginWindow.getFramesLength, null, .{ .getter = .unsafe });
     };
 };
 

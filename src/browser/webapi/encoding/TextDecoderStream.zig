@@ -152,8 +152,8 @@ pub const JsApi = struct {
     pub const encoding = bridge.accessor(TextDecoderStream.getEncoding, null, .{});
     pub const readable = bridge.accessor(TextDecoderStream.getReadable, null, .{});
     pub const writable = bridge.accessor(TextDecoderStream.getWritable, null, .{});
-    pub const fatal = bridge.accessor(TextDecoderStream.getFatal, null, .{});
-    pub const ignoreBOM = bridge.accessor(TextDecoderStream.getIgnoreBOM, null, .{});
+    pub const fatal = bridge.fastAccessor(TextDecoderStream.getFatal, null, .{ .getter = .unsafe });
+    pub const ignoreBOM = bridge.fastAccessor(TextDecoderStream.getIgnoreBOM, null, .{ .getter = .unsafe });
 };
 
 const testing = @import("../../../testing.zig");

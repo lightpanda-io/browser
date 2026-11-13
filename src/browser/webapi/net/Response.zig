@@ -679,7 +679,7 @@ pub const JsApi = struct {
     // Response.json (staticc) conflicts with resposne.json, hence the `js_name` option
     pub const json_static = bridge.function(Response.createJson, .{ .static = true, .js_name = "json" });
 
-    pub const ok = bridge.accessor(Response.isOK, null, .{});
+    pub const ok = bridge.fastAccessor(Response.isOK, null, .{ .getter = .unsafe });
     pub const status = bridge.accessor(Response.getStatus, null, .{});
     pub const statusText = bridge.accessor(Response.getStatusText, null, .{});
     pub const @"type" = bridge.accessor(Response.getType, null, .{});
@@ -687,9 +687,9 @@ pub const JsApi = struct {
     pub const json = bridge.function(Response.getJson, .{});
     pub const headers = bridge.accessor(Response.getHeaders, null, .{});
     pub const body = bridge.accessor(Response.getBody, null, .{});
-    pub const bodyUsed = bridge.accessor(Response.getBodyUsed, null, .{});
+    pub const bodyUsed = bridge.fastAccessor(Response.getBodyUsed, null, .{ .getter = .unsafe });
     pub const url = bridge.accessor(Response.getURL, null, .{});
-    pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
+    pub const redirected = bridge.fastAccessor(Response.isRedirected, null, .{ .getter = .unsafe });
     pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
     pub const blob = bridge.function(Response.blob, .{});
     pub const bytes = bridge.function(Response.bytes, .{});

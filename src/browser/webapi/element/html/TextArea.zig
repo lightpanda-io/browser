@@ -325,7 +325,7 @@ pub const JsApi = struct {
     pub const dirName = reflect.string("dirname");
 
     pub const labels = bridge.accessor(TextArea.getLabels, null, .{});
-    pub const willValidate = bridge.accessor(TextArea.getWillValidate, null, .{});
+    pub const willValidate = bridge.fastAccessor(TextArea.getWillValidate, null, .{ .getter = .unsafe });
     pub const validity = bridge.accessor(TextArea.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(TextArea.getValidationMessage, null, .{});
     pub const checkValidity = bridge.fastFunction(TextArea.checkValidity, .{});
@@ -341,11 +341,11 @@ pub const JsApi = struct {
         return normalizeNewlines(self.getDefaultValue(), frame.call_arena);
     }
 
-    pub const textLength = bridge.accessor(struct {
+    pub const textLength = bridge.fastAccessor(struct {
         fn wrap(self: *const TextArea, frame: *Frame) !u32 {
             return @intCast(Node.CData.utf16Len(try _getApiValue(self, frame)));
         }
-    }.wrap, null, .{});
+    }.wrap, null, .{ .getter = .safe });
 
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
@@ -356,8 +356,8 @@ pub const JsApi = struct {
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
     pub const select = bridge.fastFunction(TextArea.select, .{});
 
-    pub const selectionStart = bridge.accessor(TextArea.getSelectionStart, TextArea.setSelectionStart, .{});
-    pub const selectionEnd = bridge.accessor(TextArea.getSelectionEnd, TextArea.setSelectionEnd, .{});
+    pub const selectionStart = bridge.fastAccessor(TextArea.getSelectionStart, TextArea.setSelectionStart, .{ .getter = .unsafe, .setter = .safe });
+    pub const selectionEnd = bridge.fastAccessor(TextArea.getSelectionEnd, TextArea.setSelectionEnd, .{ .getter = .unsafe, .setter = .safe });
     pub const selectionDirection = bridge.accessor(TextArea.getSelectionDirection, null, .{});
     pub const setSelectionRange = bridge.function(TextArea.setSelectionRange, .{});
     pub const setRangeText = bridge.function(TextArea.setRangeText, .{});

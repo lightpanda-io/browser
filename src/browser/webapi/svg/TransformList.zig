@@ -182,8 +182,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(TransformList.getLength, null, .{});
-    pub const numberOfItems = bridge.accessor(TransformList.getNumberOfItems, null, .{});
+    pub const length = bridge.fastAccessor(TransformList.getLength, null, .{ .getter = .safe });
+    pub const numberOfItems = bridge.fastAccessor(TransformList.getNumberOfItems, null, .{ .getter = .safe });
     pub const clear = bridge.fastFunction(TransformList.clear, .{});
     pub const initialize = bridge.function(TransformList.initialize, .{});
     pub const getItem = bridge.function(TransformList.getItem, .{});

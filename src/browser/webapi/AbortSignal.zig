@@ -335,7 +335,7 @@ pub const JsApi = struct {
 
     pub const Prototype = EventTarget;
 
-    pub const aborted = bridge.accessor(AbortSignal.getAborted, null, .{});
+    pub const aborted = bridge.fastAccessor(AbortSignal.getAborted, null, .{ .getter = .unsafe });
     pub const reason = bridge.accessor(AbortSignal.getReason, null, .{});
     pub const onabort = EventTarget.handlerAccessor(AbortSignal, "abort");
     pub const throwIfAborted = bridge.function(AbortSignal.throwIfAborted, .{});

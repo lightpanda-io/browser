@@ -262,7 +262,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const size = bridge.accessor(FontFaceSet.getSize, null, .{});
+    pub const size = bridge.fastAccessor(FontFaceSet.getSize, null, .{ .getter = .unsafe });
     pub const status = bridge.property("loaded", .{ .template = false, .readonly = true });
     pub const ready = bridge.accessor(FontFaceSet.getReady, null, .{});
     pub const check = bridge.function(FontFaceSet.check, .{});

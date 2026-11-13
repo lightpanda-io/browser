@@ -56,7 +56,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(TouchList.length, null, .{});
+    pub const length = bridge.fastAccessor(TouchList.length, null, .{ .getter = .unsafe });
     pub const @"[]" = bridge.indexed(TouchList.item, getIndexes, .{ .null_as_undefined = true });
     pub const item = bridge.function(TouchList.item, .{});
 

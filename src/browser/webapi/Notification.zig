@@ -151,7 +151,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Notification.init, .{});
 
     pub const permission = bridge.accessor(getPermission, null, .{ .static = true });
-    pub const maxActions = bridge.accessor(getMaxActions, null, .{ .static = true });
+    pub const maxActions = bridge.fastAccessor(getMaxActions, null, .{ .static = true, .getter = .unsafe });
     pub const requestPermission = bridge.function(Notification.requestPermission, .{ .static = true });
 
     pub const close = bridge.function(Notification.close, .{ .noop = true });
@@ -164,9 +164,9 @@ pub const JsApi = struct {
     pub const tag = bridge.accessor(getTag, null, .{});
     pub const lang = bridge.accessor(getLang, null, .{});
     pub const dir = bridge.accessor(getDir, null, .{});
-    pub const silent = bridge.accessor(getSilent, null, .{});
-    pub const requireInteraction = bridge.accessor(getRequireInteraction, null, .{});
-    pub const renotify = bridge.accessor(getRenotify, null, .{});
+    pub const silent = bridge.fastAccessor(getSilent, null, .{ .getter = .unsafe });
+    pub const requireInteraction = bridge.fastAccessor(getRequireInteraction, null, .{ .getter = .unsafe });
+    pub const renotify = bridge.fastAccessor(getRenotify, null, .{ .getter = .unsafe });
 };
 
 const testing = @import("../../testing.zig");

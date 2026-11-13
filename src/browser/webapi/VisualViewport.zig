@@ -58,9 +58,9 @@ pub const JsApi = struct {
     // No pinch-zoom or mobile viewport, so values are straightforward
     pub const offsetLeft = bridge.property(0, .{ .template = false });
     pub const offsetTop = bridge.property(0, .{ .template = false });
-    pub const pageLeft = bridge.accessor(VisualViewport.getPageLeft, null, .{});
-    pub const pageTop = bridge.accessor(VisualViewport.getPageTop, null, .{});
-    pub const width = bridge.accessor(VisualViewport.getWidth, null, .{});
-    pub const height = bridge.accessor(VisualViewport.getHeight, null, .{});
+    pub const pageLeft = bridge.fastAccessor(VisualViewport.getPageLeft, null, .{ .getter = .safe });
+    pub const pageTop = bridge.fastAccessor(VisualViewport.getPageTop, null, .{ .getter = .safe });
+    pub const width = bridge.fastAccessor(VisualViewport.getWidth, null, .{ .getter = .safe });
+    pub const height = bridge.fastAccessor(VisualViewport.getHeight, null, .{ .getter = .safe });
     pub const scale = bridge.property(1.0, .{ .template = false });
 };

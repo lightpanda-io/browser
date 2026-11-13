@@ -257,12 +257,12 @@ pub const JsApi = struct {
     pub const FIRST_ORDERED_NODE_TYPE = bridge.property(XPathResult.FIRST_ORDERED_NODE_TYPE, .{ .template = true });
 
     pub const resultType = bridge.accessor(XPathResult.getResultType, null, .{});
-    pub const numberValue = bridge.accessor(XPathResult.getNumberValue, null, .{});
+    pub const numberValue = bridge.fastAccessor(XPathResult.getNumberValue, null, .{ .getter = .safe });
     pub const stringValue = bridge.accessor(XPathResult.getStringValue, null, .{});
-    pub const booleanValue = bridge.accessor(XPathResult.getBooleanValue, null, .{});
+    pub const booleanValue = bridge.fastAccessor(XPathResult.getBooleanValue, null, .{ .getter = .safe });
     pub const singleNodeValue = bridge.accessor(XPathResult.getSingleNodeValue, null, .{});
-    pub const snapshotLength = bridge.accessor(XPathResult.getSnapshotLength, null, .{});
-    pub const invalidIteratorState = bridge.accessor(XPathResult.getInvalidIteratorState, null, .{});
+    pub const snapshotLength = bridge.fastAccessor(XPathResult.getSnapshotLength, null, .{ .getter = .safe });
+    pub const invalidIteratorState = bridge.fastAccessor(XPathResult.getInvalidIteratorState, null, .{ .getter = .unsafe });
 
     pub const iterateNext = bridge.function(XPathResult.iterateNext, .{});
     pub const snapshotItem = bridge.function(XPathResult.snapshotItem, .{});

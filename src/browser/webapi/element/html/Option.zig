@@ -201,10 +201,10 @@ pub const JsApi = struct {
     pub const value = bridge.accessor(Option.getValue, Option.setValue, .{ .ce_reactions = true });
     pub const text = bridge.accessor(Option.getText, Option.setText, .{ .ce_reactions = true });
     pub const label = bridge.accessor(Option.getLabel, Option.setLabel, .{ .ce_reactions = true });
-    pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
+    pub const selected = bridge.fastAccessor(Option.getSelected, Option.setSelected, .{ .getter = .unsafe, .setter = .safe });
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, Option.setDefaultSelected, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
-    pub const index = bridge.accessor(Option.getIndex, null, .{});
+    pub const index = bridge.fastAccessor(Option.getIndex, null, .{ .getter = .unsafe });
 };
 
 pub const Build = struct {

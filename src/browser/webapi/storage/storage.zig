@@ -173,7 +173,7 @@ pub const Lookup = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const length = bridge.accessor(Lookup.getLength, null, .{});
+        pub const length = bridge.fastAccessor(Lookup.getLength, null, .{ .getter = .unsafe });
         pub const getItem = bridge.function(Lookup.getItem, .{});
         pub const setItem = bridge.function(Lookup.setItem, .{});
         pub const removeItem = bridge.function(Lookup.removeItem, .{});

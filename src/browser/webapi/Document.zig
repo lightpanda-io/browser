@@ -2145,7 +2145,7 @@ pub const JsApi = struct {
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
     pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
-    pub const childElementCount = bridge.accessor(Document.getChildElementCount, null, .{});
+    pub const childElementCount = bridge.fastAccessor(Document.getChildElementCount, null, .{ .getter = .unsafe });
     pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
     pub const hidden = bridge.property(false, .{ .template = false, .readonly = true });
     pub const visibilityState = bridge.property("visible", .{ .template = false, .readonly = true });

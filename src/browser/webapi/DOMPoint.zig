@@ -99,8 +99,8 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(DOMPoint.init, .{});
     pub const fromPoint = bridge.function(DOMPoint.fromPoint, .{ .static = true });
-    pub const x = bridge.accessor(DOMPoint.getX, DOMPoint.setX, .{});
-    pub const y = bridge.accessor(DOMPoint.getY, DOMPoint.setY, .{});
-    pub const z = bridge.accessor(DOMPoint.getZ, DOMPoint.setZ, .{});
-    pub const w = bridge.accessor(DOMPoint.getW, DOMPoint.setW, .{});
+    pub const x = bridge.fastAccessor(DOMPoint.getX, DOMPoint.setX, .{ .getter = .unsafe, .setter = .safe });
+    pub const y = bridge.fastAccessor(DOMPoint.getY, DOMPoint.setY, .{ .getter = .unsafe, .setter = .safe });
+    pub const z = bridge.fastAccessor(DOMPoint.getZ, DOMPoint.setZ, .{ .getter = .unsafe, .setter = .safe });
+    pub const w = bridge.fastAccessor(DOMPoint.getW, DOMPoint.setW, .{ .getter = .unsafe, .setter = .safe });
 };

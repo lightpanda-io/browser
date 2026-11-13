@@ -310,7 +310,7 @@ pub const JsApi = struct {
     pub const form = bridge.accessor(ElementInternals.getForm, null, .{});
     pub const labels = bridge.accessor(ElementInternals.getLabels, null, .{});
     pub const setValidity = bridge.function(ElementInternals.setValidity, .{});
-    pub const willValidate = bridge.accessor(ElementInternals.getWillValidate, null, .{});
+    pub const willValidate = bridge.fastAccessor(ElementInternals.getWillValidate, null, .{ .getter = .safe });
     pub const validity = bridge.accessor(ElementInternals.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(ElementInternals.getValidationMessage, null, .{});
     pub const checkValidity = bridge.fastFunction(ElementInternals.checkValidity, .{});

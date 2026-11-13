@@ -76,16 +76,16 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.accessor(TextMetrics.getWidth, null, .{});
+    pub const width = bridge.fastAccessor(TextMetrics.getWidth, null, .{ .getter = .unsafe });
     pub const actualBoundingBoxLeft = bridge.property(0.0, .{ .template = false });
-    pub const actualBoundingBoxRight = bridge.accessor(TextMetrics.getWidth, null, .{});
-    pub const actualBoundingBoxAscent = bridge.accessor(TextMetrics.getAscent, null, .{});
-    pub const actualBoundingBoxDescent = bridge.accessor(TextMetrics.getDescent, null, .{});
-    pub const fontBoundingBoxAscent = bridge.accessor(TextMetrics.getAscent, null, .{});
-    pub const fontBoundingBoxDescent = bridge.accessor(TextMetrics.getDescent, null, .{});
-    pub const emHeightAscent = bridge.accessor(TextMetrics.getAscent, null, .{});
-    pub const emHeightDescent = bridge.accessor(TextMetrics.getDescent, null, .{});
-    pub const hangingBaseline = bridge.accessor(TextMetrics.getAscent, null, .{});
+    pub const actualBoundingBoxRight = bridge.fastAccessor(TextMetrics.getWidth, null, .{ .getter = .unsafe });
+    pub const actualBoundingBoxAscent = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
+    pub const actualBoundingBoxDescent = bridge.fastAccessor(TextMetrics.getDescent, null, .{ .getter = .unsafe });
+    pub const fontBoundingBoxAscent = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
+    pub const fontBoundingBoxDescent = bridge.fastAccessor(TextMetrics.getDescent, null, .{ .getter = .unsafe });
+    pub const emHeightAscent = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
+    pub const emHeightDescent = bridge.fastAccessor(TextMetrics.getDescent, null, .{ .getter = .unsafe });
+    pub const hangingBaseline = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
     pub const alphabeticBaseline = bridge.property(0.0, .{ .template = false });
-    pub const ideographicBaseline = bridge.accessor(TextMetrics.getIdeographicBaseline, null, .{});
+    pub const ideographicBaseline = bridge.fastAccessor(TextMetrics.getIdeographicBaseline, null, .{ .getter = .unsafe });
 };

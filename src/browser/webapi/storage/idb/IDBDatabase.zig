@@ -262,7 +262,7 @@ pub const JsApi = struct {
     };
 
     pub const name = bridge.accessor(IDBDatabase.getName, null, .{});
-    pub const version = bridge.accessor(IDBDatabase.getVersion, null, .{});
+    pub const version = bridge.fastAccessor(IDBDatabase.getVersion, null, .{ .getter = .unsafe });
     pub const objectStoreNames = bridge.accessor(IDBDatabase.getObjectStoreNames, null, .{});
     pub const createObjectStore = bridge.function(IDBDatabase.createObjectStore, .{});
     pub const deleteObjectStore = bridge.function(IDBDatabase.deleteObjectStore, .{});

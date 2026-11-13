@@ -1659,13 +1659,13 @@ pub const JsApi = struct {
 
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
-    pub const valueAsNumber = bridge.accessor(Input.getValueAsNumber, Input.setValueAsNumber, .{});
+    pub const valueAsNumber = bridge.fastAccessor(Input.getValueAsNumber, Input.setValueAsNumber, .{ .getter = .unsafe, .setter = .safe });
     pub const valueAsDate = bridge.accessor(Input.getValueAsDate, Input.setValueAsDate, .{});
     pub const stepUp = bridge.function(Input.stepUp, .{});
     pub const stepDown = bridge.function(Input.stepDown, .{});
-    pub const files = bridge.accessor(Input.getFiles, Input.setFiles, .{});
+    pub const files = bridge.fastAccessor(Input.getFiles, Input.setFiles, .{ .setter = .safe });
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
-    pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
+    pub const checked = bridge.fastAccessor(Input.getChecked, Input.setChecked, .{ .getter = .unsafe, .setter = .safe });
     pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{ .ce_reactions = true });
     pub const disabled = bridge.accessor(Input.getDisabled, Input.setDisabled, .{ .ce_reactions = true });
     pub const name = reflect.string("name");
@@ -1682,12 +1682,12 @@ pub const JsApi = struct {
     pub const formAction = bridge.accessor(Input.getFormAction, Input.setFormAction, .{});
     pub const formEnctype = bridge.accessor(Input.getFormEnctype, Input.setFormEnctype, .{});
     pub const formMethod = bridge.accessor(Input.getFormMethod, Input.setFormMethod, .{});
-    pub const formNoValidate = bridge.accessor(Input.getFormNoValidate, Input.setFormNoValidate, .{});
+    pub const formNoValidate = bridge.fastAccessor(Input.getFormNoValidate, Input.setFormNoValidate, .{ .getter = .unsafe, .setter = .safe });
     pub const formTarget = reflect.string("formtarget");
     pub const labels = bridge.accessor(Input.getLabels, null, .{});
     pub const popoverTargetElement = bridge.accessor(Input.getPopoverTargetElement, Input.setPopoverTargetElement, .{ .ce_reactions = true });
     pub const popoverTargetAction = bridge.accessor(Input.getPopoverTargetAction, Input.setPopoverTargetAction, .{ .ce_reactions = true });
-    pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
+    pub const indeterminate = bridge.fastAccessor(Input.getIndeterminate, Input.setIndeterminate, .{ .getter = .unsafe, .setter = .safe });
     pub const placeholder = reflect.string("placeholder");
     pub const pattern = reflect.string("pattern");
     pub const min = reflect.string("min");
@@ -1695,7 +1695,7 @@ pub const JsApi = struct {
     pub const step = reflect.string("step");
     pub const multiple = reflect.boolean("multiple");
     pub const autocomplete = reflect.string("autocomplete");
-    pub const willValidate = bridge.accessor(Input.getWillValidate, null, .{});
+    pub const willValidate = bridge.fastAccessor(Input.getWillValidate, null, .{ .getter = .unsafe });
     pub const validity = bridge.accessor(Input.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Input.getValidationMessage, null, .{});
     pub const checkValidity = bridge.fastFunction(Input.checkValidity, .{});
@@ -1703,8 +1703,8 @@ pub const JsApi = struct {
     pub const setCustomValidity = bridge.function(Input.setCustomValidity, .{});
     pub const select = bridge.fastFunction(Input.select, .{});
 
-    pub const selectionStart = bridge.accessor(Input.getSelectionStart, Input.setSelectionStart, .{});
-    pub const selectionEnd = bridge.accessor(Input.getSelectionEnd, Input.setSelectionEnd, .{});
+    pub const selectionStart = bridge.fastAccessor(Input.getSelectionStart, Input.setSelectionStart, .{ .setter = .safe });
+    pub const selectionEnd = bridge.fastAccessor(Input.getSelectionEnd, Input.setSelectionEnd, .{ .setter = .safe });
     pub const selectionDirection = bridge.accessor(Input.getSelectionDirection, null, .{});
     pub const setSelectionRange = bridge.function(Input.setSelectionRange, .{});
     pub const setRangeText = bridge.function(Input.setRangeText, .{});

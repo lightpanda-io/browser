@@ -98,5 +98,5 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(ProgressEvent.init, .{});
     pub const total = bridge.accessor(ProgressEvent.getTotal, null, .{});
     pub const loaded = bridge.accessor(ProgressEvent.getLoaded, null, .{});
-    pub const lengthComputable = bridge.accessor(ProgressEvent.getLengthComputable, null, .{});
+    pub const lengthComputable = bridge.fastAccessor(ProgressEvent.getLengthComputable, null, .{ .getter = .unsafe });
 };

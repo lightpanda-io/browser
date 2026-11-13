@@ -570,7 +570,7 @@ pub const JsApi = struct {
 
     pub const value = bridge.accessor(Select.getValue, Select.setValue, .{});
     pub const @"type" = bridge.accessor(Select.getType, null, .{});
-    pub const selectedIndex = bridge.accessor(Select.getSelectedIndex, Select.setSelectedIndex, .{});
+    pub const selectedIndex = bridge.fastAccessor(Select.getSelectedIndex, Select.setSelectedIndex, .{ .getter = .unsafe, .setter = .safe });
     pub const multiple = reflect.boolean("multiple");
     pub const disabled = reflect.boolean("disabled");
     pub const name = reflect.string("name");
@@ -581,7 +581,7 @@ pub const JsApi = struct {
     pub const size = reflect.unsignedLong("size", .{});
     pub const length = bridge.accessor(Select.getLength, Select.setLength, .{ .ce_reactions = true });
     pub const labels = bridge.accessor(Select.getLabels, null, .{});
-    pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});
+    pub const willValidate = bridge.fastAccessor(Select.getWillValidate, null, .{ .getter = .unsafe });
     pub const validity = bridge.accessor(Select.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Select.getValidationMessage, null, .{});
     pub const add = bridge.function(Select.add, .{ .ce_reactions = true });

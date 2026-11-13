@@ -258,29 +258,29 @@ pub const JsApi = struct {
 
     // Make the components writable (the read-only getters are reused from the
     // base; the setters are ours).
-    pub const a = bridge.accessor(DOMMatrix.getA, DOMMatrix.setA, .{});
-    pub const b = bridge.accessor(DOMMatrix.getB, DOMMatrix.setB, .{});
-    pub const c = bridge.accessor(DOMMatrix.getC, DOMMatrix.setC, .{});
-    pub const d = bridge.accessor(DOMMatrix.getD, DOMMatrix.setD, .{});
-    pub const e = bridge.accessor(DOMMatrix.getE, DOMMatrix.setE, .{});
-    pub const f = bridge.accessor(DOMMatrix.getF, DOMMatrix.setF, .{});
+    pub const a = bridge.fastAccessor(DOMMatrix.getA, DOMMatrix.setA, .{ .getter = .unsafe, .setter = .safe });
+    pub const b = bridge.fastAccessor(DOMMatrix.getB, DOMMatrix.setB, .{ .getter = .unsafe, .setter = .safe });
+    pub const c = bridge.fastAccessor(DOMMatrix.getC, DOMMatrix.setC, .{ .getter = .unsafe, .setter = .safe });
+    pub const d = bridge.fastAccessor(DOMMatrix.getD, DOMMatrix.setD, .{ .getter = .unsafe, .setter = .safe });
+    pub const e = bridge.fastAccessor(DOMMatrix.getE, DOMMatrix.setE, .{ .getter = .unsafe, .setter = .safe });
+    pub const f = bridge.fastAccessor(DOMMatrix.getF, DOMMatrix.setF, .{ .getter = .unsafe, .setter = .safe });
 
-    pub const m11 = bridge.accessor(getM(0), setM(0), .{});
-    pub const m12 = bridge.accessor(getM(1), setM(1), .{});
-    pub const m13 = bridge.accessor(getM(2), setM(2), .{});
-    pub const m14 = bridge.accessor(getM(3), setM(3), .{});
-    pub const m21 = bridge.accessor(getM(4), setM(4), .{});
-    pub const m22 = bridge.accessor(getM(5), setM(5), .{});
-    pub const m23 = bridge.accessor(getM(6), setM(6), .{});
-    pub const m24 = bridge.accessor(getM(7), setM(7), .{});
-    pub const m31 = bridge.accessor(getM(8), setM(8), .{});
-    pub const m32 = bridge.accessor(getM(9), setM(9), .{});
-    pub const m33 = bridge.accessor(getM(10), setM(10), .{});
-    pub const m34 = bridge.accessor(getM(11), setM(11), .{});
-    pub const m41 = bridge.accessor(getM(12), setM(12), .{});
-    pub const m42 = bridge.accessor(getM(13), setM(13), .{});
-    pub const m43 = bridge.accessor(getM(14), setM(14), .{});
-    pub const m44 = bridge.accessor(getM(15), setM(15), .{});
+    pub const m11 = bridge.fastAccessor(getM(0), setM(0), .{ .getter = .unsafe, .setter = .safe });
+    pub const m12 = bridge.fastAccessor(getM(1), setM(1), .{ .getter = .unsafe, .setter = .safe });
+    pub const m13 = bridge.fastAccessor(getM(2), setM(2), .{ .getter = .unsafe, .setter = .safe });
+    pub const m14 = bridge.fastAccessor(getM(3), setM(3), .{ .getter = .unsafe, .setter = .safe });
+    pub const m21 = bridge.fastAccessor(getM(4), setM(4), .{ .getter = .unsafe, .setter = .safe });
+    pub const m22 = bridge.fastAccessor(getM(5), setM(5), .{ .getter = .unsafe, .setter = .safe });
+    pub const m23 = bridge.fastAccessor(getM(6), setM(6), .{ .getter = .unsafe, .setter = .safe });
+    pub const m24 = bridge.fastAccessor(getM(7), setM(7), .{ .getter = .unsafe, .setter = .safe });
+    pub const m31 = bridge.fastAccessor(getM(8), setM(8), .{ .getter = .unsafe, .setter = .safe });
+    pub const m32 = bridge.fastAccessor(getM(9), setM(9), .{ .getter = .unsafe, .setter = .safe });
+    pub const m33 = bridge.fastAccessor(getM(10), setM(10), .{ .getter = .unsafe, .setter = .safe });
+    pub const m34 = bridge.fastAccessor(getM(11), setM(11), .{ .getter = .unsafe, .setter = .safe });
+    pub const m41 = bridge.fastAccessor(getM(12), setM(12), .{ .getter = .unsafe, .setter = .safe });
+    pub const m42 = bridge.fastAccessor(getM(13), setM(13), .{ .getter = .unsafe, .setter = .safe });
+    pub const m43 = bridge.fastAccessor(getM(14), setM(14), .{ .getter = .unsafe, .setter = .safe });
+    pub const m44 = bridge.fastAccessor(getM(15), setM(15), .{ .getter = .unsafe, .setter = .safe });
 
     pub const translateSelf = bridge.function(DOMMatrix.translateSelf, .{});
     pub const scaleSelf = bridge.function(DOMMatrix.scaleSelf, .{});

@@ -1526,7 +1526,7 @@ pub const JsApi = struct {
     };
 
     pub const cssText = bridge.accessor(CSSStyleDeclaration.getCssText, CSSStyleDeclaration.setCssText, .{ .ce_reactions = true });
-    pub const length = bridge.accessor(CSSStyleDeclaration.length, null, .{});
+    pub const length = bridge.fastAccessor(CSSStyleDeclaration.length, null, .{ .getter = .unsafe });
     pub const item = bridge.function(_item, .{});
 
     fn _item(self: *const CSSStyleDeclaration, index: i32, frame: *Frame) []const u8 {
