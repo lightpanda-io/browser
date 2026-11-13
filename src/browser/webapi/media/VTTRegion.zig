@@ -139,12 +139,12 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VTTRegion.init, .{});
     pub const id = bridge.accessor(VTTRegion.getId, VTTRegion.setId, .{});
-    pub const width = bridge.accessor(VTTRegion.getWidth, VTTRegion.setWidth, .{});
-    pub const lines = bridge.accessor(VTTRegion.getLines, VTTRegion.setLines, .{});
-    pub const regionAnchorX = bridge.accessor(VTTRegion.getRegionAnchorX, VTTRegion.setRegionAnchorX, .{});
-    pub const regionAnchorY = bridge.accessor(VTTRegion.getRegionAnchorY, VTTRegion.setRegionAnchorY, .{});
-    pub const viewportAnchorX = bridge.accessor(VTTRegion.getViewportAnchorX, VTTRegion.setViewportAnchorX, .{});
-    pub const viewportAnchorY = bridge.accessor(VTTRegion.getViewportAnchorY, VTTRegion.setViewportAnchorY, .{});
+    pub const width = bridge.fastAccessor(VTTRegion.getWidth, VTTRegion.setWidth, .{ .getter = .unsafe, .setter = .safe });
+    pub const lines = bridge.fastAccessor(VTTRegion.getLines, VTTRegion.setLines, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const regionAnchorX = bridge.fastAccessor(VTTRegion.getRegionAnchorX, VTTRegion.setRegionAnchorX, .{ .getter = .unsafe, .setter = .safe });
+    pub const regionAnchorY = bridge.fastAccessor(VTTRegion.getRegionAnchorY, VTTRegion.setRegionAnchorY, .{ .getter = .unsafe, .setter = .safe });
+    pub const viewportAnchorX = bridge.fastAccessor(VTTRegion.getViewportAnchorX, VTTRegion.setViewportAnchorX, .{ .getter = .unsafe, .setter = .safe });
+    pub const viewportAnchorY = bridge.fastAccessor(VTTRegion.getViewportAnchorY, VTTRegion.setViewportAnchorY, .{ .getter = .unsafe, .setter = .safe });
     pub const scroll = bridge.accessor(VTTRegion.getScroll, VTTRegion.setScroll, .{});
 };
 

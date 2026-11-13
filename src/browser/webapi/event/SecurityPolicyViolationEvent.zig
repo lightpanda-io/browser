@@ -180,8 +180,8 @@ pub const JsApi = struct {
     pub const sample = bridge.accessor(SecurityPolicyViolationEvent.getSample, null, .{});
     pub const disposition = bridge.accessor(SecurityPolicyViolationEvent.getDisposition, null, .{});
     pub const statusCode = bridge.accessor(SecurityPolicyViolationEvent.getStatusCode, null, .{});
-    pub const lineNumber = bridge.accessor(SecurityPolicyViolationEvent.getLineNumber, null, .{});
-    pub const columnNumber = bridge.accessor(SecurityPolicyViolationEvent.getColumnNumber, null, .{});
+    pub const lineNumber = bridge.fastAccessor(SecurityPolicyViolationEvent.getLineNumber, null, .{ .getter = .unsafe });
+    pub const columnNumber = bridge.fastAccessor(SecurityPolicyViolationEvent.getColumnNumber, null, .{ .getter = .unsafe });
 };
 
 const testing = @import("../../../testing.zig");

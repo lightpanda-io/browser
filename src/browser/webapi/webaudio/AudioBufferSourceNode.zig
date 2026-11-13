@@ -329,11 +329,11 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(AudioBufferSourceNode.constructor, .{});
-    pub const buffer = bridge.accessor(AudioBufferSourceNode.getBuffer, AudioBufferSourceNode.setBuffer, .{});
+    pub const buffer = bridge.fastAccessor(AudioBufferSourceNode.getBuffer, AudioBufferSourceNode.setBuffer, .{ .setter = .safe });
     pub const playbackRate = bridge.accessor(AudioBufferSourceNode.getPlaybackRate, null, .{});
     pub const detune = bridge.accessor(AudioBufferSourceNode.getDetune, null, .{});
-    pub const loop = bridge.accessor(AudioBufferSourceNode.getLoop, AudioBufferSourceNode.setLoop, .{});
-    pub const loopStart = bridge.accessor(AudioBufferSourceNode.getLoopStart, AudioBufferSourceNode.setLoopStart, .{});
-    pub const loopEnd = bridge.accessor(AudioBufferSourceNode.getLoopEnd, AudioBufferSourceNode.setLoopEnd, .{});
+    pub const loop = bridge.fastAccessor(AudioBufferSourceNode.getLoop, AudioBufferSourceNode.setLoop, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const loopStart = bridge.fastAccessor(AudioBufferSourceNode.getLoopStart, AudioBufferSourceNode.setLoopStart, .{ .getter = .unsafe, .setter = .safe });
+    pub const loopEnd = bridge.fastAccessor(AudioBufferSourceNode.getLoopEnd, AudioBufferSourceNode.setLoopEnd, .{ .getter = .unsafe, .setter = .safe });
     pub const start = bridge.function(AudioBufferSourceNode.start, .{});
 };

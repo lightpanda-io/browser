@@ -204,7 +204,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = 0;
     };
 
-    pub const length = bridge.accessor(History.getLength, null, .{});
+    pub const length = bridge.fastAccessor(History.getLength, null, .{ .getter = .unsafe });
     pub const scrollRestoration = bridge.accessor(History.getScrollRestoration, History.setScrollRestoration, .{});
     pub const state = bridge.accessor(History.getState, null, .{});
     pub const pushState = bridge.function(History.pushState, .{});

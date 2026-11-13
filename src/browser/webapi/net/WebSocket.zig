@@ -1049,7 +1049,7 @@ pub const JsApi = struct {
 
     pub const url = bridge.accessor(WebSocket.getUrl, null, .{});
     pub const readyState = bridge.accessor(WebSocket.getReadyState, null, .{});
-    pub const bufferedAmount = bridge.accessor(WebSocket.getBufferedAmount, null, .{});
+    pub const bufferedAmount = bridge.fastAccessor(WebSocket.getBufferedAmount, null, .{ .getter = .unsafe });
     pub const binaryType = bridge.accessor(WebSocket.getBinaryType, WebSocket.setBinaryType, .{});
 
     pub const protocol = bridge.accessor(WebSocket.getProtocol, null, .{});

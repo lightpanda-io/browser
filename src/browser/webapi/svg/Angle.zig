@@ -257,8 +257,8 @@ pub const JsApi = struct {
     pub const SVG_ANGLETYPE_GRAD = bridge.property(4, .{ .template = true });
 
     pub const unitType = bridge.accessor(Angle.getUnitType, null, .{});
-    pub const value = bridge.accessor(Angle.jsGetValue, Angle.setValue, .{});
-    pub const valueInSpecifiedUnits = bridge.accessor(Angle.jsGetValueInSpecifiedUnits, Angle.setValueInSpecifiedUnits, .{});
+    pub const value = bridge.fastAccessor(Angle.jsGetValue, Angle.setValue, .{ .getter = .unsafe, .setter = .safe });
+    pub const valueInSpecifiedUnits = bridge.fastAccessor(Angle.jsGetValueInSpecifiedUnits, Angle.setValueInSpecifiedUnits, .{ .getter = .unsafe, .setter = .safe });
     pub const valueAsString = bridge.accessor(Angle.getValueAsString, Angle.setValueAsString, .{});
     pub const newValueSpecifiedUnits = bridge.function(Angle.newValueSpecifiedUnits, .{});
     pub const convertToSpecifiedUnits = bridge.function(Angle.convertToSpecifiedUnits, .{});

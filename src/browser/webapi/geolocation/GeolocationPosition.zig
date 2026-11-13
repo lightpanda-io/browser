@@ -93,6 +93,6 @@ pub const JsApi = struct {
     };
 
     pub const coords = bridge.accessor(GeolocationPosition.getCoords, null, .{});
-    pub const timestamp = bridge.accessor(GeolocationPosition.getTimestamp, null, .{});
+    pub const timestamp = bridge.fastAccessor(GeolocationPosition.getTimestamp, null, .{ .getter = .unsafe });
     pub const toJSON = bridge.function(GeolocationPosition.toJSON, .{});
 };

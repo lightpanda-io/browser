@@ -153,14 +153,14 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(DOMRectReadOnly.init, .{});
     pub const fromRect = bridge.function(DOMRectReadOnly.fromRect, .{ .static = true });
 
-    pub const x = bridge.accessor(DOMRectReadOnly.getX, null, .{});
-    pub const y = bridge.accessor(DOMRectReadOnly.getY, null, .{});
-    pub const width = bridge.accessor(DOMRectReadOnly.getWidth, null, .{});
-    pub const height = bridge.accessor(DOMRectReadOnly.getHeight, null, .{});
-    pub const top = bridge.accessor(DOMRectReadOnly.getTop, null, .{});
-    pub const right = bridge.accessor(DOMRectReadOnly.getRight, null, .{});
-    pub const bottom = bridge.accessor(DOMRectReadOnly.getBottom, null, .{});
-    pub const left = bridge.accessor(DOMRectReadOnly.getLeft, null, .{});
+    pub const x = bridge.fastAccessor(DOMRectReadOnly.getX, null, .{ .getter = .unsafe });
+    pub const y = bridge.fastAccessor(DOMRectReadOnly.getY, null, .{ .getter = .unsafe });
+    pub const width = bridge.fastAccessor(DOMRectReadOnly.getWidth, null, .{ .getter = .unsafe });
+    pub const height = bridge.fastAccessor(DOMRectReadOnly.getHeight, null, .{ .getter = .unsafe });
+    pub const top = bridge.fastAccessor(DOMRectReadOnly.getTop, null, .{ .getter = .unsafe });
+    pub const right = bridge.fastAccessor(DOMRectReadOnly.getRight, null, .{ .getter = .unsafe });
+    pub const bottom = bridge.fastAccessor(DOMRectReadOnly.getBottom, null, .{ .getter = .unsafe });
+    pub const left = bridge.fastAccessor(DOMRectReadOnly.getLeft, null, .{ .getter = .unsafe });
 
     pub const toJSON = bridge.function(DOMRectReadOnly.toJSON, .{});
 };

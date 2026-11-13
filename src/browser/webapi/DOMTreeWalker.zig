@@ -394,9 +394,9 @@ pub const JsApi = struct {
     };
 
     pub const root = bridge.accessor(DOMTreeWalker.getRoot, null, .{});
-    pub const whatToShow = bridge.accessor(DOMTreeWalker.getWhatToShow, null, .{});
+    pub const whatToShow = bridge.fastAccessor(DOMTreeWalker.getWhatToShow, null, .{ .getter = .unsafe });
     pub const filter = bridge.accessor(DOMTreeWalker.getFilter, null, .{});
-    pub const currentNode = bridge.accessor(DOMTreeWalker.getCurrentNode, DOMTreeWalker.setCurrentNode, .{});
+    pub const currentNode = bridge.fastAccessor(DOMTreeWalker.getCurrentNode, DOMTreeWalker.setCurrentNode, .{ .setter = .safe });
 
     pub const parentNode = bridge.function(DOMTreeWalker.parentNode, .{});
     pub const firstChild = bridge.function(DOMTreeWalker.firstChild, .{});

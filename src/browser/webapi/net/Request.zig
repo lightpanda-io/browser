@@ -571,7 +571,7 @@ pub const JsApi = struct {
     pub const redirect = bridge.accessor(Request.getRedirect, null, .{});
     pub const mode = bridge.accessor(Request.getMode, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
-    pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
+    pub const bodyUsed = bridge.fastAccessor(Request.getBodyUsed, null, .{ .getter = .unsafe });
     pub const body = bridge.accessor(Request.getBody, null, .{});
     pub const blob = bridge.function(Request.blob, .{});
     pub const text = bridge.function(Request.text, .{});

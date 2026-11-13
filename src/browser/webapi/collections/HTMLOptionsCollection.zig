@@ -175,7 +175,7 @@ pub const JsApi = struct {
         }
     }.wrap, .{ .null_as_undefined = true });
 
-    pub const selectedIndex = bridge.accessor(HTMLOptionsCollection.getSelectedIndex, HTMLOptionsCollection.setSelectedIndex, .{});
+    pub const selectedIndex = bridge.fastAccessor(HTMLOptionsCollection.getSelectedIndex, HTMLOptionsCollection.setSelectedIndex, .{ .getter = .unsafe, .setter = .safe });
     pub const add = bridge.function(HTMLOptionsCollection.add, .{ .ce_reactions = true });
     pub const remove = bridge.function(HTMLOptionsCollection.remove, .{ .ce_reactions = true });
 };

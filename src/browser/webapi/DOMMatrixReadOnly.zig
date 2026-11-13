@@ -980,32 +980,32 @@ pub const JsApi = struct {
     pub const fromFloat32Array = bridge.function(DOMMatrixReadOnly.fromFloat32Array, .{ .static = true });
     pub const fromFloat64Array = bridge.function(DOMMatrixReadOnly.fromFloat64Array, .{ .static = true });
 
-    pub const a = bridge.accessor(DOMMatrixReadOnly.getA, null, .{});
-    pub const b = bridge.accessor(DOMMatrixReadOnly.getB, null, .{});
-    pub const c = bridge.accessor(DOMMatrixReadOnly.getC, null, .{});
-    pub const d = bridge.accessor(DOMMatrixReadOnly.getD, null, .{});
-    pub const e = bridge.accessor(DOMMatrixReadOnly.getE, null, .{});
-    pub const f = bridge.accessor(DOMMatrixReadOnly.getF, null, .{});
+    pub const a = bridge.fastAccessor(DOMMatrixReadOnly.getA, null, .{ .getter = .unsafe });
+    pub const b = bridge.fastAccessor(DOMMatrixReadOnly.getB, null, .{ .getter = .unsafe });
+    pub const c = bridge.fastAccessor(DOMMatrixReadOnly.getC, null, .{ .getter = .unsafe });
+    pub const d = bridge.fastAccessor(DOMMatrixReadOnly.getD, null, .{ .getter = .unsafe });
+    pub const e = bridge.fastAccessor(DOMMatrixReadOnly.getE, null, .{ .getter = .unsafe });
+    pub const f = bridge.fastAccessor(DOMMatrixReadOnly.getF, null, .{ .getter = .unsafe });
 
-    pub const m11 = bridge.accessor(getM(0), null, .{});
-    pub const m12 = bridge.accessor(getM(1), null, .{});
-    pub const m13 = bridge.accessor(getM(2), null, .{});
-    pub const m14 = bridge.accessor(getM(3), null, .{});
-    pub const m21 = bridge.accessor(getM(4), null, .{});
-    pub const m22 = bridge.accessor(getM(5), null, .{});
-    pub const m23 = bridge.accessor(getM(6), null, .{});
-    pub const m24 = bridge.accessor(getM(7), null, .{});
-    pub const m31 = bridge.accessor(getM(8), null, .{});
-    pub const m32 = bridge.accessor(getM(9), null, .{});
-    pub const m33 = bridge.accessor(getM(10), null, .{});
-    pub const m34 = bridge.accessor(getM(11), null, .{});
-    pub const m41 = bridge.accessor(getM(12), null, .{});
-    pub const m42 = bridge.accessor(getM(13), null, .{});
-    pub const m43 = bridge.accessor(getM(14), null, .{});
-    pub const m44 = bridge.accessor(getM(15), null, .{});
+    pub const m11 = bridge.fastAccessor(getM(0), null, .{ .getter = .unsafe });
+    pub const m12 = bridge.fastAccessor(getM(1), null, .{ .getter = .unsafe });
+    pub const m13 = bridge.fastAccessor(getM(2), null, .{ .getter = .unsafe });
+    pub const m14 = bridge.fastAccessor(getM(3), null, .{ .getter = .unsafe });
+    pub const m21 = bridge.fastAccessor(getM(4), null, .{ .getter = .unsafe });
+    pub const m22 = bridge.fastAccessor(getM(5), null, .{ .getter = .unsafe });
+    pub const m23 = bridge.fastAccessor(getM(6), null, .{ .getter = .unsafe });
+    pub const m24 = bridge.fastAccessor(getM(7), null, .{ .getter = .unsafe });
+    pub const m31 = bridge.fastAccessor(getM(8), null, .{ .getter = .unsafe });
+    pub const m32 = bridge.fastAccessor(getM(9), null, .{ .getter = .unsafe });
+    pub const m33 = bridge.fastAccessor(getM(10), null, .{ .getter = .unsafe });
+    pub const m34 = bridge.fastAccessor(getM(11), null, .{ .getter = .unsafe });
+    pub const m41 = bridge.fastAccessor(getM(12), null, .{ .getter = .unsafe });
+    pub const m42 = bridge.fastAccessor(getM(13), null, .{ .getter = .unsafe });
+    pub const m43 = bridge.fastAccessor(getM(14), null, .{ .getter = .unsafe });
+    pub const m44 = bridge.fastAccessor(getM(15), null, .{ .getter = .unsafe });
 
-    pub const is2D = bridge.accessor(DOMMatrixReadOnly.getIs2D, null, .{});
-    pub const isIdentity = bridge.accessor(DOMMatrixReadOnly.getIsIdentity, null, .{});
+    pub const is2D = bridge.fastAccessor(DOMMatrixReadOnly.getIs2D, null, .{ .getter = .unsafe });
+    pub const isIdentity = bridge.fastAccessor(DOMMatrixReadOnly.getIsIdentity, null, .{ .getter = .unsafe });
 
     pub const translate = bridge.function(DOMMatrixReadOnly.translate, .{});
     pub const scale = bridge.function(DOMMatrixReadOnly.scale, .{});

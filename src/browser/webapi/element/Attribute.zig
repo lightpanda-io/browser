@@ -707,7 +707,7 @@ pub const NamedNodeMap = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
+        pub const length = bridge.fastAccessor(NamedNodeMap.length, null, .{ .getter = .unsafe });
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, struct {
             fn wrap(self: *const NamedNodeMap, frame: *Frame) !js.Array {
                 const len = self.length();

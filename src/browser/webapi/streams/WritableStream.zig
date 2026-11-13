@@ -158,7 +158,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(WritableStream.init, .{});
     pub const getWriter = bridge.function(WritableStream.getWriter, .{});
-    pub const locked = bridge.accessor(WritableStream.getLocked, null, .{});
+    pub const locked = bridge.fastAccessor(WritableStream.getLocked, null, .{ .getter = .unsafe });
 };
 
 pub fn registerTypes() []const type {

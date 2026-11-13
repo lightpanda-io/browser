@@ -99,6 +99,6 @@ pub const JsApi = struct {
     pub const cells = bridge.accessor(TableRow.getCells, null, .{});
     pub const insertCell = bridge.function(TableRow.insertCell, .{ .ce_reactions = true });
     pub const deleteCell = bridge.function(TableRow.deleteCell, .{ .ce_reactions = true });
-    pub const rowIndex = bridge.accessor(TableRow.getRowIndex, null, .{});
-    pub const sectionRowIndex = bridge.accessor(TableRow.getSectionRowIndex, null, .{});
+    pub const rowIndex = bridge.fastAccessor(TableRow.getRowIndex, null, .{ .getter = .unsafe });
+    pub const sectionRowIndex = bridge.fastAccessor(TableRow.getSectionRowIndex, null, .{ .getter = .unsafe });
 };

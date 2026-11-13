@@ -404,8 +404,8 @@ pub const JsApi = struct {
     pub const SVG_LENGTHTYPE_PC = bridge.property(10, .{ .template = true });
 
     pub const unitType = bridge.accessor(Length.getUnitType, null, .{});
-    pub const value = bridge.accessor(Length.jsGetValue, Length.setValue, .{});
-    pub const valueInSpecifiedUnits = bridge.accessor(Length.jsGetValueInSpecifiedUnits, Length.setValueInSpecifiedUnits, .{});
+    pub const value = bridge.fastAccessor(Length.jsGetValue, Length.setValue, .{ .getter = .safe, .setter = .safe });
+    pub const valueInSpecifiedUnits = bridge.fastAccessor(Length.jsGetValueInSpecifiedUnits, Length.setValueInSpecifiedUnits, .{ .getter = .unsafe, .setter = .safe });
     pub const valueAsString = bridge.accessor(Length.getValueAsString, Length.setValueAsString, .{});
     pub const newValueSpecifiedUnits = bridge.function(Length.newValueSpecifiedUnits, .{});
     pub const convertToSpecifiedUnits = bridge.function(Length.convertToSpecifiedUnits, .{});

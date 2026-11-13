@@ -149,7 +149,7 @@ pub const JsApi = struct {
     pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{ .ce_reactions = true });
     pub const media = reflect.string("media");
     pub const @"type" = reflect.string("type");
-    pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{});
+    pub const disabled = bridge.fastAccessor(Style.getDisabled, Style.setDisabled, .{ .getter = .safe, .setter = .safe });
     pub const sheet = bridge.accessor(Style.getSheet, null, .{});
 };
 

@@ -350,7 +350,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(OfflineAudioContext.constructor, .{});
-    pub const length = bridge.accessor(OfflineAudioContext.getLength, null, .{});
+    pub const length = bridge.fastAccessor(OfflineAudioContext.getLength, null, .{ .getter = .unsafe });
     pub const oncomplete = EventTarget.handlerAccessor(OfflineAudioContext, "complete");
     pub const startRendering = bridge.function(OfflineAudioContext.startRendering, .{});
     pub const @"suspend" = bridge.function(OfflineAudioContext.suspendContext, .{});

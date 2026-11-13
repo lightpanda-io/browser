@@ -100,8 +100,8 @@ pub const JsApi = struct {
 
     // Writable components (the read-only top/right/bottom/left are inherited
     // from DOMRectReadOnly.prototype).
-    pub const x = bridge.accessor(DOMRect.getX, DOMRect.setX, .{});
-    pub const y = bridge.accessor(DOMRect.getY, DOMRect.setY, .{});
-    pub const width = bridge.accessor(DOMRect.getWidth, DOMRect.setWidth, .{});
-    pub const height = bridge.accessor(DOMRect.getHeight, DOMRect.setHeight, .{});
+    pub const x = bridge.fastAccessor(DOMRect.getX, DOMRect.setX, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const y = bridge.fastAccessor(DOMRect.getY, DOMRect.setY, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const width = bridge.fastAccessor(DOMRect.getWidth, DOMRect.setWidth, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const height = bridge.fastAccessor(DOMRect.getHeight, DOMRect.setHeight, .{ .getter = .unsafe, .setter = .unsafe });
 };

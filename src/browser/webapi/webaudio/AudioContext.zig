@@ -146,8 +146,8 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(AudioContext.constructor, .{});
-    pub const baseLatency = bridge.accessor(AudioContext.getBaseLatency, null, .{});
-    pub const outputLatency = bridge.accessor(AudioContext.getOutputLatency, null, .{});
+    pub const baseLatency = bridge.fastAccessor(AudioContext.getBaseLatency, null, .{ .getter = .unsafe });
+    pub const outputLatency = bridge.fastAccessor(AudioContext.getOutputLatency, null, .{ .getter = .unsafe });
     pub const @"resume" = bridge.function(AudioContext.resumeContext, .{});
     pub const @"suspend" = bridge.function(AudioContext.suspendContext, .{});
     pub const close = bridge.function(AudioContext.close, .{});

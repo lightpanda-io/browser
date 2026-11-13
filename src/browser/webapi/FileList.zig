@@ -95,7 +95,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const length = bridge.accessor(FileList.getLength, null, .{});
+    pub const length = bridge.fastAccessor(FileList.getLength, null, .{ .getter = .unsafe });
     pub const item = bridge.function(FileList.item, .{});
     pub const @"[]" = bridge.indexed(FileList.item, getIndexes, .{ .null_as_undefined = true });
     pub const symbol_iterator = bridge.iterator(FileList.iterator, .{});

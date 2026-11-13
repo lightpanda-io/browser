@@ -417,9 +417,9 @@ pub const JsApi = struct {
     };
 
     pub const context = bridge.accessor(AudioNode.getContext, null, .{});
-    pub const numberOfInputs = bridge.accessor(AudioNode.getNumberOfInputs, null, .{});
-    pub const numberOfOutputs = bridge.accessor(AudioNode.getNumberOfOutputs, null, .{});
-    pub const channelCount = bridge.accessor(AudioNode.getChannelCount, AudioNode.setChannelCount, .{});
+    pub const numberOfInputs = bridge.fastAccessor(AudioNode.getNumberOfInputs, null, .{ .getter = .unsafe });
+    pub const numberOfOutputs = bridge.fastAccessor(AudioNode.getNumberOfOutputs, null, .{ .getter = .unsafe });
+    pub const channelCount = bridge.fastAccessor(AudioNode.getChannelCount, AudioNode.setChannelCount, .{ .getter = .unsafe, .setter = .safe });
     pub const channelCountMode = bridge.accessor(AudioNode.getChannelCountMode, AudioNode.setChannelCountMode, .{});
     pub const channelInterpretation = bridge.accessor(AudioNode.getChannelInterpretation, AudioNode.setChannelInterpretation, .{});
     pub const connect = bridge.function(AudioNode.connect, .{});
