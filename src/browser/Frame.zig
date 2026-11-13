@@ -601,6 +601,10 @@ pub fn viewportChanged(self: *Frame) void {
     }
 }
 
+pub inline fn isLive(self: *const Frame) bool {
+    return !self.js.destroyed;
+}
+
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {
     try self.workers.append(self.page_arena, worker);
 }
