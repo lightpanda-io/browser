@@ -119,6 +119,34 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
     };
 }
 
+/// What the tool's page method returns to a script, as markdown for the
+/// generated reference (`zig build docs`). Null for the tools a script can't
+/// call. Exhaustive so a new recorded tool has to document its return value.
+pub fn scriptReturns(tool: BrowserTool) ?[]const u8 {
+    return switch (tool) {
+        .goto => "The page object it was called on",
+        .download => "`saved <bytes> bytes (<content type>) to <absolute path>`",
+        .screenshot => "`Saved <width>x<height> PNG to <path>`",
+        .evaluate => "The page value as a string, JSON-encoded when it is an object or array",
+        .extract => "An object or an array, shaped by the schema",
+        .classify => "The category that fits, or an object keyed by question name",
+        .click => "`Clicked element (<target>)`",
+        .fill => "`Filled element (<target>) with \"<value>\"`",
+        .scroll => "`Scrolled window to x: <x>, y: <y>`, or the same for an element or its scroll container",
+        .hover => "`Hovered element (<target>)`",
+        .press => "`Pressed key '<key>'`",
+        .selectOption => "`Selected option '<value>' (<target>)`",
+        .setChecked => "`Set element (<target>) to checked` or `to unchecked`",
+        .acceptCookies => "An object reporting whether a banner was dismissed",
+        .login => "An object reporting whether the form was submitted",
+        .waitForSelector => "`Element found. backendNodeId: <id>`",
+        .waitForScript => "`Script returned truthy.`",
+        .waitForState => "`Page reached <state>.`",
+        .callPageTool => "The tool's result as a string",
+        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => null,
+    };
+}
+
 /// Slash form reads leading text as a prompt (fields are keyword-only).
 pub fn takesPrompt(tool: BrowserTool) bool {
     return switch (tool) {
