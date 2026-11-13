@@ -73,6 +73,10 @@ layout_bumps: usize = 0,
 // Inline height writes that reached the root, see extentVersion.
 extent_bumps: usize = 0,
 
+// A box that sizes others by its content couldn't be flagged (see
+// setSizesOthers), in the layout memo's current version.
+unscoped_sizing: bool = false,
+
 // The rules declaring each custom property and `content`, by property id,
 // pruning to what is (hopefully) one or few rules. Nothing memoizes `content`:
 // it only matters to scripts reading it back, often from a probe element.
@@ -1190,8 +1194,6 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         return false;
     }
 
-    // Boxes can move
-    self.layout_bumps += 1;
     var memos: Memos = .empty;
     var budget: usize = 0;
     inline for (group_fields) |field| {
@@ -1202,14 +1204,18 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         }
     }
     if (budget == 0) {
+        self.layout_bumps += 1;
         return true;
     }
     const node = el.asNode();
     const root = if (scope == .parent_subtree) node._parent orelse node else node;
     if (self.droppedCovers(root)) {
-        // nothing under it was read since it was dropped
+        // nothing under it was read since it was dropped, boxes included
         return true;
     }
+    // Boxes can move: the ones whose styles go, and what they push around
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    boxes.restyled(root);
     if (self.dropSubtree(root, memos, &budget) == false) {
         return false;
     }
@@ -1223,10 +1229,9 @@ pub const TreeChange = enum { inserted, removed };
 /// change. Returns false if treeChanged wasn't able to prune only the tree, in
 /// which case the caller should report a full style change.
 pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: TreeChange) bool {
-    // Boxes move whatever the cascade does
-    self.layout_bumps += 1;
     if (self.dirty) {
         // doesn't matter, a rebuild is needed anyways.
+        self.layout_bumps += 1;
         return true;
     }
 
@@ -1247,8 +1252,14 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         }
     }
     if (budget == 0) {
+        self.layout_bumps += 1;
         return true;
     }
+
+    // Boxes move whatever the cascade does: the child's siblings and what
+    // its parent pushes around, then whatever gets restyled below.
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    boxes.childMoved(parent, child, previous, next);
 
     if (self.holdsFocus(child)) {
         // :focus-within on the ancestors
@@ -1280,6 +1291,7 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         if (op == .removed and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
+        boxes.restyled(root);
         if (self.dropSubtree(root, memos, &budget) == false) {
             return false;
         }
@@ -1290,24 +1302,185 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         if (self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
-        if (child._type == .element and self.dropSiblings(previous, next, memos, &budget) == false) {
+        if (child._type == .element and self.dropSiblings(previous, next, &boxes, &budget) == false) {
             return false;
         }
     }
     if (self.reads_empty and emptinessFlips(parent, child)) {
         // parent's :empty, and through `:empty + x` and `:empty ~ x` its later
         // siblings
+        boxes.restyled(parent);
         if (self.dropSubtree(parent, memos, &budget) == false) {
             return false;
         }
         var sibling = parent.nextSibling();
         while (sibling) |s| : (sibling = s.nextSibling()) {
+            boxes.restyled(s);
             if (self.dropSubtree(s, memos, &budget) == false) {
                 return false;
             }
         }
     }
     return true;
+}
+
+/// The boxes a tree or class change moves, when the layout memo can keep the
+/// rest: `memos` then drops a restyled element's entries with its styles.
+/// Once it can't (see boxesMoved), the whole layout memo goes, as it does
+/// when a caller returns false for a full style change.
+const BoxScope = struct {
+    style_manager: *StyleManager,
+    memos: *Memos,
+    scoped: bool,
+
+    fn init(style_manager: *StyleManager, memos: *Memos, budget: *usize) BoxScope {
+        const scoped = style_manager.layoutMemoLive() and style_manager.unscoped_sizing == false;
+        if (scoped) {
+            memos.insert(.layout);
+            budget.* += style_manager.layout_memo.map.count();
+        } else {
+            style_manager.layout_bumps += 1;
+        }
+        return .{ .style_manager = style_manager, .memos = memos, .scoped = scoped };
+    }
+
+    fn giveUp(self: *BoxScope) void {
+        self.scoped = false;
+        self.memos.remove(.layout);
+        self.style_manager.layout_bumps += 1;
+    }
+
+    // `child` entered or left `parent`, between `previous` and `next`.
+    // Positions are counted in the flat tree, which is the DOM's only where
+    // no shadow tree or slot is involved.
+    fn childMoved(self: *BoxScope, parent: *Node, child: *Node, previous: ?*Node, next: ?*Node) void {
+        if (self.scoped == false) {
+            return;
+        }
+        const sm = self.style_manager;
+        const el = parent.is(Element) orelse return self.giveUp();
+        if (el._flags.shadow_host or el.is(Element.Html.Slot) != null or child._flags.assigned_slot) {
+            return self.giveUp();
+        }
+
+        // The children before it keep their offsets. Text takes no position,
+        // but can make its parent taller.
+        var index: ?u32 = 0;
+        if (previousElement(previous)) |before| {
+            const entry = sm.layout_memo.map.getPtr(before.as(Element));
+            // Not placed: nothing after it is either
+            index = if (entry) |e| (if (e.get(.offset) != null) e.position + 1 else null) else null;
+        }
+        if (index) |i| {
+            if (child._type == .element) {
+                sm.forgetOffsetsFrom(el, i, next);
+            }
+        }
+        if (sm.boxesMoved(el, index) == false) {
+            self.giveUp();
+        }
+    }
+
+    // `node`'s subtree is about to lose its styles: its box can change in
+    // any way, and so can the boxes inside it.
+    fn restyled(self: *BoxScope, node: *Node) void {
+        if (self.scoped == false) {
+            return;
+        }
+        const sm = self.style_manager;
+        const el = node.is(Element) orelse return self.giveUp();
+        const parent = node.flatTreeParentElement(sm.frame) orelse return self.giveUp();
+        const entry = sm.layout_memo.map.getPtr(el);
+        const index: ?u32 = if (entry) |e| (if (e.get(.offset) != null) e.position else null) else null;
+        if (sm.boxesMoved(parent, index) == false) {
+            self.giveUp();
+        }
+    }
+};
+
+// An element child entered or left `parent` at `index`: the children after
+// it that were placed now sit at another index, so their offsets go rather
+// than wait for `placed` to cover their old one again.
+fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*Node) void {
+    const memo = &self.layout_memo;
+    const entry = memo.map.getPtr(parent) orelse return;
+    if (entry.placed <= index) {
+        return;
+    }
+    var stale = entry.placed - index;
+    entry.placed = index;
+    var sibling = nextElement(next);
+    while (sibling) |s| : (sibling = nextElement(s.nextSibling())) {
+        if (memo.map.getPtr(s.as(Element))) |e| {
+            e.drop(.offset);
+        }
+        stale -= 1;
+        if (stale == 0) {
+            return;
+        }
+    }
+}
+
+// Like heightWritten, for a change that can be anything: `parent`'s children
+// from `index` on (null: none that is placed) changed, appeared or left.
+// Their later siblings move, `parent` and its auto-height ancestors grow or
+// shrink, and so on up. Widths flow the other way, so only the ancestors'
+// content widths can change: unless one of them sizes other boxes by its
+// content (see Entry.sizes_others), which returns false, for the caller to
+// drop everything.
+fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
+    const memo = &self.layout_memo;
+    var el = parent;
+    var from = index;
+    var heights = true;
+    while (true) {
+        var entry_: ?*LayoutMemo.Entry = null;
+        if (memo.map.getPtr(el)) |entry| {
+            if (entry.sizes_others) {
+                return false;
+            }
+            if (from) |i| {
+                entry.placed = @min(entry.placed, i);
+            }
+            inline for (.{ .content_width, .full_content_width, .min_content_width, .scrollable_content_width }) |kind| {
+                entry.drop(kind);
+            }
+            if (heights) {
+                entry.drop(.content_height);
+            }
+            entry_ = entry;
+        }
+        // A declared height doesn't grow: nothing above it moves. html and
+        // body take the document's height, so they never stop it.
+        if (heights and el.isRootContainer() == false and self.memoizedHeightDeclared(el)) {
+            heights = false;
+        }
+        from = null;
+        if (heights) {
+            if (entry_) |entry| {
+                entry.drop(.box_height);
+                // el stays put, the siblings after it don't
+                if (entry.get(.offset) != null) {
+                    from = entry.position + 1;
+                }
+            }
+        }
+        el = el.asNode().flatTreeParentElement(self.frame) orelse break;
+    }
+    // Document.extent reads the root's children
+    self.extent_bumps += 1;
+    return true;
+}
+
+// Whether el's height is declared, as far as the memo knows: a tree change
+// doesn't cascade to find out. Not knowing, the walk goes on.
+fn memoizedHeightDeclared(self: *StyleManager, el: *Element) bool {
+    const group = &self.geometry;
+    if (group.fresh(self.frame) == false) {
+        return false;
+    }
+    const stored = group.memo.get(el) orelse return false;
+    return @TypeOf(group.*).load(stored).height.resolve(self.frame.page.getViewport()) != null;
 }
 
 // Whether a match reads every sibling on a side of the gap that has some
@@ -1347,18 +1520,20 @@ fn previousElement(from: ?*Node) ?*Node {
 // and `next`) whose match can change (see SiblingReads), with their subtrees.
 // Only the nearest ones: readsAllSiblings sent the rest to the parent's
 // subtree.
-fn dropSiblings(self: *StyleManager, previous: ?*Node, next: ?*Node, memos: Memos, budget: *usize) bool {
+fn dropSiblings(self: *StyleManager, previous: ?*Node, next: ?*Node, boxes: *BoxScope, budget: *usize) bool {
     var sibling = next;
     for (0..self.siblings.next) |_| {
         const s = nextElement(sibling) orelse break;
-        if (self.dropSubtree(s, memos, budget) == false) {
+        boxes.restyled(s);
+        if (self.dropSubtree(s, boxes.memos.*, budget) == false) {
             return false;
         }
         sibling = s.nextSibling();
     }
     if (self.siblings.previous) {
         if (previousElement(previous)) |s| {
-            if (self.dropSubtree(s, memos, budget) == false) {
+            boxes.restyled(s);
+            if (self.dropSubtree(s, boxes.memos.*, budget) == false) {
                 return false;
             }
         }
@@ -2476,6 +2651,12 @@ const LayoutMemo = struct {
         position: u32 = 0,
         placed: u32 = 0,
 
+        // A width cached on another element reads this one's content or
+        // children: a box sized by its content sizes the boxes inside it, a
+        // flex row's items size each other. A change under it can't keep
+        // the widths (see boxesMoved).
+        sizes_others: bool = false,
+
         fn get(self: *const Entry, slot: Measure) ?f64 {
             return if (self.cached.contains(slot)) self.values.get(slot) else null;
         }
@@ -2515,6 +2696,18 @@ pub fn setCacheLayout(self: *StyleManager, el: *Element, comptime kind: LayoutKi
     _ = self.freshLayoutMemo() orelse return;
     const entry = self.layoutEntry(el) orelse return;
     entry.put(@field(LayoutMemo.Measure, @tagName(kind)), value);
+}
+
+/// A width being cached reads el's content, or its children (see
+/// Entry.sizes_others).
+pub fn setSizesOthers(self: *StyleManager, el: *Element) void {
+    _ = self.freshLayoutMemo() orelse return;
+    if (self.layoutEntry(el)) |entry| {
+        entry.sizes_others = true;
+    } else {
+        // Can't be remembered: the next change drops everything
+        self.unscoped_sizing = true;
+    }
 }
 
 /// el's top, from parent's top. parent is el's flat-tree parent.
@@ -2597,6 +2790,7 @@ fn freshLayoutMemo(self: *StyleManager) ?*LayoutMemo {
     const version = self.layoutVersion();
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
+        self.unscoped_sizing = false;
         memo.detached = false;
         memo.map.clear();
         memo.version = version;
@@ -6669,6 +6863,162 @@ test "StyleManager: memo: reading tops in order stacks each sibling once" {
         try testing.expectEqual(0, layout.boxTop(el, frame));
     }
     try testing.expectEqual(0, sm.offsets_placed);
+}
+
+// Random tree and class changes with reads in between: what the layout memo
+// keeps must be what a memo filled from nothing computes.
+test "StyleManager: memo: tree and class changes keep only boxes that didn't move" {
+    const layout = @import("layout.zig");
+
+    const sheets = [_][]const u8{
+        // The nearest siblings only
+        \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
+        \\.hid { display: none } .ib { display: inline-block; height: 7px }
+        \\.abs { position: absolute; top: 3px } .wide { width: 200px }
+        \\.blk + .blk { height: 12px } .on > .blk { height: 16px }
+        \\.on + div { height: 18px } .on span { display: block; height: 4px }
+        ,
+        // Every sibling, :empty, flex rows and boxes sized by their content
+        \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
+        \\.hid { display: none } .ib { display: inline-block }
+        \\.abs { position: absolute; top: 3px } .wide { width: 200px }
+        \\.tall ~ .blk { height: 9px } div:nth-child(2n) { height: 14px }
+        \\.on:empty { height: 40px } :empty + .blk { height: 21px }
+        \\.row { display: flex } .on > span { display: block; height: 4px }
+        ,
+    };
+    const classes = [_][]const u8{ "blk", "tall", "box", "hid", "ib", "abs", "wide", "on", "row" };
+
+    for (sheets, 0..) |sheet, seed| {
+        const frame = try testing.createFrame();
+        defer testing.test_session.closeAllPages();
+        const sm = &frame._style_manager;
+        const arena = testing.arena_allocator;
+
+        const doc = frame.document;
+        const html = (try doc.createElement("html", null, frame)).asNode();
+        _ = try doc.asNode().appendChild(html, frame);
+        const body = (try doc.createElement("body", null, frame)).asNode();
+        _ = try html.appendChild(body, frame);
+        const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+        try style_el.asNode().setTextContent(sheet, frame);
+        _ = try body.appendChild(style_el.asNode(), frame);
+        const root = (try doc.createElement("div", null, frame)).asNode();
+        _ = try body.appendChild(root, frame);
+
+        var prng: std.Random.DefaultPrng = .init(seed + 1);
+        const random = prng.random();
+
+        // Every element made, in or out of the tree
+        var els: std.ArrayList(*Element) = .empty;
+        try els.append(arena, root.as(Element));
+        var kept: usize = 0;
+
+        const Measured = struct { top: f64, height: f64, width: f64, content: f64, scroll: f64 };
+        const measure = struct {
+            fn all(list: []const *Element, out: *std.ArrayList(Measured), owner: *Frame) !void {
+                out.clearRetainingCapacity();
+                for (list) |el| {
+                    if (el.asNode().isConnected() == false) {
+                        continue;
+                    }
+                    try out.append(testing.arena_allocator, .{
+                        .top = layout.boxTop(el, owner),
+                        .height = layout.boxHeight(el, owner),
+                        .width = layout.boxWidth(el, owner),
+                        .content = layout.contentWidth(el, .clipped, owner),
+                        .scroll = layout.contentHeight(el, owner),
+                    });
+                }
+            }
+        }.all;
+        var got: std.ArrayList(Measured) = .empty;
+        var want: std.ArrayList(Measured) = .empty;
+
+        for (0..600) |step| {
+            const target = els.items[random.uintLessThan(usize, els.items.len)];
+            const node = target.asNode();
+            switch (random.uintLessThan(u8, 10)) {
+                // A new element, appended or inserted before a child
+                0, 1, 2 => if (node.isConnected() and els.items.len < 120) {
+                    const el = try doc.createElement(if (random.boolean()) "div" else "span", null, frame);
+                    if (random.boolean()) {
+                        const class = classes[random.uintLessThan(usize, classes.len)];
+                        try el.setAttribute(comptime .wrap("class"), try String.init(arena, class, .{}), frame);
+                    }
+                    try els.append(arena, el);
+                    const before = if (random.boolean()) node.firstChild() else null;
+                    _ = try node.insertBefore(el.asNode(), before, frame);
+                },
+                // Removed, to come back later
+                3 => if (node != root and node.isConnected()) {
+                    target.remove(frame);
+                },
+                // Moved, or brought back
+                4, 5 => {
+                    const to = els.items[random.uintLessThan(usize, els.items.len)].asNode();
+                    if (node != root and to.isConnected() and node.contains(to) == false) {
+                        const before = if (random.boolean()) to.firstChild() else null;
+                        if (before != node) {
+                            _ = try to.insertBefore(node, before, frame);
+                        }
+                    }
+                },
+                6, 7, 8 => if (node != root) {
+                    const class = if (random.uintLessThan(u8, 4) == 0) "" else classes[random.uintLessThan(usize, classes.len)];
+                    try target.setAttribute(comptime .wrap("class"), try String.init(arena, class, .{}), frame);
+                },
+                else => if (node.isConnected()) {
+                    if (node.firstChild()) |first| {
+                        if (first._type == .cdata) {
+                            _ = try node.removeChild(first, frame);
+                        } else {
+                            _ = try node.insertBefore(try doc.createTextNode("text"), first, frame);
+                        }
+                    } else {
+                        _ = try node.appendChild(try doc.createTextNode("text"), frame);
+                    }
+                },
+            }
+
+            // A few reads, so the memo holds some boxes and not others
+            for (0..random.uintLessThan(u8, 4)) |_| {
+                const el = els.items[random.uintLessThan(usize, els.items.len)];
+                if (el.asNode().isConnected()) {
+                    switch (random.uintLessThan(u8, 3)) {
+                        0 => _ = layout.boxTop(el, frame),
+                        1 => _ = layout.boxWidth(el, frame),
+                        else => _ = layout.boxHeight(el, frame),
+                    }
+                }
+            }
+            if (random.uintLessThan(u8, 3) != 0) {
+                continue;
+            }
+
+            const version = sm.layoutVersion();
+            try measure(els.items, &got, frame);
+            const extent = doc.extent();
+            if (sm.layoutVersion() == version and sm.layout_memo.version == version) {
+                kept += 1;
+            }
+            sm.layout_bumps += 1;
+            try measure(els.items, &want, frame);
+            for (got.items, want.items, 0..) |g, w, i| {
+                if (std.meta.eql(g, w) == false) {
+                    std.debug.print("sheet {d} step {d} box {d}: got {any} want {any}\n", .{ seed, step, i, g, w });
+                    return error.StaleLayout;
+                }
+            }
+            try testing.expectEqual(doc.extent(), extent);
+            // Sometimes start the next steps from an empty memo
+            if (random.boolean()) {
+                sm.layout_bumps += 1;
+            }
+        }
+        // The memo did survive changes, or this checked nothing
+        try testing.expect(kept > 20);
+    }
 }
 
 test "StyleManager: memo: a height write moves only what's stacked below it" {
