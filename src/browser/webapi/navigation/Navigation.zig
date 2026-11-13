@@ -508,14 +508,24 @@ pub fn abortOngoing(self: *Navigation, frame: *Frame) !void {
 }
 
 // A same-document navigation updated the URL and entries: the committed
-// promise resolves now, navigatesuccess and the finished promise follow in a
-// microtask.
-pub fn commitSameDocument(_: *Navigation, signal: *AbortSignal, frame: *Frame) !void {
+// promise resolves now. Per spec, the commit steps invoke any intercept()
+// handlers synchronously, right here — not in a later microtask. When
+// there's no handler, navigatesuccess and the finished promise still follow
+// in a microtask.
+pub fn commitSameDocument(self: *Navigation, signal: *AbortSignal, frame: *Frame) !void {
     // Gone when the commit steps (currententrychange, popstate) started a
     // navigation that aborted this one.
     resolveCommitted(signal, frame);
     const ongoing = ongoingFor(signal, frame) orelse return;
     ongoing.committed_same_document = true;
+
+    if (ongoing.intercept_handlers.len > 0) {
+        const handlers = ongoing.intercept_handlers;
+        ongoing.intercept_handlers = &.{};
+        self.runInterceptHandlers(handlers, signal, frame);
+        return;
+    }
+
     try frame.js.queueNavigateSuccess();
 }
 
@@ -533,21 +543,14 @@ fn resolveCommitted(signal: *AbortSignal, frame: *Frame) void {
     committed.local(&ls.local).resolve("navigation committed", {});
 }
 
-// The microtask queued by commitSameDocument.
+// The microtask queued by commitSameDocument when there's no intercept()
+// handler to run (that case fires navigatesuccess synchronously instead,
+// from settleIntercept once the handler's promise settles).
 pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
-    // Claim the handler (without touching committed/finished) before taking
-    // any copy: a newer navigation replacing this one invalidates the
-    // pointer this gives us, so this check has to happen first.
     {
         const ongoing_ptr = if (frame._ongoing_navigate) |*o| o else return;
         if (ongoing_ptr.committed_same_document == false) {
             // A newer navigation replaced it.
-            return;
-        }
-        if (ongoing_ptr.intercept_handlers.len > 0) {
-            const handlers = ongoing_ptr.intercept_handlers;
-            ongoing_ptr.intercept_handlers = &.{};
-            self.runInterceptHandlers(handlers, ongoing_ptr.signal, frame);
             return;
         }
     }
