@@ -31,8 +31,6 @@ const Viewport = @import("Viewport.zig");
 const DocumentRegistry = @import("DocumentRegistry.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
-const Geolocation = @import("webapi/geolocation/Geolocation.zig");
-const PermissionState = @import("webapi/Permissions.zig").State;
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
@@ -60,21 +58,11 @@ arena_account: lp.Arena.Account = .{},
 last_reported_js_bytes: usize = 0,
 last_js_heap_sample_ms: u64 = 0,
 
-// Permission state set via CDP Browser.grantPermissions / setPermission /
-// resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
-// by navigator.permissions.query(). Scoped to the Browser so it persists
-// across page navigations, mirroring how Chrome scopes permissions to the
-// browser context. Keys are owned by `allocator`; values are enum tags.
-permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
-
 // Runtime viewport override
 viewport_override: ?Viewport = null,
 
 // Screenshot renderer (fonts, glyph cache); created on the first screenshot.
 renderer: ?*lp.screenshot.Renderer = null,
-
-// Runtime geolocation override
-geolocation_override: ?Geolocation.Override = null,
 
 // Every Document allocated in this browser session, allows nodes to refer to
 // documents by their index. (TODO: this will probably eventually be moved
@@ -174,8 +162,6 @@ pub fn deinit(self: *Browser) void {
     self.documents.deinit();
     self.http_client.deinit();
     if (self.renderer) |r| r.deinit();
-    self.clearPermissions();
-    self.permissions.deinit(allocator);
     self.selector_cache.deinit();
 }
 
@@ -201,30 +187,6 @@ fn onForegroundTaskPosted(ctx: ?*anyopaque, delay_in_seconds: f64) callconv(.c) 
 pub fn prepareForTeardown(self: *Browser) void {
     self.app.watchdog.unregister(&self.watchdog_entry);
     self.env.cancelTerminate();
-}
-
-// Set (or overwrite) the stored state for a permission. The name is duped into
-// `allocator`; the state is a plain enum tag. Used by CDP
-// Browser.grantPermissions / setPermission.
-pub fn setPermission(self: *Browser, name: []const u8, state: PermissionState) !void {
-    const gop = try self.permissions.getOrPut(self.allocator, name);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = self.allocator.dupe(u8, name) catch |err| {
-            _ = self.permissions.remove(name);
-            return err;
-        };
-    }
-    gop.value_ptr.* = state;
-}
-
-// Clear all stored permissions, freeing the keys. Used by CDP
-// Browser.resetPermissions and on teardown.
-pub fn clearPermissions(self: *Browser) void {
-    var it = self.permissions.keyIterator();
-    while (it.next()) |key| {
-        self.allocator.free(key.*);
-    }
-    self.permissions.clearRetainingCapacity();
 }
 
 // The viewport every consumer should read: the runtime override if set,

@@ -24,6 +24,7 @@ const CDP = @import("../CDP.zig");
 const Session = @import("../../../browser/Session.zig");
 const Notification = @import("../../../Notification.zig");
 const PermissionState = @import("../../../browser/webapi/Permissions.zig").State;
+const PermissionOverrides = @import("../../../browser/PermissionOverrides.zig");
 
 const log = lp.log;
 
@@ -193,7 +194,7 @@ fn setWindowBounds(cmd: *CDP.Command) !void {
 }
 
 // Grant the listed permissions so navigator.permissions.query() reports them
-// as "granted". State is stored on the Browser, so it persists across page
+// as "granted". State is stored on the Session, so it persists across page
 // navigations.
 fn grantPermissions(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
@@ -205,13 +206,13 @@ fn grantPermissions(cmd: *CDP.Command) !void {
     if (params.origin) |v| {
         log.debug(.not_implemented, "Browser.grantPermissions", .{ .param = "origin", .value = v });
     }
-    if (params.browserContextId) |v| {
-        log.debug(.not_implemented, "Browser.grantPermissions", .{ .param = "browserContextId", .value = v });
+    if (params.browserContextId) |bid| {
+        const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+        if (!std.mem.eql(u8, bid, bc.id)) return error.UnknownBrowserContextId;
     }
 
-    const browser = &cmd.cdp.browser;
     for (params.permissions) |name| {
-        try browser.setPermission(name, .granted);
+        try permissionOverrides(cmd).set(cmd.cdp.allocator, name, .granted);
     }
 
     return cmd.sendResult(null, .{});
@@ -230,22 +231,34 @@ fn setPermission(cmd: *CDP.Command) !void {
     if (params.origin) |v| {
         log.debug(.not_implemented, "Browser.setPermission", .{ .param = "origin", .value = v });
     }
-    if (params.browserContextId) |v| {
-        log.debug(.not_implemented, "Browser.setPermission", .{ .param = "browserContextId", .value = v });
+    if (params.browserContextId) |bid| {
+        const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+        if (!std.mem.eql(u8, bid, bc.id)) return error.UnknownBrowserContextId;
     }
 
     const state = std.meta.stringToEnum(PermissionState, params.setting) orelse {
         return error.InvalidPermissionSetting;
     };
-    try cmd.cdp.browser.setPermission(params.permission.name, state);
+    try permissionOverrides(cmd).set(cmd.cdp.allocator, params.permission.name, state);
     return cmd.sendResult(null, .{});
 }
 
 // Clear all granted permissions; navigator.permissions.query() falls back to
 // the default "prompt".
 fn resetPermissions(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.clearPermissions();
+    if (try cmd.params(struct { browserContextId: ?[]const u8 = null })) |params| {
+        if (params.browserContextId) |bid| {
+            const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+            if (!std.mem.eql(u8, bid, bc.id)) return error.UnknownBrowserContextId;
+        }
+    }
+    permissionOverrides(cmd).clear(cmd.cdp.allocator);
     return cmd.sendResult(null, .{});
+}
+
+fn permissionOverrides(cmd: *CDP.Command) *PermissionOverrides {
+    if (cmd.browser_context) |bc| return &bc.session.permissions;
+    return &cmd.cdp.pending_permissions;
 }
 
 const testing = @import("../testing.zig");
@@ -299,19 +312,17 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-PERM", .url = "cdp/dom1.html" });
-    const browser = bc.session.browser;
+    const browser = bc.session;
 
     // grantPermissions: each listed permission becomes "granted". State lives
-    // on the Browser, not the Page.
+    // on the Session, not the Page.
     try ctx.processMessage(.{
         .id = 40,
         .method = "Browser.grantPermissions",
         .params = .{ .permissions = &[_][]const u8{ "geolocation", "notifications" } },
     });
     try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
-    // State lives on the Browser, not the Page, so it persists for the whole
-    // CDP connection (across page navigations) rather than being lost when the
-    // page is replaced.
+    // State persists across page navigations in the same context.
     try testing.expectEqual(.granted, browser.permissions.get("geolocation").?);
     try testing.expectEqual(.granted, browser.permissions.get("notifications").?);
 
@@ -336,8 +347,8 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
 test "cdp.browser: disposing a context clears its permission overrides" {
     var ctx = try testing.context();
     defer ctx.deinit();
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-PERM-OLD" });
-    const browser = &ctx.cdp().browser;
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-PERM-OLD" });
+    const browser = bc.session;
 
     try ctx.processMessage(.{
         .id = 1,
@@ -357,9 +368,9 @@ test "cdp.browser: disposing a context clears its permission overrides" {
 
     try ctx.processMessage(.{ .id = 4, .method = "Target.disposeBrowserContext", .params = .{ .browserContextId = "BID-PERM-OLD" } });
     try ctx.expectSentResult(null, .{ .id = 4 });
-    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
-    _ = try ctx.loadBrowserContext(.{ .id = "BID-PERM-NEW" });
-    try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+    const fresh = try ctx.loadBrowserContext(.{ .id = "BID-PERM-NEW" });
+    try testing.expectEqual(@as(usize, 0), fresh.session.permissions.count());
 }
 
 test "cdp.browser: setDownloadBehavior stores config on the session" {
@@ -495,6 +506,98 @@ test "cdp.browser: setDownloadBehavior writes an attachment to disk and emits ev
     const written = try tmp.dir.readFileAlloc(testing.io, "report.csv", testing.allocator, .limited(1024));
     defer testing.allocator.free(written);
     try testing.expectEqualSlices(u8, "col1,col2\nhello,world\n42,1337\n", written);
+}
+
+test "cdp.browser: permission setup works before the first target" {
+    for ([_][]const u8{ "Browser.grantPermissions", "Browser.setPermission", "Browser.resetPermissions" }, 0..) |method, index| {
+        for ([_]bool{ false, true }) |explicit_context| {
+            var ctx = try testing.context();
+            defer ctx.deinit();
+            try ctx.processMessage(.{
+                .id = 1,
+                .method = method,
+                .params = .{ .permissions = &[_][]const u8{"geolocation"}, .permission = .{ .name = "geolocation" }, .setting = "denied" },
+            });
+            try ctx.expectSentResult(null, .{ .id = 1 });
+            try testing.expectEqual(null, ctx.cdp().browser_context);
+            if (explicit_context) {
+                try ctx.processMessage(.{ .id = 2, .method = "Target.createBrowserContext" });
+                try ctx.expectSentResult(.{ .browserContextId = ctx.cdp().browser_context.?.id }, .{ .id = 2 });
+            }
+            try ctx.processMessage(.{ .id = 3, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+            const bc = &ctx.cdp().browser_context.?;
+            const expected: PermissionState = switch (index) {
+                0 => .granted,
+                1 => .denied,
+                else => .prompt,
+            };
+            try testing.expectEqual(expected, bc.session.permissions.get("geolocation") orelse .prompt);
+            try testing.expectEqual(0, ctx.cdp().pending_permissions.count());
+
+            var ls: lp.js.Local.Scope = undefined;
+            (try testing.firstTarget(bc)).mainFrame().?.js.localScope(&ls);
+            defer ls.deinit();
+            _ = try ls.local.exec("navigator.permissions.query({name: 'geolocation'}).then(p => globalThis.permissionState = p.state)", null);
+            ls.local.runMicrotasks();
+            const state = try ls.local.exec("permissionState", null);
+            try testing.expectEqual(@tagName(expected), try state.toStringSlice());
+        }
+    }
+}
+
+test "cdp.browser: resetting staged permissions leaves context creation available" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(.granted, ctx.cdp().pending_permissions.get("geolocation").?);
+    try ctx.processMessage(.{ .id = 2, .method = "Browser.resetPermissions" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+    try testing.expectEqual(0, ctx.cdp().pending_permissions.count());
+    try ctx.processMessage(.{ .id = 3, .method = "Target.createBrowserContext" });
+    const bc = &ctx.cdp().browser_context.?;
+    try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 3 });
+    try testing.expectEqual(0, bc.session.permissions.count());
+}
+
+test "cdp.browser: resetting absent permissions leaves context creation available" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Browser.resetPermissions" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Target.createBrowserContext" });
+    const bc = ctx.cdp().browser_context orelse return error.MissingBrowserContext;
+    try ctx.expectSentResult(.{ .browserContextId = bc.id }, .{ .id = 2 });
+    try testing.expectEqual(@as(usize, 0), bc.session.permissions.count());
+}
+
+test "cdp.browser: unknown permission context does not create a context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    for ([_][]const u8{ "Browser.grantPermissions", "Browser.setPermission", "Browser.resetPermissions" }) |method| {
+        try ctx.processMessage(.{
+            .id = 2,
+            .method = method,
+            .params = .{ .permissions = &[_][]const u8{"geolocation"}, .permission = .{ .name = "geolocation" }, .setting = "denied", .browserContextId = "BID-MISSING" },
+        });
+        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 2 });
+        try testing.expectEqual(null, ctx.cdp().browser_context);
+        try testing.expectEqual(.granted, ctx.cdp().pending_permissions.get("geolocation").?);
+    }
 }
 
 test "cdp.browser: stream behavior streams an attachment navigation as LP.downloadData" {

@@ -30,6 +30,7 @@ const Page = @import("../../browser/Page.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
+const PermissionOverrides = @import("../../browser/PermissionOverrides.zig");
 
 const WS = @import("../WS.zig");
 const Link = @import("../Link.zig");
@@ -78,6 +79,9 @@ browser_context_id_gen: BrowserContextIdGen = .{},
 browser_session_id: ?[]const u8 = null,
 
 browser_context: ?BrowserContext,
+// Permission commands can precede the first context. Transfer this store to
+// its Session without creating a context as a side effect of granting access.
+pending_permissions: PermissionOverrides = .{},
 disable_set_cache_disabled: bool = false,
 
 // Re-used arena for processing a message. Works because we strictly process
@@ -126,6 +130,7 @@ pub fn deinit(self: *CDP) void {
     if (self.browser_context) |*bc| {
         bc.deinit();
     }
+    self.pending_permissions.deinit(self.allocator);
     self.browser.deinit();
     self.message_arena.deinit();
     self.notification_arena.deinit();
@@ -365,6 +370,8 @@ pub fn createBrowserContext(self: *CDP) ![]const u8 {
     const browser_context = &self.browser_context.?;
 
     try BrowserContext.init(browser_context, id, self);
+    browser_context.session.permissions = self.pending_permissions;
+    self.pending_permissions = .{};
     return id;
 }
 
@@ -550,7 +557,6 @@ pub const BrowserContext = struct {
             browser.http_client.clearUserAgentOverride();
         }
         browser.http_client.clearAcceptLanguageOverride();
-        browser.clearPermissions();
     }
 
     // A new target, not bound to a page yet: the next page created in the
