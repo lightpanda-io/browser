@@ -1219,17 +1219,11 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
-    // goto-timeout fixtures: a page whose parser-blocking <script src> delays
-    // its response by `s=<seconds>`, so a navigation wait must give up while a
-    // subresource fetch is still in flight.
+    // goto-timeout fixtures: a page whose parser-blocking <script src> answers
+    // after `delay_ms`, so a navigation wait must give up while a subresource
+    // fetch is still in flight.
     if (std.mem.startsWith(u8, path, "/goto_timeout/page")) {
-        var seconds: usize = 0;
-        if (std.mem.find(u8, path, "s=")) |pos| {
-            var end = pos + 2;
-            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
-            seconds = std.fmt.parseInt(usize, path[pos + 2 .. end], 10) catch 0;
-        }
-        const body = try std.fmt.allocPrint(req_allocator, "<!doctype html><html><head><title>goto timeout</title></head><body><p id=\"status\">pending</p><script src=\"/goto_timeout/script.js?s={d}\"></script></body></html>", .{seconds});
+        const body = try std.fmt.allocPrint(req_allocator, "<!doctype html><html><head><title>goto timeout</title></head><body><p id=\"status\">pending</p><script src=\"/goto_timeout/script.js?delay_ms={d}\"></script></body></html>", .{delayMs(path)});
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
@@ -1238,13 +1232,7 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/goto_timeout/script.js")) {
-        var seconds: usize = 0;
-        if (std.mem.find(u8, path, "s=")) |pos| {
-            var end = pos + 2;
-            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
-            seconds = std.fmt.parseInt(usize, path[pos + 2 .. end], 10) catch 0;
-        }
-        lp.io.sleep(.fromMilliseconds(@intCast(seconds * 1000)), .awake) catch {};
+        lp.io.sleep(.fromMilliseconds(@intCast(delayMs(path))), .awake) catch {};
         return req.respond("document.getElementById('status').textContent = 'script ran';", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/javascript" },
@@ -1277,11 +1265,8 @@ pub fn handle(req: *std.http.Server.Request) !void {
                 lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
             }
         }
-        if (std.mem.find(u8, path, "delay_ms=")) |pos| {
-            const digits_start = pos + "delay_ms=".len;
-            var end = digits_start;
-            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
-            const delay_ms = std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
+        const delay_ms = delayMs(path);
+        if (delay_ms > 0) {
             lp.io.sleep(.fromMilliseconds(@intCast(delay_ms)), .awake) catch {};
         }
         // strip off leading / so that it's relative to CWD
@@ -1488,6 +1473,15 @@ fn yesTo(key: []const u8, deciding: bool, later_step: bool, banner_in_state: boo
 fn isWall(key: []const u8) bool {
     return std.mem.eql(u8, key, lp.tools.consent.wall_key) or std.mem.eql(u8, key, lp.tools.login.wall_key) or
         std.mem.eql(u8, key, lp.tools.login.error_key);
+}
+
+// The `delay_ms=<n>` query value, or 0 when absent or malformed.
+fn delayMs(path: []const u8) u64 {
+    const pos = std.mem.find(u8, path, "delay_ms=") orelse return 0;
+    const digits_start = pos + "delay_ms=".len;
+    var end = digits_start;
+    while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
+    return std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
 }
 
 /// What a question is looking for, as a word its option's description carries.

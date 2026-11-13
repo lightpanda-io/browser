@@ -1504,22 +1504,21 @@ test "agent script runtime: goto timeout bounds a navigation blocked on a slow p
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    // The page's <script src> answers after 9s. The goto deadline is 2s, so the
-    // wait must reject around 2s — the fetch is in flight inside the tick, and
-    // before the sync deadline it could only end at the script's response or at
-    // curl's 15s per-request wall clock.
+    // The page's <script src> answers after 3s and the goto deadline is 300ms:
+    // the fetch is in flight inside the tick, so without the sync deadline the
+    // wait only ends at the script's response.
     try runTestScript(runtime,
         \\const t0 = Date.now();
         \\let caught = "";
         \\try {
-        \\  await new Page().goto("http://localhost:9582/goto_timeout/page.html?s=9", { timeout: 2000 });
+        \\  await new Page().goto("http://localhost:9582/goto_timeout/page.html?delay_ms=3000", { timeout: 300 });
         \\} catch (e) {
         \\  caught = String(e);
         \\}
         \\const elapsed = Date.now() - t0;
         \\if (!caught.toLowerCase().includes("timed out")) throw new Error("expected a timeout rejection, got: " + caught);
-        \\if (elapsed < 1500) throw new Error("goto rejected too early: " + elapsed + "ms");
-        \\if (elapsed > 6500) throw new Error("goto deadline not honored, rejected at " + elapsed + "ms");
+        \\if (elapsed < 250) throw new Error("goto rejected too early: " + elapsed + "ms");
+        \\if (elapsed > 2000) throw new Error("goto deadline not honored, rejected at " + elapsed + "ms");
     );
 }
 
@@ -1532,15 +1531,12 @@ test "agent script runtime: goto resolves when the load completes within the tim
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    // The same blocking-script page, but the script answers in 2s and the
-    // deadline is far away: the navigation must resolve and the blocking
-    // script must have run before the promise settled.
+    // The same blocking-script page, but the script answers well inside the
+    // deadline: the navigation must resolve and the blocking script must have
+    // run before the promise settled.
     try runTestScript(runtime,
         \\const page = new Page();
-        \\const t0 = Date.now();
-        \\await page.goto("http://localhost:9582/goto_timeout/page.html?s=2", { timeout: 15000 });
-        \\const elapsed = Date.now() - t0;
-        \\if (elapsed > 8000) throw new Error("goto resolved too late: " + elapsed + "ms");
+        \\await page.goto("http://localhost:9582/goto_timeout/page.html?delay_ms=100", { timeout: 15000 });
         \\const status = page.evaluate("document.getElementById('status').textContent");
         \\if (status !== "script ran") throw new Error("blocking script did not run before load: '" + status + "'");
     );

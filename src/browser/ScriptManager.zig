@@ -198,10 +198,6 @@ fn waitForPreload(self: *ScriptManager, url: [:0]const u8) ?*Script {
         const entry = self.preloaded_scripts.getPtr(url) orelse return null;
         switch (entry.state) {
             .loading => {
-                // An enclosing navigation wait past its deadline stops the sync
-                // wait here; the fallback fetch below bails on the same
-                // deadline without starting (submitSync's upfront check).
-                if (client.waitDeadlineExceeded()) return null;
                 _ = client.tickSync(200) catch return null;
                 continue;
             },
