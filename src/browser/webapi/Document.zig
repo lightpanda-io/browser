@@ -1014,54 +1014,122 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    // Each entry carries its nearest element ancestor (its flat-tree parent)
-    // and that ancestor's top, which its own is an offset from.
-    const Entry = struct { node: *Node, parent: ?*Element, parent_top: f64 };
+    // Each entry points at its nearest element ancestor's level (its
+    // flat-tree parent's), which its own box is placed from. Levels are a
+    // stack of their own: one is done once an entry of a shallower one pops.
+    const Entry = struct { node: *Node, level: u32 };
+    var levels: std.ArrayList(HitLevel) = .empty;
+    try levels.append(frame.local_arena, .{ .element = null, .top = 0, .left = 0, .up = 0 });
     var stack: std.ArrayList(Entry) = .empty;
-    try stack.append(frame.local_arena, .{ .node = root, .parent = null, .parent_top = 0 });
+    try stack.append(frame.local_arena, .{ .node = root, .level = 0 });
 
     while (stack.items.len > 0) {
         const entry = stack.pop() orelse break;
         const node = entry.node;
-        var parent = entry.parent;
-        var top = entry.parent_top;
+        levels.shrinkRetainingCapacity(entry.level + 1);
+        var level = entry.level;
         if (node.is(Element)) |element| {
+            const above = levels.items[level];
             if (comptime lp.IS_DEBUG) {
-                std.debug.assert(parent == element.asNode().flatTreeParentElement(owner));
+                std.debug.assert(above.element == element.asNode().flatTreeParentElement(owner));
             }
-            top = layout.boxTopFrom(element, parent, entry.parent_top, owner);
-            parent = element;
+            const top = layout.boxTopFrom(element, above.element, above.top, owner);
             if (style_manager.hasDisplayNone(element) or element.hasInertAttribute()) {
                 continue;
             }
             // Unlike display:none, visibility and pointer-events let a child
             // opt back in, so the subtree is still walked. So is a subtree
             // that starts below y: a positioned box in it can sit higher.
+            var left: ?f64 = null;
             if (style_manager.isHitTestable(element) and y >= top and y <= top + layout.boxHeight(element, owner)) {
                 if (ignore_x) {
                     topmost = element;
                 } else {
                     // only bother calculating the horiziontal position for
                     // elements contained by the vertical band
-                    const left = element.horizontalPosition(frame);
-                    if (x >= left and x <= left + element.boxAxis(frame, .width)) {
+                    const l = HitLevel.leftOf(levels.items, element, level, owner, frame);
+                    if (x >= l and x <= l + element.boxAxis(frame, .width)) {
                         topmost = element;
                     }
+                    left = l;
                 }
             }
+            if (node.flatFirstChild(frame) == null) {
+                continue;
+            }
+            try levels.append(frame.local_arena, .{ .element = element, .top = top, .left = left, .up = level });
+            level = @intCast(levels.items.len - 1);
         }
 
         // Push the children, then reverse them so they pop in flat-tree order
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .parent = parent, .parent_top = top });
+            try stack.append(frame.local_arena, .{ .node = c, .level = level });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }
 
     return topmost;
 }
+
+// An element whose children hitTestImpl is walking: where they are placed
+// from. Element.horizontalPosition walks the siblings before a box at every
+// ancestor; here an ancestor's left is found once, and only when a box under
+// it is in the band, and its children's line offsets continue from one
+// another (see Element.LineCursor).
+const HitLevel = struct {
+    element: ?*Element, // null: the document
+    top: f64,
+    left: ?f64,
+    up: u32, // the level of element's own parent
+    cursor: ?Element.LineCursor = null,
+
+    // `element`'s left in document coordinates, as Element.horizontalPosition
+    // computes it. `index` is its parent's level.
+    fn leftOf(levels: []HitLevel, element: *Element, index: u32, owner: *Frame, frame: *Frame) f64 {
+        var x = element.translateX(frame);
+        if (layout.Anchor.horizontal(element, owner)) |anchor| {
+            // Placed against its containing block, an ancestor
+            const base = anchor.base orelse return x + anchor.offset;
+            var i = index;
+            while (levels[i].element != base) : (i = levels[i].up) {
+                if (i == 0) {
+                    return x + anchor.offset + base.horizontalPosition(frame);
+                }
+            }
+            return x + anchor.offset + leftOfLevel(levels, i, owner, frame);
+        }
+        x += layout.relativeShift(element, .horizontal, owner);
+
+        const level = &levels[index];
+        const parent = level.element orelse return x;
+        if (Element.LineCursor.Mode.of(element, owner)) |mode| {
+            if (level.cursor == null) {
+                level.cursor = .init(parent.asNode(), mode, frame);
+            }
+            if (level.cursor.?.mode == mode) {
+                x += level.cursor.?.offsetOf(element.asNode(), owner);
+            } else {
+                // Siblings rarely differ (an out-of-flow box in a row): walk
+                // the line again for this one
+                var cursor: Element.LineCursor = .init(parent.asNode(), mode, frame);
+                x += cursor.offsetOf(element.asNode(), owner);
+            }
+        }
+        return x + leftOfLevel(levels, index, owner, frame);
+    }
+
+    fn leftOfLevel(levels: []HitLevel, index: u32, owner: *Frame, frame: *Frame) f64 {
+        const level = &levels[index];
+        if (level.left) |left| {
+            return left;
+        }
+        const left = leftOf(levels, level.element.?, level.up, owner, frame);
+        level.left = left;
+        return left;
+    }
+};
 
 fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
     return self.elementsFromPointIn(self.asNode(), x, y, frame);
