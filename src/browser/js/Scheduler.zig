@@ -54,6 +54,11 @@ blocking: u32,
 
 resets: u32,
 
+// The `Scheduler` is part of its `Context`, which stays readable after it's
+// destroyed (see `Context.destroyed`). Task lists though owned by Context so
+// nothing be added afterwards.
+closed: bool,
+
 // The Env's attribution and the Page's settle.
 attribution: *Attribution,
 settle: *Attribution.Settle,
@@ -67,6 +72,7 @@ pub fn init(allocator: Allocator, attribution: *Attribution, settle: *Attributio
         .generation = 0,
         .blocking = 0,
         .resets = 0,
+        .closed = false,
         .timed = Queue.initContext({}),
         .immediate = .{},
         .front = .{},
@@ -74,6 +80,7 @@ pub fn init(allocator: Allocator, attribution: *Attribution, settle: *Attributio
 }
 
 pub fn deinit(self: *Scheduler) void {
+    self.closed = true;
     self.finalizeTasks();
 }
 
@@ -98,6 +105,9 @@ const AddOpts = struct {
     parent: ??Attribution.Tag = null,
 };
 pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts: AddOpts) !void {
+    if (self.closed) {
+        return error.SchedulerClosed;
+    }
     if (comptime lp.IS_DEBUG) {
         log.debug(.scheduler, "scheduler.add", .{ .name = opts.name, .run_in_ms = run_in_ms, .blocks_done = opts.blocks_done });
     }
