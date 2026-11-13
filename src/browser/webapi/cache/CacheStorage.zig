@@ -52,19 +52,24 @@ fn keys(_: *CacheStorage, exec: *const Execution) !js.Promise {
 
 const MatchOptions = struct {
     cacheName: ?[]const u8 = null,
-    ignoreMethod: bool = false, // TODO
+    ignoreMethod: bool = false,
     ignoreSearch: bool = false,
-    ignoreVary: bool = false, // TODO
+    ignoreVary: bool = false,
 };
 
 fn match(_: *CacheStorage, input: Request.Input, opts_: ?MatchOptions, exec: *const Execution) !js.Promise {
     const origin = try storeOrigin(exec);
     const opts = opts_ orelse MatchOptions{};
+    const cache_opts: Cache.QueryOptions = .{
+        .ignoreMethod = opts.ignoreMethod,
+        .ignoreSearch = opts.ignoreSearch,
+        .ignoreVary = opts.ignoreVary,
+    };
     if (opts.cacheName) |name| {
         const bucket = origin.find(name) orelse return exec.js.local.?.resolvePromise({});
-        return Cache.matchIn(&.{bucket}, input, opts.ignoreSearch, exec);
+        return Cache.matchIn(&.{bucket}, input, cache_opts, exec);
     }
-    return Cache.matchIn(origin.buckets.values(), input, opts.ignoreSearch, exec);
+    return Cache.matchIn(origin.buckets.values(), input, cache_opts, exec);
 }
 
 // Unavailable for an opaque origin, e.g. about:blank. The bridge turns the

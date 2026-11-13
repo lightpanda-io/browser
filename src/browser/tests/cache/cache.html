@@ -102,6 +102,58 @@
   });
 </script>
 
+<script id=vary_match type=module>
+  const state = await testing.async();
+
+  await caches.delete('vary');
+  const cache = await caches.open('vary');
+
+  await cache.put('/v', new Response('french', {
+    headers: { Vary: 'Accept-Language' },
+  }));
+  // stored from a plain url, so the entry recorded no Accept-Language value
+  await cache.put('/v2', new Response('headerless', {
+    headers: { Vary: 'Accept-Language' },
+  }));
+
+  const fr = new Request('/v', { headers: { 'Accept-Language': 'fr' } });
+  const en = new Request('/v', { headers: { 'Accept-Language': 'en' } });
+
+  const hit = await cache.match(fr);
+  const hit_text = hit ? await hit.text() : null;
+  const miss_value = await cache.match(en);
+  const miss_headers = await cache.match('/v');
+  const ignore_vary = await cache.match(en, { ignoreVary: true });
+  const ignore_vary_text = ignore_vary ? await ignore_vary.text() : null;
+  const post = await cache.match(new Request('/v', { method: 'POST', headers: { 'Accept-Language': 'fr' } }));
+  const ignore_method = await cache.match(
+    new Request('/v', { method: 'POST', headers: { 'Accept-Language': 'fr' } }),
+    { ignoreMethod: true },
+  );
+  const ignore_method_text = ignore_method ? await ignore_method.text() : null;
+  // both the storing and the lookup request lack the header: they match
+  const both_absent = await cache.match('/v2');
+  const both_absent_text = both_absent ? await both_absent.text() : null;
+
+  const deleted_wrong_vary = await cache.delete(en);
+  const deleted = await cache.delete(fr);
+  const gone = await cache.match(fr, { ignoreVary: true });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('french', hit_text);
+    testing.expectEqual(undefined, miss_value);
+    testing.expectEqual(undefined, miss_headers);
+    testing.expectEqual('french', ignore_vary_text);
+    testing.expectEqual(undefined, post);
+    testing.expectEqual('french', ignore_method_text);
+    testing.expectEqual('headerless', both_absent_text);
+    testing.expectEqual(false, deleted_wrong_vary);
+    testing.expectEqual(true, deleted);
+    testing.expectEqual(undefined, gone);
+  });
+</script>
+
 <script id=put_rejects type=module>
   const state = await testing.async();
 
