@@ -110,6 +110,7 @@
     testing.expectEqual('', e.destination.id);
     testing.expectEqual(-1, e.destination.index);
     testing.expectTrue(e.destination.sameDocument);
+    testing.expectTrue(e.canIntercept);
     testing.expectEqual(undefined, e.destination.getState());
     testing.expectFalse(e.hashChange);
     testing.expectFalse(e.userInitiated);
@@ -399,6 +400,11 @@
       testing.expectTrue(e.cancelable);
       testing.expectFalse(e.hashChange);
       testing.expectFalse(e.userInitiated);
+      // Same-origin, so interceptable even though it's cross-document. These
+      // were all canceled before intercept() could run, though, so it still
+      // throws, just for the "already canceled" reason instead.
+      testing.expectTrue(e.canIntercept);
+      testing.withError((err) => testing.expectEqual('InvalidStateError', err.name), () => e.intercept());
     }
   }
 </script>
@@ -597,27 +603,216 @@
   }
 </script>
 
-<script id=intercept_not_supported>
+<script id=intercept_errors>
   {
-    // Chrome differs: canIntercept is true there. We don't support intercept().
-    let in_dispatch;
-    let scroll_in_dispatch;
+    // Same-origin navigations can be intercepted whether or not they're
+    // same-document (cross_document_cancel below covers the cross-document
+    // case); intercept() throws for other reasons tested here.
+    let scroll_before_intercept;
+    let handler_type_error;
+    let scroll_after_failed_handler;
+    let scroll_before_commit;
     const {events} = recordNavigations(() => {
       navigation.addEventListener('navigate', (e) => {
-        try { e.intercept(); } catch (err) { in_dispatch = err; }
-        try { e.scroll(); } catch (err) { scroll_in_dispatch = err; }
+        try { e.scroll(); } catch (err) { scroll_before_intercept = err; }
+        try { e.intercept({handler: 123}); } catch (err) { handler_type_error = err; }
+        // A failed intercept() call must not count as having intercepted.
+        try { e.scroll(); } catch (err) { scroll_after_failed_handler = err; }
+        e.intercept();
+        // scroll() only works once the navigation has committed, which for
+        // an intercepted navigation is inside the handler, after dispatch.
+        try { e.scroll(); } catch (err) { scroll_before_commit = err; }
       }, {once: true});
       history.pushState(null, '', '?intercept');
     });
     const e = events[0];
-    testing.expectFalse(e.canIntercept);
-    testing.expectEqual('SecurityError', in_dispatch.name);
-    testing.expectEqual('InvalidStateError', scroll_in_dispatch.name);
-    testing.expectEqual('intercept() must be called before scroll()', scroll_in_dispatch.message);
+    testing.expectTrue(e.canIntercept);
+    testing.expectEqual('InvalidStateError', scroll_before_intercept.name);
+    testing.expectEqual('intercept() must be called before scroll()', scroll_before_intercept.message);
+    testing.expectTrue(handler_type_error instanceof TypeError);
+    testing.expectEqual('InvalidStateError', scroll_after_failed_handler.name);
+    testing.expectEqual('intercept() must be called before scroll()', scroll_after_failed_handler.message);
+    testing.expectEqual('InvalidStateError', scroll_before_commit.name);
+    testing.expectEqual('scroll() may only be called once the navigation has committed', scroll_before_commit.message);
 
     testing.withError((err) => {
       testing.expectEqual('InvalidStateError', err.name);
       testing.expectEqual('intercept() may only be called while the navigate event is being dispatched.', err.message);
     }, () => e.intercept());
+  }
+</script>
+
+<script id=intercept_resolves type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let handler_called = false;
+    const order = [];
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({
+        handler: () => new Promise((resolve) => setTimeout(() => {
+          handler_called = true;
+          resolve();
+        })),
+      });
+    }, {once: true});
+    navigation.addEventListener('navigatesuccess', () => order.push('navigatesuccess'), {once: true});
+
+    const r = navigation.navigate('#intercept-resolve');
+    Promise.all([
+      r.committed.then(() => order.push('committed')),
+      r.finished.then(() => order.push('finished')),
+    ]).then(() => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(order);
+    });
+
+    state.done((order) => {
+      testing.expectTrue(handler_called);
+      testing.expectTrue(order.includes('navigatesuccess'));
+      testing.expectEqual(order.indexOf('navigatesuccess') < order.indexOf('finished'), true);
+    });
+  }
+</script>
+
+<script id=intercept_rejects type=module>
+  {
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({handler: () => Promise.reject(new Error('intercept boom'))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#intercept-reject');
+    Promise.all([
+      r.committed.then(() => 'resolved', (err) => err),
+      r.finished.then(() => 'resolved', (err) => err),
+    ]).then((results) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(results);
+    });
+
+    state.done(([committed, finished]) => {
+      // committed already resolved (same-document, not intercepted at that
+      // point); only finished rejects with the handler's rejection reason.
+      testing.expectEqual('resolved', committed);
+      testing.expectEqual('intercept boom', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
+  }
+</script>
+
+<script id=intercept_rejects_while_one_never_settles type=module>
+  {
+    // A handler that never settles must not block another handler's
+    // rejection: finished rejects as soon as any handler rejects, it
+    // doesn't wait for every handler to settle first.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({handler: () => new Promise(() => {})});
+      e.intercept({handler: () => new Promise((_, reject) => setTimeout(() => reject(new Error('h2 boom')), 10))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#intercept-never-settles');
+    r.finished.then(() => 'resolved', (err) => err).then((finished) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(finished);
+    });
+
+    state.done((finished) => {
+      testing.expectEqual('h2 boom', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
+  }
+</script>
+
+<script id=intercept_fastest_rejection_wins type=module>
+  {
+    // Registration order doesn't matter: whichever handler rejects first
+    // in time wins, even though it was registered second.
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      e.intercept({handler: () => new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 100))});
+      e.intercept({handler: () => new Promise((_, reject) => setTimeout(() => reject(new Error('fast')), 10))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const r = navigation.navigate('#intercept-fastest-rejection');
+    r.finished.then(() => 'resolved', (err) => err).then((finished) => {
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(finished);
+    });
+
+    state.done((finished) => {
+      testing.expectEqual('fast', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
+  }
+</script>
+
+<script id=intercept_cross_document type=module>
+  {
+    // intercept() on a same-origin but cross-document navigation keeps it in
+    // this document, driven by the handler, instead of actually loading the
+    // target (navigate_event_target.html doesn't exist on purpose: a leaked
+    // load would 404).
+    const my_turn = takeTurn();
+    const state = await testing.async();
+    const release = await my_turn;
+
+    const original = location.href;
+    let same_document_in_event;
+    let error_event;
+    navigation.addEventListener('navigate', (e) => {
+      same_document_in_event = e.destination.sameDocument;
+      e.intercept({handler: () => Promise.reject(new Error('cross-document boom'))});
+    }, {once: true});
+    navigation.addEventListener('navigateerror', (e) => error_event = e, {once: true});
+
+    const expected = new URL('navigate_event_target.html?intercept-cross-document', original).href;
+    const r = navigation.navigate('navigate_event_target.html?intercept-cross-document');
+    let href_before_restore;
+    Promise.all([
+      r.committed.then(() => 'resolved', (err) => err),
+      r.finished.then(() => 'resolved', (err) => err),
+    ]).then((results) => {
+      href_before_restore = location.href;
+      history.replaceState(null, '', original);
+      release();
+      state.resolve(results);
+    });
+
+    state.done(([committed, finished]) => {
+      testing.expectFalse(same_document_in_event);
+      // intercept() kept the navigation in this document: no real load, so
+      // the promises settle instead of hanging forever.
+      testing.expectEqual(expected, href_before_restore);
+      testing.expectEqual('resolved', committed);
+      testing.expectEqual('cross-document boom', finished.message);
+      testing.expectEqual(finished, error_event.error);
+    });
   }
 </script>
