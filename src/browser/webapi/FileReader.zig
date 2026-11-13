@@ -124,7 +124,9 @@ const ReadType = enum {
 };
 
 fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType, encoding_: ?[]const u8) !void {
-    if (self._ready_state == .loading) {
+    // The read is a chain of tasks on the reader's own scheduler, which is gone
+    // once its frame navigated away or was torn down.
+    if (self._ready_state == .loading or !self._exec.isLive()) {
         return error.InvalidStateError;
     }
 
@@ -302,6 +304,10 @@ pub fn abort(self: *FileReader) !void {
     self._generation +%= 1;
 
     const exec = self._exec;
+    if (!exec.isLive()) {
+        // The reader's frame is gone, and its listeners with it.
+        return;
+    }
     try self.dispatch(.abort, null, exec);
     try self.dispatch(.load_end, null, exec);
 }

@@ -46,6 +46,8 @@ const XMLHttpRequest = @This();
 
 pub const Proto = XMLHttpRequestEventTarget;
 _rc: lp.RC = .{},
+// Another frame can keep the request after this one's frame is gone: checked
+// with isLive() before use.
 _exec: *const Execution,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
@@ -229,6 +231,11 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !vo
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
+    // The request is made by, and its events fire in, the frame it was created
+    // in: nothing to do once that frame navigated away or was torn down.
+    if (!self._exec.isLive()) {
+        return error.InvalidStateError;
+    }
     // Abort any in-progress request, _send_flag unset as this should not fire
     // any events.
     self._send_flag = false;
@@ -312,7 +319,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
     }
-    if (self._ready_state != .opened or self._send_flag) {
+    if (self._ready_state != .opened or self._send_flag or !self._exec.isLive()) {
         return error.InvalidStateError;
     }
 
@@ -915,7 +922,8 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
     const is_timeout = err == error.OperationTimedout;
 
     const new_state: ReadyState = if (is_abort) .unsent else .done;
-    if (new_state != self._ready_state) {
+    // No events once the request's frame is gone.
+    if (new_state != self._ready_state and self._exec.isLive()) {
         const exec = self._exec;
 
         try self.stateChanged(new_state, exec);

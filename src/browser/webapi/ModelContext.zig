@@ -47,6 +47,8 @@ pub const Proto = EventTarget;
 
 _proto: *EventTarget,
 _window: *Window,
+// Another frame can keep the ModelContext, and run tasks for it on its own
+// scheduler, after this one's frame is gone: checked with isLive() before use.
 _exec: *Execution,
 _tools: std.ArrayList(*Tool) = .empty,
 // Bumped on every register and unregister, so an observer can tell the set
@@ -145,6 +147,9 @@ pub const Tool = struct {
         defer registration.release();
 
         const mc = self.ctx;
+        if (!mc._exec.isLive()) {
+            return null;
+        }
         mc.dispatchToolChange() catch |err| {
             log.debug(.js, "toolchange dispatch", .{ .err = err });
         };
@@ -183,7 +188,7 @@ pub fn registerTool(
     options_: ?SignalOptions,
     exec: *const Execution,
 ) !js.Promise {
-    if (self.findTool(tool.name) != null) {
+    if (self.findTool(tool.name) != null or !self._exec.isLive()) {
         return error.InvalidStateError;
     }
     try validateName(tool.name);
@@ -272,7 +277,7 @@ fn runToolChange(ctx: *anyopaque) anyerror!?u32 {
 fn dispatchToolChange(self: *ModelContext) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
-    if (!exec.hasDirectListeners(target, "toolchange")) {
+    if (!exec.isLive() or !exec.hasDirectListeners(target, "toolchange")) {
         return;
     }
     const event = try Event.initTrusted(comptime .wrap("toolchange"), .{}, exec.page);
@@ -282,7 +287,7 @@ fn dispatchToolChange(self: *ModelContext) !void {
 fn dispatchToolEvent(self: *ModelContext, comptime E: type, tool_name: []const u8) !void {
     const exec = self._exec;
     const target = self.asEventTarget();
-    if (!exec.hasDirectListeners(target, E.event_type)) {
+    if (!exec.isLive() or !exec.hasDirectListeners(target, E.event_type)) {
         return;
     }
     const event = try E.initTrusted(tool_name, exec.page);
@@ -314,6 +319,9 @@ pub fn executeTool(
     options_: ?SignalOptions,
     exec: *const Execution,
 ) !js.Promise {
+    if (!self._exec.isLive()) {
+        return error.InvalidStateError;
+    }
     const arena = exec.page_arena;
     const input_json = if (definedValue(input_)) |input| try stringifyObject(exec.call_arena, input) else "{}";
 
@@ -382,6 +390,13 @@ pub const ToolCall = struct {
         defer self.input_arena.release();
         const mc = self.ctx;
         const exec = mc._exec;
+        if (!exec.isLive()) {
+            // The tool's frame is gone: there is no realm to run it in.
+            if (self.settle()) |resolver| {
+                resolver.release();
+            }
+            return null;
+        }
 
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
@@ -500,6 +515,7 @@ pub const ToolCall = struct {
         const self: *ToolCall = @ptrCast(@alignCast(ctx));
         if (!self.started) return null;
         const mc = self.ctx;
+        if (!mc._exec.isLive()) return null;
         try self.signal.abort(null, mc._exec);
         try mc.dispatchToolEvent(ToolCancelEvent, self.name);
         return null;

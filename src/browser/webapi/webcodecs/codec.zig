@@ -47,6 +47,8 @@ pub fn Core(comptime Owner: type) type {
     return struct {
         const Self = @This();
 
+        // Another frame can keep the codec after this one's frame is gone:
+        // checked with isLive() before use.
         exec: *Execution,
         state: State = .unconfigured,
         // [[decodeQueueSize]] / [[encodeQueueSize]]
@@ -88,7 +90,7 @@ pub fn Core(comptime Owner: type) type {
 
         // configure(), after the config was found valid.
         pub fn configure(self: *Self, comptime is_decoder: bool) !void {
-            if (self.state == .closed) {
+            if (self.state == .closed or !self.exec.isLive()) {
                 return error.InvalidStateError;
             }
             self.state = .configured;
@@ -101,7 +103,7 @@ pub fn Core(comptime Owner: type) type {
         // The checks decode()/encode() make before enqueuing. The work itself
         // never happens: the configure message ahead of it closes the codec.
         pub fn enqueue(self: *Self) !void {
-            if (self.state != .configured) {
+            if (self.state != .configured or !self.exec.isLive()) {
                 return error.InvalidStateError;
             }
             self.queue_size += 1;
@@ -111,7 +113,7 @@ pub fn Core(comptime Owner: type) type {
         // the codec was created in: hence `exec`, rather than `self.exec`.
         pub fn flush(self: *Self, comptime is_decoder: bool, exec: *const Execution) !js.Promise {
             const local = exec.js.local.?;
-            if (self.state != .configured) {
+            if (self.state != .configured or !self.exec.isLive()) {
                 return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidStateError } });
             }
             if (is_decoder) {
@@ -129,7 +131,7 @@ pub fn Core(comptime Owner: type) type {
         }
 
         pub fn close(self: *Self) !void {
-            if (self.state == .closed) {
+            if (self.state == .closed or !self.exec.isLive()) {
                 return error.InvalidStateError;
             }
             self.closeWith(error.AbortError);
@@ -137,7 +139,7 @@ pub fn Core(comptime Owner: type) type {
 
         // "Reset"
         fn resetWith(self: *Self, exception: anyerror) !void {
-            if (self.state == .closed) {
+            if (self.state == .closed or !self.exec.isLive()) {
                 return error.InvalidStateError;
             }
             self.state = .unconfigured;
