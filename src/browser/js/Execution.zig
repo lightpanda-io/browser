@@ -70,6 +70,11 @@ url: *[:0]const u8,
 // Pointer to the charset field of the global (Page or WorkerGlobalScope).
 charset: *[]const u8,
 
+/// Whether this `Execution`'s `Context` was destroyed.
+pub inline fn isLive(self: *const Execution) bool {
+    return !self.js.destroyed;
+}
+
 pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;

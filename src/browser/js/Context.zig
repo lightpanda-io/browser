@@ -69,8 +69,16 @@ heap_profiler: ?*v8.HeapProfiler = null,
 // references Env.templates
 templates: []*const v8.FunctionTemplate,
 
-// Arena for the lifetime of the context
+// Arena for the lifetime of the context. The `Context` itself is not allcoated
+// through this, ownership belongs to `Page`.
 arena: *lp.Arena,
+
+// Set when `deinit` starts. Objects of this realm that cache a `*Execution`,
+// which points into this struct, and another frame can keep them after this
+// one navigated away or was torn down. Nothing else of a destroyed Context may
+// be used.
+// NOTE: Call this `closing`?
+destroyed: bool = false,
 
 // The call_arena for this context. For main world contexts this is
 // frame.call_arena. For isolated world contexts this is a separate arena
@@ -215,6 +223,8 @@ pub fn deinit(self: *Context) void {
             });
         }
     }
+
+    self.destroyed = true;
 
     const env = self.env;
     defer self.arena.release();

@@ -361,7 +361,8 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const origin = try page.getOrCreateOrigin(null);
     errdefer page.releaseOrigin(origin);
 
-    const context = try context_arena.create(Context);
+    // Struct itself outlives `Context.deinit`, see `Context.destroyed`.
+    const context = try page.arena.create(Context);
     context.* = .{
         .env = self,
         .global = if (comptime is_frame) .{ .frame = global } else .{ .worker = global },

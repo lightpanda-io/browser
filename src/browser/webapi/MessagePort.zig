@@ -72,7 +72,7 @@ pub fn entangle(port1: *MessagePort, port2: *MessagePort) void {
     port2._entangled_port = port1;
 }
 
-pub fn postMessage(self: *MessagePort, message: js.Value, transfer: ?js.Value) !void {
+pub fn postMessage(self: *MessagePort, message: js.Value, transfer: ?js.Value, exec: *Execution) !void {
     const ports = try transferList(transfer);
     if (std.mem.findScalar(*MessagePort, ports, self) != null) {
         return error.DataClone;
@@ -91,7 +91,13 @@ pub fn postMessage(self: *MessagePort, message: js.Value, transfer: ?js.Value) !
 
     // The clone is made directly into the receiving port's context, which may
     // not be the sender's.
-    const target_exec = if (other) |o| o._exec else self._exec;
+    var target_exec = if (other) |o| o._exec else self._exec;
+    if (!target_exec.isLive()) {
+        // The port's frame navigated away or was torn down (which closed the
+        // port). The caller's realm is the one left to serialize into.
+        doomed = true;
+        target_exec = exec;
+    }
     const cloned = try cloneMessage(message, ports, target_exec);
     if (doomed) {
         cloned.release();

@@ -35,6 +35,8 @@ pub const Chunk = union(enum) {
 };
 
 _stream: *ReadableStream,
+// Another frame can keep the stream after this one's frame is gone: checked
+// with isLive() before use.
 _execution: *const Execution,
 _arena: std.mem.Allocator,
 _queue: std.ArrayList(js.Value.Global),
@@ -64,7 +66,7 @@ pub fn addPendingRead(self: *ReadableStreamDefaultController, local: *const js.L
 ///
 /// TODO: Come up with a better name.
 pub fn enqueueNoSideEffects(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
-    if (self._stream._state != .readable) {
+    if (self._stream._state != .readable or !self._execution.isLive()) {
         return error.StreamNotReadable;
     }
 
@@ -78,6 +80,9 @@ pub fn enqueueNoSideEffects(self: *ReadableStreamDefaultController, chunk: Chunk
 /// Call it once the producer no longer holds state that page JS could invalidate.
 pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
     const exec = self._execution;
+    if (!exec.isLive()) {
+        return;
+    }
     if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.fulfillPendingReads", .url = exec.url.* });
@@ -103,6 +108,7 @@ pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
 }
 
 pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
+    try self.checkLive();
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
@@ -116,6 +122,7 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
 /// Enqueue a raw JS value, preserving its type (number, bool, object, etc.).
 /// Used by the JS-facing API; internal Zig callers should use enqueue(Chunk).
 pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
+    try self.checkLive();
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
@@ -143,6 +150,14 @@ fn enqueueLocal(self: *ReadableStreamDefaultController, local: *const js.Local, 
     // pending reads.
     const resolver = self._pending_reads.orderedRemove(0);
     resolveRead(local, resolver, value, source);
+}
+
+// The stream works in its own realm, which is gone once its frame navigated
+// away or was torn down.
+fn checkLive(self: *const ReadableStreamDefaultController) !void {
+    if (!self._execution.isLive()) {
+        return error.InvalidStateError;
+    }
 }
 
 fn queueValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
@@ -174,6 +189,7 @@ pub fn clearQueue(self: *ReadableStreamDefaultController) void {
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
+    try self.checkLive();
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
@@ -206,6 +222,7 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 }
 
 pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void {
+    try self.checkLive();
     var ls: js.Local.Scope = undefined;
     self._execution.js.localScope(&ls);
     defer ls.deinit();
@@ -215,6 +232,7 @@ pub fn doError(self: *ReadableStreamDefaultController, reason: ?js.Value) !void 
 }
 
 pub fn typeError(self: *ReadableStreamDefaultController, message: []const u8) !void {
+    try self.checkLive();
     var ls: js.Local.Scope = undefined;
     self._execution.js.localScope(&ls);
     defer ls.deinit();
