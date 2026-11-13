@@ -395,6 +395,7 @@ fn documentChain(self: *Factory, comptime types: []const type, opts: DocumentOpt
         ._index = index,
         ._url = opts.url,
         ._charset = opts.charset,
+        ._ids = .init(self._page.session.browser.allocator),
     };
     setProto(doc, chain.get(0));
     return chain;
