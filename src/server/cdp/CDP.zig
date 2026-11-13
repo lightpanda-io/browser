@@ -68,6 +68,10 @@ target_auto_attach: bool = false,
 // via Target.targetInfoChanged.
 target_discover: bool = false,
 
+// The placeholder page target Target.setAutoAttach announces (see
+// dispatchStartupCommand). Once closed, it isn't announced again.
+startup_target: enum { none, attached, closed } = .none,
+
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
 browser_context_id_gen: BrowserContextIdGen = .{},
@@ -260,6 +264,11 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
     if (std.mem.eql(u8, method, "Page.getFrameTree")) {
         // The Page.getFrameTree handles startup response gracefully.
         return dispatchCommand(command, method);
+    }
+
+    // Drivers wait for the target's detach after asking to close it.
+    if (std.mem.eql(u8, method, "Page.close")) {
+        return @import("domains/target.zig").closeStartupTarget(command, null);
     }
 
     // The placeholder session has no page behind it: an empty

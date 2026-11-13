@@ -44,9 +44,16 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 
 const BrowserContextParam = struct { browserContextId: ?[]const u8 = null };
 
+// Without a browserContextId, Storage commands act on the default context
+// (Playwright's browser.contexts()[0], Puppeteer's browser.setCookie), which
+// clients use before creating any page. Until something creates it, it has
+// no cookies to get or clear.
 fn clearCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
+    const bc = cmd.browser_context orelse {
+        if (params.browserContextId != null) return error.BrowserContextNotLoaded;
+        return cmd.sendResult(null, .{});
+    };
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
@@ -60,8 +67,11 @@ fn clearCookies(cmd: *CDP.Command) !void {
 }
 
 fn getCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
+    const bc = cmd.browser_context orelse {
+        if (params.browserContextId != null) return error.BrowserContextNotLoaded;
+        return cmd.sendResult(.{ .cookies = [_]ResCookie{} }, .{});
+    };
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
@@ -74,11 +84,17 @@ fn getCookies(cmd: *CDP.Command) !void {
 }
 
 fn setCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
         cookies: []const CdpCookie,
         browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
+
+    // Cookies set on the default context before any page create it, as
+    // Target.createTarget does.
+    const bc = cmd.browser_context orelse blk: {
+        if (params.browserContextId != null) return error.BrowserContextNotLoaded;
+        break :blk try cmd.createBrowserContext();
+    };
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
@@ -406,6 +422,49 @@ test "cdp.Storage: cookies" {
         .params = .{ .browserContextId = "BID-S" },
     });
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 7 });
+}
+
+test "cdp.Storage: cookies of the default context before any target" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Playwright's browser.contexts()[0].cookies() and clearCookies().
+    try ctx.processMessage(.{ .id = 1, .method = "Storage.getCookies" });
+    try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 2, .method = "Storage.clearCookies" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    // A context the client names must exist.
+    try ctx.processMessage(.{ .id = 3, .method = "Storage.getCookies", .params = .{ .browserContextId = "BID-X" } });
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 3 });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Storage.setCookies",
+        .params = .{ .cookies = &[_]CdpCookie{.{ .name = "a", .value = "b", .domain = "example.com" }}, .browserContextId = "BID-X" },
+    });
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 4 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    // Playwright's addCookies(): setting cookies creates the default context,
+    // and the first target lands in it with its cookies.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Storage.setCookies",
+        .params = .{ .cookies = &[_]CdpCookie{.{ .name = "a", .value = "b", .domain = "example.com" }} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try testing.expectEqual(1, ctx.cdp().browser_context.?.session.cookie_jar.len);
+
+    try ctx.processMessage(.{ .id = 6, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    try testing.expectEqual(1, bc.targets.items.len);
+    try testing.expectEqual(1, bc.session.cookie_jar.len);
+
+    try ctx.processMessage(.{ .id = 7, .method = "Storage.getCookies" });
+    try ctx.expectSentResult(.{
+        .cookies = &[_]ResCookie{.{ .name = "a", .value = "b", .domain = "example.com", .path = "/", .size = 2 }},
+    }, .{ .id = 7 });
 }
 
 pub const ResCookie = struct {
