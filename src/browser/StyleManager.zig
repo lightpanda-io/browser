@@ -155,6 +155,111 @@ pub fn init(frame: *Frame) !StyleManager {
     };
 }
 
+// el's index into every StyleManager's records
+fn claimSlot(self: *StyleManager, el: *Element) ?u32 {
+    if (el._style_slot != 0) {
+        return el._style_slot;
+    }
+    const page = self.frame.page;
+    if (page.next_style_slot == std.math.maxInt(u32)) {
+        // Unlikely, but doesn't break anything. Just gets slower: el isn't memoized
+        return null;
+    }
+    const index = page.next_style_slot;
+    el._style_slot = index;
+    page.next_style_slot = index + 1;
+    return index;
+}
+
+/// The values for one group, by Element._style_slot. Chunked in groups of 256
+/// so we can grow without copying into the arena.
+fn Records(comptime T: type) type {
+    return struct {
+        generation: u32 = 1, // An entry is valid so long as its stamp == generation
+        len: u32 = 0, // valid entries
+        chunks: std.ArrayList(?*Chunk) = .empty,
+
+        const Self = @This();
+        const chunk_shift = 8;
+        const chunk_len = 1 << chunk_shift;
+        const Entry = struct { stamp: u32, value: T };
+        const Chunk = [chunk_len]Entry;
+
+        fn entry(self: *const Self, el: *const Element) ?*Entry {
+            const slot = el._style_slot;
+            if (slot == 0) {
+                return null;
+            }
+            const i = slot >> chunk_shift;
+            if (i >= self.chunks.items.len) {
+                return null;
+            }
+            const chunk = self.chunks.items[i] orelse return null;
+            return &chunk[slot & (chunk_len - 1)];
+        }
+
+        pub fn get(self: *const Self, el: *const Element) ?T {
+            const e = self.entry(el) orelse return null;
+            return if (e.stamp == self.generation) e.value else null;
+        }
+
+        pub fn contains(self: *const Self, el: *const Element) bool {
+            return self.get(el) != null;
+        }
+
+        pub fn count(self: *const Self) u32 {
+            return self.len;
+        }
+
+        // Whether it held a valid entry
+        fn remove(self: *Self, el: *const Element) bool {
+            const e = self.entry(el) orelse return false;
+            if (e.stamp != self.generation) {
+                return false;
+            }
+            e.stamp = 0;
+            self.len -= 1;
+            return true;
+        }
+
+        // `index` is el's, from claimSlot
+        fn put(self: *Self, allocator: Allocator, index: u32, value: T) !void {
+            const i = index >> chunk_shift;
+            if (i >= self.chunks.items.len) {
+                try self.chunks.appendNTimes(allocator, null, i + 1 - self.chunks.items.len);
+            }
+            const chunk = self.chunks.items[i] orelse blk: {
+                const chunk = try allocator.create(Chunk);
+                for (chunk) |*e| {
+                    e.stamp = 0;
+                }
+                self.chunks.items[i] = chunk;
+                break :blk chunk;
+            };
+            const e = &chunk[index & (chunk_len - 1)];
+            // callers put what they missed
+            std.debug.assert(e.stamp != self.generation);
+            self.len += 1;
+            e.* = .{ .stamp = self.generation, .value = value };
+        }
+
+        fn clear(self: *Self) void {
+            self.len = 0;
+            self.generation +%= 1;
+            if (self.generation == 0) {
+                // Wrapped: a stamp from 2^32 clears ago would come back valid
+                for (self.chunks.items) |chunk_| {
+                    const chunk = chunk_ orelse continue;
+                    for (chunk) |*e| {
+                        e.stamp = 0;
+                    }
+                }
+                self.generation = 1;
+            }
+        }
+    };
+}
+
 pub fn deinit(self: *StyleManager) void {
     self.arena.release();
 }
@@ -2337,7 +2442,6 @@ const Capacities = struct {
     subject: BucketCapacities,
     parent: BucketCapacities,
     other_rules: usize,
-    memo: u32,
 };
 
 const BucketCapacities = struct {
@@ -2352,8 +2456,10 @@ fn Group(comptime Spec: type) type {
     return struct {
         const Self = @This();
         const Declared = Spec.Declared;
-        // What we store in our memo
+        // What we return
         const Computed = Spec.Computed;
+        // What we store in our memo, see store/load
+        const Stored = if (@hasDecl(Spec, "Stored")) Spec.Stored else Computed;
         // The element's own value, only used while resolving, never stored
         const Cascaded = if (@hasDecl(Spec, "Cascaded")) Spec.Cascaded else Computed;
         const Field = std.meta.FieldEnum(Declared);
@@ -2484,7 +2590,7 @@ fn Group(comptime Spec: type) type {
         has_important: bool = false,
 
         // Valid while Page.style_version == memo_version.
-        memo: std.AutoHashMapUnmanaged(*Element, Computed) = .empty,
+        memo: Records(Stored) = .{},
         memo_version: usize = 0,
 
         // Entries put, ever: see StyleManager.dropped
@@ -2508,14 +2614,12 @@ fn Group(comptime Spec: type) type {
                 .parent = self.parent.capacities(),
                 .subject = self.subject.capacities(),
                 .other_rules = self.other_rules.len,
-                .memo = self.memo.count(),
             };
         }
 
         fn reset(self: *Self, allocator: Allocator, caps: Capacities) !void {
-            self.memo = .empty;
+            self.memo = .{};
             self.path = .empty;
-            try self.memo.ensureTotalCapacity(allocator, caps.memo);
 
             try self.parent.reset(allocator, caps.parent);
             try self.subject.reset(allocator, caps.subject);
@@ -2553,10 +2657,11 @@ fn Group(comptime Spec: type) type {
             comptime std.debug.assert(Cascaded == Computed);
             const memo = self.freshMemo(frame);
             if (memo.get(el)) |cached| {
-                return cached;
+                return load(cached);
             }
             const computed = self.compute(el, frame);
-            memo.put(allocator, el, computed) catch |err| {
+            const index = frame._style_manager.claimSlot(el) orelse return computed;
+            memo.put(allocator, index, store(computed)) catch |err| {
                 log.warn(.browser, "StyleManager memo", .{ .err = err });
                 return computed;
             };
@@ -2576,7 +2681,7 @@ fn Group(comptime Spec: type) type {
             var current: ?*Element = el;
             while (current) |elem| : (current = elem.asNode().flatTreeParentElement(frame)) {
                 if (memo.get(elem)) |cached| {
-                    above = cached;
+                    above = load(cached);
                     break;
                 }
                 if (comptime lp.IS_TEST) {
@@ -2602,7 +2707,11 @@ fn Group(comptime Spec: type) type {
                 if (storing) {
                     // Not below an ancestor that isn't stored: dropInherited
                     // stops at an uncached element
-                    memo.put(allocator, step.el, above) catch |err| {
+                    const index = frame._style_manager.claimSlot(step.el) orelse {
+                        storing = false;
+                        continue;
+                    };
+                    memo.put(allocator, index, store(above)) catch |err| {
                         log.warn(.browser, "StyleManager memo", .{ .err = err });
                         storing = false;
                     };
@@ -2615,10 +2724,18 @@ fn Group(comptime Spec: type) type {
             return self.memo_version == frame.page.style_version;
         }
 
-        fn freshMemo(self: *Self, frame: *Frame) *std.AutoHashMapUnmanaged(*Element, Computed) {
+        fn store(computed: Computed) Stored {
+            return if (Stored == Computed) computed else .pack(computed);
+        }
+
+        fn load(stored: Stored) Computed {
+            return if (Stored == Computed) stored else stored.unpack();
+        }
+
+        fn freshMemo(self: *Self, frame: *Frame) *Records(Stored) {
             const version = frame.page.style_version;
             if (self.memo_version != version) {
-                self.memo.clearRetainingCapacity();
+                self.memo.clear();
                 self.detached = false;
                 self.memo_version = version;
             }
@@ -3737,6 +3854,60 @@ const Geometry = struct {
         // Positioned boxes only; auto, and values that need layout, are auto
         left: Length = .{},
         right: Length = .{},
+    };
+
+    // Memory optimization. We usedto store each value as a
+    //          const Length = struct{value: f32, unit: enum(u3)};
+    // But that wastes a lot of memory. So now we store it like a specialized
+    // struct of arrays ("specialized", because the unit is bit-packed into bits)
+    const Stored = struct {
+        values: [length_count]f32,
+        bits: u32,
+
+        const names = @typeInfo(Computed).@"struct".field_names;
+        const types = @typeInfo(Computed).@"struct".field_types;
+        const length_count = std.mem.count(type, types, &.{Length});
+
+        comptime {
+            std.debug.assert(length_count * @bitSizeOf(Length.Unit) + (names.len - length_count) <= 32);
+        }
+
+        fn pack(computed: Computed) Stored {
+            var stored: Stored = .{ .values = undefined, .bits = 0 };
+            comptime var length = 0;
+            comptime var bit = 0;
+            inline for (names, types) |name, T| {
+                const value = @field(computed, name);
+                if (T == Length) {
+                    stored.values[length] = value.value;
+                    stored.bits |= @as(u32, @backingInt(value.unit)) << bit;
+                    length += 1;
+                    bit += @bitSizeOf(Length.Unit);
+                } else {
+                    stored.bits |= @as(u32, @intFromBool(value)) << bit;
+                    bit += 1;
+                }
+            }
+            return stored;
+        }
+
+        fn unpack(self: Stored) Computed {
+            var computed: Computed = .{};
+            comptime var length = 0;
+            comptime var bit = 0;
+            inline for (names, types) |name, T| {
+                if (T == Length) {
+                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.bits >> bit);
+                    @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(@intCast(unit)) };
+                    length += 1;
+                    bit += @bitSizeOf(Length.Unit);
+                } else {
+                    @field(computed, name) = (self.bits >> bit) & 1 == 1;
+                    bit += 1;
+                }
+            }
+            return computed;
+        }
     };
 };
 
@@ -5988,6 +6159,133 @@ test "StyleManager: memo: an inherited inline write reaches the flat tree" {
         try testing.expectEqual(false, sm.visibility.memo.contains(el));
     }
     try testing.expectEqual(true, sm.hasPointerEventsNone(p));
+}
+
+test "StyleManager: records: slots are unique across the page's StyleManagers" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<b style=\"visibility: hidden\"></b><i></i>");
+    const b = div.asNode().firstChild().?.as(Element);
+    const i = b.asNode().nextSibling().?.as(Element);
+
+    // As another frame's StyleManager, which shares the page's counter
+    var other = try StyleManager.init(frame);
+    defer other.deinit();
+    try testing.expectEqual(false, other.hasVisibilityHiddenInherited(i));
+    try testing.expectEqual(true, other.visibility.memo.contains(i));
+
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
+    try testing.expect(b._style_slot != i._style_slot);
+    try testing.expectEqual(false, sm.visibility.memo.contains(i));
+    try testing.expectEqual(false, other.visibility.memo.contains(b));
+}
+
+test "StyleManager: records: an adopted element gives up its slot" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const doc = frame.window._document;
+
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<b style=\"visibility: hidden\"></b>");
+    const b = div.asNode().firstChild().?.as(Element);
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
+    const was = b._style_slot;
+    try testing.expect(was != 0 and div._style_slot != 0);
+
+    const other = (try frame._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
+    try frame.adoptNodeTree(div.asNode(), doc, other);
+    try testing.expectEqual(0, b._style_slot);
+    try testing.expectEqual(0, div._style_slot);
+
+    // Back: a new slot, nothing from the old one
+    try frame.adoptNodeTree(div.asNode(), other, doc);
+    try testing.expectEqual(false, sm.visibility.memo.contains(b));
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
+    try testing.expect(b._style_slot > was);
+}
+
+test "StyleManager: records: a group allocates the chunks it reaches" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    var html: std.ArrayList(u8) = .empty;
+    defer html.deinit(testing.allocator);
+    for (0..300) |_| {
+        try html.appendSlice(testing.allocator, "<p style=\"text-transform: uppercase\"></p>");
+    }
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html.items);
+
+    var it = div.asNode().childrenIterator();
+    var last: *Element = undefined;
+    while (it.next()) |child| {
+        last = child.as(Element);
+        _ = sm.hasVisibilityHiddenInherited(last);
+    }
+    try testing.expectEqual(301, sm.visibility.memo.count());
+    try testing.expectEqual(2, sm.visibility.memo.chunks.items.len);
+
+    // Only the last p's chunk
+    try testing.expectEqual(.uppercase, sm.ownTextTransform(last));
+    try testing.expectEqual(1, sm.text.memo.count());
+    try testing.expectEqual(2, sm.text.memo.chunks.items.len);
+    try testing.expectEqual(null, sm.text.memo.chunks.items[0]);
+
+    // A style change clears them all at once
+    frame.page.style_version += 1;
+    try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(last));
+    try testing.expectEqual(2, sm.visibility.memo.count());
+    try testing.expectEqual(false, sm.visibility.memo.contains(div.asNode().firstChild().?.as(Element)));
+}
+
+test "StyleManager: records: geometry packs its lengths' units with the flags" {
+    try testing.expectEqual(40, @sizeOf(Records(Geometry.Stored).Entry));
+
+    // Each field apart from its neighbours
+    const names = Geometry.Stored.names;
+    const types = Geometry.Stored.types;
+    inline for (names, types, 0..) |name, T, n| {
+        var computed: Geometry.Computed = .{};
+        if (T == Length) {
+            @field(computed, name) = .{ .value = @floatFromInt(n + 1), .unit = .percent };
+        } else {
+            @field(computed, name) = true;
+        }
+        try testing.expectEqual(computed, Geometry.Stored.pack(computed).unpack());
+    }
+
+    // All at once, every unit
+    var computed: Geometry.Computed = .{};
+    const unit_values = std.enums.values(Length.Unit);
+    inline for (names, types, 0..) |name, T, n| {
+        if (T == Length) {
+            @field(computed, name) = .{ .value = -@as(f32, @floatFromInt(n)) / 3, .unit = unit_values[n % unit_values.len] };
+        } else {
+            @field(computed, name) = n % 2 == 0;
+        }
+    }
+    try testing.expectEqual(computed, Geometry.Stored.pack(computed).unpack());
+}
+
+test "StyleManager: records: the generation wraps" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    _ = sm.hasVisibilityHiddenInherited(div);
+    const memo = &sm.visibility.memo;
+    // stamped 2^32 - 1 clears ago
+    memo.generation = std.math.maxInt(u32);
+    memo.chunks.items[0].?[div._style_slot].stamp = 1;
+    memo.clear();
+    try testing.expectEqual(1, memo.generation);
+    try testing.expectEqual(false, memo.contains(div));
 }
 
 test "StyleManager: memo: inherited values, any query order" {
