@@ -763,11 +763,12 @@ fn syncStyleAttribute(self: *CSSStyleDeclaration, changed: ?properties.Id, frame
     self._syncing = true;
     defer self._syncing = false;
     if (changed) |id| {
-        // Carousels write a transform or an opacity on every slide each
-        // frame: one doesn't need every cached style and width recomputed.
-        const style_manager = &(element.ownerFrame(frame) orelse frame)._style_manager;
-        if (style_manager.inlineStyleWritten(element, id)) {
-            return element._attributes.putInertStyle(.wrap(css_text), element, frame);
+        if (element.ownerFrame(frame)) |owner| {
+            // Carousels write a transform or an opacity on every slide each
+            // frame: one doesn't need every cached style and width recomputed.
+            if (owner._style_manager.inlineStyleWritten(element, id)) {
+                return element._attributes.putInertStyle(.wrap(css_text), element, frame);
+            }
         }
     }
     try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), frame);
