@@ -55,6 +55,10 @@ pub fn open(_: *IDBFactory, name: []const u8, version: ?u64, exec: *Execution) !
         ._gate_waiter = .{ .ctx = exec.js, .wake = OpenContext.wakeUp, .cancel = OpenContext.cancelParked },
     });
 
+    // Take the strong ref before scheduling: once scheduled, the event fires whatever we return.
+    try request.strongRef(exec);
+    errdefer if (request.takeRef()) |s| s.release();
+
     try exec.js.scheduler.add(ctx, OpenContext.run, 0, .{
         .name = "IDBFactory.open",
         .finalizer = OpenContext.cancelled,
@@ -310,6 +314,10 @@ pub fn deleteDatabase(_: *IDBFactory, name: []const u8, exec: *Execution) !*IDBR
         .exec = exec,
         ._gate_waiter = .{ .ctx = exec.js, .wake = DeleteContext.wakeUp, .cancel = DeleteContext.cancelParked },
     });
+
+    // See open.
+    try request.strongRef(exec);
+    errdefer if (request.takeRef()) |s| s.release();
 
     try exec.js.scheduler.add(ctx, DeleteContext.run, 0, .{
         .name = "IDBFactory.deleteDatabase",
