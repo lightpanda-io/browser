@@ -58,6 +58,12 @@ _result: Result = .{ .none = js.Undefined{} },
 // whether or not we own th result value, if we do, we can free it once we know
 // it cannot be used
 _result_owned: bool = false,
+// A strong handle on our JS object while an event is pending. The identity map
+// only holds JS objects weakly, so without it a request that JS stopped
+// referencing can be collected before its event fires, and the event would
+// then target a fresh JS object, losing any expando on the old one (e.g.
+// Zone.js stores the real listeners there).
+_strong_ref: ?*js.GlobalSlot = null,
 
 const ReadyState = enum {
     pending,
@@ -206,6 +212,28 @@ pub fn failWithAbort(self: *IDBRequest) void {
     self._error = error.AbortError;
 }
 
+// Keep our JS object alive until the pending success/error event fires.
+// No-op if a strong ref is already held.
+pub fn strongRef(self: *IDBRequest, exec: *Execution) !void {
+    if (self._strong_ref != null) {
+        return;
+    }
+    // Page-tracked, not txn.persist: release() hands the slot back to the
+    // page's pool, so a cursor re-armed on every iteration reuses one slot
+    // instead of piling them up in txn._globals.
+    const js_obj = try exec.js.local.?.zigValueToJs(self, .{});
+    self._strong_ref = try js.newTrackedSlot(exec.js, js_obj.handle);
+}
+
+// Move the strong ref out; the caller releases it. The fire functions call it
+// before dispatching and release it after, so a handler re-arming the request
+// (cursor.continue()) can call strongRef again. Also used to undo strongRef when
+// queueing the request fails.
+pub fn takeRef(self: *IDBRequest) ?*js.GlobalSlot {
+    defer self._strong_ref = null;
+    return self._strong_ref;
+}
+
 pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
     self._ready_state = .done;
     if (self._error != null) {
@@ -242,6 +270,9 @@ pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, 
 }
 
 pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
+    const strong_ref = self.takeRef();
+    defer if (strong_ref) |s| s.release();
+
     self._ready_state = .done;
 
     const event = try Event.initTrusted(comptime .wrap("success"), null, exec.page);
@@ -266,6 +297,9 @@ pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
 }
 
 fn fireError(self: *IDBRequest, exec: *Execution) !void {
+    const strong_ref = self.takeRef();
+    defer if (strong_ref) |s| s.release();
+
     // Requests created inside a transaction own an abortable transaction; open/
     // delete requests (and the borrowed upgrade-transaction view) do not.
     const txn: ?*IDBTransaction = switch (self._txn) {
@@ -415,7 +449,12 @@ pub fn submit(self: *IDBRequest, op: Operation, exec: *Execution) !*IDBRequest {
     self._op = op;
     self._source = op.source();
     const txn = self._txn.owned;
-    try txn.enqueue(self);
+    // Take the strong ref before queueing: once queued, the event fires whatever we return.
+    try self.strongRef(exec);
+    txn.enqueue(self) catch |err| {
+        if (self.takeRef()) |s| s.release();
+        return err;
+    };
 
     if (txn.getMode() == .versionchange) {
         // for "upgradeneeded" we run them immediately (and still queue them, but
