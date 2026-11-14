@@ -1585,6 +1585,11 @@
     p.setAttribute("data-x", "1");
     doc.querySelector("i").removeAttribute("hidden");
     testing.expectEqual("x y", p.className);
+
+    // nor do its inline style writes
+    p.style.setProperty("opacity", "0.5");
+    p.style.transform = "translateX(1px)";
+    testing.expectEqual("opacity: 0.5; transform: translateX(1px);", p.getAttribute("style"));
   }
 </script>
 
