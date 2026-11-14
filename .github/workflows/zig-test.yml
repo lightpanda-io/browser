@@ -55,7 +55,7 @@ jobs:
 
       - name: Run zig fmt
         id: fmt
-        run: zig fmt --check ./
+        run: make fmt
 
   zig-test-debug:
     name: zig test using v8 in debug mode
