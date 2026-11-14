@@ -1967,9 +1967,15 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // this is a normal end-of-body (the connection closure signals the end
     // of the response per HTTP/1.1 when there is no Content-Length).
     // We must check this before endTransfer, which may reset the easy handle.
+    // A body framed by Content-Length or chunked encoding has its own end,
+    // so a connection lost before that end is a truncated response.
     const is_conn_close_recv = blk: {
         const err = effective_err orelse break :blk false;
         if (err != error.RecvError) break :blk false;
+        if (msg.conn.getResponseHeader("content-length", 0) != null) break :blk false;
+        if (msg.conn.getResponseHeader("transfer-encoding", 0)) |te| {
+            if (std.ascii.findIgnoreCase(te.value, "chunked") != null) break :blk false;
+        }
         const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };

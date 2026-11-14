@@ -1310,3 +1310,24 @@ handler runs, abort() cancels the re-send and no load is delivered.
     });
   }
 </script>
+
+<script id=xhr_bad_chunk type=module>
+  {
+    // A malformed chunked body is a network error, not a load.
+    const state = await testing.async();
+    const result = await new Promise((resolve) => {
+      const req = new XMLHttpRequest();
+      const events = [];
+      req.onload = () => events.push('load');
+      req.onerror = () => events.push('error');
+      req.onloadend = () => resolve(events.join(',') + '|' + req.status + '|' + req.responseText);
+      req.open('GET', 'http://127.0.0.1:9582/raw/bad_chunk');
+      req.send();
+    });
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('error|0|', result);
+    });
+  }
+</script>

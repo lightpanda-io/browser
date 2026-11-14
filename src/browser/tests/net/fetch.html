@@ -758,3 +758,23 @@
     });
   }
 </script>
+
+<script id=fetch_bad_chunk type=module>
+  {
+    // Headers arrive, then the chunked body turns out to be malformed:
+    // reading it must fail rather than resolve with what was decoded.
+    const state = await testing.async();
+    let result;
+    try {
+      const response = await fetch('http://127.0.0.1:9582/raw/bad_chunk');
+      result = 'ok:' + await response.text();
+    } catch (e) {
+      result = e.name;
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('TypeError', result);
+    });
+  }
+</script>
