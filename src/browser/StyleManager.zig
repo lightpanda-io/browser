@@ -64,11 +64,14 @@ touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
 flow: Group(Flow) = .{},
 
-widths: WidthMemo = .{},
+layout_memo: LayoutMemo = .{},
 
 // Inline writes of a property the layout memos read, and tree changes whose
 // cascade entries treeChanged dropped itself: boxes move either way.
 layout_bumps: usize = 0,
+
+// Inline height writes that reached the root, see extentVersion.
+extent_bumps: usize = 0,
 
 // The rules declaring each custom property and `content`, by property id,
 // pruning to what is (hopefully) one or few rules. Nothing memoizes `content`:
@@ -1087,9 +1090,9 @@ pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
         }
     }
     // A detached element's box sizes to its tree: the layout memo too
-    if (self.widths.detached and self.widthsLive()) {
+    if (self.layout_memo.detached and self.layoutMemoLive()) {
         memos.insert(.layout);
-        budget += self.widths.map.count();
+        budget += self.layout_memo.map.count();
     }
     if (budget == 0) {
         return true;
@@ -1496,7 +1499,7 @@ fn countsForEmpty(node: *Node) bool {
     };
 }
 
-/// Drops `root`'s subtree from `memos` (.layout: the width memo), and what
+/// Drops `root`'s subtree from `memos` (.layout: the layout memo), and what
 /// inherits from it outside the DOM subtree: a host's shadow tree, the nodes
 /// assigned to a slot. False once it visits more elements than `budget`.
 fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) bool {
@@ -1513,7 +1516,7 @@ fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) b
         var it = memos.iterator();
         while (it.next()) |memo| {
             switch (memo) {
-                .layout => _ = self.widths.map.remove(el),
+                .layout, .heights => _ = self.layout_memo.map.remove(el),
                 inline else => |group| _ = @field(self, @tagName(group)).memo.remove(el),
             }
         }
@@ -1535,7 +1538,7 @@ fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) b
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
-const Memo = enum { visibility, geometry, touch_action, text, flow, layout };
+const Memo = enum { visibility, geometry, touch_action, text, flow, layout, heights };
 const Memos = std.EnumSet(Memo);
 
 comptime {
@@ -1625,6 +1628,7 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
     while (it.next()) |memo| {
         switch (memo) {
             .layout => self.layout_bumps += 1,
+            .heights => self.heightWritten(el),
             inline else => |m| {
                 const group = &@field(self, @tagName(m));
                 // A stale memo: the next read clears it
@@ -1635,7 +1639,7 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
                     .geometry, .text => _ = group.memo.remove(el),
                     // Entries hold resolved values: el's reach its descendants
                     .visibility, .touch_action, .flow => self.dropInherited(&group.memo, el.asNode()),
-                    .layout => unreachable,
+                    .layout, .heights => unreachable,
                 };
             },
         }
@@ -1684,12 +1688,81 @@ pub fn layoutVersion(self: *const StyleManager) usize {
     return self.frame.page.style_version + self.layout_bumps;
 }
 
+/// The version Document.extent is valid for: the layout's, plus height writes
+/// that changed the root's content height.
+pub fn extentVersion(self: *const StyleManager) usize {
+    return self.layoutVersion() + self.extent_bumps;
+}
+
+// Part of the optimization: invalidate only the layout a height change can
+// move. Take this tree:
+//
+//  A
+//   B
+//    C
+//     D
+//     E
+//    F
+//     G
+//    H
+//   I
+//
+// If F's height changes, nothing before or inside it moves: not D or E in C,
+// not G in F, not C in B, not B in A. Only the siblings after F (H) move, so
+// their offsets get invalidated.
+//
+// If B's height is auto, it grows with F, so B's height goes too, and the
+// siblings after B (I) move. And so on up, until a parent with a declared
+// height (it doesn't grow) or the root (the document's height changes).
+//
+// Each entry keeps `placed`: how many of its first children have a correct
+// offset. Each child keeps its `position` among them. Here B.placed becomes
+// F.position + 1 = 2 (C and F are still correct, H isn't), and if B is auto,
+// A.placed becomes B.position + 1 = 1 (B is correct, I isn't). The next read
+// of H sees its position isn't under B.placed and re-stacks B's children.
+fn heightWritten(self: *StyleManager, el: *Element) void {
+    const memo = &self.layout_memo;
+    if (memo.version != self.layoutVersion()) {
+        // stale: the next read resets it
+        return;
+    }
+    if (memo.map.getPtr(el)) |entry| {
+        entry.drop(.box_height);
+    }
+    // Takes no room in its parent's flow (see layout.Flow.advance)
+    if (self.hasDisplayNone(el) or self.isOutOfFlow(el)) {
+        return;
+    }
+
+    var child = el;
+    while (child.asNode().flatTreeParentElement(self.frame)) |parent| : (child = parent) {
+        // Not placed: nothing after it is either
+        const index: ?u32 = if (memo.map.getPtr(child)) |c| (if (c.get(.offset) != null) c.position else null) else null;
+        const entry = self.layoutEntry(parent) orelse {
+            self.layout_bumps += 1;
+            return;
+        };
+        if (index) |i| {
+            entry.placed = @min(entry.placed, i + 1);
+        }
+        entry.drop(.content_height);
+        // html and body take the document's height, so they never stop it
+        if (parent.isRootContainer() == false and parent.getElementAxis(self.frame, .height).explicit) {
+            return;
+        }
+        entry.drop(.box_height);
+    }
+    self.extent_bumps += 1;
+}
+
 /// Each known property's memos: the ones that read it. A property not listed
 /// reaches nothing. transform/z-index/custom properties...no memo reads them.
 /// Nothing substitutes var() (yet).
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
-    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y" };
+    // A vertical inset only moves a positioned box, and that's applied on
+    // every read (layout.boxTop), never cached.
+    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y", .top, .bottom, .@"inset-block", .@"inset-block-start", .@"inset-block-end" };
 
     // font-size isn't cascaded by any group, but text wraps at it
     const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
@@ -1708,7 +1781,8 @@ const property_reach = blk: {
         }
         const id = @field(properties.Id, name);
         if (std.mem.findScalar(properties.Id, &layout_ignores, id) == null) {
-            memos.insert(.layout);
+            // a height reaches only the vertical layout, not the widths
+            memos.insert(if (id == .height) .heights else .layout);
         }
         result[@backingInt(id)] = memos;
     }
@@ -1839,7 +1913,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const attribute_names_count = self.attribute_names.count();
 
     self.arena.resetRetain();
-    self.widths = .{};
+    self.layout_memo = .{};
 
     self.next_doc_order = 1;
     self.rule_layers = .empty;
@@ -2117,7 +2191,8 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
         }
         return .fill;
     }
-    if (vis.box != .block_level or el.getTag().isReplacedOrControl() or flow.floated) {
+    // A row fills its table; the table and its cells shrink to their content
+    if ((vis.box != .block_level and vis.box != .table_row) or el.getTag().isReplacedOrControl() or flow.floated) {
         return .shrink;
     }
     const parent = self.boxParent(el) orelse return .fill;
@@ -2279,21 +2354,32 @@ fn plainInline(self: *StyleManager, el: *Element) bool {
     return self.visibilityProps(parent).display != .flex and self.visibilityProps(parent).display != .grid;
 }
 
-/// The children lay out side by side: a flex row or a grid. Elsewhere block
-/// children stack and only inline-level ones share a line.
+/// The children lay out side by side: a flex row, a grid or a table row.
+/// Elsewhere block children stack and only inline-level ones share a line.
 pub fn laysOutInRow(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     const vis = self.visibilityProps(el);
-    return vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+    return vis.box == .table_row or vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+}
+
+/// An in-flow table cell: it sits beside its sibling cells.
+pub fn isTableCell(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return false;
+    if (self.visibilityProps(el).box != .table_cell) {
+        return false;
+    }
+    const flow = self.flowProps(el);
+    return flow.position.outOfFlow() == false and flow.floated == false;
 }
 
 pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     switch (self.visibilityProps(el).box) {
-        .block_level, .table => {},
-        .inline_level, .atomic_inline, .contents => return false,
+        .block_level, .table, .table_row => {},
+        .inline_level, .atomic_inline, .contents, .table_cell => return false,
     }
     const flow = self.flowProps(el);
     return flow.position.outOfFlow() == false and flow.floated == false;
@@ -2328,21 +2414,32 @@ pub fn clipsOverflowX(self: *StyleManager, el: *Element) bool {
     return self.geometryProps(el).overflow_x_clips;
 }
 
-pub const WidthLimit = union(enum) {
+/// A length that may depend on the containing block's size.
+pub const BoxLength = union(enum) {
     px: f64,
     percent: f64, // A fraction of the containing block
 };
 
+pub const Side = enum { top, right, bottom, left };
+
+/// A positioned box's inset on one side. Null for auto, and for values that
+/// need layout (em, calc).
+pub fn inset(self: *StyleManager, el: *Element, comptime side: Side) ?BoxLength {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    return self.widthLimit(@field(self.geometryProps(el), @tagName(side)));
+}
+
 /// min-width and max-width. Null where they don't limit: auto, none, the
 /// intrinsic keywords, and values that need layout (em, calc).
-pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?WidthLimit, max: ?WidthLimit } {
+pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?BoxLength, max: ?BoxLength } {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{ .min = null, .max = null };
     const geometry = self.geometryProps(el);
     return .{ .min = self.widthLimit(geometry.min_width), .max = self.widthLimit(geometry.max_width) };
 }
 
-fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
+fn widthLimit(self: *StyleManager, length: Length) ?BoxLength {
     return switch (length.unit) {
         .auto, .content => null,
         .percent => .{ .percent = @as(f64, length.value) / 100.0 },
@@ -2350,13 +2447,12 @@ fn widthLimit(self: *StyleManager, length: Length) ?WidthLimit {
     };
 }
 
-// row_shrink is a flex row's shrink ratio, not a width
-pub const WidthKind = enum { box, content, full_content, scrollable_content, row_shrink };
+// row_shrink is a flex row's shrink ratio, not a width. Offsets aren't a
+// kind: see getCachedOffset.
+pub const LayoutKind = enum { box_width, content_width, full_content_width, min_content_width, scrollable_content_width, row_shrink, box_height, content_height };
 
-/// Element's computed widths (see layout.boxWidth), valid for one style
-/// version and viewport. Each read otherwise walks up to the root and down
-/// the subtree.
-const WidthMemo = struct {
+/// Element's computed layout (see layout.zig), valid for one layout version and viewport.
+const LayoutMemo = struct {
     version: usize = 0,
     // Whether the map holds a detached element (see detachedChanged)
     detached: bool = false,
@@ -2364,58 +2460,115 @@ const WidthMemo = struct {
     viewport_height: u32 = 0,
     map: Records(Entry) = .{},
 
-    // The kinds cached so far, by WidthKind
+    // One per element read. (A call to Document.extent essentially reads element)
     const Entry = struct {
-        widths: [kinds]f64,
-        set: u8 = 0,
+        // rather than storing a bunch of optional f64 (box_width: ?f64)
+        // we use a bitmap to track nullability.
+        cached: std.EnumSet(Measure) = .empty,
+        values: std.EnumArray(Measure, f64) = .initUndefined(),
 
-        const kinds = @typeInfo(WidthKind).@"enum".field_names.len;
-        comptime {
-            std.debug.assert(kinds <= 8);
+        // offset is valid while position (among the parent's element
+        // children) is under the parent's placed: how many of its first
+        // children have theirs (see heightWritten).
+        position: u32 = 0,
+        placed: u32 = 0,
+
+        fn get(self: *const Entry, slot: Measure) ?f64 {
+            return if (self.cached.contains(slot)) self.values.get(slot) else null;
+        }
+
+        fn put(self: *Entry, slot: Measure, value: f64) void {
+            self.values.set(slot, value);
+            self.cached.insert(slot);
+        }
+
+        fn drop(self: *Entry, slot: Measure) void {
+            self.cached.remove(slot);
         }
     };
+
+    // The LayoutKinds, plus the box's top from its parent's top (offset).
+    const Measure = blk: {
+        const names = @typeInfo(LayoutKind).@"enum".field_names ++ .{"offset"};
+        var values: [names.len]u8 = undefined;
+        for (&values, 0..) |*value, i| {
+            value.* = i;
+        }
+        break :blk @Enum(u8, .exhaustive, names, &values);
+    };
+
+    comptime {
+        std.debug.assert(@sizeOf(Entry) <= 88);
+    }
 };
 
-pub fn cachedWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind) ?f64 {
-    const memo = self.freshWidthMemo() orelse return null;
+pub fn getCachedLayout(self: *StyleManager, el: *Element, comptime kind: LayoutKind) ?f64 {
+    const memo = self.freshLayoutMemo() orelse return null;
     const entry = memo.map.getPtr(el) orelse return null;
-    const i = @backingInt(kind);
-    return if (entry.set & (1 << i) != 0) entry.widths[i] else null;
+    return entry.get(@field(LayoutMemo.Measure, @tagName(kind)));
 }
 
-pub fn cacheWidth(self: *StyleManager, el: *Element, comptime kind: WidthKind, width: f64) void {
-    const memo = self.freshWidthMemo() orelse return;
-    const i = @backingInt(kind);
+pub fn setCacheLayout(self: *StyleManager, el: *Element, comptime kind: LayoutKind, value: f64) void {
+    _ = self.freshLayoutMemo() orelse return;
+    const entry = self.layoutEntry(el) orelse return;
+    entry.put(@field(LayoutMemo.Measure, @tagName(kind)), value);
+}
+
+/// el's top, from parent's top. parent is el's flat-tree parent.
+pub fn getCachedOffset(self: *StyleManager, el: *Element, parent: *Element) ?f64 {
+    const memo = self.freshLayoutMemo() orelse return null;
+    const entry = memo.map.getPtr(el) orelse return null;
+    const offset = entry.get(.offset) orelse return null;
+    const placed = if (memo.map.getPtr(parent)) |p| p.placed else 0;
+    return if (entry.position < placed) offset else null;
+}
+
+/// Caches el's offset, el being its parent's index-th element child. Only
+/// valid once setCachePlaced covers index.
+pub fn setCacheOffset(self: *StyleManager, el: *Element, index: u32, offset: f64) bool {
+    _ = self.freshLayoutMemo() orelse return false;
+    const entry = self.layoutEntry(el) orelse return false;
+    entry.put(.offset, offset);
+    entry.position = index;
+    return true;
+}
+
+/// The first `count` of parent's element children have their offsets cached.
+pub fn setCachePlaced(self: *StyleManager, parent: *Element, count: u32) void {
+    _ = self.freshLayoutMemo() orelse return;
+    const entry = self.layoutEntry(parent) orelse return;
+    entry.placed = @max(entry.placed, count);
+}
+
+// el's entry in the (fresh) layout memo, added empty if it has none
+fn layoutEntry(self: *StyleManager, el: *Element) ?*LayoutMemo.Entry {
+    const memo = &self.layout_memo;
     if (memo.map.getPtr(el)) |entry| {
-        entry.widths[i] = width;
-        entry.set |= 1 << i;
-        return;
+        return entry;
     }
-    const index = self.claimSlot(el) orelse return;
-    var entry: WidthMemo.Entry = .{ .widths = undefined };
-    entry.widths[i] = width;
-    entry.set |= 1 << i;
-    memo.map.put(self.arena.allocator(), index, entry) catch |err| {
-        log.warn(.browser, "StyleManager width memo", .{ .err = err });
-        return;
+    const index = self.claimSlot(el) orelse return null;
+    memo.map.put(self.arena.allocator(), index, .{}) catch |err| {
+        log.warn(.browser, "StyleManager layout memo", .{ .err = err });
+        return null;
     };
     if (memo.detached == false and el.asNode().isConnected() == false) {
         memo.detached = true;
     }
+    return memo.map.getPtr(el).?;
 }
 
-// Whether the width memo holds entries the next read keeps
-fn widthsLive(self: *StyleManager) bool {
-    const memo = &self.widths;
+// Whether the layout memo holds entries the next read keeps
+fn layoutMemoLive(self: *StyleManager) bool {
+    const memo = &self.layout_memo;
     const viewport = self.frame.page.getViewport();
     return memo.map.count() != 0 and memo.version == self.layoutVersion() and
         memo.viewport_width == viewport.width and memo.viewport_height == viewport.height;
 }
 
 // Rebuilding resets the arena the memo lives in, so it runs first.
-fn freshWidthMemo(self: *StyleManager) ?*WidthMemo {
+fn freshLayoutMemo(self: *StyleManager) ?*LayoutMemo {
     self.rebuildIfDirty() catch return null;
-    const memo = &self.widths;
+    const memo = &self.layout_memo;
     const version = self.layoutVersion();
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
@@ -3202,6 +3355,11 @@ const Box = enum(u3) {
     atomic_inline,
     contents,
     table,
+    // Stacks like a block, lays its cells out side by side
+    table_row,
+    // Sits beside its siblings, like in an anonymous row when its parent
+    // isn't one
+    table_cell,
 
     fn parse(value: []const u8) ?Box {
         const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
@@ -3211,6 +3369,18 @@ const Box = enum(u3) {
 
         if (std.ascii.eqlIgnoreCase(trimmed, "table")) {
             return .table;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "table-row")) {
+            return .table_row;
+        }
+        if (std.ascii.eqlIgnoreCase(trimmed, "table-cell")) {
+            return .table_cell;
+        }
+        // Row groups and captions stack their children like a block
+        inline for (.{ "table-row-group", "table-header-group", "table-footer-group", "table-caption" }) |keyword| {
+            if (std.ascii.eqlIgnoreCase(trimmed, keyword)) {
+                return .block_level;
+            }
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed, "inline") or std.ascii.eqlIgnoreCase(trimmed, "inline flow")) {
@@ -3236,8 +3406,11 @@ const Box = enum(u3) {
     fn uaDefault(tag: Tag) Box {
         return switch (tag) {
             .table => .table,
+            .tr => .table_row,
+            .td, .th => .table_cell,
             .slot => .contents,
             .form, .li, .dd, .dt, .details, .summary, .menu, .dir, .hgroup, .legend, .html, .body, .optgroup, .option => .block_level,
+            .tbody, .thead, .tfoot, .caption => .block_level,
             else => if (tag.isBlock()) .block_level else .inline_level,
         };
     }
@@ -3666,7 +3839,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -3683,6 +3856,8 @@ const Geometry = struct {
         margin_right: ?Length = null,
         left: ?Length = null,
         right: ?Length = null,
+        top: ?Length = null,
+        bottom: ?Length = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
@@ -3716,6 +3891,19 @@ const Geometry = struct {
                     const sides = boxSides(value) orelse return;
                     self.left = sides.left;
                     self.right = sides.right;
+                    self.top = sides.top;
+                    self.bottom = sides.bottom;
+                },
+                .@"inset-block" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.top = sides.left;
+                    self.bottom = sides.right;
+                },
+                .top, .@"inset-block-start" => {
+                    self.top = Length.parseMargin(value);
+                },
+                .bottom, .@"inset-block-end" => {
+                    self.bottom = Length.parseMargin(value);
                 },
                 .@"inset-inline" => {
                     const sides = inlineSides(value) orelse return;
@@ -3759,10 +3947,11 @@ const Geometry = struct {
             }
         }
 
-        const Sides = struct { left: Length, right: Length };
+        // top and bottom only from boxSides
+        const Sides = struct { left: Length, right: Length, top: Length = .{}, bottom: Length = .{} };
 
-        // The left and right of a `top [right [bottom [left]]]` shorthand
-        // (margin, inset).
+        // The sides of a `top [right [bottom [left]]]` shorthand (margin,
+        // inset).
         fn boxSides(value: []const u8) ?Sides {
             var count: usize = 0;
             var tokens: [4][]const u8 = undefined;
@@ -3780,6 +3969,8 @@ const Geometry = struct {
             return .{
                 .left = Length.parseMargin(if (count == 4) tokens[3] else right),
                 .right = Length.parseMargin(right),
+                .top = Length.parseMargin(tokens[0]),
+                .bottom = Length.parseMargin(tokens[if (count >= 3) 2 else 0]),
             };
         }
 
@@ -3850,7 +4041,54 @@ const Geometry = struct {
         }
     };
 
-    const Computed = packed struct(u287) {
+    // Presentational width and height attributes (HTML Rendering §15.3.10
+    // "Tables"): author-level hints that any declaration beats.
+    pub fn finish(p: *Computed, el: *Element, _: *Frame, priorities: *const Priorities(Declared)) void {
+        const tag = el.getTag();
+        // td and th ignore a zero height; table and tr don't
+        const zero_height = switch (tag) {
+            .table, .tr => true,
+            .td, .th => false,
+            else => return,
+        };
+        if (priorities.get(.width) == 0 and tag != .tr) {
+            if (el.getAttributeSafe(comptime .wrap("width"))) |attr| {
+                if (parseDimension(attr, false)) |length| {
+                    p.width = length;
+                }
+            }
+        }
+        if (priorities.get(.height) == 0) {
+            if (el.getAttributeSafe(comptime .wrap("height"))) |attr| {
+                if (parseDimension(attr, zero_height)) |length| {
+                    p.height = length;
+                }
+            }
+        }
+    }
+
+    // HTML "rules for parsing dimension values": leading digits, then a `%`
+    // for a percentage; anything after is ignored.
+    fn parseDimension(text: []const u8, allow_zero: bool) ?Length {
+        const trimmed = std.mem.trimStart(u8, text, &std.ascii.whitespace);
+        var end: usize = 0;
+        while (end < trimmed.len and std.ascii.isDigit(trimmed[end])) : (end += 1) {}
+        if (end == 0) {
+            return null;
+        }
+        if (end < trimmed.len and trimmed[end] == '.') {
+            end += 1;
+            while (end < trimmed.len and std.ascii.isDigit(trimmed[end])) : (end += 1) {}
+        }
+        const value = std.fmt.parseFloat(f32, std.mem.trimEnd(u8, trimmed[0..end], ".")) catch return null;
+        if (value == 0 and allow_zero == false) {
+            return null;
+        }
+        const percent = end < trimmed.len and trimmed[end] == '%';
+        return .{ .value = value, .unit = if (percent) .percent else .px };
+    }
+
+    const Computed = packed struct(u357) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -3869,6 +4107,8 @@ const Geometry = struct {
         // Positioned boxes only; auto, and values that need layout, are auto
         left: Length = .{},
         right: Length = .{},
+        top: Length = .{},
+        bottom: Length = .{},
     };
 
     // Memory optimization. We usedto store each value as a
@@ -3877,30 +4117,33 @@ const Geometry = struct {
     // struct of arrays ("specialized", because the unit is bit-packed into bits)
     const Stored = struct {
         values: [length_count]f32,
-        bits: u32,
+        // each length's unit, then the bools: apart so neither needs a u64,
+        // which would pad the record
+        units: u32,
+        flags: u8,
 
         const names = @typeInfo(Computed).@"struct".field_names;
         const types = @typeInfo(Computed).@"struct".field_types;
         const length_count = std.mem.count(type, types, &.{Length});
 
         comptime {
-            std.debug.assert(length_count * @bitSizeOf(Length.Unit) + (names.len - length_count) <= 32);
+            std.debug.assert(length_count * @bitSizeOf(Length.Unit) <= 32);
+            std.debug.assert(names.len - length_count <= 8);
         }
 
         fn pack(computed: Computed) Stored {
-            var stored: Stored = .{ .values = undefined, .bits = 0 };
+            var stored: Stored = .{ .values = undefined, .units = 0, .flags = 0 };
             comptime var length = 0;
-            comptime var bit = 0;
+            comptime var flag = 0;
             inline for (names, types) |name, T| {
                 const value = @field(computed, name);
                 if (T == Length) {
                     stored.values[length] = value.value;
-                    stored.bits |= @as(u32, @backingInt(value.unit)) << bit;
+                    stored.units |= @as(u32, @backingInt(value.unit)) << (length * @bitSizeOf(Length.Unit));
                     length += 1;
-                    bit += @bitSizeOf(Length.Unit);
                 } else {
-                    stored.bits |= @as(u32, @intFromBool(value)) << bit;
-                    bit += 1;
+                    stored.flags |= @as(u8, @intFromBool(value)) << flag;
+                    flag += 1;
                 }
             }
             return stored;
@@ -3909,16 +4152,15 @@ const Geometry = struct {
         fn unpack(self: Stored) Computed {
             var computed: Computed = .{};
             comptime var length = 0;
-            comptime var bit = 0;
+            comptime var flag = 0;
             inline for (names, types) |name, T| {
                 if (T == Length) {
-                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.bits >> bit);
-                    @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(@intCast(unit)) };
+                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.units >> (length * @bitSizeOf(Length.Unit)));
+                    @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(unit) };
                     length += 1;
-                    bit += @bitSizeOf(Length.Unit);
                 } else {
-                    @field(computed, name) = (self.bits >> bit) & 1 == 1;
-                    bit += 1;
+                    @field(computed, name) = (self.flags >> flag) & 1 == 1;
+                    flag += 1;
                 }
             }
             return computed;
@@ -5780,7 +6022,7 @@ test "StyleManager: memo: changes in a detached tree keep it" {
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
     const version = frame.page.style_version;
     const layout_version = sm.layoutVersion();
-    sm.cacheWidth(p, .box, 10);
+    sm.setCacheLayout(p, .box_width, 10);
 
     // A component built off-DOM: attributes, children, text, inline style,
     // innerHTML
@@ -5801,15 +6043,15 @@ test "StyleManager: memo: changes in a detached tree keep it" {
     // tree's entries, and only those
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(i));
     try testing.expectEqual(true, sm.visibility.memo.contains(i));
-    sm.cacheWidth(i, .box, 50);
+    sm.setCacheLayout(i, .box_width, 50);
     try card.removeAttribute(comptime .wrap("class"), frame);
     try testing.expectEqual(version, frame.page.style_version);
     try testing.expectEqual(layout_version, sm.layoutVersion());
     try testing.expectEqual(false, sm.visibility.memo.contains(i));
     try testing.expectEqual(false, sm.visibility.memo.contains(card));
     try testing.expectEqual(true, sm.visibility.memo.contains(p));
-    try testing.expectEqual(null, sm.cachedWidth(i, .box));
-    try testing.expectEqual(@as(?f64, 10), sm.cachedWidth(p, .box));
+    try testing.expectEqual(null, sm.getCachedLayout(i, .box_width));
+    try testing.expectEqual(@as(?f64, 10), sm.getCachedLayout(p, .box_width));
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(i));
 
     // Taken out of its detached tree, it no longer inherits from it
@@ -6041,34 +6283,39 @@ test "StyleManager: memo: an inline write drops only the memos that read it" {
     const version = frame.page.style_version;
 
     // A fading slide: its visibility, inherited below it, but no width
-    sm.cacheWidth(div, .box, 100);
+    sm.setCacheLayout(div, .box_width, 100);
     try testing.expectEqual(false, sm.isHidden(p, .{ .check_opacity = true }));
     try style.setProperty("opacity", "0", null, frame);
     try testing.expectEqual(true, sm.isHidden(p, .{ .check_opacity = true }));
-    try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(div, .box_width));
 
     // display reaches both
     try style.setProperty("display", "none", null, frame);
     try testing.expectEqual(true, sm.hasDisplayNone(div));
-    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .box_width));
 
     // A shorthand reaches what its longhands do: overflow-x clips the width
-    sm.cacheWidth(div, .box, 100);
+    sm.setCacheLayout(div, .box_width, 100);
     try testing.expectEqual(false, sm.clipsOverflowX(div));
     try testing.expectEqual(false, sm.clipsOverflowX(p));
     try style.setProperty("overflow", "hidden", null, frame);
     try testing.expectEqual(true, sm.clipsOverflowX(div));
-    try testing.expectEqual(null, sm.cachedWidth(div, .box));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .box_width));
     try testing.expectEqual(true, sm.visibility.memo.contains(div));
     // geometry isn't inherited: only the written element's entry goes
     try testing.expect(sm.geometry.memo.contains(p));
     try testing.expectEqual(false, sm.clipsOverflowX(p));
 
+    // A vertical inset only moves a positioned box, applied on every read
+    sm.setCacheLayout(div, .box_width, 100);
+    try style.setProperty("top", "4px", null, frame);
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(div, .box_width));
+
     // No memo reads a custom property
-    sm.cacheWidth(div, .box, 100);
+    sm.setCacheLayout(div, .box_width, 100);
     try style.setProperty("--offset", "4px", null, frame);
     try testing.expectString("4px", sm.customPropertyValue(p, sm.customPropertyId(p, "--offset").?).?);
-    try testing.expectEqual(@as(?f64, 100), sm.cachedWidth(div, .box));
+    try testing.expectEqual(@as(?f64, 100), sm.getCachedLayout(div, .box_width));
 
     // None of it touched another frame's memos
     try testing.expectEqual(version, frame.page.style_version);
@@ -6259,7 +6506,7 @@ test "StyleManager: records: a group allocates the chunks it reaches" {
 }
 
 test "StyleManager: records: geometry packs its lengths' units with the flags" {
-    try testing.expectEqual(40, @sizeOf(Records(Geometry.Stored).Entry));
+    try testing.expectEqual(52, @sizeOf(Records(Geometry.Stored).Entry));
 
     // Each field apart from its neighbours
     const names = Geometry.Stored.names;
@@ -6287,28 +6534,28 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
     try testing.expectEqual(computed, Geometry.Stored.pack(computed).unpack());
 }
 
-test "StyleManager: records: the width memo keeps each kind apart" {
-    try testing.expectEqual(56, @sizeOf(Records(WidthMemo.Entry).Entry));
+test "StyleManager: records: the layout memo keeps each kind apart" {
+    try testing.expectEqual(96, @sizeOf(Records(LayoutMemo.Entry).Entry));
 
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
     const sm = &frame._style_manager;
 
     const div = try frame.window._document.createElement("div", null, frame);
-    try testing.expectEqual(null, sm.cachedWidth(div, .box));
-    sm.cacheWidth(div, .box, 120);
-    sm.cacheWidth(div, .row_shrink, 0.5);
-    try testing.expectEqual(120, sm.cachedWidth(div, .box));
-    try testing.expectEqual(0.5, sm.cachedWidth(div, .row_shrink));
-    try testing.expectEqual(null, sm.cachedWidth(div, .content));
-    try testing.expectEqual(1, sm.widths.map.count());
+    try testing.expectEqual(null, sm.getCachedLayout(div, .box_width));
+    sm.setCacheLayout(div, .box_width, 120);
+    sm.setCacheLayout(div, .row_shrink, 0.5);
+    try testing.expectEqual(120, sm.getCachedLayout(div, .box_width));
+    try testing.expectEqual(0.5, sm.getCachedLayout(div, .row_shrink));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .content_width));
+    try testing.expectEqual(1, sm.layout_memo.map.count());
 
     // A layout change clears them all at once
     sm.layout_bumps += 1;
-    try testing.expectEqual(null, sm.cachedWidth(div, .box));
-    sm.cacheWidth(div, .content, 80);
-    try testing.expectEqual(80, sm.cachedWidth(div, .content));
-    try testing.expectEqual(null, sm.cachedWidth(div, .row_shrink));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .box_width));
+    sm.setCacheLayout(div, .content_width, 80);
+    try testing.expectEqual(80, sm.getCachedLayout(div, .content_width));
+    try testing.expectEqual(null, sm.getCachedLayout(div, .row_shrink));
 }
 
 test "StyleManager: records: the generation wraps" {
@@ -6325,6 +6572,89 @@ test "StyleManager: records: the generation wraps" {
     memo.clear();
     try testing.expectEqual(1, memo.generation);
     try testing.expectEqual(false, memo.contains(div));
+}
+
+test "StyleManager: memo: a height write moves only what's stacked below it" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div id=a><div id=b><div id=c><div id=d style="height:10px"></div> <div id=e style="height:20px"></div></div><div id=f><div id=g style="height:30px"></div></div><div id=h style="height:40px"></div></div><div id=i style="height:50px"><div id=k style="position:absolute"></div></div></div>
+    );
+    const ids = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g", "h", "i" };
+    var els: [ids.len]*Element = undefined;
+    for (ids, &els) |id, *el| {
+        el.* = doc.getElementById(id).?;
+    }
+    const a, const b, const c, const d, const e, const f, const g, const h, const i = els;
+
+    const tops = struct {
+        fn of(all: []const *Element, owner: *Frame) [ids.len]f64 {
+            var out: [ids.len]f64 = undefined;
+            for (all, &out) |el, *top| {
+                top.* = layout.boxTop(el, owner);
+            }
+            return out;
+        }
+    }.of;
+
+    try testing.expectEqual([_]f64{ 0, 0, 0, 0, 10, 30, 30, 60, 100 }, tops(&els, frame));
+    try testing.expectEqual(150, doc.extent().height);
+    const layout_bumps = sm.layout_bumps;
+    const version = frame.page.style_version;
+
+    // c grows: its following siblings (f, h) move, and so does b's (i), since
+    // b and a are as tall as their content. Nothing before them moves, nor
+    // inside c and f.
+    const c_style = (try c.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try c_style.setProperty("height", "100px", null, frame);
+    for ([_]*Element{ b, c, d, e, g }) |el| {
+        try testing.expect(sm.getCachedOffset(el, el.asNode().parentElement().?) != null);
+    }
+    for ([_]*Element{ f, h, i }) |el| {
+        try testing.expectEqual(null, sm.getCachedOffset(el, el.asNode().parentElement().?));
+    }
+    for ([_]*Element{ d, e, f, g, h, i }) |el| {
+        try testing.expect(sm.getCachedLayout(el, .box_height) != null);
+    }
+    for ([_]*Element{ a, b, c }) |el| {
+        try testing.expectEqual(null, sm.getCachedLayout(el, .box_height));
+    }
+    try testing.expectEqual([_]f64{ 0, 0, 0, 0, 10, 100, 100, 130, 170 }, tops(&els, frame));
+    try testing.expectEqual(220, doc.extent().height);
+
+    // A declared height stops it: with b's set, d moves e, and nothing past b
+    const b_style = (try b.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try b_style.setProperty("height", "200px", null, frame);
+    try testing.expectEqual([_]f64{ 0, 0, 0, 0, 10, 100, 100, 130, 200 }, tops(&els, frame));
+    try testing.expectEqual(250, doc.extent().height);
+    _ = try c_style.removeProperty("height", frame);
+    try testing.expectEqual(null, sm.getCachedOffset(f, b));
+    try testing.expect(sm.getCachedOffset(i, a) != null);
+    try testing.expect(sm.getCachedLayout(a, .box_height) != null);
+    try testing.expectEqual([_]f64{ 0, 0, 0, 0, 10, 30, 30, 60, 200 }, tops(&els, frame));
+    try testing.expectEqual(250, doc.extent().height);
+
+    // An out-of-flow box takes no room: its height moves nothing
+    const k = doc.getElementById("k").?;
+    try testing.expectEqual(200, layout.boxTop(k, frame));
+    try testing.expectEqual(0, layout.contentHeight(i, frame));
+    const k_style = (try k.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try k_style.setProperty("height", "30px", null, frame);
+    try testing.expect(sm.getCachedOffset(k, i) != null);
+    try testing.expect(sm.getCachedLayout(i, .content_height) != null);
+    try testing.expectEqual(30, layout.boxHeight(k, frame));
+
+    // None of it dropped the whole layout memo
+    try testing.expectEqual(layout_bumps, sm.layout_bumps);
+    try testing.expectEqual(version, frame.page.style_version);
 }
 
 test "StyleManager: memo: inherited values, any query order" {

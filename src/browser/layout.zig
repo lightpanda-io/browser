@@ -21,14 +21,17 @@ const std = @import("std");
 const Frame = @import("Frame.zig");
 const StyleManager = @import("StyleManager.zig");
 
+const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
+const text_measure = @import("text_measure.zig");
+const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 // Width flows down (height flows up): a block in normal flow is as wide as
 // its containing block.
 pub fn boxWidth(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, .box)) |width| {
+    if (style_manager.getCachedLayout(self, .box_width)) |width| {
         return width;
     }
     const fill = StyleManager.fill_check.enter(style_manager);
@@ -64,16 +67,19 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
         };
         break :blk clampWidth(self, width, .box, owner);
     };
-    style_manager.cacheWidth(self, .box, width);
+    style_manager.setCacheLayout(self, .box_width, width);
     return width;
 }
 
 // How a box that clips its overflow counts toward its ancestors' content.
 // Out-of-flow boxes take no room in their parent's flow, so they don't size
 // it, but they still extend a scroller's scrollable area.
+// Text that wraps is as wide as the line it wraps at (see textLineWidth).
 pub const ContentMode = enum {
     full,
     clipped,
+    // clipped, with wrapping text at its longest word: the least it takes
+    min,
     // clipped, with out-of-flow boxes counted
     scrollable,
 };
@@ -107,7 +113,7 @@ fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
         .shrink, .grow, .fill => @max(own.value, contentWidth(self, .full, owner)),
         .contents => return .{
             .base = widthContribution(self, .full, owner),
-            .floor = widthContribution(self, .clipped, owner),
+            .floor = widthContribution(self, .min, owner),
         },
     };
     const base = clampWidth(self, width, .box, owner);
@@ -131,8 +137,8 @@ fn flexMinWidth(self: *Element, base: f64, owner: *Frame) f64 {
         return base;
     }
     const own = self.getElementAxis(owner, .width);
-    const content = contentWidth(self, .clipped, owner);
-    // An auto width's fallback stands in for its text
+    const content = contentWidth(self, .min, owner);
+    // An auto width's fallback stands in for an empty box
     return @min(base, if (own.explicit) content else @max(own.value, content));
 }
 
@@ -146,7 +152,7 @@ fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
     if (style_manager.flexWraps(self)) {
         return 0;
     }
-    if (style_manager.cachedWidth(self, .row_shrink)) |ratio| {
+    if (style_manager.getCachedLayout(self, .row_shrink)) |ratio| {
         return ratio;
     }
     const fill = StyleManager.fill_check.enter(style_manager);
@@ -190,7 +196,7 @@ fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
             frozen_before = frozen;
         }
     }
-    style_manager.cacheWidth(self, .row_shrink, ratio);
+    style_manager.setCacheLayout(self, .row_shrink, ratio);
     return ratio;
 }
 
@@ -227,7 +233,7 @@ fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution 
     return clamped;
 }
 
-fn resolveWidthLimit(self: *Element, limit: StyleManager.WidthLimit, resolve_percent: bool, owner: *Frame) ?f64 {
+fn resolveWidthLimit(self: *Element, limit: StyleManager.BoxLength, resolve_percent: bool, owner: *Frame) ?f64 {
     return switch (limit) {
         .px => |px| px,
         .percent => |fraction| if (resolve_percent) fraction * containingBlockWidth(self, owner) else null,
@@ -275,17 +281,18 @@ fn growShare(self: *Element, owner: *Frame) f64 {
 // The width the children would take unconstrained: the sum of their
 // contributions. In a flex row or grid they sit side by side; elsewhere
 // block-level children stack, so the widest counts, and inline-level ones
-// share one line that never wraps (the dummy layout has no line breaking,
-// which keeps the "append until the lane outgrows its shell" idiom
-// terminating).
+// and text share one line. Boxes on a line never wrap (the dummy layout has
+// no line breaking, which keeps the "append until the lane outgrows its
+// shell" idiom terminating); only text does.
 pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
-    const kind: StyleManager.WidthKind = switch (mode) {
-        .full => .full_content,
-        .clipped => .content,
-        .scrollable => .scrollable_content,
+    const kind: StyleManager.LayoutKind = switch (mode) {
+        .full => .full_content_width,
+        .clipped => .content_width,
+        .min => .min_content_width,
+        .scrollable => .scrollable_content_width,
     };
     const style_manager = &owner._style_manager;
-    if (style_manager.cachedWidth(self, kind)) |width| {
+    if (style_manager.getCachedLayout(self, kind)) |width| {
         return width;
     }
     const fill = StyleManager.fill_check.enter(style_manager);
@@ -294,9 +301,15 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
     const in_row = style_manager.laysOutInRow(self);
     var widest: f64 = 0;
     var line: f64 = 0;
+    var text: LineText(mode) = .{ .parent = self };
     var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
     while (children.next()) |node| {
-        const el = node.is(Element) orelse continue;
+        const el = node.is(Element) orelse {
+            if (node.is(Node.CData.Text)) |t| {
+                text.add(t.ownData(), owner);
+            }
+            continue;
+        };
         if (style_manager.hasDisplayNone(el)) {
             continue;
         }
@@ -307,11 +320,340 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
         if (in_row or style_manager.isBlockLevel(el) == false) {
             line += width;
         } else {
-            widest = @max(widest, line, width);
+            widest = @max(widest, line + text.end(), width);
             line = 0;
         }
     }
-    const width = @max(widest, line);
-    style_manager.cacheWidth(self, kind, width);
+    const width = @max(widest, line + text.end());
+    style_manager.setCacheLayout(self, kind, width);
     return width;
 }
+
+// Where el's text wraps, for each mode: never for its full width, at the
+// viewport to size a box by it (its containing block's width may be sized by
+// this box), between every word for the least it takes, and at its block's
+// width for what overflows.
+fn textLineWidth(self: *Element, comptime mode: ContentMode, white_space: text_measure.WhiteSpace, owner: *Frame) f64 {
+    if (white_space.wrap == false) {
+        return std.math.inf(f64);
+    }
+    return switch (mode) {
+        .full => std.math.inf(f64),
+        .clipped => @floatFromInt(owner.page.getViewport().width),
+        .min => 0,
+        .scrollable => {
+            const block = owner._style_manager.blockContainer(self) orelse {
+                return @floatFromInt(owner.page.getViewport().width);
+            };
+            return boxWidth(block, owner);
+        },
+    };
+}
+
+/// The text of parent's children on one line, measured as it's added.
+pub fn LineText(comptime mode: ContentMode) type {
+    return struct {
+        parent: *Element,
+        // Set up at the first text with content
+        wrap: ?text_measure.LineWrap = null,
+
+        const Self = @This();
+
+        pub fn add(self: *Self, data: []const u8, owner: *Frame) void {
+            if (self.wrap) |*w| {
+                w.add(data);
+                return;
+            }
+            if (isAllWhitespace(data)) {
+                return;
+            }
+            const style_manager = &owner._style_manager;
+            const white_space = style_manager.whiteSpace(self.parent);
+            self.wrap = .{
+                .line_width = textLineWidth(self.parent, mode, white_space, owner),
+                .font_size = style_manager.computedFontSize(self.parent),
+                .white_space = white_space,
+            };
+            self.wrap.?.add(data);
+        }
+
+        /// The text's width; the next line's text starts afresh.
+        pub fn end(self: *Self) f64 {
+            const w = self.wrap orelse return 0;
+            self.wrap = .{ .line_width = w.line_width, .font_size = w.font_size, .white_space = w.white_space };
+            return w.lines().width;
+        }
+
+        /// Like end, with the space before what comes next.
+        pub fn endBefore(self: *Self) f64 {
+            const space = if (self.wrap) |w| w.space else 0;
+            return self.end() + space;
+        }
+    };
+}
+
+/// Height flows up, top flows down. In the flow, a box is never above its
+/// parent, nor above an earlier sibling. Offsets are cached from the parent's
+/// top, so a height write moves only the siblings below it (see
+/// StyleManager.heightWritten). A positioned box then moves from there (see
+/// Anchor), along with its subtree.
+pub fn boxTop(self: *Element, owner: *Frame) f64 {
+    var top: f64 = 0;
+    var el = self;
+    while (true) {
+        if (Anchor.vertical(el, owner)) |anchor| {
+            top += anchor.offset;
+            el = anchor.base orelse return top;
+            continue;
+        }
+        const parent = el.asNode().flatTreeParentElement(owner) orelse return top;
+        top += boxOffset(el, parent, owner) + relativeShift(el, .vertical, owner);
+        el = parent;
+    }
+}
+
+/// The box's top, given its flat-tree parent and the parent's top (for walks
+/// that already have them).
+pub fn boxTopFrom(self: *Element, parent: ?*Element, parent_top: f64, owner: *Frame) f64 {
+    if (Anchor.vertical(self, owner)) |anchor| {
+        const base = anchor.base orelse return anchor.offset;
+        return boxTop(base, owner) + anchor.offset;
+    }
+    const p = parent orelse return 0;
+    return parent_top + boxOffset(self, p, owner) + relativeShift(self, .vertical, owner);
+}
+
+pub const Axis = enum { vertical, horizontal };
+
+/// Where an absolutely positioned or fixed box with an inset on the axis
+/// sits: offset from its containing block's edge (base), or from the
+/// document's when base is null. It takes no room in the flow, so nothing
+/// else moves with it but its subtree. Without an inset it stays where the
+/// flow put it.
+pub const Anchor = struct {
+    offset: f64,
+    base: ?*Element,
+
+    pub fn vertical(el: *Element, owner: *Frame) ?Anchor {
+        return anchor(el, .vertical, owner);
+    }
+
+    pub fn horizontal(el: *Element, owner: *Frame) ?Anchor {
+        return anchor(el, .horizontal, owner);
+    }
+
+    fn anchor(el: *Element, comptime axis: Axis, owner: *Frame) ?Anchor {
+        const style_manager = &owner._style_manager;
+        const position = style_manager.position(el);
+        if (position != .absolute and position != .fixed) {
+            return null;
+        }
+        const start, const end = switch (axis) {
+            .vertical => .{ style_manager.inset(el, .top), style_manager.inset(el, .bottom) },
+            .horizontal => .{ style_manager.inset(el, .left), style_manager.inset(el, .right) },
+        };
+        if (start == null and end == null) {
+            return null;
+        }
+
+        const base = style_manager.containingBlock(el);
+        var offset = if (start) |s|
+            resolveInset(s, base, axis, owner)
+        else
+            containingSize(base, axis, owner) - resolveInset(end.?, base, axis, owner) - boxSize(el, axis, owner);
+
+        if (position == .fixed) {
+            // against the viewport, wherever it's scrolled to
+            const window = owner.window;
+            offset += @floatFromInt(if (axis == .vertical) window.getScrollY() else window.getScrollX());
+        }
+        return .{ .offset = offset, .base = base };
+    }
+};
+
+/// How far a relatively positioned box moves from where the flow put it
+pub fn relativeShift(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.position(el) != .relative) {
+        return 0;
+    }
+    const start, const end = switch (axis) {
+        .vertical => .{ style_manager.inset(el, .top), style_manager.inset(el, .bottom) },
+        .horizontal => .{ style_manager.inset(el, .left), style_manager.inset(el, .right) },
+    };
+    const base = style_manager.containingBlock(el);
+    if (start) |s| {
+        return resolveInset(s, base, axis, owner);
+    }
+    if (end) |e| {
+        return -resolveInset(e, base, axis, owner);
+    }
+    return 0;
+}
+
+fn resolveInset(length: StyleManager.BoxLength, base: ?*Element, comptime axis: Axis, owner: *Frame) f64 {
+    return switch (length) {
+        .px => |px| px,
+        .percent => |fraction| fraction * containingSize(base, axis, owner),
+    };
+}
+
+// The containing block's size on the axis; the viewport's for null
+fn containingSize(base: ?*Element, comptime axis: Axis, owner: *Frame) f64 {
+    if (base) |b| {
+        return boxSize(b, axis, owner);
+    }
+    const viewport = owner.page.getViewport();
+    return @floatFromInt(if (axis == .vertical) viewport.height else viewport.width);
+}
+
+fn boxSize(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
+    return switch (axis) {
+        .vertical => boxHeight(el, owner),
+        .horizontal => boxWidth(el, owner),
+    };
+}
+
+// The box's top, from its parent's top. Caches every sibling's up to it: an
+// offset needs only the heights before it, and going on would measure self's
+// subtree and everything after it (for body, the whole document).
+fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.getCachedOffset(self, parent)) |offset| {
+        return offset;
+    }
+    const fill = StyleManager.fill_check.enter(style_manager);
+    defer StyleManager.fill_check.exit(fill);
+
+    var flow: Flow = .{ .in_row = style_manager.laysOutInRow(parent) };
+    // How many children, from the first, have their offset cached. A failed
+    // cache ends it, so a cached prefix never has a hole.
+    var position: u32 = 0;
+    var placed: u32 = 0;
+    defer style_manager.setCachePlaced(parent, placed);
+
+    var children: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
+    while (children.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        const offset = flow.at(el, owner);
+        if (placed == position) {
+            const cached = style_manager.setCacheOffset(el, position, offset);
+            if (cached) {
+                placed += 1;
+            }
+        }
+        position += 1;
+        if (el == self) {
+            return offset;
+        }
+        flow.advance(el, owner);
+    }
+    return 0;
+}
+
+/// The declared height, else the content's
+pub fn boxHeight(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.getCachedLayout(self, .box_height)) |height| {
+        return height;
+    }
+    const fill = StyleManager.fill_check.enter(style_manager);
+    defer StyleManager.fill_check.exit(fill);
+
+    const own = self.getElementAxis(owner, .height);
+    const height = if (own.explicit or self.isRootContainer()) own.value else @max(own.value, contentHeight(self, owner));
+    style_manager.setCacheLayout(self, .box_height, height);
+    return height;
+}
+
+/// The height the children take
+pub fn contentHeight(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    if (style_manager.getCachedLayout(self, .content_height)) |height| {
+        return height;
+    }
+    const fill = StyleManager.fill_check.enter(style_manager);
+    defer StyleManager.fill_check.exit(fill);
+
+    var wrap: ?text_measure.LineWrap = null;
+    // Without a width to wrap at, each text node with content is one line
+    // tall, placed like an inline box. Computed on first use.
+    var line_height: ?f64 = null;
+    const width = self.getElementAxis(owner, .width);
+    if (width.explicit) {
+        wrap = .{
+            .line_width = width.value,
+            .font_size = style_manager.computedFontSize(self),
+            .white_space = style_manager.whiteSpace(self),
+        };
+    }
+
+    var flow: Flow = .{ .in_row = style_manager.laysOutInRow(self) };
+    var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
+    while (children.next()) |node| {
+        if (node.is(Element)) |el| {
+            flow.advance(el, owner);
+            continue;
+        }
+        const text = node.is(Node.CData.Text) orelse continue;
+        if (wrap) |*w| {
+            w.add(text.ownData());
+            continue;
+        }
+        // Skip the scan once the line is already this tall
+        if (line_height) |h| {
+            if (flow.line >= h) continue;
+        }
+        if (isAllWhitespace(text.ownData())) {
+            continue;
+        }
+        const h = line_height orelse blk: {
+            // Whole pixels, like the wrapped height
+            const h = @ceil(style_manager.computedFontSize(self) * text_measure.LINE_HEIGHT);
+            line_height = h;
+            break :blk h;
+        };
+        flow.line = @max(flow.line, h);
+    }
+
+    var height = flow.offset + flow.line;
+    if (wrap) |w| {
+        // Whole pixels, like scroll offsets
+        height += @ceil(w.height());
+    }
+    style_manager.setCacheLayout(self, .content_height, height);
+    return height;
+}
+
+// A parent's children, laid out top to bottom.
+const Flow = struct {
+    in_row: bool,
+    line: f64 = 0, // The current line's height
+    offset: f64 = 0, // The current line's top, from the parent's
+
+    // Where el goes, from the parent's top. Its own height only moves what
+    // comes after it.
+    fn at(self: *const Flow, el: *Element, owner: *Frame) f64 {
+        const style_manager = &owner._style_manager;
+        if (self.in_row or style_manager.isBlockLevel(el) == false) {
+            return self.offset;
+        }
+        // A block ends the line and starts below it
+        return self.offset + self.line;
+    }
+
+    // Moves past el, to where the next box goes
+    fn advance(self: *Flow, el: *Element, owner: *Frame) void {
+        const style_manager = &owner._style_manager;
+        if (style_manager.hasDisplayNone(el) or style_manager.isOutOfFlow(el)) {
+            return;
+        }
+        const height = boxHeight(el, owner);
+        if (self.in_row or style_manager.isBlockLevel(el) == false) {
+            self.line = @max(self.line, height);
+            return;
+        }
+        self.offset += self.line + height;
+        self.line = 0;
+    }
+};

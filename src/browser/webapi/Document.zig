@@ -28,7 +28,9 @@ const IdMap = @import("../IdMap.zig");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const layout = @import("../layout.zig");
 const Parser = @import("../parser/Parser.zig");
+const exec_command = @import("../frame/exec_command.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -46,7 +48,6 @@ const ModelContext = @import("ModelContext.zig");
 const Sanitizer = @import("Sanitizer.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
-const exec_command = @import("../frame/exec_command.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -498,14 +499,12 @@ pub fn getDocumentElement(self: *Document) ?*Element {
 
 pub const Extent = struct { width: f64, height: f64 };
 
-/// The document's size. Height: enough for every synthetic position (5px per
-/// node), the bottom of every element with an inline height, and body's
-/// stacked children. Width: body's widest child. An inline size on body
-/// stretches both. A document without a frame isn't rendered, so it has no
-/// size.
+/// The document's size. Height is body's content (see layout.contentHeight).
+/// Width is the body's widest child. An inline size on body stretches both.
+/// A document without a frame has no size.
 pub fn extent(self: *Document) Extent {
     const frame = self._frame orelse return .{ .width = 0, .height = 0 };
-    const version = frame._style_manager.layoutVersion();
+    const version = frame._style_manager.extentVersion();
     const viewport = frame.page.getViewport();
     if (self._extent) |cached| {
         if (cached.version == version and cached.viewport_width == viewport.width and cached.viewport_height == viewport.height) {
@@ -516,38 +515,21 @@ pub fn extent(self: *Document) Extent {
     const style_manager = &frame._style_manager;
     var size: Extent = .{ .width = 0, .height = 0 };
 
-    // A nested spacer (virtualized lists) must extend the document even when
-    // its auto-height ancestors count as 5px each. Body's own children are
-    // stacked below instead. Only inline heights: virtualizers set theirs
-    // inline, and the cascade per element is too slow on every mutation.
-    // Walks the flat tree, the order Element positions are numbered in.
-    var index: f64 = 0;
-    var tw: TreeWalker.Flat = .init(self.asNode(), .{ .frame = frame });
-    while (tw.next()) |node| : (index += 1) {
-        const el = node.is(Element) orelse continue;
-        const parent = el.asNode().flatTreeParentElement(frame) orelse continue;
-        if (parent.isRootContainer()) {
-            continue;
-        }
-        if (style_manager.inlineSize(el, .height)) |height| {
-            size.height = @max(size.height, index * 5.0 + height);
-        }
-    }
-    size.height = @max(size.height, index * 5.0);
-
-    if (self.is(HTMLDocument) != null) {
-        if (self.getBody()) |html_body| {
-            const body = html_body.asElement();
-            size.height = @max(size.height, body.contentAxis(frame, .height), style_manager.inlineSize(body, .height) orelse 0);
-            size.width = style_manager.inlineSize(body, .width) orelse 0;
-            var children: TreeWalker.FlatChildren = .init(body.asNode(), .{ .frame = frame });
-            while (children.next()) |node| {
-                const el = node.is(Element) orelse continue;
-                if (!style_manager.hasDisplayNone(el)) {
-                    size.width = @max(size.width, el.getElementAxis(frame, .width).value);
-                }
+    // Content heights only: html's and body's own heights are this extent.
+    const html_body = if (self.is(HTMLDocument) != null) self.getBody() else null;
+    if (html_body) |b| {
+        const body = b.asElement();
+        size.height = @max(layout.contentHeight(body, frame), style_manager.inlineSize(body, .height) orelse 0);
+        size.width = style_manager.inlineSize(body, .width) orelse 0;
+        var children: TreeWalker.FlatChildren = .init(body.asNode(), .{ .frame = frame });
+        while (children.next()) |node| {
+            const el = node.is(Element) orelse continue;
+            if (!style_manager.hasDisplayNone(el)) {
+                size.width = @max(size.width, el.getElementAxis(frame, .width).value);
             }
         }
+    } else if (self.getDocumentElement()) |root| {
+        size.height = layout.contentHeight(root, frame);
     }
 
     // Whole pixels, like scroll offsets
@@ -1025,17 +1007,10 @@ pub fn hitTestVertical(self: *Document, y: f64, frame: *Frame) !?*Element {
 
 fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
     // DFS in flat-tree order (shadow content inside its host, slotted nodes
-    // inside their slot, as Element.calculateDocumentPosition lays them out);
-    // topmost = last visited element whose rect contains (x, y).
+    // inside their slot, as layout.zig lays them out); topmost = last visited
+    // element whose rect contains (x, y).
     //
-    // Faux-layout shortcut: rect.top is calculateDocumentPosition × 5, which is
-    // monotonically increasing in document order. So we maintain a running
-    // preorder counter instead of calling calculateDocumentPosition per node
-    // (which itself is O(N)). Once the counter's y passes the query y, no
-    // later element can contain the point, and we can return.
-    //
-    // Hidden and inert subtrees still count towards the index so positions
-    // agree with getBoundingClientRect; the exclusion rides down the stack.
+    // A display:none or inert subtree isn't walked: nothing in it opts out.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1046,39 +1021,38 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
     const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
 
-    const Entry = struct { node: *Node, excluded: bool };
+    // Each entry carries its nearest element ancestor (its flat-tree parent)
+    // and that ancestor's top, which its own is an offset from.
+    const Entry = struct { node: *Node, parent: ?*Element, parent_top: f64 };
     var stack: std.ArrayList(Entry) = .empty;
-    try stack.append(frame.local_arena, .{ .node = root, .excluded = false });
-
-    var preorder_index: f64 = 0;
+    try stack.append(frame.local_arena, .{ .node = root, .parent = null, .parent_top = 0 });
 
     while (stack.items.len > 0) {
         const entry = stack.pop() orelse break;
         const node = entry.node;
-        var excluded = entry.excluded;
-        const pos = preorder_index * 5.0;
-
-        if (pos > y) {
-            // Monotonic: no later element has top <= y, so none can contain (x, y).
-            return topmost;
-        }
-
-        preorder_index += 1;
+        var parent = entry.parent;
+        var top = entry.parent_top;
         if (node.is(Element)) |element| {
-            excluded = excluded or style_manager.hasDisplayNone(element) or element.hasInertAttribute();
-            // Unlike display:none, a child can opt back in, so the subtree is
-            // still walked.
-            if (!excluded and style_manager.isHitTestable(element)) {
-                if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
-                    if (ignore_x) {
+            if (comptime lp.IS_DEBUG) {
+                std.debug.assert(parent == element.asNode().flatTreeParentElement(owner));
+            }
+            top = layout.boxTopFrom(element, parent, entry.parent_top, owner);
+            parent = element;
+            if (style_manager.hasDisplayNone(element) or element.hasInertAttribute()) {
+                continue;
+            }
+            // Unlike display:none, visibility and pointer-events let a child
+            // opt back in, so the subtree is still walked. So is a subtree
+            // that starts below y: a positioned box in it can sit higher.
+            if (style_manager.isHitTestable(element) and y >= top and y <= top + layout.boxHeight(element, owner)) {
+                if (ignore_x) {
+                    topmost = element;
+                } else {
+                    // only bother calculating the horiziontal position for
+                    // elements contained by the vertical band
+                    const left = element.horizontalPosition(frame);
+                    if (x >= left and x <= left + element.boxAxis(frame, .width)) {
                         topmost = element;
-                    } else {
-                        // only bother calculating the horiziontal position for
-                        // elements contained by the vertical band
-                        const left = element.horizontalPosition(frame);
-                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
-                            topmost = element;
-                        }
                     }
                 }
             }
@@ -1088,7 +1062,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         const first = stack.items.len;
         var children: TreeWalker.FlatChildren = .init(node, .{ .frame = frame });
         while (children.next()) |c| {
-            try stack.append(frame.local_arena, .{ .node = c, .excluded = excluded });
+            try stack.append(frame.local_arena, .{ .node = c, .parent = parent, .parent_top = top });
         }
         std.mem.reverse(Entry, stack.items[first..]);
     }
