@@ -73,6 +73,13 @@ layout_bumps: usize = 0,
 // Inline height writes that reached the root, see extentVersion.
 extent_bumps: usize = 0,
 
+// Document.hitTest's prune, see HitBands
+hit_bands: HitBands = .{},
+
+// Inline writes the memos take without a bump: a top only drops the
+// element's geometry, a height can stop at a declared one (see heightWritten).
+inline_bumps: usize = 0,
+
 // A box that sizes others by its content couldn't be flagged (see
 // setSizesOthers), in the layout memo's current version.
 unscoped_sizing: bool = false,
@@ -1906,6 +1913,9 @@ fn nextReaching(it: *CssParser.DeclarationsIterator, memo: Memo) ?Reaching {
 }
 
 fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
+    if (reach.count() != 0) {
+        self.inline_bumps += 1;
+    }
     var it = reach.iterator();
     while (it.next()) |memo| {
         switch (memo) {
@@ -2198,6 +2208,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.arena.resetRetain();
     self.layout_memo = .{};
+    self.hit_bands = .{};
 
     self.next_doc_order = 1;
     self.rule_layers = .empty;
@@ -2879,6 +2890,107 @@ fn layoutEntry(self: *StyleManager, el: *Element) ?*LayoutMemo.Entry {
         memo.detached = true;
     }
     return memo.map.getPtr(el).?;
+}
+
+/// The vertical span holding every box of an element's subtree (its own, and
+/// a positioned descendant's wherever that sits), in whole document pixels
+/// rounded outward: a point outside it hits nothing in the subtree.
+pub const HitBand = struct {
+    lo: i32,
+    hi: i32,
+
+    pub const none: HitBand = .{ .lo = std.math.maxInt(i32), .hi = std.math.minInt(i32) };
+
+    pub fn of(top: f64, height: f64) HitBand {
+        // saturates, and widening is always safe
+        return .{ .lo = std.math.lossyCast(i32, @floor(top)), .hi = std.math.lossyCast(i32, @ceil(top + height)) };
+    }
+
+    pub fn add(self: *HitBand, other: HitBand) void {
+        self.lo = @min(self.lo, other.lo);
+        self.hi = @max(self.hi, other.hi);
+    }
+
+    pub fn holds(self: HitBand, y: f64) bool {
+        return y >= @as(f64, @floatFromInt(self.lo)) and y <= @as(f64, @floatFromInt(self.hi));
+    }
+};
+
+// Document.hitTest walks every element: a positioned box can sit anywhere, so
+// where a subtree starts says nothing about what's in it. A walk that finds
+// no bands records one per element it visits, and the next ones skip the
+// subtrees whose band the point is outside of. Nothing is kept across a
+// change that can move a box: the first hit test after one walks everything
+// again.
+const HitBands = struct {
+    map: Records(HitBand) = .{},
+
+    // What the bands were recorded for. A fixed box moves with the scroll.
+    version: usize = 0,
+    scroll_y: u32 = 0,
+    viewport_width: u32 = 0,
+    viewport_height: u32 = 0,
+
+    // The walk recording them finished
+    complete: bool = false,
+
+    // One couldn't be stored. Its parent's would cover it, but a missing
+    // band has to mean a subtree no walk went into.
+    failed: bool = false,
+};
+
+// Every change that can move a box bumps one of these. A scoped tree, class
+// or focus change does through BoxScope: extent_bumps when the layout memo
+// kept the rest, layout_bumps when it couldn't.
+fn hitVersion(self: *const StyleManager) usize {
+    return self.extentVersion() + self.inline_bumps;
+}
+
+/// Whether a walk recorded the bands and no box moved since. When not, they
+/// are reset for the caller to record: setHitBand for every element it
+/// visits, then hitBandsRecorded.
+pub fn hasHitBands(self: *StyleManager, scroll_y: u32) bool {
+    self.rebuildIfDirty() catch {};
+    const bands = &self.hit_bands;
+    const version = self.hitVersion();
+    const viewport = self.frame.page.getViewport();
+    if (bands.complete and bands.version == version and bands.scroll_y == scroll_y and
+        bands.viewport_width == viewport.width and bands.viewport_height == viewport.height)
+    {
+        return true;
+    }
+    bands.map.clear();
+    bands.* = .{
+        .map = bands.map,
+        .version = version,
+        .scroll_y = scroll_y,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+    };
+    return false;
+}
+
+/// Only after hasHitBands returned true
+pub fn getHitBand(self: *const StyleManager, el: *const Element) ?HitBand {
+    return self.hit_bands.map.get(el);
+}
+
+pub fn setHitBand(self: *StyleManager, el: *Element, band: HitBand) void {
+    const bands = &self.hit_bands;
+    const index = self.claimSlot(el) orelse {
+        bands.failed = true;
+        return;
+    };
+    bands.map.put(self.arena.allocator(), index, band) catch |err| {
+        log.warn(.browser, "StyleManager hit bands", .{ .err = err });
+        bands.failed = true;
+    };
+}
+
+pub fn hitBandsRecorded(self: *StyleManager) void {
+    const bands = &self.hit_bands;
+    // The walk only read; if anything moved a box meanwhile, they're stale
+    bands.complete = bands.failed == false and bands.version == self.hitVersion();
 }
 
 // Whether the layout memo holds entries the next read keeps
@@ -6365,6 +6477,113 @@ test "StyleManager: memo: a focus move drops what :focus and :focus-within reach
     try testing.expect(frame.page.style_version != version);
 }
 
+test "StyleManager: hit bands: a hit test skips the subtrees the point is outside of" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div style="height: 100px"><i style="display: block; height: 10px"></i></div>
+        \\<div style="height: 100px"><b style="display: block; position: absolute; top: 10px; height: 20px"></b></div>
+        \\<div style="height: 100px" inert><p style="height: 50px"></p></div>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".low { position: absolute; top: 340px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const first = body.firstChild().?.as(Element);
+    const i = first.asNode().firstChild().?.as(Element);
+    const second = first.asNode().nextSibling().?.nextSibling().?.as(Element);
+    const b = second.asNode().firstChild().?.as(Element);
+    const third = second.asNode().nextSibling().?.nextSibling().?.as(Element);
+    const p = third.asNode().firstChild().?.as(Element);
+
+    // The first walk records, the next ones use what it recorded: a
+    // positioned box counts in its ancestors' bands, wherever it sits
+    try testing.expectEqual(false, sm.hit_bands.complete);
+    try testing.expectEqual(b, (try doc.hitTestVertical(15, frame)).?);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+    try testing.expectEqual(StyleManager.HitBand{ .lo = 0, .hi = 100 }, sm.getHitBand(first).?);
+    try testing.expectEqual(StyleManager.HitBand{ .lo = 10, .hi = 200 }, sm.getHitBand(second).?);
+    try testing.expectEqual(StyleManager.HitBand{ .lo = 200, .hi = 300 }, sm.getHitBand(third).?);
+    const version = sm.hit_bands.version;
+    try testing.expectEqual(b, (try doc.hitTestVertical(15, frame)).?);
+    try testing.expectEqual(i, (try doc.hitTestVertical(5, frame)).?);
+    try testing.expectEqual(second, (try doc.hitTestVertical(150, frame)).?);
+    try testing.expectEqual(body.as(Element), (try doc.hitTestVertical(220, frame)).?);
+    try testing.expectEqual(version, sm.hit_bands.version);
+
+    // inert isn't recorded: the boxes under it are
+    try third.removeAttribute(comptime .wrap("inert"), frame);
+    try testing.expectEqual(p, (try doc.hitTestVertical(220, frame)).?);
+    try testing.expectEqual(version, sm.hit_bands.version);
+
+    // Changes that move a box: an inline write, a class, the tree
+    try b.setAttribute(comptime .wrap("style"), try String.init(testing.arena_allocator, "display: block; position: absolute; top: 310px; height: 20px", .{}), frame);
+    try testing.expectEqual(first, (try doc.hitTestVertical(15, frame)).?);
+    try testing.expectEqual(b, (try doc.hitTestVertical(315, frame)).?);
+    try i.setAttribute(comptime .wrap("class"), comptime .wrap("low"), frame);
+    try testing.expectEqual(first, (try doc.hitTestVertical(5, frame)).?);
+    try testing.expectEqual(i, (try doc.hitTestVertical(345, frame)).?);
+    i.remove(frame);
+    try testing.expect((try doc.hitTestVertical(345, frame)) != i);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+}
+
+test "StyleManager: hit bands: a scoped change drops them" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div style="height: 400px"><section><input></section><section class=s><input><p class=a></p></section><p class=a></p></div>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { height: 20px } .tall { height: 60px } .s:focus-within > .a { height: 50px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const box = body.firstChild().?;
+    const first = box.firstChild().?;
+    const second = first.nextSibling().?;
+    const last = second.nextSibling().?.as(Element);
+    try first.firstChild().?.as(Element).focus(frame);
+
+    const steps = [_]enum { insert, class, focus }{ .insert, .class, .focus };
+    for (steps) |step| {
+        // Recorded, with last where it is now
+        const before = layout.boxTop(last, frame);
+        try testing.expectEqual(last, (try doc.hitTestVertical(before + 1, frame)).?);
+        try testing.expectEqual(true, sm.hit_bands.complete);
+        const style_version = frame.page.style_version;
+
+        switch (step) {
+            .insert => {
+                const p = try doc.createElement("p", null, frame);
+                try p.setAttribute(comptime .wrap("class"), comptime .wrap("a"), frame);
+                _ = try box.insertBefore(p.asNode(), first, frame);
+            },
+            .class => try box.firstChild().?.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("a tall"), frame),
+            .focus => try second.firstChild().?.as(Element).focus(frame),
+        }
+
+        // Scoped: the styles around it are kept
+        try testing.expectEqual(style_version, frame.page.style_version);
+        const after = layout.boxTop(last, frame);
+        try testing.expect(after >= before + 20);
+        try testing.expectEqual(last, (try doc.hitTestVertical(after + 1, frame)).?);
+    }
+}
+
 test "StyleManager: memo: a class attribute selector reaches where it sits" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -7180,6 +7399,25 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                 continue;
             }
 
+            // Hit tests that skip by the bands they have, which the steps
+            // had to drop if a box moved, against ones that walk everything
+            var hits: [64]?*Element = undefined;
+            for (&hits, 0..) |*hit, n| {
+                hit.* = try doc.hitTestVertical(@floatFromInt(n * 8), frame);
+            }
+            for (hits, 0..) |hit, n| {
+                const y: f64 = @floatFromInt(n * 8);
+                sm.hit_bands.complete = false;
+                const walked = try doc.hitTestVertical(y, frame);
+                if (walked != hit) {
+                    std.debug.print("sheet {d} step {d} y {d}: stale bands\n", .{ seed, step, y });
+                    return error.StaleBands;
+                }
+                // ... and by the bands that walk recorded
+                try testing.expectEqual(true, sm.hit_bands.complete);
+                try testing.expectEqual(walked, try doc.hitTestVertical(y, frame));
+            }
+
             const version = sm.layoutVersion();
             try measure(els.items, &got, frame);
             const extent = doc.extent();
@@ -7199,6 +7437,10 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
             // Sometimes start the next steps from an empty memo
             if (random.boolean()) {
                 sm.layout_bumps += 1;
+            }
+            // ... and sometimes with bands for them to make stale
+            if (random.boolean()) {
+                _ = try doc.hitTestVertical(0, frame);
             }
         }
         // The memo did survive changes, or this checked nothing
