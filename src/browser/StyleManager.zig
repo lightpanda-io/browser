@@ -141,6 +141,12 @@ class_reach: std.HashMapUnmanaged([]const u8, ClassReach, AttributeNameContext, 
 class_attribute_reach: ?ClassReach = null,
 has: HasKeys = .{},
 
+// What a focus move reaches from the elements whose :focus match flips (the
+// old and new active elements), and from those whose :focus-within match does
+// (their ancestors, up to the first one holding both). Null: nothing reads it.
+focus_reach: ?ClassReach = null,
+focus_within_reach: ?ClassReach = null,
+
 // Short dudupe list of roots that had treeChanged call since the memos last
 // filled. They don't need to be dropped again. Useful for common pattern of
 // appending in a loop.
@@ -670,11 +676,12 @@ fn addSelectorRules(
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, layer: u16) !void {
+    const matched = unwrapWhere(selector);
+    // Before anything is collected: a rule no bucket holds reads nothing
+    const placement = placeSelector(matched) orelse return;
     try self.collectAttributeNames(selector);
     self.siblings.addNext(nextReach(selector));
     try self.collectClassReach(selector, .subtree);
-    const matched = unwrapWhere(selector);
-    const placement = placeSelector(matched) orelse return;
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
@@ -1156,6 +1163,8 @@ fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, r
                 .has => |selectors| for (selectors) |selector| {
                     try self.collectClassReach(selector, .full);
                 },
+                .focus => self.focus_reach = if (self.focus_reach) |current| current.widest(reach) else reach,
+                .focus_within => self.focus_within_reach = if (self.focus_within_reach) |current| current.widest(reach) else reach,
                 else => {},
             },
             else => {},
@@ -1223,6 +1232,101 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
     return true;
 }
 
+/// The document's active element went from `old` to `new`. Drops the memo
+/// entries their :focus and :focus-within matches reach, like a class toggled
+/// on the elements that flip. Returns false when that's everything: the caller
+/// reports a full style change.
+pub fn focusChanged(self: *StyleManager, old: ?*Element, new: ?*Element) bool {
+    if (self.dirty) {
+        // the rebuild resets every memo
+        return true;
+    }
+    const focus = self.focus_reach;
+    const within = self.focus_within_reach;
+    if (focus == null and within == null) {
+        return true;
+    }
+    if (focus == .full or within == .full) {
+        return false;
+    }
+
+    var roots: [4]*Node = undefined;
+    var len: usize = 0;
+    inline for (.{ .{ old, new }, .{ new, old } }) |pair| {
+        if (pair[0]) |el| {
+            const node = el.asNode();
+            if (focus) |reach| {
+                roots[len] = reachRoot(node, reach);
+                len += 1;
+            }
+            if (within) |reach| {
+                const other: ?*Node = if (pair[1]) |o| o.asNode() else null;
+                if (other == null or node.contains(other.?) == false) {
+                    // Its ancestors flip up to the first one holding the
+                    // other end, and the topmost one's subtree covers them.
+                    var top = node;
+                    while (top._parent) |parent| {
+                        if (parent._type != .element) {
+                            if (parent._type == .document or node.isConnected()) {
+                                // Every ancestor (from or to no focus), or
+                                // out of a shadow tree into its host
+                                return false;
+                            }
+                            break;
+                        }
+                        if (other) |o| {
+                            if (parent.contains(o)) {
+                                break;
+                            }
+                        }
+                        top = parent;
+                    }
+                    roots[len] = reachRoot(top, reach);
+                    len += 1;
+                }
+            }
+        }
+    }
+
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.memo.count() != 0 and group.fresh(self.frame)) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    if (budget == 0) {
+        self.layout_bumps += 1;
+        return true;
+    }
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    for (roots[0..len]) |root| {
+        if (root._type == .document) {
+            return false;
+        }
+        if (self.droppedCovers(root)) {
+            continue;
+        }
+        boxes.restyled(root);
+        if (self.dropSubtree(root, memos, &budget) == false) {
+            return false;
+        }
+        self.recordDropped(root);
+    }
+    return true;
+}
+
+// Where the drop starts for a match that flips on `node`
+fn reachRoot(node: *Node, reach: ClassReach) *Node {
+    return switch (reach) {
+        .subtree => node,
+        .parent_subtree => node._parent orelse node,
+        .full => unreachable,
+    };
+}
+
 pub const TreeChange = enum { inserted, removed };
 
 /// `child` was inserted/removed from `parent`. Drop the memo entries that can
@@ -1261,7 +1365,7 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
     var boxes: BoxScope = .init(self, &memos, &budget);
     boxes.childMoved(parent, child, previous, next);
 
-    if (self.holdsFocus(child)) {
+    if ((self.focus_reach != null or self.focus_within_reach != null) and self.holdsFocus(child)) {
         // :focus-within on the ancestors
         return false;
     }
@@ -2079,6 +2183,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.reads_default = false;
     self.siblings = .{};
     self.reads_empty = false;
+    self.focus_reach = null;
+    self.focus_within_reach = null;
     self.class_reach = .empty;
     self.class_attribute_reach = null;
     self.has = .{};
@@ -6188,6 +6294,77 @@ test "StyleManager: memo: a class change drops what its selectors reach" {
     try testing.expect(frame.page.style_version != version);
 }
 
+test "StyleManager: memo: a focus move drops what :focus and :focus-within reach" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><span><input></span><p class=a></p></div><section><input><b></b></section><aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    // A rule whose subject is :focus is never bucketed: it reads nothing
+    try style_el.asNode().setTextContent("input:focus { display: none } .a { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?;
+    const first = div.firstChild().?.firstChild().?.as(Element);
+    const p = div.firstChild().?.nextSibling().?.as(Element);
+    const section = div.nextSibling().?;
+    const second = section.firstChild().?.as(Element);
+    const b = second.asNode().nextSibling().?.as(Element);
+    const aside = section.nextSibling().?;
+    const u = aside.firstChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+    try testing.expectEqual(null, sm.focus_reach);
+    try testing.expectEqual(null, sm.focus_within_reach);
+
+    // Nothing reads focus: a noop
+    var version = frame.page.style_version;
+    try first.focus(frame);
+    try testing.expectEqual(first, doc._active_element.?);
+    try first.blur(frame);
+    try testing.expectEqual(version, frame.page.style_version);
+
+    const reading = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try reading.asNode().setTextContent("div:focus-within .a { display: none } input:focus + b { display: none }", frame);
+    _ = try body.appendChild(reading.asNode(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+    try testing.expectEqual(ClassReach.parent_subtree, sm.focus_reach.?);
+    try testing.expectEqual(ClassReach.subtree, sm.focus_within_reach.?);
+
+    // From no focus, every ancestor's :focus-within flips
+    version = frame.page.style_version;
+    try first.focus(frame);
+    try testing.expect(frame.page.style_version != version);
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(false, sm.hasDisplayNone(b));
+
+    // Between two elements: their sides of the tree, up to <body>
+    var child = aside.firstChild();
+    while (child) |c| : (child = c.nextSibling()) {
+        try testing.expectEqual(false, sm.hasDisplayNone(c.as(Element)));
+    }
+    version = frame.page.style_version;
+    try second.focus(frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+    try testing.expectEqual(true, sm.hasDisplayNone(b));
+    try testing.expectEqual(true, sm.visibility.memo.contains(u));
+
+    // Inside :has(), anything can anchor on it
+    const anchored = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try anchored.asNode().setTextContent("aside:has(~ section :focus) u { display: none }", frame);
+    _ = try body.appendChild(anchored.asNode(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(u));
+    try testing.expectEqual(ClassReach.full, sm.focus_reach.?);
+    version = frame.page.style_version;
+    try first.focus(frame);
+    try testing.expect(frame.page.style_version != version);
+}
+
 test "StyleManager: memo: a class attribute selector reaches where it sits" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -6867,7 +7044,7 @@ test "StyleManager: memo: reading tops in order stacks each sibling once" {
 
 // Random tree and class changes with reads in between: what the layout memo
 // keeps must be what a memo filled from nothing computes.
-test "StyleManager: memo: tree and class changes keep only boxes that didn't move" {
+test "StyleManager: memo: tree, class and focus changes keep only boxes that didn't move" {
     const layout = @import("layout.zig");
 
     const sheets = [_][]const u8{
@@ -6877,6 +7054,7 @@ test "StyleManager: memo: tree and class changes keep only boxes that didn't mov
         \\.abs { position: absolute; top: 3px } .wide { width: 200px }
         \\.blk + .blk { height: 12px } .on > .blk { height: 16px }
         \\.on + div { height: 18px } .on span { display: block; height: 4px }
+        \\div:focus-within > .blk { height: 22px }
         ,
         // Every sibling, :empty, flex rows and boxes sized by their content
         \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
@@ -6885,6 +7063,8 @@ test "StyleManager: memo: tree and class changes keep only boxes that didn't mov
         \\.tall ~ .blk { height: 9px } div:nth-child(2n) { height: 14px }
         \\.on:empty { height: 40px } :empty + .blk { height: 21px }
         \\.row { display: flex } .on > span { display: block; height: 4px }
+        \\div:focus-within ~ .tall { height: 33px } :focus > span { height: 6px }
+        \\:focus + div { height: 13px }
         ,
     };
     const classes = [_][]const u8{ "blk", "tall", "box", "hid", "ib", "abs", "wide", "on", "row" };
@@ -6938,7 +7118,7 @@ test "StyleManager: memo: tree and class changes keep only boxes that didn't mov
         for (0..600) |step| {
             const target = els.items[random.uintLessThan(usize, els.items.len)];
             const node = target.asNode();
-            switch (random.uintLessThan(u8, 10)) {
+            switch (random.uintLessThan(u8, 11)) {
                 // A new element, appended or inserted before a child
                 0, 1, 2 => if (node.isConnected() and els.items.len < 120) {
                     const el = try doc.createElement(if (random.boolean()) "div" else "span", null, frame);
@@ -6967,6 +7147,10 @@ test "StyleManager: memo: tree and class changes keep only boxes that didn't mov
                 6, 7, 8 => if (node != root) {
                     const class = if (random.uintLessThan(u8, 4) == 0) "" else classes[random.uintLessThan(usize, classes.len)];
                     try target.setAttribute(comptime .wrap("class"), try String.init(arena, class, .{}), frame);
+                },
+                // Focus moves, sometimes to nothing
+                9 => if (node.isConnected()) {
+                    doc.setActiveElement(if (random.uintLessThan(u8, 5) == 0) null else target, frame);
                 },
                 else => if (node.isConnected()) {
                     if (node.firstChild()) |first| {
@@ -7002,7 +7186,8 @@ test "StyleManager: memo: tree and class changes keep only boxes that didn't mov
             if (sm.layoutVersion() == version and sm.layout_memo.version == version) {
                 kept += 1;
             }
-            sm.layout_bumps += 1;
+            // From nothing: no style memo either
+            frame.page.style_version += 1;
             try measure(els.items, &want, frame);
             for (got.items, want.items, 0..) |g, w, i| {
                 if (std.meta.eql(g, w) == false) {
