@@ -5,7 +5,7 @@ Lightpanda accepts pull requests through GitHub.
 ## Development
 
 - Run the tests: `make test`
-- Check formatting: `zig fmt --check ./`
+- Check formatting: `make fmt`
 
 See [AGENTS.md](AGENTS.md) for the full set of test, formatting, and code conventions (test filters, the leak-detection invariant, `@import` alias case, struct-init inference).
 
@@ -22,7 +22,7 @@ build instead.
 ## Before opening a PR
 
 - [ ] Tests pass (`make test`).
-- [ ] Formatting is clean (`zig fmt --check ./`).
+- [ ] Formatting is clean (`make fmt`).
 - [ ] CLA signed (see below).
 
 ## CLA

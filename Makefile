@@ -78,7 +78,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test test-completion-bash coverage bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test fmt test-completion-bash coverage bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -128,6 +128,11 @@ run-debug: build-dev
 
 test:
 	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) test -freference-trace
+
+## Check formatting
+fmt:
+# Explicit paths: ./ would also walk into the gitignored zig-pkg/
+	$(ZIG) fmt --check build.zig build.zig.zon src orderfile
 
 ## Test the generated Bash completion script (COMPLETION_BASH=/bin/bash)
 test-completion-bash: build-dev
