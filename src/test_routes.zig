@@ -821,14 +821,14 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/styles/large.css")) {
-        // Over 2 MiB, with the rule under test last.
-        const chunk = ".pad { color: #abcdef; } "; // 25 bytes
-        const tail = ".large-hide { display: none; }";
-        const repeats = 5 * 1024 * 1024 / 2 / chunk.len;
-        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats + tail.len);
-        for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
-        body.appendSliceAssumeCapacity(tail);
-        return req.respond(body.items, .{
+        // Over 2 MiB, with the rule under test last. The bulk is a comment:
+        // ~100k real rules took most of the test's time budget in debug CI.
+        const tail = "*/ .large-hide { display: none; }";
+        const body = try req_allocator.alloc(u8, 5 * 1024 * 1024 / 2 + tail.len);
+        body[0..2].* = "/*".*;
+        @memset(body[2 .. body.len - tail.len], ' ');
+        @memcpy(body[body.len - tail.len ..], tail);
+        return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/css" },
             },

@@ -3615,7 +3615,7 @@ test "download: a multi-megabyte body arrives intact" {
     const path = try testing.tmpPath(&tmp, "large.css");
 
     const r = try testDownload(&registry, "http://127.0.0.1:9582/styles/large.css", path);
-    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621455 bytes (text/css)"));
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621473 bytes (text/css)"));
 
     const body = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4 * 1024 * 1024));
     try std.testing.expect(std.mem.endsWith(u8, body, ".large-hide { display: none; }"));
@@ -3638,7 +3638,7 @@ test "download: --http-max-response-size caps memory, not a streamed body's Cont
     const path = try testing.tmpPath(&tmp, "large.css");
 
     const r = try testDownload(&registry, "http://127.0.0.1:9582/styles/large.css", path);
-    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621455 bytes"));
+    try std.testing.expect(std.mem.startsWith(u8, r.text, "saved 2621473 bytes"));
 }
 
 test "download: a 404 saves nothing" {
