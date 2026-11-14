@@ -131,6 +131,11 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const timer: std.Io.Timestamp = .now(io, .boot);
 
+    defer if (comptime is_cdp == false) {
+        // reset it (this is never set when is_cdp == true)
+        self.http_client.setWaitDeadline(null);
+    };
+
     // Periodic V8 GC hint during long waits. V8 is otherwise only nudged on
     // session/page teardown (Session.zig, Page.zig), so a page that stays
     // alive for seconds while running heavy JS accumulates wrappers and
@@ -161,10 +166,17 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         }
         session.processDestroyQueues();
 
+        if (comptime is_cdp == false) {
+            const elapsed_ms: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
+            const remaining_ms = timeout_ms -| elapsed_ms;
+            self.http_client.setWaitDeadline(lp.datetime.milliTimestamp(.boot) + remaining_ms);
+        }
+
         const tick_result = self._tick(is_cdp, 200, conditions) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 error.ClientDisconnected => {}, // CDP layer already logged this
+                error.WaitDeadlineExceeded => return .timeout,
                 else => log.err(.browser, "session wait", .{ .err = err }),
             }
             return err;

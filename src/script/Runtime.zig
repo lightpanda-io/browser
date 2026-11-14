@@ -682,6 +682,23 @@ fn driveAsync(self: *Runtime, context: *const v8.Context, try_catch: *const v8.T
         // agent-side settling below (the Runtime owns a separate isolate).
         var tick_failed = false;
         {
+            // Publish the soonest pending deadline as the http client's sync
+            // deadline: a parser-blocking subresource fetched during this tick
+            // spins inside `submitSync` on the same stack and would otherwise
+            // hold the tick past every deadline (see HttpClient.wait_deadline_ms).
+            const run_timer_ms: u64 = @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds());
+            var soonest: u64 = std.math.maxInt(u64);
+            for (self.pending_gotos.items) |pending| {
+                soonest = @min(soonest, pending.deadline_ms);
+            }
+            const http_client = &self.session.browser.http_client;
+            if (soonest != std.math.maxInt(u64)) {
+                http_client.setWaitDeadline(lp.datetime.milliTimestamp(.boot) + (soonest -| run_timer_ms));
+            } else {
+                http_client.setWaitDeadline(null);
+            }
+            defer http_client.setWaitDeadline(null);
+
             self.session.browser.env.isolate.enter();
             defer self.session.browser.env.isolate.exit();
             _ = runner.tick(50, conditions) catch {
@@ -708,10 +725,19 @@ fn settleCompleted(self: *Runtime, context: *const v8.Context, conditions: []con
     var write: usize = 0;
     for (conditions, 0..) |condition, i| {
         const pending = &self.pending_gotos.items[i];
-        const outcome: ?Outcome = switch (condition.status) {
-            .complete => .loaded,
-            .err => .failed,
-            .pending => if (now_ms >= pending.deadline_ms) .timed_out else null,
+        // Deadline first for pending and complete conditions: a complete set
+        // during the deadline tick itself (e.g. the sync deadline aborted the
+        // parser-blocking subresource and let the document finish) must still
+        // settle as a timeout — the caller's bound already elapsed. A genuine
+        // error keeps reporting .failed regardless.
+        const outcome: ?Outcome = blk: {
+            if (condition.status == .err) break :blk .failed;
+            if (now_ms >= pending.deadline_ms) break :blk .timed_out;
+            break :blk switch (condition.status) {
+                .complete => .loaded,
+                .pending => null,
+                .err => unreachable,
+            };
         };
         if (outcome) |o| {
             self.settlePending(context, pending, o);
@@ -1464,6 +1490,55 @@ test "agent script runtime: a failed navigation rejects the goto promise" {
         \\  caught = String(e);
         \\}
         \\if (!caught.toLowerCase().includes("navigation")) throw new Error("expected a navigation rejection, got: " + caught);
+    );
+}
+
+test "agent script runtime: goto timeout bounds a navigation blocked on a slow parser-blocking script" {
+    testing.silenceLog(&.{ .frame, .http });
+
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // The page's <script src> answers after 3s and the goto deadline is 300ms:
+    // the fetch is in flight inside the tick, so without the sync deadline the
+    // wait only ends at the script's response.
+    try runTestScript(runtime,
+        \\const t0 = Date.now();
+        \\let caught = "";
+        \\try {
+        \\  await new Page().goto("http://localhost:9582/goto_timeout/page.html?delay_ms=3000", { timeout: 300 });
+        \\} catch (e) {
+        \\  caught = String(e);
+        \\}
+        \\const elapsed = Date.now() - t0;
+        \\if (!caught.toLowerCase().includes("timed out")) throw new Error("expected a timeout rejection, got: " + caught);
+        \\if (elapsed < 250) throw new Error("goto rejected too early: " + elapsed + "ms");
+        \\if (elapsed > 2000) throw new Error("goto deadline not honored, rejected at " + elapsed + "ms");
+    );
+}
+
+test "agent script runtime: goto resolves when the load completes within the timeout" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // The same blocking-script page, but the script answers well inside the
+    // deadline: the navigation must resolve and the blocking script must have
+    // run before the promise settled.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/goto_timeout/page.html?delay_ms=100", { timeout: 15000 });
+        \\const status = page.evaluate("document.getElementById('status').textContent");
+        \\if (status !== "script ran") throw new Error("blocking script did not run before load: '" + status + "'");
     );
 }
 

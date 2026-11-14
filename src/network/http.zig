@@ -1028,6 +1028,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         error.AbortedByCallback,
         error.AbortAuthChallenge,
         error.SyncWaitInterrupted,
+        error.WaitDeadlineExceeded,
         => .aborted,
         error.RobotsBlocked => .robots_blocked,
         error.BotChallenge => .bot_challenge,
