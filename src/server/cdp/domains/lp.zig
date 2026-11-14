@@ -178,8 +178,12 @@ fn dump(cmd: anytype) !void {
         selector: ?[]const u8 = null,
         backendNodeId: ?NodeRegistry.Id = null,
         maxBytes: ?u32 = null,
+        withFrames: bool = false,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParams;
+    if (params.withFrames and params.format != .html) {
+        return error.InvalidParams;
+    }
 
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
@@ -204,7 +208,7 @@ fn dump(cmd: anytype) !void {
             if (params.format == .markdown) {
                 try markdown.dump(state, .{ .max_bytes = params.maxBytes }, &aw.writer, frame);
             } else {
-                try lp.dump.render(state, .{ .max_bytes = params.maxBytes }, &aw.writer, frame);
+                try lp.dump.render(state, .{ .max_bytes = params.maxBytes, .with_frames = params.withFrames }, &aw.writer, frame);
             }
             return cmd.sendResult(.{ .format = params.format, .content = aw.written() }, .{});
         },
@@ -666,6 +670,30 @@ test "cdp.lp: dump formats, strip and scoping" {
     try testing.expect((try dumpReply(&ctx, 8)).get("error") != null);
     try ctx.processMessage(.{ .id = 9, .method = "LP.dump", .params = .{ .strip = .{ .shell = true } } });
     try testing.expect((try dumpReply(&ctx, 9)).get("error") != null);
+}
+
+test "cdp.lp: dump withFrames" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S", .url = "dump_frames.html", .target_id = "FID-000000000S".* });
+
+    // Without withFrames, an iframe dumps its own (ignored) children.
+    try ctx.processMessage(.{ .id = 1, .method = "LP.dump", .params = .{ .format = "html" } });
+    var content = try dumpContent(&ctx, 1, "html");
+    try testing.expect(std.mem.find(u8, content, ">ignored</iframe>") != null);
+    try testing.expect(std.mem.find(u8, content, "<p>inner</p>") == null);
+
+    // With it, each iframe holds its content document, nested ones too.
+    try ctx.processMessage(.{ .id = 2, .method = "LP.dump", .params = .{ .format = "html", .withFrames = true } });
+    content = try dumpContent(&ctx, 2, "html");
+    try testing.expect(std.mem.find(u8, content, "ignored") == null);
+    try testing.expect(std.mem.find(u8, content, "<p>inner</p>") != null);
+    try testing.expect(std.mem.find(u8, content, "<b>deep</b>") != null);
+
+    // html only.
+    try ctx.processMessage(.{ .id = 3, .method = "LP.dump", .params = .{ .format = "markdown", .withFrames = true } });
+    try testing.expect((try dumpReply(&ctx, 3)).get("error") != null);
 }
 
 // A backendNodeId can name a node in a child frame while the handler only
