@@ -1537,18 +1537,19 @@ fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*
 // Their later siblings move, `parent` and its auto-height ancestors grow or
 // shrink, and so on up. Widths flow the other way, so only the ancestors'
 // content widths can change: unless one of them sizes other boxes by its
-// content (see Entry.sizes_others), which returns false, for the caller to
-// drop everything.
+// content (see Entry.sizes_others). Then every width under the topmost one
+// that does goes; the heights and offsets there stay, no width decides them.
 fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
     const memo = &self.layout_memo;
     var el = parent;
     var from = index;
     var heights = true;
+    var sizing: ?*Element = null;
     while (true) {
         var entry_: ?*LayoutMemo.Entry = null;
         if (memo.map.getPtr(el)) |entry| {
             if (entry.sizes_others) {
-                return false;
+                sizing = el;
             }
             if (from) |i| {
                 entry.placed = @min(entry.placed, i);
@@ -1578,9 +1579,39 @@ fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
         }
         el = el.asNode().flatTreeParentElement(self.frame) orelse break;
     }
+    if (sizing) |root| {
+        self.dropWidths(root.asNode());
+    }
     // Document.extent reads the root's children
     self.extent_bumps += 1;
     return true;
+}
+
+// Drops the widths of `root`'s flat subtree, and with them what made a
+// change under it reach this far: no cached width reads another box's
+// content anymore, until layout.zig caches one again. So a batch of changes
+// under the same row walks it once.
+fn dropWidths(self: *StyleManager, root: *Node) void {
+    var tw = TreeWalker.Full.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (comptime lp.IS_TEST) {
+            self.walked += 1;
+        }
+        if (self.layout_memo.map.getPtr(el)) |entry| {
+            inline for (.{ .box_width, .content_width, .full_content_width, .min_content_width, .scrollable_content_width, .row_shrink }) |kind| {
+                entry.drop(kind);
+            }
+            entry.sizes_others = false;
+        }
+        if (el.hostedShadowRoot(self.frame)) |shadow| {
+            self.dropWidths(shadow.asNode());
+        }
+        if (el.is(Element.Html.Slot)) |slot| {
+            for (slot._assigned.items) |assigned| {
+                self.dropWidths(assigned);
+            }
+        }
+    }
 }
 
 // Whether el's height is declared, as far as the memo knows: a tree change
@@ -6475,6 +6506,53 @@ test "StyleManager: memo: a focus move drops what :focus and :focus-within reach
     version = frame.page.style_version;
     try first.focus(frame);
     try testing.expect(frame.page.style_version != version);
+}
+
+test "StyleManager: memo: a change under a flex row drops its widths only" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div class=row><div class=it></div><div class=it></div></div>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".row { display: flex; width: 100px } .it { width: 80px; height: 10px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const row = body.firstChild().?;
+    const first = row.firstChild().?.as(Element);
+    const u = row.nextSibling().?.nextSibling().?.firstChild().?.as(Element);
+
+    // Everything read: the two items shrink to share the row
+    _ = try doc.hitTestVertical(0, frame);
+    try testing.expectEqual(50, layout.boxWidth(first, frame));
+    try testing.expect(sm.getCachedLayout(u, .box_height) != null);
+    const version = sm.layoutVersion();
+
+    var walked: [2]usize = undefined;
+    for (&walked) |*count| {
+        const item = try doc.createElement("div", null, frame);
+        try item.setAttribute(comptime .wrap("class"), comptime .wrap("it"), frame);
+        const before = sm.walked;
+        _ = try row.appendChild(item.asNode(), frame);
+        count.* = sm.walked - before;
+    }
+    // No width was read in between: the row's subtree is walked once
+    try testing.expect(walked[0] >= 4);
+    try testing.expectEqual(1, walked[1]);
+
+    // The memo is kept, without the widths a fourth item changes
+    try testing.expectEqual(version, sm.layoutVersion());
+    try testing.expectEqual(version, sm.layout_memo.version);
+    try testing.expect(sm.getCachedLayout(u, .box_height) != null);
+    try testing.expectEqual(25, layout.boxWidth(first, frame));
 }
 
 test "StyleManager: hit bands: a hit test skips the subtrees the point is outside of" {
