@@ -270,7 +270,7 @@ const Context = struct {
             if (shouldAddSpacing(tag)) {
                 try self.writer.writeByte('\n');
             }
-        } else if (tag == .li or tag == .tr) {
+        } else if (tag == .li or tag == .tr or tag == .dt or tag == .dd) {
             try self.ensureNewline();
         }
 
@@ -768,6 +768,10 @@ test "browser.markdown: whitespace" {
 
 test "browser.markdown: escaping" {
     try testMarkdownHTML("<p># Not a header</p>", "\n\\# Not a header\n");
+}
+
+test "browser.markdown: definition list" {
+    try testMarkdownHTML("<dl><dt>Term</dt><dd>Definition</dd><dt>Other</dt><dd>Meaning</dd></dl>", "Term\nDefinition\nOther\nMeaning\n");
 }
 
 test "browser.markdown: strikethrough" {
