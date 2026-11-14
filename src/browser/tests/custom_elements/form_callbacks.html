@@ -232,3 +232,20 @@ customElements.define('fc-control', FcControl);
   testing.onload(() => testing.expectEqual(2, control.resets));
 }
 </script>
+
+<form id="upgrade_form"><input><fc-late></fc-late></form>
+
+<script id="upgrade_joins_elements">
+{
+  const form = document.getElementById('upgrade_form');
+  const elements = form.elements;
+  // undefined, it's just an HTMLElement
+  testing.expectEqual(1, elements.length);
+
+  customElements.define('fc-late', class extends HTMLElement {
+    static formAssociated = true;
+  });
+  testing.expectEqual(2, elements.length);
+  testing.expectEqual('FC-LATE', elements[1].tagName);
+}
+</script>

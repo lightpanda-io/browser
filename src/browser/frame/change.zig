@@ -158,20 +158,39 @@ pub const State = enum {
     checked,
     indeterminate,
     defined,
-    // These bump dom_version too: selectedOptions is a live collection, and
-    // both move boxes, so the layout observers look.
-    selectedness,
-    popover_open,
+    popover_open, // Moves boxes, so the layout observers look.
+    selectedness, // Also bumps dom_version: selectedOptions is a live collection.
 };
 
 pub fn stateChanged(element: *Element, state: State, frame: *Frame) void {
     const handled = detachedHandled(element.asNode(), frame);
     switch (state) {
-        .value, .checked, .indeterminate, .defined => if (handled == false) styleChanged(frame),
-        .selectedness, .popover_open => if (handled) {
+        .value, .checked, .indeterminate => if (handled == false) styleChanged(frame),
+        .defined => {
+            if (joinsFormControls(element)) {
+                frame.page.dom_version += 1;
+            }
+            if (handled == false) {
+                styleChanged(frame);
+            }
+        },
+        .popover_open => if (handled == false) renderingChanged(frame),
+        .selectedness => if (handled) {
             frame.page.dom_version += 1;
         } else domChanged(frame),
     }
+}
+
+// A form-associated upgrade makes the element a listed control, so
+// form.elements (node_live isFormControl) now includes it. A customized
+// built-in isn't an Html.Custom: its tag already decided.
+fn joinsFormControls(element: *Element) bool {
+    if (element.asNode()._parent == null) {
+        // cannot be in a collection
+        return false;
+    }
+    const custom = element.is(Element.Html.Custom) orelse return false;
+    return custom.isFormAssociated();
 }
 
 pub fn focusChanged(old: ?*Element, new: ?*Element, frame: *Frame) void {
@@ -302,4 +321,9 @@ test "change: only attributes a live collection reads move dom_version" {
     // and inserting it is the change collections see
     _ = try html.appendChild(fresh.asNode(), frame);
     try testing.expect(frame.page.dom_version != detached);
+
+    // An open popover is no collection's business
+    const popover = frame.page.dom_version;
+    stateChanged(div, .popover_open, frame);
+    try testing.expectEqual(popover, frame.page.dom_version);
 }
