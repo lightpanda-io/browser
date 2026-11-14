@@ -439,7 +439,7 @@ test "docs: pandascript-builtins lists exactly the recorded tools" {
         try testing.expectEqual(t.isRecorded(), Schema.scriptReturns(t) != null);
     }
     try testing.expect(std.mem.find(u8, out, "`page.extract(schema)`") != null);
-    try testing.expect(std.mem.find(u8, out, "| `Clicked element (<target>)` |") != null);
+    try testing.expect(std.mem.find(u8, out, "| A status line starting `Clicked element (<target>)`, ") != null);
     // No signature takes a node id; the one mention is what `waitForSelector` returns.
     try testing.expectEqual(1, std.mem.count(u8, out, "backendNodeId"));
     for (lp.Runtime.page_methods) |m| {
