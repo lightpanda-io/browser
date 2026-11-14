@@ -30,6 +30,7 @@ const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const layout = @import("../layout.zig");
 const Parser = @import("../parser/Parser.zig");
+const StyleManager = @import("../StyleManager.zig");
 const exec_command = @import("../frame/exec_command.zig");
 
 const Node = @import("Node.zig");
@@ -1004,6 +1005,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // element whose rect contains (x, y).
     //
     // A display:none or inert subtree isn't walked: nothing in it opts out.
+    // Neither is one whose band the point is outside of (see
+    // StyleManager.HitBands), once a walk has recorded them: `recording`
+    // is that walk, which skips nothing but display:none.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
@@ -1012,7 +1016,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 
     // (x, y) is viewport-relative; the faux layout is in document coordinates.
     const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
-    const y = viewport_y + @as(f64, @floatFromInt(owner.window.getScrollY()));
+    const scroll_y = owner.window.getScrollY();
+    const y = viewport_y + @as(f64, @floatFromInt(scroll_y));
+    const recording = style_manager.hasHitBands(scroll_y) == false;
 
     // Each entry points at its nearest element ancestor's level (its
     // flat-tree parent's), which its own box is placed from. Levels are a
@@ -1026,22 +1032,39 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     while (stack.items.len > 0) {
         const entry = stack.pop() orelse break;
         const node = entry.node;
-        levels.shrinkRetainingCapacity(entry.level + 1);
+        HitLevel.close(&levels, entry.level + 1, recording, style_manager);
         var level = entry.level;
         if (node.is(Element)) |element| {
-            const above = levels.items[level];
+            if (recording == false) {
+                if (style_manager.getHitBand(element)) |band| {
+                    if (band.holds(y) == false) {
+                        continue;
+                    }
+                }
+            }
+            const above = &levels.items[level];
             if (comptime lp.IS_DEBUG) {
                 std.debug.assert(above.element == element.asNode().flatTreeParentElement(owner));
             }
             const top = layout.boxTopFrom(element, above.element, above.top, owner);
-            if (style_manager.hasDisplayNone(element) or element.hasInertAttribute()) {
+            if (style_manager.hasDisplayNone(element)) {
+                if (recording) {
+                    style_manager.setHitBand(element, .none);
+                }
                 continue;
             }
+            // The bands don't know about inert, an attribute nothing else
+            // here tracks: recording walks its subtree, for the boxes only.
+            const inert = above.inert or element.hasInertAttribute();
+            if (inert and recording == false) {
+                continue;
+            }
+            const band: StyleManager.HitBand = if (recording) .of(top, layout.boxHeight(element, owner)) else .none;
             // Unlike display:none, visibility and pointer-events let a child
             // opt back in, so the subtree is still walked. So is a subtree
             // that starts below y: a positioned box in it can sit higher.
             var left: ?f64 = null;
-            if (style_manager.isHitTestable(element) and y >= top and y <= top + layout.boxHeight(element, owner)) {
+            if (inert == false and style_manager.isHitTestable(element) and y >= top and y <= top + layout.boxHeight(element, owner)) {
                 if (ignore_x) {
                     topmost = element;
                 } else {
@@ -1055,9 +1078,13 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
                 }
             }
             if (node.flatFirstChild(frame) == null) {
+                if (recording) {
+                    style_manager.setHitBand(element, band);
+                    above.band.add(band);
+                }
                 continue;
             }
-            try levels.append(frame.local_arena, .{ .element = element, .top = top, .left = left, .up = level });
+            try levels.append(frame.local_arena, .{ .element = element, .top = top, .left = left, .up = level, .band = band, .inert = inert });
             level = @intCast(levels.items.len - 1);
         }
 
@@ -1070,6 +1097,10 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         std.mem.reverse(Entry, stack.items[first..]);
     }
 
+    if (recording) {
+        HitLevel.close(&levels, 1, recording, style_manager);
+        style_manager.hitBandsRecorded();
+    }
     return topmost;
 }
 
@@ -1084,6 +1115,23 @@ const HitLevel = struct {
     left: ?f64,
     up: u32, // the level of element's own parent
     cursor: ?Element.LineCursor = null,
+    // When recording: element's box and those of its subtree walked so far
+    band: StyleManager.HitBand = .none,
+    inert: bool = false, // element or an ancestor
+
+    // Drops the levels from `keep` up: their subtrees are walked. When
+    // recording, each one's band is final, and part of its parent's.
+    fn close(levels: *std.ArrayList(HitLevel), keep: usize, recording: bool, style_manager: *StyleManager) void {
+        if (recording == false) {
+            levels.shrinkRetainingCapacity(keep);
+            return;
+        }
+        while (levels.items.len > keep) {
+            const done = levels.pop().?;
+            style_manager.setHitBand(done.element.?, done.band);
+            levels.items[done.up].band.add(done.band);
+        }
+    }
 
     // `element`'s left in document coordinates, as Element.horizontalPosition
     // computes it. `index` is its parent's level.
