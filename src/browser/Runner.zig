@@ -176,6 +176,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 error.ClientDisconnected => {}, // CDP layer already logged this
+                error.WaitDeadlineExceeded => return .timeout,
                 else => log.err(.browser, "session wait", .{ .err = err }),
             }
             return err;
