@@ -686,7 +686,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     const matched = unwrapWhere(selector);
     // Before anything is collected: a rule no bucket holds reads nothing
     const placement = placeSelector(matched) orelse return;
-    try self.collectAttributeNames(selector);
+    try self.collectAttributeNames(selector, false);
     self.siblings.addNext(nextReach(selector));
     try self.collectClassReach(selector, .subtree);
     const rank_and_order = try self.nextPriority(layer);
@@ -705,24 +705,33 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     }
 }
 
-fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector) Allocator.Error!void {
-    try self.collectCompoundAttributeNames(selector.first);
-    for (selector.segments) |segment| {
+// `nested`: an argument of :not(), :is()..., not a rule's own selector
+fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector, nested: bool) Allocator.Error!void {
+    try self.collectCompoundAttributeNames(selector.first, nested);
+    for (selector.segments, 0..) |segment, i| {
         switch (segment.combinator) {
-            .subsequent_sibling => self.siblings.later = true,
+            .subsequent_sibling => {
+                // `a ~ b`: an element entering or leaving changes b's match
+                // when it can be a. Unless a's own match reads its siblings
+                // (`x + a ~ b`, `a:first-child ~ b`): then anything moving
+                // before it can.
+                const left = if (i == 0) selector.first else selector.segments[i - 1].compound;
+                const reads = nested or readsSiblings(left) or (i != 0 and selector.segments[i - 1].combinator == .next_sibling);
+                try self.siblings.following.add(self.arena.allocator(), if (reads) null else left);
+            },
             // counted by nextReach
             .next_sibling, .descendant, .child => {},
         }
-        try self.collectCompoundAttributeNames(segment.compound);
+        try self.collectCompoundAttributeNames(segment.compound, nested);
     }
 }
 
-fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compound) Allocator.Error!void {
+fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compound, nested: bool) Allocator.Error!void {
     // By pointer: a short name's str() points into its String, which would be
     // an issue, except these are all on the same self.arena, so we can copy the pointer.
     const allocator = self.arena.allocator();
     for (compound.parts) |*part| {
-        const nested: []const Selector.Selector = switch (part.*) {
+        const arguments: []const Selector.Selector = switch (part.*) {
             .attribute => |*attr| {
                 if (attr.name.eql(comptime .wrap("style"))) {
                     self.reads_style_attribute = true;
@@ -739,15 +748,15 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
                     break :blk selectors;
                 },
                 .nth_child_of => |of| blk: {
-                    self.siblings.later = true;
+                    self.siblings.later.any = true;
                     break :blk of.selectors;
                 },
                 .nth_last_child_of => |of| blk: {
-                    self.siblings.earlier = true;
+                    self.siblings.earlier.any = true;
                     break :blk of.selectors;
                 },
                 else => {
-                    self.siblings.add(pseudo);
+                    try self.siblings.add(allocator, pseudo, if (nested) null else compound);
                     if (readsOtherFormElements(pseudo)) {
                         self.reads_form = true;
                         self.reads_default = self.reads_default or pseudo == .default;
@@ -763,8 +772,8 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
             },
             else => continue,
         };
-        for (nested) |selector| {
-            try self.collectAttributeNames(selector);
+        for (arguments) |selector| {
+            try self.collectAttributeNames(selector, true);
         }
     }
 }
@@ -876,12 +885,40 @@ const SiblingReads = struct {
     // A change reaches this many element siblings after it: one for `+` or
     // :first-child, one more for each `+` that follows (see nextReach)
     next: u8 = 0,
-    // ... every later one: `~`, :nth-child(), :nth-of-type(), :first-of-type
-    later: bool = false,
+    // ... every later one that can match a compound counting the siblings
+    // before it: :nth-child(), :nth-of-type(), :first-of-type
+    later: Reach = .{},
+    // ... every later one, when what moved can match the compound left of a `~`
+    following: Reach = .{},
     // ... the previous element sibling: :last-child
     previous: bool = false,
-    // ... every earlier one: :nth-last-child(), :nth-last-of-type(), :last-of-type
-    earlier: bool = false,
+    // ... every earlier one that can match a compound counting the siblings
+    // after it: :nth-last-child(), :nth-last-of-type(), :last-of-type
+    earlier: Reach = .{},
+
+    // The compounds a change reaches through, by key; `any` when one has no
+    // key, or isn't known.
+    const Reach = struct {
+        any: bool = false,
+        keys: Keys = .{},
+
+        fn add(self: *Reach, allocator: Allocator, compound: ?Selector.Compound) Allocator.Error!void {
+            if (self.any) {
+                return;
+            }
+            const c = compound orelse {
+                self.any = true;
+                return;
+            };
+            if (try self.keys.add(allocator, c) == false) {
+                self.any = true;
+            }
+        }
+
+        fn matches(self: *const Reach, el: *Element) bool {
+            return self.any or self.keys.matches(el);
+        }
+    };
 
     // Past this, walking the next siblings one by one costs more than the
     // parent's subtree, which batches.
@@ -889,26 +926,54 @@ const SiblingReads = struct {
 
     fn addNext(self: *SiblingReads, reach: usize) void {
         if (reach > max_next) {
-            self.later = true;
+            self.later.any = true;
             return;
         }
         self.next = @max(self.next, @as(u8, @intCast(reach)));
     }
 
-    fn add(self: *SiblingReads, pseudo: Selector.PseudoClass) void {
+    // `compound` holds `pseudo`; null inside :not(), :is()..., where it
+    // isn't the one the sibling has to match.
+    fn add(self: *SiblingReads, allocator: Allocator, pseudo: Selector.PseudoClass, compound: ?Selector.Compound) Allocator.Error!void {
         switch (pseudo) {
             // their next sibling is counted by nextReach
             .last_child, .only_child => self.previous = true,
-            .nth_child, .nth_of_type, .first_of_type => self.later = true,
-            .nth_last_child, .nth_last_of_type, .last_of_type => self.earlier = true,
+            .nth_child, .nth_of_type, .first_of_type => try self.later.add(allocator, compound),
+            .nth_last_child, .nth_last_of_type, .last_of_type => try self.earlier.add(allocator, compound),
             .only_of_type => {
-                self.later = true;
-                self.earlier = true;
+                try self.later.add(allocator, compound);
+                try self.earlier.add(allocator, compound);
             },
             else => {},
         }
     }
 };
+
+// Whether `compound`'s match on an element depends on its siblings: then a
+// sibling moving changes it, whatever that sibling is.
+fn readsSiblings(compound: Selector.Compound) bool {
+    for (compound.parts) |part| {
+        const nested: []const Selector.Selector = switch (part) {
+            .pseudo_class => |pseudo| switch (pseudo) {
+                .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type, .nth_child_of, .nth_last_child_of => return true,
+                .not, .is, .where, .has => |selectors| selectors,
+                else => continue,
+            },
+            else => continue,
+        };
+        for (nested) |selector| {
+            if (readsSiblings(selector.first)) {
+                return true;
+            }
+            for (selector.segments) |segment| {
+                if (segment.combinator == .next_sibling or segment.combinator == .subsequent_sibling or readsSiblings(segment.compound)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 
 /// How many element siblings after a gap (an element inserted or removed) can
 /// change what `selector` matches. A compound's match changes at the gap (the
@@ -973,59 +1038,45 @@ fn isFormElement(el: *Element) bool {
 /// E:has(S) reads E's subtree, so a change under E can change what it matches.
 /// But if the argument is only made of descendants and child combinators, the
 /// selector can only change when the change matches S's subject.
-const HasKeys = struct {
-    // An argument that can change without its subject moving, or with no key.
-    any: bool = false,
+/// What an element needs for a compound to match it, one key per compound:
+/// a name it carries as id, class, tag or attribute, or its tag. An element
+/// with none of the keys matches none of the compounds.
+const Keys = struct {
     tags: std.EnumSet(Tag) = .empty,
     names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
 
-    // How many ancestors of a subject an argument reaches: `:has(> a > img)`
-    // (stored as `:scope > a > img`) 2, so its subject moving can only change
-    // the match of its 2 nearest ancestors. Unbounded with a descendant
-    // combinator.
-    depth: usize = 0,
-    unbounded: bool = false,
-
-    fn isEmpty(self: *const HasKeys) bool {
-        return self.any == false and self.tags.count() == 0 and self.names.count() == 0;
+    fn isEmpty(self: *const Keys) bool {
+        return self.tags.count() == 0 and self.names.count() == 0;
     }
 
-    fn add(self: *HasKeys, allocator: Allocator, argument: Selector.Selector) Allocator.Error!void {
-        if (self.any) {
-            // no point tracking anything else
-            return;
-        }
-
-        if (reachesOutside(argument)) {
-            self.any = true;
-            return;
-        }
-
-        for (argument.segments) |segment| {
-            if (segment.combinator != .child) {
-                self.unbounded = true;
-            }
-        }
-        self.depth = @max(self.depth, argument.segments.len);
-
-        const subject = argument.rightmost();
-        for (subject.parts) |*part| {
+    // False when the compound has no key: it can match any element
+    fn add(self: *Keys, allocator: Allocator, compound: Selector.Compound) Allocator.Error!bool {
+        for (compound.parts) |*part| {
             switch (part.*) {
-                .id, .class, .tag_name => |name| return self.names.put(allocator, name, {}),
-                .attribute => |*attr| return self.names.put(allocator, attr.name.str(), {}),
+                .id, .class, .tag_name => |name| {
+                    try self.names.put(allocator, name, {});
+                    return true;
+                },
+                .attribute => |*attr| {
+                    try self.names.put(allocator, attr.name.str(), {});
+                    return true;
+                },
                 else => {},
             }
         }
-        for (subject.parts) |part| {
+        for (compound.parts) |part| {
             switch (part) {
-                .tag => |tag| return self.tags.insert(tag),
+                .tag => |tag| {
+                    self.tags.insert(tag);
+                    return true;
+                },
                 else => {},
             }
         }
-        self.any = true;
+        return false;
     }
 
-    fn matches(self: *const HasKeys, el: *Element) bool {
+    fn matches(self: *const Keys, el: *Element) bool {
         if (self.tags.contains(el.getTag())) {
             return true;
         }
@@ -1054,6 +1105,50 @@ const HasKeys = struct {
             }
         }
         return false;
+    }
+};
+
+const HasKeys = struct {
+    // An argument that can change without its subject moving, or with no key.
+    any: bool = false,
+    keys: Keys = .{},
+
+    // How many ancestors of a subject an argument reaches: `:has(> a > img)`
+    // (stored as `:scope > a > img`) 2, so its subject moving can only change
+    // the match of its 2 nearest ancestors. Unbounded with a descendant
+    // combinator.
+    depth: usize = 0,
+    unbounded: bool = false,
+
+    fn isEmpty(self: *const HasKeys) bool {
+        return self.any == false and self.keys.isEmpty();
+    }
+
+    fn add(self: *HasKeys, allocator: Allocator, argument: Selector.Selector) Allocator.Error!void {
+        if (self.any) {
+            // no point tracking anything else
+            return;
+        }
+
+        if (reachesOutside(argument)) {
+            self.any = true;
+            return;
+        }
+
+        for (argument.segments) |segment| {
+            if (segment.combinator != .child) {
+                self.unbounded = true;
+            }
+        }
+        self.depth = @max(self.depth, argument.segments.len);
+
+        if (try self.keys.add(allocator, argument.rightmost()) == false) {
+            self.any = true;
+        }
+    }
+
+    fn matches(self: *const HasKeys, el: *Element) bool {
+        return self.keys.matches(el);
     }
 
     // Whether a :has() argument's match can change without its subject moving.
@@ -1395,7 +1490,7 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         if (op == .inserted and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
-    } else if (root != parent or (child._type == .element and self.readsAllSiblings(previous, next))) {
+    } else if (root != parent or (if (child.is(Element)) |el| self.readsAllSiblings(el, previous, next) else false)) {
         // Widened (a :has() anchor, a form), or a match reads every sibling
         // and there are some: everything under root, which batching can skip
         // next time
@@ -1625,15 +1720,30 @@ fn memoizedHeightDeclared(self: *StyleManager, el: *Element) bool {
     return @TypeOf(group.*).load(stored).height.resolve(self.frame.page.getViewport()) != null;
 }
 
-// Whether a match reads every sibling on a side of the gap that has some
-// (`~`, :nth-child()...). Not for an append when only earlier siblings are
-// read: there's nothing after it.
-fn readsAllSiblings(self: *const StyleManager, previous: ?*Node, next: ?*Node) bool {
-    if (self.siblings.later and nextElement(next) != null) {
+// Whether `child` entering or leaving between `previous` and `next` can
+// change the match of a sibling beyond the nearest ones (`~`, :nth-child()...).
+// Not for an append when only earlier siblings are read: there's nothing
+// after it.
+fn readsAllSiblings(self: *const StyleManager, child: *Element, previous: ?*Node, next: ?*Node) bool {
+    const siblings = &self.siblings;
+    if (siblings.following.matches(child) and nextElement(next) != null) {
         return true;
     }
-    if (self.siblings.earlier and previousElement(previous) != null) {
-        return true;
+    if (siblings.later.any or siblings.later.keys.isEmpty() == false) {
+        var sibling = nextElement(next);
+        while (sibling) |s| : (sibling = nextElement(s.nextSibling())) {
+            if (siblings.later.matches(s.as(Element))) {
+                return true;
+            }
+        }
+    }
+    if (siblings.earlier.any or siblings.earlier.keys.isEmpty() == false) {
+        var sibling = previousElement(previous);
+        while (sibling) |s| : (sibling = previousElement(s.previousSibling())) {
+            if (siblings.earlier.matches(s.as(Element))) {
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -6506,6 +6616,118 @@ test "StyleManager: memo: a focus move drops what :focus and :focus-within reach
     version = frame.page.style_version;
     try first.focus(frame);
     try testing.expect(frame.page.style_version != version);
+}
+
+test "StyleManager: memo: a tree change reaches every sibling only when one can match" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<ul><li></li><li></li><li></li></ul>
+        \\<div><div class=row></div><div class=row></div><div class=row></div><div class=row></div></div>
+        \\<p><b class=lead></b><b class=mark></b><i class=row></i></p>
+        \\<h1><em class=lead></em><em></em><q></q></h1>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("li:nth-child(2) { display: none } .mark ~ div.row { display: none } li:nth-last-child(2) { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const ul = body.firstChild().?;
+    const list = ul.nextSibling().?.nextSibling().?;
+    const p = list.nextSibling().?.nextSibling().?;
+    const li = ul.firstChild().?.as(Element);
+    const last_row = list.lastChild().?.as(Element);
+    const i = p.lastChild().?.as(Element);
+    const q = p.nextSibling().?.nextSibling().?.lastChild().?.as(Element);
+
+    const read = struct {
+        fn all(root: *Node, style_manager: *StyleManager) void {
+            var tw = TreeWalker.Full.Elements.init(root, .{});
+            while (tw.next()) |el| {
+                _ = style_manager.hasDisplayNone(el);
+            }
+        }
+    }.all;
+    read(body, sm);
+    try testing.expectEqual(false, sm.hasDisplayNone(li));
+    try testing.expectEqual(false, sm.hasDisplayNone(last_row));
+
+    // :nth-child() by its compound's key, `~` by its left compound's
+    const siblings = &sm.siblings;
+    try testing.expectEqual(false, siblings.later.any);
+    try testing.expectEqual(true, siblings.later.keys.tags.contains(.li));
+    try testing.expectEqual(false, siblings.following.any);
+    try testing.expectEqual(true, siblings.following.keys.names.contains("mark"));
+    try testing.expectEqual(false, siblings.earlier.any);
+    try testing.expectEqual(true, siblings.earlier.keys.tags.contains(.li));
+    const version = frame.page.style_version;
+
+    // Not a .mark, before rows that can't be the <li>: only what's inserted
+    var walked = sm.walked;
+    _ = try list.insertBefore((try doc.createElement("div", null, frame)).asNode(), list.firstChild(), frame);
+    try testing.expectEqual(1, sm.walked - walked);
+    try testing.expectEqual(true, sm.visibility.memo.contains(last_row));
+    try testing.expectEqual(false, sm.hasDisplayNone(last_row));
+
+    // A .mark: every row after it
+    const mark = try doc.createElement("div", null, frame);
+    try mark.setAttribute(comptime .wrap("class"), comptime .wrap("mark"), frame);
+    _ = try list.insertBefore(mark.asNode(), list.firstChild(), frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(last_row));
+    mark.remove(frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(last_row));
+
+    // Before <li>s: each is one further from the start
+    read(body, sm);
+    walked = sm.walked;
+    _ = try ul.insertBefore((try doc.createElement("li", null, frame)).asNode(), ul.firstChild(), frame);
+    try testing.expect(sm.walked - walked >= 4);
+    try testing.expectEqual(true, sm.hasDisplayNone(li));
+
+    // ... and after them, from the end
+    const last_li = ul.lastChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasDisplayNone(last_li));
+    _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(last_li));
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // `a:first-child ~ b`: a's match reads its own siblings, so anything
+    // entering before it reaches b, past the one sibling :first-child reaches
+    const first = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try first.asNode().setTextContent(".lead:first-child ~ q { display: none }", frame);
+    _ = try body.appendChild(first.asNode(), frame);
+    read(body, sm);
+    try testing.expectEqual(true, sm.hasDisplayNone(q));
+    try testing.expectEqual(true, siblings.following.any);
+    const h1 = q.asNode()._parent.?;
+    _ = try h1.insertBefore((try doc.createElement("s", null, frame)).asNode(), h1.firstChild(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(q));
+    first.asNode().as(Element).remove(frame);
+    read(body, sm);
+    try testing.expectEqual(false, siblings.following.any);
+
+    // `x + a ~ b` too: anything entering between x and a
+    const chained = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try chained.asNode().setTextContent(".lead + .mark ~ i.row { display: none }", frame);
+    _ = try body.appendChild(chained.asNode(), frame);
+    read(body, sm);
+    try testing.expectEqual(true, sm.hasDisplayNone(i));
+    try testing.expectEqual(true, siblings.following.any);
+    _ = try p.insertBefore((try doc.createElement("s", null, frame)).asNode(), p.firstChild().?.nextSibling(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(i));
+
+    // Inside :not(), the compound isn't the one a sibling has to match
+    const negated = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try negated.asNode().setTextContent(":not(b:nth-last-child(2)) > q { display: none }", frame);
+    _ = try body.appendChild(negated.asNode(), frame);
+    read(body, sm);
+    try testing.expectEqual(true, siblings.earlier.any);
 }
 
 test "StyleManager: memo: a change under a flex row drops its widths only" {
