@@ -73,6 +73,11 @@ layout_bumps: usize = 0,
 // Inline height writes that reached the root, see extentVersion.
 extent_bumps: usize = 0,
 
+// The sibling count :nth-child() and the like last walked for, kept from one
+// rule to the next (see nthCache).
+nth: SelectorList.NthCache,
+nth_version: usize = 0,
+
 // Document.hitTest's prune, see HitBands
 hit_bands: HitBands = .{},
 
@@ -141,11 +146,20 @@ siblings: SiblingReads = .{},
 
 // given a class name, what, if anything, does it reach. Best class: a class
 // that no selector we track uses is a noop.
-class_reach: std.HashMapUnmanaged([]const u8, ClassReach, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+class_reach: std.HashMapUnmanaged([]const u8, ClassUse, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+
+// The subjects of the rules a class is an ancestor's or a sibling's in, for
+// the classes that are never a subject's own (see ClassUse.subjects).
+class_subjects: std.ArrayList(Compounds) = .empty,
 
 // The widest reach of a compound reading the class attribute as a string
 // ([class*=x]): any change to it can change what that matches. Null: none.
-class_attribute_reach: ?ClassReach = null,
+class_attribute: ?ClassUse = null,
+
+// Those compounds' attribute selectors: a class change that matches each one
+// as before changes none of them. Past the limit, any change counts.
+class_attribute_selectors: std.ArrayList(Selector.Attribute) = .empty,
+class_attribute_unlisted: bool = false,
 has: HasKeys = .{},
 
 // What a focus move reaches from the elements whose :focus match flips (the
@@ -172,9 +186,11 @@ offsets_placed: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 last_rule_sheet: ?*CSSStyleSheet = null,
 
 pub fn init(frame: *Frame) !StyleManager {
+    const arena = try frame.getArena(.medium, "StyleManager");
     return .{
         .frame = frame,
-        .arena = try frame.getArena(.medium, "StyleManager"),
+        .arena = arena,
+        .nth = .{ .allocator = arena.allocator(), .walk_only = true },
     };
 }
 
@@ -688,7 +704,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     const placement = placeSelector(matched) orelse return;
     try self.collectAttributeNames(selector, false);
     self.siblings.addNext(nextReach(selector));
-    try self.collectClassReach(selector, .subtree);
+    try self.collectClassReach(selector, .subtree, true, matched.rightmost());
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
@@ -887,38 +903,14 @@ const SiblingReads = struct {
     next: u8 = 0,
     // ... every later one that can match a compound counting the siblings
     // before it: :nth-child(), :nth-of-type(), :first-of-type
-    later: Reach = .{},
+    later: Compounds = .{},
     // ... every later one, when what moved can match the compound left of a `~`
-    following: Reach = .{},
+    following: Compounds = .{},
     // ... the previous element sibling: :last-child
     previous: bool = false,
     // ... every earlier one that can match a compound counting the siblings
     // after it: :nth-last-child(), :nth-last-of-type(), :last-of-type
-    earlier: Reach = .{},
-
-    // The compounds a change reaches through, by key; `any` when one has no
-    // key, or isn't known.
-    const Reach = struct {
-        any: bool = false,
-        keys: Keys = .{},
-
-        fn add(self: *Reach, allocator: Allocator, compound: ?Selector.Compound) Allocator.Error!void {
-            if (self.any) {
-                return;
-            }
-            const c = compound orelse {
-                self.any = true;
-                return;
-            };
-            if (try self.keys.add(allocator, c) == false) {
-                self.any = true;
-            }
-        }
-
-        fn matches(self: *const Reach, el: *Element) bool {
-            return self.any or self.keys.matches(el);
-        }
-    };
+    earlier: Compounds = .{},
 
     // Past this, walking the next siblings one by one costs more than the
     // parent's subtree, which batches.
@@ -1108,6 +1100,30 @@ const Keys = struct {
     }
 };
 
+/// The compounds a change reaches through, by key; `any` when one has no key,
+/// or isn't known.
+const Compounds = struct {
+    any: bool = false,
+    keys: Keys = .{},
+
+    fn add(self: *Compounds, allocator: Allocator, compound: ?Selector.Compound) Allocator.Error!void {
+        if (self.any) {
+            return;
+        }
+        const c = compound orelse {
+            self.any = true;
+            return;
+        };
+        if (try self.keys.add(allocator, c) == false) {
+            self.any = true;
+        }
+    }
+
+    fn matches(self: *const Compounds, el: *Element) bool {
+        return self.any or self.keys.matches(el);
+    }
+};
+
 const HasKeys = struct {
     // An argument that can change without its subject moving, or with no key.
     any: bool = false,
@@ -1228,9 +1244,49 @@ const ClassReach = enum(u8) {
     }
 };
 
+// How the tracked selectors use a class (or the class attribute).
+const ClassUse = struct {
+    reach: ClassReach,
+
+    // Within that reach, the elements whose match the class can change: the
+    // subjects of the rules it's in, an index in class_subjects. Everything
+    // (any_subject) once it's in a subject's own compound, as the element's
+    // style then changes, and what inherits from it.
+    subjects: u32,
+
+    const any_subject = std.math.maxInt(u32);
+};
+
+// A use of `use`'s class, in a compound reaching `reach`, in a rule whose
+// subject is `subject`; null when the class is the subject's own, or the
+// subject isn't known.
+fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassReach, subject: ?Selector.Compound) Allocator.Error!void {
+    const allocator = self.arena.allocator();
+    if (first) {
+        use.* = .{ .reach = reach, .subjects = ClassUse.any_subject };
+        if (subject != null) {
+            use.subjects = @intCast(self.class_subjects.items.len);
+            try self.class_subjects.append(allocator, .{});
+        }
+    } else {
+        use.reach = use.reach.widest(reach);
+    }
+    if (use.subjects == ClassUse.any_subject) {
+        return;
+    }
+    const subjects = &self.class_subjects.items[use.subjects];
+    try subjects.add(allocator, subject);
+    if (subjects.any) {
+        use.subjects = ClassUse.any_subject;
+    }
+}
+
+const max_class_attribute_selectors = 256;
+
 // `subject` is the reach of the selector's subject compound: .subtree for a
-// rule's selector, the enclosing compound's for an :is() argument.
-fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach) Allocator.Error!void {
+// rule's selector, the enclosing compound's for an :is() argument. `own`:
+// that compound is the rule's subject, `rule_subject` (null: not known).
+fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
     const segments = selector.segments;
     for (0..segments.len + 1) |i| {
         const compound = if (i == 0) selector.first else segments[i - 1].compound;
@@ -1240,30 +1296,40 @@ fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: 
             .descendant, .child => .subtree,
             .next_sibling, .subsequent_sibling => .parent_subtree,
         };
-        try self.collectCompoundClassReach(compound, reach);
+        try self.collectCompoundClassReach(compound, reach, own and i == segments.len, rule_subject);
     }
 }
 
-fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach) Allocator.Error!void {
+fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
+    const subject = if (own) null else rule_subject;
     for (compound.parts) |part| {
         switch (part) {
             .class => |class| {
                 const gop = try self.class_reach.getOrPut(self.arena.allocator(), class);
-                gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.widest(reach) else reach;
+                try self.noteClassUse(gop.value_ptr, gop.found_existing == false, reach, subject);
             },
             .attribute => |attr| if (attr.name.eql(comptime .wrap("class"))) {
-                self.class_attribute_reach = if (self.class_attribute_reach) |current| current.widest(reach) else reach;
+                const first = self.class_attribute == null;
+                if (first) {
+                    self.class_attribute = .{ .reach = reach, .subjects = ClassUse.any_subject };
+                }
+                try self.noteClassUse(&self.class_attribute.?, first, reach, subject);
+                if (self.class_attribute_selectors.items.len < max_class_attribute_selectors) {
+                    try self.class_attribute_selectors.append(self.arena.allocator(), attr);
+                } else {
+                    self.class_attribute_unlisted = true;
+                }
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, reach);
+                    try self.collectClassReach(selector, reach, own, rule_subject);
                 },
                 // A sibling's class changes which index the element has
                 .nth_child_of, .nth_last_child_of => |of| for (of.selectors) |selector| {
-                    try self.collectClassReach(selector, reach.widest(.parent_subtree));
+                    try self.collectClassReach(selector, reach.widest(.parent_subtree), false, null);
                 },
                 .has => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, .full);
+                    try self.collectClassReach(selector, .full, false, null);
                 },
                 .focus => self.focus_reach = if (self.focus_reach) |current| current.widest(reach) else reach,
                 .focus_within => self.focus_within_reach = if (self.focus_within_reach) |current| current.widest(reach) else reach,
@@ -1283,9 +1349,15 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         // the rebuild resets every memo
         return true;
     }
-    // [class*=x] reads the string, [class] its presence: any call is a change
-    // (change.attributeSet skips same-value writes)
-    var reach: ?ClassReach = self.class_attribute_reach;
+    var reach: ?ClassReach = null;
+    var subjects: ClassSubjects = .{};
+    // [class*=x] reads the string, [class] its presence
+    if (self.class_attribute) |use| {
+        if (self.classAttributeMatchChanged(el, old, new)) {
+            reach = use.reach;
+            subjects.add(self, use);
+        }
+    }
     inline for (.{ .{ old, new }, .{ new, old } }) |pair| {
         var it = std.mem.tokenizeAny(u8, pair[0] orelse "", &std.ascii.whitespace);
         outer: while (it.next()) |class| {
@@ -1295,8 +1367,9 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
                     continue :outer;
                 }
             }
-            if (self.class_reach.get(class)) |r| {
-                reach = if (reach) |current| current.widest(r) else r;
+            if (self.class_reach.get(class)) |use| {
+                reach = if (reach) |current| current.widest(use.reach) else use.reach;
+                subjects.add(self, use);
             }
         }
     }
@@ -1326,12 +1399,103 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
     }
     // Boxes can move: the ones whose styles go, and what they push around
     var boxes: BoxScope = .init(self, &memos, &budget);
+    keyed: {
+        if (subjects.any) {
+            break :keyed;
+        }
+        // No changed class is a subject's own: root keeps its style, and so
+        // does what's under it but the rules' subjects, with what inherits
+        // from those.
+        // Looking for them costs more per element than dropping it, and
+        // like dropSubtree, past what's cached that's more than starting over
+        var visits = budget *| 8;
+        var tw = TreeWalker.Full.Elements.init(root, .{});
+        while (tw.next()) |under| {
+            if (visits == 0) {
+                return false;
+            }
+            visits -= 1;
+            if (under._flags.shadow_host) {
+                // what it reaches in there isn't known
+                break :keyed;
+            }
+            if (under.asNode() == root or subjects.matches(under) == false) {
+                continue;
+            }
+            boxes.restyled(under.asNode());
+            if (self.dropSubtree(under.asNode(), memos, &budget) == false) {
+                return false;
+            }
+            tw.tw.skipChildren();
+        }
+        return true;
+    }
     boxes.restyled(root);
     if (self.dropSubtree(root, memos, &budget) == false) {
         return false;
     }
     self.recordDropped(root);
     return true;
+}
+
+// The subjects the changed classes of one classChanged can reach
+const ClassSubjects = struct {
+    any: bool = false,
+    compounds: [4]*const Compounds = undefined,
+    len: u8 = 0,
+
+    fn add(self: *ClassSubjects, style_manager: *const StyleManager, use: ClassUse) void {
+        if (use.subjects == ClassUse.any_subject or self.len == self.compounds.len) {
+            self.any = true;
+            return;
+        }
+        self.compounds[self.len] = &style_manager.class_subjects.items[use.subjects];
+        self.len += 1;
+    }
+
+    fn matches(self: *const ClassSubjects, el: *Element) bool {
+        for (self.compounds[0..self.len]) |compounds| {
+            if (compounds.keys.matches(el)) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+// Whether a [class...] selector matches `new` and not `old`, or the reverse
+// (change.attributeSet skips same-value writes).
+fn classAttributeMatchChanged(self: *const StyleManager, el: *const Element, old: ?[]const u8, new: ?[]const u8) bool {
+    if (self.class_attribute_unlisted) {
+        return true;
+    }
+    const html = el._namespace == .html;
+    // Most selectors' values can't be in either string: they start or end
+    // with a byte neither holds
+    var bytes: std.StaticBitSet(256) = .empty;
+    for (old orelse "") |c| {
+        bytes.set(c);
+    }
+    for (new orelse "") |c| {
+        bytes.set(c);
+    }
+    for (self.class_attribute_selectors.items) |*attr| {
+        if (attr.value_case == .sensitive) {
+            const value: []const u8 = switch (attr.matcher) {
+                .presence => "",
+                inline else => |value| value,
+            };
+            if (value.len != 0 and (bytes.isSet(value[0]) == false or bytes.isSet(value[value.len - 1]) == false)) {
+                continue;
+            }
+        }
+        const before = if (old) |value| SelectorList.matchesAttributeValue(value, attr.*, html) else false;
+        const after = if (new) |value| SelectorList.matchesAttributeValue(value, attr.*, html) else false;
+        if (before != after) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// The document's active element went from `old` to `new`. Drops the memo
@@ -2337,7 +2501,10 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.focus_reach = null;
     self.focus_within_reach = null;
     self.class_reach = .empty;
-    self.class_attribute_reach = null;
+    self.class_subjects = .empty;
+    self.class_attribute = null;
+    self.class_attribute_selectors = .empty;
+    self.class_attribute_unlisted = false;
     self.has = .{};
     self.dropped_len = 0;
     var caps: [group_fields.len]Capacities = undefined;
@@ -2348,6 +2515,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const attribute_names_count = self.attribute_names.count();
 
     self.arena.resetRetain();
+    self.nth = .{ .allocator = self.arena.allocator(), .walk_only = true };
     self.layout_memo = .{};
     self.hit_bands = .{};
 
@@ -3566,6 +3734,7 @@ fn Group(comptime Spec: type) type {
         }
 
         fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+            const nth = frame._style_manager.nthCache();
             rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
                 var matched = false;
                 inline for (fields) |field| {
@@ -3575,7 +3744,7 @@ fn Group(comptime Spec: type) type {
                     if (rule.set.contains(f) and priority > priorities.get(f)) {
                         if (matched == false) {
                             count(.matches);
-                            if (matchesSelector(el, selector, frame) == false) {
+                            if (matchesSelector(el, selector, nth, frame) == false) {
                                 continue :rules;
                             }
                             matched = true;
@@ -3905,9 +4074,23 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
     }
 }
 
-fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) bool {
+// `nth` is nthCache(), fetched once for the rules of a list: this runs for
+// every one of them.
+fn matchesSelector(el: *Element, selector: Selector.Selector, nth: *SelectorList.NthCache, frame: *Frame) bool {
     // Outside @scope, a stylesheet's :scope is the root element.
-    return SelectorList.matches(el.asNode(), selector, frame.document.asNode(), null, frame);
+    return SelectorList.matches(el.asNode(), selector, frame.document.asNode(), nth, frame);
+}
+
+// Valid while no element enters or leaves a tree: a parser insert only stamps
+// the style version.
+fn nthCache(self: *StyleManager) *SelectorList.NthCache {
+    const page = self.frame.page;
+    const version = page.dom_version +% page.style_version;
+    if (self.nth_version != version) {
+        self.nth.clear();
+        self.nth_version = version;
+    }
+    return &self.nth;
 }
 
 /// Only the values the dumpers act on; everything else is `other`.
@@ -5624,6 +5807,7 @@ fn layerOrder(priority: u64) u16 {
 /// rules and its inline style. With `before`, only those from earlier layers.
 fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
     const limit = before orelse std.math.maxInt(u16);
+    const nth = self.nthCache();
 
     var winner: ?LazyWinner = null;
     var priority: u64 = 0;
@@ -5635,7 +5819,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []con
         if (layer >= limit) {
             continue;
         }
-        if (matchesSelector(el, rule.selector, self.frame) == false) {
+        if (matchesSelector(el, rule.selector, nth, self.frame) == false) {
             continue;
         }
         winner = .{ .value = rule.value, .layer = layer, .priority = rule.priority };
@@ -6507,17 +6691,17 @@ test "StyleManager: memo: a class change drops what its selectors reach" {
     const i = section.asNode().firstChild().?.as(Element);
 
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("a").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("anc").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("x").?);
-    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("sib").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("neg").?);
-    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("of").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("h").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("k").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kk").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("ka").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kb").?);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("a").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("anc").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("x").?.reach);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("sib").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("neg").?.reach);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("of").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("h").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("k").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kk").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("ka").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kb").?.reach);
     try testing.expectEqual(null, sm.class_reach.get("hook"));
 
     _ = sm.hasVisibilityHiddenInherited(i);
@@ -6884,6 +7068,101 @@ test "StyleManager: hit bands: a scoped change drops them" {
     }
 }
 
+test "StyleManager: memo: a class that is only an ancestor's drops the subjects under it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<main><section><p class=fb></p><b></b><span></span></section><section><p class=fb><i></i></p><b></b></section></main>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.val .fb { display: none }
+        \\.own { display: none }
+        \\[class*=zz] span { display: none }
+        \\.sib ~ section b { display: none }
+        \\.mix .fb { display: none } .mix { display: none }
+        \\.mixed { display: none } .mixed .fb { display: none }
+        \\p:is(.pick) { display: none }
+    , frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const main = body.firstChild().?.as(Element);
+    const first = main.asNode().firstChild().?.as(Element);
+    const second = main.asNode().lastChild().?.as(Element);
+    const fb = first.asNode().firstChild().?.as(Element);
+    const b = fb.asNode().nextSibling().?.as(Element);
+    const span = b.asNode().nextSibling().?.as(Element);
+    const second_fb = second.asNode().firstChild().?.as(Element);
+    const second_b = second.asNode().lastChild().?.as(Element);
+
+    const read = struct {
+        fn all(root: *Node, style_manager: *StyleManager) void {
+            var tw = TreeWalker.Full.Elements.init(root, .{});
+            while (tw.next()) |el| {
+                _ = style_manager.hasDisplayNone(el);
+            }
+        }
+    }.all;
+    read(body, sm);
+    try testing.expectEqual(false, sm.hasDisplayNone(fb));
+
+    // Only a class no subject carries narrows to the subjects
+    const any = ClassUse.any_subject;
+    try testing.expect(sm.class_reach.get("val").?.subjects != any);
+    try testing.expect(sm.class_reach.get("sib").?.subjects != any);
+    try testing.expect(sm.class_attribute.?.subjects != any);
+    try testing.expectEqual(any, sm.class_reach.get("own").?.subjects);
+    try testing.expectEqual(any, sm.class_reach.get("fb").?.subjects);
+    try testing.expectEqual(any, sm.class_reach.get("mix").?.subjects);
+    try testing.expectEqual(any, sm.class_reach.get("mixed").?.subjects);
+    // ... inside :is() too, on the subject
+    try testing.expectEqual(any, sm.class_reach.get("pick").?.subjects);
+    const version = frame.page.style_version;
+
+    // The two .fb and what's in them, not the rest of <main>
+    var walked = sm.walked;
+    try main.setAttribute(comptime .wrap("class"), comptime .wrap("val"), frame);
+    try testing.expectEqual(3, sm.walked - walked);
+    try testing.expectEqual(true, sm.visibility.memo.contains(b));
+    try testing.expectEqual(true, sm.hasDisplayNone(fb));
+    try testing.expectEqual(true, sm.hasDisplayNone(second_fb));
+
+    // A class no selector knows, in a string every [class...] matches as
+    // before: nothing
+    read(body, sm);
+    walked = sm.walked;
+    try main.setAttribute(comptime .wrap("class"), comptime .wrap("val other"), frame);
+    try testing.expectEqual(0, sm.walked - walked);
+
+    // ... and one it matches now: its subjects
+    try main.setAttribute(comptime .wrap("class"), comptime .wrap("val zzz"), frame);
+    try testing.expectEqual(1, sm.walked - walked);
+    try testing.expectEqual(true, sm.hasDisplayNone(span));
+
+    // From a sibling: the subjects under the parent
+    read(body, sm);
+    walked = sm.walked;
+    try first.setAttribute(comptime .wrap("class"), comptime .wrap("sib"), frame);
+    try testing.expectEqual(2, sm.walked - walked);
+    try testing.expectEqual(false, sm.hasDisplayNone(b));
+    try testing.expectEqual(true, sm.hasDisplayNone(second_b));
+
+    // The element's own: everything that inherits from it
+    read(body, sm);
+    walked = sm.walked;
+    try second.setAttribute(comptime .wrap("class"), comptime .wrap("own"), frame);
+    try testing.expectEqual(4, sm.walked - walked);
+    try testing.expectEqual(true, sm.hasDisplayNone(second));
+    try testing.expectEqual(version, frame.page.style_version);
+}
+
 test "StyleManager: memo: a class attribute selector reaches where it sits" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -6907,7 +7186,7 @@ test "StyleManager: memo: a class attribute selector reaches where it sits" {
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
     // More cached than the walk visits, or dropping costs more than a reset
     _ = sm.hasVisibilityHiddenInherited(section);
-    try testing.expectEqual(ClassReach.parent_subtree, sm.class_attribute_reach.?);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_attribute.?.reach);
     const version = frame.page.style_version;
 
     // Present but empty is a change for [class]: i, a later sibling, sees it
