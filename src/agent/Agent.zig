@@ -389,6 +389,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.ts.init(app);
     errdefer self.ts.deinit();
+    if (app.config.cookieFile()) |path| lp.cookies.loadFromFile(self.ts.session, path);
 
     self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.backend(), c.keySlice(), .{ .base_url = settings.baseUrl(c.provider, opts.base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider) }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
@@ -431,6 +432,7 @@ pub fn deinit(self: *Agent) void {
     self.allocator.free(self.conversation.system_prompt);
     self.conversation.deinit();
     self.model_completion_arena.deinit();
+    if (self.ts.browser.app.config.cookieJarFile()) |path| lp.cookies.saveToFile(&self.ts.session.cookie_jar, path);
     self.ts.deinit();
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
     if (self.credential) |*c| c.deinit(self.allocator);
