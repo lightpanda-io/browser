@@ -73,6 +73,22 @@ layout_bumps: usize = 0,
 // Inline height writes that reached the root, see extentVersion.
 extent_bumps: usize = 0,
 
+// The sibling count :nth-child() and the like last walked for, kept from one
+// rule to the next (see nthCache).
+nth: SelectorList.NthCache,
+nth_version: usize = 0,
+
+// Document.hitTest's prune, see HitBands
+hit_bands: HitBands = .{},
+
+// Inline writes the memos take without a bump: a top only drops the
+// element's geometry, a height can stop at a declared one (see heightWritten).
+inline_bumps: usize = 0,
+
+// A box that sizes others by its content couldn't be flagged (see
+// setSizesOthers), in the layout memo's current version.
+unscoped_sizing: bool = false,
+
 // The rules declaring each custom property and `content`, by property id,
 // pruning to what is (hopefully) one or few rules. Nothing memoizes `content`:
 // it only matters to scripts reading it back, often from a probe element.
@@ -130,12 +146,27 @@ siblings: SiblingReads = .{},
 
 // given a class name, what, if anything, does it reach. Best class: a class
 // that no selector we track uses is a noop.
-class_reach: std.HashMapUnmanaged([]const u8, ClassReach, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+class_reach: std.HashMapUnmanaged([]const u8, ClassUse, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
+
+// The subjects of the rules a class is an ancestor's or a sibling's in, for
+// the classes that are never a subject's own (see ClassUse.subjects).
+class_subjects: std.ArrayList(Compounds) = .empty,
 
 // The widest reach of a compound reading the class attribute as a string
 // ([class*=x]): any change to it can change what that matches. Null: none.
-class_attribute_reach: ?ClassReach = null,
+class_attribute: ?ClassUse = null,
+
+// Those compounds' attribute selectors: a class change that matches each one
+// as before changes none of them. Past the limit, any change counts.
+class_attribute_selectors: std.ArrayList(Selector.Attribute) = .empty,
+class_attribute_unlisted: bool = false,
 has: HasKeys = .{},
+
+// What a focus move reaches from the elements whose :focus match flips (the
+// old and new active elements), and from those whose :focus-within match does
+// (their ancestors, up to the first one holding both). Null: nothing reads it.
+focus_reach: ?ClassReach = null,
+focus_within_reach: ?ClassReach = null,
 
 // Short dudupe list of roots that had treeChanged call since the memos last
 // filled. They don't need to be dropped again. Useful for common pattern of
@@ -147,14 +178,19 @@ dropped_fills: usize = 0,
 // treeChanged's visited elements, our tests want to count work, not time
 walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
+// setCacheOffset calls, likewise
+offsets_placed: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
 last_rule_sheet: ?*CSSStyleSheet = null,
 
 pub fn init(frame: *Frame) !StyleManager {
+    const arena = try frame.getArena(.medium, "StyleManager");
     return .{
         .frame = frame,
-        .arena = try frame.getArena(.medium, "StyleManager"),
+        .arena = arena,
+        .nth = .{ .allocator = arena.allocator(), .walk_only = true },
     };
 }
 
@@ -663,11 +699,12 @@ fn addSelectorRules(
 // indexes rule_layers. The !important declarations become a second rule in
 // the tier above every normal one, where an unlayered rule packs rank 0.
 fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *const Declarations, important: *const Declarations, layer: u16) !void {
-    try self.collectAttributeNames(selector);
-    self.siblings.addNext(nextReach(selector));
-    try self.collectClassReach(selector, .subtree);
     const matched = unwrapWhere(selector);
+    // Before anything is collected: a rule no bucket holds reads nothing
     const placement = placeSelector(matched) orelse return;
+    try self.collectAttributeNames(selector, false);
+    self.siblings.addNext(nextReach(selector));
+    try self.collectClassReach(selector, .subtree, true, matched.rightmost());
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
@@ -684,24 +721,33 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     }
 }
 
-fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector) Allocator.Error!void {
-    try self.collectCompoundAttributeNames(selector.first);
-    for (selector.segments) |segment| {
+// `nested`: an argument of :not(), :is()..., not a rule's own selector
+fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector, nested: bool) Allocator.Error!void {
+    try self.collectCompoundAttributeNames(selector.first, nested);
+    for (selector.segments, 0..) |segment, i| {
         switch (segment.combinator) {
-            .subsequent_sibling => self.siblings.later = true,
+            .subsequent_sibling => {
+                // `a ~ b`: an element entering or leaving changes b's match
+                // when it can be a. Unless a's own match reads its siblings
+                // (`x + a ~ b`, `a:first-child ~ b`): then anything moving
+                // before it can.
+                const left = if (i == 0) selector.first else selector.segments[i - 1].compound;
+                const reads = nested or readsSiblings(left) or (i != 0 and selector.segments[i - 1].combinator == .next_sibling);
+                try self.siblings.following.add(self.arena.allocator(), if (reads) null else left);
+            },
             // counted by nextReach
             .next_sibling, .descendant, .child => {},
         }
-        try self.collectCompoundAttributeNames(segment.compound);
+        try self.collectCompoundAttributeNames(segment.compound, nested);
     }
 }
 
-fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compound) Allocator.Error!void {
+fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compound, nested: bool) Allocator.Error!void {
     // By pointer: a short name's str() points into its String, which would be
     // an issue, except these are all on the same self.arena, so we can copy the pointer.
     const allocator = self.arena.allocator();
     for (compound.parts) |*part| {
-        const nested: []const Selector.Selector = switch (part.*) {
+        const arguments: []const Selector.Selector = switch (part.*) {
             .attribute => |*attr| {
                 if (attr.name.eql(comptime .wrap("style"))) {
                     self.reads_style_attribute = true;
@@ -718,15 +764,15 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
                     break :blk selectors;
                 },
                 .nth_child_of => |of| blk: {
-                    self.siblings.later = true;
+                    self.siblings.later.any = true;
                     break :blk of.selectors;
                 },
                 .nth_last_child_of => |of| blk: {
-                    self.siblings.earlier = true;
+                    self.siblings.earlier.any = true;
                     break :blk of.selectors;
                 },
                 else => {
-                    self.siblings.add(pseudo);
+                    try self.siblings.add(allocator, pseudo, if (nested) null else compound);
                     if (readsOtherFormElements(pseudo)) {
                         self.reads_form = true;
                         self.reads_default = self.reads_default or pseudo == .default;
@@ -742,8 +788,8 @@ fn collectCompoundAttributeNames(self: *StyleManager, compound: Selector.Compoun
             },
             else => continue,
         };
-        for (nested) |selector| {
-            try self.collectAttributeNames(selector);
+        for (arguments) |selector| {
+            try self.collectAttributeNames(selector, true);
         }
     }
 }
@@ -855,12 +901,16 @@ const SiblingReads = struct {
     // A change reaches this many element siblings after it: one for `+` or
     // :first-child, one more for each `+` that follows (see nextReach)
     next: u8 = 0,
-    // ... every later one: `~`, :nth-child(), :nth-of-type(), :first-of-type
-    later: bool = false,
+    // ... every later one that can match a compound counting the siblings
+    // before it: :nth-child(), :nth-of-type(), :first-of-type
+    later: Compounds = .{},
+    // ... every later one, when what moved can match the compound left of a `~`
+    following: Compounds = .{},
     // ... the previous element sibling: :last-child
     previous: bool = false,
-    // ... every earlier one: :nth-last-child(), :nth-last-of-type(), :last-of-type
-    earlier: bool = false,
+    // ... every earlier one that can match a compound counting the siblings
+    // after it: :nth-last-child(), :nth-last-of-type(), :last-of-type
+    earlier: Compounds = .{},
 
     // Past this, walking the next siblings one by one costs more than the
     // parent's subtree, which batches.
@@ -868,26 +918,54 @@ const SiblingReads = struct {
 
     fn addNext(self: *SiblingReads, reach: usize) void {
         if (reach > max_next) {
-            self.later = true;
+            self.later.any = true;
             return;
         }
         self.next = @max(self.next, @as(u8, @intCast(reach)));
     }
 
-    fn add(self: *SiblingReads, pseudo: Selector.PseudoClass) void {
+    // `compound` holds `pseudo`; null inside :not(), :is()..., where it
+    // isn't the one the sibling has to match.
+    fn add(self: *SiblingReads, allocator: Allocator, pseudo: Selector.PseudoClass, compound: ?Selector.Compound) Allocator.Error!void {
         switch (pseudo) {
             // their next sibling is counted by nextReach
             .last_child, .only_child => self.previous = true,
-            .nth_child, .nth_of_type, .first_of_type => self.later = true,
-            .nth_last_child, .nth_last_of_type, .last_of_type => self.earlier = true,
+            .nth_child, .nth_of_type, .first_of_type => try self.later.add(allocator, compound),
+            .nth_last_child, .nth_last_of_type, .last_of_type => try self.earlier.add(allocator, compound),
             .only_of_type => {
-                self.later = true;
-                self.earlier = true;
+                try self.later.add(allocator, compound);
+                try self.earlier.add(allocator, compound);
             },
             else => {},
         }
     }
 };
+
+// Whether `compound`'s match on an element depends on its siblings: then a
+// sibling moving changes it, whatever that sibling is.
+fn readsSiblings(compound: Selector.Compound) bool {
+    for (compound.parts) |part| {
+        const nested: []const Selector.Selector = switch (part) {
+            .pseudo_class => |pseudo| switch (pseudo) {
+                .first_child, .last_child, .only_child, .first_of_type, .last_of_type, .only_of_type, .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type, .nth_child_of, .nth_last_child_of => return true,
+                .not, .is, .where, .has => |selectors| selectors,
+                else => continue,
+            },
+            else => continue,
+        };
+        for (nested) |selector| {
+            if (readsSiblings(selector.first)) {
+                return true;
+            }
+            for (selector.segments) |segment| {
+                if (segment.combinator == .next_sibling or segment.combinator == .subsequent_sibling or readsSiblings(segment.compound)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 
 /// How many element siblings after a gap (an element inserted or removed) can
 /// change what `selector` matches. A compound's match changes at the gap (the
@@ -952,59 +1030,45 @@ fn isFormElement(el: *Element) bool {
 /// E:has(S) reads E's subtree, so a change under E can change what it matches.
 /// But if the argument is only made of descendants and child combinators, the
 /// selector can only change when the change matches S's subject.
-const HasKeys = struct {
-    // An argument that can change without its subject moving, or with no key.
-    any: bool = false,
+/// What an element needs for a compound to match it, one key per compound:
+/// a name it carries as id, class, tag or attribute, or its tag. An element
+/// with none of the keys matches none of the compounds.
+const Keys = struct {
     tags: std.EnumSet(Tag) = .empty,
     names: std.HashMapUnmanaged([]const u8, void, AttributeNameContext, std.hash_map.default_max_load_percentage) = .empty,
 
-    // How many ancestors of a subject an argument reaches: `:has(> a > img)`
-    // (stored as `:scope > a > img`) 2, so its subject moving can only change
-    // the match of its 2 nearest ancestors. Unbounded with a descendant
-    // combinator.
-    depth: usize = 0,
-    unbounded: bool = false,
-
-    fn isEmpty(self: *const HasKeys) bool {
-        return self.any == false and self.tags.count() == 0 and self.names.count() == 0;
+    fn isEmpty(self: *const Keys) bool {
+        return self.tags.count() == 0 and self.names.count() == 0;
     }
 
-    fn add(self: *HasKeys, allocator: Allocator, argument: Selector.Selector) Allocator.Error!void {
-        if (self.any) {
-            // no point tracking anything else
-            return;
-        }
-
-        if (reachesOutside(argument)) {
-            self.any = true;
-            return;
-        }
-
-        for (argument.segments) |segment| {
-            if (segment.combinator != .child) {
-                self.unbounded = true;
-            }
-        }
-        self.depth = @max(self.depth, argument.segments.len);
-
-        const subject = argument.rightmost();
-        for (subject.parts) |*part| {
+    // False when the compound has no key: it can match any element
+    fn add(self: *Keys, allocator: Allocator, compound: Selector.Compound) Allocator.Error!bool {
+        for (compound.parts) |*part| {
             switch (part.*) {
-                .id, .class, .tag_name => |name| return self.names.put(allocator, name, {}),
-                .attribute => |*attr| return self.names.put(allocator, attr.name.str(), {}),
+                .id, .class, .tag_name => |name| {
+                    try self.names.put(allocator, name, {});
+                    return true;
+                },
+                .attribute => |*attr| {
+                    try self.names.put(allocator, attr.name.str(), {});
+                    return true;
+                },
                 else => {},
             }
         }
-        for (subject.parts) |part| {
+        for (compound.parts) |part| {
             switch (part) {
-                .tag => |tag| return self.tags.insert(tag),
+                .tag => |tag| {
+                    self.tags.insert(tag);
+                    return true;
+                },
                 else => {},
             }
         }
-        self.any = true;
+        return false;
     }
 
-    fn matches(self: *const HasKeys, el: *Element) bool {
+    fn matches(self: *const Keys, el: *Element) bool {
         if (self.tags.contains(el.getTag())) {
             return true;
         }
@@ -1033,6 +1097,74 @@ const HasKeys = struct {
             }
         }
         return false;
+    }
+};
+
+/// The compounds a change reaches through, by key; `any` when one has no key,
+/// or isn't known.
+const Compounds = struct {
+    any: bool = false,
+    keys: Keys = .{},
+
+    fn add(self: *Compounds, allocator: Allocator, compound: ?Selector.Compound) Allocator.Error!void {
+        if (self.any) {
+            return;
+        }
+        const c = compound orelse {
+            self.any = true;
+            return;
+        };
+        if (try self.keys.add(allocator, c) == false) {
+            self.any = true;
+        }
+    }
+
+    fn matches(self: *const Compounds, el: *Element) bool {
+        return self.any or self.keys.matches(el);
+    }
+};
+
+const HasKeys = struct {
+    // An argument that can change without its subject moving, or with no key.
+    any: bool = false,
+    keys: Keys = .{},
+
+    // How many ancestors of a subject an argument reaches: `:has(> a > img)`
+    // (stored as `:scope > a > img`) 2, so its subject moving can only change
+    // the match of its 2 nearest ancestors. Unbounded with a descendant
+    // combinator.
+    depth: usize = 0,
+    unbounded: bool = false,
+
+    fn isEmpty(self: *const HasKeys) bool {
+        return self.any == false and self.keys.isEmpty();
+    }
+
+    fn add(self: *HasKeys, allocator: Allocator, argument: Selector.Selector) Allocator.Error!void {
+        if (self.any) {
+            // no point tracking anything else
+            return;
+        }
+
+        if (reachesOutside(argument)) {
+            self.any = true;
+            return;
+        }
+
+        for (argument.segments) |segment| {
+            if (segment.combinator != .child) {
+                self.unbounded = true;
+            }
+        }
+        self.depth = @max(self.depth, argument.segments.len);
+
+        if (try self.keys.add(allocator, argument.rightmost()) == false) {
+            self.any = true;
+        }
+    }
+
+    fn matches(self: *const HasKeys, el: *Element) bool {
+        return self.keys.matches(el);
     }
 
     // Whether a :has() argument's match can change without its subject moving.
@@ -1112,9 +1244,49 @@ const ClassReach = enum(u8) {
     }
 };
 
+// How the tracked selectors use a class (or the class attribute).
+const ClassUse = struct {
+    reach: ClassReach,
+
+    // Within that reach, the elements whose match the class can change: the
+    // subjects of the rules it's in, an index in class_subjects. Everything
+    // (any_subject) once it's in a subject's own compound, as the element's
+    // style then changes, and what inherits from it.
+    subjects: u32,
+
+    const any_subject = std.math.maxInt(u32);
+};
+
+// A use of `use`'s class, in a compound reaching `reach`, in a rule whose
+// subject is `subject`; null when the class is the subject's own, or the
+// subject isn't known.
+fn noteClassUse(self: *StyleManager, use: *ClassUse, first: bool, reach: ClassReach, subject: ?Selector.Compound) Allocator.Error!void {
+    const allocator = self.arena.allocator();
+    if (first) {
+        use.* = .{ .reach = reach, .subjects = ClassUse.any_subject };
+        if (subject != null) {
+            use.subjects = @intCast(self.class_subjects.items.len);
+            try self.class_subjects.append(allocator, .{});
+        }
+    } else {
+        use.reach = use.reach.widest(reach);
+    }
+    if (use.subjects == ClassUse.any_subject) {
+        return;
+    }
+    const subjects = &self.class_subjects.items[use.subjects];
+    try subjects.add(allocator, subject);
+    if (subjects.any) {
+        use.subjects = ClassUse.any_subject;
+    }
+}
+
+const max_class_attribute_selectors = 256;
+
 // `subject` is the reach of the selector's subject compound: .subtree for a
-// rule's selector, the enclosing compound's for an :is() argument.
-fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach) Allocator.Error!void {
+// rule's selector, the enclosing compound's for an :is() argument. `own`:
+// that compound is the rule's subject, `rule_subject` (null: not known).
+fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
     const segments = selector.segments;
     for (0..segments.len + 1) |i| {
         const compound = if (i == 0) selector.first else segments[i - 1].compound;
@@ -1124,31 +1296,43 @@ fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: 
             .descendant, .child => .subtree,
             .next_sibling, .subsequent_sibling => .parent_subtree,
         };
-        try self.collectCompoundClassReach(compound, reach);
+        try self.collectCompoundClassReach(compound, reach, own and i == segments.len, rule_subject);
     }
 }
 
-fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach) Allocator.Error!void {
+fn collectCompoundClassReach(self: *StyleManager, compound: Selector.Compound, reach: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
+    const subject = if (own) null else rule_subject;
     for (compound.parts) |part| {
         switch (part) {
             .class => |class| {
                 const gop = try self.class_reach.getOrPut(self.arena.allocator(), class);
-                gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.widest(reach) else reach;
+                try self.noteClassUse(gop.value_ptr, gop.found_existing == false, reach, subject);
             },
             .attribute => |attr| if (attr.name.eql(comptime .wrap("class"))) {
-                self.class_attribute_reach = if (self.class_attribute_reach) |current| current.widest(reach) else reach;
+                const first = self.class_attribute == null;
+                if (first) {
+                    self.class_attribute = .{ .reach = reach, .subjects = ClassUse.any_subject };
+                }
+                try self.noteClassUse(&self.class_attribute.?, first, reach, subject);
+                if (self.class_attribute_selectors.items.len < max_class_attribute_selectors) {
+                    try self.class_attribute_selectors.append(self.arena.allocator(), attr);
+                } else {
+                    self.class_attribute_unlisted = true;
+                }
             },
             .pseudo_class => |pseudo| switch (pseudo) {
                 .not, .is, .where => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, reach);
+                    try self.collectClassReach(selector, reach, own, rule_subject);
                 },
                 // A sibling's class changes which index the element has
                 .nth_child_of, .nth_last_child_of => |of| for (of.selectors) |selector| {
-                    try self.collectClassReach(selector, reach.widest(.parent_subtree));
+                    try self.collectClassReach(selector, reach.widest(.parent_subtree), false, null);
                 },
                 .has => |selectors| for (selectors) |selector| {
-                    try self.collectClassReach(selector, .full);
+                    try self.collectClassReach(selector, .full, false, null);
                 },
+                .focus => self.focus_reach = if (self.focus_reach) |current| current.widest(reach) else reach,
+                .focus_within => self.focus_within_reach = if (self.focus_within_reach) |current| current.widest(reach) else reach,
                 else => {},
             },
             else => {},
@@ -1165,9 +1349,15 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         // the rebuild resets every memo
         return true;
     }
-    // [class*=x] reads the string, [class] its presence: any call is a change
-    // (change.attributeSet skips same-value writes)
-    var reach: ?ClassReach = self.class_attribute_reach;
+    var reach: ?ClassReach = null;
+    var subjects: ClassSubjects = .{};
+    // [class*=x] reads the string, [class] its presence
+    if (self.class_attribute) |use| {
+        if (self.classAttributeMatchChanged(el, old, new)) {
+            reach = use.reach;
+            subjects.add(self, use);
+        }
+    }
     inline for (.{ .{ old, new }, .{ new, old } }) |pair| {
         var it = std.mem.tokenizeAny(u8, pair[0] orelse "", &std.ascii.whitespace);
         outer: while (it.next()) |class| {
@@ -1177,8 +1367,9 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
                     continue :outer;
                 }
             }
-            if (self.class_reach.get(class)) |r| {
-                reach = if (reach) |current| current.widest(r) else r;
+            if (self.class_reach.get(class)) |use| {
+                reach = if (reach) |current| current.widest(use.reach) else use.reach;
+                subjects.add(self, use);
             }
         }
     }
@@ -1187,8 +1378,6 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         return false;
     }
 
-    // Boxes can move
-    self.layout_bumps += 1;
     var memos: Memos = .empty;
     var budget: usize = 0;
     inline for (group_fields) |field| {
@@ -1199,19 +1388,209 @@ pub fn classChanged(self: *StyleManager, el: *Element, old: ?[]const u8, new: ?[
         }
     }
     if (budget == 0) {
+        self.layout_bumps += 1;
         return true;
     }
     const node = el.asNode();
     const root = if (scope == .parent_subtree) node._parent orelse node else node;
     if (self.droppedCovers(root)) {
-        // nothing under it was read since it was dropped
+        // nothing under it was read since it was dropped, boxes included
         return true;
     }
+    // Boxes can move: the ones whose styles go, and what they push around
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    keyed: {
+        if (subjects.any) {
+            break :keyed;
+        }
+        // No changed class is a subject's own: root keeps its style, and so
+        // does what's under it but the rules' subjects, with what inherits
+        // from those.
+        // Looking for them costs more per element than dropping it, and
+        // like dropSubtree, past what's cached that's more than starting over
+        var visits = budget *| 8;
+        var tw = TreeWalker.Full.Elements.init(root, .{});
+        while (tw.next()) |under| {
+            if (visits == 0) {
+                return false;
+            }
+            visits -= 1;
+            if (under._flags.shadow_host) {
+                // what it reaches in there isn't known
+                break :keyed;
+            }
+            if (under.asNode() == root or subjects.matches(under) == false) {
+                continue;
+            }
+            boxes.restyled(under.asNode());
+            if (self.dropSubtree(under.asNode(), memos, &budget) == false) {
+                return false;
+            }
+            tw.tw.skipChildren();
+        }
+        return true;
+    }
+    boxes.restyled(root);
     if (self.dropSubtree(root, memos, &budget) == false) {
         return false;
     }
     self.recordDropped(root);
     return true;
+}
+
+// The subjects the changed classes of one classChanged can reach
+const ClassSubjects = struct {
+    any: bool = false,
+    compounds: [4]*const Compounds = undefined,
+    len: u8 = 0,
+
+    fn add(self: *ClassSubjects, style_manager: *const StyleManager, use: ClassUse) void {
+        if (use.subjects == ClassUse.any_subject or self.len == self.compounds.len) {
+            self.any = true;
+            return;
+        }
+        self.compounds[self.len] = &style_manager.class_subjects.items[use.subjects];
+        self.len += 1;
+    }
+
+    fn matches(self: *const ClassSubjects, el: *Element) bool {
+        for (self.compounds[0..self.len]) |compounds| {
+            if (compounds.keys.matches(el)) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+// Whether a [class...] selector matches `new` and not `old`, or the reverse
+// (change.attributeSet skips same-value writes).
+fn classAttributeMatchChanged(self: *const StyleManager, el: *const Element, old: ?[]const u8, new: ?[]const u8) bool {
+    if (self.class_attribute_unlisted) {
+        return true;
+    }
+    const html = el._namespace == .html;
+    // Most selectors' values can't be in either string: they start or end
+    // with a byte neither holds
+    var bytes: std.StaticBitSet(256) = .empty;
+    for (old orelse "") |c| {
+        bytes.set(c);
+    }
+    for (new orelse "") |c| {
+        bytes.set(c);
+    }
+    for (self.class_attribute_selectors.items) |*attr| {
+        if (attr.value_case == .sensitive) {
+            const value: []const u8 = switch (attr.matcher) {
+                .presence => "",
+                inline else => |value| value,
+            };
+            if (value.len != 0 and (bytes.isSet(value[0]) == false or bytes.isSet(value[value.len - 1]) == false)) {
+                continue;
+            }
+        }
+        const before = if (old) |value| SelectorList.matchesAttributeValue(value, attr.*, html) else false;
+        const after = if (new) |value| SelectorList.matchesAttributeValue(value, attr.*, html) else false;
+        if (before != after) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The document's active element went from `old` to `new`. Drops the memo
+/// entries their :focus and :focus-within matches reach, like a class toggled
+/// on the elements that flip. Returns false when that's everything: the caller
+/// reports a full style change.
+pub fn focusChanged(self: *StyleManager, old: ?*Element, new: ?*Element) bool {
+    if (self.dirty) {
+        // the rebuild resets every memo
+        return true;
+    }
+    const focus = self.focus_reach;
+    const within = self.focus_within_reach;
+    if (focus == null and within == null) {
+        return true;
+    }
+    if (focus == .full or within == .full) {
+        return false;
+    }
+
+    var roots: [4]*Node = undefined;
+    var len: usize = 0;
+    inline for (.{ .{ old, new }, .{ new, old } }) |pair| {
+        if (pair[0]) |el| {
+            const node = el.asNode();
+            if (focus) |reach| {
+                roots[len] = reachRoot(node, reach);
+                len += 1;
+            }
+            if (within) |reach| {
+                const other: ?*Node = if (pair[1]) |o| o.asNode() else null;
+                if (other == null or node.contains(other.?) == false) {
+                    // Its ancestors flip up to the first one holding the
+                    // other end, and the topmost one's subtree covers them.
+                    var top = node;
+                    while (top._parent) |parent| {
+                        if (parent._type != .element) {
+                            if (parent._type == .document or node.isConnected()) {
+                                // Every ancestor (from or to no focus), or
+                                // out of a shadow tree into its host
+                                return false;
+                            }
+                            break;
+                        }
+                        if (other) |o| {
+                            if (parent.contains(o)) {
+                                break;
+                            }
+                        }
+                        top = parent;
+                    }
+                    roots[len] = reachRoot(top, reach);
+                    len += 1;
+                }
+            }
+        }
+    }
+
+    var memos: Memos = .empty;
+    var budget: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.memo.count() != 0 and group.fresh(self.frame)) {
+            memos.insert(@field(Memo, field));
+            budget += group.memo.count();
+        }
+    }
+    if (budget == 0) {
+        self.layout_bumps += 1;
+        return true;
+    }
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    for (roots[0..len]) |root| {
+        if (root._type == .document) {
+            return false;
+        }
+        if (self.droppedCovers(root)) {
+            continue;
+        }
+        boxes.restyled(root);
+        if (self.dropSubtree(root, memos, &budget) == false) {
+            return false;
+        }
+        self.recordDropped(root);
+    }
+    return true;
+}
+
+// Where the drop starts for a match that flips on `node`
+fn reachRoot(node: *Node, reach: ClassReach) *Node {
+    return switch (reach) {
+        .subtree => node,
+        .parent_subtree => node._parent orelse node,
+        .full => unreachable,
+    };
 }
 
 pub const TreeChange = enum { inserted, removed };
@@ -1220,10 +1599,9 @@ pub const TreeChange = enum { inserted, removed };
 /// change. Returns false if treeChanged wasn't able to prune only the tree, in
 /// which case the caller should report a full style change.
 pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: TreeChange) bool {
-    // Boxes move whatever the cascade does
-    self.layout_bumps += 1;
     if (self.dirty) {
         // doesn't matter, a rebuild is needed anyways.
+        self.layout_bumps += 1;
         return true;
     }
 
@@ -1244,10 +1622,16 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         }
     }
     if (budget == 0) {
+        self.layout_bumps += 1;
         return true;
     }
 
-    if (self.holdsFocus(child)) {
+    // Boxes move whatever the cascade does: the child's siblings and what
+    // its parent pushes around, then whatever gets restyled below.
+    var boxes: BoxScope = .init(self, &memos, &budget);
+    boxes.childMoved(parent, child, previous, next);
+
+    if ((self.focus_reach != null or self.focus_within_reach != null) and self.holdsFocus(child)) {
         // :focus-within on the ancestors
         return false;
     }
@@ -1270,13 +1654,14 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         if (op == .inserted and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
-    } else if (root != parent or (child._type == .element and self.readsAllSiblings(previous, next))) {
+    } else if (root != parent or (if (child.is(Element)) |el| self.readsAllSiblings(el, previous, next) else false)) {
         // Widened (a :has() anchor, a form), or a match reads every sibling
         // and there are some: everything under root, which batching can skip
         // next time
         if (op == .removed and self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
+        boxes.restyled(root);
         if (self.dropSubtree(root, memos, &budget) == false) {
             return false;
         }
@@ -1287,18 +1672,20 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
         if (self.dropSubtree(child, memos, &budget) == false) {
             return false;
         }
-        if (child._type == .element and self.dropSiblings(previous, next, memos, &budget) == false) {
+        if (child._type == .element and self.dropSiblings(previous, next, &boxes, &budget) == false) {
             return false;
         }
     }
     if (self.reads_empty and emptinessFlips(parent, child)) {
         // parent's :empty, and through `:empty + x` and `:empty ~ x` its later
         // siblings
+        boxes.restyled(parent);
         if (self.dropSubtree(parent, memos, &budget) == false) {
             return false;
         }
         var sibling = parent.nextSibling();
         while (sibling) |s| : (sibling = s.nextSibling()) {
+            boxes.restyled(s);
             if (self.dropSubtree(s, memos, &budget) == false) {
                 return false;
             }
@@ -1307,15 +1694,220 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
     return true;
 }
 
-// Whether a match reads every sibling on a side of the gap that has some
-// (`~`, :nth-child()...). Not for an append when only earlier siblings are
-// read: there's nothing after it.
-fn readsAllSiblings(self: *const StyleManager, previous: ?*Node, next: ?*Node) bool {
-    if (self.siblings.later and nextElement(next) != null) {
+/// The boxes a tree or class change moves, when the layout memo can keep the
+/// rest: `memos` then drops a restyled element's entries with its styles.
+/// Once it can't (see boxesMoved), the whole layout memo goes, as it does
+/// when a caller returns false for a full style change.
+const BoxScope = struct {
+    style_manager: *StyleManager,
+    memos: *Memos,
+    scoped: bool,
+
+    fn init(style_manager: *StyleManager, memos: *Memos, budget: *usize) BoxScope {
+        const scoped = style_manager.layoutMemoLive() and style_manager.unscoped_sizing == false;
+        if (scoped) {
+            memos.insert(.layout);
+            budget.* += style_manager.layout_memo.map.count();
+        } else {
+            style_manager.layout_bumps += 1;
+        }
+        return .{ .style_manager = style_manager, .memos = memos, .scoped = scoped };
+    }
+
+    fn giveUp(self: *BoxScope) void {
+        self.scoped = false;
+        self.memos.remove(.layout);
+        self.style_manager.layout_bumps += 1;
+    }
+
+    // `child` entered or left `parent`, between `previous` and `next`.
+    // Positions are counted in the flat tree, which is the DOM's only where
+    // no shadow tree or slot is involved.
+    fn childMoved(self: *BoxScope, parent: *Node, child: *Node, previous: ?*Node, next: ?*Node) void {
+        if (self.scoped == false) {
+            return;
+        }
+        const sm = self.style_manager;
+        const el = parent.is(Element) orelse return self.giveUp();
+        if (el._flags.shadow_host or el.is(Element.Html.Slot) != null or child._flags.assigned_slot) {
+            return self.giveUp();
+        }
+
+        // The children before it keep their offsets. Text takes no position,
+        // but can make its parent taller.
+        var index: ?u32 = 0;
+        if (previousElement(previous)) |before| {
+            const entry = sm.layout_memo.map.getPtr(before.as(Element));
+            // Not placed: nothing after it is either
+            index = if (entry) |e| (if (e.get(.offset) != null) e.position + 1 else null) else null;
+        }
+        if (index) |i| {
+            if (child._type == .element) {
+                sm.forgetOffsetsFrom(el, i, next);
+            }
+        }
+        if (sm.boxesMoved(el, index) == false) {
+            self.giveUp();
+        }
+    }
+
+    // `node`'s subtree is about to lose its styles: its box can change in
+    // any way, and so can the boxes inside it.
+    fn restyled(self: *BoxScope, node: *Node) void {
+        if (self.scoped == false) {
+            return;
+        }
+        const sm = self.style_manager;
+        const el = node.is(Element) orelse return self.giveUp();
+        const parent = node.flatTreeParentElement(sm.frame) orelse return self.giveUp();
+        const entry = sm.layout_memo.map.getPtr(el);
+        const index: ?u32 = if (entry) |e| (if (e.get(.offset) != null) e.position else null) else null;
+        if (sm.boxesMoved(parent, index) == false) {
+            self.giveUp();
+        }
+    }
+};
+
+// An element child entered or left `parent` at `index`: the children after
+// it that were placed now sit at another index, so their offsets go rather
+// than wait for `placed` to cover their old one again.
+fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*Node) void {
+    const memo = &self.layout_memo;
+    const entry = memo.map.getPtr(parent) orelse return;
+    if (entry.placed <= index) {
+        return;
+    }
+    var stale = entry.placed - index;
+    entry.placed = index;
+    var sibling = nextElement(next);
+    while (sibling) |s| : (sibling = nextElement(s.nextSibling())) {
+        if (memo.map.getPtr(s.as(Element))) |e| {
+            e.drop(.offset);
+        }
+        stale -= 1;
+        if (stale == 0) {
+            return;
+        }
+    }
+}
+
+// Like heightWritten, for a change that can be anything: `parent`'s children
+// from `index` on (null: none that is placed) changed, appeared or left.
+// Their later siblings move, `parent` and its auto-height ancestors grow or
+// shrink, and so on up. Widths flow the other way, so only the ancestors'
+// content widths can change: unless one of them sizes other boxes by its
+// content (see Entry.sizes_others). Then every width under the topmost one
+// that does goes; the heights and offsets there stay, no width decides them.
+fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
+    const memo = &self.layout_memo;
+    var el = parent;
+    var from = index;
+    var heights = true;
+    var sizing: ?*Element = null;
+    while (true) {
+        var entry_: ?*LayoutMemo.Entry = null;
+        if (memo.map.getPtr(el)) |entry| {
+            if (entry.sizes_others) {
+                sizing = el;
+            }
+            if (from) |i| {
+                entry.placed = @min(entry.placed, i);
+            }
+            inline for (.{ .content_width, .full_content_width, .min_content_width, .scrollable_content_width }) |kind| {
+                entry.drop(kind);
+            }
+            if (heights) {
+                entry.drop(.content_height);
+            }
+            entry_ = entry;
+        }
+        // A declared height doesn't grow: nothing above it moves. html and
+        // body take the document's height, so they never stop it.
+        if (heights and el.isRootContainer() == false and self.memoizedHeightDeclared(el)) {
+            heights = false;
+        }
+        from = null;
+        if (heights) {
+            if (entry_) |entry| {
+                entry.drop(.box_height);
+                // el stays put, the siblings after it don't
+                if (entry.get(.offset) != null) {
+                    from = entry.position + 1;
+                }
+            }
+        }
+        el = el.asNode().flatTreeParentElement(self.frame) orelse break;
+    }
+    if (sizing) |root| {
+        self.dropWidths(root.asNode());
+    }
+    // Document.extent reads the root's children
+    self.extent_bumps += 1;
+    return true;
+}
+
+// Drops the widths of `root`'s flat subtree, and with them what made a
+// change under it reach this far: no cached width reads another box's
+// content anymore, until layout.zig caches one again. So a batch of changes
+// under the same row walks it once.
+fn dropWidths(self: *StyleManager, root: *Node) void {
+    var tw = TreeWalker.Full.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (comptime lp.IS_TEST) {
+            self.walked += 1;
+        }
+        if (self.layout_memo.map.getPtr(el)) |entry| {
+            inline for (.{ .box_width, .content_width, .full_content_width, .min_content_width, .scrollable_content_width, .row_shrink }) |kind| {
+                entry.drop(kind);
+            }
+            entry.sizes_others = false;
+        }
+        if (el.hostedShadowRoot(self.frame)) |shadow| {
+            self.dropWidths(shadow.asNode());
+        }
+        if (el.is(Element.Html.Slot)) |slot| {
+            for (slot._assigned.items) |assigned| {
+                self.dropWidths(assigned);
+            }
+        }
+    }
+}
+
+// Whether el's height is declared, as far as the memo knows: a tree change
+// doesn't cascade to find out. Not knowing, the walk goes on.
+fn memoizedHeightDeclared(self: *StyleManager, el: *Element) bool {
+    const group = &self.geometry;
+    if (group.fresh(self.frame) == false) {
+        return false;
+    }
+    const stored = group.memo.get(el) orelse return false;
+    return @TypeOf(group.*).load(stored).height.resolve(self.frame.page.getViewport()) != null;
+}
+
+// Whether `child` entering or leaving between `previous` and `next` can
+// change the match of a sibling beyond the nearest ones (`~`, :nth-child()...).
+// Not for an append when only earlier siblings are read: there's nothing
+// after it.
+fn readsAllSiblings(self: *const StyleManager, child: *Element, previous: ?*Node, next: ?*Node) bool {
+    const siblings = &self.siblings;
+    if (siblings.following.matches(child) and nextElement(next) != null) {
         return true;
     }
-    if (self.siblings.earlier and previousElement(previous) != null) {
-        return true;
+    if (siblings.later.any or siblings.later.keys.isEmpty() == false) {
+        var sibling = nextElement(next);
+        while (sibling) |s| : (sibling = nextElement(s.nextSibling())) {
+            if (siblings.later.matches(s.as(Element))) {
+                return true;
+            }
+        }
+    }
+    if (siblings.earlier.any or siblings.earlier.keys.isEmpty() == false) {
+        var sibling = previousElement(previous);
+        while (sibling) |s| : (sibling = previousElement(s.previousSibling())) {
+            if (siblings.earlier.matches(s.as(Element))) {
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -1344,18 +1936,20 @@ fn previousElement(from: ?*Node) ?*Node {
 // and `next`) whose match can change (see SiblingReads), with their subtrees.
 // Only the nearest ones: readsAllSiblings sent the rest to the parent's
 // subtree.
-fn dropSiblings(self: *StyleManager, previous: ?*Node, next: ?*Node, memos: Memos, budget: *usize) bool {
+fn dropSiblings(self: *StyleManager, previous: ?*Node, next: ?*Node, boxes: *BoxScope, budget: *usize) bool {
     var sibling = next;
     for (0..self.siblings.next) |_| {
         const s = nextElement(sibling) orelse break;
-        if (self.dropSubtree(s, memos, budget) == false) {
+        boxes.restyled(s);
+        if (self.dropSubtree(s, boxes.memos.*, budget) == false) {
             return false;
         }
         sibling = s.nextSibling();
     }
     if (self.siblings.previous) {
         if (previousElement(previous)) |s| {
-            if (self.dropSubtree(s, memos, budget) == false) {
+            boxes.restyled(s);
+            if (self.dropSubtree(s, boxes.memos.*, budget) == false) {
                 return false;
             }
         }
@@ -1624,6 +2218,9 @@ fn nextReaching(it: *CssParser.DeclarationsIterator, memo: Memo) ?Reaching {
 }
 
 fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
+    if (reach.count() != 0) {
+        self.inline_bumps += 1;
+    }
     var it = reach.iterator();
     while (it.next()) |memo| {
         switch (memo) {
@@ -1901,8 +2498,13 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.reads_default = false;
     self.siblings = .{};
     self.reads_empty = false;
+    self.focus_reach = null;
+    self.focus_within_reach = null;
     self.class_reach = .empty;
-    self.class_attribute_reach = null;
+    self.class_subjects = .empty;
+    self.class_attribute = null;
+    self.class_attribute_selectors = .empty;
+    self.class_attribute_unlisted = false;
     self.has = .{};
     self.dropped_len = 0;
     var caps: [group_fields.len]Capacities = undefined;
@@ -1913,7 +2515,9 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const attribute_names_count = self.attribute_names.count();
 
     self.arena.resetRetain();
+    self.nth = .{ .allocator = self.arena.allocator(), .walk_only = true };
     self.layout_memo = .{};
+    self.hit_bands = .{};
 
     self.next_doc_order = 1;
     self.rule_layers = .empty;
@@ -2473,6 +3077,12 @@ const LayoutMemo = struct {
         position: u32 = 0,
         placed: u32 = 0,
 
+        // A width cached on another element reads this one's content or
+        // children: a box sized by its content sizes the boxes inside it, a
+        // flex row's items size each other. A change under it can't keep
+        // the widths (see boxesMoved).
+        sizes_others: bool = false,
+
         fn get(self: *const Entry, slot: Measure) ?f64 {
             return if (self.cached.contains(slot)) self.values.get(slot) else null;
         }
@@ -2514,13 +3124,44 @@ pub fn setCacheLayout(self: *StyleManager, el: *Element, comptime kind: LayoutKi
     entry.put(@field(LayoutMemo.Measure, @tagName(kind)), value);
 }
 
+/// A width being cached reads el's content, or its children (see
+/// Entry.sizes_others).
+pub fn setSizesOthers(self: *StyleManager, el: *Element) void {
+    _ = self.freshLayoutMemo() orelse return;
+    if (self.layoutEntry(el)) |entry| {
+        entry.sizes_others = true;
+    } else {
+        // Can't be remembered: the next change drops everything
+        self.unscoped_sizing = true;
+    }
+}
+
 /// el's top, from parent's top. parent is el's flat-tree parent.
 pub fn getCachedOffset(self: *StyleManager, el: *Element, parent: *Element) ?f64 {
+    const placement = self.getCachedPlacement(el, parent) orelse return null;
+    return placement.offset;
+}
+
+pub const CachedOffset = struct {
+    offset: f64,
+    // el's index among parent's element children
+    position: u32,
+};
+
+/// Like getCachedOffset, with where el sits among its siblings.
+pub fn getCachedPlacement(self: *StyleManager, el: *Element, parent: *Element) ?CachedOffset {
     const memo = self.freshLayoutMemo() orelse return null;
     const entry = memo.map.getPtr(el) orelse return null;
     const offset = entry.get(.offset) orelse return null;
     const placed = if (memo.map.getPtr(parent)) |p| p.placed else 0;
-    return if (entry.position < placed) offset else null;
+    return if (entry.position < placed) .{ .offset = offset, .position = entry.position } else null;
+}
+
+/// How many of parent's first element children have their offset cached.
+pub fn getCachedPlaced(self: *StyleManager, parent: *Element) u32 {
+    const memo = self.freshLayoutMemo() orelse return 0;
+    const entry = memo.map.getPtr(parent) orelse return 0;
+    return entry.placed;
 }
 
 /// Caches el's offset, el being its parent's index-th element child. Only
@@ -2528,6 +3169,9 @@ pub fn getCachedOffset(self: *StyleManager, el: *Element, parent: *Element) ?f64
 pub fn setCacheOffset(self: *StyleManager, el: *Element, index: u32, offset: f64) bool {
     _ = self.freshLayoutMemo() orelse return false;
     const entry = self.layoutEntry(el) orelse return false;
+    if (comptime lp.IS_TEST) {
+        self.offsets_placed += 1;
+    }
     entry.put(.offset, offset);
     entry.position = index;
     return true;
@@ -2557,6 +3201,107 @@ fn layoutEntry(self: *StyleManager, el: *Element) ?*LayoutMemo.Entry {
     return memo.map.getPtr(el).?;
 }
 
+/// The vertical span holding every box of an element's subtree (its own, and
+/// a positioned descendant's wherever that sits), in whole document pixels
+/// rounded outward: a point outside it hits nothing in the subtree.
+pub const HitBand = struct {
+    lo: i32,
+    hi: i32,
+
+    pub const none: HitBand = .{ .lo = std.math.maxInt(i32), .hi = std.math.minInt(i32) };
+
+    pub fn of(top: f64, height: f64) HitBand {
+        // saturates, and widening is always safe
+        return .{ .lo = std.math.lossyCast(i32, @floor(top)), .hi = std.math.lossyCast(i32, @ceil(top + height)) };
+    }
+
+    pub fn add(self: *HitBand, other: HitBand) void {
+        self.lo = @min(self.lo, other.lo);
+        self.hi = @max(self.hi, other.hi);
+    }
+
+    pub fn holds(self: HitBand, y: f64) bool {
+        return y >= @as(f64, @floatFromInt(self.lo)) and y <= @as(f64, @floatFromInt(self.hi));
+    }
+};
+
+// Document.hitTest walks every element: a positioned box can sit anywhere, so
+// where a subtree starts says nothing about what's in it. A walk that finds
+// no bands records one per element it visits, and the next ones skip the
+// subtrees whose band the point is outside of. Nothing is kept across a
+// change that can move a box: the first hit test after one walks everything
+// again.
+const HitBands = struct {
+    map: Records(HitBand) = .{},
+
+    // What the bands were recorded for. A fixed box moves with the scroll.
+    version: usize = 0,
+    scroll_y: u32 = 0,
+    viewport_width: u32 = 0,
+    viewport_height: u32 = 0,
+
+    // The walk recording them finished
+    complete: bool = false,
+
+    // One couldn't be stored. Its parent's would cover it, but a missing
+    // band has to mean a subtree no walk went into.
+    failed: bool = false,
+};
+
+// Every change that can move a box bumps one of these. A scoped tree, class
+// or focus change does through BoxScope: extent_bumps when the layout memo
+// kept the rest, layout_bumps when it couldn't.
+fn hitVersion(self: *const StyleManager) usize {
+    return self.extentVersion() + self.inline_bumps;
+}
+
+/// Whether a walk recorded the bands and no box moved since. When not, they
+/// are reset for the caller to record: setHitBand for every element it
+/// visits, then hitBandsRecorded.
+pub fn hasHitBands(self: *StyleManager, scroll_y: u32) bool {
+    self.rebuildIfDirty() catch {};
+    const bands = &self.hit_bands;
+    const version = self.hitVersion();
+    const viewport = self.frame.page.getViewport();
+    if (bands.complete and bands.version == version and bands.scroll_y == scroll_y and
+        bands.viewport_width == viewport.width and bands.viewport_height == viewport.height)
+    {
+        return true;
+    }
+    bands.map.clear();
+    bands.* = .{
+        .map = bands.map,
+        .version = version,
+        .scroll_y = scroll_y,
+        .viewport_width = viewport.width,
+        .viewport_height = viewport.height,
+    };
+    return false;
+}
+
+/// Only after hasHitBands returned true
+pub fn getHitBand(self: *const StyleManager, el: *const Element) ?HitBand {
+    return self.hit_bands.map.get(el);
+}
+
+pub fn setHitBand(self: *StyleManager, el: *Element, band: HitBand) void {
+    const bands = &self.hit_bands;
+    const index = self.claimSlot(el) orelse {
+        bands.failed = true;
+        return;
+    };
+    bands.map.put(self.arena.allocator(), index, band) catch |err| {
+        log.warn(.browser, "StyleManager hit bands", .{ .err = err });
+        bands.failed = true;
+    };
+}
+
+pub fn hitBandsRecorded(self: *StyleManager) void {
+    const bands = &self.hit_bands;
+    // The walk only read; if anything moved a box meanwhile, they're stale
+    bands.complete = bands.failed == false and bands.version == self.hitVersion();
+}
+
 // Whether the layout memo holds entries the next read keeps
 fn layoutMemoLive(self: *StyleManager) bool {
     const memo = &self.layout_memo;
@@ -2572,6 +3317,7 @@ fn freshLayoutMemo(self: *StyleManager) ?*LayoutMemo {
     const version = self.layoutVersion();
     const viewport = self.frame.page.getViewport();
     if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
+        self.unscoped_sizing = false;
         memo.detached = false;
         memo.map.clear();
         memo.version = version;
@@ -2988,6 +3734,7 @@ fn Group(comptime Spec: type) type {
         }
 
         fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+            const nth = frame._style_manager.nthCache();
             rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
                 var matched = false;
                 inline for (fields) |field| {
@@ -2997,7 +3744,7 @@ fn Group(comptime Spec: type) type {
                     if (rule.set.contains(f) and priority > priorities.get(f)) {
                         if (matched == false) {
                             count(.matches);
-                            if (matchesSelector(el, selector, frame) == false) {
+                            if (matchesSelector(el, selector, nth, frame) == false) {
                                 continue :rules;
                             }
                             matched = true;
@@ -3327,9 +4074,23 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
     }
 }
 
-fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) bool {
+// `nth` is nthCache(), fetched once for the rules of a list: this runs for
+// every one of them.
+fn matchesSelector(el: *Element, selector: Selector.Selector, nth: *SelectorList.NthCache, frame: *Frame) bool {
     // Outside @scope, a stylesheet's :scope is the root element.
-    return SelectorList.matches(el.asNode(), selector, frame.document.asNode(), null, frame);
+    return SelectorList.matches(el.asNode(), selector, frame.document.asNode(), nth, frame);
+}
+
+// Valid while no element enters or leaves a tree: a parser insert only stamps
+// the style version.
+fn nthCache(self: *StyleManager) *SelectorList.NthCache {
+    const page = self.frame.page;
+    const version = page.dom_version +% page.style_version;
+    if (self.nth_version != version) {
+        self.nth.clear();
+        self.nth_version = version;
+    }
+    return &self.nth;
 }
 
 /// Only the values the dumpers act on; everything else is `other`.
@@ -5046,6 +5807,7 @@ fn layerOrder(priority: u64) u16 {
 /// rules and its inline style. With `before`, only those from earlier layers.
 fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []const ParsedRule, before: ?u16) ?LazyWinner {
     const limit = before orelse std.math.maxInt(u16);
+    const nth = self.nthCache();
 
     var winner: ?LazyWinner = null;
     var priority: u64 = 0;
@@ -5057,7 +5819,7 @@ fn lazyWinner(self: *StyleManager, el: *Element, id: properties.Id, rules: []con
         if (layer >= limit) {
             continue;
         }
-        if (matchesSelector(el, rule.selector, self.frame) == false) {
+        if (matchesSelector(el, rule.selector, nth, self.frame) == false) {
             continue;
         }
         winner = .{ .value = rule.value, .layer = layer, .priority = rule.priority };
@@ -5929,17 +6691,17 @@ test "StyleManager: memo: a class change drops what its selectors reach" {
     const i = section.asNode().firstChild().?.as(Element);
 
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("a").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("anc").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("x").?);
-    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("sib").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("neg").?);
-    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("of").?);
-    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("h").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("k").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kk").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("ka").?);
-    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kb").?);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("a").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("anc").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("x").?.reach);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("sib").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("neg").?.reach);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_reach.get("of").?.reach);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("h").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("k").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kk").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("ka").?.reach);
+    try testing.expectEqual(ClassReach.full, sm.class_reach.get("kb").?.reach);
     try testing.expectEqual(null, sm.class_reach.get("hook"));
 
     _ = sm.hasVisibilityHiddenInherited(i);
@@ -5969,6 +6731,438 @@ test "StyleManager: memo: a class change drops what its selectors reach" {
     try testing.expect(frame.page.style_version != version);
 }
 
+test "StyleManager: memo: a focus move drops what :focus and :focus-within reach" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><span><input></span><p class=a></p></div><section><input><b></b></section><aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    // A rule whose subject is :focus is never bucketed: it reads nothing
+    try style_el.asNode().setTextContent("input:focus { display: none } .a { visibility: hidden }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?;
+    const first = div.firstChild().?.firstChild().?.as(Element);
+    const p = div.firstChild().?.nextSibling().?.as(Element);
+    const section = div.nextSibling().?;
+    const second = section.firstChild().?.as(Element);
+    const b = second.asNode().nextSibling().?.as(Element);
+    const aside = section.nextSibling().?;
+    const u = aside.firstChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+    try testing.expectEqual(null, sm.focus_reach);
+    try testing.expectEqual(null, sm.focus_within_reach);
+
+    // Nothing reads focus: a noop
+    var version = frame.page.style_version;
+    try first.focus(frame);
+    try testing.expectEqual(first, doc._active_element.?);
+    try first.blur(frame);
+    try testing.expectEqual(version, frame.page.style_version);
+
+    const reading = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try reading.asNode().setTextContent("div:focus-within .a { display: none } input:focus + b { display: none }", frame);
+    _ = try body.appendChild(reading.asNode(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+    try testing.expectEqual(ClassReach.parent_subtree, sm.focus_reach.?);
+    try testing.expectEqual(ClassReach.subtree, sm.focus_within_reach.?);
+
+    // From no focus, every ancestor's :focus-within flips
+    version = frame.page.style_version;
+    try first.focus(frame);
+    try testing.expect(frame.page.style_version != version);
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(false, sm.hasDisplayNone(b));
+
+    // Between two elements: their sides of the tree, up to <body>
+    var child = aside.firstChild();
+    while (child) |c| : (child = c.nextSibling()) {
+        try testing.expectEqual(false, sm.hasDisplayNone(c.as(Element)));
+    }
+    version = frame.page.style_version;
+    try second.focus(frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(false, sm.hasDisplayNone(p));
+    try testing.expectEqual(true, sm.hasDisplayNone(b));
+    try testing.expectEqual(true, sm.visibility.memo.contains(u));
+
+    // Inside :has(), anything can anchor on it
+    const anchored = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try anchored.asNode().setTextContent("aside:has(~ section :focus) u { display: none }", frame);
+    _ = try body.appendChild(anchored.asNode(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(u));
+    try testing.expectEqual(ClassReach.full, sm.focus_reach.?);
+    version = frame.page.style_version;
+    try first.focus(frame);
+    try testing.expect(frame.page.style_version != version);
+}
+
+test "StyleManager: memo: a tree change reaches every sibling only when one can match" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<ul><li></li><li></li><li></li></ul>
+        \\<div><div class=row></div><div class=row></div><div class=row></div><div class=row></div></div>
+        \\<p><b class=lead></b><b class=mark></b><i class=row></i></p>
+        \\<h1><em class=lead></em><em></em><q></q></h1>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("li:nth-child(2) { display: none } .mark ~ div.row { display: none } li:nth-last-child(2) { display: none }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const ul = body.firstChild().?;
+    const list = ul.nextSibling().?.nextSibling().?;
+    const p = list.nextSibling().?.nextSibling().?;
+    const li = ul.firstChild().?.as(Element);
+    const last_row = list.lastChild().?.as(Element);
+    const i = p.lastChild().?.as(Element);
+    const q = p.nextSibling().?.nextSibling().?.lastChild().?.as(Element);
+
+    const read = struct {
+        fn all(root: *Node, style_manager: *StyleManager) void {
+            var tw = TreeWalker.Full.Elements.init(root, .{});
+            while (tw.next()) |el| {
+                _ = style_manager.hasDisplayNone(el);
+            }
+        }
+    }.all;
+    read(body, sm);
+    try testing.expectEqual(false, sm.hasDisplayNone(li));
+    try testing.expectEqual(false, sm.hasDisplayNone(last_row));
+
+    // :nth-child() by its compound's key, `~` by its left compound's
+    const siblings = &sm.siblings;
+    try testing.expectEqual(false, siblings.later.any);
+    try testing.expectEqual(true, siblings.later.keys.tags.contains(.li));
+    try testing.expectEqual(false, siblings.following.any);
+    try testing.expectEqual(true, siblings.following.keys.names.contains("mark"));
+    try testing.expectEqual(false, siblings.earlier.any);
+    try testing.expectEqual(true, siblings.earlier.keys.tags.contains(.li));
+    const version = frame.page.style_version;
+
+    // Not a .mark, before rows that can't be the <li>: only what's inserted
+    var walked = sm.walked;
+    _ = try list.insertBefore((try doc.createElement("div", null, frame)).asNode(), list.firstChild(), frame);
+    try testing.expectEqual(1, sm.walked - walked);
+    try testing.expectEqual(true, sm.visibility.memo.contains(last_row));
+    try testing.expectEqual(false, sm.hasDisplayNone(last_row));
+
+    // A .mark: every row after it
+    const mark = try doc.createElement("div", null, frame);
+    try mark.setAttribute(comptime .wrap("class"), comptime .wrap("mark"), frame);
+    _ = try list.insertBefore(mark.asNode(), list.firstChild(), frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(last_row));
+    mark.remove(frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(last_row));
+
+    // Before <li>s: each is one further from the start
+    read(body, sm);
+    walked = sm.walked;
+    _ = try ul.insertBefore((try doc.createElement("li", null, frame)).asNode(), ul.firstChild(), frame);
+    try testing.expect(sm.walked - walked >= 4);
+    try testing.expectEqual(true, sm.hasDisplayNone(li));
+
+    // ... and after them, from the end
+    const last_li = ul.lastChild().?.as(Element);
+    try testing.expectEqual(false, sm.hasDisplayNone(last_li));
+    _ = try ul.appendChild((try doc.createElement("li", null, frame)).asNode(), frame);
+    try testing.expectEqual(true, sm.hasDisplayNone(last_li));
+    try testing.expectEqual(version, frame.page.style_version);
+
+    // `a:first-child ~ b`: a's match reads its own siblings, so anything
+    // entering before it reaches b, past the one sibling :first-child reaches
+    const first = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try first.asNode().setTextContent(".lead:first-child ~ q { display: none }", frame);
+    _ = try body.appendChild(first.asNode(), frame);
+    read(body, sm);
+    try testing.expectEqual(true, sm.hasDisplayNone(q));
+    try testing.expectEqual(true, siblings.following.any);
+    const h1 = q.asNode()._parent.?;
+    _ = try h1.insertBefore((try doc.createElement("s", null, frame)).asNode(), h1.firstChild(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(q));
+    first.asNode().as(Element).remove(frame);
+    read(body, sm);
+    try testing.expectEqual(false, siblings.following.any);
+
+    // `x + a ~ b` too: anything entering between x and a
+    const chained = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try chained.asNode().setTextContent(".lead + .mark ~ i.row { display: none }", frame);
+    _ = try body.appendChild(chained.asNode(), frame);
+    read(body, sm);
+    try testing.expectEqual(true, sm.hasDisplayNone(i));
+    try testing.expectEqual(true, siblings.following.any);
+    _ = try p.insertBefore((try doc.createElement("s", null, frame)).asNode(), p.firstChild().?.nextSibling(), frame);
+    try testing.expectEqual(false, sm.hasDisplayNone(i));
+
+    // Inside :not(), the compound isn't the one a sibling has to match
+    const negated = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try negated.asNode().setTextContent(":not(b:nth-last-child(2)) > q { display: none }", frame);
+    _ = try body.appendChild(negated.asNode(), frame);
+    read(body, sm);
+    try testing.expectEqual(true, siblings.earlier.any);
+}
+
+test "StyleManager: memo: a change under a flex row drops its widths only" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div class=row><div class=it></div><div class=it></div></div>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".row { display: flex; width: 100px } .it { width: 80px; height: 10px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const row = body.firstChild().?;
+    const first = row.firstChild().?.as(Element);
+    const u = row.nextSibling().?.nextSibling().?.firstChild().?.as(Element);
+
+    // Everything read: the two items shrink to share the row
+    _ = try doc.hitTestVertical(0, frame);
+    try testing.expectEqual(50, layout.boxWidth(first, frame));
+    try testing.expect(sm.getCachedLayout(u, .box_height) != null);
+    const version = sm.layoutVersion();
+
+    var walked: [2]usize = undefined;
+    for (&walked) |*count| {
+        const item = try doc.createElement("div", null, frame);
+        try item.setAttribute(comptime .wrap("class"), comptime .wrap("it"), frame);
+        const before = sm.walked;
+        _ = try row.appendChild(item.asNode(), frame);
+        count.* = sm.walked - before;
+    }
+    // No width was read in between: the row's subtree is walked once
+    try testing.expect(walked[0] >= 4);
+    try testing.expectEqual(1, walked[1]);
+
+    // The memo is kept, without the widths a fourth item changes
+    try testing.expectEqual(version, sm.layoutVersion());
+    try testing.expectEqual(version, sm.layout_memo.version);
+    try testing.expect(sm.getCachedLayout(u, .box_height) != null);
+    try testing.expectEqual(25, layout.boxWidth(first, frame));
+}
+
+test "StyleManager: hit bands: a hit test skips the subtrees the point is outside of" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div style="height: 100px"><i style="display: block; height: 10px"></i></div>
+        \\<div style="height: 100px"><b style="display: block; position: absolute; top: 10px; height: 20px"></b></div>
+        \\<div style="height: 100px" inert><p style="height: 50px"></p></div>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".low { position: absolute; top: 340px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const first = body.firstChild().?.as(Element);
+    const i = first.asNode().firstChild().?.as(Element);
+    const second = first.asNode().nextSibling().?.nextSibling().?.as(Element);
+    const b = second.asNode().firstChild().?.as(Element);
+    const third = second.asNode().nextSibling().?.nextSibling().?.as(Element);
+    const p = third.asNode().firstChild().?.as(Element);
+
+    // The first walk records, the next ones use what it recorded: a
+    // positioned box counts in its ancestors' bands, wherever it sits
+    try testing.expectEqual(false, sm.hit_bands.complete);
+    try testing.expectEqual(b, (try doc.hitTestVertical(15, frame)).?);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+    try testing.expectEqual(StyleManager.HitBand{ .lo = 0, .hi = 100 }, sm.getHitBand(first).?);
+    try testing.expectEqual(StyleManager.HitBand{ .lo = 10, .hi = 200 }, sm.getHitBand(second).?);
+    try testing.expectEqual(StyleManager.HitBand{ .lo = 200, .hi = 300 }, sm.getHitBand(third).?);
+    const version = sm.hit_bands.version;
+    try testing.expectEqual(b, (try doc.hitTestVertical(15, frame)).?);
+    try testing.expectEqual(i, (try doc.hitTestVertical(5, frame)).?);
+    try testing.expectEqual(second, (try doc.hitTestVertical(150, frame)).?);
+    try testing.expectEqual(body.as(Element), (try doc.hitTestVertical(220, frame)).?);
+    try testing.expectEqual(version, sm.hit_bands.version);
+
+    // inert isn't recorded: the boxes under it are
+    try third.removeAttribute(comptime .wrap("inert"), frame);
+    try testing.expectEqual(p, (try doc.hitTestVertical(220, frame)).?);
+    try testing.expectEqual(version, sm.hit_bands.version);
+
+    // Changes that move a box: an inline write, a class, the tree
+    try b.setAttribute(comptime .wrap("style"), try String.init(testing.arena_allocator, "display: block; position: absolute; top: 310px; height: 20px", .{}), frame);
+    try testing.expectEqual(first, (try doc.hitTestVertical(15, frame)).?);
+    try testing.expectEqual(b, (try doc.hitTestVertical(315, frame)).?);
+    try i.setAttribute(comptime .wrap("class"), comptime .wrap("low"), frame);
+    try testing.expectEqual(first, (try doc.hitTestVertical(5, frame)).?);
+    try testing.expectEqual(i, (try doc.hitTestVertical(345, frame)).?);
+    i.remove(frame);
+    try testing.expect((try doc.hitTestVertical(345, frame)) != i);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+}
+
+test "StyleManager: hit bands: a scoped change drops them" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div style="height: 400px"><section><input></section><section class=s><input><p class=a></p></section><p class=a></p></div>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { height: 20px } .tall { height: 60px } .s:focus-within > .a { height: 50px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const box = body.firstChild().?;
+    const first = box.firstChild().?;
+    const second = first.nextSibling().?;
+    const last = second.nextSibling().?.as(Element);
+    try first.firstChild().?.as(Element).focus(frame);
+
+    const steps = [_]enum { insert, class, focus }{ .insert, .class, .focus };
+    for (steps) |step| {
+        // Recorded, with last where it is now
+        const before = layout.boxTop(last, frame);
+        try testing.expectEqual(last, (try doc.hitTestVertical(before + 1, frame)).?);
+        try testing.expectEqual(true, sm.hit_bands.complete);
+        const style_version = frame.page.style_version;
+
+        switch (step) {
+            .insert => {
+                const p = try doc.createElement("p", null, frame);
+                try p.setAttribute(comptime .wrap("class"), comptime .wrap("a"), frame);
+                _ = try box.insertBefore(p.asNode(), first, frame);
+            },
+            .class => try box.firstChild().?.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("a tall"), frame),
+            .focus => try second.firstChild().?.as(Element).focus(frame),
+        }
+
+        // Scoped: the styles around it are kept
+        try testing.expectEqual(style_version, frame.page.style_version);
+        const after = layout.boxTop(last, frame);
+        try testing.expect(after >= before + 20);
+        try testing.expectEqual(last, (try doc.hitTestVertical(after + 1, frame)).?);
+    }
+}
+
+test "StyleManager: memo: a class that is only an ancestor's drops the subjects under it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<main><section><p class=fb></p><b></b><span></span></section><section><p class=fb><i></i></p><b></b></section></main>
+        \\<aside><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u><u></u></aside>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.val .fb { display: none }
+        \\.own { display: none }
+        \\[class*=zz] span { display: none }
+        \\.sib ~ section b { display: none }
+        \\.mix .fb { display: none } .mix { display: none }
+        \\.mixed { display: none } .mixed .fb { display: none }
+        \\p:is(.pick) { display: none }
+    , frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const main = body.firstChild().?.as(Element);
+    const first = main.asNode().firstChild().?.as(Element);
+    const second = main.asNode().lastChild().?.as(Element);
+    const fb = first.asNode().firstChild().?.as(Element);
+    const b = fb.asNode().nextSibling().?.as(Element);
+    const span = b.asNode().nextSibling().?.as(Element);
+    const second_fb = second.asNode().firstChild().?.as(Element);
+    const second_b = second.asNode().lastChild().?.as(Element);
+
+    const read = struct {
+        fn all(root: *Node, style_manager: *StyleManager) void {
+            var tw = TreeWalker.Full.Elements.init(root, .{});
+            while (tw.next()) |el| {
+                _ = style_manager.hasDisplayNone(el);
+            }
+        }
+    }.all;
+    read(body, sm);
+    try testing.expectEqual(false, sm.hasDisplayNone(fb));
+
+    // Only a class no subject carries narrows to the subjects
+    const any = ClassUse.any_subject;
+    try testing.expect(sm.class_reach.get("val").?.subjects != any);
+    try testing.expect(sm.class_reach.get("sib").?.subjects != any);
+    try testing.expect(sm.class_attribute.?.subjects != any);
+    try testing.expectEqual(any, sm.class_reach.get("own").?.subjects);
+    try testing.expectEqual(any, sm.class_reach.get("fb").?.subjects);
+    try testing.expectEqual(any, sm.class_reach.get("mix").?.subjects);
+    try testing.expectEqual(any, sm.class_reach.get("mixed").?.subjects);
+    // ... inside :is() too, on the subject
+    try testing.expectEqual(any, sm.class_reach.get("pick").?.subjects);
+    const version = frame.page.style_version;
+
+    // The two .fb and what's in them, not the rest of <main>
+    var walked = sm.walked;
+    try main.setAttribute(comptime .wrap("class"), comptime .wrap("val"), frame);
+    try testing.expectEqual(3, sm.walked - walked);
+    try testing.expectEqual(true, sm.visibility.memo.contains(b));
+    try testing.expectEqual(true, sm.hasDisplayNone(fb));
+    try testing.expectEqual(true, sm.hasDisplayNone(second_fb));
+
+    // A class no selector knows, in a string every [class...] matches as
+    // before: nothing
+    read(body, sm);
+    walked = sm.walked;
+    try main.setAttribute(comptime .wrap("class"), comptime .wrap("val other"), frame);
+    try testing.expectEqual(0, sm.walked - walked);
+
+    // ... and one it matches now: its subjects
+    try main.setAttribute(comptime .wrap("class"), comptime .wrap("val zzz"), frame);
+    try testing.expectEqual(1, sm.walked - walked);
+    try testing.expectEqual(true, sm.hasDisplayNone(span));
+
+    // From a sibling: the subjects under the parent
+    read(body, sm);
+    walked = sm.walked;
+    try first.setAttribute(comptime .wrap("class"), comptime .wrap("sib"), frame);
+    try testing.expectEqual(2, sm.walked - walked);
+    try testing.expectEqual(false, sm.hasDisplayNone(b));
+    try testing.expectEqual(true, sm.hasDisplayNone(second_b));
+
+    // The element's own: everything that inherits from it
+    read(body, sm);
+    walked = sm.walked;
+    try second.setAttribute(comptime .wrap("class"), comptime .wrap("own"), frame);
+    try testing.expectEqual(4, sm.walked - walked);
+    try testing.expectEqual(true, sm.hasDisplayNone(second));
+    try testing.expectEqual(version, frame.page.style_version);
+}
+
 test "StyleManager: memo: a class attribute selector reaches where it sits" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
@@ -5992,7 +7186,7 @@ test "StyleManager: memo: a class attribute selector reaches where it sits" {
     try testing.expectEqual(false, sm.hasVisibilityHiddenInherited(p));
     // More cached than the walk visits, or dropping costs more than a reset
     _ = sm.hasVisibilityHiddenInherited(section);
-    try testing.expectEqual(ClassReach.parent_subtree, sm.class_attribute_reach.?);
+    try testing.expectEqual(ClassReach.parent_subtree, sm.class_attribute.?.reach);
     const version = frame.page.style_version;
 
     // Present but empty is a change for [class]: i, a later sibling, sees it
@@ -6572,6 +7766,265 @@ test "StyleManager: records: the generation wraps" {
     memo.clear();
     try testing.expectEqual(1, memo.generation);
     try testing.expectEqual(false, memo.contains(div));
+}
+
+test "StyleManager: memo: reading tops in order stacks each sibling once" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    // blocks, a line of inline boxes (as tall as its tallest), a hidden block
+    // and an out-of-flow box, with text between
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div id=p><div style="height:10px"></div> <div style="height:20px"></div>text<span style="display:inline-block;height:7px"></span> <span style="display:inline-block;height:30px"></span><span style="display:inline-block;height:9px"></span><div style="height:40px"></div><div style="display:none;height:99px"></div><span style="display:inline-block;height:6px"></span><div style="position:absolute;height:99px"></div><div style="height:50px"></div><div style="height:60px"></div></div>
+    );
+    const p = doc.getElementById("p").?;
+    var els: [11]*Element = undefined;
+    var count: usize = 0;
+    var it = p.asNode().childrenIterator();
+    while (it.next()) |node| {
+        const el = node.is(Element) orelse continue;
+        els[count] = el;
+        count += 1;
+    }
+    try testing.expectEqual(els.len, count);
+    const expected = [els.len]f64{ 0, 10, 30, 30, 30, 60, 100, 100, 100, 106, 156 };
+
+    // Last first: one walk from the first child places them all
+    _ = layout.boxTop(p, frame);
+    sm.offsets_placed = 0;
+    try testing.expectEqual(156, layout.boxTop(els[10], frame));
+    try testing.expectEqual(els.len, sm.offsets_placed);
+    for (els, expected) |el, top| {
+        try testing.expectEqual(top, layout.boxTop(el, frame));
+    }
+    try testing.expectEqual(els.len, sm.offsets_placed);
+
+    // In order, from nothing: each read continues from the sibling before it
+    sm.layout_bumps += 1;
+    _ = layout.boxTop(p, frame);
+    sm.offsets_placed = 0;
+    for (els, expected) |el, top| {
+        try testing.expectEqual(top, layout.boxTop(el, frame));
+    }
+    try testing.expectEqual(els.len, sm.offsets_placed);
+
+    // A height write keeps the offsets up to its element: the read after it
+    // continues from there, and one further down from the nearest block
+    // before it that is still placed.
+    sm.offsets_placed = 0;
+    const style = (try els[1].getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("height", "25px", null, frame);
+    try testing.expectEqual(35, layout.boxTop(els[2], frame));
+    try testing.expectEqual(1, sm.offsets_placed);
+    try testing.expectEqual(161, layout.boxTop(els[10], frame));
+    try testing.expectEqual(9, sm.offsets_placed);
+    try testing.expectEqual(111, layout.boxTop(els[9], frame));
+    try testing.expectEqual(65, layout.boxTop(els[5], frame));
+    try testing.expectEqual(9, sm.offsets_placed);
+
+    // A row's children all sit at its top
+    const p_style = (try p.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try p_style.setProperty("display", "flex", null, frame);
+    _ = layout.boxTop(p, frame);
+    sm.offsets_placed = 0;
+    for (els) |el| {
+        try testing.expectEqual(0, layout.boxTop(el, frame));
+    }
+    try testing.expectEqual(0, sm.offsets_placed);
+}
+
+// Random tree and class changes with reads in between: what the layout memo
+// keeps must be what a memo filled from nothing computes.
+test "StyleManager: memo: tree, class and focus changes keep only boxes that didn't move" {
+    const layout = @import("layout.zig");
+
+    const sheets = [_][]const u8{
+        // The nearest siblings only
+        \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
+        \\.hid { display: none } .ib { display: inline-block; height: 7px }
+        \\.abs { position: absolute; top: 3px } .wide { width: 200px }
+        \\.blk + .blk { height: 12px } .on > .blk { height: 16px }
+        \\.on + div { height: 18px } .on span { display: block; height: 4px }
+        \\div:focus-within > .blk { height: 22px }
+        ,
+        // Every sibling, :empty, flex rows and boxes sized by their content
+        \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
+        \\.hid { display: none } .ib { display: inline-block }
+        \\.abs { position: absolute; top: 3px } .wide { width: 200px }
+        \\.tall ~ .blk { height: 9px } div:nth-child(2n) { height: 14px }
+        \\.on:empty { height: 40px } :empty + .blk { height: 21px }
+        \\.row { display: flex } .on > span { display: block; height: 4px }
+        \\div:focus-within ~ .tall { height: 33px } :focus > span { height: 6px }
+        \\:focus + div { height: 13px }
+        ,
+    };
+    const classes = [_][]const u8{ "blk", "tall", "box", "hid", "ib", "abs", "wide", "on", "row" };
+
+    for (sheets, 0..) |sheet, seed| {
+        const frame = try testing.createFrame();
+        defer testing.test_session.closeAllPages();
+        const sm = &frame._style_manager;
+        const arena = testing.arena_allocator;
+
+        const doc = frame.document;
+        const html = (try doc.createElement("html", null, frame)).asNode();
+        _ = try doc.asNode().appendChild(html, frame);
+        const body = (try doc.createElement("body", null, frame)).asNode();
+        _ = try html.appendChild(body, frame);
+        const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+        try style_el.asNode().setTextContent(sheet, frame);
+        _ = try body.appendChild(style_el.asNode(), frame);
+        const root = (try doc.createElement("div", null, frame)).asNode();
+        _ = try body.appendChild(root, frame);
+
+        var prng: std.Random.DefaultPrng = .init(seed + 1);
+        const random = prng.random();
+
+        // Every element made, in or out of the tree
+        var els: std.ArrayList(*Element) = .empty;
+        try els.append(arena, root.as(Element));
+        var kept: usize = 0;
+
+        const Measured = struct { top: f64, height: f64, width: f64, content: f64, scroll: f64 };
+        const measure = struct {
+            fn all(list: []const *Element, out: *std.ArrayList(Measured), owner: *Frame) !void {
+                out.clearRetainingCapacity();
+                for (list) |el| {
+                    if (el.asNode().isConnected() == false) {
+                        continue;
+                    }
+                    try out.append(testing.arena_allocator, .{
+                        .top = layout.boxTop(el, owner),
+                        .height = layout.boxHeight(el, owner),
+                        .width = layout.boxWidth(el, owner),
+                        .content = layout.contentWidth(el, .clipped, owner),
+                        .scroll = layout.contentHeight(el, owner),
+                    });
+                }
+            }
+        }.all;
+        var got: std.ArrayList(Measured) = .empty;
+        var want: std.ArrayList(Measured) = .empty;
+
+        for (0..600) |step| {
+            const target = els.items[random.uintLessThan(usize, els.items.len)];
+            const node = target.asNode();
+            switch (random.uintLessThan(u8, 11)) {
+                // A new element, appended or inserted before a child
+                0, 1, 2 => if (node.isConnected() and els.items.len < 120) {
+                    const el = try doc.createElement(if (random.boolean()) "div" else "span", null, frame);
+                    if (random.boolean()) {
+                        const class = classes[random.uintLessThan(usize, classes.len)];
+                        try el.setAttribute(comptime .wrap("class"), try String.init(arena, class, .{}), frame);
+                    }
+                    try els.append(arena, el);
+                    const before = if (random.boolean()) node.firstChild() else null;
+                    _ = try node.insertBefore(el.asNode(), before, frame);
+                },
+                // Removed, to come back later
+                3 => if (node != root and node.isConnected()) {
+                    target.remove(frame);
+                },
+                // Moved, or brought back
+                4, 5 => {
+                    const to = els.items[random.uintLessThan(usize, els.items.len)].asNode();
+                    if (node != root and to.isConnected() and node.contains(to) == false) {
+                        const before = if (random.boolean()) to.firstChild() else null;
+                        if (before != node) {
+                            _ = try to.insertBefore(node, before, frame);
+                        }
+                    }
+                },
+                6, 7, 8 => if (node != root) {
+                    const class = if (random.uintLessThan(u8, 4) == 0) "" else classes[random.uintLessThan(usize, classes.len)];
+                    try target.setAttribute(comptime .wrap("class"), try String.init(arena, class, .{}), frame);
+                },
+                // Focus moves, sometimes to nothing
+                9 => if (node.isConnected()) {
+                    doc.setActiveElement(if (random.uintLessThan(u8, 5) == 0) null else target, frame);
+                },
+                else => if (node.isConnected()) {
+                    if (node.firstChild()) |first| {
+                        if (first._type == .cdata) {
+                            _ = try node.removeChild(first, frame);
+                        } else {
+                            _ = try node.insertBefore(try doc.createTextNode("text"), first, frame);
+                        }
+                    } else {
+                        _ = try node.appendChild(try doc.createTextNode("text"), frame);
+                    }
+                },
+            }
+
+            // A few reads, so the memo holds some boxes and not others
+            for (0..random.uintLessThan(u8, 4)) |_| {
+                const el = els.items[random.uintLessThan(usize, els.items.len)];
+                if (el.asNode().isConnected()) {
+                    switch (random.uintLessThan(u8, 3)) {
+                        0 => _ = layout.boxTop(el, frame),
+                        1 => _ = layout.boxWidth(el, frame),
+                        else => _ = layout.boxHeight(el, frame),
+                    }
+                }
+            }
+            if (random.uintLessThan(u8, 3) != 0) {
+                continue;
+            }
+
+            // Hit tests that skip by the bands they have, which the steps
+            // had to drop if a box moved, against ones that walk everything
+            var hits: [64]?*Element = undefined;
+            for (&hits, 0..) |*hit, n| {
+                hit.* = try doc.hitTestVertical(@floatFromInt(n * 8), frame);
+            }
+            for (hits, 0..) |hit, n| {
+                const y: f64 = @floatFromInt(n * 8);
+                sm.hit_bands.complete = false;
+                const walked = try doc.hitTestVertical(y, frame);
+                if (walked != hit) {
+                    std.debug.print("sheet {d} step {d} y {d}: stale bands\n", .{ seed, step, y });
+                    return error.StaleBands;
+                }
+                // ... and by the bands that walk recorded
+                try testing.expectEqual(true, sm.hit_bands.complete);
+                try testing.expectEqual(walked, try doc.hitTestVertical(y, frame));
+            }
+
+            const version = sm.layoutVersion();
+            try measure(els.items, &got, frame);
+            const extent = doc.extent();
+            if (sm.layoutVersion() == version and sm.layout_memo.version == version) {
+                kept += 1;
+            }
+            // From nothing: no style memo either
+            frame.page.style_version += 1;
+            try measure(els.items, &want, frame);
+            for (got.items, want.items, 0..) |g, w, i| {
+                if (std.meta.eql(g, w) == false) {
+                    std.debug.print("sheet {d} step {d} box {d}: got {any} want {any}\n", .{ seed, step, i, g, w });
+                    return error.StaleLayout;
+                }
+            }
+            try testing.expectEqual(doc.extent(), extent);
+            // Sometimes start the next steps from an empty memo
+            if (random.boolean()) {
+                sm.layout_bumps += 1;
+            }
+            // ... and sometimes with bands for them to make stale
+            if (random.boolean()) {
+                _ = try doc.hitTestVertical(0, frame);
+            }
+        }
+        // The memo did survive changes, or this checked nothing
+        try testing.expect(kept > 20);
+    }
 }
 
 test "StyleManager: memo: a height write moves only what's stacked below it" {

@@ -515,11 +515,35 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
     const value = el.getAttributeSafe(name) orelse {
         return false;
     };
+    return matchesAttributeValue(value, attr, el._namespace == .html);
+}
 
+// std.mem.find compares the needle at every position. Attribute values and
+// needles are short, and most values hold no byte the needle starts with.
+fn contains(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) {
+        return true;
+    }
+    if (needle.len > haystack.len) {
+        return false;
+    }
+    const starts = haystack[0 .. haystack.len - needle.len + 1];
+    var from: usize = 0;
+    while (std.mem.findScalarPos(u8, starts, from, needle[0])) |at| : (from = at + 1) {
+        if (std.mem.eql(u8, haystack[at + 1 ..][0 .. needle.len - 1], needle[1..])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Whether an attribute holding `value` matches `attr`, on an HTML element
+/// or a foreign one.
+pub fn matchesAttributeValue(value: []const u8, attr: Selector.Attribute, html: bool) bool {
     const case_insensitive = switch (attr.value_case) {
         .sensitive => false,
         .insensitive => true,
-        .html_legacy => el._namespace == .html,
+        .html_legacy => html,
     };
 
     switch (attr.matcher) {
@@ -534,7 +558,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
             return if (case_insensitive)
                 std.ascii.findIgnoreCase(value, expected) != null
             else
-                std.mem.find(u8, value, expected) != null;
+                contains(value, expected);
         },
         .starts_with => |expected| {
             return if (case_insensitive)
@@ -1029,6 +1053,11 @@ fn indexedOrdinals(el: *Node.Element, nth: ?*NthCache) ?NthCache.Ordinals {
 }
 
 fn getChildIndex(el: *Node.Element, nth: ?*NthCache) usize {
+    if (nth) |cache| {
+        if (cache.walkedIndex(el, .child)) |index| {
+            return index;
+        }
+    }
     if (cachedOrdinals(el, nth)) |o| {
         return o.child;
     }
@@ -1049,10 +1078,18 @@ fn getChildIndex(el: *Node.Element, nth: ?*NthCache) usize {
         sibling = s.previousSibling();
     }
 
+    if (nth) |cache| {
+        cache.setWalked(el, .child, index);
+    }
     return index;
 }
 
 fn getChildIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
+    if (nth) |cache| {
+        if (cache.walkedIndex(el, .child_from_end)) |index| {
+            return index;
+        }
+    }
     if (cachedOrdinals(el, nth)) |o| {
         return o.child_from_end;
     }
@@ -1073,10 +1110,18 @@ fn getChildIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
         sibling = s.nextSibling();
     }
 
+    if (nth) |cache| {
+        cache.setWalked(el, .child_from_end, index);
+    }
     return index;
 }
 
 fn getTypeIndex(el: *Node.Element, nth: ?*NthCache) usize {
+    if (nth) |cache| {
+        if (cache.walkedIndex(el, .of_type)) |index| {
+            return index;
+        }
+    }
     if (cachedOrdinals(el, nth)) |o| {
         return o.of_type;
     }
@@ -1109,10 +1154,18 @@ fn getTypeIndex(el: *Node.Element, nth: ?*NthCache) usize {
         sibling = s.previousSibling();
     }
 
+    if (nth) |cache| {
+        cache.setWalked(el, .of_type, index);
+    }
     return index;
 }
 
 fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
+    if (nth) |cache| {
+        if (cache.walkedIndex(el, .of_type_from_end)) |index| {
+            return index;
+        }
+    }
     if (cachedOrdinals(el, nth)) |o| {
         return o.of_type_from_end;
     }
@@ -1145,6 +1198,9 @@ fn getTypeIndexFromEnd(el: *Node.Element, nth: ?*NthCache) usize {
         sibling = s.nextSibling();
     }
 
+    if (nth) |cache| {
+        cache.setWalked(el, .of_type_from_end, index);
+    }
     return index;
 }
 
@@ -1198,6 +1254,17 @@ pub const NthCache = struct {
     allocator: std.mem.Allocator,
     entries: std.AutoHashMapUnmanaged(*const Node, Ordinals) = .empty,
 
+    // The last element counted by walking its siblings, under WALK_LIMIT: a
+    // cascade asks for the same element's index once per rule. 0: not counted.
+    walked_el: ?*const Node.Element = null,
+    walked: std.EnumArray(Ordinal, u32) = .initFill(0),
+
+    // Never index a parent's children: for a cache that's cleared too often
+    // (every tree change, for the cascade's) to get that work back.
+    walk_only: bool = false,
+
+    const Ordinal = enum { child, child_from_end, of_type, of_type_from_end };
+
     const WALK_LIMIT = 32;
     const Ordinals = struct {
         child: u32,
@@ -1224,11 +1291,41 @@ pub const NthCache = struct {
         self.entries.deinit(self.allocator);
     }
 
+    /// The tree changed: nothing counted holds
+    pub fn clear(self: *NthCache) void {
+        if (self.walk_only == false) {
+            self.entries.clearRetainingCapacity();
+        }
+        self.walked_el = null;
+    }
+
+    fn walkedIndex(self: *const NthCache, el: *const Node.Element, ordinal: Ordinal) ?usize {
+        if (self.walked_el != el) {
+            return null;
+        }
+        const count = self.walked.get(ordinal);
+        return if (count == 0) null else count;
+    }
+
+    fn setWalked(self: *NthCache, el: *const Node.Element, ordinal: Ordinal, count: usize) void {
+        if (self.walked_el != el) {
+            self.walked_el = el;
+            self.walked = .initFill(0);
+        }
+        self.walked.set(ordinal, std.math.lossyCast(u32, count));
+    }
+
     fn lookup(self: *NthCache, el: *Node.Element) ?Ordinals {
+        if (self.walk_only) {
+            return null;
+        }
         return self.entries.get(el.asNode());
     }
 
     fn indexAndLookup(self: *NthCache, el: *Node.Element) ?Ordinals {
+        if (self.walk_only) {
+            return null;
+        }
         const node = el.asNode();
         const parent = node._parent orelse return null;
         self.index(parent) catch return null; // OOM, it'll just fallback to walk
@@ -1266,3 +1363,16 @@ pub const NthCache = struct {
         }
     }
 };
+
+const testing = @import("../../../testing.zig");
+test "Selector.List: contains" {
+    try testing.expectEqual(true, contains("item c12", "c1"));
+    try testing.expectEqual(true, contains("c1", "c1"));
+    try testing.expectEqual(true, contains("ccc1", "cc1"));
+    try testing.expectEqual(true, contains("abc", "c"));
+    try testing.expectEqual(true, contains("abc", ""));
+    try testing.expectEqual(false, contains("item c", "c1"));
+    try testing.expectEqual(false, contains("c", "c1"));
+    try testing.expectEqual(false, contains("", "c"));
+    try testing.expectEqual(false, contains("scrolled", "c1"));
+}

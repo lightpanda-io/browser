@@ -173,9 +173,13 @@ pub fn stateChanged(element: *Element, state: State, frame: *Frame) void {
 }
 
 pub fn focusChanged(old: ?*Element, new: ?*Element, frame: *Frame) void {
-    _ = old;
-    _ = new;
-    styleChanged(frame);
+    // Both are in the document whose active element moved
+    const element = new orelse old orelse return;
+    // A frameless document (DOMParser, XHR) has no styles
+    const owner = element.ownerFrame(frame) orelse return;
+    if (owner._style_manager.focusChanged(old, new) == false) {
+        styleChanged(frame);
+    }
 }
 
 pub const DocumentState = enum {
