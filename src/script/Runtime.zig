@@ -524,11 +524,12 @@ const PageMethod = struct {
     callback: Callback,
     /// Rendered by `zig build docs`.
     summary: []const u8,
+    returns: []const u8,
 };
 
 /// The page methods besides the recorded tools.
 pub const page_methods = [_]PageMethod{
-    .{ .name = "close", .callback = closeCallback, .summary = "Stales the handle, so later calls on it fail. The page itself is reclaimed on the next `goto` or at script end." },
+    .{ .name = "close", .callback = closeCallback, .summary = "Stales the handle, so later calls on it fail. The page itself is reclaimed on the next `goto` or at script end.", .returns = "Nothing" },
 };
 
 /// Property carrying a page handle's claim on a live frame. Numeric while the
