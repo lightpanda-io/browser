@@ -512,3 +512,210 @@
     testing.expectEqual(['err!', 'err!', undefined, 'err!', 'TypeError', 'TypeError', 'err!'], results);
   });
 </script>
+
+<script id=readable_stream_tee type=module>
+  const state = await testing.async();
+
+  async function readAll(stream) {
+    const reader = stream.getReader();
+    const out = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return out;
+      out.push(value);
+    }
+  }
+
+  const obj = { a: 1 };
+  const source = new ReadableStream({
+    start(c) {
+      c.enqueue('a');
+      c.enqueue(1);
+      c.enqueue(undefined);
+      c.enqueue(obj);
+      c.close();
+    },
+  });
+
+  const [branch1, branch2] = source.tee();
+  const locked = [source.locked, branch1.locked, branch2.locked];
+  const [b1, b2] = await Promise.all([readAll(branch1), readAll(branch2)]);
+  state.resolve();
+
+  await state.done(() => {
+    // the source stays locked to the tee, the branches start unlocked
+    testing.expectEqual([true, false, false], locked);
+    testing.expectEqual(['a', 1, undefined, obj], b1);
+    testing.expectEqual(['a', 1, undefined, obj], b2);
+    // the default tee doesn't clone: both branches get the same object
+    testing.expectEqual(true, b1[3] === obj && b2[3] === obj);
+  });
+</script>
+
+<script id=readable_stream_tee_locked>
+  {
+    const s = new ReadableStream();
+    s.getReader();
+    testing.expectError('TypeError', () => s.tee());
+  }
+</script>
+
+<script id=readable_stream_tee_closed_or_errored type=module>
+  const state = await testing.async();
+
+  // Unlike Response.clone(), tee() accepts a closed or errored stream.
+  const closed = new ReadableStream({ start(c) { c.close(); } });
+  const errored = new ReadableStream({ start(c) { c.error('err!'); } });
+  const cancelled = new ReadableStream();
+  await cancelled.cancel();
+
+  const [c1, c2] = closed.tee();
+  const [e1, e2] = errored.tee();
+  const [cancelled_branch] = cancelled.tee();
+  const results = [
+    (await c1.getReader().read()).done,
+    (await c2.getReader().read()).done,
+    await e1.getReader().read().catch((e) => e),
+    await e2.getReader().read().catch((e) => e),
+    (await cancelled_branch.getReader().read()).done,
+  ];
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([true, true, 'err!', 'err!', true], results);
+  });
+</script>
+
+<script id=readable_stream_tee_cancel type=module>
+  const state = await testing.async();
+
+  let controller;
+  const cancelled = [];
+  const source = new ReadableStream({
+    start(c) { controller = c; },
+    cancel(reason) { cancelled.push(reason); },
+  });
+  const [b1, b2] = source.tee();
+  const r2 = b2.getReader();
+
+  // cancelling one branch leaves the source and the other branch alone
+  await b1.cancel('r1');
+  const after_first = cancelled.length;
+  controller.enqueue('still flowing');
+  const chunk = await r2.read();
+
+  // cancelling both cancels the source with both reasons
+  await r2.cancel('r2');
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(0, after_first);
+    testing.expectEqual('still flowing', chunk.value);
+    testing.expectEqual(1, cancelled.length);
+    testing.expectEqual(['r1', 'r2'], cancelled[0]);
+  });
+</script>
+
+<script id=readable_stream_tee_errors_branches type=module>
+  const state = await testing.async();
+
+  let controller;
+  const source = new ReadableStream({ start(c) { controller = c; } });
+  const [b1, b2] = source.tee();
+  const r1 = b1.getReader();
+  const r2 = b2.getReader();
+
+  controller.enqueue('x');
+  const first = [(await r1.read()).value, (await r2.read()).value];
+  const pending = [r1.read().catch((e) => e), r2.read().catch((e) => e)];
+  controller.error('boom');
+  const errors = await Promise.all(pending);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['x', 'x'], first);
+    testing.expectEqual(['boom', 'boom'], errors);
+  });
+</script>
+
+<script id=readable_stream_tee_pull type=module>
+  const state = await testing.async();
+
+  // A source that only produces when pulled: the tee reads it as the
+  // branches are read, not ahead of them.
+  let pulls = 0;
+  const source = new ReadableStream({
+    pull(c) {
+      pulls += 1;
+      if (pulls > 100) {
+        c.close();
+      } else {
+        c.enqueue(pulls);
+      }
+    },
+  });
+
+  const [b1, b2] = source.tee();
+  const r1 = b1.getReader();
+  const first = [(await r1.read()).value, (await r1.read()).value];
+  const pulls_after_two = pulls;
+
+  // the branch that wasn't read still gets every chunk
+  const all = [];
+  for await (const chunk of b2) {
+    all.push(chunk);
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([1, 2], first);
+    testing.expectEqual(true, pulls_after_two < 10);
+    testing.expectEqual(Array.from({ length: 100 }, (_, i) => i + 1), all);
+  });
+</script>
+
+<script id=readable_stream_tee_response_body type=module>
+  const state = await testing.async();
+
+  // the shape Next.js uses: tee a byte stream, decode both halves
+  const [for_react, for_cache] = new Response('hello world').body.tee();
+  async function decoded(stream) {
+    let out = '';
+    for await (const text of stream.pipeThrough(new TextDecoderStream())) {
+      out += text;
+    }
+    return out;
+  }
+  const [a, b] = await Promise.all([new Response(for_react).text(), decoded(for_cache)]);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('hello world', a);
+    testing.expectEqual('hello world', b);
+  });
+</script>
+
+<script id=readable_stream_values type=module>
+  const state = await testing.async();
+
+  const make = () => new ReadableStream({
+    start(c) {
+      c.enqueue('a');
+      c.enqueue('b');
+      c.close();
+    },
+  });
+
+  const it = make().values();
+  const self_iter = it[Symbol.asyncIterator]() === it;
+  const out = [];
+  for await (const chunk of make().values()) {
+    out.push(chunk);
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(true, self_iter);
+    testing.expectEqual(['a', 'b'], out);
+  });
+</script>
