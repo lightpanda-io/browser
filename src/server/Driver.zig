@@ -82,7 +82,7 @@ pub fn shutdown(self: *const Driver) void {
 
 // server loop. Something was pushed to the inbox; wake the worker from its poll.
 pub fn wakeup(self: *const Driver) void {
-    self.browser.http_client.handles.wakeup() catch |err| {
+    self.browser.http_client.wakeup() catch |err| {
         log.err(self.scope, "wakeup", .{ .err = err });
     };
 }

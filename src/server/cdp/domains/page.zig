@@ -145,7 +145,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
             // Dispatch network events only for complete page, ie. w/ real nav
             // done.
             if (frame._load_state == .complete) {
-                const http_client = frame._session.browser.http_client;
+                const http_client = frame._session.http_client;
                 const http_active = http_client.http_active;
                 const http_buffered = http_client.dispatch_count;
                 const total_network_activity = http_active + http_buffered + http_client.intercepted;
@@ -2459,7 +2459,7 @@ test "cdp.page: setDocumentContent refuses while the document is still loading" 
     while (true) : (attempts += 1) {
         _ = try runner.tickForFrame(page_frame_id, 20, .{});
         const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
-        if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
+        if (bc.session.http_client.findTransfer(frame._req_id)) |transfer| {
             if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }
@@ -2499,7 +2499,7 @@ test "cdp.page: stopLoading finishes a streaming document with what has arrived"
     while (true) : (attempts += 1) {
         _ = try runner.tickForFrame(frame_id, 20, .{});
         const frame = target.mainFrame() orelse unreachable;
-        if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
+        if (bc.session.http_client.findTransfer(frame._req_id)) |transfer| {
             if (std.mem.find(u8, transfer.res.buffer.items(), "first") != null) {
                 break;
             }

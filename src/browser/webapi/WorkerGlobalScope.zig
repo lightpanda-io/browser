@@ -186,7 +186,7 @@ pub fn init(
 
     self._script_manager = ScriptManagerBase.init(
         arena,
-        &session.browser.http_client,
+        session.http_client,
         .{ .worker = self },
     );
 
@@ -214,7 +214,7 @@ pub fn deinit(self: *WorkerGlobalScope) void {
     const browser = session.browser;
 
     page.worker_scopes.remove(&self._page_node);
-    browser.http_client.abortOwner(&self._http_owner);
+    session.http_client.abortOwner(&self._http_owner);
 
     // Close this worker's MessagePorts before the context dies: this severs
     // entanglement with page-side ports (which may outlive us) and releases
@@ -267,7 +267,7 @@ pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
 }
 
 pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
-    const transfer = try self._session.browser.http_client.newRequest(req, &self._http_owner);
+    const transfer = try self._session.http_client.newRequest(req, &self._http_owner);
     {
         errdefer transfer.deinit();
         try self.headersForRequest(transfer, .{});
@@ -277,7 +277,7 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
-    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+    return self._session.http_client.newRequest(req, &self._http_owner);
 }
 
 fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -379,7 +379,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 
     const resolved_url = try URL.resolve(arena, self.url, url, .{});
 
-    const http_client = &session.browser.http_client;
+    const http_client = session.http_client;
 
     const transfer = http_client.newRequest(.{
         .url = resolved_url,
