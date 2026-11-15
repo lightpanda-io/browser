@@ -270,8 +270,15 @@ const Context = struct {
             if (shouldAddSpacing(tag)) {
                 try self.writer.writeByte('\n');
             }
-        } else if (tag == .li or tag == .tr) {
+        } else if (tag == .tr) {
             try self.ensureNewline();
+        } else if (tag == .li or tag == .dt or tag == .dd) {
+            // A table row has to stay on one line.
+            if (!self.state.in_table) {
+                try self.ensureNewline();
+            } else if (!self.state.last_char_was_newline) {
+                try self.writer.writeByte(' ');
+            }
         }
 
         // Markdown syntax is literal inside a code span or fence, so inline
@@ -331,7 +338,9 @@ const Context = struct {
                 try self.writer.writeByte('|');
             },
             .td, .th => {
-                self.state.last_char_was_newline = false;
+                // The padding stands in for a line start, so the cell's
+                // first item doesn't add a second space.
+                self.state.last_char_was_newline = true;
                 try self.writer.writeByte(' ');
             },
             .blockquote => {
@@ -552,6 +561,9 @@ const Context = struct {
                 self.state.table_col_count += 1;
                 self.state.last_char_was_newline = false;
             },
+            .dt, .dd => {
+                if (!self.state.in_table) try self.ensureNewline();
+            },
             else => {},
         }
 
@@ -768,6 +780,14 @@ test "browser.markdown: whitespace" {
 
 test "browser.markdown: escaping" {
     try testMarkdownHTML("<p># Not a header</p>", "\n\\# Not a header\n");
+}
+
+test "browser.markdown: definition list" {
+    try testMarkdownHTML("<dl><dt>Term</dt><dd>Definition</dd><dt>Other</dt><dd>Meaning</dd></dl>", "Term\nDefinition\nOther\nMeaning\n");
+    try testMarkdownHTML("<dl>\n  <dt>Term</dt>\n  <dd>Definition</dd>\n</dl>", "Term\nDefinition\n");
+    try testMarkdownHTML("<dd>D</dd><span>b</span>", "D\nb\n");
+    try testMarkdownHTML("<table><tr><td><dl><dt>T</dt><dd>D</dd></dl></td><td>x</td></tr></table>", "\n| T D | x |\n|---|---|\n");
+    try testMarkdownHTML("<table><tr><td>a<ul><li>T</li><li>D</li></ul></td><td>x</td></tr></table>", "\n| a - T - D | x |\n|---|---|\n");
 }
 
 test "browser.markdown: strikethrough" {
