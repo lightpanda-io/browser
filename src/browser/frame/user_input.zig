@@ -597,8 +597,8 @@ fn mouseHitTest(frame: *Frame, x: f64, y: f64) !MouseHit {
         if (window._closed) break;
         const child = window._frame;
         const rect = target.boundingClientRectValues(hit.frame);
-        const child_x = hit.x - rect.x - target.getClientLeft();
-        const child_y = hit.y - rect.y - target.getClientTop();
+        const child_x = hit.x - rect.x - target.getClientLeft(hit.frame);
+        const child_y = hit.y - rect.y - target.getClientTop(hit.frame);
         const width = target.getClientWidth(hit.frame);
         const height = target.getClientHeight(hit.frame);
         // The iframe's client box is the child viewport. A point in its border
@@ -638,16 +638,16 @@ fn inBox(x: f64, y: f64, width: f64, height: f64) bool {
 const Point = struct { x: f64, y: f64 };
 
 /// Where `frame`'s viewport sits in the top-level viewport. The faux layout
-/// has no transform scaling and client borders are zero; this uses the same
-/// rects as hit testing, including each parent's scroll.
+/// has no transform scaling; this uses the same rects as hit testing,
+/// including each parent's scroll.
 fn viewportOrigin(frame: *Frame) Point {
     var point: Point = .{ .x = 0, .y = 0 };
     var current = frame;
     while (current.parent) |parent| {
         const element = (current.iframe orelse break).asElement();
         const rect = element.boundingClientRectValues(parent);
-        point.x += rect.x + element.getClientLeft();
-        point.y += rect.y + element.getClientTop();
+        point.x += rect.x + element.getClientLeft(parent);
+        point.y += rect.y + element.getClientTop(parent);
         current = parent;
     }
     return point;
@@ -5675,7 +5675,7 @@ test "user_input: element click inside an iframe reports the point in each docum
     try testing.expect((try main_ls.local.compileAndRun(try std.fmt.allocPrint(
         frame.local_arena,
         "events.length === 2 && events.every(e => e.trusted && e.tag === 'IFRAME' && e.x === {d} && e.y === {d})",
-        .{ child_rect.x + iframe.getClientLeft() + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop() + rect.y + rect.height / 2 },
+        .{ child_rect.x + iframe.getClientLeft(frame) + rect.x + rect.width / 2, child_rect.y + iframe.getClientTop(frame) + rect.y + rect.height / 2 },
     ), null)).isTrue());
 }
 
