@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<div id=box style="width: 100px; height: 100px; background: red;"></div>
+<div id=other style="width: 100px; height: 100px; background: blue;"></div>
+
+<script id=api_exposure>
+{
+  testing.expectEqual('function', typeof Element.prototype.setPointerCapture);
+  testing.expectEqual('function', typeof Element.prototype.releasePointerCapture);
+  testing.expectEqual('function', typeof Element.prototype.hasPointerCapture);
+}
+</script>
+
+<script id=initial_state>
+{
+  const box = document.getElementById('box');
+  testing.expectFalse(box.hasPointerCapture(1));
+  testing.expectFalse(box.hasPointerCapture(2));
+  testing.expectFalse(box.hasPointerCapture(999));
+}
+</script>
+
+<script id=unknown_pointer_id>
+{
+  const box = document.getElementById('box');
+  testing.expectError('NotFoundError', () => box.setPointerCapture(999));
+  testing.expectError('NotFoundError', () => box.setPointerCapture(0));
+  testing.expectError('NotFoundError', () => box.setPointerCapture(-1));
+  testing.expectError('NotFoundError', () => box.releasePointerCapture(999));
+  testing.expectFalse(box.hasPointerCapture(999));
+}
+</script>
+
+<script id=disconnected_element>
+{
+  const detached = document.createElement('div');
+  testing.expectError('InvalidStateError', () => detached.setPointerCapture(1));
+}
+</script>
+
+<script id=validation_order>
+{
+  const detached = document.createElement('div');
+  // Unknown pointer ID check (NotFoundError) MUST precede disconnected check (InvalidStateError)
+  testing.expectError('NotFoundError', () => detached.setPointerCapture(999));
+}
+</script>
+
+<script id=no_buttons_pressed_noop>
+{
+  const box = document.getElementById('box');
+  // Pointer 1 (mouse) is active, but no buttons are pressed.
+  // setPointerCapture must do nothing (no throw, no capture).
+  box.setPointerCapture(1);
+  testing.expectFalse(box.hasPointerCapture(1));
+}
+</script>
+
+<script id=release_not_held>
+{
+  const box = document.getElementById('box');
+  // releasePointerCapture when capture is not held terminates silently without error.
+  box.releasePointerCapture(1);
+  testing.expectFalse(box.hasPointerCapture(1));
+}
+</script>
+
+<script id=argument_conversion>
+{
+  const box = document.getElementById('box');
+  // hasPointerCapture converts argument via ToInt32
+  testing.expectFalse(box.hasPointerCapture('999'));
+  testing.expectFalse(box.hasPointerCapture(999.9));
+  testing.expectFalse(box.hasPointerCapture(null));
+  testing.expectFalse(box.hasPointerCapture(undefined));
+  testing.expectFalse(box.hasPointerCapture(NaN));
+}
+</script>
+
+<script id=illegal_invocation>
+{
+  // Calling APIs with non-Element receiver throws TypeError
+  testing.expectError('TypeError', () => Element.prototype.hasPointerCapture.call({}, 1));
+  testing.expectError('TypeError', () => Element.prototype.setPointerCapture.call({}, 1));
+  testing.expectError('TypeError', () => Element.prototype.releasePointerCapture.call({}, 1));
+}
+</script>

@@ -2281,6 +2281,37 @@ pub const ScrollToOpts = union(enum) {
     }
 };
 
+pub fn setPointerCapture(self: *Element, pointer_id: i32, frame: *Frame) !void {
+    const page = frame.page;
+    if (!user_input.isPointerActive(page, pointer_id)) {
+        return error.NotFound;
+    }
+    if (!self.asNode().isConnected()) {
+        return error.InvalidStateError;
+    }
+    if (!user_input.isPointerButtonPressed(page, pointer_id)) {
+        return;
+    }
+    user_input.setPendingPointerCapture(page, pointer_id, self);
+}
+
+pub fn releasePointerCapture(self: *Element, pointer_id: i32, frame: *Frame) !void {
+    const page = frame.page;
+    if (!user_input.isPointerActive(page, pointer_id)) {
+        return error.NotFound;
+    }
+    if (!self.hasPointerCapture(pointer_id, frame)) {
+        return;
+    }
+    user_input.clearPendingPointerCapture(page, pointer_id, self);
+}
+
+pub fn hasPointerCapture(self: *Element, pointer_id: i32, frame: *Frame) bool {
+    const page = frame.page;
+    const capture = user_input.getPointerCapture(page, pointer_id) orelse return false;
+    return capture.pending_target == self;
+}
+
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = (opts orelse return).offsets(y);
     _ = try self.writeScroll(.{ .to = o }, frame);
@@ -2981,6 +3012,9 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Element.scrollTo, .{});
     pub const scrollTo = bridge.function(Element.scrollTo, .{});
     pub const scrollBy = bridge.function(Element.scrollBy, .{});
+    pub const setPointerCapture = bridge.function(Element.setPointerCapture, .{});
+    pub const releasePointerCapture = bridge.function(Element.releasePointerCapture, .{});
+    pub const hasPointerCapture = bridge.function(Element.hasPointerCapture, .{});
 
     fn ariaAccessor(comptime attr: []const u8) js.bridge.Accessor {
         const R = struct {
@@ -3090,4 +3124,8 @@ test "Element: div chain slot size" {
     const Div = @import("element/html/Div.zig");
     const slot = comptime Factory.chainOffsetOf(Div, Div) + @sizeOf(Div);
     try testing.expectEqual(if (comptime lp.IS_DEBUG) 112 else 73, slot);
+}
+
+test "Element: pointer capture specification tests" {
+    try testing.htmlRunner("element/pointer_capture.html", .{});
 }

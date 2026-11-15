@@ -27,6 +27,7 @@ const lp = @import("lightpanda");
 
 const URL = @import("../URL.zig");
 const Frame = @import("../Frame.zig");
+const Page = @import("../Page.zig");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const StyleManager = @import("../StyleManager.zig");
@@ -310,9 +311,10 @@ fn emitPointer(
     const owner = target.ownerFrame(frame) orelse frame;
     if (owner.window._closed) return true;
     const boundary = comptime std.mem.eql(u8, typ, "pointerenter") or std.mem.eql(u8, typ, "pointerleave");
+    const capture_event = comptime std.mem.eql(u8, typ, "gotpointercapture") or std.mem.eql(u8, typ, "lostpointercapture");
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = !boundary,
-        .cancelable = !boundary and comptime !std.mem.eql(u8, typ, "pointercancel"),
+        .cancelable = !boundary and !capture_event and comptime !std.mem.eql(u8, typ, "pointercancel"),
         .composed = !boundary,
         .clientX = g.x,
         .clientY = g.y,
@@ -332,6 +334,30 @@ fn emitPointer(
     }, owner);
     const cancelled = try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
     return cancelled or owner.window._closed;
+}
+
+fn emitPointerOnDocument(frame: *Frame, comptime typ: []const u8, g: Gesture) !void {
+    if (frame.window._closed) return;
+    const event: *PointerEvent = try .initTrusted(typ, .{
+        .bubbles = true,
+        .cancelable = false,
+        .composed = true,
+        .clientX = g.x,
+        .clientY = g.y,
+        .button = g.button,
+        .buttons = g.buttons_down,
+        .pointerId = g.pointer_id,
+        .pointerType = g.pointer_type,
+        .isPrimary = true,
+        .width = g.width,
+        .height = g.height,
+        .pressure = if (g.buttons_down != 0) g.pressure else 0.0,
+        .ctrlKey = g.modifiers.ctrl,
+        .shiftKey = g.modifiers.shift,
+        .altKey = g.modifiers.alt,
+        .metaKey = g.modifiers.meta,
+    }, frame);
+    _ = try frame._event_manager.dispatchCancelable(frame.document.asEventTarget(), event.asEvent());
 }
 
 /// Dispatch a trusted mouse event; returns whether its default action is off,
@@ -376,6 +402,163 @@ fn buttonsBitmask(button: i32) u16 {
     };
 }
 
+pub const PointerCapture = struct {
+    pending_target: ?*Element = null,
+    active_target: ?*Element = null,
+    is_processing: bool = false,
+};
+
+pub fn getPointerCapture(page: *Page, pointer_id: i32) ?*PointerCapture {
+    if (pointer_id == 1) {
+        return &page.input_pointer.capture;
+    }
+    if (page.input_touch.contact) |contact| {
+        if (pointer_id == contact.pointer_id) {
+            return &page.input_touch.capture;
+        }
+    }
+    if (page.input_touch.capture.active_target != null or page.input_touch.capture.pending_target != null) {
+        return &page.input_touch.capture;
+    }
+    return null;
+}
+
+pub fn isPointerActive(page: *Page, pointer_id: i32) bool {
+    if (pointer_id == 1) {
+        return true;
+    }
+    if (page.input_touch.contact) |contact| {
+        if (pointer_id == contact.pointer_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn isPointerButtonPressed(page: *Page, pointer_id: i32) bool {
+    if (pointer_id == 1) {
+        return page.input_pointer.held != 0;
+    }
+    if (page.input_touch.contact) |contact| {
+        if (pointer_id == contact.pointer_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn setPendingPointerCapture(page: *Page, pointer_id: i32, element: *Element) void {
+    if (getPointerCapture(page, pointer_id)) |c| {
+        c.pending_target = element;
+    }
+}
+
+pub fn clearPendingPointerCapture(page: *Page, pointer_id: i32, target: *Element) void {
+    if (getPointerCapture(page, pointer_id)) |c| {
+        if (c.pending_target == target or c.active_target == target) {
+            c.pending_target = null;
+        }
+    }
+}
+
+pub fn processPendingPointerCapture(frame: *Frame, pointer_id: i32, g: Gesture) !void {
+    const capture = getPointerCapture(frame.page, pointer_id) orelse return;
+    if (capture.is_processing) return;
+
+    if (capture.active_target == capture.pending_target) {
+        return;
+    }
+
+    capture.is_processing = true;
+    defer capture.is_processing = false;
+
+    // 1. If active_target is set and != pending_target, fire lostpointercapture
+    if (capture.active_target) |old_target| {
+        if (old_target != capture.pending_target) {
+            const owner = old_target.ownerFrame(frame) orelse frame;
+            if (!owner.window._closed) {
+                var cg = g;
+                cg.pointer_id = pointer_id;
+                if (old_target.asNode().isConnected()) {
+                    _ = emitPointer(owner, old_target, "lostpointercapture", cg, 0) catch |err| {
+                        log.debug(.frame, "lostpointercapture dispatch", .{ .err = err });
+                    };
+                } else {
+                    emitPointerOnDocument(owner, "lostpointercapture", cg) catch |err| {
+                        log.debug(.frame, "lostpointercapture dispatch", .{ .err = err });
+                    };
+                }
+            }
+        }
+    }
+
+    // 2. If pending_target is set and != active_target, fire gotpointercapture
+    if (capture.pending_target) |new_target| {
+        if (new_target != capture.active_target and new_target.asNode().isConnected()) {
+            const owner = new_target.ownerFrame(frame) orelse frame;
+            if (!owner.window._closed) {
+                var cg = g;
+                cg.pointer_id = pointer_id;
+                _ = emitPointer(owner, new_target, "gotpointercapture", cg, 0) catch |err| {
+                    log.debug(.frame, "gotpointercapture dispatch", .{ .err = err });
+                };
+            }
+        }
+    }
+
+    // 3. Set active_target = pending_target
+    capture.active_target = capture.pending_target;
+}
+
+pub fn implicitRelease(frame: *Frame, pointer_id: i32, g: Gesture) !void {
+    const capture = getPointerCapture(frame.page, pointer_id) orelse return;
+    if (capture.active_target == null and capture.pending_target == null) {
+        return;
+    }
+    const had_active = capture.active_target != null;
+    capture.pending_target = null;
+    try processPendingPointerCapture(frame, pointer_id, g);
+    if (had_active and pointer_id == 1) {
+        const hit = mouseHitTest(frame, g.x, g.y) catch return;
+        updateHoverTarget(hit.frame, hit.target, HoverContext{
+            .x = hit.x,
+            .y = hit.y,
+            .buttons = frame.page.input_pointer.held,
+            .modifiers = g.modifiers,
+        });
+    }
+}
+
+pub fn handleNodeRemoval(frame: *Frame) void {
+    const page = frame.page;
+    handlePointerRemoval(frame, 1, &page.input_pointer.capture);
+    if (page.input_touch.contact) |contact| {
+        handlePointerRemoval(frame, contact.pointer_id, &page.input_touch.capture);
+    }
+}
+
+fn handlePointerRemoval(frame: *Frame, pointer_id: i32, capture: *PointerCapture) void {
+    if (capture.pending_target) |pending| {
+        if (!pending.asNode().isConnected()) {
+            capture.pending_target = null;
+        }
+    }
+    if (capture.active_target) |active| {
+        if (!active.asNode().isConnected()) {
+            const owner = active.ownerFrame(frame) orelse frame;
+            capture.active_target = null;
+            if (!owner.window._closed) {
+                emitPointerOnDocument(owner, "lostpointercapture", .{
+                    .pointer_id = pointer_id,
+                    .pointer_type = if (pointer_id == 1) "mouse" else "touch",
+                }) catch |err| {
+                    log.debug(.frame, "lostpointercapture disconnect", .{ .err = err });
+                };
+            }
+        }
+    }
+}
+
 /// Held-button mask and suppression flag for the single synthetic mouse
 /// pointer, tracked across the split press/release messages of one gesture so
 /// a chord is told apart from a new gesture.
@@ -389,6 +572,8 @@ pub const PointerButtons = struct {
     /// its click. A release with no press behind it has no target, and
     /// reports a click count of 0.
     down_target: ?*Element = null,
+    /// Active pointer capture state for this pointer.
+    capture: PointerCapture = .{},
 
     /// `g.buttons_down` is ignored: the held mask supplies it.
     pub fn press(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !void {
@@ -409,7 +594,15 @@ pub const PointerButtons = struct {
     /// Returns the element the click fired at, if any. `g.buttons_down` is
     /// ignored: the held mask supplies it.
     pub fn release(self: *PointerButtons, frame: *Frame, target: *Element, g: Gesture) !?*Element {
-        const click_target = if (self.down_target) |down| commonClickTarget(frame, down, target) else null;
+        try processPendingPointerCapture(frame, 1, g);
+        const captured = self.capture.active_target;
+        const effective_target = captured orelse target;
+        const click_target = if (captured) |cap|
+            cap
+        else if (self.down_target) |down|
+            commonClickTarget(frame, down, target)
+        else
+            null;
         const was_suppressed = self.mousedown_suppressed;
         const was_pressed = self.down_target != null;
         self.releaseButton(g.button);
@@ -420,7 +613,7 @@ pub const PointerButtons = struct {
         // later releases of a chord, or a lone release) with a click count of
         // 0, whatever the client sent.
         if (!was_pressed) rg.click_count = 0;
-        try releaseSequence(frame, target, rg, was_suppressed, click_target);
+        try releaseSequence(frame, effective_target, rg, was_suppressed, click_target);
         return click_target;
     }
 
@@ -474,12 +667,15 @@ fn commonClickTarget(frame: *Frame, down: *Element, up: *Element) ?*Element {
 }
 
 pub fn moveSequence(frame: *Frame, target: *Element, g: Gesture) !void {
-    updateHoverTarget(frame, target, HoverContext{ .x = g.x, .y = g.y, .buttons = g.buttons_down, .modifiers = g.modifiers });
+    try processPendingPointerCapture(frame, g.pointer_id, g);
+    const effective_target = if (getPointerCapture(frame.page, g.pointer_id)) |c| c.active_target orelse target else target;
+    const owner = effective_target.ownerFrame(frame) orelse frame;
+    updateHoverTarget(owner, effective_target, HoverContext{ .x = g.x, .y = g.y, .buttons = g.buttons_down, .modifiers = g.modifiers });
     // A move changes no button: https://www.w3.org/TR/pointerevents3/#the-button-property
     var pg = g;
     pg.button = -1;
-    _ = try emitPointer(frame, target, "pointermove", pg, 0);
-    _ = try emitMouse(frame, target, "mousemove", g, 0);
+    _ = try emitPointer(owner, effective_target, "pointermove", pg, 0);
+    _ = try emitMouse(owner, effective_target, "mousemove", g, 0);
 }
 
 /// Returns whether the gesture's compat mouse events are suppressed: by the
@@ -518,6 +714,7 @@ fn mouseDown(frame: *Frame, target: *Element, g: Gesture) !void {
 fn releaseSequence(frame: *Frame, up_target: *Element, g: Gesture, suppressed: bool, click_target: ?*Element) !void {
     if (g.buttons_down == 0) {
         _ = try emitPointer(frame, up_target, "pointerup", g, 0);
+        try implicitRelease(frame, g.pointer_id, g);
     } else {
         _ = try emitPointer(frame, up_target, "pointermove", g, 0);
     }
@@ -662,81 +859,134 @@ pub fn pointInFrame(from: *Frame, to: *Frame, x: f64, y: f64) Point {
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
-    const hit = try mouseHitTest(frame, x, y);
-    const target = hit.target orelse {
-        // Don't leave a prior gesture's state for the next message to misread.
-        frame.page.input_pointer.reset();
-        return;
-    };
+    const pointer = &frame.page.input_pointer;
+    var target: *Element = undefined;
+    var press_frame: *Frame = undefined;
+    var press_x: f64 = x;
+    var press_y: f64 = y;
+
+    if (pointer.capture.active_target orelse pointer.capture.pending_target) |captured| {
+        target = captured;
+        press_frame = captured.ownerFrame(frame) orelse frame;
+        const pt = pointInFrame(frame, press_frame, x, y);
+        press_x = pt.x;
+        press_y = pt.y;
+    } else {
+        const hit = try mouseHitTest(frame, x, y);
+        const hit_target = hit.target orelse {
+            // Don't leave a prior gesture's state for the next message to misread.
+            frame.page.input_pointer.reset();
+            return;
+        };
+        target = hit_target;
+        press_frame = hit.frame;
+        press_x = hit.x;
+        press_y = hit.y;
+    }
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse press", .{
             .url = frame.url,
             .node = target,
-            .x = hit.x,
-            .y = hit.y,
+            .x = press_x,
+            .y = press_y,
             .button = button,
             .type = frame._type,
         });
     }
 
-    try frame.page.input_pointer.press(hit.frame, target, .{
+    try frame.page.input_pointer.press(press_frame, target, .{
         .button = button,
         // clickCount 0 (omitted) stays 0, not forced to 1: Chrome and Firefox
         // both fire mousedown with detail 0 in that case.
         .click_count = if (click_count > 0) @intCast(click_count) else 0,
-        .x = hit.x,
-        .y = hit.y,
+        .x = press_x,
+        .y = press_y,
     });
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
-    const hit = try mouseHitTest(frame, x, y);
-    const target = hit.target orelse {
-        // A miss ends hover without releasing a held button.
-        updateHoverTarget(frame, null, HoverContext{ .x = x, .y = y, .buttons = frame.page.input_pointer.held });
-        return;
-    };
+    const pointer = &frame.page.input_pointer;
+    var target: *Element = undefined;
+    var move_frame: *Frame = undefined;
+    var move_x: f64 = x;
+    var move_y: f64 = y;
+
+    if (pointer.capture.active_target orelse pointer.capture.pending_target) |captured| {
+        target = captured;
+        move_frame = captured.ownerFrame(frame) orelse frame;
+        const pt = pointInFrame(frame, move_frame, x, y);
+        move_x = pt.x;
+        move_y = pt.y;
+    } else {
+        const hit = try mouseHitTest(frame, x, y);
+        const hit_target = hit.target orelse {
+            // A miss ends hover without releasing a held button.
+            updateHoverTarget(frame, null, HoverContext{ .x = x, .y = y, .buttons = frame.page.input_pointer.held });
+            return;
+        };
+        target = hit_target;
+        move_frame = hit.frame;
+        move_x = hit.x;
+        move_y = hit.y;
+    }
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse move", .{
             .url = frame.url,
             .node = target,
-            .x = hit.x,
-            .y = hit.y,
+            .x = move_x,
+            .y = move_y,
             .type = frame._type,
         });
     }
 
-    try moveSequence(hit.frame, target, .{ .buttons_down = frame.page.input_pointer.held, .x = hit.x, .y = hit.y });
+    try moveSequence(move_frame, target, .{ .buttons_down = frame.page.input_pointer.held, .x = move_x, .y = move_y });
 }
 
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     const pointer = &frame.page.input_pointer;
-    // A release that misses every element still lets go of the button, so
-    // the next message doesn't read it as held.
-    const hit = mouseHitTest(frame, x, y) catch |err| {
-        pointer.releaseButton(button);
-        return err;
-    };
-    const target = hit.target orelse {
-        pointer.releaseButton(button);
-        return;
-    };
+    var target: *Element = undefined;
+    var release_frame: *Frame = undefined;
+    var release_x: f64 = x;
+    var release_y: f64 = y;
+
+    if (pointer.capture.active_target orelse pointer.capture.pending_target) |captured| {
+        target = captured;
+        release_frame = captured.ownerFrame(frame) orelse frame;
+        const pt = pointInFrame(frame, release_frame, x, y);
+        release_x = pt.x;
+        release_y = pt.y;
+    } else {
+        // A release that misses every element still lets go of the button, so
+        // the next message doesn't read it as held.
+        const hit = mouseHitTest(frame, x, y) catch |err| {
+            pointer.releaseButton(button);
+            return err;
+        };
+        const hit_target = hit.target orelse {
+            pointer.releaseButton(button);
+            return;
+        };
+        target = hit_target;
+        release_frame = hit.frame;
+        release_x = hit.x;
+        release_y = hit.y;
+    }
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse release", .{
             .url = frame.url,
             .node = target,
-            .x = hit.x,
-            .y = hit.y,
+            .x = release_x,
+            .y = release_y,
             .button = button,
             .type = frame._type,
         });
     }
 
-    _ = try pointer.release(hit.frame, target, .{
+    _ = try pointer.release(release_frame, target, .{
         .button = button,
         .click_count = if (click_count > 0) @intCast(click_count) else 0,
-        .x = hit.x,
-        .y = hit.y,
+        .x = release_x,
+        .y = release_y,
     });
 }
 
@@ -1098,6 +1348,7 @@ pub const TouchInput = struct {
     next_pointer_id: i32 = first_touch_pointer_id,
     // The last tap that activated, for counting the next one.
     last_tap: ?LastTap = null,
+    capture: PointerCapture = .{},
 };
 
 const TouchDispatch = struct {
@@ -1159,6 +1410,7 @@ pub fn touchStart(frame: *Frame, target: ?*Element, point: Touch.Point, modifier
     };
     touch.last_tap = null;
     touch.next_pointer_id = if (contact.pointer_id == std.math.maxInt(i32)) first_touch_pointer_id else contact.pointer_id + 1;
+    touch.contact = contact;
     const g = contact.gesture(point, .down, modifiers);
     dispatchBoundaryEvents(owner, null, resolved, TouchBoundary{ .g = g });
     contact.suppress_mouse = try emitPointer(owner, resolved, "pointerdown", g, 0);
@@ -1195,7 +1447,10 @@ pub fn touchMove(frame: *Frame, over: ?*Element, point: Touch.Point, modifiers: 
         contact.phase = .drag;
     }
     if (contact.phase != .pan) {
-        _ = try emitPointer(owner, contact.target, "pointermove", contact.gesture(point, .move, modifiers), 0);
+        const g = contact.gesture(point, .move, modifiers);
+        try processPendingPointerCapture(owner, g.pointer_id, g);
+        const effective_target = touch.capture.active_target orelse contact.target;
+        _ = try emitPointer(owner, effective_target, "pointermove", g, 0);
     }
     if (contact.phase == .slop) {
         touch.contact = contact;
@@ -1250,8 +1505,11 @@ pub fn touchEnd(frame: *Frame, point: ?Touch.Point, modifiers: Modifiers) !void 
 
     const g = contact.gesture(lift, .up, modifiers);
     if (contact.phase != .pan) {
-        _ = try emitPointer(owner, contact.target, "pointerup", g, 0);
-        dispatchBoundaryEvents(owner, contact.target, null, TouchBoundary{ .g = g });
+        try processPendingPointerCapture(owner, g.pointer_id, g);
+        const effective_target = touch.capture.active_target orelse contact.target;
+        _ = try emitPointer(owner, effective_target, "pointerup", g, 0);
+        try implicitRelease(owner, g.pointer_id, g);
+        dispatchBoundaryEvents(owner, effective_target, null, TouchBoundary{ .g = g });
     }
     const prevented = try dispatchTouchEvent(owner, contact.target, .touchend, lift, contact.dispatch(modifiers));
     if (contact.start_prevented or contact.phase != .slop or prevented) return;
@@ -1291,8 +1549,11 @@ pub fn touchCancel(frame: *Frame, modifiers: Modifiers) !void {
     touch.contact = null;
     if (contact.phase != .pan) {
         const g = contact.gesture(contact.point, .cancel, modifiers);
-        _ = try emitPointer(owner, contact.target, "pointercancel", g, 0);
-        dispatchBoundaryEvents(owner, contact.target, null, TouchBoundary{ .g = g });
+        try processPendingPointerCapture(owner, g.pointer_id, g);
+        const effective_target = touch.capture.active_target orelse contact.target;
+        _ = try emitPointer(owner, effective_target, "pointercancel", g, 0);
+        try implicitRelease(owner, g.pointer_id, g);
+        dispatchBoundaryEvents(owner, effective_target, null, TouchBoundary{ .g = g });
     }
     _ = try dispatchTouchEvent(owner, contact.target, .touchcancel, contact.point, .{ .modifiers = modifiers });
 }
@@ -1313,6 +1574,26 @@ pub fn forgetFrame(frame: *Frame) void {
     if (page.input_pointer.down_target) |el| {
         if (el.ownerFrame(frame) == frame) {
             page.input_pointer.reset();
+        }
+    }
+    if (page.input_pointer.capture.pending_target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_pointer.capture.pending_target = null;
+        }
+    }
+    if (page.input_pointer.capture.active_target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_pointer.capture.active_target = null;
+        }
+    }
+    if (page.input_touch.capture.pending_target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_touch.capture.pending_target = null;
+        }
+    }
+    if (page.input_touch.capture.active_target) |el| {
+        if (el.ownerFrame(frame) == frame) {
+            page.input_touch.capture.active_target = null;
         }
     }
     if (page.input_drag.target) |el| {
@@ -5728,4 +6009,379 @@ test "user_input: trusted mouse events stop at a disabled form control" {
     // An untrusted click propagates as usual.
     const synthetic = try (try ls.local.compileAndRun("inner.click(); take()", null)).toStringSliceWithAlloc(testing.arena_allocator);
     try testing.expectString("click@inner click@btn click@document click@window", synthetic);
+}
+
+test "user_input: pointer capture mouse lifecycle and retargeting" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\(() => {
+        \\  window.events = [];
+        \\  const btn = document.getElementById('btn');
+        \\  const inp = document.getElementById('inp');
+        \\  for (const type of ['pointerdown', 'gotpointercapture', 'lostpointercapture', 'pointermove', 'pointerup', 'mousemove', 'mouseup', 'click']) {
+        \\    btn.addEventListener(type, e => {
+        \\      window.events.push(e.type + '@btn');
+        \\      if (e.type === 'pointerdown') {
+        \\        btn.setPointerCapture(e.pointerId);
+        \\      }
+        \\    });
+        \\    inp.addEventListener(type, e => {
+        \\      window.events.push(e.type + '@inp');
+        \\    });
+        \\  }
+        \\})();
+    , null);
+
+    const btn = frame.document.getElementById("btn").?;
+    const inp = frame.document.getElementById("inp").?;
+    const btn_pt = gesturePoint(frame, btn);
+    const inp_pt = gesturePoint(frame, inp);
+
+    // Mouse press on btn: calls setPointerCapture(1)
+    try triggerMousePress(frame, btn_pt.x, btn_pt.y, mouse_button.main, 1);
+    try testing.expect(btn.hasPointerCapture(1, frame));
+
+    // Mouse moves to inp's position, but events must be retargeted to btn due to capture!
+    try triggerMouseMove(frame, inp_pt.x, inp_pt.y);
+
+    // Mouse releases: fires pointerup, lostpointercapture, mouseup, click on btn!
+    try triggerMouseRelease(frame, inp_pt.x, inp_pt.y, mouse_button.main, 1);
+    try testing.expect(!btn.hasPointerCapture(1, frame));
+
+    const events = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, events, "gotpointercapture@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "pointermove@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "pointerup@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "lostpointercapture@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "click@btn") != null);
+    // inp should NOT have received pointermove or pointerup while btn held capture!
+    try testing.expect(std.mem.indexOf(u8, events, "pointermove@inp") == null);
+}
+
+test "user_input: pointer capture element removal releases to document" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\(() => {
+        \\  window.lostCaptured = false;
+        \\  document.addEventListener('lostpointercapture', () => { window.lostCaptured = true; });
+        \\  const btn = document.getElementById('btn');
+        \\  btn.addEventListener('pointerdown', e => { btn.setPointerCapture(e.pointerId); });
+        \\})();
+    , null);
+
+    const btn = frame.document.getElementById("btn").?;
+    const pt = gesturePoint(frame, btn);
+    try triggerMousePress(frame, pt.x, pt.y, mouse_button.main, 1);
+    try testing.expect(btn.hasPointerCapture(1, frame));
+
+    // Process pending capture to activate
+    try triggerMouseMove(frame, pt.x + 1, pt.y + 1);
+
+    // Remove the element from the document tree
+    _ = try ls.local.compileAndRun("btn.remove()", null);
+
+    // Capture state should be cleared and lostpointercapture received by document
+    try testing.expect(!btn.hasPointerCapture(1, frame));
+    try testing.expect((try ls.local.compileAndRun("window.lostCaptured === true", null)).toBool());
+
+    // Clean up held button
+    frame.page.input_pointer.reset();
+}
+
+test "user_input: pointer capture transition between pending and active, explicit release and transfer" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\(() => {
+        \\  window.events = [];
+        \\  const btn = document.getElementById('btn');
+        \\  const inp = document.getElementById('inp');
+        \\  for (const type of ['gotpointercapture', 'lostpointercapture']) {
+        \\    btn.addEventListener(type, e => window.events.push(e.type + '@btn'));
+        \\    inp.addEventListener(type, e => window.events.push(e.type + '@inp'));
+        \\  }
+        \\})();
+    , null);
+
+    const btn = frame.document.getElementById("btn").?;
+    const inp = frame.document.getElementById("inp").?;
+    const btn_pt = gesturePoint(frame, btn);
+    const inp_pt = gesturePoint(frame, inp);
+
+    // Press on btn: buttons held
+    try triggerMousePress(frame, btn_pt.x, btn_pt.y, mouse_button.main, 1);
+
+    // Call setPointerCapture on btn: pending_target = btn, active_target = null
+    try btn.setPointerCapture(1, frame);
+    // While pending, hasPointerCapture MUST return true
+    try testing.expect(btn.hasPointerCapture(1, frame));
+    try testing.expect(!inp.hasPointerCapture(1, frame));
+
+    // Next move processes pending capture -> gotpointercapture@btn fires, active_target = btn
+    try triggerMouseMove(frame, btn_pt.x + 2, btn_pt.y + 2);
+    // While active, hasPointerCapture MUST return true
+    try testing.expect(btn.hasPointerCapture(1, frame));
+    try testing.expect(!inp.hasPointerCapture(1, frame));
+
+    // Transfer capture: inp calls setPointerCapture
+    try inp.setPointerCapture(1, frame);
+    // In transition: inp has pending capture, so hasPointerCapture on inp is true per spec
+    try testing.expect(inp.hasPointerCapture(1, frame));
+    try testing.expect(!btn.hasPointerCapture(1, frame));
+
+    // Move: processes capture transfer: lostpointercapture@btn then gotpointercapture@inp
+    try triggerMouseMove(frame, inp_pt.x, inp_pt.y);
+    try testing.expect(!btn.hasPointerCapture(1, frame));
+    try testing.expect(inp.hasPointerCapture(1, frame));
+
+    // Explicit release by inp: hasPointerCapture on inp immediately reverts to false
+    try inp.releasePointerCapture(1, frame);
+    try testing.expect(!inp.hasPointerCapture(1, frame));
+
+    // Move: lostpointercapture@inp fires
+    try triggerMouseMove(frame, inp_pt.x + 1, inp_pt.y + 1);
+
+    // Release mouse button to clean up
+    try triggerMouseRelease(frame, inp_pt.x + 1, inp_pt.y + 1, mouse_button.main, 1);
+
+    const events = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString("gotpointercapture@btn lostpointercapture@btn gotpointercapture@inp lostpointercapture@inp", events);
+}
+
+test "user_input: touch pointer capture implicit release on touchCancel" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\(() => {
+        \\  window.events = [];
+        \\  const btn = document.getElementById('btn');
+        \\  for (const type of ['pointerdown', 'gotpointercapture', 'lostpointercapture', 'pointercancel']) {
+        \\    btn.addEventListener(type, e => {
+        \\      window.events.push(e.type + '@btn');
+        \\      if (e.type === 'pointerdown') {
+        \\      btn.setPointerCapture(e.pointerId);
+        \\      }
+        \\    });
+        \\  }
+        \\})();
+    , null);
+
+    const btn = frame.document.getElementById("btn").?;
+    const pt = gesturePoint(frame, btn);
+    try touchStart(frame, btn, .{ .x = pt.x, .y = pt.y }, .{});
+    const contact = frame.page.input_touch.contact.?;
+    const pointer_id = contact.pointer_id;
+
+    // Contact target setPointerCapture called in pointerdown
+    try testing.expect(btn.hasPointerCapture(pointer_id, frame));
+
+    // Move touch slightly to process pending capture
+    try touchMove(frame, btn, .{ .x = pt.x + 1, .y = pt.y + 1 }, .{});
+    try testing.expect(btn.hasPointerCapture(pointer_id, frame));
+
+    // Cancel touch: fires pointercancel, implicit release (lostpointercapture)
+    try touchCancel(frame, .{});
+    try testing.expect(!btn.hasPointerCapture(pointer_id, frame));
+
+    const events = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, events, "pointerdown@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "gotpointercapture@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "pointercancel@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "lostpointercapture@btn") != null);
+}
+
+test "user_input: touch pointer capture implicit release on touchEnd" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\(() => {
+        \\  window.events = [];
+        \\  const btn = document.getElementById('btn');
+        \\  for (const type of ['pointerdown', 'gotpointercapture', 'lostpointercapture', 'pointerup', 'touchend']) {
+        \\    btn.addEventListener(type, e => {
+        \\      window.events.push(e.type + '@btn');
+        \\      if (e.type === 'pointerdown') {
+        \\        btn.setPointerCapture(e.pointerId);
+        \\      }
+        \\    });
+        \\  }
+        \\})();
+    , null);
+
+    const btn = frame.document.getElementById("btn").?;
+    const pt = gesturePoint(frame, btn);
+    try touchStart(frame, btn, .{ .x = pt.x, .y = pt.y }, .{});
+    const contact = frame.page.input_touch.contact.?;
+    const pointer_id = contact.pointer_id;
+
+    try testing.expect(btn.hasPointerCapture(pointer_id, frame));
+
+    // Move touch slightly to process pending capture
+    try touchMove(frame, btn, .{ .x = pt.x + 1, .y = pt.y + 1 }, .{});
+    try testing.expect(btn.hasPointerCapture(pointer_id, frame));
+
+    // Release touch: fires pointerup, implicit release (lostpointercapture), touchend
+    try touchEnd(frame, null, .{});
+    try testing.expect(!btn.hasPointerCapture(pointer_id, frame));
+
+    const events = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, events, "pointerdown@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "gotpointercapture@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "pointerup@btn") != null);
+    try testing.expect(std.mem.indexOf(u8, events, "lostpointercapture@btn") != null);
+}
+
+test "user_input: cross-origin and same-origin iframe pointer capture lifecycle, isolation and teardown" {
+    const page = try testing.pageTest("input_pointer_capture_cross_origin.html", .{ .wait_until_done = true });
+    defer page.close();
+    const main = page.frame().?;
+    try testing.expectEqual(2, main.child_frames.items.len);
+
+    const cross_child = main.child_frames.items[0];
+    const same_child = main.child_frames.items[1];
+
+    // Verify genuine cross-origin separation:
+    try testing.expect(!main.isSameOrigin(cross_child.url));
+    try testing.expect(main.isSameOrigin(same_child.url));
+
+    var main_ls: js.Local.Scope = undefined;
+    main.js.localScope(&main_ls);
+    defer main_ls.deinit();
+
+    var cross_ls: js.Local.Scope = undefined;
+    cross_child.js.localScope(&cross_ls);
+    defer cross_ls.deinit();
+
+    var same_ls: js.Local.Scope = undefined;
+    same_child.js.localScope(&same_ls);
+    defer same_ls.deinit();
+
+    const cross_target = cross_child.document.getElementById("child_box").?;
+    const cross_pt = gesturePoint(cross_child, cross_target);
+    const cross_in_main = pointInFrame(cross_child, main, cross_pt.x, cross_pt.y);
+
+    // 1. Pointer down inside cross-origin iframe + setPointerCapture
+    try triggerMousePress(main, cross_in_main.x, cross_in_main.y, mouse_button.main, 1);
+    try testing.expect(cross_target.hasPointerCapture(1, cross_child));
+
+    // 2. Move pointer outside the captured element and outside the iframe's bounds (into main frame)
+    try triggerMouseMove(main, 40, 40);
+    try testing.expect(cross_target.hasPointerCapture(1, cross_child));
+
+    // 3. Release pointer outside iframe: fires pointerup, implicit release (lostpointercapture)
+    try triggerMouseRelease(main, 40, 40, mouse_button.main, 1);
+    try testing.expect(!cross_target.hasPointerCapture(1, cross_child));
+
+    // Verify cross-origin child received events, and parent was completely isolated
+    const cross_events = try (try cross_ls.local.compileAndRun("window.childEvents.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, cross_events, "pointerdown") != null);
+    try testing.expect(std.mem.indexOf(u8, cross_events, "gotpointercapture") != null);
+    try testing.expect(std.mem.indexOf(u8, cross_events, "pointermove") != null);
+    try testing.expect(std.mem.indexOf(u8, cross_events, "pointerup") != null);
+    try testing.expect(std.mem.indexOf(u8, cross_events, "lostpointercapture") != null);
+
+    // Main frame must have received ZERO pointer events (cross-origin isolation preserved)
+    const parent_events = try (try main_ls.local.compileAndRun("window.parentEvents.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expectString("", parent_events);
+
+    // 4. Explicit releasePointerCapture on cross-origin iframe
+    _ = try cross_ls.local.compileAndRun("window.childEvents = []", null);
+    try triggerMousePress(main, cross_in_main.x, cross_in_main.y, mouse_button.main, 1);
+    try triggerMouseMove(main, cross_in_main.x + 1, cross_in_main.y + 1); // activate capture: gotpointercapture
+    try testing.expect(cross_target.hasPointerCapture(1, cross_child));
+    try cross_target.releasePointerCapture(1, cross_child);
+    try testing.expect(!cross_target.hasPointerCapture(1, cross_child));
+    try triggerMouseMove(main, cross_in_main.x + 2, cross_in_main.y + 2); // process explicit release: lostpointercapture
+    try triggerMouseRelease(main, cross_in_main.x + 2, cross_in_main.y + 2, mouse_button.main, 1);
+
+    const explicit_events = try (try cross_ls.local.compileAndRun("window.childEvents.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, explicit_events, "lostpointercapture") != null);
+
+    // 5. Touch pointer capture and cancellation on cross-origin iframe
+    _ = try cross_ls.local.compileAndRun("window.childEvents = []", null);
+    try touchStart(cross_child, cross_target, .{ .x = cross_pt.x, .y = cross_pt.y }, .{});
+    const contact = main.page.input_touch.contact.?;
+    const pointer_id = contact.pointer_id;
+    try testing.expect(cross_target.hasPointerCapture(pointer_id, cross_child));
+    try touchMove(cross_child, cross_target, .{ .x = cross_pt.x + 1, .y = cross_pt.y + 1 }, .{});
+    try touchCancel(cross_child, .{});
+    try testing.expect(!cross_target.hasPointerCapture(pointer_id, cross_child));
+
+    const touch_events = try (try cross_ls.local.compileAndRun("window.childEvents.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, touch_events, "pointercancel") != null);
+    try testing.expect(std.mem.indexOf(u8, touch_events, "lostpointercapture") != null);
+
+    // 6. Element removal inside cross-origin iframe
+    _ = try cross_ls.local.compileAndRun("window.childEvents = []", null);
+    try triggerMousePress(main, cross_in_main.x, cross_in_main.y, mouse_button.main, 1);
+    try testing.expect(cross_target.hasPointerCapture(1, cross_child));
+    try triggerMouseMove(main, cross_in_main.x + 1, cross_in_main.y + 1); // activate capture
+    _ = try cross_ls.local.compileAndRun("document.getElementById('child_box').remove()", null);
+    try testing.expect(!cross_target.hasPointerCapture(1, cross_child));
+    const removal_events = try (try cross_ls.local.compileAndRun("window.childEvents.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, removal_events, "lostpointercapture@document") != null);
+    main.page.input_pointer.reset();
+
+    // 7. Iframe removal and teardown while capture is active (same-origin control)
+    const same_target = same_child.document.getElementById("child_box").?;
+    const same_pt = gesturePoint(same_child, same_target);
+    const same_in_main = pointInFrame(same_child, main, same_pt.x, same_pt.y);
+
+    try triggerMousePress(main, same_in_main.x, same_in_main.y, mouse_button.main, 1);
+    try testing.expect(same_target.hasPointerCapture(1, same_child));
+    try triggerMouseMove(main, same_in_main.x + 1, same_in_main.y + 1); // activate
+
+    // Remove the iframe itself from the parent document
+    _ = try main_ls.local.compileAndRun("document.getElementById('same_iframe').remove()", null);
+    // Verify capture state is immediately cleared, no stale references
+    try testing.expect(main.page.input_pointer.capture.pending_target == null);
+    try testing.expect(main.page.input_pointer.capture.active_target == null);
+    main.page.input_pointer.reset();
+
+    // 8. Verify parent frame normal mouse interaction resumes cleanly
+    try triggerMouseMove(main, 40, 40);
+    const parent_after = try (try main_ls.local.compileAndRun("window.parentEvents.join(' ')", null)).toStringSliceWithAlloc(testing.arena_allocator);
+    try testing.expect(std.mem.indexOf(u8, parent_after, "pointermove") != null);
 }

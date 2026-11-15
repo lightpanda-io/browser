@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 0; }
+  #parent_box {
+    width: 80px;
+    height: 80px;
+    background: red;
+  }
+  #cross_iframe {
+    position: absolute;
+    left: 100px;
+    top: 100px;
+    width: 200px;
+    height: 200px;
+  }
+  #same_iframe {
+    position: absolute;
+    left: 350px;
+    top: 100px;
+    width: 200px;
+    height: 200px;
+  }
+</style>
+</head>
+<body>
+<div id="parent_box"></div>
+<iframe id="cross_iframe" src="http://localhost:9582/src/browser/tests/frames/support/pointer_capture_child.html"></iframe>
+<iframe id="same_iframe" src="http://127.0.0.1:9582/src/browser/tests/frames/support/pointer_capture_child.html"></iframe>
+<script>
+  window.parentEvents = [];
+  for (const t of ['pointerdown', 'gotpointercapture', 'lostpointercapture', 'pointermove', 'pointerup', 'click']) {
+    document.addEventListener(t, (e) => {
+      window.parentEvents.push(t + '@' + (e.target.id || e.target.tagName));
+    });
+  }
+</script>
+</body>
+</html>
