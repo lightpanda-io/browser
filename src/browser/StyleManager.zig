@@ -708,6 +708,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
+    const parent_needs = if (parentCompound(matched)) |compound| KeyBits.needed(compound) else 0;
     inline for (group_fields) |field| {
         inline for (.{ @field(props, field), @field(important, field) }, .{ priority, important_priority }) |declared, p| {
             if (declaresAny(declared)) {
@@ -715,6 +716,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
                     .props = .init(declared),
                     .selector = matched,
                     .priority = p,
+                    .parent_needs = parent_needs,
                 });
             }
         }
@@ -3400,6 +3402,9 @@ fn Group(comptime Spec: type) type {
             // finalizeLayerRanks knows every layer and stamps them from
             // rule_layers[doc_order - 1].
             priority: u64,
+
+            // What the selector's `>` asks of the subject's parent, 0 for nothing
+            parent_needs: u64,
         };
 
         const RuleList = std.MultiArrayList(Rule);
@@ -3463,11 +3468,11 @@ fn Group(comptime Spec: type) type {
 
             // Checks the rules filed under `keyed`'s id, classes and tag
             // against `el`: the same element, or its parent.
-            fn apply(self: *const Buckets, keyed: *Element, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+            fn apply(self: *const Buckets, keyed: *Element, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, parent_has: *?u64, frame: *Frame) void {
                 if (keyed.getId()) |id| {
                     count(.probes);
                     if (self.id.get(id)) |rules| {
-                        checkRules(&rules, p, priorities, el, frame);
+                        checkRules(&rules, p, priorities, el, parent_has, frame);
                     }
                 }
 
@@ -3476,14 +3481,14 @@ fn Group(comptime Spec: type) type {
                     while (it.next()) |class| {
                         count(.probes);
                         if (self.class.get(class)) |rules| {
-                            checkRules(&rules, p, priorities, el, frame);
+                            checkRules(&rules, p, priorities, el, parent_has, frame);
                         }
                     }
                 }
 
                 count(.probes);
                 if (self.tag.get(keyed.getTag())) |rules| {
-                    checkRules(&rules, p, priorities, el, frame);
+                    checkRules(&rules, p, priorities, el, parent_has, frame);
                 }
             }
         };
@@ -3712,19 +3717,21 @@ fn Group(comptime Spec: type) type {
         // checkRules keeps the strongest rule per property, so the order the
         // lists are walked in doesn't change the result.
         fn applyRules(self: *const Self, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
-            self.subject.apply(el, p, priorities, el, frame);
+            // The parent's keys, hashed on the first rule that asks for them
+            var parent_has: ?u64 = null;
+            self.subject.apply(el, p, priorities, el, &parent_has, frame);
 
             if (self.parent.isEmpty() == false) {
                 // The DOM parent, as `>` matches: a shadow root's children have
                 // none, and no parent-keyed rule can match them.
                 if (el.asNode()._parent) |parent| {
                     if (parent.is(Element)) |parent_el| {
-                        self.parent.apply(parent_el, p, priorities, el, frame);
+                        self.parent.apply(parent_el, p, priorities, el, &parent_has, frame);
                     }
                 }
             }
 
-            checkRules(&self.other_rules, p, priorities, el, frame);
+            checkRules(&self.other_rules, p, priorities, el, &parent_has, frame);
         }
 
         inline fn count(comptime field: std.meta.FieldEnum(Work)) void {
@@ -3733,9 +3740,21 @@ fn Group(comptime Spec: type) type {
             }
         }
 
-        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
+        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, parent_has: *?u64, frame: *Frame) void {
             const nth = frame._style_manager.nthCache();
-            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
+            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs)) |priority, rule, selector, parent_needs| {
+                if (parent_needs != 0) {
+                    const has = parent_has.* orelse blk: {
+                        const has = KeyBits.ofParent(el);
+                        parent_has.* = has;
+                        break :blk has;
+                    };
+                    // A parent without one of them fails the `>`, whatever
+                    // the rest of the selector says.
+                    if (parent_needs & ~has != 0) {
+                        continue;
+                    }
+                }
                 var matched = false;
                 inline for (fields) |field| {
                     const f = @field(Field, field);
@@ -3934,6 +3953,57 @@ fn parentCompound(selector: Selector.Selector) ?Selector.Compound {
     }
     return null;
 }
+
+/// A tag, id or class as one of 64 bits: an element's set holds every bit a
+/// compound's tags, ids and classes need, or the compound can't match it.
+const KeyBits = struct {
+    fn ofParent(el: *Element) u64 {
+        const parent = el.asNode()._parent orelse return 0;
+        const parent_el = parent.is(Element) orelse return 0;
+        const tag = parent_el.getTag();
+        if (tag == .unknown) {
+            // Matches a tag selector by name
+            return std.math.maxInt(u64);
+        }
+        var bits = ofTag(tag);
+        if (parent_el.getId()) |id| {
+            bits |= ofName(id);
+        }
+        if (parent_el.getClassName()) |class_attr| {
+            // The separators classAttributeContains splits on
+            var it = std.mem.tokenizeAny(u8, class_attr, &.{ '\t', '\n', 0x0C, '\r', ' ' });
+            while (it.next()) |class| {
+                bits |= ofName(class);
+            }
+        }
+        return bits;
+    }
+
+    fn needed(compound: Selector.Compound) u64 {
+        var bits: u64 = 0;
+        for (compound.parts) |part| {
+            switch (part) {
+                .tag => |tag| bits |= ofTag(tag),
+                .id => |id| bits |= ofName(id),
+                .class => |class| bits |= ofName(class),
+                else => {},
+            }
+        }
+        return bits;
+    }
+
+    fn ofTag(tag: Tag) u64 {
+        return bit(std.hash.int(@as(u64, @backingInt(tag))));
+    }
+
+    fn ofName(name: []const u8) u64 {
+        return bit(std.hash.Wyhash.hash(0, name));
+    }
+
+    fn bit(hash: u64) u64 {
+        return @as(u64, 1) << @intCast(hash >> 58);
+    }
+};
 
 /// Optimization. A lone `:where(X)` matches exactly what X does. What changes
 /// is its priority (it has zero specificity). So we need to remain aware of
@@ -8508,6 +8578,78 @@ test "StyleManager: work: child-combinator rules keyed by parent" {
         .probes = (24 + 3) + (4 + 8 * 2 + 4 * 2 + 4 * 1 + 4 * 2),
         .matches = 8 + 4 + 4,
     }, work);
+}
+
+test "StyleManager: work: a `>` rule is skipped when the parent lacks its keys" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const GeometryGroup = @TypeOf(sm.geometry);
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<ul class="a menu b"><li><span></span></li><li><span></span></li></ul><ul><li></li></ul><div id="top"><span></span></div><div><span></span></div>
+    );
+    const menu = body.firstChild().?;
+    const plain_list = menu.nextSibling().?;
+    const top = plain_list.nextSibling().?;
+    const plain_div = top.nextSibling().?;
+
+    // A foreign element named like a tag matches the tag selector
+    const foreign = (try doc.createElementNS("urn:x", "li", frame)).asNode();
+    _ = try body.appendChild(foreign, frame);
+    const foreign_span = (try doc.createElement("span", null, frame)).asNode();
+    _ = try foreign.appendChild(foreign_span, frame);
+
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\li:nth-child(1) > span { height: 1px }
+        \\li:nth-child(2) > span { height: 2px }
+        \\li:nth-child(6) > span { height: 6px }
+        \\ul.menu > li { width: 10px }
+        \\#top > span { width: 3px }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), body.firstChild(), frame);
+
+    const first_item = menu.firstChild().?;
+    const second_item = first_item.nextSibling().?;
+    const elements = [_]*Element{
+        first_item.firstChild().?.as(Element),
+        second_item.firstChild().?.as(Element),
+        first_item.as(Element),
+        second_item.as(Element),
+        plain_list.firstChild().?.as(Element),
+        top.firstChild().?.as(Element),
+        plain_div.firstChild().?.as(Element),
+    };
+
+    try sm.rebuildIfDirty();
+    GeometryGroup.work = .{};
+    for (elements) |el| {
+        _ = sm.geometryProps(el);
+    }
+    const work = GeometryGroup.work;
+
+    try testing.expectEqual(Length{ .value = 1, .unit = .px }, sm.geometryProps(elements[0]).height);
+    try testing.expectEqual(Length{ .value = 2, .unit = .px }, sm.geometryProps(elements[1]).height);
+    try testing.expectEqual(Length{ .value = 10, .unit = .px }, sm.geometryProps(elements[2]).width);
+    try testing.expectEqual(Length{ .value = 10, .unit = .px }, sm.geometryProps(elements[3]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(elements[4]).width);
+    try testing.expectEqual(Length{ .value = 3, .unit = .px }, sm.geometryProps(elements[5]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(elements[6]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(elements[6]).height);
+    // The 6th child of body
+    try testing.expectEqual(Length{ .value = 6, .unit = .px }, sm.geometryProps(foreign_span.as(Element)).height);
+
+    // Without the parent's keys every span matched its 4 rules and every li
+    // its one: 4 * 4 + 3 = 19. Now a span under an li matches the 3 li rules,
+    // the one under #top its own, the one under a plain div none, and the li
+    // of a list without the class none.
+    try testing.expectEqual(3 + 3 + 1 + 1 + 0 + 1 + 0, work.matches);
 }
 
 test "StyleManager: parent-keyed and :where rules keep their priority" {
