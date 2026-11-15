@@ -121,9 +121,13 @@ fn treeChanged(parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: 
 /// parser's root memo stays valid (an insertion never changes an existing
 /// node's root).
 pub fn parserInserted(parent: *Node, child: *Node, frame: *Frame) void {
-    _ = child;
     // During a parse insert, only a fragment can be detached.
-    if (frame._parse_mode == .fragment and detachedHandled(parent, frame)) {
+    if (frame._parse_mode == .fragment) {
+        if (detachedHandled(parent, frame)) {
+            return;
+        }
+        // fragmentParsed stamps the lot
+    } else if (frame._style_manager.parserInserted(parent, child)) {
         return;
     }
     styleChanged(frame);

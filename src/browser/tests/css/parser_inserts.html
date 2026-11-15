@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+  <style>
+    #box > div, #list > li, #has > div { display: block }
+    #list { list-style: none; margin: 0; padding: 0 }
+    #list > li { height: 10px }
+    #list > li:last-of-type { height: 30px }
+    #list > li:nth-last-of-type(2) { height: 50px }
+    #has { height: 5px }
+    #has:has(.late) { height: 60px }
+    #next > .first ~ .second { height: 70px }
+    #text { width: 100px }
+  </style>
+</head>
+<body>
+<!-- Enough cached boxes that the inserts below are worth scoping -->
+<div id="filler"></div>
+<script>
+  for (let i = 0; i < 400; i++) {
+    document.getElementById('filler').appendChild(document.createElement('div'));
+  }
+  document.documentElement.scrollHeight;
+</script>
+
+<!-- Each script reads a box while the parser is still under it. What the
+     parser appends afterwards changes the box, or a match it depends on. -->
+<div id="box"><div style="height: 10px"></div><script>
+  var boxBefore = document.getElementById('box').offsetHeight;
+</script><div style="height: 20px"></div></div>
+
+<ul id="list"><li id="one"></li><script>
+  var oneAsLast = document.getElementById('one').offsetHeight;
+</script><li id="two"></li><script>
+  var oneAsSecondLast = document.getElementById('one').offsetHeight;
+  var twoAsLast = document.getElementById('two').offsetHeight;
+</script><li id="three"></li></ul>
+
+<div id="has"><script>
+  var hasBefore = document.getElementById('has').offsetHeight;
+</script><div class="late"></div></div>
+
+<div id="next"><div class="first"></div><script>
+  var nextRead = document.getElementById('next').offsetHeight;
+</script><div class="second" id="second"></div></div>
+
+<div id="text"><script>
+  var textBefore = document.getElementById('text').offsetHeight;
+</script>one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen</div>
+
+<script id="parserInsertsAfterARead">
+{
+  testing.expectEqual(10, boxBefore);
+  testing.expectEqual(30, $('#box').offsetHeight);
+
+  testing.expectEqual(30, oneAsLast);
+  testing.expectEqual(50, oneAsSecondLast);
+  testing.expectEqual(30, twoAsLast);
+  testing.expectEqual(10, $('#one').offsetHeight);
+  testing.expectEqual(50, $('#two').offsetHeight);
+  testing.expectEqual(30, $('#three').offsetHeight);
+  testing.expectEqual(90, $('#list').offsetHeight);
+
+  testing.expectEqual(5, hasBefore);
+  testing.expectEqual(60, $('#has').offsetHeight);
+
+  testing.expectEqual(70, $('#second').offsetHeight);
+  testing.expectEqual(true, $('#next').offsetHeight >= 70);
+
+  testing.expectEqual(true, $('#text').offsetHeight > textBefore);
+}
+</script>
+</body>

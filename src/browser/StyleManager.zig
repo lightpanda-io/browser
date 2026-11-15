@@ -175,6 +175,11 @@ dropped: [4]*Node = undefined,
 dropped_len: u8 = 0,
 dropped_fills: usize = 0,
 
+// Parser inserts treeChanged has taken since the memos last filled (see
+// parserInserted)
+parser_inserts: usize = 0,
+parser_fills: usize = 0,
+
 // treeChanged's visited elements, our tests want to count work, not time
 walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
@@ -1596,6 +1601,46 @@ fn reachRoot(node: *Node, reach: ClassReach) *Node {
 }
 
 pub const TreeChange = enum { inserted, removed };
+
+/// The parser inserted `child` in `parent`. False when the caller's stamp is
+/// the cheapest way to cover it, as in any parse where nothing was read: the
+/// memos are empty. Once a script has read styles or boxes mid-parse, each
+/// insert drops what it can change, like a script's own insert.
+pub fn parserInserted(self: *StyleManager, parent: *Node, child: *Node) bool {
+    if (self.dirty) {
+        return false;
+    }
+    // The elements with something to keep, near enough
+    var kept: usize = 0;
+    inline for (group_fields) |field| {
+        const group = &@field(self, field);
+        if (group.fresh(self.frame)) {
+            kept = @max(kept, group.memo.count());
+        }
+    }
+    if (kept == 0) {
+        return false;
+    }
+    // A long parse nothing may read again: dropping around an insert costs a
+    // fraction of computing an element, so this many of them stay well under
+    // what the stamp would cost the next read.
+    const fills = self.memoFills();
+    if (self.parser_fills != fills) {
+        self.parser_fills = fills;
+        self.parser_inserts = 0;
+    }
+    self.parser_inserts += 1;
+    if (self.parser_inserts > kept / 4) {
+        return false;
+    }
+    // A script can move the node the parser appends to
+    if (parent.isConnected() == false or parent.ownerFrame(self.frame) != self.frame) {
+        return false;
+    }
+    // Without the stamp, nothing else tells the child indexes they moved
+    self.nth.clear();
+    return self.treeChanged(parent, child, child.previousSibling(), child.nextSibling(), .inserted);
+}
 
 /// `child` was inserted/removed from `parent`. Drop the memo entries that can
 /// change. Returns false if treeChanged wasn't able to prune only the tree, in
@@ -6067,6 +6112,10 @@ test "StyleManager: position" {
 
 test "StyleManager: inline style writes" {
     try testing.htmlRunner("css/inline_style_writes.html", .{});
+}
+
+test "StyleManager: parser inserts after a read" {
+    try testing.htmlRunner("css/parser_inserts.html", .{});
 }
 
 test "StyleManager: animation events" {

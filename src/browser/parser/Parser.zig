@@ -156,6 +156,11 @@ pub fn flushPendingText(self: *Parser) !void {
         self.buf.items,
         .{ .dupe = true },
     );
+    // The node grew since its insert: what read its first chunk is stale
+    const node = pt.text_node.asNode();
+    if (node._parent) |parent| {
+        Frame.change.parserInserted(parent, node, self.frame);
+    }
 }
 
 fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
