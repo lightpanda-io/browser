@@ -647,6 +647,12 @@
     \\          Unsupported escape hatch: V8 does not validate flags against the
     \\          prebuilt snapshot, so an incompatible flag can misbehave or
     \\          crash at any point.
+    \\  --v8-gc-floor-mb <INT>
+    \\          V8 heap size, in megabytes, below which V8 does not start a full
+    \\          garbage collection on its own. When set to 0, V8 will base the
+    \\          value on what survived the last GC. Higher values typically cost
+    \\          more memory but less CPU.
+    \\          Defaults to 32, 0 keeps the V8 default.
     \\  --v8-gc-hint-floor-mb <INT>
     \\          Floor under which cleanup events (e.g. page teardown) does not
     \\          notify V8 of memory pressure. Low numbers typically cost more
