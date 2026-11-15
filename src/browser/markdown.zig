@@ -270,8 +270,16 @@ const Context = struct {
             if (shouldAddSpacing(tag)) {
                 try self.writer.writeByte('\n');
             }
-        } else if (tag == .li or tag == .tr or tag == .dt or tag == .dd) {
+        } else if (tag == .li or tag == .tr) {
             try self.ensureNewline();
+        } else if (tag == .dt or tag == .dd) {
+            // A table row has to stay on one line.
+            if (self.state.in_table) {
+                try self.writer.writeByte(' ');
+                self.state.last_char_was_newline = false;
+            } else {
+                try self.ensureNewline();
+            }
         }
 
         // Markdown syntax is literal inside a code span or fence, so inline
@@ -552,6 +560,9 @@ const Context = struct {
                 self.state.table_col_count += 1;
                 self.state.last_char_was_newline = false;
             },
+            .dt, .dd => {
+                if (!self.state.in_table) try self.ensureNewline();
+            },
             else => {},
         }
 
@@ -772,6 +783,9 @@ test "browser.markdown: escaping" {
 
 test "browser.markdown: definition list" {
     try testMarkdownHTML("<dl><dt>Term</dt><dd>Definition</dd><dt>Other</dt><dd>Meaning</dd></dl>", "Term\nDefinition\nOther\nMeaning\n");
+    try testMarkdownHTML("<dl>\n  <dt>Term</dt>\n  <dd>Definition</dd>\n</dl>", "Term\nDefinition\n");
+    try testMarkdownHTML("<dl><dt>T</dt><dd>D</dd></dl><span>b</span>", "T\nD\nb\n");
+    try testMarkdownHTML("<table><tr><td><dl><dt>T</dt><dd>D</dd></dl></td><td>x</td></tr></table>", "\n|  T D | x |\n|---|---|\n");
 }
 
 test "browser.markdown: strikethrough" {
