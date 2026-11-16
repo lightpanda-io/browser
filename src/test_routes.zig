@@ -49,6 +49,9 @@ var serve_counts = [_]struct { name: []const u8, count: u32 = 0 }{
     .{ .name = "prescan_blocking" },
     .{ .name = "prescan_defer" },
     .{ .name = "prescan_module" },
+    .{ .name = "prescan_sheet" },
+    .{ .name = "prescan_sheet_after_script" },
+    .{ .name = "prescan_sheet_failed" },
 };
 
 // /cache/set-cookie responses sent; only ever touched from the test HTTP server thread.
@@ -476,6 +479,37 @@ pub fn handle(req: *std.http.Server.Request) !void {
         return req.respond("window.__deferRan = true;", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/serve-count/") and std.mem.endsWith(u8, path, ".css")) {
+        // The stylesheet counterpart of the .js route below: the N-th serve
+        // of <name>.css sets `--serve-count-<name>: N` on the root.
+        const name = path["/serve-count/".len .. path.len - ".css".len];
+        const slot: *u32 = blk: {
+            for (&serve_counts) |*sc| {
+                if (std.mem.eql(u8, sc.name, name)) break :blk &sc.count;
+            }
+            return req.respond("unknown counter", .{ .status = .not_found });
+        };
+        slot.* += 1;
+        if (std.mem.eql(u8, name, "prescan_sheet_failed")) {
+            // A body that fails to decode: a transfer error, not a status.
+            return req.respond("not actually gzip", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/css" },
+                    .{ .name = "Content-Encoding", .value = "gzip" },
+                    .{ .name = "Cache-Control", .value = "no-store" },
+                },
+            });
+        }
+        var buf: [96]u8 = undefined;
+        const body = try std.mem.print(&buf, ":root {{ --serve-count-{s}: {d}; }}", .{ name, slot.* });
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+                .{ .name = "Cache-Control", .value = "no-store" },
             },
         });
     }

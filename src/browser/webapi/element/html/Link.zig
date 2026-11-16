@@ -234,6 +234,10 @@ test "WebApi: HTML.Link external stylesheet" {
     try testing.htmlRunner("css/external_stylesheet.html", .{ .load_resources = .{ .stylesheet = true } });
 }
 
+test "WebApi: HTML.Link stylesheet prescan" {
+    try testing.htmlRunner("css/stylesheet_prescan.html", .{ .load_resources = .{ .stylesheet = true } });
+}
+
 test "WebApi: HTML.Link external stylesheet charset" {
     try testing.htmlRunner("css/stylesheet_charset.html", .{ .load_resources = .{ .stylesheet = true } });
 }
