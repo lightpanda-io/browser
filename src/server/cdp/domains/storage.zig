@@ -457,7 +457,7 @@ test "cdp.Storage: cookies of the default context before any target" {
     try testing.expectEqual(1, ctx.cdp().browser_context.?.session.cookie_jar.len);
 
     try ctx.processMessage(.{ .id = 6, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual(1, bc.targets.items.len);
     try testing.expectEqual(1, bc.session.cookie_jar.len);
 
