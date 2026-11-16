@@ -496,6 +496,9 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
         if (worker.url) |url| self.allocator.free(url);
         self.allocator.free(worker.id);
         self.allocator.destroy(worker);
+        // The session's browser, pages and isolate are freed: hand that
+        // memory back, or the process keeps its largest page's footprint.
+        lp.malloc_tuning.trim();
     }
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
