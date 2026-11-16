@@ -102,6 +102,9 @@
       'outline-offset:-1px',
       'background:transparent',
       SHOW_TEXT ? `font:${r1(box.fontSize)}px/1.2 monospace;word-spacing:-0.27em;color:#888` : 'font-size:0;color:transparent',
+      // A box one line high holds text our layout didn't wrap. Its width is
+      // that text's, to a rounding, so Chrome mustn't wrap it either.
+      box.height < 2 * 1.2 * box.fontSize ? 'white-space:nowrap' : '',
     ].filter(Boolean).join(';'));
   }
 
