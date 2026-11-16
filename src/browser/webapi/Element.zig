@@ -2038,8 +2038,14 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         const parent = current.flatParent(frame) orelse return x;
         if (current.is(Element)) |el| {
             if (LineCursor.Mode.of(el, owner)) |mode| {
-                var cursor: LineCursor = .init(parent, mode, frame);
-                x += cursor.offsetOf(current, owner);
+                if (el == self) {
+                    // Its own line is the one a caller reads child after
+                    // child; an ancestor's would take the one slot from it
+                    x += LineCursor.resumed(parent, mode, current, owner, frame);
+                } else {
+                    var cursor: LineCursor = .init(parent, mode, frame);
+                    x += cursor.offsetOf(current, owner);
+                }
             }
         }
         current = parent;
@@ -2091,6 +2097,37 @@ pub const LineCursor = struct {
         return self;
     }
 
+    /// offsetOf, going on from the last read of this line when `node` is a
+    /// little further along it (see StyleManager.LineResume).
+    fn resumed(parent: *Node, mode: Mode, node: *Node, owner: *Frame, frame: *Frame) f64 {
+        const style_manager = &owner._style_manager;
+        if (style_manager.lineResume(parent)) |saved| {
+            if (saved.mode == mode and saved.reaches(node, frame)) {
+                saved.frame = frame;
+                return saved.offsetOf(node, owner);
+            }
+        }
+        var cursor: LineCursor = .init(parent, mode, frame);
+        const x = cursor.offsetOf(node, owner);
+        style_manager.setLineResume(parent, cursor);
+        return x;
+    }
+
+    // Whether `node` is among the next few siblings. Bounded, so a read
+    // behind the cursor (children read last to first) costs little more
+    // than the walk from the first child it then takes.
+    fn reaches(self: *const LineCursor, node: *Node, frame: *Frame) bool {
+        var next = self.next;
+        for (0..64) |_| {
+            const sibling = next orelse return false;
+            if (sibling == node) {
+                return true;
+            }
+            next = sibling.flatNextSibling(frame);
+        }
+        return false;
+    }
+
     /// `node` is a child of the parent, at or after the last one asked for.
     pub fn offsetOf(self: *LineCursor, node: *Node, owner: *Frame) f64 {
         const style_manager = &owner._style_manager;
@@ -2115,6 +2152,9 @@ pub const LineCursor = struct {
                     continue;
                 },
                 .line => {},
+            }
+            if (comptime lp.IS_TEST) {
+                style_manager.line_steps += 1;
             }
             self.x += layout.boxWidth(sibling, owner);
         }

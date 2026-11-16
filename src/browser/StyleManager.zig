@@ -81,6 +81,9 @@ nth_version: usize = 0,
 // Document.hitTest's prune, see HitBands
 hit_bands: HitBands = .{},
 
+// Where Element.horizontalPosition stopped on a line, see LineResume
+line_resume: ?LineResume = null,
+
 // Inline writes the memos take without a bump: a top only drops the
 // element's geometry, a height can stop at a declared one (see heightWritten).
 inline_bumps: usize = 0,
@@ -185,6 +188,8 @@ walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
 // setCacheOffset calls, likewise
 offsets_placed: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+// Siblings Element.LineCursor measured
+line_steps: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
 // The sheet that emitted the highest document order. A rule appended to it,
 // or to a later sheet, stays last in cascade order.
@@ -1216,6 +1221,8 @@ const HasKeys = struct {
 /// Something changed in the detached tree. Selectors never cross this, so
 /// all this can ever invalidate are caches within that tree.
 pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
+    // Nothing here bumps a version it could be checked against
+    self.line_resume = null;
     if (self.dirty) {
         return true;
     }
@@ -2570,6 +2577,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.nth = .{ .allocator = self.arena.allocator(), .walk_only = true };
     self.layout_memo = .{};
     self.hit_bands = .{};
+    self.line_resume = null;
 
     self.next_doc_order = 1;
     self.rule_layers = .empty;
@@ -3331,6 +3339,30 @@ const HitBands = struct {
 // kept the rest, layout_bumps when it couldn't.
 fn hitVersion(self: *const StyleManager) usize {
     return self.extentVersion() + self.inline_bumps;
+}
+
+/// The cursor of the last line Element.horizontalPosition walked, left at the
+/// child it was asked for. Reading the left of every child of one parent in
+/// order then measures each sibling once, where a cursor per read measures
+/// every earlier one again. One line only: nothing is stored per element.
+const LineResume = struct {
+    version: usize, // hitVersion: no box moved, no text changed
+    parent: *Node,
+    cursor: Element.LineCursor,
+};
+
+/// Null when the last line walked wasn't `parent`'s, or a box moved since.
+pub fn lineResume(self: *StyleManager, parent: *Node) ?*Element.LineCursor {
+    self.rebuildIfDirty() catch return null;
+    const saved = &(self.line_resume orelse return null);
+    if (saved.parent != parent or saved.version != self.hitVersion()) {
+        return null;
+    }
+    return &saved.cursor;
+}
+
+pub fn setLineResume(self: *StyleManager, parent: *Node, cursor: Element.LineCursor) void {
+    self.line_resume = .{ .version = self.hitVersion(), .parent = parent, .cursor = cursor };
 }
 
 /// Whether a walk recorded the bands and no box moved since. When not, they
@@ -8008,6 +8040,72 @@ test "StyleManager: memo: reading tops in order stacks each sibling once" {
     try testing.expectEqual(0, sm.offsets_placed);
 }
 
+test "StyleManager: memo: reading lefts in order measures each sibling once" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent("i { display: inline-block; width: 10px } .w { width: 25px }", frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const p = (try doc.createElement("p", null, frame)).asNode();
+    _ = try body.appendChild(p, frame);
+    var els: [8]*Element = undefined;
+    for (&els) |*el| {
+        el.* = try doc.createElement("i", null, frame);
+        _ = try p.appendChild(el.*.asNode(), frame);
+    }
+
+    for (els, 0..) |el, i| {
+        try testing.expectEqual(@as(f64, @floatFromInt(i * 10)), el.horizontalPosition(frame));
+    }
+    try testing.expectEqual(els.len - 1, sm.line_steps);
+
+    // Again from the first: behind the cursor, so a new walk, then in order
+    sm.line_steps = 0;
+    for (els, 0..) |el, i| {
+        try testing.expectEqual(@as(f64, @floatFromInt(i * 10)), el.horizontalPosition(frame));
+    }
+    try testing.expectEqual(els.len - 1, sm.line_steps);
+
+    // The same one again is where the cursor is. Then last to first: every
+    // read walks from the first child
+    sm.line_steps = 0;
+    try testing.expectEqual(70, els[7].horizontalPosition(frame));
+    try testing.expectEqual(0, sm.line_steps);
+    try testing.expectEqual(60, els[6].horizontalPosition(frame));
+    try testing.expectEqual(50, els[5].horizontalPosition(frame));
+    try testing.expectEqual(6 + 5, sm.line_steps);
+
+    // A box before the cursor grows: nothing goes on from it
+    try testing.expectEqual(70, els[7].horizontalPosition(frame));
+    try els[2].setAttribute(comptime .wrap("class"), comptime .wrap("w"), frame);
+    try testing.expectEqual(85, els[7].horizontalPosition(frame));
+    const style = (try els[0].getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("width", "40px", null, frame);
+    try testing.expectEqual(115, els[7].horizontalPosition(frame));
+    // ... or leaves, or gets text before it
+    els[1].remove(frame);
+    try testing.expectEqual(105, els[7].horizontalPosition(frame));
+    const text = try doc.createTextNode("word");
+    _ = try p.insertBefore(text, els[3].asNode(), frame);
+    const after_text = els[7].horizontalPosition(frame);
+    try testing.expect(after_text > 105);
+    try text.setTextContent("a longer word", frame);
+    try testing.expect(els[7].horizontalPosition(frame) > after_text);
+
+    // Out of the document, where a change bumps nothing
+    _ = try body.removeChild(p, frame);
+    const detached = els[7].horizontalPosition(frame);
+    try els[4].setAttribute(comptime .wrap("class"), comptime .wrap("w"), frame);
+    try testing.expectEqual(detached + 15, els[7].horizontalPosition(frame));
+}
+
 // Random tree and class changes with reads in between: what the layout memo
 // keeps must be what a memo filled from nothing computes.
 test "StyleManager: memo: tree, class and focus changes keep only boxes that didn't move" {
@@ -8060,7 +8158,7 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
         try els.append(arena, root.as(Element));
         var kept: usize = 0;
 
-        const Measured = struct { top: f64, height: f64, width: f64, content: f64, scroll: f64 };
+        const Measured = struct { top: f64, left: f64, height: f64, width: f64, content: f64, scroll: f64 };
         const measure = struct {
             fn all(list: []const *Element, out: *std.ArrayList(Measured), owner: *Frame) !void {
                 out.clearRetainingCapacity();
@@ -8070,6 +8168,7 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                     }
                     try out.append(testing.arena_allocator, .{
                         .top = layout.boxTop(el, owner),
+                        .left = el.horizontalPosition(owner),
                         .height = layout.boxHeight(el, owner),
                         .width = layout.boxWidth(el, owner),
                         .content = layout.contentWidth(el, .clipped, owner),
@@ -8135,9 +8234,11 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
             for (0..random.uintLessThan(u8, 4)) |_| {
                 const el = els.items[random.uintLessThan(usize, els.items.len)];
                 if (el.asNode().isConnected()) {
-                    switch (random.uintLessThan(u8, 3)) {
+                    switch (random.uintLessThan(u8, 4)) {
                         0 => _ = layout.boxTop(el, frame),
                         1 => _ = layout.boxWidth(el, frame),
+                        // Leaves a line cursor for a step to make stale
+                        2 => _ = el.horizontalPosition(frame),
                         else => _ = layout.boxHeight(el, frame),
                     }
                 }
