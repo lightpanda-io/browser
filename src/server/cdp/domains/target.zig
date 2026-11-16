@@ -343,11 +343,36 @@ fn closeTarget(cmd: *CDP.Command) !void {
         targetId: []const u8,
     })) orelse return error.InvalidParams;
 
+    if (cmd.cdp.startup_target == .attached and std.mem.eql(u8, params.targetId, startup_target_id)) {
+        return closeStartupTarget(cmd, .{ .success = true });
+    }
+
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const target = try resolveTarget(bc, params.targetId);
 
     try cmd.sendResult(.{ .success = true }, .{});
     try bc.closeTarget(target);
+}
+
+const startup_target_id = "TID-STARTUP";
+
+/// Closes the STARTUP placeholder page, which Playwright lists as the first
+/// page of its default context: page.close() settles on its detach, as for
+/// a real target (see Target.close). Target.closeTarget and Page.close on
+/// the STARTUP session, each answered with its own `result`.
+pub fn closeStartupTarget(cmd: *CDP.Command, result: anytype) !void {
+    const cdp = cmd.cdp;
+    if (cdp.startup_target != .attached) {
+        return error.TargetNotLoaded;
+    }
+    cdp.startup_target = .closed;
+
+    try cmd.sendResult(result, .{});
+    try cmd.sendEvent("Target.detachedFromTarget", .{
+        .targetId = startup_target_id,
+        .sessionId = "STARTUP",
+    }, .{});
+    try cmd.sendEvent("Target.targetDestroyed", .{ .targetId = startup_target_id }, .{});
 }
 
 fn getTargetInfo(cmd: *CDP.Command) !void {
@@ -540,12 +565,15 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     // A client that excluded page targets from auto-attach
     // (puppeteer does) must not hear about this placeholder:
     // navigating it would land on the page-less STARTUP session.
-    if (filterIncludesPage(params.filter)) {
+    //
+    // Once the client closed the placeholder, it stays closed.
+    if (filterIncludesPage(params.filter) and cmd.cdp.startup_target != .closed) {
+        cmd.cdp.startup_target = .attached;
         try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
             .sessionId = "STARTUP",
             .targetInfo = TargetInfo{
                 .type = "page",
-                .targetId = "TID-STARTUP",
+                .targetId = startup_target_id,
                 .title = "",
                 .url = "about:blank",
                 .browserContextId = "BID-STARTUP",
@@ -1498,4 +1526,51 @@ test "cdp.target: setAutoAttach on a page session doesn't attach new pages" {
     try ctx.processMessage(.{ .id = 5, .method = "Target.attachToTarget", .params = .{ .targetId = &second.target_id.? } });
     try ctx.expectSentResult(.{ .sessionId = second.session_id.? }, .{ .id = 5 });
     try testing.expectEqual(2, bc.attached_sessions.count());
+}
+
+test "cdp.target: closeTarget closes the STARTUP placeholder" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // Not announced yet: there's nothing to close.
+    try ctx.processMessage(.{ .id = 1, .method = "Target.closeTarget", .params = .{ .targetId = "TID-STARTUP" } });
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.expectSentCount(3);
+
+    // Playwright's page.close() on browser.contexts()[0].pages()[0].
+    try ctx.processMessage(.{ .id = 3, .method = "Target.closeTarget", .params = .{ .targetId = "TID-STARTUP" } });
+    try ctx.expectSentResult(.{ .success = true }, .{ .id = 3, .index = 3 });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{ .targetId = "TID-STARTUP", .sessionId = "STARTUP" }, .{ .index = 4 });
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = "TID-STARTUP" }, .{ .index = 5 });
+    try ctx.expectSentCount(6);
+
+    // Closed for good: not announced again, not closed twice.
+    try ctx.processMessage(.{ .id = 4, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.expectSentResult(null, .{ .id = 4, .index = 6 });
+    try ctx.expectSentCount(7);
+    try ctx.processMessage(.{ .id = 5, .method = "Target.closeTarget", .params = .{ .targetId = "TID-STARTUP" } });
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 5 });
+
+    // Real targets are unaffected.
+    try ctx.processMessage(.{ .id = 6, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    try testing.expectEqual(1, ctx.cdp().browser_context.?.targets.items.len);
+}
+
+test "cdp.target: Page.close on the STARTUP session closes the placeholder" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.expectSentCount(2);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.close", .sessionId = "STARTUP" });
+    try ctx.expectSentResult(null, .{ .id = 2, .index = 2, .session_id = "STARTUP" });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{ .targetId = "TID-STARTUP", .sessionId = "STARTUP" }, .{ .index = 3 });
+    try ctx.expectSentEvent("Target.targetDestroyed", .{ .targetId = "TID-STARTUP" }, .{ .index = 4 });
+    try ctx.expectSentCount(5);
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.close", .sessionId = "STARTUP" });
+    try ctx.expectSentError(-31999, "TargetNotLoaded", .{ .id = 3 });
 }
