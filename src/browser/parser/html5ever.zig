@@ -397,6 +397,7 @@ pub const PrescanResource = enum(u32) {
     script = 0,
     module = 1,
     base = 2,
+    stylesheet = 3,
     _,
 };
 

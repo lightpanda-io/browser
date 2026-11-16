@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // A preload scanner: a lightweight tokenizer-only pass over a document that
-// reports fetchable script resources, so downloads can start before the tree
-// builder (which stalls on every blocking <script src>) reaches them. Purely
+// reports fetchable script and stylesheet resources, so downloads can start
+// before the tree builder (which stalls on every blocking <script src> and
+// <link rel=stylesheet>) reaches them. Purely
 // a hint source — it builds no tree and a wrong guess only costs a fetch.
 // Same idea as Servo's dom/servoparser/prefetch.rs.
 
@@ -37,6 +38,7 @@ use html5ever::{local_name, ns, Attribute, LocalName};
 const KIND_SCRIPT: u32 = 0;
 const KIND_MODULE: u32 = 1;
 const KIND_BASE: u32 = 2;
+const KIND_STYLESHEET: u32 = 3;
 
 pub type PrescanCallback =
     extern "C" fn(ctx: *mut c_void, kind: u32, url: *const c_uchar, url_len: usize);
@@ -93,6 +95,20 @@ impl PrescanSink {
         };
         self.emit(kind, &src.value);
     }
+
+    fn scan_link(&self, tag: &Tag) {
+        // Mirrors Link.linkAddedCallback: rel has to be exactly "stylesheet".
+        let Some(rel) = Self::attr(tag, &local_name!("rel")) else {
+            return;
+        };
+        if &*rel.value != "stylesheet" {
+            return;
+        }
+        let Some(href) = Self::attr(tag, &local_name!("href")) else {
+            return;
+        };
+        self.emit(KIND_STYLESHEET, &href.value);
+    }
 }
 
 impl TokenSink for PrescanSink {
@@ -119,6 +135,12 @@ impl TokenSink for PrescanSink {
             // the sink must request the script-data state itself or the
             // script body would be tokenized as markup.
             return TokenSinkResult::RawData(RawKind::ScriptData);
+        }
+        if tag.name == local_name!("link") {
+            if self.template_depth.get() == 0 {
+                self.scan_link(&tag);
+            }
+            return TokenSinkResult::Continue;
         }
         if tag.name == local_name!("base") {
             if !self.base_seen.get() {
@@ -157,10 +179,10 @@ impl TokenSink for PrescanSink {
     }
 }
 
-/// Tokenize the (fully buffered) document and report each fetchable script
-/// resource through `callback`: raw (unresolved) src values for classic and
-/// module scripts, plus the first <base href> so the caller can resolve
-/// subsequent URLs the way the real parse will.
+/// Tokenize the (fully buffered) document and report each fetchable resource
+/// through `callback`: raw (unresolved) src values for classic and module
+/// scripts and href values for stylesheets, plus the first <base href> so the
+/// caller can resolve subsequent URLs the way the real parse will.
 #[no_mangle]
 pub extern "C" fn html5ever_prescan(
     html: *const c_uchar,
