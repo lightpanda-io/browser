@@ -25,7 +25,6 @@ const Frame = @import("../Frame.zig");
 const layout = @import("../layout.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
-const text_measure = @import("../text_measure.zig");
 const user_input = @import("../frame/user_input.zig");
 
 const CSS = @import("CSS.zig");
@@ -1765,22 +1764,17 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
 
 // Caller must have made sure self is visible.
 pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
-    if (axis == .width) {
-        const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, .width).value;
-        return layout.boxWidth(self, owner);
-    }
+    const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, axis).value;
+    return switch (axis) {
+        .width => layout.boxWidth(self, owner),
+        .height => layout.boxHeight(self, owner),
+    };
+}
 
-    const own = self.getElementAxis(frame, axis);
-    if (own.explicit) {
-        // an explicitly set value always wins
-        return own.value;
-    }
-
-    if (self.isRootContainer()) {
-        // html/body return their set value regardless of children.
-        return own.value;
-    }
-    return @max(own.value, self.contentAxis(frame, axis));
+/// The box's top in document coordinates.
+fn documentTop(self: *Element, frame: *Frame) f64 {
+    const owner = self.ownerFrame(frame) orelse return 0;
+    return layout.boxTop(self, owner);
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1814,7 +1808,7 @@ pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     const window = (self.ownerFrame(frame) orelse frame).window;
     return .{
         .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
-        .y = calculateDocumentPosition(self.asNode(), frame) - @as(f64, @floatFromInt(window.getScrollY())),
+        .y = self.documentTop(frame) - @as(f64, @floatFromInt(window.getScrollY())),
     };
 }
 
@@ -1902,7 +1896,8 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return self.rootScrollSize(frame, .height) orelse height;
     }
 
-    return @max(height, self.contentAxis(frame, .height));
+    const owner = self.ownerFrame(frame) orelse return height;
+    return @max(height, layout.contentHeight(self, owner));
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
@@ -1938,64 +1933,6 @@ fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     return content - client;
 }
 
-// One axis of the direct child elements' size: laid end to end on a single
-// row for the width, stacked for the height.
-//
-// The dummy layout engine has no line-breaking, and an element only overflows
-// horizontally when its children don't wrap (white-space:nowrap, a flex row, an
-// inline-block strip), so the single-row assumption covers the case that
-// matters. We don't detect the layout mode to do better: the cascade resolves
-// too few properties to lay out lines.
-//
-// Only direct children are measured, never the whole subtree. This runs on
-// every size read, and recursing would make an element's cost O(subtree)
-// rather than O(fan-out). It also keeps an ancestor from growing in lockstep
-// with its descendants, so "append until the track outgrows its shell" still
-// crosses the threshold.
-//
-// Growing with the child count is the point: JS that appends content until
-// `scrollWidth` passes a threshold (the infinite-marquee idiom) never
-// terminates when the metric ignores what it just inserted.
-//
-// Text children add height only under an explicit width to wrap at.
-// Otherwise almost every element with text would report overflow.
-pub fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
-    var total: f64 = 0;
-    const owner = self.ownerFrame(frame) orelse return 0;
-    const style_manager = &owner._style_manager;
-
-    var wrap: ?text_measure.LineWrap = null;
-    if (axis == .height) {
-        const width = self.getElementAxis(frame, .width);
-        if (width.explicit) {
-            wrap = .{
-                .line_width = width.value,
-                .font_size = style_manager.computedFontSize(self),
-                .white_space = style_manager.whiteSpace(self),
-            };
-        }
-    }
-
-    var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = frame });
-    while (children.next()) |node| {
-        if (node.is(Element)) |el| {
-            if (!style_manager.hasDisplayNone(el)) {
-                total += el.getElementAxis(frame, axis).value;
-            }
-        } else if (wrap) |*w| {
-            if (node.is(Node.CData.Text)) |text| {
-                w.add(text.ownData());
-            }
-        }
-    }
-
-    if (wrap) |w| {
-        // Whole pixels, like scroll offsets
-        total += @ceil(w.height());
-    }
-    return total;
-}
-
 // Unlike clientHeight, the root's offsetHeight is the document height.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
@@ -2015,7 +1952,7 @@ pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return calculateDocumentPosition(self.asNode(), frame);
+    return self.documentTop(frame);
 }
 
 pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
@@ -2074,61 +2011,6 @@ pub fn getClientLeft(_: *Element) f64 {
     return 0.0;
 }
 
-// Calculates document position by counting all nodes that appear before this one
-// in tree order, but only traversing the "left side" of the tree.
-//
-// This walks up from the target node to the root, and at each level counts:
-// 1. All previous siblings and their descendants
-// 2. The parent itself
-//
-// Example:
-//   <body>              → y=0
-//     <h1>Text</h1>     → y=1    (body=1)
-//     <h2>              → y=2    (body=1 + h1=1)
-//       <a>Link1</a>    → y=3    (body=1 + h1=1 + h2=1)
-//     </h2>
-//     <p>Text</p>       → y=5    (body=1 + h1=1 + h2=2)
-//     <h2>              → y=6    (body=1 + h1=1 + h2=2 + p=1)
-//       <a>Link2</a>    → y=7    (body=1 + h1=1 + h2=2 + p=1 + h2=1)
-//     </h2>
-//   </body>
-//
-// Trade-offs:
-// - O(depth × siblings × subtree_height) - only left-side traversal
-// - Linear scaling: 5px per node
-// - Perfect document order, guaranteed unique positions
-// - Compact coordinates (1000 nodes ≈ 5,000px)
-fn calculateDocumentPosition(node: *Node, frame: *const Frame) f64 {
-    var position: f64 = 0.0;
-    var current = node;
-
-    // Walk up to root, counting preceding nodes
-    while (current.flatParent(frame)) |parent| {
-        // Count all previous siblings and their descendants
-        var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
-        while (siblings.next()) |s| {
-            if (s == current) break;
-            position += countSubtreeNodes(s, frame);
-        }
-
-        // Count the parent itself
-        position += 1.0;
-        current = parent;
-    }
-
-    return position * 5.0; // 5px per node
-}
-
-// Counts total nodes in a flat-tree subtree (node + all descendants)
-fn countSubtreeNodes(node: *Node, frame: *const Frame) f64 {
-    var count: f64 = 0;
-    var walker: TreeWalker.Flat = .init(node, .{ .frame = frame });
-    while (walker.next()) |_| {
-        count += 1;
-    }
-    return count;
-}
-
 // An element sits to the right of the visible element siblings before it on
 // its line. A block-level box takes a line of its own at its parent's left
 // edge, as it fills the parent's width (layout.boxWidth); only a flex row's
@@ -2140,45 +2022,69 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     var x: f64 = 0.0;
     var current = self.asNode();
     const owner = self.ownerFrame(frame) orelse return 0;
-    const style_manager = &owner._style_manager;
 
-    if (self.inlineStyle(frame)) |style| {
-        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
-    }
-
-    while (current.flatParent(frame)) |parent| {
-        if (parent.is(Element)) |el| {
+    while (true) {
+        if (current.is(Element)) |el| {
             if (el.inlineStyle(frame)) |style| {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getKnownPropertyValue(.transform, frame));
             }
+            // Placed against its containing block, not its line (see
+            // layout.boxTop)
+            if (layout.Anchor.horizontal(el, owner)) |anchor| {
+                x += anchor.offset;
+                current = (anchor.base orelse return x).asNode();
+                continue;
+            }
+            x += layout.relativeShift(el, .horizontal, owner);
         }
-        x += lineOffset(current, parent, style_manager, frame);
+        const parent = current.flatParent(frame) orelse return x;
+        x += lineOffset(current, parent, owner, frame);
         current = parent;
     }
-
-    return x;
 }
 
-fn lineOffset(node: *Node, parent: *Node, style_manager: *StyleManager, frame: *Frame) f64 {
+fn lineOffset(node: *Node, parent: *Node, owner: *Frame, frame: *Frame) f64 {
     const el = node.is(Element) orelse return 0;
-    const in_row = style_manager.isFlexRowItem(el);
+    const style_manager = &owner._style_manager;
+    const in_row = style_manager.isFlexRowItem(el) or style_manager.isTableCell(el);
     if (in_row == false and style_manager.isBlockLevel(el)) {
         return 0;
     }
 
+    // Text before el on its line, unwrapped. A row's text is an item of its
+    // own we don't place.
+    var text: ?layout.LineText(.full) = null;
+    if (in_row == false) {
+        if (parent.is(Element)) |p| {
+            text = .{ .parent = p };
+        }
+    }
     var x: f64 = 0.0;
     var siblings: TreeWalker.FlatChildren = .init(parent, .{ .frame = frame });
     while (siblings.next()) |s| {
         if (s == node) break;
-        const sibling = s.is(Element) orelse continue;
-        if (style_manager.hasDisplayNone(sibling)) {
+        const sibling = s.is(Element) orelse {
+            if (text) |*t| {
+                if (s.is(Node.CData.Text)) |data| {
+                    t.add(data.ownData(), owner);
+                }
+            }
+            continue;
+        };
+        if (style_manager.hasDisplayNone(sibling) or style_manager.isOutOfFlow(sibling)) {
             continue;
         }
         if (in_row == false and style_manager.isBlockLevel(sibling)) {
             x = 0;
+            if (text) |*t| {
+                _ = t.end();
+            }
             continue;
         }
-        x += sibling.getElementAxis(frame, .width).value;
+        x += layout.boxWidth(sibling, owner);
+    }
+    if (text) |*t| {
+        x += t.endBefore();
     }
     return x;
 }
@@ -2239,7 +2145,7 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
 
 pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *Frame) void {
     _ = center_if_needed;
-    const y = calculateDocumentPosition(self.asNode(), frame);
+    const y = self.documentTop(frame);
     const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
     const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
     if (y >= scroll_y and y < scroll_y + viewport_height) {
@@ -2255,9 +2161,8 @@ const ScrollIntoViewOpts = union {
 pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) void {
     _ = opts;
     // Scroll the window so the element's top is brought into the viewport.
-    // Positions come from the faux-layout document position (top = preorder
-    // depth-scaled y), the same source getBoundingClientRect uses.
-    const y = calculateDocumentPosition(self.asNode(), frame);
+    // Same top as getBoundingClientRect.
+    const y = self.documentTop(frame);
     frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
 }
 
@@ -3059,9 +2964,9 @@ test "Element: scroll extent" {
     try box.setScrollTop(-1, frame);
     try testing.expectEqual(0, box.getScrollTop(frame));
 
-    // A real browser clamps this one too, to the height of its text. contentAxis
-    // sums element children only, so we have no extent to clamp against and the
-    // offset stays unbounded.
+    // A real browser clamps this one too, to the height of its text. Without a
+    // declared width we don't measure text, so we have no extent to clamp
+    // against and the offset stays unbounded.
     try text.setScrollTop(9999, frame);
     try testing.expectEqual(9999, text.getScrollTop(frame));
 }
