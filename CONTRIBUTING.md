@@ -45,6 +45,22 @@ design while it's already written.
 
 Large PRs opened without a prior discussion are likely to be closed.
 
+### Automated triage
+
+A bot checks every new pull request against the list above, using its size
+and the files it touches. If it looks large and was not discussed, the bot
+closes it and explains why. To get it through:
+
+1. Open an issue and agree on the approach with a maintainer, who then labels
+   the issue `accepted`.
+2. Add `Fixes #<issue>` to the pull request description and reopen it, or open
+   a new one.
+
+Contributors who have landed a few good pull requests are added to
+[`.github/trusted-contributors`](.github/trusted-contributors) by a maintainer
+and skip this check. Maintainers can also wave a single pull request through
+with the `triage-override` label.
+
 ## Real-world impact
 
 If possible, when opening an issue or a PR, include real-world examples, e.g.

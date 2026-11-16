@@ -1,0 +1,13 @@
+# Contributors whose pull requests skip the automated triage
+# (.github/workflows/pr-triage.yml). One GitHub login per line.
+# People with write access to the repository don't need to be listed.
+#
+# Maintainers add someone here once they have landed a few good pull requests.
+
+coolswood
+dmitryuk
+jayhemnani9910
+lucoffe
+navidemad
+orezraey
+staylor

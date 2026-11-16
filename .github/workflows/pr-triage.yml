@@ -1,0 +1,43 @@
+name: pr-triage
+
+# Closes large pull requests from untrusted contributors that were not
+# discussed in an issue first. See CONTRIBUTING.md.
+#
+# pull_request_target gives a write token on fork PRs, so this workflow must
+# never check out or run code from the pull request: it only checks out the
+# base branch and reads the PR through the API.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-triage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+
+      - name: Triage
+        run: node .github/scripts/pr-triage.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unless this repository variable is "true", the workflow only
+          # labels and reports in the job summary (dry run).
+          PR_TRIAGE_ENFORCE: ${{ vars.PR_TRIAGE_ENFORCE }}
