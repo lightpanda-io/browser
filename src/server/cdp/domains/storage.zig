@@ -353,7 +353,7 @@ test "cdp.Storage: setCookies takes back the cookies getCookies gave" {
     session.expires = -1;
     try ctx.processMessage(.{ .id = 5, .method = "Storage.setCookies", .params = .{ .cookies = &[_]CdpCookie{session} } });
     try ctx.expectSentResult(null, .{ .id = 5 });
-    const jar = &ctx.cdp().browser_context.?.session.cookie_jar;
+    const jar = ctx.cdp().browser_context.?.session.cookie_jar;
     try testing.expectEqual(1, jar.len);
     var it = jar.iterator();
     try testing.expectEqual(null, it.next().?.expires);
@@ -457,7 +457,7 @@ test "cdp.Storage: cookies of the default context before any target" {
     try testing.expectEqual(1, ctx.cdp().browser_context.?.session.cookie_jar.len);
 
     try ctx.processMessage(.{ .id = 6, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
-    const bc = &ctx.cdp().browser_context.?;
+    const bc = ctx.cdp().browser_context.?;
     try testing.expectEqual(1, bc.targets.items.len);
     try testing.expectEqual(1, bc.session.cookie_jar.len);
 

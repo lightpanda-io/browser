@@ -86,7 +86,7 @@ pub const TestContext = struct {
         c.disposeBrowserContext();
 
         _ = try c.createBrowserContext();
-        var bc = &c.browser_context.?;
+        const bc = c.browser_context.?;
 
         if (opts.id) |id| {
             bc.id = id;
@@ -251,7 +251,7 @@ pub const TestContext = struct {
 
     /// Advances the page so asynchronous events get a chance to be sent.
     fn tick(self: *TestContext) !void {
-        if (self.cdp_.browser_context) |*bc| {
+        if (self.cdp_.browser_context) |bc| {
             if (bc.session.hasPage()) {
                 var runner = bc.session.runner(.{});
                 switch (try runner.tickForFrame((try firstTarget(bc)).frame_id.?, 20, .{ .until = .done })) {

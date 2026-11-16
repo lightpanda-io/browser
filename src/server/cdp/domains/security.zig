@@ -38,7 +38,7 @@ fn setIgnoreCertificateErrors(cmd: *CDP.Command) !void {
         ignore: bool,
     })) orelse return error.InvalidParams;
 
-    try cmd.cdp.browser.http_client.setTlsVerify(!params.ignore);
+    try cmd.httpClient().setTlsVerify(!params.ignore);
     return cmd.sendResult(null, .{});
 }
 

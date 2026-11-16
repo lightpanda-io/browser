@@ -173,7 +173,7 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json
     // A search through a search engine's page carries the query in its URL,
     // so `--block-urls` already refuses a query that matches a pattern
     // (`*some-site*`). Treat API searches the same way.
-    if (session.browser.http_client.blocksUrl(args.query)) return .{ .text = "No results." };
+    if (session.http_client.blocksUrl(args.query)) return .{ .text = "No results." };
 
     const timeout_ms = args.timeout orelse default_search_timeout_ms;
     switch (engine) {
@@ -186,7 +186,7 @@ pub fn exec(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json
                     // Fall through on any failure so one outage doesn't kill
                     // a whole benchmark run.
                     var detail: Failure = .{};
-                    if (session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, args.query, &detail, &session.browser.http_client, &session.browser.app.http_client })) |markdown_| {
+                    if (session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, args.query, &detail, session.http_client, &session.browser.app.http_client })) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
                         last_err = err;
@@ -216,7 +216,7 @@ fn searchExplicit(arena: std.mem.Allocator, session: *lp.Session, comptime e: an
         .is_error = true,
     };
     var detail: Failure = .{};
-    const markdown_ = session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, query, &detail, &session.browser.http_client, &session.browser.app.http_client }) catch |err|
+    const markdown_ = session.runPumped(apiSearch, .{ e, arena, api_key, timeout_ms, query, &detail, session.http_client, &session.browser.app.http_client }) catch |err|
         return searchFailed(arena, label, err, detail);
     return .{ .text = markdown_ };
 }
