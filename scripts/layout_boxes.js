@@ -13,6 +13,11 @@
 // Every rect is read before anything is changed, because dropping the
 // stylesheets changes the layout. Elements inside shadow roots are not
 // rewritten. Hover a box for its tag and numbers; data-lp-box holds them too.
+//
+// Text is drawn with the metrics our layout measures it with (text_measure:
+// every glyph 0.6em, a space 0.33em), which a monospace face with a negative
+// word-spacing matches. In Chrome's own run the text then overflows boxes
+// sized for the real font: there, set SHOW_TEXT to false.
 (() => {
   const SHOW_TEXT = true;
   const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#000000'];
@@ -28,12 +33,16 @@
   const boxes = new Map();
   for (const el of elements) {
     const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
     boxes.set(el, {
       top: r.top + sy,
       left: r.left + sx,
       width: r.width,
       height: r.height,
-      hidden: getComputedStyle(el).display === 'none',
+      hidden: cs.display === 'none',
+      inline: cs.display.startsWith('inline'),
+      outOfFlow: cs.position === 'absolute' || cs.position === 'fixed',
+      fontSize: parseFloat(cs.fontSize) || 16,
     });
   }
 
@@ -92,8 +101,41 @@
       `outline:1px solid ${color}`,
       'outline-offset:-1px',
       'background:transparent',
-      SHOW_TEXT ? 'font:10px/1.2 monospace;color:#888' : 'font-size:0;color:transparent',
+      SHOW_TEXT ? `font:${r1(box.fontSize)}px/1.2 monospace;word-spacing:-0.27em;color:#888` : 'font-size:0;color:transparent',
     ].filter(Boolean).join(';'));
+  }
+
+  // Text has no box of its own, and every element is now out of the flow, so
+  // text after an element would be drawn as if that element weren't there.
+  // Next to elements, start each run where our layout has it: right of the
+  // inline box before it, or under the block before it, on a line that
+  // doesn't wrap (see Element.lineOffset).
+  if (SHOW_TEXT) {
+    for (const [el, box] of boxes) {
+      if (!el.isConnected || box.hidden || el.children.length === 0) continue;
+      let prev = null;
+      for (const node of [...el.childNodes]) {
+        if (node.nodeType === 1) {
+          const b = boxes.get(node);
+          if (b && !b.hidden && !b.outOfFlow) prev = b;
+          continue;
+        }
+        if (node.nodeType !== 3 || !node.data.trim()) continue;
+        let top = 0;
+        let left = 0;
+        if (prev) {
+          top = prev.top - box.top + (prev.inline ? 0 : prev.height);
+          left = prev.inline ? prev.left + prev.width - box.left : 0;
+        }
+        const span = document.createElement('span');
+        span.setAttribute('data-lp-text', '');
+        span.setAttribute('style', `position:absolute;white-space:pre;top:${r1(top)}px;left:${r1(left)}px`);
+        // One space where a run of them collapses, kept at the edges: it's
+        // the gap to the neighbouring boxes.
+        span.textContent = node.data.replace(/\s+/g, ' ');
+        node.replaceWith(span);
+      }
+    }
   }
 
   return true;
