@@ -344,7 +344,13 @@ pub const NavigateEventResult = union(enum) {
     // No event: an iframe, the initial about:blank, or nothing could observe it.
     not_fired,
     // Navigate. A same-document navigation then calls commitSameDocument.
-    fired: *AbortSignal,
+    fired: struct {
+        signal: *AbortSignal,
+        // intercept() was called: even a cross-document navigation stays in
+        // this document and is driven by the handlers, like a same-document
+        // one.
+        intercepted: bool,
+    },
 };
 
 // Fires `navigate` at a navigation about to happen in `frame`, aborting the
@@ -390,10 +396,19 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         std.mem.eql(u8, frame.url, params.url) == false;
 
     const signal = try AbortSignal.init(&frame.js.execution);
+    // Same-origin navigations are interceptable whether or not they're
+    // same-document — that's what lets a listener turn a cross-document
+    // link click into client-side routing. A traversal landing on a
+    // different document can't be intercepted: the entry it's going to
+    // already belongs to another document, so there's nothing for a
+    // handler to drive it to.
+    const can_intercept = frame.isSameOrigin(params.url) and
+        (params.navigation_type != .traverse or params.same_document);
     const event = try NavigateEvent.initTrusted(.{
         // A traversal to another document can't be canceled.
         .cancelable = params.navigation_type != .traverse or params.same_document,
         .navigationType = @tagName(params.navigation_type),
+        .canIntercept = can_intercept,
         .destination = destination,
         .userInitiated = params.user_initiated,
         .hashChange = hash_change,
@@ -428,13 +443,22 @@ pub fn fireNavigateEvent(self: *Navigation, params: NavigateEventParams, frame: 
         return .canceled;
     }
 
-    if (params.same_document == false) {
+    if (event._handlers.items.len > 0) {
+        const handlers = try frame.page_arena.alloc(js.Function.Global, event._handlers.items.len);
+        @memcpy(handlers, event._handlers.items);
+        ongoing.intercept_handlers = handlers;
+        event._handlers.clearRetainingCapacity();
+    }
+
+    const intercepted = event._intercepted;
+
+    if (params.same_document == false and !intercepted) {
         // The promises of a navigation to another document never settle: this
         // document goes away. It stays ongoing until then, so that a newer
         // navigation or window.stop() still aborts it.
         ongoing.releasePromises();
     }
-    return .{ .fired = signal };
+    return .{ .fired = .{ .signal = signal, .intercepted = intercepted } };
 }
 
 fn ongoingFor(signal: *AbortSignal, frame: *Frame) ?*OngoingNavigation {
@@ -469,7 +493,7 @@ pub fn abortOngoing(self: *Navigation, frame: *Frame) !void {
     const local = &ls.local;
 
     const err = try local.zigValueToJs(dom, .{});
-    try self.fireNavigateError(err, frame);
+    try self.fireNavigateError(err, "AbortError: Navigation was aborted", frame);
 
     if (ongoing.committed) |c| {
         c.local(local).rejectValue(err) catch |e| {
@@ -484,14 +508,24 @@ pub fn abortOngoing(self: *Navigation, frame: *Frame) !void {
 }
 
 // A same-document navigation updated the URL and entries: the committed
-// promise resolves now, navigatesuccess and the finished promise follow in a
-// microtask.
-pub fn commitSameDocument(_: *Navigation, signal: *AbortSignal, frame: *Frame) !void {
+// promise resolves now. Per spec, the commit steps invoke any intercept()
+// handlers synchronously, right here — not in a later microtask. When
+// there's no handler, navigatesuccess and the finished promise still follow
+// in a microtask.
+pub fn commitSameDocument(self: *Navigation, signal: *AbortSignal, frame: *Frame) !void {
     // Gone when the commit steps (currententrychange, popstate) started a
     // navigation that aborted this one.
     resolveCommitted(signal, frame);
     const ongoing = ongoingFor(signal, frame) orelse return;
     ongoing.committed_same_document = true;
+
+    if (ongoing.intercept_handlers.len > 0) {
+        const handlers = ongoing.intercept_handlers;
+        ongoing.intercept_handlers = &.{};
+        self.runInterceptHandlers(handlers, signal, frame);
+        return;
+    }
+
     try frame.js.queueNavigateSuccess();
 }
 
@@ -509,14 +543,19 @@ fn resolveCommitted(signal: *AbortSignal, frame: *Frame) void {
     committed.local(&ls.local).resolve("navigation committed", {});
 }
 
-// The microtask queued by commitSameDocument.
+// The microtask queued by commitSameDocument when there's no intercept()
+// handler to run (that case fires navigatesuccess synchronously instead,
+// from settleIntercept once the handler's promise settles).
 pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
-    var ongoing = frame._ongoing_navigate orelse return;
-    if (ongoing.committed_same_document == false) {
-        // A newer navigation replaced it
-        return;
+    {
+        const ongoing_ptr = if (frame._ongoing_navigate) |*o| o else return;
+        if (ongoing_ptr.committed_same_document == false) {
+            // A newer navigation replaced it.
+            return;
+        }
     }
 
+    var ongoing = frame._ongoing_navigate.?;
     frame._ongoing_navigate = null;
     defer ongoing.releasePromises();
 
@@ -529,6 +568,158 @@ pub fn finishSameDocument(self: *Navigation, frame: *Frame) void {
         frame.js.localScope(&ls);
         defer ls.deinit();
         f.local(&ls.local).resolve("navigation finished", {});
+    }
+}
+
+// The spec's "wait for all" settles as soon as any handler's result
+// rejects -- it doesn't wait for the rest to settle -- and only settles as
+// a success once every handler has fulfilled (a non-promise return counts
+// as an already-fulfilled one).
+const WaitAllHandlers = struct {
+    navigation: *Navigation,
+    signal: *AbortSignal,
+    frame: *Frame,
+    pending: usize,
+    done: bool,
+
+    fn settleOne(ctx: *WaitAllHandlers, index: usize, reason: ?js.Value) void {
+        _ = index;
+        if (ctx.done) {
+            return;
+        }
+
+        if (reason) |r| {
+            ctx.done = true;
+            ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .{ .failure = r });
+            return;
+        }
+
+        ctx.pending -= 1;
+        if (ctx.pending > 0) {
+            return;
+        }
+
+        ctx.done = true;
+        ctx.navigation.settleIntercept(ctx.signal, ctx.frame, .success);
+    }
+};
+
+fn runInterceptHandlers(
+    self: *Navigation,
+    handlers: []js.Function.Global,
+    signal: *AbortSignal,
+    frame: *Frame,
+) void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const ctx = frame.page_arena.create(WaitAllHandlers) catch {
+        for (handlers) |handler| {
+            handler.release();
+        }
+        self.settleIntercept(signal, frame, .success);
+        return;
+    };
+    ctx.* = .{
+        .navigation = self,
+        .signal = signal,
+        .frame = frame,
+        .pending = handlers.len,
+        .done = false,
+    };
+
+    for (handlers, 0..) |handler, i| {
+        defer handler.release();
+        const handler_fn = handler.local(local);
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(local);
+        defer try_catch.deinit();
+
+        const ret = handler_fn.callRethrow(js.Value, .{}) catch |err| {
+            if (err == error.TryCatchRethrow) {
+                if (try_catch.exceptionValue()) |exc| {
+                    ctx.settleOne(i, exc);
+                } else {
+                    const reason: ?js.Value = local.zigValueToJs(js.Undefined{}, .{}) catch null;
+                    ctx.settleOne(i, reason);
+                }
+                continue;
+            }
+            if (err == error.ExecutionTerminated) {
+                // Unwinding the whole call stack; don't settle anything.
+                return;
+            }
+            log.debug(.event, "Navigation.intercept handler", .{ .err = err });
+            ctx.settleOne(i, null);
+            continue;
+        };
+
+        if (!ret.isPromise()) {
+            ctx.settleOne(i, null);
+            continue;
+        }
+
+        const HandlerContext = struct { ctx: *WaitAllHandlers, index: usize };
+        const handler_ctx = frame.page_arena.create(HandlerContext) catch {
+            ctx.settleOne(i, null);
+            continue;
+        };
+        handler_ctx.* = .{ .ctx = ctx, .index = i };
+
+        const on_fulfilled = local.newCallback(struct {
+            fn f(c: *HandlerContext, _: ?js.Value) void {
+                c.ctx.settleOne(c.index, null);
+            }
+        }.f, handler_ctx);
+
+        const on_rejected = local.newCallback(struct {
+            fn f(c: *HandlerContext, reason: ?js.Value) void {
+                c.ctx.settleOne(c.index, reason);
+            }
+        }.f, handler_ctx);
+
+        _ = ret.toPromise().thenAndCatch(on_fulfilled, on_rejected) catch {
+            ctx.settleOne(i, null);
+        };
+    }
+}
+
+const InterceptResult = union(enum) { success, failure: js.Value };
+
+fn settleIntercept(self: *Navigation, signal: *AbortSignal, frame: *Frame, result: InterceptResult) void {
+    const ongoing_ptr = ongoingFor(signal, frame) orelse return;
+    var ongoing = ongoing_ptr.*;
+    frame._ongoing_navigate = null;
+    defer ongoing.releasePromises();
+
+    switch (result) {
+        .success => {
+            self.fireNavigateSuccess(frame) catch |err| {
+                log.debug(.event, "Navigation.navigatesuccess", .{ .err = err });
+            };
+            if (ongoing.finished) |f| {
+                var ls: js.Local.Scope = undefined;
+                frame.js.localScope(&ls);
+                defer ls.deinit();
+                f.local(&ls.local).resolve("navigation finished", {});
+            }
+        },
+        .failure => |reason| {
+            self.fireNavigateError(reason, "Error: a navigate event handler rejected", frame) catch |err| {
+                log.debug(.event, "Navigation.navigateerror", .{ .err = err });
+            };
+            if (ongoing.finished) |f| {
+                var ls: js.Local.Scope = undefined;
+                frame.js.localScope(&ls);
+                defer ls.deinit();
+                f.local(&ls.local).rejectValue(reason) catch |err| {
+                    log.debug(.event, "Navigation.intercept reject", .{ .err = err });
+                };
+            }
+        },
     }
 }
 
@@ -549,14 +740,14 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) !void {
     try self.dispatch(event, frame);
 }
 
-fn fireNavigateError(self: *Navigation, err: js.Value, frame: *Frame) !void {
+fn fireNavigateError(self: *Navigation, err: js.Value, message: []const u8, frame: *Frame) !void {
     if (!frame.hasDirectListeners(self.asEventTarget(), "navigateerror")) {
         return;
     }
 
     const event = try ErrorEvent.initTrusted(.wrap("navigateerror"), .{
         .@"error" = try err.persist(),
-        .message = "AbortError: Navigation was aborted",
+        .message = message,
         .filename = frame.url,
     }, frame.page);
 
@@ -629,7 +820,7 @@ pub fn navigateInner(
     // navigate() stays in the document only for a fragment change, but a
     // traversal stays in it whenever the entry belongs to it, whatever URL
     // pushState gave the entry. A reload never does.
-    const is_same_document = switch (kind) {
+    const is_same_document_pre = switch (kind) {
         .traverse => |index| self._entries.items[index].sameDocument(frame),
         .reload => false,
         else => is_same_url,
@@ -638,14 +829,14 @@ pub fn navigateInner(
     // In case of navigation to the same document, we force an url duplication.
     // Keeping the same url generates a crash during WPT test navigate-history-push-same-url.html.
     // When building a script's src, script's base and frame url overlap.
-    if (is_same_document) {
+    if (is_same_document_pre) {
         new_url = try arena.dupeSentinel(u8, new_url, 0);
     }
 
     const result = try self.fireNavigateEvent(.{
         .navigation_type = kind.toNavigationType(),
         .url = new_url,
-        .same_document = is_same_document,
+        .same_document = is_same_document_pre,
         .entry = switch (kind) {
             .traverse => |index| self._entries.items[index],
             else => null,
@@ -665,8 +856,16 @@ pub fn navigateInner(
         // aborting the navigation rejected the promises
         .canceled => return returnPromises(committed, finished),
         .not_fired => null,
-        .fired => |signal| signal,
+        .fired => |f| f.signal,
     };
+    const intercepted = switch (result) {
+        .fired => |f| f.intercepted,
+        else => false,
+    };
+
+    // intercept() turns even a cross-document navigation into one that
+    // stays in this document, driven by the handlers.
+    const is_same_document = is_same_document_pre or intercepted;
 
     // Captured before a same-document navigation overwrites frame.url; used
     // to queue the hashchange once below.
@@ -725,7 +924,11 @@ pub fn navigateInner(
                 previous._state = .{ .source = .navigation, .value = state };
                 try self.fireCurrentEntryChangeEvent(previous, .reload, frame);
             }
-            try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
+            if (is_same_document) {
+                try self.settleSameDocument(finished, signal, frame);
+            } else {
+                try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
+            }
         },
     }
 
