@@ -188,6 +188,8 @@ walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
 // setCacheOffset calls, likewise
 offsets_placed: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+// Document.hitTest calls that walked the tree
+hit_walks: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 // Siblings Element.LineCursor measured
 line_steps: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
@@ -1795,12 +1797,7 @@ const BoxScope = struct {
             // Not placed: nothing after it is either
             index = if (entry) |e| (if (e.get(.offset) != null) e.position + 1 else null) else null;
         }
-        if (index) |i| {
-            if (child._type == .element) {
-                sm.forgetOffsetsFrom(el, i, next);
-            }
-        }
-        if (sm.boxesMoved(el, index) == false) {
+        if (sm.boxesMoved(el, index, next) == false) {
             self.giveUp();
         }
     }
@@ -1816,15 +1813,17 @@ const BoxScope = struct {
         const parent = node.flatTreeParentElement(sm.frame) orelse return self.giveUp();
         const entry = sm.layout_memo.map.getPtr(el);
         const index: ?u32 = if (entry) |e| (if (e.get(.offset) != null) e.position else null) else null;
-        if (sm.boxesMoved(parent, index) == false) {
+        if (sm.boxesMoved(parent, index, node) == false) {
             self.giveUp();
         }
     }
 };
 
-// An element child entered or left `parent` at `index`: the children after
-// it that were placed now sit at another index, so their offsets go rather
-// than wait for `placed` to cover their old one again.
+// `parent`'s children from `index` on, `next` being the first of them, are
+// no longer placed. Their offsets go with it: an element inserted before
+// one moves it to another index, and `placed` growing back over its old
+// one would make a stale offset valid again. So no child past `placed`
+// ever holds an offset, and every cut of `placed` comes through here.
 fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*Node) void {
     const memo = &self.layout_memo;
     const entry = memo.map.getPtr(parent) orelse return;
@@ -1833,9 +1832,10 @@ fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*
     }
     var stale = entry.placed - index;
     entry.placed = index;
-    var sibling = nextElement(next);
-    while (sibling) |s| : (sibling = nextElement(s.nextSibling())) {
-        if (memo.map.getPtr(s.as(Element))) |e| {
+    var sibling = next;
+    while (sibling) |s| : (sibling = s.flatNextSibling(self.frame)) {
+        const el = s.is(Element) orelse continue;
+        if (memo.map.getPtr(el)) |e| {
             e.drop(.offset);
         }
         stale -= 1;
@@ -1852,10 +1852,12 @@ fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*
 // content widths can change: unless one of them sizes other boxes by its
 // content (see Entry.sizes_others). Then every width under the topmost one
 // that does goes; the heights and offsets there stay, no width decides them.
-fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
+fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32, at: ?*Node) bool {
     const memo = &self.layout_memo;
     var el = parent;
     var from = index;
+    // The child at `from`, or the first node after where it would be
+    var first = at;
     var heights = true;
     var sizing: ?*Element = null;
     while (true) {
@@ -1865,7 +1867,7 @@ fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
                 sizing = el;
             }
             if (from) |i| {
-                entry.placed = @min(entry.placed, i);
+                self.forgetOffsetsFrom(el, i, first);
             }
             inline for (.{ .content_width, .full_content_width, .min_content_width, .scrollable_content_width }) |kind| {
                 entry.drop(kind);
@@ -1887,6 +1889,7 @@ fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32) bool {
                 // el stays put, the siblings after it don't
                 if (entry.get(.offset) != null) {
                     from = entry.position + 1;
+                    first = el.asNode().flatNextSibling(self.frame);
                 }
             }
         }
@@ -2399,7 +2402,7 @@ fn heightWritten(self: *StyleManager, el: *Element) void {
             return;
         };
         if (index) |i| {
-            entry.placed = @min(entry.placed, i + 1);
+            self.forgetOffsetsFrom(parent, i + 1, child.asNode().flatNextSibling(self.frame));
         }
         entry.drop(.content_height);
         // html and body take the document's height, so they never stop it
@@ -2698,6 +2701,49 @@ pub fn isHitTestable(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return true;
     const p = self.visibilityProps(el);
     return !p.visibility_hidden and !p.pointer_events_none and self.generatesBox(el);
+}
+
+/// What Document.hitTest asks of every element in the point's band, from one
+/// read of each memo: hasDisplayNone, isHitTestable, position, and what
+/// LineCursor.Mode.of takes four calls to find.
+pub const HitFacts = struct {
+    display_none: bool = false,
+    // isHitTestable
+    hittable: bool = true,
+    // display: contents: no box, so its children's box parent is its own
+    contents: bool = false,
+    // A flex row: its children with a box sit side by side (isFlexRowItem)
+    row: bool = false,
+    position: Position = .static,
+    line: Line = .line,
+
+    pub const Line = enum {
+        block, // isBlockLevel
+        cell, // isTableCell
+        line,
+    };
+};
+
+pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    const visibility = self.visibilityProps(el);
+    const flow = self.flowProps(el);
+    // On the root element it computes to block instead
+    const contents = visibility.box == .contents and if (el.asNode().parentNode()) |parent| parent._type != .document else true;
+    const in_flow = flow.position.outOfFlow() == false and flow.floated == false;
+    return .{
+        .display_none = visibility.display == .none,
+        .hittable = !visibility.visibility_hidden and !visibility.pointer_events_none and contents == false,
+        .contents = contents,
+        .row = visibility.display == .flex and visibility.flex_column == false,
+        .position = flow.position,
+        .line = switch (visibility.box) {
+            .block_level, .table, .table_row => if (in_flow) .block else .line,
+            .table_cell => if (in_flow) .cell else .line,
+            .inline_level, .atomic_inline, .contents => .line,
+        },
+    };
 }
 
 /// Computed text-transform, which inherits: the nearest of `el` and its
@@ -3329,6 +3375,11 @@ const HitBands = struct {
     // The walk recording them finished
     complete: bool = false,
 
+    // The last point tested and what it hit: a click is a move, a press and
+    // a release at one point. Unlike the bands, a hit also reads what no
+    // version tracks (inert, an inline transform): see hitInputWritten.
+    last: ?LastHit = null,
+
     // One couldn't be stored. Its parent's would cover it, but a missing
     // band has to mean a subtree no walk went into.
     failed: bool = false,
@@ -3382,6 +3433,30 @@ pub fn hasHitBands(self: *StyleManager, scroll_y: u32) bool {
         .scroll_y = scroll_y,
     };
     return false;
+}
+
+pub const HitPoint = struct { x: f64, y: f64, scroll_x: u32, ignore_x: bool };
+const LastHit = struct { point: HitPoint, element: ?*Element };
+
+/// Only after hasHitBands returned true. The outer null: the point isn't
+/// the last one tested, or something a hit reads was written since.
+pub fn lastHit(self: *const StyleManager, point: HitPoint) ??*Element {
+    const last = self.hit_bands.last orelse return null;
+    return if (std.meta.eql(last.point, point)) last.element else null;
+}
+
+/// After a walk, recording or not.
+pub fn setLastHit(self: *StyleManager, point: HitPoint, element: ?*Element) void {
+    const bands = &self.hit_bands;
+    if (bands.complete and bands.version == self.hitVersion()) {
+        bands.last = .{ .point = point, .element = element };
+    }
+}
+
+/// An attribute or an inline style was written, whether or not a memo
+/// reads it.
+pub fn hitInputWritten(self: *StyleManager) void {
+    self.hit_bands.last = null;
 }
 
 /// Only after hasHitBands returned true
@@ -7190,6 +7265,49 @@ test "StyleManager: hit bands: a hit test skips the subtrees the point is outsid
     try testing.expectEqual(true, sm.hit_bands.complete);
 }
 
+test "StyleManager: hit bands: the same point again doesn't walk" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='width: 100px; height: 50px'></div><p style='height: 50px'></p>");
+    const div = body.firstChild().?.as(Element);
+    const p = body.lastChild().?.as(Element);
+
+    // Recorded, then walked with the bands, then neither
+    try testing.expectEqual(div, (try doc.hitTest(10, 10, frame)).?);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+    try testing.expectEqual(2, sm.hit_walks);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+    try testing.expectEqual(2, sm.hit_walks);
+    // Another axis, another point
+    try testing.expectEqual(div, (try doc.hitTestVertical(20, frame)).?);
+    try testing.expectEqual(p, (try doc.hitTest(10, 60, frame)).?);
+    try testing.expectEqual(4, sm.hit_walks);
+
+    // Writes no version tracks: a transform, inert, any attribute
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+    const version = sm.hit_bands.version;
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("transform", "translateX(500px)", null, frame);
+    try testing.expectEqual(body.as(Element), (try doc.hitTest(10, 20, frame)).?);
+    try testing.expectEqual(div, (try doc.hitTest(510, 20, frame)).?);
+    try div.setAttribute(comptime .wrap("inert"), comptime .wrap(""), frame);
+    try testing.expectEqual(body.as(Element), (try doc.hitTest(510, 20, frame)).?);
+    try testing.expectEqual(version, sm.hit_bands.version);
+    try testing.expectEqual(8, sm.hit_walks);
+
+    // A box moved: the bands go, and the point with them
+    try testing.expectEqual(p, (try doc.hitTest(10, 60, frame)).?);
+    try style.setProperty("height", "5px", null, frame);
+    try testing.expectEqual(null, try doc.hitTest(10, 60, frame));
+}
+
 test "StyleManager: a viewport change drops the layout" {
     const layout = @import("layout.zig");
     const frame = try testing.createFrame();
@@ -8106,6 +8224,41 @@ test "StyleManager: memo: reading lefts in order measures each sibling once" {
     try testing.expectEqual(detached + 15, els[7].horizontalPosition(frame));
 }
 
+test "StyleManager: memo: an offset cut from the placed ones doesn't come back" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div><p style='height: 10px'></p><section></section><p style='height: 10px'></p></div>");
+    const box = body.firstChild().?;
+    const first = box.firstChild().?;
+    const middle = first.nextSibling().?;
+    const last = middle.nextSibling().?.as(Element);
+
+    // An empty box is 5px tall
+    try testing.expectEqual(15, layout.boxTop(last, frame));
+    // Text makes the middle one taller: the last is no longer placed
+    _ = try middle.appendChild(try doc.createTextNode("text"), frame);
+    // An element before them takes index 0, and the middle one is placed
+    // again, at the last one's old index
+    _ = try box.insertBefore((try doc.createElement("div", null, frame)).asNode(), first, frame);
+    const below = layout.boxTop(middle.as(Element), frame) + layout.boxHeight(middle.as(Element), frame);
+    try testing.expect(below > 20);
+    try testing.expectEqual(below, layout.boxTop(last, frame));
+
+    // The same through a height write
+    const style = (try middle.as(Element).getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("height", "50px", null, frame);
+    _ = try box.insertBefore((try doc.createElement("div", null, frame)).asNode(), first, frame);
+    try testing.expectEqual(20, layout.boxTop(middle.as(Element), frame));
+    try testing.expectEqual(70, layout.boxTop(last, frame));
+}
+
 // Random tree and class changes with reads in between: what the layout memo
 // keeps must be what a memo filled from nothing computes.
 test "StyleManager: memo: tree, class and focus changes keep only boxes that didn't move" {
@@ -8264,6 +8417,38 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                 // ... and by the bands that walk recorded
                 try testing.expectEqual(true, sm.hit_bands.complete);
                 try testing.expectEqual(walked, try doc.hitTestVertical(y, frame));
+            }
+
+            // The walk places a box from what it read on the way down; each
+            // box asked on its own must land in the same place
+            for (0..24) |_| {
+                const x: f64 = @floatFromInt(random.uintLessThan(u16, 320));
+                const y: f64 = @floatFromInt(random.uintLessThan(u16, 400));
+                var expected: ?*Element = null;
+                var tw = TreeWalker.Full.init(html, .{});
+                while (tw.next()) |n| {
+                    const el = n.is(Element) orelse continue;
+                    var shown = true;
+                    var up: ?*Element = el;
+                    while (up) |e| : (up = e.asNode().parentElement()) {
+                        if (sm.hasDisplayNone(e)) {
+                            shown = false;
+                        }
+                    }
+                    if (shown == false or sm.isHitTestable(el) == false) {
+                        continue;
+                    }
+                    const top = layout.boxTop(el, frame);
+                    const left = el.horizontalPosition(frame);
+                    if (y >= top and y <= top + layout.boxHeight(el, frame) and x >= left and x <= left + el.boxAxis(frame, .width)) {
+                        expected = el;
+                    }
+                }
+                const hit = try doc.hitTest(x, y, frame);
+                if (hit != expected) {
+                    std.debug.print("sheet {d} step {d} point {d},{d}: hit {?*} expected {?*}\n", .{ seed, step, x, y, hit, expected });
+                    return error.WrongHit;
+                }
             }
 
             const version = sm.layoutVersion();

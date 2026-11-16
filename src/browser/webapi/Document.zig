@@ -1017,17 +1017,27 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     const style_manager = &owner._style_manager;
 
     // (x, y) is viewport-relative; the faux layout is in document coordinates.
-    const x = viewport_x + @as(f64, @floatFromInt(owner.window.getScrollX()));
+    const scroll_x = owner.window.getScrollX();
+    const x = viewport_x + @as(f64, @floatFromInt(scroll_x));
     const scroll_y = owner.window.getScrollY();
     const y = viewport_y + @as(f64, @floatFromInt(scroll_y));
     const recording = style_manager.hasHitBands(scroll_y) == false;
+    const point: StyleManager.HitPoint = .{ .x = viewport_x, .y = viewport_y, .scroll_x = scroll_x, .ignore_x = ignore_x };
+    if (recording == false) {
+        if (style_manager.lastHit(point)) |element| {
+            return element;
+        }
+    }
+    if (comptime lp.IS_TEST) {
+        style_manager.hit_walks += 1;
+    }
 
     // Each entry points at its nearest element ancestor's level (its
     // flat-tree parent's), which its own box is placed from. Levels are a
     // stack of their own: one is done once an entry of a shallower one pops.
     const Entry = struct { node: *Node, level: u32 };
     var levels: std.ArrayList(HitLevel) = .empty;
-    try levels.append(frame.local_arena, .{ .element = null, .top = 0, .left = 0, .up = 0 });
+    try levels.append(frame.local_arena, .{ .element = null, .facts = .{}, .row = false, .top = 0, .left = 0, .up = 0 });
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .level = 0 });
 
@@ -1048,8 +1058,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             if (comptime lp.IS_DEBUG) {
                 std.debug.assert(above.element == element.asNode().flatTreeParentElement(owner));
             }
-            const top = layout.boxTopFrom(element, above.element, above.top, owner);
-            if (style_manager.hasDisplayNone(element)) {
+            const facts = style_manager.hitFacts(element);
+            const top = layout.boxTopAt(element, facts.position, above.element, above.top, owner);
+            if (facts.display_none) {
                 if (recording) {
                     style_manager.setHitBand(element, .none);
                 }
@@ -1061,18 +1072,20 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             if (inert and recording == false) {
                 continue;
             }
-            const band: StyleManager.HitBand = if (recording) .of(top, layout.boxHeight(element, owner)) else .none;
+            // Recording needs it for every box, a hit only once y is past the top
+            const recorded_height: ?f64 = if (recording) layout.boxHeight(element, owner) else null;
+            const band: StyleManager.HitBand = if (recorded_height) |height| .of(top, height) else .none;
             // Unlike display:none, visibility and pointer-events let a child
             // opt back in, so the subtree is still walked. So is a subtree
             // that starts below y: a positioned box in it can sit higher.
             var left: ?f64 = null;
-            if (inert == false and style_manager.isHitTestable(element) and y >= top and y <= top + layout.boxHeight(element, owner)) {
+            if (inert == false and facts.hittable and y >= top and y <= top + (recorded_height orelse layout.boxHeight(element, owner))) {
                 if (ignore_x) {
                     topmost = element;
                 } else {
                     // only bother calculating the horiziontal position for
                     // elements contained by the vertical band
-                    const l = HitLevel.leftOf(levels.items, element, level, owner, frame);
+                    const l = HitLevel.leftOf(levels.items, element, facts, level, owner, frame);
                     if (x >= l and x <= l + element.boxAxis(frame, .width)) {
                         topmost = element;
                     }
@@ -1086,7 +1099,16 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
                 }
                 continue;
             }
-            try levels.append(frame.local_arena, .{ .element = element, .top = top, .left = left, .up = level, .band = band, .inert = inert });
+            try levels.append(frame.local_arena, .{
+                .element = element,
+                .facts = facts,
+                .row = if (facts.contents) above.row else facts.row,
+                .top = top,
+                .left = left,
+                .up = level,
+                .band = band,
+                .inert = inert,
+            });
             level = @intCast(levels.items.len - 1);
         }
 
@@ -1103,6 +1125,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         HitLevel.close(&levels, 1, recording, style_manager);
         style_manager.hitBandsRecorded();
     }
+    style_manager.setLastHit(point, topmost);
     return topmost;
 }
 
@@ -1113,6 +1136,10 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
 // another (see Element.LineCursor).
 const HitLevel = struct {
     element: ?*Element, // null: the document
+    facts: StyleManager.HitFacts, // element's
+    // Its children's box parent is a flex row: element, or the nearest
+    // ancestor with a box when element is display: contents
+    row: bool,
     top: f64,
     left: ?f64,
     up: u32, // the level of element's own parent
@@ -1137,24 +1164,36 @@ const HitLevel = struct {
 
     // `element`'s left in document coordinates, as Element.horizontalPosition
     // computes it. `index` is its parent's level.
-    fn leftOf(levels: []HitLevel, element: *Element, index: u32, owner: *Frame, frame: *Frame) f64 {
+    fn leftOf(levels: []HitLevel, element: *Element, facts: StyleManager.HitFacts, index: u32, owner: *Frame, frame: *Frame) f64 {
         var x = element.translateX(frame);
-        if (layout.Anchor.horizontal(element, owner)) |anchor| {
-            // Placed against its containing block, an ancestor
-            const base = anchor.base orelse return x + anchor.offset;
-            var i = index;
-            while (levels[i].element != base) : (i = levels[i].up) {
-                if (i == 0) {
-                    return x + anchor.offset + base.horizontalPosition(frame);
+        switch (facts.position) {
+            .static, .sticky => {},
+            .relative => x += layout.relativeShift(element, .horizontal, owner),
+            .absolute, .fixed => if (layout.Anchor.horizontal(element, owner)) |anchor| {
+                // Placed against its containing block, an ancestor
+                const base = anchor.base orelse return x + anchor.offset;
+                var i = index;
+                while (levels[i].element != base) : (i = levels[i].up) {
+                    if (i == 0) {
+                        return x + anchor.offset + base.horizontalPosition(frame);
+                    }
                 }
-            }
-            return x + anchor.offset + leftOfLevel(levels, i, owner, frame);
+                return x + anchor.offset + leftOfLevel(levels, i, owner, frame);
+            },
         }
-        x += layout.relativeShift(element, .horizontal, owner);
 
         const level = &levels[index];
         const parent = level.element orelse return x;
-        if (Element.LineCursor.Mode.of(element, owner)) |mode| {
+        // Element.LineCursor.Mode.of, from what the walk already read
+        const line_mode: ?Element.LineCursor.Mode = switch (facts.position) {
+            .absolute, .fixed => .line,
+            .static, .sticky, .relative => if (level.row) .row else switch (facts.line) {
+                .cell => .row,
+                .block => null,
+                .line => .line,
+            },
+        };
+        if (line_mode) |mode| {
             if (level.cursor == null) {
                 level.cursor = .init(parent.asNode(), mode, frame);
             }
@@ -1175,7 +1214,7 @@ const HitLevel = struct {
         if (level.left) |left| {
             return left;
         }
-        const left = leftOf(levels, level.element.?, level.up, owner, frame);
+        const left = leftOf(levels, level.element.?, level.facts, level.up, owner, frame);
         level.left = left;
         return left;
     }

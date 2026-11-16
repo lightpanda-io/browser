@@ -435,6 +435,18 @@ pub fn boxTopFrom(self: *Element, parent: ?*Element, parent_top: f64, owner: *Fr
     return parent_top + boxOffset(self, p, owner) + relativeShift(self, .vertical, owner);
 }
 
+/// boxTopFrom, for a walk that already read the box's position: one in the
+/// flow has no anchor and no shift to look for.
+pub fn boxTopAt(self: *Element, position: StyleManager.Position, parent: ?*Element, parent_top: f64, owner: *Frame) f64 {
+    switch (position) {
+        .static, .sticky => {
+            const p = parent orelse return 0;
+            return parent_top + boxOffset(self, p, owner);
+        },
+        .relative, .absolute, .fixed => return boxTopFrom(self, parent, parent_top, owner),
+    }
+}
+
 pub const Axis = enum { vertical, horizontal };
 
 /// Where an absolutely positioned or fixed box with an inset on the axis

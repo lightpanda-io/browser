@@ -50,6 +50,9 @@ pub fn attributeSet(element: *Element, name: String, old: ?String, new: String, 
 
 /// A style attribute write no selector can see (see Attribute.List.putInertStyle).
 pub fn inertStyleSet(element: *Element, frame: *Frame) void {
+    if (element.ownerFrame(frame)) |owner| {
+        owner._style_manager.hitInputWritten();
+    }
     if (detachedHandled(element.asNode(), frame) == false) {
         layoutObserversChanged(frame);
     }
@@ -65,6 +68,7 @@ fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]c
     }
     // A frameless document (DOMParser, XHR) has no styles
     const owner = element.ownerFrame(frame) orelse return;
+    owner._style_manager.hitInputWritten();
     if (owner._style_manager.readsAttribute(name.str()) == false) {
         // no selector reads it, and neither does the engine
         return;
