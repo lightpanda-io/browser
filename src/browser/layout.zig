@@ -320,14 +320,15 @@ pub fn contentWidth(self: *Element, comptime mode: ContentMode, owner: *Frame) f
             }
             continue;
         };
-        if (style_manager.hasDisplayNone(el)) {
+        const role = style_manager.flowRole(el);
+        if (role == .none) {
             continue;
         }
-        if (mode != .scrollable and style_manager.isOutOfFlow(el)) {
+        if (mode != .scrollable and role == .out_of_flow) {
             continue;
         }
         const width = widthContribution(el, mode, owner);
-        if (in_row or style_manager.isBlockLevel(el) == false) {
+        if (in_row or role != .block) {
             line += width;
         } else {
             widest = @max(widest, line + text.end(), width);
@@ -716,11 +717,12 @@ const Flow = struct {
     // Moves past el, to where the next box goes
     fn advance(self: *Flow, el: *Element, owner: *Frame) void {
         const style_manager = &owner._style_manager;
-        if (style_manager.hasDisplayNone(el) or style_manager.isOutOfFlow(el)) {
+        const role = style_manager.flowRole(el);
+        if (role == .none or role == .out_of_flow) {
             return;
         }
         const height = boxHeight(el, owner);
-        if (self.in_row or style_manager.isBlockLevel(el) == false) {
+        if (self.in_row or role != .block) {
             self.line = @max(self.line, height);
             return;
         }

@@ -2104,16 +2104,17 @@ pub const LineCursor = struct {
                 }
                 continue;
             };
-            if (style_manager.hasDisplayNone(sibling) or style_manager.isOutOfFlow(sibling)) {
-                continue;
-            }
-            if (self.mode == .line and style_manager.isBlockLevel(sibling)) {
-                // A block ends the line
-                self.x = 0;
-                if (self.text) |*t| {
-                    _ = t.end();
-                }
-                continue;
+            switch (style_manager.flowRole(sibling)) {
+                .none, .out_of_flow => continue,
+                .block => if (self.mode == .line) {
+                    // A block ends the line
+                    self.x = 0;
+                    if (self.text) |*t| {
+                        _ = t.end();
+                    }
+                    continue;
+                },
+                .line => {},
             }
             self.x += layout.boxWidth(sibling, owner);
         }

@@ -2327,6 +2327,11 @@ fn knownId(name: []const u8) ?properties.Id {
     return properties.idOf(std.ascii.lowerString(&buf, name));
 }
 
+/// Every box is sized against the viewport, so nothing laid out is kept.
+pub fn viewportChanged(self: *StyleManager) void {
+    self.layout_bumps += 1;
+}
+
 /// The version the layout memos are valid for.
 pub fn layoutVersion(self: *const StyleManager) usize {
     return self.frame.page.style_version + self.layout_bumps;
@@ -3036,6 +3041,36 @@ pub fn isBlockLevel(self: *StyleManager, el: *Element) bool {
     return flow.position.outOfFlow() == false and flow.floated == false;
 }
 
+/// How a box takes part in its parent's flow, for the walks that would
+/// otherwise ask hasDisplayNone, isOutOfFlow and isBlockLevel of every child.
+pub const FlowRole = enum {
+    // display: none
+    none,
+    // position: absolute or fixed
+    out_of_flow,
+    // isBlockLevel: on a line of its own
+    block,
+    // on its parent's current line: inline-level, floated, a table cell
+    line,
+};
+
+pub fn flowRole(self: *StyleManager, el: *Element) FlowRole {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .line;
+    const visibility = self.visibilityProps(el);
+    if (visibility.display == .none) {
+        return .none;
+    }
+    const flow = self.flowProps(el);
+    if (flow.position.outOfFlow()) {
+        return .out_of_flow;
+    }
+    return switch (visibility.box) {
+        .block_level, .table, .table_row => if (flow.floated) .line else .block,
+        .inline_level, .atomic_inline, .contents, .table_cell => .line,
+    };
+}
+
 /// position: absolute or fixed
 pub fn isOutOfFlow(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
@@ -3102,13 +3137,11 @@ fn widthLimit(self: *StyleManager, length: Length) ?BoxLength {
 // kind: see getCachedOffset.
 pub const LayoutKind = enum { box_width, content_width, full_content_width, min_content_width, scrollable_content_width, row_shrink, box_height, content_height };
 
-/// Element's computed layout (see layout.zig), valid for one layout version and viewport.
+/// Element's computed layout (see layout.zig), valid for one layout version.
 const LayoutMemo = struct {
     version: usize = 0,
     // Whether the map holds a detached element (see detachedChanged)
     detached: bool = false,
-    viewport_width: u32 = 0,
-    viewport_height: u32 = 0,
     map: Records(Entry) = .{},
 
     // One per element read. (A call to Document.extent essentially reads element)
@@ -3284,8 +3317,6 @@ const HitBands = struct {
     // What the bands were recorded for. A fixed box moves with the scroll.
     version: usize = 0,
     scroll_y: u32 = 0,
-    viewport_width: u32 = 0,
-    viewport_height: u32 = 0,
 
     // The walk recording them finished
     complete: bool = false,
@@ -3309,10 +3340,7 @@ pub fn hasHitBands(self: *StyleManager, scroll_y: u32) bool {
     self.rebuildIfDirty() catch {};
     const bands = &self.hit_bands;
     const version = self.hitVersion();
-    const viewport = self.frame.page.getViewport();
-    if (bands.complete and bands.version == version and bands.scroll_y == scroll_y and
-        bands.viewport_width == viewport.width and bands.viewport_height == viewport.height)
-    {
+    if (bands.complete and bands.version == version and bands.scroll_y == scroll_y) {
         return true;
     }
     bands.map.clear();
@@ -3320,8 +3348,6 @@ pub fn hasHitBands(self: *StyleManager, scroll_y: u32) bool {
         .map = bands.map,
         .version = version,
         .scroll_y = scroll_y,
-        .viewport_width = viewport.width,
-        .viewport_height = viewport.height,
     };
     return false;
 }
@@ -3352,9 +3378,7 @@ pub fn hitBandsRecorded(self: *StyleManager) void {
 // Whether the layout memo holds entries the next read keeps
 fn layoutMemoLive(self: *StyleManager) bool {
     const memo = &self.layout_memo;
-    const viewport = self.frame.page.getViewport();
-    return memo.map.count() != 0 and memo.version == self.layoutVersion() and
-        memo.viewport_width == viewport.width and memo.viewport_height == viewport.height;
+    return memo.map.count() != 0 and memo.version == self.layoutVersion();
 }
 
 // Rebuilding resets the arena the memo lives in, so it runs first.
@@ -3362,14 +3386,11 @@ fn freshLayoutMemo(self: *StyleManager) ?*LayoutMemo {
     self.rebuildIfDirty() catch return null;
     const memo = &self.layout_memo;
     const version = self.layoutVersion();
-    const viewport = self.frame.page.getViewport();
-    if (memo.version != version or memo.viewport_width != viewport.width or memo.viewport_height != viewport.height) {
+    if (memo.version != version) {
         self.unscoped_sizing = false;
         memo.detached = false;
         memo.map.clear();
         memo.version = version;
-        memo.viewport_width = viewport.width;
-        memo.viewport_height = viewport.height;
     }
     return memo;
 }
@@ -7135,6 +7156,34 @@ test "StyleManager: hit bands: a hit test skips the subtrees the point is outsid
     i.remove(frame);
     try testing.expect((try doc.hitTestVertical(345, frame)) != i);
     try testing.expectEqual(true, sm.hit_bands.complete);
+}
+
+test "StyleManager: a viewport change drops the layout" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const browser = frame.page.session.browser;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='height: 50vh'></div><p style='height: 10px'></p>");
+    const p = body.lastChild().?.as(Element);
+
+    browser.setViewportOverride(.{ .width = 400, .height = 800, .scale = 1 });
+    defer browser.setViewportOverride(null);
+    try testing.expectEqual(400, layout.boxTop(p, frame));
+    try testing.expectEqual(410, doc.extent().height);
+    try testing.expectEqual(p, (try doc.hitTestVertical(405, frame)).?);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+
+    browser.setViewportOverride(.{ .width = 400, .height = 200, .scale = 1 });
+    try testing.expectEqual(100, layout.boxTop(p, frame));
+    try testing.expectEqual(110, doc.extent().height);
+    try testing.expectEqual(p, (try doc.hitTestVertical(105, frame)).?);
 }
 
 test "StyleManager: hit bands: a scoped change drops them" {
