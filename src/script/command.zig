@@ -22,7 +22,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const zenai = @import("zenai");
 const BrowserTool = lp.tools.Tool;
 const Schema = @import("Schema.zig");
 
@@ -41,7 +40,7 @@ const login_prompt_head =
 const login_prompt_tail =
     \\
     \\The login and acceptCookies tools need a decision model key (
-++ zenai.decisions.env_hint ++
+++ lp.App.decision_env_hint ++
     \\) that is not set, so do this with fill, click and press. Handle any
     \\cookie banners or popups first, then submit the form by clicking its
     \\submit button or pressing Enter in a filled field.
@@ -74,7 +73,7 @@ const accept_cookies_prompt =
     \\Find and dismiss the cookie consent banner on the current page.
     \\Look for "Accept", "Accept All", "I agree", or similar buttons and click them.
     \\The acceptCookies tool needs a decision model key (
-++ zenai.decisions.env_hint ++
+++ lp.App.decision_env_hint ++
     \\) that is not set, so click the button yourself.
 ;
 
@@ -300,7 +299,7 @@ pub const Command = union(enum) {
     pub const bare_login_help =
         \\Bare /login uses $LP_PASSWORD with $LP_USERNAME (or $LP_EMAIL) when set.
         \\Otherwise, without 
-    ++ zenai.decisions.env_hint ++
+    ++ lp.App.decision_env_hint ++
         \\ the model picks the LP_* variables for the
         \\site; with it, pass password=$LP_… username=$LP_….
     ;
@@ -520,7 +519,7 @@ test "fallbackPrompt: only the tools that ask the decision model have a prompt f
 
     // Both prompts tell the model why the tool is out of reach, by the
     // variables' real names.
-    const key = zenai.decisions.env_hint;
+    const key = lp.App.decision_env_hint;
     try testing.expect(std.mem.find(u8, (try fallbackFor(aa, .acceptCookies, "{}")).?, key) != null);
     const login = (try fallbackFor(aa, .login,
         \\{"password":"$LP_PASSWORD"}

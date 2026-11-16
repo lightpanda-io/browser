@@ -1257,7 +1257,7 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
     const html_element_ptr = try frame._factory.htmlElement(document, html_element);
     const element = html_element_ptr.asElement();
     element._namespace = namespace;
-    element._attributes.normalize = namespace == .html;
+    element._attributes._bits.normalize = namespace == .html;
     try populateElementAttributes(frame, element, attribute_iterator);
 
     // Check for customized built-in element via "is" attribute. A document
@@ -1297,7 +1297,7 @@ fn createSvgElementT(document: *const Node.Document, comptime E: type, tag_name:
 
 fn initSvgElement(frame: *Frame, element: *Element, attribute_iterator: anytype) !*Node {
     element._namespace = .svg;
-    element._attributes.normalize = false;
+    element._attributes._bits.normalize = false;
     try populateElementAttributes(frame, element, attribute_iterator);
     return element.asNode();
 }

@@ -78,7 +78,7 @@ const DispatchType = enum {
     timeout,
 };
 
-const Progress = struct {
+pub const Progress = struct {
     loaded: usize = 0,
     total: usize = 0,
     length_computable: bool = false,

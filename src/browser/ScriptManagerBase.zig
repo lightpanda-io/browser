@@ -927,9 +927,15 @@ pub const Script = struct {
             return;
         }
 
-        const previous_script = frame.document._current_script;
-        frame.document._current_script = fe.script_element;
-        defer frame.document._current_script = previous_script;
+        const document = frame.document;
+        const previous_script = document._current_script;
+        const previous_is_module = document._current_script_is_module;
+        document._current_script = fe.script_element;
+        document._current_script_is_module = fe.kind == .module;
+        defer {
+            document._current_script = previous_script;
+            document._current_script_is_module = previous_is_module;
+        }
 
         // inline scripts aren't cached. remote ones are.
         const cacheable = self.source == .remote;

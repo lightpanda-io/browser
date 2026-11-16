@@ -88,6 +88,8 @@ pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, fram
 /// nodes pruning skips, and returns whether to get a `leave()` for it too.
 fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var xpath_buffer: std.ArrayList(u8) = .empty;
+    var names: std.Io.Writer.Allocating = .init(self.arena);
+    var tag_counts: std.ArrayList(TagCounts) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
@@ -95,6 +97,8 @@ fn visitAll(self: @This(), visitor: anytype) error{WriteFailed}!void {
     var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
+        .names = &names,
+        .tag_counts = &tag_counts,
         .listener_targets = listener_targets,
         .label_index = &label_index,
     };
@@ -449,8 +453,16 @@ const NodeData = struct {
     tag_name: []const u8,
 };
 
+const TagCounts = std.StringArrayHashMapUnmanaged(usize);
+
 const WalkContext = struct {
     xpath_buffer: *std.ArrayList(u8),
+    // The names of the open nodes, one after the other.
+    names: *std.Io.Writer.Allocating,
+    // For the xpath index of an open node's children. Indexed at the node's
+    // depth. TagCounts are re-used by this index (freeing into the Arena would
+    // just "leak" memory in the arena)
+    tag_counts: *std.ArrayList(TagCounts),
     listener_targets: interactive.ListenerTargetMap,
     label_index: *Label.LabelByForIndex,
 };
@@ -458,14 +470,24 @@ const WalkContext = struct {
 // A node whose children are still being walked
 const Open = struct {
     next_child: ?*Node,
-    // for the children's xpath index
-    tag_counts: std.StringArrayHashMapUnmanaged(usize) = .empty,
-    name: ?[]const u8, // The children's parent_name
+    name: ?NameRange, // The children's parent_name
+    names_len: usize,
     invisible: bool, // visibility:hidden, so its text children are too
     controls_only: bool, // Walk.controls from it or an ancestor
     xpath_len: usize,
     // Whether the visitor gets a `leave()` once the children are done.
     opened: bool,
+};
+
+// Slice within WalkContext.names (memory moves as it grows, so we do it
+// index-based)
+const NameRange = struct {
+    start: usize,
+    len: usize,
+
+    fn slice(self: NameRange, names: *std.Io.Writer.Allocating) []const u8 {
+        return names.written()[self.start..][0..self.len];
+    }
 };
 
 fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
@@ -483,7 +505,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
             if (child.is(Element)) |el| {
                 tag = el.getTagNameLower();
             }
-            const gop = try top.tag_counts.getOrPut(self.arena, tag);
+            const gop = try ctx.tag_counts.items[stack.items.len - 1].getOrPut(self.arena, tag);
             if (!gop.found_existing) {
                 gop.value_ptr.* = 0;
             }
@@ -498,6 +520,7 @@ fn walk(self: @This(), ctx: *WalkContext, visitor: anytype) !void {
             try visitor.leave();
         }
         ctx.xpath_buffer.shrinkRetainingCapacity(done.xpath_len);
+        ctx.names.shrinkRetainingCapacity(done.names_len);
     }
 }
 
@@ -507,7 +530,7 @@ fn visitNode(
     ctx: *WalkContext,
     stack: *std.ArrayList(Open),
     node: *Node,
-    parent_name: ?[]const u8,
+    parent_name_range: ?NameRange,
     parent_invisible: bool,
     controls_only: bool,
     visitor: anytype,
@@ -606,10 +629,23 @@ fn visitNode(
     // This prevents token bloat and ensures their StaticText children aren't incorrectly pruned.
     // We ignore interactivity because a generic wrapper with an event listener still shouldn't hoist all text.
     // Not computing it also keeps a deep chain of containers from being O(depth²).
-    const name = if (invisible or (structural and !has_explicit_label))
-        null
-    else
-        try axn.getName(self.frame, self.arena, ctx.label_index);
+    const names_len = ctx.names.written().len;
+    var name_range: ?NameRange = null;
+    if (invisible == false and (structural == false or has_explicit_label)) {
+        if (try axn.writeNameInto(ctx.names, self.frame, ctx.label_index)) |text| {
+            name_range = .{
+                .start = @intFromPtr(text.ptr) - @intFromPtr(ctx.names.written().ptr),
+                .len = text.len,
+            };
+            // keep the name, drop what was trimmed after it
+            ctx.names.shrinkRetainingCapacity(name_range.?.start + text.len);
+        } else {
+            ctx.names.shrinkRetainingCapacity(names_len);
+        }
+    }
+    // Resolved once the buffer has stopped moving: nothing below writes to it.
+    const name: ?[]const u8 = if (name_range) |range| range.slice(ctx.names) else null;
+    const parent_name: ?[]const u8 = if (parent_name_range) |range| range.slice(ctx.names) else null;
 
     var should_visit = true;
     if (invisible) {
@@ -670,9 +706,15 @@ fn visitNode(
 
     // Its text is the only thing saying what it is, as outside a heading.
     const nameless_control = should_visit and (name == null or name.?.len == 0);
+    if (current_depth < ctx.tag_counts.items.len) {
+        ctx.tag_counts.items[current_depth].clearRetainingCapacity();
+    } else {
+        try ctx.tag_counts.append(self.arena, .empty);
+    }
     try stack.append(self.arena, .{
         .next_child = if (children != .none) node._first_child else null,
-        .name = name,
+        .name = name_range,
+        .names_len = names_len,
         .invisible = invisible,
         .controls_only = children == .controls or (controls_only and !nameless_control),
         .xpath_len = initial_xpath_len,

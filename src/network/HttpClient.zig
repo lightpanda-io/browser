@@ -88,6 +88,15 @@ wakeup_mutex: std.Io.Mutex = .init,
 polling_client: ?*Client = null,
 wakeup_pending: bool = false,
 
+// Absolute `.boot` millisecond deadline bounding any in-flight synchronous
+// fetch (parser-blocking script/stylesheet, sync XHR, worker import) on this
+// client, or null when no enclosing wait bounds them. A navigation waiter
+// (Runner._wait, the script Runtime's driveAsync) sets it before each tick so
+// a hung subresource can't stretch the wait past the caller's timeout: those
+// sync fetches spin inside `submitSync` on the same stack as the tick, and
+// without this bound they only end at curl's per-request wall clock.
+wait_deadline_ms: ?u64 = null,
+
 // Use to generate the next request ID
 next_request_id: u32 = 0,
 
@@ -845,7 +854,20 @@ pub fn tickSync(self: *Client, timeout_ms: u32) !void {
     if (self.hasPendingTeardown()) {
         return error.SyncWaitInterrupted;
     }
-    _ = try self._tick(timeout_ms, .sync_wait);
+
+    var remaining = timeout_ms;
+    if (self.wait_deadline_ms) |deadline| {
+        // A sync wait runs inside the waiter's tick (parser-blocking fetch,
+        // preload, import), so the waiter can't enforce its own timeout until
+        // we return: stop at its deadline.
+        const now = lp.datetime.milliTimestamp(.boot);
+        remaining = @intCast(deadline -| now);
+        if (remaining == 0) {
+            return error.WaitDeadlineExceeded;
+        }
+        remaining = @min(timeout_ms, remaining);
+    }
+    _ = try self._tick(remaining, .sync_wait);
 }
 
 fn hasPendingTeardown(self: *Client) bool {
@@ -933,6 +955,12 @@ fn clampToDelayed(self: *const Client, timeout_ms: u32) u32 {
         return 0;
     }
     return @intCast(@min(timeout_ms, transfer._run_at - now));
+}
+
+/// Bounds every in-flight synchronous fetch until cleared. Called by a
+/// navigation waiter before each of its ticks; null ends the bound.
+pub fn setWaitDeadline(self: *Client, deadline_ms: ?u64) void {
+    self.wait_deadline_ms = deadline_ms;
 }
 
 // Deliver completed response. This is the ONLY place user callbacks run,
@@ -1981,9 +2009,15 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // this is a normal end-of-body (the connection closure signals the end
     // of the response per HTTP/1.1 when there is no Content-Length).
     // We must check this before endTransfer, which may reset the easy handle.
+    // A body framed by Content-Length or chunked encoding has its own end,
+    // so a connection lost before that end is a truncated response.
     const is_conn_close_recv = blk: {
         const err = effective_err orelse break :blk false;
         if (err != error.RecvError) break :blk false;
+        if (msg.conn.getResponseHeader("content-length", 0) != null) break :blk false;
+        if (msg.conn.getResponseHeader("transfer-encoding", 0)) |te| {
+            if (std.ascii.findIgnoreCase(te.value, "chunked") != null) break :blk false;
+        }
         const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
         break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
     };
@@ -3053,6 +3087,15 @@ pub const Transfer = struct {
         if (client.hasPendingTeardown()) {
             self.deinit();
             return error.SyncWaitInterrupted;
+        }
+
+        // An enclosing navigation wait has already run past its deadline: don't
+        // even start this fetch, the waiter must settle now.
+        if (client.wait_deadline_ms) |deadline| {
+            if (lp.datetime.milliTimestamp(.boot) >= deadline) {
+                self.deinit();
+                return error.WaitDeadlineExceeded;
+            }
         }
 
         var sync_ctx = SyncContext{ .client = client, .body = .init(client.allocator), .options = opts };

@@ -141,6 +141,7 @@ fn isCancellation(err: anyerror) bool {
         error.Shutdown,
         error.ClientDisconnect,
         error.ClientDisconnected,
+        error.WaitDeadlineExceeded,
         => true,
         else => false,
     };

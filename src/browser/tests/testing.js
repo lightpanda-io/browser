@@ -151,8 +151,7 @@
   }
 
   async function async() {
-    // currentScript is null while a module runs (Lightpanda sets it, against
-    // the spec).
+    // currentScript is null while a module runs
     const script = document.currentScript;
     const is_module = script === null || script.type === 'module';
     if (is_module) {

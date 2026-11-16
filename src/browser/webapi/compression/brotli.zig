@@ -314,7 +314,7 @@ const alignment: std.mem.Alignment = .fromByteUnits(HEADER);
 
 fn alloc(raw_exec: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
     const exec: *const Execution = @ptrCast(@alignCast(raw_exec));
-    const allocator = exec._factory.storageAllocator();
+    const allocator = exec.page.recycling;
 
     const total = std.math.add(usize, size, HEADER) catch return null;
     const block = allocator.alignedAlloc(u8, alignment, total) catch return null;
@@ -328,7 +328,7 @@ fn free(raw_exec: ?*anyopaque, maybe_address: ?*anyopaque) callconv(.c) void {
     const address = maybe_address orelse return;
 
     const exec: *const Execution = @ptrCast(@alignCast(raw_exec));
-    const allocator = exec._factory.storageAllocator();
+    const allocator = exec.page.recycling;
 
     const block: [*]align(HEADER) u8 = @ptrCast(@alignCast(@as([*]u8, @ptrCast(address)) - HEADER));
     const total = std.mem.readInt(usize, block[0..@sizeOf(usize)], .native);

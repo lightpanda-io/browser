@@ -78,6 +78,8 @@ pub fn run(cmd: *BiDi.Command, p: Script, mode: Mode) !void {
         js_argument.* = fromJson(local, &bidi.node_registry, argument, frame) catch |err| switch (err) {
             error.NoSuchElement => return cmd.sendError("no such element", "unknown element reference"),
             error.StaleElement => return cmd.sendError("stale element reference", "element is not in the current document"),
+            error.NoSuchShadowRoot => return cmd.sendError("no such shadow root", "unknown shadow root reference"),
+            error.DetachedShadowRoot => return cmd.sendError("detached shadow root", "shadow root's host is not in the current document"),
             error.InvalidArgument => return cmd.sendError("invalid argument", "cannot deserialize an argument"),
             else => return err,
         };
@@ -352,13 +354,13 @@ fn cloneErrorMessage(err: anyerror) []const u8 {
 }
 
 // W3C's "JSON clone" of a script's result. Not a RemoteValue: a client reads
-// it as plain JSON, with an element the one exception.
+// it as plain JSON, with elements and shadow roots the exceptions.
 const Value = union(enum) {
     null,
     boolean: bool,
     number: f64,
     string: []const u8,
-    element: http_command.Reference,
+    reference: http_command.Reference,
     array: []const Value,
     object: []const Property,
 
@@ -372,7 +374,7 @@ const Value = union(enum) {
             .null => try w.write(null),
             .boolean => |v| try w.write(v),
             .string => |v| try w.write(v),
-            .element => |v| try w.write(v),
+            .reference => |v| try w.write(v),
             .number => |v| {
                 // JSON has no NaN or Infinity, and a whole number must not go
                 // out as 3e0 -- a client that rejects non-conforming JSON is
@@ -475,9 +477,11 @@ const Cloner = struct {
 
     fn platform(self: *Cloner, tao: js.TaggedOpaque) !?Value {
         if (tao.as(Node)) |node| {
-            // Non-elements will be serialized via properties()
-            const element = node.is(Node.Element) orelse return null;
-            return .{ .element = try self.reference(element.asNode()) };
+            // Other nodes will be serialized via properties()
+            if (node.is(Node.Element) == null and node.is(Node.ShadowRoot) == null) {
+                return null;
+            }
+            return .{ .reference = try self.reference(node) };
         }
 
         if (tao.as(NodeList)) |list| {
@@ -493,7 +497,7 @@ const Cloner = struct {
             const values = try self.arena.alloc(Value, collection.length(self.frame));
             for (values, 0..) |*item, i| {
                 const element = collection.getAtIndex(i, self.frame) orelse unreachable;
-                item.* = .{ .element = try self.reference(element.asNode()) };
+                item.* = .{ .reference = try self.reference(element.asNode()) };
             }
             return .{ .array = values };
         }
@@ -566,6 +570,14 @@ fn fromJson(
                 };
                 const element = try http_command.elementFromReference(registry, shared_id, frame);
                 return local.zigValueToJs(element.asNode(), .{});
+            }
+            if (fields.get(http_command.shadow_key)) |id| {
+                const shared_id = switch (id) {
+                    .string => |s| s,
+                    else => return error.NoSuchShadowRoot,
+                };
+                const shadow_root = try http_command.shadowRootFromReference(registry, shared_id, frame);
+                return local.zigValueToJs(shadow_root, .{});
             }
 
             const object = local.newObject();

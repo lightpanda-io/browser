@@ -81,7 +81,8 @@ _navigated_away: bool = false,
 _iframe_load_in_progress: bool = false,
 _mute_iframe_load: bool = false,
 _current_script: ?*Element.Html.Script = null,
-_ids: IdMap = .{},
+_current_script_is_module: bool = false,
+_ids: IdMap,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _implementation: ?*DOMImplementation = null,
@@ -111,6 +112,13 @@ _modal_dialogs: std.ArrayList(*Element.Html.Dialog) = .empty,
 // Incremented during custom element reactions when parsing. When > 0,
 // document.open/close/write/writeln must throw InvalidStateError.
 _throw_on_dynamic_markup_insertion_counter: u32 = 0,
+
+pub fn deinit(self: *Document, page: *Page) void {
+    self._selection.releaseRef(page);
+    if (self._fonts) |f| {
+        f.releaseRef(page);
+    }
+}
 
 pub const Type = union(enum) {
     generic,
@@ -1283,6 +1291,12 @@ fn getApplets(_: *const Document, frame: *Frame) !*collections.HTMLCollection {
 }
 
 fn getCurrentScript(self: *const Document) ?*Element.Html.Script {
+    if (self._current_script_is_module) {
+        // document.currentScript is null while a module is running
+        // but we still need to track it, which is why we can't just set
+        // _current_script = null.
+        return null;
+    }
     return self._current_script;
 }
 
@@ -1501,7 +1515,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     }
 
     // reset the document
-    self._ids.clear(frame.page_arena);
+    self._ids.clear();
     self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._modal_dialogs = .empty;

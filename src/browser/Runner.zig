@@ -134,6 +134,11 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const timer: std.Io.Timestamp = .now(io, .boot);
 
+    defer if (comptime is_cdp == false) {
+        // reset it (this is never set when is_cdp == true)
+        self.http_client.setWaitDeadline(null);
+    };
+
     // Periodic V8 GC hint during long waits. V8 is otherwise only nudged on
     // session/page teardown (Session.zig, Page.zig), so a page that stays
     // alive for seconds while running heavy JS accumulates wrappers and
@@ -164,10 +169,17 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         }
         session.processDestroyQueues();
 
+        if (comptime is_cdp == false) {
+            const elapsed_ms: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
+            const remaining_ms = timeout_ms -| elapsed_ms;
+            self.http_client.setWaitDeadline(lp.datetime.milliTimestamp(.boot) + remaining_ms);
+        }
+
         const tick_result = self._tick(is_cdp, 200, conditions) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 error.ClientDisconnected => {}, // CDP layer already logged this
+                error.WaitDeadlineExceeded => return .timeout,
                 else => log.err(.browser, "session wait", .{ .err = err }),
             }
             return err;
@@ -815,6 +827,49 @@ test "Runner: settled releases a port delivery its frame dropped" {
 
     // Dropping the scheduler finalizes the delivery without running it.
     frame.js.scheduler.reset();
+    try testing.expectEqual(0, frame.page.settle.pending);
+}
+
+test "Runner: an iframe's document request belongs to the work that inserted it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // From untracked work (an interval, an observer callback), the iframe's
+    // request isn't a tracked root of its own.
+    _ = try ls.local.exec(
+        \\document.appendChild(document.createElement('html'));
+        \\const a = document.createElement('iframe');
+        \\a.src = 'http://127.0.0.1:9582/src/browser/tests/runner/plain.txt?a';
+        \\document.documentElement.appendChild(a);
+    , null);
+    try testing.expectEqual(0, frame.page.settle.pending);
+
+    // From tracked work, it inherits the task and holds settled.
+    const attribution = frame.js.attribution;
+    var task_scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+    _ = try ls.local.exec(
+        \\const b = document.createElement('iframe');
+        \\b.src = 'http://127.0.0.1:9582/src/browser/tests/runner/plain.txt?b';
+        \\document.documentElement.appendChild(b);
+    , null);
+    task_scope.exit();
+    try testing.expectEqual(1, frame.page.settle.pending);
+
+    // A re-navigation from tracked work is queued: it holds settled until it
+    // runs, then its request runs under the task that queued it.
+    task_scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+    _ = try ls.local.exec("a.src = 'http://127.0.0.1:9582/src/browser/tests/runner/plain.txt?a2';", null);
+    task_scope.exit();
+    try testing.expectEqual(2, frame.page.settle.pending);
+
+    _ = try testing.test_session.processQueuedNavigation();
+    try testing.expectEqual(2, frame.page.settle.pending);
+
+    try testing.waitForFrame();
     try testing.expectEqual(0, frame.page.settle.pending);
 }
 

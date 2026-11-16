@@ -52,8 +52,9 @@ _observations: std.ArrayList(Observation) = .empty,
 const Observation = struct {
     target: *Element,
     connected: bool = false,
-    last_width: f64 = 0,
-    last_height: f64 = 0,
+    // -1 so the first delivery always reports, even for a zero-size target.
+    last_width: f64 = -1,
+    last_height: f64 = -1,
 };
 
 const Options = struct {

@@ -167,7 +167,7 @@
 
 <script id=custom_property_cssom_rules>
 {
-  // The CSSOM path (addRule) has to agree with the raw-text path (addRawRule).
+  // A rule added through the CSSOM has to agree with one parsed from source.
   const sheet = $('#dyn').sheet;
   sheet.insertRule('#plain { --Om: om-upper; --om: om-lower }', 0);
 

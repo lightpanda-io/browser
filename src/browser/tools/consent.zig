@@ -386,5 +386,5 @@ test "acceptCookies: a missing key is reported so the REPL can ask a model inste
     try std.testing.expect(result.is_error);
     // What `/acceptCookies` reads to fall back to the prompt it used to send.
     try std.testing.expectEqual(.missing_api_key, result.failure);
-    try std.testing.expect(std.mem.find(u8, result.text, zenai.decisions.env_hint) != null);
+    try std.testing.expect(std.mem.find(u8, result.text, lp.App.decision_env_hint) != null);
 }

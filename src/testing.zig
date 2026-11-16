@@ -452,10 +452,19 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
     }
 
     var runner = test_session.runner(.{});
-    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+    var timer: std.Io.Timestamp = .now(lp.io, .boot);
+
+    // Not runner.waitForFrame: its timeout is a hard deadline for every sync
+    // fetch started under it
+    while (timer.untilNow(lp.io, .boot).toMilliseconds() < 2000) {
+        switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .load })) {
+            .done => break,
+            .ok => |next_ms| if (next_ms > 0) lp.io.sleep(.fromMilliseconds(@min(next_ms, 20)), .awake) catch {},
+        }
+    }
 
     var wait_ms: u32 = timeout_ms;
-    var timer: std.Io.Timestamp = .now(lp.io, .boot);
+    timer = .now(lp.io, .boot);
     while (true) {
         const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
             .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more

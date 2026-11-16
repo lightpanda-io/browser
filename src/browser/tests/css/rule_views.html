@@ -189,3 +189,55 @@
   testing.expectEqual('', computed.getPropertyValue('--size'));
 }
 </script>
+
+<script id="grouping_rule_css_text">
+{
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(`@media screen and (min-width: 600px) { .a { color: red } .b{margin:1px} }
+@media   print  { }
+@supports (display:grid) { .g { display: grid } @media print { .p { color: blue } } }
+@layer base { .e { display: flex } }
+@layer { .anon { color: red } }
+@layer a, b;
+.n { @media (min-width: 1px) { color: blue; & .x { color: green } } }`);
+  const rules = sheet.cssRules;
+  testing.expectEqual(7, rules.length);
+  testing.expectEqual('@media screen and (min-width: 600px) {\n  .a { color: red; }\n  .b { margin: 1px; }\n}', rules[0].cssText);
+  testing.expectEqual('@media print {\n}', rules[1].cssText);
+  testing.expectEqual('@supports (display:grid) {\n  .g { display: grid; }\n  @media print {\n  .p { color: blue; }\n}\n}', rules[2].cssText);
+  testing.expectEqual('@layer base {\n  .e { display: flex; }\n}', rules[3].cssText);
+  testing.expectEqual('@layer {\n  .anon { color: red; }\n}', rules[4].cssText);
+  testing.expectEqual('@layer a, b;', rules[5].cssText);
+  testing.expectEqual('@media (min-width: 1px) {\n  color: blue;\n  & .x { color: green; }\n}', rules[6].cssRules[0].cssText);
+
+  // The keyword is lowercased; a `{` in a string doesn't open the block
+  const more = new CSSStyleSheet();
+  more.replaceSync(`@MEDIA print { .a { color: red } }
+@supports (content: "{") { .s { color: red } }`);
+  testing.expectEqual(2, more.cssRules.length);
+  testing.expectEqual('@media print {\n  .a { color: red; }\n}', more.cssRules[0].cssText);
+  testing.expectEqual('@supports (content: "{") {\n  .s { color: red; }\n}', more.cssRules[1].cssText);
+}
+</script>
+
+<script id="grouping_rule_cascade">
+{
+  // The rules in an inserted group, and a group nested in a style rule
+  const style = document.createElement('style');
+  document.head.appendChild(style);
+  const sheet = style.sheet;
+  const target = document.getElementById('target');
+  sheet.insertRule('@media (min-width: 1px) { @layer x { #target { visibility: hidden } } }');
+  testing.expectEqual('hidden', getComputedStyle(target).visibility);
+  sheet.insertRule('#target { @media print { visibility: visible } }', 1);
+  testing.expectEqual('hidden', getComputedStyle(target).visibility);
+  sheet.insertRule('#target { @supports (not (display: grid)) { visibility: visible } }', 2);
+  testing.expectEqual('hidden', getComputedStyle(target).visibility);
+  sheet.insertRule('#target { @media (min-width: 1px) { visibility: visible } }', 3);
+  testing.expectEqual('visible', getComputedStyle(target).visibility);
+  sheet.deleteRule(3);
+  testing.expectEqual('hidden', getComputedStyle(target).visibility);
+  style.remove();
+  testing.expectEqual('visible', getComputedStyle(target).visibility);
+}
+</script>

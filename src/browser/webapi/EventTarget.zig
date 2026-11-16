@@ -180,8 +180,9 @@ pub fn Subtype(comptime tag: Type) type {
 }
 
 pub fn subtype(self: *const EventTarget, comptime T: type) *T {
-    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, EventTarget);
-    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    // Wrapping: a Node embeds its EventTarget, so it starts before it.
+    const offset = comptime Factory.chainOffsetOf(T, T) -% Factory.chainOffsetOf(T, EventTarget);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) +% offset);
     if (comptime lp.IS_DEBUG) {
         // This pointer dance only works because the factory allocates the chain
         // in a contiguous block of memory. In debug, we assert this holds via

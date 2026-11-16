@@ -53,10 +53,9 @@ _first_child: ?*Node = null,
 _next: ?*Node = null,
 _prev: ?*Node = null,
 _owner: u32 = undefined, // owner document index
-// In debug, set so that we can check that we have a proper contiguous block
-// of memory for the entire chain (and thus, simple pointer arithmetics will
-// work to resolve the proto).
-_proto_canary: if (lp.IS_DEBUG) *EventTarget else void = undefined,
+// Embedded rather than laid out before the Node: at 1 byte it fits in our
+// padding, where a chain slot of its own costs every node 8 bytes.
+_proto: EventTarget = .{ ._type = .node },
 
 pub const Type = enum(u8) {
     cdata,
@@ -2046,5 +2045,5 @@ test "Node: text chain slot size" {
     // in existing padding. Debug is larger from the _proto_canary fields.
     const Text = @import("cdata/Text.zig");
     const slot = comptime Factory.chainOffsetOf(Text, Text) + @sizeOf(Text);
-    try testing.expectEqual(if (comptime lp.IS_DEBUG) 96 else 72, slot);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 80 else 64, slot);
 }

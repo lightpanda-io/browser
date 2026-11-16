@@ -136,10 +136,19 @@ pub const JsApi = struct {
 // in our Entry? Because that would require an extra 8 bytes for every single
 // attribute in the DOM, and, again, we expect that to almost always be null.
 pub const List = struct {
-    normalize: bool = true,
     _len: u16 = 0,
-    _cap: u16 = 0,
-    _entries: [*]Entry = @constCast(&empty_entries),
+    _bits: Bits = .{},
+    // align(4) so that the List is 12 bytes with no tail padding: with the
+    // Element's own 4 bytes, an Element is 16 bytes rather than 24.
+    _entries: [*]Entry align(4) = @constCast(&empty_entries),
+
+    // normalize shares the capacity's u16, a byte of its own would cost every
+    // element 8 (see above).
+    const Bits = packed struct(u16) {
+        cap: u15 = 0,
+        normalize: bool = true,
+    };
+    const max_cap = std.math.maxInt(u15);
 
     const empty_entries: [0]Entry = .{};
 
@@ -355,7 +364,7 @@ pub const List = struct {
             return false;
         }
         const len = self._len;
-        if (len == std.math.maxInt(u16) or name.len > std.math.maxInt(u32) or value.len > std.math.maxInt(u32)) {
+        if (len == max_cap or name.len > std.math.maxInt(u32) or value.len > std.math.maxInt(u32)) {
             // Bad input. Drop rather than fail the parse
             return false;
         }
@@ -415,33 +424,33 @@ pub const List = struct {
     }
 
     pub fn ensureTotalCapacity(self: *List, count: usize, frame: *Frame) !void {
-        const cap: u16 = @intCast(@min(count, std.math.maxInt(u16)));
+        const cap: u15 = @intCast(@min(count, max_cap));
         return self.setCapacity(cap, frame);
     }
 
     fn ensureUnusedCapacity(self: *List, extra: u16, frame: *Frame) !void {
         const needed = @as(u32, self._len) + extra;
-        if (needed <= self._cap) {
+        if (needed <= self._bits.cap) {
             return;
         }
-        if (needed > std.math.maxInt(u16)) {
+        if (needed > max_cap) {
             return error.OutOfMemory;
         }
         // Lists are sized exactly at creation; dynamic additions are rare and
         // small, so grow slowly.
-        return self.setCapacity(@intCast(@max(needed, @as(u32, self._cap) + 2)), frame);
+        return self.setCapacity(@intCast(@min(@max(needed, @as(u32, self._bits.cap) + 2), max_cap)), frame);
     }
 
-    fn setCapacity(self: *List, new_cap: u16, frame: *Frame) !void {
-        if (new_cap <= self._cap) {
+    fn setCapacity(self: *List, new_cap: u15, frame: *Frame) !void {
+        if (new_cap <= self._bits.cap) {
             return;
         }
-        if (self._cap == 0) {
+        if (self._bits.cap == 0) {
             self._entries = (try frame.page_arena.alloc(Entry, new_cap)).ptr;
         } else {
-            self._entries = (try frame.page_arena.realloc(self._entries[0..self._cap], new_cap)).ptr;
+            self._entries = (try frame.page_arena.realloc(self._entries[0..self._bits.cap], new_cap)).ptr;
         }
-        self._cap = new_cap;
+        self._bits.cap = new_cap;
     }
 
     fn getEntry(self: *const List, name: String, frame: *Frame) !?*Entry {
@@ -457,7 +466,7 @@ pub const List = struct {
     };
     fn getEntryAndNormalizedName(self: *const List, name: String, frame: *Frame) !NormalizeAndEntry {
         const normalized =
-            if (self.normalize) try normalizeNameForLookup(name, frame) else name;
+            if (self._bits.normalize) try normalizeNameForLookup(name, frame) else name;
 
         return .{
             .normalized = normalized,

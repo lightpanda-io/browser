@@ -354,6 +354,12 @@ pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, exec: *const 
     return promise;
 }
 
+/// The `{ done, value }` a reader.read() promise resolves with.
+const ReadData = struct {
+    done: bool,
+    value: js.Value,
+};
+
 /// State for an async pipe operation.
 const PipeState = struct {
     execution: *const Execution,
@@ -394,10 +400,6 @@ const PipeState = struct {
         };
     }
 
-    const ReadData = struct {
-        done: bool,
-        value: js.Value,
-    };
     fn onReadFulfilled(self: *PipeState, data_: ?ReadData) void {
         const exec = self.execution;
         const local = exec.js.local.?;
@@ -442,6 +444,157 @@ const Cancel = struct {
     resolver: ?js.PromiseResolver.Global = null,
 };
 
+/// tee() — https://streams.spec.whatwg.org/#readable-stream-default-tee
+/// Locks this stream and returns two branches which each receive every chunk.
+/// Like the spec, only a locked stream is rejected: teeing a closed or errored
+/// stream gives two closed or errored branches.
+pub fn tee(self: *ReadableStream, exec: *const Execution) ![2]*ReadableStream {
+    if (self.getLocked()) {
+        return exec.js.typeError("ReadableStream is locked");
+    }
+
+    const reader = try self.getReader(exec);
+    const state = try exec.page_arena.create(TeeState);
+    state.* = .{
+        .execution = exec,
+        .source = self,
+        .reader = reader,
+        .branches = .{
+            .{ .stream = try ReadableStream.init(null, null, exec) },
+            .{ .stream = try ReadableStream.init(null, null, exec) },
+        },
+    };
+
+    const local = exec.js.local.?;
+    const pull = try local.newCallback(TeeState.pull, state).persist();
+    inline for (&state.branches, 0..) |*branch, index| {
+        branch.stream._pull_fn = pull;
+        const on_cancel = try local.newCallback(TeeState.cancelBranch(index), state).persist();
+        branch.stream._cancel = .{ .callback = on_cancel };
+    }
+
+    // The spec's start algorithm resolves right away and then pulls each
+    // branch: the first pull reads the source, the second sets read_again.
+    for (state.branches) |branch| {
+        try branch.stream.callPullIfNeeded();
+    }
+
+    return .{ state.branches[0].stream, state.branches[1].stream };
+}
+
+/// ReadableStreamDefaultTee state. Each branch pulls through `pull`, which
+/// reads one chunk from the source and hands it to both branches. A branch
+/// that's cancelled stops receiving chunks; the source is only cancelled once
+/// both branches are, with the two reasons as the cancel reason.
+const TeeState = struct {
+    execution: *const Execution,
+    source: *ReadableStream,
+    reader: *ReadableStreamDefaultReader,
+    branches: [2]Branch,
+    reading: bool = false,
+    read_again: bool = false,
+
+    const Branch = struct {
+        stream: *ReadableStream,
+        cancelled: bool = false,
+        reason: ?js.Value.Global = null,
+    };
+
+    fn pull(self: *TeeState) void {
+        if (self.reading) {
+            self.read_again = true;
+            return;
+        }
+        self.reading = true;
+
+        const local = self.execution.js.local.?;
+        const read_promise = self.reader.read(self.execution) catch |err| {
+            log.warn(.js, "tee read", .{ .err = err });
+            self.reading = false;
+            return;
+        };
+        const then_fn = local.newCallback(onReadFulfilled, self);
+        const catch_fn = local.newCallback(onReadRejected, self);
+        _ = read_promise.thenAndCatch(then_fn, catch_fn) catch |err| {
+            log.warn(.js, "tee read", .{ .err = err });
+            self.reading = false;
+        };
+    }
+
+    fn onReadFulfilled(self: *TeeState, data_: ?ReadData) void {
+        const data = data_ orelse return self.onClose();
+        if (data.done) {
+            return self.onClose();
+        }
+
+        // Chunk steps: both branches get the same value (the default tee doesn't
+        // clone). An enqueue can run page JS that cancels a branch, so check each as we go.
+        self.read_again = false;
+        for (&self.branches) |*branch| {
+            if (branch.cancelled) continue;
+            branch.stream._controller.enqueueValue(data.value) catch {};
+            branch.stream.callPullIfNeeded() catch {};
+        }
+        self.reading = false;
+
+        if (self.read_again) {
+            self.pull();
+        }
+    }
+
+    fn onClose(self: *TeeState) void {
+        self.reading = false;
+        for (&self.branches) |*branch| {
+            if (branch.cancelled) continue;
+            branch.stream._controller.close() catch {};
+        }
+    }
+
+    fn onReadRejected(self: *TeeState) void {
+        self.reading = false;
+
+        const local = self.execution.js.local.?;
+        const reason: ?js.Value = if (self.source._stored_error) |stored| local.toLocal(stored) else null;
+        for (&self.branches) |*branch| {
+            branch.stream._controller.doError(reason) catch {};
+        }
+    }
+
+    /// The cancel callback of branch `index`. Each branch needs its own
+    /// function, since all a callback gets back is the TeeState.
+    fn cancelBranch(comptime index: usize) fn (*TeeState, ?js.Value) void {
+        return struct {
+            fn cancel(self: *TeeState, reason: ?js.Value) void {
+                const branch = &self.branches[index];
+                branch.cancelled = true;
+                if (reason) |r| {
+                    branch.reason = r.persist() catch null;
+                }
+                if (self.branches[1 - index].cancelled) {
+                    self.cancelSource();
+                }
+            }
+        }.cancel;
+    }
+
+    fn cancelSource(self: *TeeState) void {
+        const exec = self.execution;
+        const local = exec.js.local.?;
+
+        const no_reason: js.Value = .{ .local = local, .handle = local.isolate.initUndefined() };
+        const composite = local.newArray(2);
+        for (&self.branches, 0..) |*branch, index| {
+            const reason = if (branch.reason) |r| local.toLocal(r) else no_reason;
+            _ = composite.set(@intCast(index), reason, .{}) catch {};
+            if (branch.reason) |r| r.release();
+            branch.reason = null;
+        }
+        _ = self.source.cancel(composite.toValue(), exec) catch |err| {
+            log.warn(.js, "tee cancel source", .{ .err = err });
+        };
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ReadableStream);
 
@@ -455,6 +608,8 @@ pub const JsApi = struct {
     pub const getReader = bridge.function(ReadableStream.getReader, .{});
     pub const pipeThrough = bridge.function(ReadableStream.pipeThrough, .{});
     pub const pipeTo = bridge.function(ReadableStream.pipeTo, .{});
+    pub const tee = bridge.function(ReadableStream.tee, .{});
+    pub const values = bridge.function(ReadableStream.getAsyncIterator, .{});
     pub const locked = bridge.accessor(ReadableStream.getLocked, null, .{});
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };
@@ -490,6 +645,8 @@ const AsyncIterator = struct {
 
         pub const next = bridge.function(ReadableStream.AsyncIterator.next, .{});
         pub const @"return" = bridge.function(ReadableStream.AsyncIterator.@"return", .{});
+        // so `for await (const chunk of stream.values())` works
+        pub const symbol_async_iterator = bridge.iterator(ReadableStream.AsyncIterator, .{ .async = true });
     };
 };
 

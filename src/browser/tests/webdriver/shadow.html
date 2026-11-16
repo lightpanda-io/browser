@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<title>webdriver shadow</title>
+<div id=open_host></div>
+<div id=closed_host></div>
+<div id=plain><span class=inner>light</span></div>
+<script>
+  const open = document.getElementById('open_host').attachShadow({mode: 'open'});
+  open.innerHTML = '<span class=inner id=in_open>open text</span><a href="/x">shadow link</a><p class=inner>second</p>';
+  const closed = document.getElementById('closed_host').attachShadow({mode: 'closed'});
+  closed.innerHTML = '<span class=inner>closed text</span>';
+</script>

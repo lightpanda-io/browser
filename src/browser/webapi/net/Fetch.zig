@@ -278,19 +278,22 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 fn httpDoneCallback(transfer: *Transfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
     var response = self._response;
-    const body: []const u8 = if (self._null_body) "" else try response._arena.allocator().dupe(u8, transfer.responseBody());
+    if (self._null_body) {
+        response._body = .empty;
+    } else {
+        response.takeTransferBody(transfer);
+    }
 
     const signal = self._signal;
     self.detachSignal();
 
     response._http_transfer = null;
-    response._body = if (self._null_body) .empty else .{ .bytes = body };
 
     log.info(.http, "request complete", .{
         .source = "fetch",
         .url = self._url,
         .status = response._status,
-        .len = body.len,
+        .len = response._transfer_body.len(),
     });
 
     const resolver = switch (self._sink) {
@@ -309,7 +312,7 @@ fn httpDoneCallback(transfer: *Transfer) !void {
     response._signal = signal;
     const js_val = try ls.local.zigValueToJs(self._response, .{});
     self._owns_response = false;
-    response._arena.report();
+    response.report();
     return ls.toLocal(resolver).resolve("fetch done", js_val);
 }
 
@@ -368,7 +371,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
         }
         if (ls.local.zigValueToJs(response, .{})) |js_val| {
             owns_response = false;
-            response._arena.report();
+            response.report();
             return ls.toLocal(resolver).resolve("fetch done", js_val);
         } else |_| {}
     }
@@ -417,4 +420,30 @@ test "WebApi: fetch" {
     try testing.htmlRunner("net/fetch.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
     try testing.htmlRunner("net/fetch_readablestream_body.html", .{});
+}
+
+test "WebApi: fetch takes the response body from the transfer and reports it" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try frame.navigate("http://localhost:9582/", .{});
+    try testing.waitForFrame();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.exec("fetch('http://localhost:9582/xhr').then((r) => globalThis.res = r);", null);
+    try testing.waitForFrame();
+
+    const response = try ls.local.jsValueToZig(*Response, try ls.local.exec("res", null));
+    const body = response._transfer_body;
+    try testing.expectEqual(100, body.len());
+
+    // Not a copy.
+    try testing.expect(body.items().ptr == response._body.bytes.ptr);
+
+    // The runner has already flushed the account to V8, so check what the
+    // response told it. Response.deinit hands back this much.
+    try testing.expectEqual(body.capacity(), response._transfer_body_reported);
 }

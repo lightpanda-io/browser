@@ -27,9 +27,8 @@ const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 // https://xhr.spec.whatwg.org/#xmlhttprequestupload
 //
 // Returned by XMLHttpRequest.upload. It only inherits from
-// XMLHttpRequestEventTarget; it has no members of its own. We don't yet emit
-// upload progress events, but the object still needs to exist so scripts (e.g.
-// htmx) can call addEventListener on it without throwing.
+// XMLHttpRequestEventTarget; it has no members of its own. XMLHttpRequest
+// dispatches the upload progress events on it.
 const XMLHttpRequestUpload = @This();
 
 pub const Proto = XMLHttpRequestEventTarget;

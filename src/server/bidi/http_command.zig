@@ -32,6 +32,8 @@ const NodeRegistry = @import("../../NodeRegistry.zig");
 const Method = @import("../http.zig").Connection.Method;
 const json_input = @import("../json_input.zig");
 
+const AXNode = @import("../cdp/AXNode.zig");
+
 const BiDi = @import("BiDi.zig");
 const input = @import("input.zig");
 const storage = @import("storage.zig");
@@ -44,6 +46,8 @@ const Allocator = std.mem.Allocator;
 
 // The key of a WebDriver element reference: {"element-6066-…": "<sharedId>"}
 pub const element_key = "element-6066-11e4-a52e-4f735466cecf";
+// And of a shadow root reference: {"shadow-6066-…": "<sharedId>"}
+pub const shadow_key = "shadow-6066-11e4-a52e-4f735466cecf";
 
 pub const Command = union(enum) {
     navigate_to: NavigateTo,
@@ -69,6 +73,9 @@ pub const Command = union(enum) {
     find_elements: Find,
     find_element_from_element: FindFrom,
     find_elements_from_element: FindFrom,
+    find_element_from_shadow_root: FindFrom,
+    find_elements_from_shadow_root: FindFrom,
+    get_element_shadow_root: ElementId,
     get_active_element,
     get_element_text: ElementId,
     get_element_tag_name: ElementId,
@@ -78,6 +85,9 @@ pub const Command = union(enum) {
     get_element_rect: ElementId,
     is_element_enabled: ElementId,
     is_element_selected: ElementId,
+    is_element_displayed: ElementId,
+    get_computed_role: ElementId,
+    get_computed_label: ElementId,
     element_click: ElementId,
     element_clear: ElementId,
     element_send_keys: SendKeys,
@@ -90,6 +100,10 @@ pub const Command = union(enum) {
     add_cookie: AddCookie,
     delete_cookie: CookieName,
     delete_all_cookies,
+    dismiss_alert,
+    accept_alert,
+    get_alert_text,
+    send_alert_text: AlertText,
 };
 
 // A command's path parameters are its leading fields (see `parse`); the rest
@@ -253,11 +267,17 @@ const routes = [_]Route{
     .init(.GET, "/element/active", .get_active_element),
     .init(.POST, "/element/{id}/element", .find_element_from_element),
     .init(.POST, "/element/{id}/elements", .find_elements_from_element),
+    .init(.GET, "/element/{id}/shadow", .get_element_shadow_root),
+    .init(.POST, "/shadow/{id}/element", .find_element_from_shadow_root),
+    .init(.POST, "/shadow/{id}/elements", .find_elements_from_shadow_root),
     .init(.GET, "/element/{id}/text", .get_element_text),
     .init(.GET, "/element/{id}/name", .get_element_tag_name),
     .init(.GET, "/element/{id}/rect", .get_element_rect),
     .init(.GET, "/element/{id}/enabled", .is_element_enabled),
     .init(.GET, "/element/{id}/selected", .is_element_selected),
+    .init(.GET, "/element/{id}/displayed", .is_element_displayed),
+    .init(.GET, "/element/{id}/computedrole", .get_computed_role),
+    .init(.GET, "/element/{id}/computedlabel", .get_computed_label),
     .init(.POST, "/element/{id}/click", .element_click),
     .init(.POST, "/element/{id}/clear", .element_clear),
     .init(.POST, "/element/{id}/value", .element_send_keys),
@@ -273,6 +293,10 @@ const routes = [_]Route{
     .init(.DELETE, "/cookie", .delete_all_cookies),
     .init(.GET, "/cookie/{name}", .get_named_cookie),
     .init(.DELETE, "/cookie/{name}", .delete_cookie),
+    .init(.POST, "/alert/dismiss", .dismiss_alert),
+    .init(.POST, "/alert/accept", .accept_alert),
+    .init(.GET, "/alert/text", .get_alert_text),
+    .init(.POST, "/alert/text", .send_alert_text),
 };
 
 pub const ParseError = error{
@@ -354,10 +378,13 @@ pub fn process(cmd: *BiDi.Command) !void {
         .take_screenshot => return takeScreenshot(cmd),
         .perform_actions => |p| return performActions(cmd, p),
         .release_actions => return releaseActions(cmd),
-        .find_element => |p| return findElement(cmd, p.using, p.value, null),
-        .find_elements => |p| return findElements(cmd, p.using, p.value, null),
-        .find_element_from_element => |p| return findElement(cmd, p.using, p.value, p.id),
-        .find_elements_from_element => |p| return findElements(cmd, p.using, p.value, p.id),
+        .find_element => |p| return findElement(cmd, p.using, p.value, .document),
+        .find_elements => |p| return findElements(cmd, p.using, p.value, .document),
+        .find_element_from_element => |p| return findElement(cmd, p.using, p.value, .{ .element = p.id }),
+        .find_elements_from_element => |p| return findElements(cmd, p.using, p.value, .{ .element = p.id }),
+        .find_element_from_shadow_root => |p| return findElement(cmd, p.using, p.value, .{ .shadow_root = p.id }),
+        .find_elements_from_shadow_root => |p| return findElements(cmd, p.using, p.value, .{ .shadow_root = p.id }),
+        .get_element_shadow_root => |p| return getElementShadowRoot(cmd, p),
         .get_active_element => return getActiveElement(cmd),
         .get_element_text => |p| return getElementText(cmd, p),
         .get_element_tag_name => |p| return getElementTagName(cmd, p),
@@ -367,6 +394,9 @@ pub fn process(cmd: *BiDi.Command) !void {
         .get_element_rect => |p| return getElementRect(cmd, p),
         .is_element_enabled => |p| return isElementEnabled(cmd, p),
         .is_element_selected => |p| return isElementSelected(cmd, p),
+        .is_element_displayed => |p| return isElementDisplayed(cmd, p),
+        .get_computed_role => |p| return getComputedRole(cmd, p),
+        .get_computed_label => |p| return getComputedLabel(cmd, p),
         .element_click => |p| return elementClick(cmd, p),
         .element_clear => |p| return elementClear(cmd, p),
         .element_send_keys => |p| return elementSendKeys(cmd, p),
@@ -379,6 +409,7 @@ pub fn process(cmd: *BiDi.Command) !void {
         .add_cookie => |p| return addCookie(cmd, p),
         .delete_cookie => |p| return deleteCookies(cmd, p.name),
         .delete_all_cookies => return deleteCookies(cmd, null),
+        .dismiss_alert, .accept_alert, .get_alert_text, .send_alert_text => return noSuchAlert(cmd),
     }
 }
 
@@ -513,8 +544,16 @@ fn releaseActions(cmd: *BiDi.Command) !void {
     return input.release(cmd);
 }
 
-// POST /session/{id}/element, POST /session/{id}/element/{id}/element
-fn findElement(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]const u8) !void {
+// Where a search starts
+const From = union(enum) {
+    document,
+    element: []const u8,
+    shadow_root: []const u8,
+};
+
+// POST /session/{id}/element, POST /session/{id}/element/{id}/element,
+// POST /session/{id}/shadow/{id}/element
+fn findElement(cmd: *BiDi.Command, using: Using, value: []const u8, from: From) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const root = (try findRoot(cmd, frame, from)) orelse return;
     const nodes = (try locate(cmd, root, using, value, 1, frame)) orelse return;
@@ -524,8 +563,9 @@ fn findElement(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]con
     return cmd.sendResult(try Reference.initFromCommand(cmd, nodes[0]));
 }
 
-// POST /session/{id}/elements, POST /session/{id}/element/{id}/elements
-fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]const u8) !void {
+// POST /session/{id}/elements, POST /session/{id}/element/{id}/elements,
+// POST /session/{id}/shadow/{id}/elements
+fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: From) !void {
     const frame = (try currentFrame(cmd)) orelse return;
     const root = (try findRoot(cmd, frame, from)) orelse return;
     const nodes = (try locate(cmd, root, using, value, std.math.maxInt(u32), frame)) orelse return;
@@ -537,11 +577,29 @@ fn findElements(cmd: *BiDi.Command, using: Using, value: []const u8, from: ?[]co
     return cmd.sendResult(references);
 }
 
-// The document, or the element a "from element" search starts at.
-fn findRoot(cmd: *BiDi.Command, frame: *Frame, from: ?[]const u8) !?*Node {
-    const id = from orelse return frame.window._document.asNode();
-    const element = (try requireElement(cmd, id, frame)) orelse return null;
-    return element.asNode();
+fn findRoot(cmd: *BiDi.Command, frame: *Frame, from: From) !?*Node {
+    switch (from) {
+        .document => return frame.window._document.asNode(),
+        .element => |id| {
+            const element = (try requireElement(cmd, id, frame)) orelse return null;
+            return element.asNode();
+        },
+        .shadow_root => |id| {
+            const shadow_root = (try requireShadowRoot(cmd, id, frame)) orelse return null;
+            return shadow_root.asNode();
+        },
+    }
+}
+
+// GET /session/{id}/element/{id}/shadow. Closed roots included: the spec
+// asks for the element's shadow root, not what script's shadowRoot exposes.
+fn getElementShadowRoot(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+    const shadow_root = element.hostedShadowRoot(frame) orelse {
+        return cmd.sendError("no such shadow root", "element has no shadow root");
+    };
+    return cmd.sendResult(try Reference.initFromCommand(cmd, shadow_root.asNode()));
 }
 
 fn locate(cmd: *BiDi.Command, root: *Node, using: Using, value: []const u8, max: u32, frame: *Frame) !?[]const *Node {
@@ -680,6 +738,43 @@ fn isElementSelected(cmd: *BiDi.Command, p: ElementId) !void {
         return cmd.sendResult(option.getSelected());
     }
     return cmd.sendResult(false);
+}
+
+// GET /session/{id}/element/{id}/displayed.
+fn isElementDisplayed(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    var element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    const list_start: ?*Node = if (element.is(Html.Option) != null)
+        element.asNode().parentNode()
+    else if (element.is(Html.OptGroup) != null)
+        element.asNode()
+    else
+        null;
+    if (list_start) |start| {
+        if (Html.Select.listPosition(start)) |pos| {
+            element = pos.select.asElement();
+        }
+    }
+    return cmd.sendResult(element.checkVisibility(.{ .checkOpacity = true, .visibilityProperty = true }, frame));
+}
+
+// GET /session/{id}/element/{id}/computedrole
+fn getComputedRole(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+    return cmd.sendResult(try AXNode.fromNode(element.asNode()).getRole());
+}
+
+// GET /session/{id}/element/{id}/computedlabel
+fn getComputedLabel(cmd: *BiDi.Command, p: ElementId) !void {
+    const frame = (try currentFrame(cmd)) orelse return;
+    const element = (try requireElement(cmd, p.id, frame)) orelse return;
+
+    var labels: Html.Label.LabelByForIndex = .{};
+    var aw: std.Io.Writer.Allocating = .init(cmd.arena);
+    const name = try AXNode.fromNode(element.asNode()).writeNameInto(&aw, frame, &labels);
+    return cmd.sendResult(name orelse "");
 }
 
 // POST /session/{id}/element/{id}/click.
@@ -942,14 +1037,31 @@ fn deleteCookies(cmd: *BiDi.Command, name: ?[]const u8) !void {
     return cmd.sendDone();
 }
 
-// {"element-6066-…": "<sharedId>"}: a WebDriver element reference is the
-// node registry's id, the same one BiDi hands out.
+// POST /session/{id}/alert/text
+const AlertText = struct {
+    text: []const u8,
+};
+
+// POST /session/{id}/alert/dismiss, /alert/accept, GET and POST /alert/text.
+// alert(), confirm() and prompt() never block: they return as soon as they're
+// called. So there's never a prompt open to act on.
+fn noSuchAlert(cmd: *BiDi.Command) !void {
+    return cmd.sendError("no such alert", "no user prompt is open");
+}
+
+// {"element-6066-…": "<sharedId>"}, or {"shadow-6066-…": "<sharedId>"} for a
+// shadow root: a WebDriver reference is the node registry's id, the same one
+// BiDi hands out.
 pub const Reference = struct {
+    key: []const u8,
     shared_id: []const u8,
 
     pub fn init(arena: Allocator, registry: *NodeRegistry, node: *Node) !Reference {
         const registered = try registry.register(node);
-        return .{ .shared_id = try arena.print("{d}", .{registered.id}) };
+        return .{
+            .key = if (node.is(Node.ShadowRoot) != null) shadow_key else element_key,
+            .shared_id = try arena.print("{d}", .{registered.id}),
+        };
     }
 
     fn initFromCommand(cmd: *BiDi.Command, node: *Node) !Reference {
@@ -958,7 +1070,7 @@ pub const Reference = struct {
 
     pub fn jsonStringify(self: Reference, jws: anytype) !void {
         try jws.beginObject();
-        try jws.objectField(element_key);
+        try jws.objectField(self.key);
         try jws.write(self.shared_id);
         try jws.endObject();
     }
@@ -970,6 +1082,34 @@ pub const ReferenceError = error{
     // the element is no longer in a document
     StaleElement,
 };
+
+pub const ShadowRootReferenceError = error{
+    NoSuchShadowRoot,
+    DetachedShadowRoot,
+};
+
+pub fn shadowRootFromReference(registry: *const NodeRegistry, id: []const u8, frame: *const Frame) ShadowRootReferenceError!*Node.ShadowRoot {
+    const node = remote_value.nodeFromSharedId(registry, .{ .string = id }) catch return error.NoSuchShadowRoot;
+    const shadow_root = node.is(Node.ShadowRoot) orelse return error.NoSuchShadowRoot;
+    const host = shadow_root.getHost().asNode();
+    if (host.isConnected() == false or host.getDocument(frame) != frame.window._document) {
+        return error.DetachedShadowRoot;
+    }
+    return shadow_root;
+}
+
+fn requireShadowRoot(cmd: *BiDi.Command, id: []const u8, frame: *const Frame) !?*Node.ShadowRoot {
+    return shadowRootFromReference(&cmd.bidi.node_registry, id, frame) catch |err| switch (err) {
+        error.NoSuchShadowRoot => {
+            try cmd.sendError("no such shadow root", "unknown shadow root reference");
+            return null;
+        },
+        error.DetachedShadowRoot => {
+            try cmd.sendError("detached shadow root", "shadow root's host is not in the current document");
+            return null;
+        },
+    };
+}
 
 pub fn elementFromReference(registry: *const NodeRegistry, id: []const u8, frame: *const Frame) ReferenceError!*Node.Element {
     // ids are dropped on navigation
@@ -1072,6 +1212,12 @@ test "bidi.http_command: parse" {
     }
 
     {
+        const command = try parse(arena, .POST, "/shadow/9/element", "{\"using\":\"css selector\",\"value\":\"b\"}");
+        try testing.expectEqual("9", command.find_element_from_shadow_root.id);
+        try testing.expectEqual(.css, command.find_element_from_shadow_root.using);
+    }
+
+    {
         // two path parameters, no body
         const command = try parse(arena, .GET, "/element/7/attribute/data-x", "");
         try testing.expectEqual("7", command.get_element_attribute.id);
@@ -1158,6 +1304,12 @@ test "bidi.http_command: parse" {
     try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/window", "{\"handle\":17}"));
     try testing.expect(try parse(arena, .DELETE, "/window", "") == .close_window);
     try testing.expect(try parse(arena, .DELETE, "/actions", "") == .release_actions);
+
+    try testing.expect(try parse(arena, .POST, "/alert/dismiss", "{}") == .dismiss_alert);
+    try testing.expect(try parse(arena, .POST, "/alert/accept", "{}") == .accept_alert);
+    try testing.expect(try parse(arena, .GET, "/alert/text", "") == .get_alert_text);
+    try testing.expectEqual("hi", (try parse(arena, .POST, "/alert/text", "{\"text\":\"hi\"}")).send_alert_text.text);
+    try testing.expectError(error.InvalidArgument, parse(arena, .POST, "/alert/text", "{}"));
 
     // a known path with the wrong method is an unknown command too
     try testing.expectError(error.UnknownCommand, parse(arena, .PUT, "/url", ""));

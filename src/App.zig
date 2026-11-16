@@ -64,9 +64,12 @@ http_client: std.http.Client,
 /// from any thread: it touches no browser state.
 decisions: zenai.decisions.Pool,
 
-/// Picks the decision model's provider, "gemini" or "typesafe", when keys for
-/// both are set. Unset, Gemini is preferred.
+/// Picks the decision model's provider, "gemini" or "typesafe". Unset,
+/// TypeSafe answers: a Google key alone never sends page content to Gemini.
 pub const decision_provider_env_var_name = "LIGHTPANDA_DECISION_PROVIDER";
+
+/// What to set for the decision model, for a message telling someone to.
+pub const decision_env_hint = zenai.decisions.envHint(decision_provider_env_var_name);
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{

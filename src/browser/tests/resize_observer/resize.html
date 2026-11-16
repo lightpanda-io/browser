@@ -1,9 +1,12 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <div id="anchor">anchor</div>
 
 <script id="style_change_delivers" type=module>
-  // Changing an element's size delivers a fresh notification.
+  // Changing an element's size delivers a fresh notification. Callbacks in
+  // this file resize via setTimeout: a same-depth change made inside the
+  // callback makes Chrome report a ResizeObserver loop error.
   const state = await testing.async();
   const t = document.createElement('div');
   t.style.width = '100px';
@@ -15,7 +18,7 @@
     step += 1;
     if (step === 1) {
       testing.expectEqual(100, entries[0].contentRect.width);
-      t.style.width = '25px';
+      setTimeout(() => { t.style.width = '25px'; });
     } else if (step === 2) {
       testing.expectEqual(25, entries[0].contentRect.width);
       observer.disconnect();
@@ -40,7 +43,7 @@
   const observer = new ResizeObserver((entries) => {
     widths.push(entries[0].contentRect.width);
     if (widths.length === 1) {
-      t.remove();
+      setTimeout(() => t.remove());
     } else if (widths.length === 2) {
       observer.disconnect();
       state.resolve();
@@ -67,7 +70,7 @@
   const observer = new ResizeObserver((entries) => {
     widths.push(entries[0].contentRect.width);
     if (widths.length === 1) {
-      host.style.display = 'none';
+      setTimeout(() => { host.style.display = 'none'; });
     } else if (widths.length === 2) {
       observer.disconnect();
       state.resolve();

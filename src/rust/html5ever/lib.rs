@@ -158,23 +158,38 @@ pub extern "C" fn html5ever_parse_document_with_encoding(
     parse_document_text(sink, &decoded);
 }
 
-// parse_document(sink, Default::default()).one(text), with the sink knowing
-// where the tokenizer is in the input.
+// What the tokenizer is given at a time. Bounds the copy of the input that's
+// alive during the parse: tendrils own their buffer, so feeding the document
+// as one would duplicate all of it.
+const FEED_CHUNK: usize = 64 * 1024;
+
+// parse_document(sink, Default::default()).one(text), fed in chunks and with
+// the sink knowing where the tokenizer is in the input. `text` is read
+// throughout, so it has to survive the scripts the parse runs.
 fn parse_document_text(sink: sink::Sink, text: &str) {
-    // Like the tokenizer, the sink only reads this copy, so `text` doesn't
-    // have to survive the scripts the parse runs.
-    let input = StrTendril::from(text);
     let queue = BufferQueue::default();
-    queue.push_back(input.clone());
+    let unfed = Cell::new(text.len());
     let sink = sink::Sink {
-        input: Some(sink::DocumentInput::new(&input, &queue)),
+        input: Some(sink::DocumentInput::new(text, &queue, &unfed)),
         ..sink
     };
     let tokenizer = Tokenizer::new(
         TreeBuilder::new(sink, Default::default()),
         Default::default(),
     );
-    while !matches!(tokenizer.feed(&queue), TokenizerResult::Done) {}
+
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut len = rest.len().min(FEED_CHUNK);
+        while !rest.is_char_boundary(len) {
+            len -= 1;
+        }
+        let (chunk, tail) = rest.split_at(len);
+        rest = tail;
+        unfed.set(rest.len());
+        queue.push_back(StrTendril::from(chunk));
+        while !matches!(tokenizer.feed(&queue), TokenizerResult::Done) {}
+    }
     tokenizer.end();
 }
 

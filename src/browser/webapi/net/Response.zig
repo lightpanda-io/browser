@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
 const Page = @import("../../Page.zig");
-const Transfer = @import("../../../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../../network/HttpClient.zig");
 
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
@@ -34,6 +34,7 @@ const TextDecoderStream = @import("../encoding/TextDecoderStream.zig");
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
+const Transfer = HttpClient.Transfer;
 
 const Response = @This();
 
@@ -51,6 +52,11 @@ _status: u16,
 _arena: *lp.Arena,
 _headers: *Headers,
 _body: Body = .empty,
+// fetch's body, taken from the transfer instead of copied into _arena. When
+// set, _body.bytes points into it.
+_transfer_body: HttpClient.Body = .empty,
+// What V8 has been told about _transfer_body; see report.
+_transfer_body_reported: usize = 0,
 _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
@@ -123,7 +129,8 @@ pub fn isNullBodyStatus(status: u16) bool {
 
 // fetch()'s response shell.
 pub fn initPending(exec: *const Execution) !*Response {
-    const arena = try exec.session.getPinnedArena(.large, "Response.pending");
+    // The body doesn't go in here; see takeTransferBody.
+    const arena = try exec.session.getPinnedArena(.small, "Response.pending");
     errdefer arena.release();
     return initWithArena(arena, null, .{ .status = 0 }, exec);
 }
@@ -259,6 +266,10 @@ pub fn deinit(self: *Response, _: *Page) void {
         resp.cancel();
         self._http_transfer = null;
     }
+    if (self._arena.account) |account| {
+        account.pending -= @intCast(self._transfer_body_reported);
+    }
+    self._transfer_body.deinit();
     self._arena.release();
 }
 
@@ -268,6 +279,19 @@ pub fn releaseRef(self: *Response, page: *Page) void {
 
 pub fn acquireRef(self: *Response) void {
     self._rc.acquire();
+}
+
+pub fn takeTransferBody(self: *Response, transfer: *Transfer) void {
+    self._transfer_body = transfer.takeBody();
+    self._body = .{ .bytes = self._transfer_body.items() };
+}
+
+pub fn report(self: *Response) void {
+    self._arena.report();
+    const account = self._arena.account orelse return;
+    const cap = self._transfer_body.capacity();
+    account.pending += @as(i64, @intCast(cap)) - @as(i64, @intCast(self._transfer_body_reported));
+    self._transfer_body_reported = cap;
 }
 
 pub fn getStatus(self: *const Response) u16 {

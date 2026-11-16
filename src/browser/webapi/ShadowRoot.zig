@@ -61,7 +61,7 @@ _clonable: bool,
 _serializable: bool,
 _declarative: bool,
 _available_to_internals: bool = false,
-_ids: IdMap = .{},
+_ids: IdMap,
 _adopted_style_sheets: ?js.Object.Global = null,
 
 pub fn init(host: *Element, opts: AttachOptions, frame: *Frame) !*ShadowRoot {
@@ -74,6 +74,7 @@ pub fn init(host: *Element, opts: AttachOptions, frame: *Frame) !*ShadowRoot {
         ._clonable = opts.clonable,
         ._serializable = opts.serializable,
         ._declarative = opts.declarative,
+        ._ids = .init(frame.page_arena),
     });
 }
 

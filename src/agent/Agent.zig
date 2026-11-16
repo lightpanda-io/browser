@@ -389,6 +389,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.ts.init(app);
     errdefer self.ts.deinit();
+    if (app.config.cookieFile()) |path| lp.cookies.loadFromFile(self.ts.session, path);
 
     self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.backend(), c.keySlice(), .{ .base_url = settings.baseUrl(c.provider, opts.base_url), .retry_policy = .long_running, .http_client = &self.ts.browser.app.http_client, .extra_headers = self.extraHeaders(c.provider) }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
@@ -431,6 +432,7 @@ pub fn deinit(self: *Agent) void {
     self.allocator.free(self.conversation.system_prompt);
     self.conversation.deinit();
     self.model_completion_arena.deinit();
+    if (self.ts.browser.app.config.cookieJarFile()) |path| lp.cookies.saveToFile(&self.ts.session.cookie_jar, path);
     self.ts.deinit();
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
     if (self.credential) |*c| c.deinit(self.allocator);
@@ -798,7 +800,7 @@ fn runRepl(self: *Agent) void {
                     switch (Command.bareLogin(aa, names, has_key) catch continue :repl) {
                         .args => |args| tc.args = args,
                         .prompt => |prompt| {
-                            self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
+                            self.terminal.printInfo("no decision model key (" ++ App.decision_env_hint ++ "); asking the model instead", .{});
                             _ = self.runPromptTurn(aa, tc.name(), prompt, line);
                             continue :repl;
                         },
@@ -821,7 +823,7 @@ fn runRepl(self: *Agent) void {
                         self.printCommandResult(tc, result);
                         continue :repl;
                     };
-                    self.terminal.printInfo("no decision model key (" ++ zenai.decisions.env_hint ++ "); asking the model instead", .{});
+                    self.terminal.printInfo("no decision model key (" ++ App.decision_env_hint ++ "); asking the model instead", .{});
                     if (!self.runPromptTurn(aa, tc.name(), prompt, line)) {
                         self.printCommandResult(tc, result);
                     }

@@ -576,14 +576,14 @@ pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Orig
         .protocol = protocol,
         .session_id = switch (origin) {
             .socket => null,
-            .session => |id| id,
+            .session => |session| session.id,
         },
     };
     self.workers.append(&worker.node);
     if (origin == .session) {
         lp.assert(self.protocols.webdriver, "spawnWorker session without webdriver", .{});
         // because we sized self.sessions to config.maxConnections()
-        self.sessions.putAssumeCapacityNoClobber(origin.session, worker);
+        self.sessions.putAssumeCapacityNoClobber(origin.session.id, worker);
     }
 
     lp.metrics.serve_connections.incr(protocol);
@@ -1373,7 +1373,12 @@ pub const Worker = struct {
     // whose websocket, if any, comes later (see attachConnection).
     pub const Origin = union(enum) {
         socket: posix.socket_t,
-        session: [36]u8,
+        session: Session,
+
+        pub const Session = struct {
+            id: [36]u8,
+            accept_insecure_certs: bool,
+        };
     };
 
     pub fn linkDropping(self: *const Worker) bool {
@@ -1419,7 +1424,11 @@ pub const Worker = struct {
                 defer allocator.destroy(bidi);
                 try bidi.init(server.app, &self.inbox, switch (origin) {
                     .socket => |socket| .{ .socket = socket },
-                    .session => |id| .{ .session = .{ .id = id, .worker = self } },
+                    .session => |session| .{ .session = .{
+                        .id = session.id,
+                        .worker = self,
+                        .accept_insecure_certs = session.accept_insecure_certs,
+                    } },
                 });
                 defer bidi.deinit();
                 self.run(.init(.{ .bidi = bidi }, &self.inbox), bidi.link);
@@ -1926,6 +1935,26 @@ test "server: HTTP session bootstrap" {
     }
 }
 
+test "server: HTTP session acceptInsecureCerts" {
+    const cases = [_]struct { []const u8, bool }{
+        .{ "{\"capabilities\":{\"alwaysMatch\":{\"acceptInsecureCerts\":true}}}", true },
+        .{ "{\"capabilities\":{\"alwaysMatch\":{\"acceptInsecureCerts\":false}}}", false },
+        .{ "{\"capabilities\":{\"firstMatch\":[{\"acceptInsecureCerts\":true},{}]}}", true },
+        // only the first firstMatch is the one we match
+        .{ "{\"capabilities\":{\"firstMatch\":[{},{\"acceptInsecureCerts\":true}]}}", false },
+        // alwaysMatch wins
+        .{ "{\"capabilities\":{\"alwaysMatch\":{\"acceptInsecureCerts\":false},\"firstMatch\":[{\"acceptInsecureCerts\":true}]}}", false },
+    };
+    for (cases) |case| {
+        const session = try postHTTPSession(case[0]);
+        defer deleteHTTPSession(&session.id, true) catch |err| @panic(@errorName(err));
+        testing.expectEqual(case[1], session.capabilities.get("acceptInsecureCerts").?.bool) catch |err| {
+            std.debug.print("body: {s}\n", .{case[0]});
+            return err;
+        };
+    }
+}
+
 test "server: HTTP session outlives its websocket" {
     // Without webSocketUrl the session is driven over HTTP alone; asking for
     // it later still works, and closing the websocket doesn't end the session.
@@ -2213,6 +2242,139 @@ test "server: HTTP history commands" {
     try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/forward", "{}")));
     try testing.expectEqual("{\"value\":\"" ++ second ++ "#pushed\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
     try testing.expectEqual("{\"value\":\",#pushed\"}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"return pops.join()\",\"args\":[]}")));
+}
+
+test "server: HTTP element displayed, role and label" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/displayed.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "#plain", "true" },
+        .{ "#gone_child", "false" },
+        .{ "#faded_child", "false" },
+        .{ "#hidden", "false" },
+        .{ "#hidden_child", "false" },
+        .{ "#shown_again", "true" },
+        .{ "#secret", "false" },
+        // an option or optgroup is displayed when its <select> is
+        .{ "#group", "true" },
+        .{ "#opt", "true" },
+        .{ "#gone_group", "false" },
+        .{ "#gone_opt", "false" },
+    };
+    for (cases) |case| {
+        const id = try findElement(&c, &session_id, "css selector", case[0]);
+        const expected = try testing.arena_allocator.print("{{\"value\":{s}}}", .{case[1]});
+        testing.expectEqual(expected, try elementCommand(&c, &session_id, id, "/displayed")) catch |err| {
+            std.debug.print("displayed: {s}\n", .{case[0]});
+            return err;
+        };
+    }
+
+    const named = try findElement(&c, &session_id, "css selector", "#named");
+    try testing.expectEqual("{\"value\":\"textbox\"}", try elementCommand(&c, &session_id, named, "/computedrole"));
+    try testing.expectEqual("{\"value\":\"Your name\"}", try elementCommand(&c, &session_id, named, "/computedlabel"));
+
+    const save = try findElement(&c, &session_id, "css selector", "#save");
+    try testing.expectEqual("{\"value\":\"button\"}", try elementCommand(&c, &session_id, save, "/computedrole"));
+    try testing.expectEqual("{\"value\":\"Save draft\"}", try elementCommand(&c, &session_id, save, "/computedlabel"));
+
+    const menu = try findElement(&c, &session_id, "css selector", "#menu");
+    try testing.expectEqual("{\"value\":\"navigation\"}", try elementCommand(&c, &session_id, menu, "/computedrole"));
+    try testing.expectEqual("{\"value\":\"\"}", try elementCommand(&c, &session_id, menu, "/computedlabel"));
+
+    // an explicit role is a fallback list: the first token wins
+    const landmark = try findElement(&c, &session_id, "css selector", "#landmark");
+    try testing.expectEqual("{\"value\":\"region\"}", try elementCommand(&c, &session_id, landmark, "/computedrole"));
+}
+
+test "server: HTTP shadow roots" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/shadow.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    const open_host = try findElement(&c, &session_id, "css selector", "#open_host");
+    const open_root = try shadowRootReference(elementCommand(&c, &session_id, open_host, "/shadow"));
+
+    // a document search doesn't reach into a shadow tree
+    {
+        const res = try findElements(&c, &session_id, "css selector", "#in_open");
+        try testing.expectEqual(0, (try elementReferences(responseBody(res))).len);
+    }
+
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/element", "css selector", ".inner");
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
+        const inner = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+        try testing.expectEqual("{\"value\":\"open text\"}", try elementCommand(&c, &session_id, inner, "/text"));
+    }
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/elements", "css selector", ".inner");
+        try testing.expectEqual(2, (try elementReferences(res)).len);
+    }
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/elements", "tag name", "span");
+        try testing.expectEqual(1, (try elementReferences(res)).len);
+    }
+    {
+        const res = try shadowFind(&c, &session_id, open_root, "/elements", "link text", "shadow link");
+        try testing.expectEqual(1, (try elementReferences(res)).len);
+    }
+
+    // closed roots too: the spec reads the element's shadow root, not what
+    // script's shadowRoot exposes
+    {
+        const closed_host = try findElement(&c, &session_id, "css selector", "#closed_host");
+        const closed_root = try shadowRootReference(elementCommand(&c, &session_id, closed_host, "/shadow"));
+        const res = try shadowFind(&c, &session_id, closed_root, "/elements", "css selector", ".inner");
+        try testing.expectEqual(1, (try elementReferences(res)).len);
+    }
+
+    {
+        const plain = try findElement(&c, &session_id, "css selector", "#plain");
+        const path = try testing.arena_allocator.print("/element/{s}/shadow", .{plain});
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"no such shadow root\"") != null);
+
+        // an element reference isn't a shadow root reference
+        const find = try sessionCommand(&c, "POST", &session_id, try testing.arena_allocator.print("/shadow/{s}/element", .{plain}), "{\"using\":\"css selector\",\"value\":\"span\"}");
+        try testing.expect(std.mem.find(u8, find, "\"error\":\"no such shadow root\"") != null);
+
+        // nor the other way around
+        const text = try sessionCommand(&c, "GET", &session_id, try testing.arena_allocator.print("/element/{s}/text", .{open_root}), "");
+        try testing.expect(std.mem.find(u8, text, "\"error\":\"no such element\"") != null);
+    }
+
+    // through execute, both ways
+    {
+        const body = try testing.arena_allocator.print(
+            \\{{"script":"return arguments[0].querySelector('a').textContent","args":[{{"{s}":"{s}"}}]}}
+        , .{ http_command.shadow_key, open_root });
+        try testing.expectEqual("{\"value\":\"shadow link\"}", responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", body)));
+
+        const res = responseBody(try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"return document.getElementById('open_host').shadowRoot\",\"args\":[]}"));
+        try testing.expectEqual(open_root, try shadowRootReference(res));
+    }
+
+    // the host leaving the document detaches its root
+    {
+        _ = try sessionCommand(&c, "POST", &session_id, "/execute/sync", "{\"script\":\"document.getElementById('open_host').remove()\",\"args\":[]}");
+        const res = try sessionCommand(&c, "POST", &session_id, try testing.arena_allocator.print("/shadow/{s}/element", .{open_root}), "{\"using\":\"css selector\",\"value\":\"span\"}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.find(u8, res, "\"error\":\"detached shadow root\"") != null);
+    }
 }
 
 test "server: HTTP element commands" {
@@ -2714,6 +2876,18 @@ fn elementReferences(body: []const u8) ![]const []const u8 {
     return references;
 }
 
+fn shadowFind(c: *TestClient, session_id: *const [36]u8, root: []const u8, suffix: []const u8, using: []const u8, value: []const u8) ![]const u8 {
+    const path = try testing.arena_allocator.print("/shadow/{s}{s}", .{ root, suffix });
+    const body = try testing.arena_allocator.print("{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    return responseBody(try sessionCommand(c, "POST", session_id, path, body));
+}
+
+// The id out of a {"value": {"shadow-6066-…": id}} body.
+fn shadowRootReference(body: anyerror![]const u8) ![]const u8 {
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, try body, .{});
+    return parsed.object.get("value").?.object.get(http_command.shadow_key).?.string;
+}
+
 fn elementCommand(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8) ![]const u8 {
     const path = try testing.arena_allocator.print("/element/{s}{s}", .{ id, suffix });
     return responseBody(try sessionCommand(c, "GET", session_id, path, ""));
@@ -2839,6 +3013,20 @@ test "server: HTTP command errors" {
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
     }
 
+    // dialogs never block, so no user prompt is ever open
+    for ([_][3][]const u8{
+        .{ "POST", "/alert/dismiss", "{}" },
+        .{ "POST", "/alert/accept", "{}" },
+        .{ "GET", "/alert/text", "" },
+        .{ "POST", "/alert/text", "{\"text\":\"hi\"}" },
+    }) |command| {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, command[0], &session_id, command[1], command[2]);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"no such alert\",\"message\":\"no user prompt is open\",\"stacktrace\":\"\"}}"));
+    }
+
     // a slow page keeps the navigate parked on the worker
     var slow = try createTestClient();
     defer slow.deinit();
@@ -2874,24 +3062,9 @@ fn writeSessionCommand(c: *TestClient, method: []const u8, session_id: *const [3
 
 // POST /session; asserts the response and whether it advertised a websocket
 fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
-    var c = try createTestClient();
-    defer c.deinit();
-
-    const res = try c.httpRequest(try testing.arena_allocator.print("POST /session HTTP/1.1\r\n" ++
-        "Content-Type: application/json;charset=UTF-8\r\n" ++
-        "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body }));
-    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-
-    const json = res[std.mem.find(u8, res, "\r\n\r\n").? + 4 ..];
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
-
-    const value = parsed.value.object.get("value").?.object;
-    const id = value.get("sessionId").?.string;
-    try testing.expectEqual(36, id.len);
-
-    const capabilities = value.get("capabilities").?.object;
-    try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
+    const session = try postHTTPSession(body);
+    const id: []const u8 = &session.id;
+    const capabilities = session.capabilities;
     try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
     if (expect_ws_url) {
         const ws_url = capabilities.get("webSocketUrl").?.string;
@@ -2901,7 +3074,32 @@ fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
     } else {
         try testing.expectEqual(null, capabilities.get("webSocketUrl"));
     }
-    return id[0..36].*;
+    return session.id;
+}
+
+const PostedSession = struct {
+    id: [36]u8,
+    capabilities: std.json.ObjectMap,
+};
+
+// POST /session; asserts it succeeded. The capabilities live in the test arena.
+fn postHTTPSession(body: []const u8) !PostedSession {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const res = try c.httpRequest(try testing.arena_allocator.print("POST /session HTTP/1.1\r\n" ++
+        "Content-Type: application/json;charset=UTF-8\r\n" ++
+        "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body }));
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, responseBody(res), .{});
+    const value = parsed.object.get("value").?.object;
+    const id = value.get("sessionId").?.string;
+    try testing.expectEqual(36, id.len);
+
+    const capabilities = value.get("capabilities").?.object;
+    try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
+    return .{ .id = id[0..36].*, .capabilities = capabilities };
 }
 
 fn deleteHTTPSession(session_id: *const [36]u8, expect_live: bool) !void {

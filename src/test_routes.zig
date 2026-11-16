@@ -82,6 +82,11 @@ pub const raw_responses = struct {
         .head = "HTTP/1.1 200 OK\r\nContent-Length: 262144\r\n\r\n",
         .body = &@as([256 * 1024]u8, @splat('a')),
     };
+    // A chunk size that isn't hex.
+    pub const bad_chunk: RawResponse = .{
+        .head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n",
+        .body = "ZZ\r\nhello\r\n0\r\n\r\n",
+    };
     // A three-digit status outside 100..599, like LinkedIn's 999.
     pub const status_999: RawResponse = .{
         .head = "HTTP/1.1 999 Request denied\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\n",
@@ -104,6 +109,8 @@ fn serveRaw(req: *std.http.Server.Request, name: []const u8) !void {
         raw_responses.large
     else if (std.mem.eql(u8, name, "status_999"))
         raw_responses.status_999
+    else if (std.mem.eql(u8, name, "bad_chunk"))
+        raw_responses.bad_chunk
     else
         return req.respond("unknown raw response", .{ .status = .not_found });
     try req.server.out.writeAll(r.head);
@@ -821,14 +828,14 @@ pub fn handle(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/styles/large.css")) {
-        // Over 2 MiB, with the rule under test last.
-        const chunk = ".pad { color: #abcdef; } "; // 25 bytes
-        const tail = ".large-hide { display: none; }";
-        const repeats = 5 * 1024 * 1024 / 2 / chunk.len;
-        var body = try std.ArrayList(u8).initCapacity(req_allocator, chunk.len * repeats + tail.len);
-        for (0..repeats) |_| body.appendSliceAssumeCapacity(chunk);
-        body.appendSliceAssumeCapacity(tail);
-        return req.respond(body.items, .{
+        // Over 2 MiB, with the rule under test last. The bulk is a comment:
+        // ~100k real rules took most of the test's time budget in debug CI.
+        const tail = "*/ .large-hide { display: none; }";
+        const body = try req_allocator.alloc(u8, 5 * 1024 * 1024 / 2 + tail.len);
+        body[0..2].* = "/*".*;
+        @memset(body[2 .. body.len - tail.len], ' ');
+        @memcpy(body[body.len - tail.len ..], tail);
+        return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/css" },
             },
@@ -1219,6 +1226,27 @@ pub fn handle(req: *std.http.Server.Request) !void {
         });
     }
 
+    // goto-timeout fixtures: a page whose parser-blocking <script src> answers
+    // after `delay_ms`, so a navigation wait must give up while a subresource
+    // fetch is still in flight.
+    if (std.mem.startsWith(u8, path, "/goto_timeout/page")) {
+        const body = try std.fmt.allocPrint(req_allocator, "<!doctype html><html><head><title>goto timeout</title></head><body><p id=\"status\">pending</p><script src=\"/goto_timeout/script.js?delay_ms={d}\"></script></body></html>", .{delayMs(path)});
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.startsWith(u8, path, "/goto_timeout/script.js")) {
+        lp.io.sleep(.fromMilliseconds(@intCast(delayMs(path))), .awake) catch {};
+        return req.respond("document.getElementById('status').textContent = 'script ran';", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
     // Fixture for the browser `download` tool tests. Its cookie is scoped to
     // this path prefix, so it can't reach the handlers other tests on the
     // shared session rely on.
@@ -1244,11 +1272,8 @@ pub fn handle(req: *std.http.Server.Request) !void {
                 lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
             }
         }
-        if (std.mem.find(u8, path, "delay_ms=")) |pos| {
-            const digits_start = pos + "delay_ms=".len;
-            var end = digits_start;
-            while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
-            const delay_ms = std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
+        const delay_ms = delayMs(path);
+        if (delay_ms > 0) {
             lp.io.sleep(.fromMilliseconds(@intCast(delay_ms)), .awake) catch {};
         }
         // strip off leading / so that it's relative to CWD
@@ -1455,6 +1480,15 @@ fn yesTo(key: []const u8, deciding: bool, later_step: bool, banner_in_state: boo
 fn isWall(key: []const u8) bool {
     return std.mem.eql(u8, key, lp.tools.consent.wall_key) or std.mem.eql(u8, key, lp.tools.login.wall_key) or
         std.mem.eql(u8, key, lp.tools.login.error_key);
+}
+
+// The `delay_ms=<n>` query value, or 0 when absent or malformed.
+fn delayMs(path: []const u8) u64 {
+    const pos = std.mem.find(u8, path, "delay_ms=") orelse return 0;
+    const digits_start = pos + "delay_ms=".len;
+    var end = digits_start;
+    while (end < path.len and std.ascii.isDigit(path[end])) : (end += 1) {}
+    return std.fmt.parseInt(u64, path[digits_start..end], 10) catch 0;
 }
 
 /// What a question is looking for, as a word its option's description carries.

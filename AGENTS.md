@@ -25,7 +25,7 @@ The suite is split across processes that run at the same time, each claiming the
 ## Formatting
 
 ```bash
-zig fmt --check ./*.zig ./**/*.zig    # Exact command CI runs
+make fmt    # Exact command CI runs
 ```
 
 `zig build` depends on the fmt step, so a local build catches drift too.

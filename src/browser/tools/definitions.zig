@@ -22,7 +22,6 @@
 
 const std = @import("std");
 const lp = @import("../../lightpanda.zig");
-const zenai = @import("zenai");
 
 const tools = @import("../tools.zig");
 const Tool = tools.Tool;
@@ -221,7 +220,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .acceptCookies => .{
-            .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to a decision model (Gemini Decisions or TypeSafe System One), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selectors` the controls clicked in order, and `reason` why nothing happened when nothing did. A click that leaves a banner up (a confirmation, say) is followed by one more pick. A page with nothing to click costs no model call; passing `selectors` clicks them in order and asks nothing, which is how a recorded call replays. Otherwise needs " ++ zenai.decisions.env_hint ++ ".",
+            .description = "Dismiss the cookie consent banner on the current page: the browser offers the banner's own controls to a decision model (Gemini Decisions or TypeSafe System One), clicks the one it picks, and re-reads the page to check the banner went. Returns JSON — `dismissed` is what was clicked, `verified` whether the page agreed afterwards, `selectors` the controls clicked in order, and `reason` why nothing happened when nothing did. A click that leaves a banner up (a confirmation, say) is followed by one more pick. A page with nothing to click costs no model call; passing `selectors` clicks them in order and asks nothing, which is how a recorded call replays. Otherwise needs " ++ lp.App.decision_env_hint ++ ".",
             .summary = "Dismiss a cookie consent banner",
             .input_schema = minify(
                 \\{
@@ -236,7 +235,7 @@ pub fn of(tool: Tool) Definition {
             ),
         },
         .login => .{
-            .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks a decision model (Gemini Decisions or TypeSafe System One) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`, and credentials only go to an https (or loopback) page whose form posts to an https URL. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ zenai.decisions.env_hint ++ ".",
+            .description = "Sign in on the current page. The browser collects the candidate fields and sign-in controls, asks a decision model (Gemini Decisions or TypeSafe System One) only what the markup leaves ambiguous, fills the credentials, submits, and re-reads the page to say whether it worked. A password is only ever typed into an `input[type=password]`, and credentials only go to an https (or loopback) page whose form posts to an https URL. Pass `$LP_*` placeholders rather than literal secrets: they resolve inside the browser and never appear in the result. Returns JSON with the selectors it used, so a recorded call replays them with no model call. Otherwise needs " ++ lp.App.decision_env_hint ++ ".",
             .summary = "Sign in, picking the fields with a decision model",
             .input_schema = minify(
                 \\{

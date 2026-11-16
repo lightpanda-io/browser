@@ -525,7 +525,7 @@ pub fn deinit(self: *Frame) void {
     }
 
     if (self._queued_navigation) |qn| {
-        qn.arena.release();
+        qn.release();
     }
 
     while (self._message_ports.first) |node| {
@@ -545,15 +545,7 @@ pub fn deinit(self: *Frame) void {
 
         observers.deinit(self, page);
 
-        var document = self.window._document;
-        document._selection.releaseRef(page);
-
-        if (document._fonts) |f| {
-            f.releaseRef(page);
-        }
-
-        // Release our reference to location.
-        self.window._location.releaseRef(page);
+        self.window.deinit(page);
         page.event_listeners.removeTarget(self.window.asEventTarget());
     }
 
@@ -1139,7 +1131,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             arena.release();
 
             if (result == .fired) {
-                try session.navigationFor(target).commitSameDocument(result.fired, target);
+                try session.navigationFor(target).commitSameDocument(result.fired.signal, target);
             }
             return;
         }
@@ -1181,14 +1173,45 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         arena.release();
 
         if (result == .fired) {
-            try session.navigationFor(target).commitSameDocument(result.fired, target);
+            try session.navigationFor(target).commitSameDocument(result.fired.signal, target);
         }
         return;
     }
 
-    if (try fireNavigateEvent(originator, target, resolved_url, false, opts) == .canceled) {
+    const nav_result = try fireNavigateEvent(originator, target, resolved_url, false, opts);
+    if (nav_result == .canceled) {
         // don't defer this, the caller is responsible for freeing it on error
         arena.release();
+        return;
+    }
+
+    // intercept() turns even a cross-document navigation into one that stays
+    // in this document, driven by the handlers, like a same-document one.
+    if (nav_result == .fired and nav_result.fired.intercepted) {
+        target.url = try target.page_arena.dupeSentinel(u8, resolved_url, 0);
+
+        const location = try Location.init(target.url, target);
+        location.acquireRef();
+        target.window._location.releaseRef(target.page);
+        target.window._location = location;
+
+        session.notification.dispatch(.frame_navigated_within_document, &.{
+            .url = target.url,
+            .frame_id = target._frame_id,
+            .navigation_type = .other,
+        });
+
+        if (target.parent == null) {
+            try session.navigationFor(target).updateEntries(target.url, opts.kind, target, true);
+        }
+
+        // `:target` matches off the fragment, which might have just changed.
+        change.documentStateChanged(.target, target);
+
+        // don't defer this, the caller is responsible for freeing it on error
+        arena.release();
+
+        try session.navigationFor(target).commitSameDocument(nav_result.fired.signal, target);
         return;
     }
 
@@ -1237,14 +1260,20 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .url = resolved_url,
         .is_about_something = is_about_something,
         .navigation_type = std.meta.activeTag(nt),
+        .task = originator.js.attribution.current(),
     };
 
     if (target._queued_navigation) |existing| {
-        existing.arena.release();
+        existing.release();
     }
 
     target._queued_navigation = qn;
     try session.scheduleNavigation(target);
+    // Processed at the start of the next tick, after this tick's settled
+    // check. A top-level navigation's request is a root of its own.
+    if (target.parent != null) {
+        qn.settle_hold = target.page.settle.hold(qn.task);
+    }
     target.abortedDocumentIsComplete();
 }
 
@@ -1473,7 +1502,7 @@ pub fn cancelQueuedNavigation(self: *Frame) void {
     if (std.mem.findScalar(*Frame, queued.items, self)) |idx| {
         _ = queued.swapRemove(idx);
     }
-    qn.arena.release();
+    qn.release();
     self._queued_navigation = null;
 
     // Our own load is aborted and the replacement that would have completed it
@@ -1878,10 +1907,10 @@ fn frameDoneCallback(transfer: *HttpClient.Transfer) !void {
     if (body.len > 0) {
         try self.processBody(transfer, body);
     }
-    return self.frameDone();
+    return self.frameDone(body);
 }
 
-fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !void {
+fn processBody(self: *Frame, transfer: *HttpClient.Transfer, body: []const u8) !void {
     if (self._parse_state == .pre) {
         // done here rather than in the header callback because sniffing the
         // content type needs the body
@@ -1889,16 +1918,16 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
             if (transfer.contentType()) |ct| {
                 // A Content-Type we can't parse must not fail the navigation;
                 // browsers render the page anyway, so fall back to sniffing.
-                break :blk Mime.parseLenient(ct) catch Mime.sniff(data);
+                break :blk Mime.parseLenient(ct) catch Mime.sniff(body);
             }
-            break :blk Mime.sniff(data);
+            break :blk Mime.sniff(body);
         } orelse .unknown;
 
         // If the HTTP Content-Type header didn't specify a charset and this is HTML,
         // prescan the first 1024 bytes for a <meta charset> declaration.
         var html_prescan_found_charset = false;
         if (mime.content_type == .text_html and mime.is_default_charset) {
-            if (Mime.prescanCharset(data)) |charset| {
+            if (Mime.prescanCharset(body)) |charset| {
                 html_prescan_found_charset = true;
                 if (charset.len <= 40) {
                     @memcpy(mime.charset[0..charset.len], charset);
@@ -1911,7 +1940,7 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
         if (comptime lp.IS_DEBUG) {
             log.debug(.frame, "navigate body", .{
                 .content_type = mime.content_type,
-                .len = data.len,
+                .len = body.len,
                 .type = self._type,
                 .url = self.url,
             });
@@ -1942,23 +1971,16 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
                     const name = info.name();
                     self.charset = if (html_prescan_found_charset and info.isUtf16()) "UTF-8" else name;
                 }
-                self._parse_state = .{ .html = .{
-                    .buffer = .empty,
-                    .arena = try self.getArena(.large, "Frame.navigate"),
-                } };
+                self._parse_state = .{ .html = .{ .xml = false } };
             },
             .text_xml, .other_xml => {
                 // XML ignores <meta charset>. Priority is BOM, header and XML declaration
                 // declaration (a BOM overrides both when decoding).
-                const label = if (mime.is_default_charset) Mime.xmlDeclarationEncoding(data) else mime.charsetString();
+                const label = if (mime.is_default_charset) Mime.xmlDeclarationEncoding(body) else mime.charsetString();
                 if (h5e.EncodingInfo.forLabel(label)) |info| {
                     self.charset = info.name();
                 }
-                self._parse_state = .{ .html = .{
-                    .buffer = .empty,
-                    .arena = try self.getArena(.large, "Frame.navigate"),
-                    .xml = true,
-                } };
+                self._parse_state = .{ .html = .{ .xml = true } };
             },
             .application_json, .text_javascript, .text_css, .text_plain, .text_markdown => {
                 var arr: std.ArrayList(u8) = .empty;
@@ -1975,11 +1997,11 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.buffer.appendSlice(html.arena.allocator(), data),
+        .html => {},
         .text => |*buf| {
             // The payload is text, not markup: `&` has to be escaped too, or
             // the parser turns a literal "&#9733;" in the body into a star.
-            var v = data;
+            var v = body;
             while (v.len > 0) {
                 const index = std.mem.findAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.page_arena, v);
@@ -1994,8 +2016,8 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
                 v = v[index + 1 ..];
             }
         },
-        .raw, .image => |*buf| try buf.appendSlice(self.page_arena, data),
-        .download => |*download| download.feed(data) catch {
+        .raw, .image => |*buf| try buf.appendSlice(self.page_arena, body),
+        .download => |*download| download.feed(body) catch {
             // Like Chrome, a failed download doesn't fail the navigation:
             // report it canceled, then let `done` commit the same empty
             // document a finished download gets (see `.raw`). The partial
@@ -2010,7 +2032,7 @@ fn processBody(self: *Frame, transfer: *HttpClient.Transfer, data: []const u8) !
     }
 }
 
-fn frameDone(self: *Frame) !void {
+fn frameDone(self: *Frame, body: []const u8) !void {
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate done", .{ .type = self._type, .url = self.url });
     }
@@ -2037,20 +2059,13 @@ fn frameDone(self: *Frame) !void {
     var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
 
     switch (self._parse_state) {
-        .html => |*html| {
+        .html => |html| {
             {
-                defer {
-                    html.arena.release();
-                    self._parse_state = .complete;
-                }
-
-                const raw_html = html.buffer.items;
-
-                preload.prescan(self, raw_html);
-
+                defer self._parse_state = .complete;
+                preload.prescan(self, body);
                 if (html.xml) {
                     const encoding = h5e.EncodingInfo.forLabel(self.charset) orelse h5e.EncodingInfo.utf8();
-                    const xml = try h5e.validUtf8(html.arena.allocator(), encoding, raw_html);
+                    const xml = try h5e.validUtf8(parse_arena.allocator(), encoding, body);
                     if (Parser.isWellFormedXML(xml)) {
                         parser.parseXML(xml);
                     } else {
@@ -2059,9 +2074,9 @@ fn frameDone(self: *Frame) !void {
                         parser.parse(xml);
                     }
                 } else if (std.mem.eql(u8, self.charset, "UTF-8")) {
-                    parser.parse(raw_html);
+                    parser.parse(body);
                 } else {
-                    parser.parseWithEncoding(raw_html, self.charset);
+                    parser.parseWithEncoding(body, self.charset);
                 }
             }
             // Deferred and module scripts run after readiness is interactive.
@@ -2172,7 +2187,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     // In case of error, we want to complete the frame with a custom HTML
     // containing the error.
-    self.frameDone() catch |e| {
+    self.frameDone("") catch |e| {
         log.err(.browser, "frameErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
@@ -2535,7 +2550,7 @@ fn rootIsConnected(root: *Node) bool {
 }
 
 pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
-    return self.getIdMap(parent).add(self.page_arena, element, id);
+    return self.getIdMap(parent).add(element, id);
 }
 
 pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
@@ -2990,6 +3005,8 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
+        // Another document, maybe another StyleManager: el's records stay behind
+        el._style_slot = 0;
         el._attributes.adopt(node._owner, self);
         Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
 
@@ -3441,7 +3458,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
             if (idMapForRoot(root)) |id_map| {
                 if (child.firstChild() == null) {
                     if (el.getId()) |id| {
-                        try id_map.add(self.page_arena, el, id);
+                        try id_map.add(el, id);
                     }
                 } else {
                     // The adoption agency inserts a fresh element holding
@@ -3449,7 +3466,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                     var tw = TreeWalker.Full.Elements.init(child, .{});
                     while (tw.next()) |sub| {
                         if (sub.getId()) |id| {
-                            try id_map.add(self.page_arena, sub, id);
+                            try id_map.add(sub, id);
                         }
                     }
                 }
@@ -3519,7 +3536,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
                 var tw = TreeWalker.Full.Elements.init(child, .{});
                 while (tw.next()) |el| {
                     if (el.getId()) |id| {
-                        try new_id_map.add(self.page_arena, el, id);
+                        try new_id_map.add(el, id);
                     }
                 }
                 // but beause it was and stays connected, we don't trigger
@@ -3539,7 +3556,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getId()) |id| {
-            try new_id_map.add(self.page_arena, el, id);
+            try new_id_map.add(el, id);
         }
 
         if (should_invoke_connected) {
@@ -3826,9 +3843,7 @@ const ParseState = union(enum) {
     complete,
     err: anyerror,
     html: struct {
-        arena: *lp.Arena,
         xml: bool = false,
-        buffer: std.ArrayList(u8),
     },
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
@@ -3838,7 +3853,6 @@ const ParseState = union(enum) {
 
     fn deinit(self: *ParseState, _: *Frame) void {
         switch (self.*) {
-            .html => |html| html.arena.release(),
             .download => |*download| {
                 download.cancel();
                 self.* = .complete;
@@ -4009,6 +4023,15 @@ pub const QueuedNavigation = struct {
     opts: NavigateOpts,
     is_about_something: bool, // about:blank or about:srcdoc
     navigation_type: NavigationType,
+    // The work that queued it: the navigation runs under it.
+    task: ?JS.Attribution.Tag,
+    settle_hold: JS.Attribution.Hold = .{},
+
+    // Lives in its own arena, so this frees it.
+    pub fn release(self: *QueuedNavigation) void {
+        self.settle_hold.release();
+        self.arena.release();
+    }
 };
 
 const TargetFrame = union(enum) {

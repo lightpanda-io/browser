@@ -245,7 +245,7 @@ const alignment: std.mem.Alignment = .fromByteUnits(HEADER);
 
 fn alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv(.c) ?*anyopaque {
     const exec: *const Execution = @ptrCast(@alignCast(userdata.?));
-    const allocator = exec._factory.storageAllocator();
+    const allocator = exec.page.recycling;
 
     const len = std.math.mul(usize, items, size) catch return null;
     const total = std.math.add(usize, len, HEADER) catch return null;
@@ -259,7 +259,7 @@ fn alloc(userdata: ?*anyopaque, items: zlib.uInt, size: zlib.uInt) callconv(.c) 
 fn free(userdata: ?*anyopaque, ptr: ?*anyopaque) callconv(.c) void {
     const payload = ptr orelse return;
     const exec: *const Execution = @ptrCast(@alignCast(userdata.?));
-    const allocator = exec._factory.storageAllocator();
+    const allocator = exec.page.recycling;
 
     const base: [*]align(HEADER) u8 = @ptrCast(@alignCast(@as([*]u8, @ptrCast(payload)) - HEADER));
     const total = std.mem.readInt(usize, base[0..@sizeOf(usize)], .native);

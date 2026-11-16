@@ -56,6 +56,13 @@ pub const GlobalScope = union(enum) {
         };
     }
 
+    fn isTopLevel(self: GlobalScope) bool {
+        return switch (self) {
+            .frame => |f| f.parent == null,
+            .worker => false,
+        };
+    }
+
     pub fn setJs(self: GlobalScope, ctx: *lp.js.Context) void {
         switch (self) {
             inline else => |g| g.js = ctx,
@@ -151,7 +158,9 @@ pub const GlobalScope = union(enum) {
         return attribution.begin(.request, .{
             .label = request_url,
             .detail = resource_type.string(),
-            .root = resource_type == .document,
+            // Only a top-level navigation starts new work. An iframe's
+            // document belongs to the work that inserted or navigated it.
+            .root = resource_type == .document and self.isTopLevel(),
         });
     }
 

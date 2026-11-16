@@ -215,7 +215,7 @@ pub fn askPage(
     const options: zenai.decisions.AskOptions = .{};
     var response = session.runPumped(zenai.decisions.Pool.ask, .{ pool, arena, state, ask.questions, options, &detail }) catch |err| switch (err) {
         error.MissingApiKey => return .{ .failed = .{
-            .text = arena.print("{s}: no decision model key is set; set " ++ zenai.decisions.env_hint, .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
+            .text = arena.print("{s}: no decision model key is set; set " ++ lp.App.decision_env_hint, .{@tagName(ask.tool)}) catch return ToolError.OutOfMemory,
             .is_error = true,
             .failure = .missing_api_key,
         } },

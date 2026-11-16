@@ -23,6 +23,7 @@ const Notification = @import("../../Notification.zig");
 
 const js = @import("../js/js.zig");
 const URL = @import("../URL.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 
 const Console = @import("Console.zig");
@@ -118,6 +119,11 @@ _closed: bool = false,
 
 // Popup name (owned by page.arena)
 _name: []const u8 = "",
+
+pub fn deinit(self: *Window, page: *Page) void {
+    self._document.deinit(page);
+    self._location.releaseRef(page);
+}
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
