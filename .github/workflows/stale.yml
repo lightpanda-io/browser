@@ -1,0 +1,55 @@
+name: stale
+
+# Nudges issues and pull requests that have gone quiet, then closes them.
+# The `keep-open` label exempts one.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      actions: write # the action caches its progress between runs
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          # Unless this repository variable is "true", the action only logs
+          # what it would do (dry run).
+          debug-only: ${{ vars.STALE_ENFORCE != 'true' }}
+
+          days-before-stale: 30
+          days-before-close: 14
+
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: keep-open,accepted
+          exempt-pr-labels: keep-open
+          exempt-draft-pr: true
+
+          stale-issue-message: >
+            This issue has had no activity for 30 days. It will be closed in
+            14 days unless there is an update. If it still matters to you, a
+            comment is enough to keep it open.
+          stale-pr-message: >
+            This pull request has had no activity for 30 days. It will be
+            closed in 14 days unless there is an update. A comment or a push
+            is enough to keep it open.
+          close-issue-message: >
+            Closing for lack of activity. Comment here if this is still
+            relevant and we will reopen it.
+          close-pr-message: >
+            Closing for lack of activity. Feel free to reopen it when you
+            pick it back up.

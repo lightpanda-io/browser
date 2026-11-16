@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// PR triage: closes large PRs from untrusted contributors that were not
-// discussed in an issue first. See CONTRIBUTING.md "Discuss large changes first".
+// PR triage: labels large PRs from untrusted contributors that were not
+// discussed in an issue first, so maintainers can decide what to do with them. See CONTRIBUTING.md "Discuss large changes first".
 //
 //   node pr-triage.js                 run inside the pr-triage workflow
 //   node pr-triage.js backtest [N]    classify the last N PRs, print a TSV
@@ -181,13 +181,13 @@ We ask that larger changes are [discussed in an issue first](${contributing}), a
 
 ${result.rules.map((r) => `- ${r.detail}`).join("\n")}
 
-I'm closing it for now. This is about how we take on large changes, not a judgment of the code.
+I've labeled it \`${LABEL_LARGE}\`. It will likely not be reviewed as it stands, and a maintainer may close it. This is about how we take on large changes, not a judgment of the code.
 
 To move it forward:
 
 1. Open an issue describing what you want to change, why, and how you intend to implement it. A real-world example (a site or library that breaks) helps a lot.
 2. A maintainer will discuss the approach with you there. If you work with a coding agent, that discussion is the right input for it.
-3. Once the issue is labeled \`${LABEL_ACCEPTED}\`, add \`Fixes #<issue>\` to this pull request's description and reopen it, or open a new one.
+3. Once the issue is labeled \`${LABEL_ACCEPTED}\`, add \`Fixes #<issue>\` to this pull request's description.
 
 Bug fixes and small, self-contained improvements don't need any of this.
 
@@ -207,7 +207,7 @@ async function run() {
   const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
   const pr = event.pull_request;
   const repo = process.env.GITHUB_REPOSITORY;
-  const enforce = process.env.PR_TRIAGE_ENFORCE === "true";
+  const comment = process.env.PR_TRIAGE_COMMENT === "true";
   const gh = client(process.env.GITHUB_TOKEN);
   const login = pr.user.login;
 
@@ -238,8 +238,8 @@ async function run() {
   }
 
   await setLabel(gh, repo, pr, LABEL_LARGE, true);
-  summary(`**large** (${enforce ? "enforced" : "dry run"})\n\n${result.rules.map((r) => `- \`${r.id}\`: ${r.detail}`).join("\n")}`);
-  if (!enforce) return;
+  summary(`**large** (${comment ? "labeled and commented" : "labeled only"})\n\n${result.rules.map((r) => `- \`${r.id}\`: ${r.detail}`).join("\n")}`);
+  if (!comment) return;
 
   const body = commentBody(repo, login, result);
   const comments = await gh.paginate(`/repos/${repo}/issues/${pr.number}/comments`);
@@ -249,7 +249,6 @@ async function run() {
   } else {
     await gh.call("POST", `/repos/${repo}/issues/${pr.number}/comments`, { body });
   }
-  await gh.call("PATCH", `/repos/${repo}/pulls/${pr.number}`, { state: "closed" });
 }
 
 async function backtest(count) {

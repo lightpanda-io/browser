@@ -1,7 +1,7 @@
 name: pr-triage
 
-# Closes large pull requests from untrusted contributors that were not
-# discussed in an issue first. See CONTRIBUTING.md.
+# Labels large pull requests from untrusted contributors that were not
+# discussed in an issue first. It never closes anything. See CONTRIBUTING.md.
 #
 # pull_request_target gives a write token on fork PRs, so this workflow must
 # never check out or run code from the pull request: it only checks out the
@@ -9,7 +9,7 @@ name: pr-triage
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, edited]
 
 permissions:
   contents: read
@@ -39,5 +39,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Unless this repository variable is "true", the workflow only
-          # labels and reports in the job summary (dry run).
-          PR_TRIAGE_ENFORCE: ${{ vars.PR_TRIAGE_ENFORCE }}
+          # labels and reports in the job summary, without commenting.
+          PR_TRIAGE_COMMENT: ${{ vars.PR_TRIAGE_COMMENT }}

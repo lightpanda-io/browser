@@ -1,6 +1,6 @@
 <!--
 Larger changes need an issue first: see CONTRIBUTING.md.
-Pull requests that skip it are closed automatically.
+Pull requests that skip it are flagged and likely closed.
 -->
 
 ## What and why
