@@ -594,6 +594,7 @@ pub fn resetLocalArena(self: *Frame) void {
 }
 
 pub fn viewportChanged(self: *Frame) void {
+    self._style_manager.viewportChanged();
     var i: usize = 0;
     while (i < self._media_query_lists.items.len) : (i += 1) {
         self._media_query_lists.items[i].viewportChanged();

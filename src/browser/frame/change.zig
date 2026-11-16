@@ -50,6 +50,9 @@ pub fn attributeSet(element: *Element, name: String, old: ?String, new: String, 
 
 /// A style attribute write no selector can see (see Attribute.List.putInertStyle).
 pub fn inertStyleSet(element: *Element, frame: *Frame) void {
+    if (element.ownerFrame(frame)) |owner| {
+        owner._style_manager.hitInputWritten();
+    }
     if (detachedHandled(element.asNode(), frame) == false) {
         layoutObserversChanged(frame);
     }
@@ -65,6 +68,7 @@ fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]c
     }
     // A frameless document (DOMParser, XHR) has no styles
     const owner = element.ownerFrame(frame) orelse return;
+    owner._style_manager.hitInputWritten();
     if (owner._style_manager.readsAttribute(name.str()) == false) {
         // no selector reads it, and neither does the engine
         return;
@@ -121,9 +125,13 @@ fn treeChanged(parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: 
 /// parser's root memo stays valid (an insertion never changes an existing
 /// node's root).
 pub fn parserInserted(parent: *Node, child: *Node, frame: *Frame) void {
-    _ = child;
     // During a parse insert, only a fragment can be detached.
-    if (frame._parse_mode == .fragment and detachedHandled(parent, frame)) {
+    if (frame._parse_mode == .fragment) {
+        if (detachedHandled(parent, frame)) {
+            return;
+        }
+        // fragmentParsed stamps the lot
+    } else if (frame._style_manager.parserInserted(parent, child)) {
         return;
     }
     styleChanged(frame);
@@ -194,9 +202,13 @@ fn joinsFormControls(element: *Element) bool {
 }
 
 pub fn focusChanged(old: ?*Element, new: ?*Element, frame: *Frame) void {
-    _ = old;
-    _ = new;
-    styleChanged(frame);
+    // Both are in the document whose active element moved
+    const element = new orelse old orelse return;
+    // A frameless document (DOMParser, XHR) has no styles
+    const owner = element.ownerFrame(frame) orelse return;
+    if (owner._style_manager.focusChanged(old, new) == false) {
+        styleChanged(frame);
+    }
 }
 
 pub const DocumentState = enum {
