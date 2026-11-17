@@ -323,6 +323,11 @@ fn continueRequest(cmd: *CDP.Command) !void {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "continue" });
         return cmd.sendResult(null, .{});
     };
+    // Cancellation callbacks can pump CDP before the transfer is destroyed.
+    // Its old intercept id must not resume it while abort() is delivering.
+    if (transfer.state != .parked) {
+        return cmd.sendError(-32000, "Invalid InterceptionId.", .{});
+    }
 
     log.debug(.cdp, "request intercept", .{
         .state = "continue",
@@ -453,6 +458,9 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fulfill" });
         return cmd.sendResult(null, .{});
     };
+    if (transfer.state != .parked) {
+        return cmd.sendError(-32000, "Invalid InterceptionId.", .{});
+    }
 
     log.debug(.cdp, "request intercept", .{
         .state = "fulfilled",
@@ -490,6 +498,9 @@ fn failRequest(cmd: *CDP.Command) !void {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fail" });
         return cmd.sendResult(null, .{});
     };
+    if (transfer.state != .parked) {
+        return cmd.sendError(-32000, "Invalid InterceptionId.", .{});
+    }
 
     defer transfer.abortParked(params.errorReason.toError());
 
@@ -1013,6 +1024,80 @@ fn enableResponseStage(ctx: anytype) !void {
         .params = .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Response" }} },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
+}
+
+fn expectStoppedRequestCommand(comptime method: []const u8, comptime params: anytype) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .session_id = "SID-STOP", .url = "hi.html" });
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame() orelse unreachable;
+    const client = &bc.cdp.browser.http_client;
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const Probe = struct {
+        ctx: *testing.TestContext,
+        transfer: ?*HttpClient.Transfer = null,
+        err: ?anyerror = null,
+        command_error: ?anyerror = null,
+        error_calls: usize = 0,
+        was_delivering: bool = false,
+
+        fn errorCallback(raw: *anyopaque, err: anyerror) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.err = err;
+            self.error_calls += 1;
+            self.was_delivering = self.transfer.?.state == .delivering;
+            // Cancellation callbacks can pump CDP while abort() keeps the
+            // transfer alive in .delivering. Reply to its old pause there.
+            self.ctx.processMessage(.{ .id = 3, .method = method, .params = params }) catch |command_error| {
+                self.command_error = command_error;
+            };
+        }
+    };
+    var probe: Probe = .{ .ctx = &ctx };
+    try client.request(.{
+        .frame_id = frame._frame_id,
+        .loader_id = 7,
+        .method = .GET,
+        .url = "http://127.0.0.1:9582/xhr",
+        .origin = target.security_origin,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
+        .resource_type = .xhr,
+        .notification = bc.session.notification,
+        .ctx = &probe,
+        .error_callback = Probe.errorCallback,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, &frame._http_owner);
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+    try ctx.expectSentEvent("Fetch.requestPaused", .{ .requestId = "INT-0000000001" }, .{});
+    const transfer_id = target.intercept_state.get(1) orelse return error.PauseNotFound;
+    probe.transfer = client.findTransfer(transfer_id) orelse return error.TransferNotFound;
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.stopLoading" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ctx.expectSentError(-32000, "Invalid InterceptionId.", .{ .id = 3 });
+    try testing.expectEqual(null, probe.command_error);
+    try testing.expectEqual(error.TransferCanceled, probe.err.?);
+    try testing.expectEqual(1, probe.error_calls);
+    try testing.expect(probe.was_delivering);
+    try testing.expectEqual(null, target.intercept_state.get(1));
+    try testing.expectEqual(null, client.findTransfer(transfer_id));
+    try testing.expectEqual(0, client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest rejects a request being cancelled by stopLoading" {
+    try expectStoppedRequestCommand("Fetch.continueRequest", .{ .requestId = "INT-0000000001", .url = "http://example.test/late" });
+}
+
+test "cdp.Fetch: fulfillRequest rejects a request being cancelled by stopLoading" {
+    try expectStoppedRequestCommand("Fetch.fulfillRequest", .{ .requestId = "INT-0000000001", .responseCode = 200, .body = "bGF0ZQ==" });
+}
+
+test "cdp.Fetch: failRequest rejects a request being cancelled by stopLoading" {
+    try expectStoppedRequestCommand("Fetch.failRequest", .{ .requestId = "INT-0000000001", .errorReason = "Aborted" });
 }
 
 test "cdp.Fetch: response stage pauses a final response and continueResponse delivers it" {
