@@ -8429,15 +8429,21 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
             for (0..24) |_| {
                 const x: f64 = @floatFromInt(random.uintLessThan(u16, 320));
                 const y: f64 = @floatFromInt(random.uintLessThan(u16, 400));
-                var expected: ?*Element = null;
+                // Positioned boxes and their subtrees paint above the flow
+                var expected_flow: ?*Element = null;
+                var expected_positioned: ?*Element = null;
                 var tw = TreeWalker.Full.init(html, .{});
                 while (tw.next()) |n| {
                     const el = n.is(Element) orelse continue;
                     var shown = true;
+                    var positioned = false;
                     var up: ?*Element = el;
                     while (up) |e| : (up = e.asNode().parentElement()) {
                         if (sm.hasDisplayNone(e)) {
                             shown = false;
+                        }
+                        if (sm.hitFacts(e).position != .static) {
+                            positioned = true;
                         }
                     }
                     if (shown == false or sm.isHitTestable(el) == false) {
@@ -8447,9 +8453,14 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                     const left = el.horizontalPosition(frame);
                     const height = layout.boxHeight(el, frame);
                     if (height > 0 and y >= top and y <= top + height and x >= left and x <= left + el.boxAxis(frame, .width)) {
-                        expected = el;
+                        if (positioned) {
+                            expected_positioned = el;
+                        } else {
+                            expected_flow = el;
+                        }
                     }
                 }
+                const expected = expected_positioned orelse expected_flow;
                 const hit = try doc.hitTest(x, y, frame);
                 if (hit != expected) {
                     std.debug.print("sheet {d} step {d} point {d},{d}: hit {?*} expected {?*}\n", .{ seed, step, x, y, hit, expected });
