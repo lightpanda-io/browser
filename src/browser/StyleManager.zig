@@ -3070,7 +3070,11 @@ pub fn laysOutInRow(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     const vis = self.visibilityProps(el);
-    return vis.box == .table_row or vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+    return switch (vis.display) {
+        .flex => vis.flex_column == false,
+        .grid => vis.grid_row,
+        else => vis.box == .table_row,
+    };
 }
 
 /// An in-flow table cell: it sits beside its sibling cells.
@@ -4708,12 +4712,16 @@ pub const Length = packed struct(u35) {
 const Visibility = struct {
     const Declared = struct {
         // A shorthand comes before its longhands, so a later longhand wins
-        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap" };
+        const names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "flex-flow", "flex-direction", "flex-wrap", "grid", "grid-template", "grid-template-columns", "grid-auto-flow" };
 
         display: ?Display = null,
         box: ?Box = null,
         flex_column: ?bool = null,
         flex_wrap: ?bool = null,
+        // More than one column track: the first items sit side by side
+        grid_columns: ?bool = null,
+        // grid-auto-flow: column, each item a column of its own
+        grid_flow_column: ?bool = null,
         // Inner null: an explicit inherit, which still wins the cascade
         visibility_hidden: ??bool = null,
         opacity_zero: ?bool = null,
@@ -4745,6 +4753,25 @@ const Visibility = struct {
                         }
                     }
                 },
+                // [rows / columns], or one side auto-flow: `auto-flow /
+                // columns` flows by row, `rows / auto-flow` by column
+                .grid, .@"grid-template" => {
+                    self.grid_columns = false;
+                    self.grid_flow_column = false;
+                    const slash = std.mem.indexOfScalar(u8, value, '/') orelse return;
+                    const columns = value[slash + 1 ..];
+                    if (hasKeyword(columns, "auto-flow")) {
+                        self.grid_flow_column = true;
+                    } else {
+                        self.grid_columns = hasColumns(columns);
+                    }
+                },
+                .@"grid-template-columns" => {
+                    self.grid_columns = hasColumns(value);
+                },
+                .@"grid-auto-flow" => {
+                    self.grid_flow_column = hasKeyword(value, "column");
+                },
                 .visibility => {
                     self.visibility_hidden = parseInheritedFlag(value, &.{ "hidden", "collapse" }, &.{ "visible", "initial" });
                 },
@@ -4771,6 +4798,73 @@ const Visibility = struct {
             const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
             return std.ascii.eqlIgnoreCase(trimmed, "wrap") or std.ascii.eqlIgnoreCase(trimmed, "wrap-reverse");
         }
+
+        fn hasKeyword(value: []const u8, keyword: []const u8) bool {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            while (it.next()) |token| {
+                if (std.ascii.eqlIgnoreCase(token, keyword)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Whether a track list has two tracks or more. `[names]` aren't
+        // tracks; a function (minmax(), fit-content()) is one, repeat(n, …)
+        // is n times its list, and an auto-fill/auto-fit repeat usually more
+        // than one.
+        fn hasColumns(value: []const u8) bool {
+            return trackCount(value) >= 2;
+        }
+
+        fn trackCount(value: []const u8) u32 {
+            var count: u32 = 0;
+            var i: usize = 0;
+            while (i < value.len) {
+                const c = value[i];
+                if (std.ascii.isWhitespace(c)) {
+                    i += 1;
+                    continue;
+                }
+                if (c == '[') {
+                    i = std.mem.indexOfScalarPos(u8, value, i, ']') orelse return count;
+                    i += 1;
+                    continue;
+                }
+                // One token, with any parenthesized arguments
+                const start = i;
+                var depth: u32 = 0;
+                var open: ?usize = null;
+                while (i < value.len) : (i += 1) {
+                    switch (value[i]) {
+                        '(' => {
+                            if (depth == 0 and open == null) open = i;
+                            depth += 1;
+                        },
+                        ')' => depth -|= 1,
+                        else => if (depth == 0 and std.ascii.isWhitespace(value[i])) break,
+                    }
+                }
+                const token = value[start..i];
+                if (std.ascii.eqlIgnoreCase(token, "none") or std.ascii.eqlIgnoreCase(token, "subgrid")) {
+                    continue;
+                }
+                const paren = open orelse {
+                    count +|= 1;
+                    continue;
+                };
+                if (std.ascii.eqlIgnoreCase(token[0 .. paren - start], "repeat") == false) {
+                    count +|= 1;
+                    continue;
+                }
+                const args = std.mem.trimEnd(u8, token[paren - start + 1 ..], ")");
+                const comma = std.mem.indexOfScalar(u8, args, ',') orelse continue;
+                const times = std.mem.trim(u8, args[0..comma], &std.ascii.whitespace);
+                const n = std.fmt.parseInt(u32, times, 10) catch 2; // auto-fill, auto-fit
+                count +|= n *| trackCount(args[comma + 1 ..]);
+            }
+            return count;
+        }
     };
 
     // The element's own values, from the cascade.
@@ -4782,6 +4876,8 @@ const Visibility = struct {
         box: Box = .inline_level,
         flex_column: bool = false,
         flex_wrap: bool = false,
+        grid_columns: bool = false,
+        grid_flow_column: bool = false,
         author_display: bool = false,
         // Null takes the parent's value
         visibility_hidden: ?bool = null,
@@ -4791,11 +4887,13 @@ const Visibility = struct {
         outside_flat_tree: bool = false,
     };
 
-    const Computed = packed struct(u12) {
+    const Computed = packed struct(u13) {
         display: Display = .other,
         box: Box = .inline_level,
         flex_column: bool = false,
         flex_wrap: bool = false,
+        // A grid whose items sit side by side; else they stack
+        grid_row: bool = false,
         author_display: bool = false,
         visibility_hidden: bool = false, // inherited
         pointer_events_none: bool = false, // inherited
@@ -4808,6 +4906,7 @@ const Visibility = struct {
                 .box = own.box,
                 .flex_column = own.flex_column,
                 .flex_wrap = own.flex_wrap,
+                .grid_row = own.grid_columns or own.grid_flow_column,
                 .author_display = own.author_display,
                 .visibility_hidden = own.visibility_hidden orelse parent.visibility_hidden,
                 .pointer_events_none = own.pointer_events_none orelse parent.pointer_events_none,

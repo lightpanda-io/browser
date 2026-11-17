@@ -746,6 +746,33 @@
 }
 </script>
 
+<script id="gridColumnsDecideTheRow">
+{
+  // A grid without column tracks has one implicit column: its items stack
+  // (a card's title, description and date). Two tracks or more put the
+  // first items side by side, as does grid-auto-flow: column.
+  const tops = (css) => {
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display: grid; ' + css;
+    grid.innerHTML = '<div style="height: 10px"></div><div style="height: 10px"></div><div style="height: 10px"></div>';
+    document.body.appendChild(grid);
+    const result = [...grid.children].map((c) => c.getBoundingClientRect().top - grid.getBoundingClientRect().top);
+    const height = grid.getBoundingClientRect().height;
+    grid.remove();
+    return [...result, height];
+  };
+  testing.expectEqual([0, 10, 20, 30], tops(''));
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template-columns: 1fr'));
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template-columns: [full] minmax(0, 1fr) [end]'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-template-columns: repeat(3, 1fr)'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-template-columns: 100px minmax(0, 1fr) 100px'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-template: auto / 1fr 1fr 1fr'));
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template: auto / 1fr'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-auto-flow: column'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid: auto / auto-flow'));
+}
+</script>
+
 <script id="displayContentsIsTransparent">
 {
   // display: contents generates no box: it reports no size, and its children
