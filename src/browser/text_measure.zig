@@ -38,6 +38,10 @@ fn unitLength(codepoint: u21) u32 {
 }
 
 pub fn width(text: []const u8, font_size: f64) f64 {
+    return asciiWidth(text, font_size) orelse decodedWidth(text, font_size);
+}
+
+fn decodedWidth(text: []const u8, font_size: f64) f64 {
     var iterator = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
     var result: f64 = 0;
     while (iterator.nextCodepoint()) |codepoint| result += advance(codepoint, font_size);
@@ -138,6 +142,11 @@ pub const LineWrap = struct {
         return self.lines().height(self.font_size);
     }
 
+    /// height, in whole pixels like scroll offsets
+    pub fn wrappedHeight(self: LineWrap) f64 {
+        return @ceil(self.height());
+    }
+
     fn addSpace(self: *LineWrap, run: []const u8) void {
         self.in_word = false;
         if (self.white_space.collapse == false) {
@@ -180,6 +189,25 @@ pub const LineWrap = struct {
         self.in_word = false;
     }
 };
+
+// width without decoding, for text that is all ASCII (most of it): the same
+// advances, added in the same order, so the same sum to the bit. Null when
+// some byte isn't ASCII.
+fn asciiWidth(text: []const u8, font_size: f64) ?f64 {
+    const glyph = font_size * 0.6;
+    const space = font_size * 0.33;
+    const tab = font_size * 1.32;
+    var result: f64 = 0;
+    for (text) |byte| {
+        result += switch (byte) {
+            0x80...0xff => return null,
+            '\n', '\r' => 0,
+            '\t' => tab,
+            else => if (std.ascii.isWhitespace(byte)) space else glyph,
+        };
+    }
+    return result;
+}
 
 fn advance(codepoint: u21, font_size: f64) f64 {
     if (isZeroWidth(codepoint)) return 0;
@@ -293,4 +321,15 @@ test "layout: white-space modes" {
 
     // No font, no size
     try std.testing.expectEqual(0, layout("abc", 0, 100, normal).height(0));
+}
+
+test "width: the ASCII path sums what decoding does, to the bit" {
+    const texts = [_][]const u8{ "", "word", "two words", "tab\there", "line\nbreak\r\n", "\x0b\x0c\x01~", "What's the story with Pocognoli, is it now time to go?" };
+    for (texts) |text| {
+        for ([_]f64{ 16, 13.333, 0.1, 37.5 }) |size| {
+            try std.testing.expectEqual(decodedWidth(text, size), asciiWidth(text, size).?);
+        }
+    }
+    try std.testing.expectEqual(null, asciiWidth("café", 16));
+    try std.testing.expectEqual(decodedWidth("café", 16), width("café", 16));
 }

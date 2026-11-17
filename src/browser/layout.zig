@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -46,6 +47,10 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
         const sizing = style_manager.widthSizing(self);
         if (sizing == .contents) {
             break :blk 0;
+        }
+        if (style_manager.gridOf(self)) |grid| {
+            const width = if (own.explicit) own.value else gridItemWidth(self, grid, owner);
+            break :blk clampWidth(self, width, .box, owner);
         }
         if (style_manager.isFlexRowItem(self)) {
             const row = style_manager.boxParent(self).?;
@@ -447,6 +452,91 @@ pub fn boxTopAt(self: *Element, position: StyleManager.Position, parent: ?*Eleme
     }
 }
 
+pub const Origin = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+
+    fn plus(self: Origin, other: Origin) Origin {
+        return .{ .x = self.x + other.x, .y = self.y + other.y };
+    }
+};
+
+/// The box's top-left in document coordinates: boxTop and
+/// Element.horizontalPosition in one walk up, reading each box's style once.
+/// Its parent's origin is kept (StyleManager.originMemo), so reading every
+/// child of one parent walks the ancestors once.
+pub fn boxOrigin(self: *Element, owner: *Frame, frame: *Frame) Origin {
+    const style_manager = &owner._style_manager;
+    const own = originStep(self, self, owner, frame);
+    var next = own.up orelse return own.delta;
+    if (style_manager.originMemo(next)) |memo| {
+        return own.delta.plus(.{ .x = memo.x, .y = memo.y });
+    }
+    const memo_el = next;
+    var rest: Origin = .{};
+    while (true) {
+        const step = originStep(next, self, owner, frame);
+        rest = rest.plus(step.delta);
+        next = step.up orelse break;
+    }
+    style_manager.setOriginMemo(memo_el, rest.x, rest.y);
+    return own.delta.plus(rest);
+}
+
+const OriginStep = struct {
+    delta: Origin,
+    // where the walk goes on, both axes; null when delta is the rest of it
+    up: ?*Element,
+};
+
+// el's top-left from the box the walk goes on to: its parent's, or its
+// containing block's for a box positioned on both axes. A box positioned on
+// one axis only goes on to a different box on each: the rest of the walk is
+// then each axis' own.
+fn originStep(el: *Element, self: *Element, owner: *Frame, frame: *Frame) OriginStep {
+    const style_manager = &owner._style_manager;
+    var delta: Origin = .{};
+    switch (style_manager.position(el)) {
+        .static, .sticky => {},
+        .relative => {
+            delta.x = relativeShift(el, .horizontal, owner);
+            delta.y = relativeShift(el, .vertical, owner);
+        },
+        .absolute, .fixed => {
+            const vertical = Anchor.vertical(el, owner);
+            const horizontal = Anchor.horizontal(el, owner);
+            if (vertical != null and horizontal != null) {
+                // Both against its containing block
+                return .{
+                    .delta = .{ .x = el.translateX(frame) + horizontal.?.offset, .y = vertical.?.offset },
+                    .up = vertical.?.base,
+                };
+            }
+            if (vertical != null or horizontal != null) {
+                return .{ .delta = .{ .x = el.horizontalPosition(frame), .y = boxTop(el, owner) }, .up = null };
+            }
+        },
+    }
+    delta.x += el.translateX(frame);
+
+    const parent = el.asNode().flatTreeParentElement(owner) orelse return .{ .delta = delta, .up = null };
+    delta.y += boxOffset(el, parent, owner);
+    const alongside = style_manager.alongside(el);
+    if (alongside == .grid) {
+        delta.x += gridItemLeft(el, parent, owner);
+    } else if (Element.LineCursor.Mode.from(alongside)) |mode| {
+        if (el == self) {
+            // Its own line is the one a caller reads child after child; an
+            // ancestor's would take the one slot from it
+            delta.x += Element.LineCursor.resumed(parent.asNode(), mode, el.asNode(), owner, frame);
+        } else {
+            var cursor: Element.LineCursor = .init(parent.asNode(), mode, frame);
+            delta.x += cursor.offsetOf(el.asNode(), owner);
+        }
+    }
+    return .{ .delta = delta, .up = parent };
+}
+
 pub const Axis = enum { vertical, horizontal };
 
 /// Where an absolutely positioned or fixed box with an inset on the axis
@@ -549,19 +639,23 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
-    if (style_manager.laysOutInRow(parent)) {
+    var flow: Flow = .of(parent, owner);
+    if (flow.mode == .row) {
         // A row's children all sit at its top (see Flow.at): nothing to
         // stack, so nothing to cache.
         return 0;
     }
 
-    var flow: Flow = .{ .in_row = false };
     var next = parent.asNode().flatFirstChild(owner);
     // How many children, from the first, have their offset cached. A failed
     // cache ends it, so a cached prefix never has a hole.
     var position: u32 = 0;
     var placed: u32 = 0;
-    if (resumePoint(self, parent, owner)) |point| {
+    const resume_point = switch (flow.mode) {
+        .grid => gridResumePoint(self, parent, owner),
+        else => resumePoint(self, parent, owner),
+    };
+    if (resume_point) |point| {
         flow.offset = point.offset;
         next = point.next;
         position = point.position;
@@ -572,9 +666,13 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
 
     while (next) |node| : (next = node.flatNextSibling(owner)) {
         const el = node.is(Element) orelse continue;
-        const offset = flow.at(el, owner);
+        if (comptime lp.IS_TEST) {
+            style_manager.offset_steps += 1;
+        }
+        const role = style_manager.flowRole(el);
+        const offset = flow.at(el, role, owner);
         if (placed == position) {
-            const cached = style_manager.setCacheOffset(el, position, offset);
+            const cached = style_manager.setCacheOffset(el, position, offset, flow.columnOf(el));
             if (cached) {
                 placed += 1;
             }
@@ -583,7 +681,7 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
         if (el == self) {
             return offset;
         }
-        flow.advance(el, owner);
+        flow.advance(el, role, owner);
     }
     return 0;
 }
@@ -610,12 +708,13 @@ fn resumePoint(self: *Element, parent: *Element, owner: *Frame) ?ResumePoint {
     }
 
     // A line-level box sits at its line's top whatever the line's height, so
-    // the line-level sibling right before it is enough.
-    var adjacent = style_manager.isBlockLevel(self) == false;
+    // the sibling right before it that isn't a block is enough: Flow.at puts
+    // that one at the line's top too.
+    var adjacent = style_manager.flowRole(self) != .block;
     var previous = self_node.previousSibling();
     while (previous) |node| : (previous = node.previousSibling()) {
         const el = node.is(Element) orelse continue;
-        if (style_manager.isBlockLevel(el) == false) {
+        if (style_manager.flowRole(el) != .block) {
             if (adjacent) {
                 if (style_manager.getCachedPlacement(el, parent)) |placement| {
                     return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset };
@@ -625,9 +724,6 @@ fn resumePoint(self: *Element, parent: *Element, owner: *Frame) ?ResumePoint {
             continue;
         }
         adjacent = false;
-        if (style_manager.hasDisplayNone(el)) {
-            continue;
-        }
         // A block ends its line: the next box goes right below it
         const placement = style_manager.getCachedPlacement(el, parent) orelse continue;
         return .{ .next = node.nextSibling(), .position = placement.position + 1, .offset = placement.offset + boxHeight(el, owner) };
@@ -635,18 +731,63 @@ fn resumePoint(self: *Element, parent: *Element, owner: *Frame) ?ResumePoint {
     return null;
 }
 
+// A grid's items share their row's top, whatever their heights: the walk
+// resumes at the first item of the row the nearest placed sibling before self
+// is on, with the row empty (see Flow.grid). An item starts a row when the
+// placed item before it has another top, or there's none.
+fn gridResumePoint(self: *Element, parent: *Element, owner: *Frame) ?ResumePoint {
+    const style_manager = &owner._style_manager;
+    if (style_manager.getCachedPlaced(parent) == 0) {
+        return null;
+    }
+    const self_node = self.asNode();
+    if (self_node._flags.assigned_slot or self_node.isOutsideFlatTree()) {
+        // Slotted nodes aren't DOM siblings, the others aren't laid out
+        return null;
+    }
+
+    // A hidden or out-of-flow child is placed at the top of the row the walk
+    // is on (Flow.at), so it never splits one
+    var row_start: ?ResumePoint = null;
+    var previous = self_node.previousSibling();
+    while (previous) |node| : (previous = node.previousSibling()) {
+        const el = node.is(Element) orelse continue;
+        const placement = style_manager.getCachedPlacement(el, parent) orelse {
+            if (row_start != null) {
+                // The cached prefix ends nowhere but at its start
+                break;
+            }
+            continue;
+        };
+        if (row_start) |start| {
+            if (placement.offset != start.offset) {
+                break;
+            }
+        }
+        row_start = .{ .next = node, .position = placement.position, .offset = placement.offset };
+    }
+    return row_start;
+}
+
 /// The declared height, else the content's
 pub fn boxHeight(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
-    if (style_manager.getCachedLayout(self, .box_height)) |height| {
+    // Both in one read: a box without its height usually lacks its content's
+    const cached = style_manager.getCachedHeights(self);
+    if (cached.box) |height| {
         return height;
     }
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
     const own = self.getElementAxis(owner, .height);
-    const height = if (own.explicit or self.isRootContainer()) own.value else @max(own.value, contentHeight(self, owner));
-    style_manager.setCacheLayout(self, .box_height, height);
+    if (own.explicit or self.isRootContainer()) {
+        style_manager.setCacheLayout(self, .box_height, own.value);
+        return own.value;
+    }
+    const content = cached.content orelse measureContentHeight(self, owner);
+    const height = @max(own.value, content);
+    style_manager.setCacheHeights(self, content, height);
     return height;
 }
 
@@ -659,36 +800,78 @@ pub fn contentHeight(self: *Element, owner: *Frame) f64 {
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
-    var wrap: ?text_measure.LineWrap = null;
-    // Without a width to wrap at, each text node with content is one line
-    // tall, placed like an inline box. Computed on first use.
-    var line_height: ?f64 = null;
-    const width = self.getElementAxis(owner, .width);
-    if (width.explicit) {
-        wrap = .{
-            .line_width = width.value,
-            .font_size = style_manager.computedFontSize(self),
-            .white_space = style_manager.whiteSpace(self),
-        };
-    }
+    const height = measureContentHeight(self, owner);
+    style_manager.setCacheLayout(self, .content_height, height);
+    return height;
+}
 
-    var flow: Flow = .{ .in_row = style_manager.laysOutInRow(self) };
+// contentHeight, without the memo: the caller caches it
+fn measureContentHeight(self: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+
+    // Text wraps at a declared width. An inline box's text wraps with its
+    // line's, which isn't modelled: each text node with content is one line
+    // tall, placed like an inline box. Any other box's text wraps at the
+    // width layout gives it. All read at the first text: a box without text
+    // needs no width.
+    var wrap: ?text_measure.LineWrap = null;
+    var declared_read = false;
+    var wraps_at_box: ?bool = null;
+    var line_height: ?f64 = null;
+
+    var flow: Flow = .of(self, owner);
     var children: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
     while (children.next()) |node| {
         if (node.is(Element)) |el| {
-            flow.advance(el, owner);
+            const role = style_manager.flowRole(el);
+            if (wrap) |*w| {
+                // The text so far is the lines above a block
+                if (flow.mode == .block and role == .block) {
+                    flow.line = @max(flow.line, w.wrappedHeight());
+                    w.* = .{ .line_width = w.line_width, .font_size = w.font_size, .white_space = w.white_space };
+                }
+            }
+            flow.advance(el, role, owner);
             continue;
         }
         const text = node.is(Node.CData.Text) orelse continue;
+        if (declared_read == false) {
+            declared_read = true;
+            const width = self.getElementAxis(owner, .width);
+            if (width.explicit) {
+                wrap = .{
+                    .line_width = width.value,
+                    .font_size = style_manager.computedFontSize(self),
+                    .white_space = style_manager.whiteSpace(self),
+                };
+            }
+        }
         if (wrap) |*w| {
             w.add(text.ownData());
             continue;
         }
-        // Skip the scan once the line is already this tall
-        if (line_height) |h| {
-            if (flow.line >= h) continue;
+        if (wraps_at_box == false) {
+            // Skip the scan once the line is already this tall
+            if (line_height) |h| {
+                if (flow.line >= h) continue;
+            }
         }
         if (isAllWhitespace(text.ownData())) {
+            continue;
+        }
+        const at_box = wraps_at_box orelse blk: {
+            const wraps = style_manager.wrapsOwnText(self);
+            wraps_at_box = wraps;
+            break :blk wraps;
+        };
+        if (at_box) {
+            style_manager.setHeightReadsWidth(self);
+            wrap = .{
+                .line_width = boxWidth(self, owner),
+                .font_size = style_manager.computedFontSize(self),
+                .white_space = style_manager.whiteSpace(self),
+            };
+            wrap.?.add(text.ownData());
             continue;
         }
         const h = line_height orelse blk: {
@@ -700,45 +883,196 @@ pub fn contentHeight(self: *Element, owner: *Frame) f64 {
         flow.line = @max(flow.line, h);
     }
 
-    var height = flow.offset + flow.line;
     if (wrap) |w| {
-        // Whole pixels, like scroll offsets
-        height += @ceil(w.height());
+        // Its lines share the last line's height with the inline boxes there
+        flow.line = @max(flow.line, w.wrappedHeight());
     }
-    style_manager.setCacheLayout(self, .content_height, height);
-    return height;
+    return flow.offset + flow.line;
 }
 
 // A parent's children, laid out top to bottom.
 const Flow = struct {
-    in_row: bool,
+    mode: Mode,
     line: f64 = 0, // The current line's height
     offset: f64 = 0, // The current line's top, from the parent's
+    column: u32 = 0, // A grid's next free column on the current row
+    // The grid cell at() found, for advance() past the same item
+    cell: ?struct { el: *Element, cell: GridCell } = null,
+
+    // StyleManager.ChildFlow, with a wrapping grid's column count
+    const Mode = union(enum) {
+        block,
+        row,
+        grid: u32,
+    };
+
+    fn of(parent: *Element, owner: *Frame) Flow {
+        return switch (owner._style_manager.childFlow(parent)) {
+            .block => .{ .mode = .block },
+            .row => .{ .mode = .row },
+            .grid => .{ .mode = .{ .grid = gridTrackCount(parent, owner) } },
+        };
+    }
 
     // Where el goes, from the parent's top. Its own height only moves what
     // comes after it.
-    fn at(self: *const Flow, el: *Element, owner: *Frame) f64 {
-        const style_manager = &owner._style_manager;
-        if (self.in_row or style_manager.isBlockLevel(el) == false) {
-            return self.offset;
+    fn at(self: *Flow, el: *Element, role: StyleManager.FlowRole, owner: *Frame) f64 {
+        switch (self.mode) {
+            .row => return self.offset,
+            .block => {
+                if (role != .block) {
+                    return self.offset;
+                }
+                // A block ends the line and starts below it
+                return self.offset + self.line;
+            },
+            .grid => |tracks| {
+                if (role == .none or role == .out_of_flow) {
+                    return self.offset;
+                }
+                const cell = self.gridCell(el, tracks, owner);
+                self.cell = .{ .el = el, .cell = cell };
+                return if (cell.wraps) self.offset + self.line else self.offset;
+            },
         }
-        // A block ends the line and starts below it
-        return self.offset + self.line;
     }
 
     // Moves past el, to where the next box goes
-    fn advance(self: *Flow, el: *Element, owner: *Frame) void {
-        const style_manager = &owner._style_manager;
-        const role = style_manager.flowRole(el);
+    fn advance(self: *Flow, el: *Element, role: StyleManager.FlowRole, owner: *Frame) void {
         if (role == .none or role == .out_of_flow) {
             return;
         }
         const height = boxHeight(el, owner);
-        if (self.in_row or role != .block) {
-            self.line = @max(self.line, height);
-            return;
+        switch (self.mode) {
+            .row => {},
+            .block => if (role == .block) {
+                self.offset += self.line + height;
+                self.line = 0;
+                return;
+            },
+            .grid => |tracks| {
+                const cell = if (self.cell) |c| (if (c.el == el) c.cell else self.gridCell(el, tracks, owner)) else self.gridCell(el, tracks, owner);
+                if (cell.wraps) {
+                    self.offset += self.line;
+                    self.line = 0;
+                }
+                self.column = cell.column + cell.span;
+            },
         }
-        self.offset += self.line + height;
-        self.line = 0;
+        self.line = @max(self.line, height);
+    }
+
+    // The column at() put el at, in a grid; 0 otherwise
+    fn columnOf(self: *const Flow, el: *Element) u16 {
+        const c = self.cell orelse return 0;
+        return if (c.el == el) @intCast(@min(c.cell.column, std.math.maxInt(u16))) else 0;
+    }
+
+    const GridCell = struct {
+        wraps: bool, // it starts the next row
+        column: u32,
+        span: u32,
+    };
+
+    // Where a grid item goes on the current row, or whether it wraps:
+    // auto-placed items fill the columns in order, an item with a start
+    // line goes at it, on the next row if the row is past it. Sparse, as
+    // grid-auto-flow: row is; rows themselves aren't modelled.
+    fn gridCell(self: *const Flow, el: *Element, tracks: u32, owner: *Frame) GridCell {
+        const placement = owner._style_manager.gridColumn(el);
+        // Lines are 1 to tracks + 1, negative ones counted from the end
+        const start = gridLine(placement.start, tracks);
+        const end = gridLine(placement.end, tracks);
+        const span = gridSpan(placement, tracks);
+
+        const column = if (start) |s| s else if (end) |e| (if (e >= span) e - span else 0) else null;
+        if (column) |c| {
+            const at_column = @min(c, tracks - 1);
+            return .{ .wraps = at_column < self.column, .column = at_column, .span = span };
+        }
+        if (self.column > 0 and self.column + span > tracks) {
+            return .{ .wraps = true, .column = 0, .span = span };
+        }
+        return .{ .wraps = false, .column = self.column, .span = span };
+    }
+
+    // How many columns an item takes
+    fn gridSpan(placement: StyleManager.GridColumn, tracks: u32) u32 {
+        const span: u32 = if (placement.span != 0) placement.span else blk: {
+            const s = gridLine(placement.start, tracks) orelse break :blk 1;
+            const e = gridLine(placement.end, tracks) orelse break :blk 1;
+            break :blk if (e > s) e - s else 1;
+        };
+        return std.math.clamp(span, 1, tracks);
+    }
+
+    // A line's column index, null for auto
+    fn gridLine(line: i8, tracks: u32) ?u32 {
+        if (line > 0) {
+            return @as(u32, @intCast(line)) - 1;
+        }
+        if (line < 0) {
+            const from_end: u32 = @intCast(-@as(i32, line));
+            return (tracks + 1) -| from_end;
+        }
+        return null;
     }
 };
+
+// A wrapping grid's item is as wide as the columns it spans, less its
+// margins. The columns share the grid's width evenly: fr tracks; a px or
+// auto track among them isn't sized, nor are gaps.
+fn gridItemWidth(item: *Element, grid: *Element, owner: *Frame) f64 {
+    const tracks = gridTrackCount(grid, owner);
+    const span = Flow.gridSpan(owner._style_manager.gridColumn(item), tracks);
+    const area = boxWidth(grid, owner) * @as(f64, @floatFromInt(span)) / @as(f64, @floatFromInt(tracks));
+    return @max(0, area - owner._style_manager.inlineMargins(item, area));
+}
+
+/// A wrapping grid's item: its left from the grid's, at its column, which
+/// boxOffset caches with its offset.
+pub fn gridItemLeft(item: *Element, grid: *Element, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    const tracks = switch (Flow.of(grid, owner).mode) {
+        .grid => |tracks| tracks,
+        .block, .row => return 0,
+    };
+    _ = boxOffset(item, grid, owner);
+    const column = if (style_manager.getCachedPlacement(item, grid)) |placement| placement.column else gridColumnByWalk(item, grid, tracks, owner);
+    return boxWidth(grid, owner) * @as(f64, @floatFromInt(column)) / @as(f64, @floatFromInt(tracks));
+}
+
+// The item's column without the cache: the row replayed from its first item
+fn gridColumnByWalk(item: *Element, grid: *Element, tracks: u32, owner: *Frame) u32 {
+    const style_manager = &owner._style_manager;
+    var flow: Flow = .{ .mode = .{ .grid = tracks } };
+    var next = grid.asNode().flatFirstChild(owner);
+    if (gridResumePoint(item, grid, owner)) |point| {
+        next = point.next;
+    }
+    while (next) |node| : (next = node.flatNextSibling(owner)) {
+        const el = node.is(Element) orelse continue;
+        switch (style_manager.flowRole(el)) {
+            .none, .out_of_flow => continue,
+            .block, .line => {},
+        }
+        const cell = flow.gridCell(el, tracks, owner);
+        if (el == item) {
+            return cell.column;
+        }
+        flow.column = cell.column + cell.span;
+    }
+    return 0;
+}
+
+// A wrapping grid's columns: its fixed tracks, and as many repeat(auto-fill)
+// ones as its width holds.
+fn gridTrackCount(grid: *Element, owner: *Frame) u32 {
+    const tracks = owner._style_manager.gridTracks(grid);
+    var count: u32 = tracks.tracks;
+    if (tracks.fill_px > 0) {
+        const fill: f64 = @floatFromInt(tracks.fill_px);
+        count += @intFromFloat(@max(1, @floor(boxWidth(grid, owner) / fill)));
+    }
+    return @max(count, 1);
+}
