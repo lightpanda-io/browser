@@ -63,6 +63,7 @@ geometry: Group(Geometry) = .{},
 touch_action: Group(TouchAction) = .{},
 text: Group(Text) = .{},
 flow: Group(Flow) = .{},
+grid: Group(Grid) = .{},
 
 layout_memo: LayoutMemo = .{},
 
@@ -83,6 +84,7 @@ hit_bands: HitBands = .{},
 
 // Where Element.horizontalPosition stopped on a line, see LineResume
 line_resume: ?LineResume = null,
+origin_memo: ?OriginMemo = null,
 
 // Inline writes the memos take without a bump: a top only drops the
 // element's geometry, a height can stop at a declared one (see heightWritten).
@@ -190,6 +192,8 @@ walked: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 offsets_placed: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 // Document.hitTest calls that walked the tree
 hit_walks: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
+// Siblings layout.boxOffset's walk placed, cached or not
+offset_steps: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 // Siblings Element.LineCursor measured
 line_steps: if (lp.IS_TEST) usize else void = if (lp.IS_TEST) 0 else {},
 
@@ -1225,6 +1229,7 @@ const HasKeys = struct {
 pub fn detachedChanged(self: *StyleManager, node: *Node) bool {
     // Nothing here bumps a version it could be checked against
     self.line_resume = null;
+    self.origin_memo = null;
     if (self.dirty) {
         return true;
     }
@@ -1851,7 +1856,8 @@ fn forgetOffsetsFrom(self: *StyleManager, parent: *Element, index: u32, next: ?*
 // shrink, and so on up. Widths flow the other way, so only the ancestors'
 // content widths can change: unless one of them sizes other boxes by its
 // content (see Entry.sizes_others). Then every width under the topmost one
-// that does goes; the heights and offsets there stay, no width decides them.
+// that does goes, and with them the heights there (text wraps at them) and
+// the offsets those place.
 fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32, at: ?*Node) bool {
     const memo = &self.layout_memo;
     var el = parent;
@@ -1896,7 +1902,14 @@ fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32, at: ?*Node) bo
         el = el.asNode().flatTreeParentElement(self.frame) orelse break;
     }
     if (sizing) |root| {
-        self.dropWidths(root.asNode());
+        const rewraps = self.heightsReadWidths(root.asNode());
+        if (rewraps) {
+            // Its own height can change too: what's after it moves, and its
+            // ancestors grow or shrink. Before its subtree goes, which takes
+            // the placed counts this reads.
+            self.heightWritten(root);
+        }
+        self.dropWidths(root.asNode(), rewraps);
     }
     // Document.extent reads the root's children
     self.extent_bumps += 1;
@@ -1907,7 +1920,7 @@ fn boxesMoved(self: *StyleManager, parent: *Element, index: ?u32, at: ?*Node) bo
 // change under it reach this far: no cached width reads another box's
 // content anymore, until layout.zig caches one again. So a batch of changes
 // under the same row walks it once.
-fn dropWidths(self: *StyleManager, root: *Node) void {
+fn dropWidths(self: *StyleManager, root: *Node, heights: bool) void {
     var tw = TreeWalker.Full.Elements.init(root, .{});
     while (tw.next()) |el| {
         if (comptime lp.IS_TEST) {
@@ -1918,16 +1931,62 @@ fn dropWidths(self: *StyleManager, root: *Node) void {
                 entry.drop(kind);
             }
             entry.sizes_others = false;
+            if (heights) {
+                // Text wraps at the widths: the heights go, and the offsets
+                // they place, with the counts (see forgetOffsetsFrom). root's
+                // own offset stays, its parent placed it.
+                entry.drop(.content_height);
+                entry.drop(.box_height);
+                if (el.asNode() != root) {
+                    entry.drop(.offset);
+                }
+                entry.placed = 0;
+                entry.height_reads_width = false;
+            }
         }
         if (el.hostedShadowRoot(self.frame)) |shadow| {
-            self.dropWidths(shadow.asNode());
+            self.dropWidths(shadow.asNode(), heights);
         }
         if (el.is(Element.Html.Slot)) |slot| {
             for (slot._assigned.items) |assigned| {
-                self.dropWidths(assigned);
+                // The slot placed it, and the slot is under root
+                if (heights) {
+                    if (assigned.is(Element)) |a| {
+                        if (self.layout_memo.map.getPtr(a)) |entry| {
+                            entry.drop(.offset);
+                        }
+                    }
+                }
+                self.dropWidths(assigned, heights);
             }
         }
     }
+}
+
+// Whether a cached height under root wrapped text at a computed width
+// (Entry.height_reads_width): dropping the widths there drops it too.
+fn heightsReadWidths(self: *StyleManager, root: *Node) bool {
+    var tw = TreeWalker.Full.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (self.layout_memo.map.getPtr(el)) |entry| {
+            if (entry.height_reads_width) {
+                return true;
+            }
+        }
+        if (el.hostedShadowRoot(self.frame)) |shadow| {
+            if (self.heightsReadWidths(shadow.asNode())) {
+                return true;
+            }
+        }
+        if (el.is(Element.Html.Slot)) |slot| {
+            for (slot._assigned.items) |assigned| {
+                if (self.heightsReadWidths(assigned)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 // Whether el's height is declared, as far as the memo knows: a tree change
@@ -2189,7 +2248,7 @@ fn dropSubtree(self: *StyleManager, root: *Node, memos: Memos, budget: *usize) b
 
 /// The memos an inline write can invalidate on its own, one per Group. Plus
 /// the layout memos comes from several groups.
-const Memo = enum { visibility, geometry, touch_action, text, flow, layout, heights };
+const Memo = enum { visibility, geometry, touch_action, text, flow, grid, layout, heights };
 const Memos = std.EnumSet(Memo);
 
 comptime {
@@ -2278,6 +2337,8 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
     if (reach.count() != 0) {
         self.inline_bumps += 1;
     }
+    // A transform reaches no memo, but moves the origins (translateX)
+    self.origin_memo = null;
     var it = reach.iterator();
     while (it.next()) |memo| {
         switch (memo) {
@@ -2290,7 +2351,7 @@ fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
                     // Entries hold the element's own values. el1.style.width =
                     // '100px' might change the bounding rect of its parent or
                     // children, but not their styles.
-                    .geometry, .text => _ = group.memo.remove(el),
+                    .geometry, .text, .grid => _ = group.memo.remove(el),
                     // Entries hold resolved values: el's reach its descendants
                     .visibility, .touch_action, .flow => self.dropInherited(&group.memo, el.asNode()),
                     .layout, .heights => unreachable,
@@ -2581,6 +2642,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.layout_memo = .{};
     self.hit_bands = .{};
     self.line_resume = null;
+    self.origin_memo = null;
 
     self.next_doc_order = 1;
     self.rule_layers = .empty;
@@ -2714,6 +2776,8 @@ pub const HitFacts = struct {
     contents: bool = false,
     // A flex row: its children with a box sit side by side (isFlexRowItem)
     row: bool = false,
+    // A wrapping grid: its in-flow children sit in its columns (gridOf)
+    grid: bool = false,
     position: Position = .static,
     line: Line = .line,
 
@@ -2737,6 +2801,7 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
         .hittable = !visibility.visibility_hidden and !visibility.pointer_events_none and contents == false,
         .contents = contents,
         .row = visibility.display == .flex and visibility.flex_column == false,
+        .grid = visibility.display == .grid and self.childFlow(el) == .grid,
         .position = flow.position,
         .line = switch (visibility.box) {
             .block_level, .table, .table_row => if (in_flow) .block else .line,
@@ -3067,10 +3132,149 @@ fn plainInline(self: *StyleManager, el: *Element) bool {
 /// The children lay out side by side: a flex row, a grid or a table row.
 /// Elsewhere block children stack and only inline-level ones share a line.
 pub fn laysOutInRow(self: *StyleManager, el: *Element) bool {
+    return self.childFlow(el) != .block;
+}
+
+pub const ChildFlow = enum {
+    // blocks stack, line-level boxes share a line
+    block,
+    // every child on one line: a flex row, a table row, a grid flowing by
+    // column
+    row,
+    // a grid's items fill its columns, then wrap onto the next row
+    grid,
+};
+
+/// Whether el's text wraps at el's own width: anything but an inline box,
+/// whose text wraps with its line (see layout.contentHeight).
+pub fn wrapsOwnText(self: *StyleManager, el: *Element) bool {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
+    return switch (self.visibilityProps(el).box) {
+        .inline_level, .contents => false,
+        .atomic_inline, .block_level, .table, .table_row, .table_cell => true,
+    };
+}
+
+/// How el lays its children out (see layout.Flow).
+pub fn childFlow(self: *StyleManager, el: *Element) ChildFlow {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .block;
     const vis = self.visibilityProps(el);
-    return vis.box == .table_row or vis.display == .grid or (vis.display == .flex and vis.flex_column == false);
+    return switch (vis.display) {
+        .flex => if (vis.flex_column) .block else .row,
+        .grid => switch (self.gridFlow(el)) {
+            .stack => .block,
+            .row => .row,
+            .wrap => .grid,
+        },
+        else => if (vis.box == .table_row) .row else .block,
+    };
+}
+
+const GridFlow = enum {
+    // one column: the items stack, like blocks
+    stack,
+    // grid-auto-flow: column, each item a column of its own on one row
+    row,
+    // the items fill the columns, then wrap onto the next row (see
+    // layout.Flow)
+    wrap,
+};
+
+/// The wrapping grid (ChildFlow.grid) whose column el, an in-flow item,
+/// sits in (see layout.gridItemLeft).
+pub fn gridOf(self: *StyleManager, el: *Element) ?*Element {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    const parent = el.asNode().flatTreeParentElement(self.frame) orelse return null;
+    if (self.visibilityProps(parent).display != .grid or self.flowProps(el).position.outOfFlow()) {
+        return null;
+    }
+    return if (self.gridFlow(parent) == .wrap) parent else null;
+}
+
+pub const Alongside = enum {
+    // on a line of its own, at its parent's left (isBlockLevel)
+    block,
+    // after the boxes and text on its line
+    line,
+    // beside every sibling before it: a flex row's item, a table cell
+    row,
+    // in a wrapping grid's column (gridOf)
+    grid,
+};
+
+/// How el sits among its siblings, for its left (see Element.LineCursor):
+/// isFlexRowItem, isTableCell, isBlockLevel and gridOf in one read of its
+/// props and its parent's.
+pub fn alongside(self: *StyleManager, el: *Element) Alongside {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .line;
+    const flow = self.flowProps(el);
+    if (flow.position.outOfFlow()) {
+        return .line;
+    }
+    if (self.boxParent(el)) |parent| {
+        const parent_vis = self.visibilityProps(parent);
+        switch (parent_vis.display) {
+            .flex => if (parent_vis.flex_column == false) return .row,
+            // the grid places its own children (layout.Flow)
+            .grid => if (self.gridFlow(parent) == .wrap and el.asNode().flatTreeParentElement(self.frame) == parent) return .grid,
+            .none, .other => {},
+        }
+    }
+    if (flow.floated) {
+        return .line;
+    }
+    return switch (self.visibilityProps(el).box) {
+        .table_cell => .row,
+        .block_level, .table, .table_row => .block,
+        .inline_level, .atomic_inline, .contents => .line,
+    };
+}
+
+/// How a grid places its items.
+fn gridFlow(self: *StyleManager, el: *Element) GridFlow {
+    const grid = self.gridProps(el);
+    if (grid.flow_column) {
+        return .row;
+    }
+    return if (grid.tracks >= 2 or grid.fill_px > 0) .wrap else .stack;
+}
+
+pub const GridTracks = struct {
+    // tracks of a fixed count
+    tracks: u8,
+    // the least width of each track a repeat(auto-fill/auto-fit, …) adds as
+    // many of as fit; 0 for none
+    fill_px: u16,
+};
+
+/// A .wrap grid's column tracks.
+pub fn gridTracks(self: *StyleManager, el: *Element) GridTracks {
+    const grid = self.gridProps(el);
+    return .{ .tracks = grid.tracks, .fill_px = grid.fill_px };
+}
+
+pub const GridColumn = struct {
+    // A line number, negative from the end; 0 for auto
+    start: i8,
+    end: i8,
+    // 0 for none
+    span: u8,
+};
+
+/// Where a grid item's grid-column puts it.
+pub fn gridColumn(self: *StyleManager, el: *Element) GridColumn {
+    const grid = self.gridProps(el);
+    return .{ .start = grid.column_start, .end = grid.column_end, .span = grid.column_span };
+}
+
+fn gridProps(self: *StyleManager, el: *Element) Grid.Computed {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    return self.grid.ownProps(self.arena.allocator(), el, self.frame);
 }
 
 /// An in-flow table cell: it sits beside its sibling cells.
@@ -3210,12 +3414,17 @@ const LayoutMemo = struct {
         // children have theirs (see heightWritten).
         position: u32 = 0,
         placed: u32 = 0,
+        // In a wrapping grid, the column the offset's row puts it at
+        column: u16 = 0,
 
         // A width cached on another element reads this one's content or
         // children: a box sized by its content sizes the boxes inside it, a
         // flex row's items size each other. A change under it can't keep
         // the widths (see boxesMoved).
         sizes_others: bool = false,
+        // Its content height wraps text at its computed width: dropping that
+        // width drops the heights too (see dropWidths)
+        height_reads_width: bool = false,
 
         fn get(self: *const Entry, slot: Measure) ?f64 {
             return if (self.cached.contains(slot)) self.values.get(slot) else null;
@@ -3258,6 +3467,38 @@ pub fn setCacheLayout(self: *StyleManager, el: *Element, comptime kind: LayoutKi
     entry.put(@field(LayoutMemo.Measure, @tagName(kind)), value);
 }
 
+pub const CachedHeights = struct {
+    box: ?f64 = null,
+    content: ?f64 = null,
+};
+
+/// getCachedLayout of box_height and content_height, in one read
+pub fn getCachedHeights(self: *StyleManager, el: *Element) CachedHeights {
+    const memo = self.freshLayoutMemo() orelse return .{};
+    const entry = memo.map.getPtr(el) orelse return .{};
+    return .{ .box = entry.get(.box_height), .content = entry.get(.content_height) };
+}
+
+/// setCacheLayout of content_height and box_height, in one write
+pub fn setCacheHeights(self: *StyleManager, el: *Element, content: f64, box: f64) void {
+    _ = self.freshLayoutMemo() orelse return;
+    const entry = self.layoutEntry(el) orelse return;
+    entry.put(.content_height, content);
+    entry.put(.box_height, box);
+}
+
+/// el's content height wraps text at its computed width (see
+/// Entry.height_reads_width).
+pub fn setHeightReadsWidth(self: *StyleManager, el: *Element) void {
+    _ = self.freshLayoutMemo() orelse return;
+    if (self.layoutEntry(el)) |entry| {
+        entry.height_reads_width = true;
+    } else {
+        // Can't be remembered: the next change drops everything
+        self.unscoped_sizing = true;
+    }
+}
+
 /// A width being cached reads el's content, or its children (see
 /// Entry.sizes_others).
 pub fn setSizesOthers(self: *StyleManager, el: *Element) void {
@@ -3280,6 +3521,8 @@ pub const CachedOffset = struct {
     offset: f64,
     // el's index among parent's element children
     position: u32,
+    // its column, when parent is a wrapping grid
+    column: u16,
 };
 
 /// Like getCachedOffset, with where el sits among its siblings.
@@ -3288,7 +3531,7 @@ pub fn getCachedPlacement(self: *StyleManager, el: *Element, parent: *Element) ?
     const entry = memo.map.getPtr(el) orelse return null;
     const offset = entry.get(.offset) orelse return null;
     const placed = if (memo.map.getPtr(parent)) |p| p.placed else 0;
-    return if (entry.position < placed) .{ .offset = offset, .position = entry.position } else null;
+    return if (entry.position < placed) .{ .offset = offset, .position = entry.position, .column = entry.column } else null;
 }
 
 /// How many of parent's first element children have their offset cached.
@@ -3300,7 +3543,7 @@ pub fn getCachedPlaced(self: *StyleManager, parent: *Element) u32 {
 
 /// Caches el's offset, el being its parent's index-th element child. Only
 /// valid once setCachePlaced covers index.
-pub fn setCacheOffset(self: *StyleManager, el: *Element, index: u32, offset: f64) bool {
+pub fn setCacheOffset(self: *StyleManager, el: *Element, index: u32, offset: f64, column: u16) bool {
     _ = self.freshLayoutMemo() orelse return false;
     const entry = self.layoutEntry(el) orelse return false;
     if (comptime lp.IS_TEST) {
@@ -3308,6 +3551,7 @@ pub fn setCacheOffset(self: *StyleManager, el: *Element, index: u32, offset: f64
     }
     entry.put(.offset, offset);
     entry.position = index;
+    entry.column = column;
     return true;
 }
 
@@ -3401,6 +3645,39 @@ const LineResume = struct {
     parent: *Node,
     cursor: Element.LineCursor,
 };
+
+/// The document origin of the last parent layout.boxOrigin walked up from:
+/// reading every child of one parent then walks its ancestors once. Like
+/// LineResume, one parent only.
+const OriginMemo = struct {
+    version: usize, // hitVersion: no box moved, no transform written
+    // A fixed box among the ancestors moves with the scroll
+    scroll_x: u32,
+    scroll_y: u32,
+    el: *Element,
+    x: f64,
+    y: f64,
+};
+
+/// el's document origin as layout.boxOrigin last computed it; null when it
+/// wasn't el's, or a box moved or the window scrolled since.
+pub fn originMemo(self: *StyleManager, el: *Element) ?struct { x: f64, y: f64 } {
+    self.rebuildIfDirty() catch return null;
+    const saved = self.origin_memo orelse return null;
+    if (saved.el != el or saved.version != self.hitVersion()) {
+        return null;
+    }
+    const window = self.frame.window;
+    if (saved.scroll_x != window.getScrollX() or saved.scroll_y != window.getScrollY()) {
+        return null;
+    }
+    return .{ .x = saved.x, .y = saved.y };
+}
+
+pub fn setOriginMemo(self: *StyleManager, el: *Element, x: f64, y: f64) void {
+    const window = self.frame.window;
+    self.origin_memo = .{ .version = self.hitVersion(), .scroll_x = window.getScrollX(), .scroll_y = window.getScrollY(), .el = el, .x = x, .y = y };
+}
 
 /// Null when the last line walked wasn't `parent`'s, or a box moved since.
 pub fn lineResume(self: *StyleManager, parent: *Node) ?*Element.LineCursor {
@@ -5362,16 +5639,226 @@ const Flow = struct {
     };
 };
 
+/// A grid container's column tracks, and where an item sits among them.
+/// Rows aren't modelled: an item's row is where the columns wrap.
+const Grid = struct {
+    const Declared = struct {
+        // A shorthand comes before its longhands, so a later longhand wins
+        const names = [_][]const u8{ "grid", "grid-template", "grid-template-columns", "grid-auto-flow", "grid-area", "grid-column", "grid-column-start", "grid-column-end" };
+
+        tracks: ?u8 = null,
+        fill_px: ?u16 = null,
+        flow_column: ?bool = null,
+        column_start: ?i8 = null,
+        column_end: ?i8 = null,
+        column_span: ?u8 = null,
+
+        fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
+            switch (id) {
+                // [rows / columns], or one side auto-flow: `auto-flow /
+                // columns` flows by row, `rows / auto-flow` by column
+                .grid, .@"grid-template" => {
+                    self.setColumns("none");
+                    self.flow_column = false;
+                    const slash = std.mem.indexOfScalar(u8, value, '/') orelse return;
+                    const columns = value[slash + 1 ..];
+                    if (hasKeyword(columns, "auto-flow")) {
+                        self.flow_column = true;
+                    } else {
+                        self.setColumns(columns);
+                    }
+                },
+                .@"grid-template-columns" => self.setColumns(value),
+                .@"grid-auto-flow" => {
+                    self.flow_column = hasKeyword(value, "column");
+                },
+                // row-start / column-start / row-end / column-end
+                .@"grid-area" => {
+                    var it = std.mem.splitScalar(u8, value, '/');
+                    _ = it.next();
+                    self.setColumnLines(it.next() orelse "auto", blk: {
+                        _ = it.next();
+                        break :blk it.next() orelse "auto";
+                    });
+                },
+                .@"grid-column" => {
+                    var it = std.mem.splitScalar(u8, value, '/');
+                    const start = it.next() orelse "auto";
+                    self.setColumnLines(start, it.next() orelse "auto");
+                },
+                .@"grid-column-start" => {
+                    const line = Line.parse(value);
+                    self.column_start = line.number;
+                    if (line.span != 0 or self.column_span == null) {
+                        self.column_span = line.span;
+                    }
+                },
+                .@"grid-column-end" => {
+                    const line = Line.parse(value);
+                    self.column_end = line.number;
+                    if (line.span != 0 or self.column_span == null) {
+                        self.column_span = line.span;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        fn setColumns(self: *Declared, value: []const u8) void {
+            const count = trackCount(value);
+            self.tracks = count.tracks;
+            self.fill_px = count.fill_px;
+        }
+
+        fn setColumnLines(self: *Declared, start_value: []const u8, end_value: []const u8) void {
+            const start = Line.parse(start_value);
+            const end = Line.parse(end_value);
+            self.column_start = start.number;
+            self.column_end = end.number;
+            self.column_span = @max(start.span, end.span);
+        }
+
+        // One side of grid-column: a line number, `span n`, or auto (named
+        // lines are auto too)
+        const Line = struct {
+            number: i8 = 0,
+            span: u8 = 0,
+
+            fn parse(value: []const u8) Line {
+                var line: Line = .{};
+                var is_span = false;
+                var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+                while (it.next()) |token| {
+                    if (std.ascii.eqlIgnoreCase(token, "span")) {
+                        is_span = true;
+                        continue;
+                    }
+                    const n = std.fmt.parseInt(i32, token, 10) catch continue;
+                    if (is_span) {
+                        line.span = @intCast(std.math.clamp(n, 1, 255));
+                    } else {
+                        line.number = @intCast(std.math.clamp(n, -127, 127));
+                    }
+                }
+                if (is_span and line.span == 0) {
+                    line.span = 1;
+                }
+                return line;
+            }
+        };
+
+        fn hasKeyword(value: []const u8, keyword: []const u8) bool {
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            while (it.next()) |token| {
+                if (std.ascii.eqlIgnoreCase(token, keyword)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        const TrackCount = struct {
+            tracks: u8 = 0,
+            fill_px: u16 = 0,
+        };
+
+        // A track list's tracks. `[names]` aren't tracks; a function
+        // (minmax(), fit-content()) is one, repeat(n, …) is n times its list.
+        // repeat(auto-fill/auto-fit, …) adds as many as fit: its least track
+        // width when it has one in px, else it counts as two.
+        fn trackCount(value: []const u8) TrackCount {
+            var count: TrackCount = .{};
+            var i: usize = 0;
+            while (i < value.len) {
+                const c = value[i];
+                if (std.ascii.isWhitespace(c)) {
+                    i += 1;
+                    continue;
+                }
+                if (c == '[') {
+                    i = std.mem.indexOfScalarPos(u8, value, i, ']') orelse return count;
+                    i += 1;
+                    continue;
+                }
+                // One token, with any parenthesized arguments
+                const start = i;
+                var depth: u32 = 0;
+                var open: ?usize = null;
+                while (i < value.len) : (i += 1) {
+                    switch (value[i]) {
+                        '(' => {
+                            if (depth == 0 and open == null) open = i;
+                            depth += 1;
+                        },
+                        ')' => depth -|= 1,
+                        else => if (depth == 0 and std.ascii.isWhitespace(value[i])) break,
+                    }
+                }
+                const token = value[start..i];
+                if (std.ascii.eqlIgnoreCase(token, "none") or std.ascii.eqlIgnoreCase(token, "subgrid")) {
+                    continue;
+                }
+                const paren = open orelse {
+                    count.tracks +|= 1;
+                    continue;
+                };
+                if (std.ascii.eqlIgnoreCase(token[0 .. paren - start], "repeat") == false) {
+                    count.tracks +|= 1;
+                    continue;
+                }
+                const args = std.mem.trimEnd(u8, token[paren - start + 1 ..], ")");
+                const comma = std.mem.indexOfScalar(u8, args, ',') orelse continue;
+                const list = args[comma + 1 ..];
+                const times = std.mem.trim(u8, args[0..comma], &std.ascii.whitespace);
+                if (std.fmt.parseInt(u8, times, 10)) |n| {
+                    count.tracks +|= n *| trackCount(list).tracks;
+                } else |_| if (leastPx(list)) |px| {
+                    count.fill_px = px;
+                } else {
+                    count.tracks +|= 2;
+                }
+            }
+            return count;
+        }
+
+        // The first px length in a repeat()'s track list: minmax(200px, 1fr),
+        // 200px
+        fn leastPx(list: []const u8) ?u16 {
+            var it = std.mem.tokenizeAny(u8, list, " \t\n\r(),");
+            while (it.next()) |token| {
+                if (std.ascii.endsWithIgnoreCase(token, "px") == false) {
+                    continue;
+                }
+                const px = std.fmt.parseFloat(f32, token[0 .. token.len - 2]) catch continue;
+                if (px >= 1) {
+                    return @intFromFloat(@min(px, std.math.maxInt(u16)));
+                }
+            }
+            return null;
+        }
+    };
+
+    const Computed = packed struct(u49) {
+        tracks: u8 = 0,
+        fill_px: u16 = 0,
+        flow_column: bool = false,
+        column_start: i8 = 0,
+        column_end: i8 = 0,
+        column_span: u8 = 0,
+    };
+};
+
 /// Every group's share of one declaration block, so a sheet's block is folded
 /// once. Field names match the StyleManager's group fields.
 const Declarations = struct {
-    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names;
+    const names = Visibility.Declared.names ++ Geometry.Declared.names ++ TouchAction.Declared.names ++ Text.Declared.names ++ Flow.Declared.names ++ Grid.Declared.names;
 
     visibility: Visibility.Declared = .{},
     geometry: Geometry.Declared = .{},
     touch_action: TouchAction.Declared = .{},
     text: Text.Declared = .{},
     flow: Flow.Declared = .{},
+    grid: Grid.Declared = .{},
 
     fn apply(self: *Declarations, id: properties.Id, value: []const u8) void {
         inline for (group_fields) |field| {
@@ -8086,6 +8573,117 @@ test "StyleManager: records: the generation wraps" {
     try testing.expectEqual(false, memo.contains(div));
 }
 
+test "StyleManager: memo: a kept origin moves with the scroll under a fixed box" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='height: 5000px'></div><div style='position: fixed; top: 10px; left: 5px'><p id=a style='height: 20px'></p><p id=b style='height: 20px'></p></div>");
+    const a = doc.getElementById("a").?;
+    const b = doc.getElementById("b").?;
+
+    try testing.expectEqual(layout.Origin{ .x = 5, .y = 10 }, layout.boxOrigin(a, frame, frame));
+    // From the fixed box's kept origin
+    try testing.expectEqual(layout.Origin{ .x = 5, .y = 30 }, layout.boxOrigin(b, frame, frame));
+
+    frame.window.scrollTo(.{ .x = 0 }, 100, frame) catch {};
+    try testing.expectEqual(layout.Origin{ .x = 5, .y = 130 }, layout.boxOrigin(b, frame, frame));
+    try testing.expectEqual(layout.boxTop(b, frame), layout.boxOrigin(b, frame, frame).y);
+}
+
+test "StyleManager: memo: a box widened by its content rewraps its text" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    // Sized by its content, which wraps at the viewport: the text, wider
+    // than that, takes two lines at the box's width
+    var words: std.ArrayList(u8) = .empty;
+    for (0..30) |_| {
+        try words.appendSlice(testing.arena_allocator, "word word ");
+    }
+    const markup = try std.fmt.allocPrint(testing.arena_allocator, "<div id=s style='display:inline-block'><p id=t>{s}</p></div><div id=after></div>", .{words.items});
+    try Frame.parse.htmlAsChildren(frame, body, markup);
+    const text = doc.getElementById("t").?;
+    const after = doc.getElementById("after").?;
+
+    const two_lines = layout.boxHeight(text, frame);
+    const top = layout.boxTop(after, frame);
+    try testing.expectEqual(true, two_lines > 20);
+
+    // A child wider than the text: the box and its text widen, one line
+    const wide = try doc.createElement("div", null, frame);
+    const style = (try wide.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("width", "4000px", null, frame);
+    _ = try doc.getElementById("s").?.asNode().appendChild(wide.asNode(), frame);
+    const layout_version = sm.layoutVersion();
+    const one_line = layout.boxHeight(text, frame);
+    try testing.expectEqual(20, one_line);
+    try testing.expectEqual(top - (two_lines - one_line) + layout.boxHeight(wide, frame), layout.boxTop(after, frame));
+    // ... through the targeted drop, not a full one
+    try testing.expectEqual(layout_version, sm.layoutVersion());
+}
+
+test "StyleManager: memo: reading a grid's tops in order replays one row at most" {
+    const layout = @import("layout.zig");
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div id=g style='display:grid; grid-template-columns: repeat(3, 1fr)'></div>");
+    const grid = doc.getElementById("g").?;
+    var els: [30]*Element = undefined;
+    for (&els, 0..) |*el, i| {
+        el.* = try doc.createElement("div", null, frame);
+        const style = (try el.*.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+        // rows of 10, 20 and 30px
+        try style.setProperty("height", if (i % 3 == 0) "10px" else if (i % 3 == 1) "20px" else "30px", null, frame);
+        _ = try grid.asNode().appendChild(el.*.asNode(), frame);
+    }
+
+    _ = layout.boxTop(grid, frame);
+    sm.offset_steps = 0;
+    for (els, 0..) |el, i| {
+        try testing.expectEqual(@as(f64, @floatFromInt(i / 3 * 30)), layout.boxTop(el, frame));
+    }
+    // Each read resumes at its row's first item: no more than a row's worth
+    try testing.expectEqual(true, sm.offset_steps <= els.len * 3);
+    try testing.expectEqual(300, layout.boxHeight(grid, frame));
+
+    // Each item's column is cached with its offset: its left walks nothing
+    sm.offset_steps = 0;
+    const third = layout.boxWidth(grid, frame) / 3;
+    for (els, 0..) |el, i| {
+        try testing.expectEqual(grid.horizontalPosition(frame) + third * @as(f64, @floatFromInt(i % 3)), el.horizontalPosition(frame));
+        try testing.expectEqual(third, layout.boxWidth(el, frame));
+    }
+    try testing.expectEqual(0, sm.offset_steps);
+
+    // A height write moves the rows below it, not the ones above
+    const style = (try els[4].getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("height", "50px", null, frame);
+    try testing.expectEqual(30, layout.boxTop(els[5], frame));
+    try testing.expectEqual(80, layout.boxTop(els[6], frame));
+    try testing.expectEqual(290, layout.boxTop(els[29], frame));
+    try testing.expectEqual(320, layout.boxHeight(grid, frame));
+}
+
 test "StyleManager: memo: reading tops in order stacks each sibling once" {
     const layout = @import("layout.zig");
     const frame = try testing.createFrame();
@@ -8319,6 +8917,11 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                     if (el.asNode().isConnected() == false) {
                         continue;
                     }
+                    // One walk for both, from the parent's kept origin: the
+                    // same sums, grouped differently
+                    const origin = layout.boxOrigin(el, owner, owner);
+                    try std.testing.expectApproxEqAbs(layout.boxTop(el, owner), origin.y, 1e-9);
+                    try std.testing.expectApproxEqAbs(el.horizontalPosition(owner), origin.x, 1e-9);
                     try out.append(testing.arena_allocator, .{
                         .top = layout.boxTop(el, owner),
                         .left = el.horizontalPosition(owner),

@@ -746,6 +746,103 @@
 }
 </script>
 
+<script id="gridColumnsDecideTheRow">
+{
+  // A grid without column tracks has one implicit column: its items stack
+  // (a card's title, description and date). Two tracks or more put the
+  // first items side by side, as does grid-auto-flow: column.
+  const tops = (css) => {
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display: grid; ' + css;
+    grid.innerHTML = '<div style="height: 10px"></div><div style="height: 10px"></div><div style="height: 10px"></div>';
+    document.body.appendChild(grid);
+    const result = [...grid.children].map((c) => c.getBoundingClientRect().top - grid.getBoundingClientRect().top);
+    const height = grid.getBoundingClientRect().height;
+    grid.remove();
+    return [...result, height];
+  };
+  testing.expectEqual([0, 10, 20, 30], tops(''));
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template-columns: 1fr'));
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template-columns: [full] minmax(0, 1fr) [end]'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-template-columns: repeat(3, 1fr)'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-template-columns: 100px minmax(0, 1fr) 100px'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-template: auto / 1fr 1fr 1fr'));
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template: auto / 1fr'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid-auto-flow: column'));
+  testing.expectEqual([0, 0, 0, 10], tops('grid: auto / auto-flow'));
+}
+</script>
+
+<script id="gridItemsWrapOntoRows">
+{
+  // Items fill a grid's columns, then wrap onto the next row, as tall as its
+  // tallest item. A span takes that many columns; a start line behind the
+  // row's next free column goes on the next row.
+  const tops = (css, items) => {
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display: grid; width: 300px; ' + css;
+    for (const [height, item] of items) {
+      const child = document.createElement('div');
+      child.style.cssText = 'height: ' + height + 'px; ' + item;
+      grid.appendChild(child);
+    }
+    document.body.appendChild(grid);
+    const top = grid.getBoundingClientRect().top;
+    const result = [...grid.children].map((c) => c.getBoundingClientRect().top - top);
+    const height = grid.getBoundingClientRect().height;
+    grid.remove();
+    return [...result, height];
+  };
+  const plain = (...heights) => heights.map((h) => [h, '']);
+
+  testing.expectEqual([0, 0, 0, 20, 20, 20, 50, 60], tops('grid-template-columns: repeat(3, 1fr)', plain(10, 20, 10, 5, 5, 30, 10)));
+  // Every item spanning the columns: they stack (BBC's story lists)
+  const full = [[10, 'grid-column: 1 / span 6'], [10, 'grid-column: 1 / span 6'], [10, 'grid-column: 1 / span 6']];
+  testing.expectEqual([0, 10, 20, 30], tops('grid-template-columns: repeat(6, 1fr)', full));
+  const toEnd = [[10, 'grid-column: 1 / -1'], [10, 'grid-column: 1 / -1']];
+  testing.expectEqual([0, 10, 20], tops('grid-template-columns: repeat(4, 1fr)', toEnd));
+  const spans = [[10, 'grid-column: span 2'], [10, 'grid-column: span 2'], [10, 'grid-column: span 3'], [10, '']];
+  testing.expectEqual([0, 0, 10, 10, 20], tops('grid-template-columns: repeat(4, 1fr)', spans));
+  const back = [[10, ''], [10, 'grid-column-start: 1'], [10, '']];
+  testing.expectEqual([0, 10, 10, 20], tops('grid-template-columns: repeat(3, 1fr)', back));
+  const area = [[10, 'grid-area: auto / 1 / auto / -1'], [10, 'grid-area: auto / 1 / auto / -1']];
+  testing.expectEqual([0, 10, 20], tops('grid-template-columns: 1fr 1fr', area));
+  // As many 100px tracks as 300px holds
+  testing.expectEqual([0, 0, 0, 10, 20], tops('grid-template-columns: repeat(auto-fill, minmax(100px, 1fr))', plain(10, 10, 10, 10)));
+}
+</script>
+
+<script id="gridItemsTakeTheirColumns">
+{
+  // An item is as wide as the columns it spans, at its column's left.
+  const boxes = (css, items) => {
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display: grid; width: 300px; ' + css;
+    for (const item of items) {
+      const child = document.createElement('div');
+      child.style.cssText = 'height: 10px; ' + item;
+      grid.appendChild(child);
+    }
+    document.body.appendChild(grid);
+    const g = grid.getBoundingClientRect();
+    const result = [...grid.children].map((c) => {
+      const r = c.getBoundingClientRect();
+      return [r.left - g.left, r.top - g.top, r.width];
+    });
+    grid.remove();
+    return result;
+  };
+
+  testing.expectEqual([[0, 0, 100], [100, 0, 100], [200, 0, 100], [0, 10, 100]], boxes('grid-template-columns: repeat(3, 1fr)', ['', '', '', '']));
+  testing.expectEqual([[0, 0, 200], [200, 0, 100], [0, 10, 300]], boxes('grid-template-columns: repeat(3, 1fr)', ['grid-column: span 2', '', 'grid-column: 1 / -1']));
+  testing.expectEqual([[200, 0, 100], [0, 10, 100]], boxes('grid-template-columns: repeat(3, 1fr)', ['grid-column-start: 3', '']));
+  testing.expectEqual([[0, 0, 60], [60, 0, 60], [120, 0, 60], [180, 0, 60], [240, 0, 60]], boxes('grid-template-columns: repeat(5, 1fr)', ['', '', '', '', '']));
+  testing.expectEqual([[0, 0, 100], [100, 0, 100], [200, 0, 100], [0, 10, 100]], boxes('grid-template-columns: repeat(auto-fill, minmax(100px, 1fr))', ['', '', '', '']));
+  // An explicit width keeps it, at its column
+  testing.expectEqual([[0, 0, 50], [100, 0, 100]], boxes('grid-template-columns: 1fr 1fr 1fr', ['width: 50px', '']));
+}
+</script>
+
 <script id="displayContentsIsTransparent">
 {
   // display: contents generates no box: it reports no size, and its children
@@ -1596,6 +1693,24 @@
 <div id="textWrapped" style="width: 100px">one two three four five six seven eight nine ten</div>
 <div id="textNowrap" style="width: 100px; white-space: nowrap">one two three four five six seven eight nine ten</div>
 <div id="textWrapModeNowrap" style="width: 100px; text-wrap: nowrap">one two three four five six seven eight nine ten</div>
+
+<div style="width: 100px"><div id="textWrappedByParent">one two three four five six seven eight nine ten</div></div>
+
+<script id="textWrapsAtItsBoxWidth">
+{
+  // Without a declared width, text wraps at the width layout gives its box
+  testing.expectEqual($('#textWrapped').clientHeight, $('#textWrappedByParent').clientHeight);
+  testing.expectTrue($('#textWrappedByParent').clientHeight > $('#lineInline').scrollHeight);
+
+  // ... and in a grid column
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display: grid; grid-template-columns: repeat(3, 1fr); width: 300px';
+  grid.innerHTML = '<div>one two three four five six seven eight nine ten</div><div>one</div><div>one</div>';
+  document.body.appendChild(grid);
+  testing.expectEqual($('#textWrapped').clientHeight, grid.firstElementChild.getBoundingClientRect().height);
+  grid.remove();
+}
+</script>
 
 <script id="textNowrapIsOneLine">
 {

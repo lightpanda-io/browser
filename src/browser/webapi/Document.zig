@@ -1184,6 +1184,10 @@ const HitLevel = struct {
 
         const level = &levels[index];
         const parent = level.element orelse return x;
+        if (level.facts.grid and facts.position != .absolute and facts.position != .fixed) {
+            // StyleManager.gridOf: in one of its parent's columns
+            return x + layout.gridItemLeft(element, parent, owner) + leftOfLevel(levels, index, owner, frame);
+        }
         // Element.LineCursor.Mode.of, from what the walk already read
         const line_mode: ?Element.LineCursor.Mode = switch (facts.position) {
             .absolute, .fixed => .line,

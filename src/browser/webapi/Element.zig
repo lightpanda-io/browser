@@ -1771,10 +1771,11 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     };
 }
 
-/// The box's top in document coordinates.
-fn documentTop(self: *Element, frame: *Frame) f64 {
-    const owner = self.ownerFrame(frame) orelse return 0;
-    return layout.boxTop(self, owner);
+/// The box's top-left in document coordinates, as every API reporting it
+/// reads it (one sum, so they agree to the bit).
+fn documentOrigin(self: *Element, frame: *Frame) layout.Origin {
+    const owner = self.ownerFrame(frame) orelse return .{};
+    return layout.boxOrigin(self, owner, frame);
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1806,9 +1807,10 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
 // position by the owning window's scroll position.
 pub fn clientOrigin(self: *Element, frame: *Frame) struct { x: f64, y: f64 } {
     const window = (self.ownerFrame(frame) orelse frame).window;
+    const origin = self.documentOrigin(frame);
     return .{
-        .x = self.horizontalPosition(frame) - @as(f64, @floatFromInt(window.getScrollX())),
-        .y = self.documentTop(frame) - @as(f64, @floatFromInt(window.getScrollY())),
+        .x = origin.x - @as(f64, @floatFromInt(window.getScrollX())),
+        .y = origin.y - @as(f64, @floatFromInt(window.getScrollY())),
     };
 }
 
@@ -1952,14 +1954,14 @@ pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return self.documentTop(frame);
+    return self.documentOrigin(frame).y;
 }
 
 pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
     }
-    return self.horizontalPosition(frame);
+    return self.documentOrigin(frame).x;
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
@@ -2037,7 +2039,10 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         }
         const parent = current.flatParent(frame) orelse return x;
         if (current.is(Element)) |el| {
-            if (LineCursor.Mode.of(el, owner)) |mode| {
+            const alongside = owner._style_manager.alongside(el);
+            if (alongside == .grid) {
+                x += layout.gridItemLeft(el, parent.as(Element), owner);
+            } else if (LineCursor.Mode.from(alongside)) |mode| {
                 if (el == self) {
                     // Its own line is the one a caller reads child after
                     // child; an ancestor's would take the one slot from it
@@ -2076,14 +2081,14 @@ pub const LineCursor = struct {
         // an inline-level box: after the boxes and text on its line
         line,
 
-        /// Null for a block-level box: on a line of its own, at its
-        /// parent's left edge.
-        pub fn of(el: *Element, owner: *Frame) ?Mode {
-            const style_manager = &owner._style_manager;
-            if (style_manager.isFlexRowItem(el) or style_manager.isTableCell(el)) {
-                return .row;
-            }
-            return if (style_manager.isBlockLevel(el)) null else .line;
+        /// Null for a block-level box, on a line of its own at its parent's
+        /// left edge, and for a grid item, which its grid places.
+        pub fn from(alongside: StyleManager.Alongside) ?Mode {
+            return switch (alongside) {
+                .row => .row,
+                .line => .line,
+                .block, .grid => null,
+            };
         }
     };
 
@@ -2099,7 +2104,7 @@ pub const LineCursor = struct {
 
     /// offsetOf, going on from the last read of this line when `node` is a
     /// little further along it (see StyleManager.LineResume).
-    fn resumed(parent: *Node, mode: Mode, node: *Node, owner: *Frame, frame: *Frame) f64 {
+    pub fn resumed(parent: *Node, mode: Mode, node: *Node, owner: *Frame, frame: *Frame) f64 {
         const style_manager = &owner._style_manager;
         if (style_manager.lineResume(parent)) |saved| {
             if (saved.mode == mode and saved.reaches(node, frame)) {
@@ -2218,7 +2223,7 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
 
 pub fn scrollIntoViewIfNeeded(self: *Element, center_if_needed: ?bool, frame: *Frame) void {
     _ = center_if_needed;
-    const y = self.documentTop(frame);
+    const y = self.documentOrigin(frame).y;
     const scroll_y: f64 = @floatFromInt(frame.window.getScrollY());
     const viewport_height: f64 = @floatFromInt(frame.window.getInnerHeight(frame));
     if (y >= scroll_y and y < scroll_y + viewport_height) {
@@ -2235,7 +2240,7 @@ pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) 
     _ = opts;
     // Scroll the window so the element's top is brought into the viewport.
     // Same top as getBoundingClientRect.
-    const y = self.documentTop(frame);
+    const y = self.documentOrigin(frame).y;
     frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
 }
 
