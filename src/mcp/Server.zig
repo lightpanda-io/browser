@@ -176,7 +176,7 @@ pub fn idle(self: *Self) u31 {
     return entry.session.idleSlice();
 }
 
-/// Close the session's pages, keeping its cookies. False if it had none.
+/// False if the session had no page.
 pub fn closePages(self: *Self) bool {
     const entry = self.active_session;
     const session = entry.session;

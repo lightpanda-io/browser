@@ -382,7 +382,6 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     return true;
 }
 
-/// What the default session gets instead of `reap`: it outlives its pages.
 fn closeIdlePages(self: *HttpServer, worker: *Worker, server: *Server) void {
     if (!server.closePages()) return;
     log.info(.mcp, "mcp session pages closed", .{ .session = worker.id });
@@ -546,9 +545,7 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
                 if (idle_for < timeout) {
                     wait_ms = @min(wait_ms, timeout - idle_for);
                 } else if (Server.isDefault(worker.id)) {
-                    // Never reaped, it holds the cookies saved on exit: only
-                    // its pages go, or their timers run for as long as the
-                    // process does.
+                    // Not reaped: it holds the cookies saved on exit.
                     if (server) |s| self.closeIdlePages(worker, s);
                     idle_since = now;
                 } else if (self.reap(worker)) {
