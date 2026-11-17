@@ -8,6 +8,7 @@
     <div id="knob" style="position:absolute;left:0;top:15px;width:20px;height:20px"></div>
   </div>
   <div id="out"></div>
+  <hr id="rule">
 </body>
 
 <script id="empty_block_has_no_height">
@@ -32,5 +33,16 @@
 
   const o = document.getElementById('out').getBoundingClientRect();
   testing.expectEqual('knob', document.elementFromPoint(x, o.top + 0.5)?.id);
+}
+</script>
+
+<script id="hr_is_its_borders">
+{
+  // An <hr> has no content, but its 1px top and bottom borders make it
+  // 2px tall in Chrome, so it can be hit.
+  const rule = document.getElementById('rule');
+  const r = rule.getBoundingClientRect();
+  testing.expectEqual(2, r.height);
+  testing.expectEqual('rule', document.elementFromPoint(r.right - 10, r.top + 1)?.id);
 }
 </script>
