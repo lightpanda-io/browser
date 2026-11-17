@@ -74,6 +74,7 @@ pub const decision_env_hint = zenai.decisions.envHint(decision_provider_env_var_
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const platform = try Platform.init(.{
         .v8_flags = config.v8Flags(),
+        .gc_auto_min_mb = config.v8GCAutoMinMb(),
         .locale = config.locale(),
         .timezone = config.timezone(),
     });

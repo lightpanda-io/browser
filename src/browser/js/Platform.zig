@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -24,6 +25,7 @@ handle: *v8.Platform,
 
 pub const Options = struct {
     v8_flags: ?[]const u8 = null,
+    gc_auto_min_mb: ?u16 = null,
     // BCP 47 tag; becomes ICU's default locale (Intl, toLocaleString).
     locale: ?[:0]const u8 = null,
     // IANA id; becomes ICU's default time zone. Null keeps the host zone.
@@ -37,6 +39,15 @@ pub const Options = struct {
 /// rest of the process and for every child. ICU canonicalizes the tag itself,
 /// script subtag included.
 pub fn init(opts: Options) !Platform {
+    if (opts.gc_auto_min_mb) |mb| {
+        // Only the flag makes this a floor for the limit V8 recomputes after
+        // each full GC; ResourceConstraints sets the initial limit only.
+        var buf: [48]u8 = undefined;
+        const flag = std.fmt.bufPrint(&buf, "--initial-old-space-size={d}", .{mb}) catch unreachable;
+        v8.v8__V8__SetFlagsFromString(flag.ptr, flag.len);
+    }
+
+    // After our own flags, so they can be overridden.
     if (opts.v8_flags) |flags| {
         v8.v8__V8__SetFlagsFromString(flags.ptr, flags.len);
     }

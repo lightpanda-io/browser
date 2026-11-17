@@ -647,10 +647,16 @@
     \\          Unsupported escape hatch: V8 does not validate flags against the
     \\          prebuilt snapshot, so an incompatible flag can misbehave or
     \\          crash at any point.
-    \\  --v8-gc-hint-floor-mb <INT>
-    \\          Floor under which cleanup events (e.g. page teardown) does not
-    \\          notify V8 of memory pressure. Low numbers typically cost more
-    \\          CPU but can help keep memory usage down.
+    \\  --v8-gc-auto-min-mb <INT>
+    \\          V8 heap size, in megabytes, below which V8 does not start a full
+    \\          garbage collection on its own. When set to 0, V8 will base the
+    \\          value on what survived the last GC. Higher values typically cost
+    \\          more memory but less CPU.
+    \\          Defaults to 32, 0 keeps the V8 default.
+    \\  --v8-gc-request-min-mb <INT>
+    \\          Heap size, in megabytes, below which cleanup events (e.g.
+    \\          page teardown) do not notify V8 of memory pressure. Low numbers
+    \\          typically cost more CPU but can help keep memory usage down.
     \\          Defaults to 1 (1MiB) in serve (CDP), mcp and agent mode.
     \\          V8 GC hints are disabled by default with fetch.
     \\  --v8-max-heap-mb <INT>

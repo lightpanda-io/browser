@@ -131,7 +131,7 @@ heap_limit_protected: bool = false,
 // Think of it as our own little global errno. How cute.
 error_message: ?[]const u8 = null,
 
-gc_hint_floor: ?u64,
+gc_request_min: ?u64,
 
 pub const InitOpts = struct {
     with_inspector: bool = false,
@@ -240,7 +240,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .private_symbols = private_symbols,
         .disabled_api_names = disabled_api_names,
         .microtask_queues_are_running = false,
-        .gc_hint_floor = app.config.v8GCHintFloor(),
+        .gc_request_min = app.config.v8GCRequestMin(),
         .eternal_function_templates = eternal_function_templates,
     };
 }
@@ -705,9 +705,9 @@ pub fn runIdleTasks(self: *const Env) void {
 // any contexts which have been freed.
 // Skips if there's little to reclaim
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
-    const hint_floor = self.gc_hint_floor orelse return;
+    const request_min = self.gc_request_min orelse return;
     const stats = self.isolate.getHeapStatistics();
-    if (stats.used_heap_size + stats.external_memory < hint_floor) {
+    if (stats.used_heap_size + stats.external_memory < request_min) {
         return;
     }
     var handle_scope: js.HandleScope = undefined;

@@ -301,7 +301,9 @@ const CommonOptions = .{
     .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
-    .{ .name = "v8_gc_hint_floor_mb", .type = ?u16 },
+    .{ .name = "v8_gc_auto_min_mb", .type = ?u16 },
+    .{ .name = "v8_gc_request_min_mb", .type = ?u16 },
+    .{ .name = "v8_gc_hint_floor_mb", .type = ?u16, .deprecated = "use --v8-gc-request-min-mb" },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{
@@ -674,21 +676,29 @@ pub fn v8Flags(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn v8GCAutoMinMb(self: *const Config) ?u16 {
+    const mb = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_gc_auto_min_mb orelse 32,
+        else => unreachable,
+    };
+    return if (mb == 0) null else mb;
+}
+
+pub fn v8GCRequestMin(self: *const Config) ?u64 {
+    const mb = switch (self.mode) {
+        .fetch => |opts| opts.v8_gc_request_min_mb orelse opts.v8_gc_hint_floor_mb,
+        inline .serve, .mcp, .agent => |opts| opts.v8_gc_request_min_mb orelse opts.v8_gc_hint_floor_mb orelse 1,
+        else => unreachable,
+    } orelse return null;
+
+    return 1024 * 1024 * @as(u64, @intCast(mb));
+}
+
 pub fn v8MaxHeapMb(self: *const Config) ?u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
         else => unreachable,
     };
-}
-
-pub fn v8GCHintFloor(self: *const Config) ?u64 {
-    const mb = switch (self.mode) {
-        .fetch => |opts| opts.v8_gc_hint_floor_mb,
-        inline .serve, .mcp, .agent => |opts| opts.v8_gc_hint_floor_mb orelse 1,
-        else => unreachable,
-    } orelse return null;
-
-    return 1024 * 1024 * @as(u64, @intCast(mb));
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
