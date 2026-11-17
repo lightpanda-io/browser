@@ -485,9 +485,9 @@ const Cloner = struct {
         }
 
         if (tao.as(NodeList)) |list| {
-            const values = try self.arena.alloc(Value, try list.length(self.frame));
+            const values = try self.arena.alloc(Value, list.length(self.frame));
             for (values, 0..) |*item, i| {
-                const node = (try list.getAtIndex(i, self.frame)) orelse unreachable;
+                const node = list.getAtIndex(i, self.frame) orelse unreachable;
                 item.* = try self.run(try self.local.zigValueToJs(node, .{}));
             }
             return .{ .array = values };

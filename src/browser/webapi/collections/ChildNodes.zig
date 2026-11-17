@@ -60,7 +60,7 @@ pub fn deinit(self: *const ChildNodes, _: *Page) void {
     self._arena.release();
 }
 
-pub fn length(self: *ChildNodes, frame: *const Frame) !u32 {
+pub fn length(self: *ChildNodes, frame: *const Frame) u32 {
     if (self.versionCheck(frame)) {
         if (self._last_length) |cached_length| {
             return cached_length;
@@ -76,7 +76,7 @@ pub fn length(self: *ChildNodes, frame: *const Frame) !u32 {
     return len;
 }
 
-pub fn getAtIndex(self: *ChildNodes, index: usize, frame: *const Frame) !?*Node {
+pub fn getAtIndex(self: *ChildNodes, index: usize, frame: *const Frame) ?*Node {
     _ = self.versionCheck(frame);
 
     var current = self._last_index;
@@ -146,7 +146,7 @@ const Iterator = struct {
 
     pub fn next(self: *Iterator, frame: *const Frame) !?Entry {
         const index = self.index;
-        const node = try self.list.getAtIndex(index, frame) orelse return null;
+        const node = self.list.getAtIndex(index, frame) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }

@@ -35,9 +35,9 @@ _proto: *NodeList,
 _name: []const u8,
 _form_collection: *HTMLFormControlsCollection,
 
-pub fn getLength(self: *RadioNodeList) !u32 {
+pub fn getLength(self: *RadioNodeList) u32 {
     var i: u32 = 0;
-    var it = try self._form_collection.iterator();
+    var it = self._form_collection.iterator();
     while (it.next()) |element| {
         if (self.matches(element)) {
             i += 1;
@@ -48,9 +48,9 @@ pub fn getLength(self: *RadioNodeList) !u32 {
 
 // Walks a cloned iterator, like getLength and getValue do: indexing the form
 // collection directly would rewind its cursor on every call.
-pub fn getAtIndex(self: *RadioNodeList, index: usize) !?*Node {
+pub fn getAtIndex(self: *RadioNodeList, index: usize) ?*Node {
     var current: usize = 0;
-    var it = try self._form_collection.iterator();
+    var it = self._form_collection.iterator();
     while (it.next()) |element| {
         if (!self.matches(element)) {
             continue;
@@ -64,7 +64,7 @@ pub fn getAtIndex(self: *RadioNodeList, index: usize) !?*Node {
 }
 
 pub fn getValue(self: *RadioNodeList) ![]const u8 {
-    var it = try self._form_collection.iterator();
+    var it = self._form_collection.iterator();
     while (it.next()) |element| {
         const input = element.is(Input) orelse continue;
         if (input._input_type != .radio) {
@@ -79,7 +79,7 @@ pub fn getValue(self: *RadioNodeList) ![]const u8 {
 }
 
 pub fn setValue(self: *RadioNodeList, value: []const u8, frame: *Frame) !void {
-    var it = try self._form_collection.iterator();
+    var it = self._form_collection.iterator();
     while (it.next()) |element| {
         const input = element.is(Input) orelse continue;
         if (input._input_type != .radio) {

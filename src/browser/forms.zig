@@ -190,7 +190,7 @@ fn collectFormFields(
     var fields: std.ArrayList(FormField) = .empty;
 
     var elements = try form.getElements(frame);
-    var it = try elements.iterator();
+    var it = elements.iterator();
     while (it.next()) |el| {
         const node = el.asNode();
 

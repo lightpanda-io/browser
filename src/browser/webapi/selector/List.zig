@@ -261,7 +261,7 @@ pub fn entries(self: *List, frame: *Frame) !*EntryIterator {
     return .init(.{ .list = self }, frame);
 }
 
-pub fn getAtIndex(self: *const List, index: usize) !?*Node {
+pub fn getAtIndex(self: *const List, index: usize) ?*Node {
     if (index >= self._nodes.len) {
         return null;
     }
