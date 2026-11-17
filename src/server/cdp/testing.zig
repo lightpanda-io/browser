@@ -21,6 +21,7 @@ const std = @import("std");
 const CDP = @import("CDP.zig");
 const Inbox = @import("../../Inbox.zig");
 const Driver = @import("../Driver.zig");
+const json_input = @import("../json_input.zig");
 const sys_net = @import("../../sys/net.zig");
 
 pub const base = @import("../../testing.zig");
@@ -135,6 +136,21 @@ pub const TestContext = struct {
             break :blk msg;
         };
         return self.cdp().processMessage(json_message);
+    }
+
+    // Pushes `msg` on the inbox like the Network thread does. It's dispatched
+    // by the next drain, which can be a sync wait's nested tick.
+    pub fn queueMessage(self: *TestContext, msg: anytype) !void {
+        _ = self.cdp();
+        const bytes = try std.json.Stringify.valueAlloc(base.arena_allocator, msg, .{});
+        const arena = try base.test_app.arena_pool.acquire(bytes.len, "cdp test message");
+        errdefer arena.release();
+
+        var raw: []const u8 = try arena.dupe(u8, bytes);
+        const input = try json_input.parseLeaky(CDP.InputMessage, arena.allocator(), &raw, .{
+            .ignore_unknown_fields = true,
+        });
+        self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input } });
     }
 
     pub fn expectSentCount(self: *TestContext, expected: usize) !void {
