@@ -1701,7 +1701,13 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }, .explicit = true };
     }
 
-    return .{ .value = 5.0 };
+    // An empty box with no declared height is 0px tall: it takes its height
+    // from its content. Replaced elements, form controls and <br> keep a
+    // minimal height, as they show something even without content.
+    return .{ .value = switch (axis) {
+        .width => 5.0,
+        .height => if (tag.isReplacedOrControl() or tag == .br) 5.0 else 0.0,
+    } };
 }
 
 // The document's <html>, or a <body> under it. These span the document and

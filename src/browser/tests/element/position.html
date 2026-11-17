@@ -1157,14 +1157,23 @@
   document.body.appendChild(empty);
   testing.expectEqual(empty.clientHeight, empty.scrollHeight);
 
-  // Children stack, so each one strictly increases scrollHeight.
+  // An empty child is 0px tall, so it adds nothing.
   const box = document.createElement('div');
   document.body.appendChild(box);
   box.appendChild(document.createElement('div'));
+  testing.expectEqual(0, box.scrollHeight);
+
+  // Children with content stack, so each one strictly increases scrollHeight.
+  const line = () => {
+    const child = document.createElement('div');
+    child.textContent = 'x';
+    return child;
+  };
+  box.appendChild(line());
   const oneChild = box.scrollHeight;
   testing.expectTrue(oneChild >= box.clientHeight);
 
-  box.appendChild(document.createElement('div'));
+  box.appendChild(line());
   testing.expectTrue(box.scrollHeight > oneChild);
   // An unsized box shrink-wraps: clientHeight tracks the same content sum.
   testing.expectEqual(box.scrollHeight, box.clientHeight);
@@ -1201,8 +1210,8 @@
   // not hidden; its content is still measured.
   const panel = document.createElement('div');
   panel.style.height = '0';
-  panel.appendChild(document.createElement('div'));
-  panel.appendChild(document.createElement('div'));
+  panel.appendChild(line());
+  panel.appendChild(line());
   document.body.appendChild(panel);
   testing.expectEqual(0, panel.clientHeight);
   testing.expectTrue(panel.scrollHeight > 0);
@@ -1589,7 +1598,7 @@
   // Text after an inline shares its line
   testing.expectEqual(20, $('#lineInline').scrollHeight);
   // Whitespace adds nothing
-  testing.expectEqual(5, $('#lineBlank').scrollHeight);
+  testing.expectEqual(0, $('#lineBlank').scrollHeight);
 }
 </script>
 

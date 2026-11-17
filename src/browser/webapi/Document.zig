@@ -1001,6 +1001,10 @@ pub fn hitTestVertical(self: *Document, y: f64, frame: *Frame) !?*Element {
     return self.hitTestImpl(0, y, true, frame);
 }
 
+fn coversY(top: f64, y: f64, height: f64) bool {
+    return y >= top and height > 0 and y <= top + height;
+}
+
 fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool, frame: *Frame) !?*Element {
     // DFS in flat-tree order (shadow content inside its host, slotted nodes
     // inside their slot, as layout.zig lays them out); topmost = last visited
@@ -1078,8 +1082,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             // Unlike display:none, visibility and pointer-events let a child
             // opt back in, so the subtree is still walked. So is a subtree
             // that starts below y: a positioned box in it can sit higher.
+            // A 0px tall box covers nothing, so it is never hit.
             var left: ?f64 = null;
-            if (inert == false and facts.hittable and y >= top and y <= top + (recorded_height orelse layout.boxHeight(element, owner))) {
+            if (inert == false and facts.hittable and coversY(top, y, recorded_height orelse layout.boxHeight(element, owner))) {
                 if (ignore_x) {
                     topmost = element;
                 } else {
