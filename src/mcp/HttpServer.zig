@@ -192,13 +192,13 @@ worker_wg: lp.WaitGroup = .{},
 
 /// Create the server and start the default session. Returns once that
 /// session is up (or errors if it failed to initialize).
-pub fn init(allocator: std.mem.Allocator, app: *App) !*HttpServer {
+pub fn init(allocator: std.mem.Allocator, app: *App, session_timeout_ms: ?u64) !*HttpServer {
     const self = try allocator.create(HttpServer);
     errdefer allocator.destroy(self);
     self.* = .{
         .allocator = allocator,
         .app = app,
-        .session_timeout_ms = app.config.httpSessionTimeout(),
+        .session_timeout_ms = session_timeout_ms,
     };
     errdefer self.workers.deinit(allocator);
 
@@ -382,6 +382,13 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     return true;
 }
 
+fn closeIdlePages(self: *HttpServer, worker: *Worker, server: *Server) void {
+    if (!server.closePages()) return;
+    log.info(.mcp, "mcp session pages closed", .{ .session = worker.id });
+    self.publishUrl(worker, null);
+    lp.malloc_tuning.trim();
+}
+
 fn publishUrl(self: *HttpServer, worker: *Worker, url: ?[]const u8) void {
     self.workers_mutex.lockUncancelable(lp.io);
     defer self.workers_mutex.unlock(lp.io);
@@ -521,7 +528,7 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
         st.done.set(lp.io);
     }
 
-    const timeout_ms: ?u64 = if (Server.isDefault(worker.id)) null else self.session_timeout_ms;
+    const timeout_ms = self.session_timeout_ms;
     var idle_since = lp.datetime.milliTimestamp(.boot);
 
     // Drain queued jobs before pumping idle work: idle() ticks the session
@@ -538,6 +545,12 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
                 const idle_for = now -| idle_since;
                 if (idle_for < timeout) {
                     wait_ms = @min(wait_ms, timeout - idle_for);
+                } else if (Server.isDefault(worker.id)) {
+                    // Never reaped, it holds the cookies saved on exit: only
+                    // its pages go, or their timers run for as long as the
+                    // process does.
+                    if (server) |s| self.closeIdlePages(worker, s);
+                    idle_since = now;
                 } else if (self.reap(worker)) {
                     wait_ms = 0;
                 } else {
@@ -890,12 +903,9 @@ const TestServer = struct {
     accept_thread: std.Thread,
     port: u16,
 
-    /// `session_timeout_ms` overrides the config's before any session but
-    /// the default (which is never reaped) reads it.
     fn start(session_timeout_ms: ?u64) !TestServer {
-        const http = try HttpServer.init(testing.allocator, testing.test_app);
+        const http = try HttpServer.init(testing.allocator, testing.test_app, session_timeout_ms);
         errdefer http.deinit();
-        http.session_timeout_ms = session_timeout_ms;
         const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
         const accept_thread = try std.Thread.spawn(.{}, run, .{ http, address });
         var port: u16 = 0;
@@ -1068,6 +1078,40 @@ test "HttpServer - idle sessions are reaped" {
     defer testing.allocator.free(revived);
     try testing.expect(std.mem.find(u8, revived, "session busy") != null);
     try testing.expectEqual(.ok, try testStatus(testing.allocator, port, .POST, "busy", call, null));
+}
+
+test "HttpServer - the idle default session loses its page, not its place" {
+    var server: TestServer = try .start(150);
+    defer server.stop();
+    const port = server.port;
+
+    const loaded = try testPost(testing.allocator, port, "default",
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html"}}}
+    );
+    defer testing.allocator.free(loaded);
+    try testing.expect(std.mem.find(u8, loaded, "Navigated") != null);
+
+    var closed = false;
+    for (0..500) |_| {
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
+        server.http.workers_mutex.lockUncancelable(lp.io);
+        defer server.http.workers_mutex.unlock(lp.io);
+        closed = server.http.workers.get(Server.default_session_id).?.url == null;
+        if (closed) break;
+    }
+    try testing.expect(closed);
+
+    const listed = try testPost(testing.allocator, port, "default",
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
+    );
+    defer testing.allocator.free(listed);
+    try testing.expect(std.mem.find(u8, listed, "{\\\"id\\\":\\\"default\\\"}") != null);
+
+    const reloaded = try testPost(testing.allocator, port, "default",
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html"}}}
+    );
+    defer testing.allocator.free(reloaded);
+    try testing.expect(std.mem.find(u8, reloaded, "Navigated") != null);
 }
 
 const WaitCall = struct {

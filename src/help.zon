@@ -246,7 +246,8 @@
     \\  --http-session-timeout <INT>
     \\          Seconds before an idle HTTP session (--port) is closed. A later
     \\          request with its Mcp-Session-Id gets 404, so the client starts
-    \\          a new session. The default session is never closed.
+    \\          a new session. The default session is never closed: its page
+    \\          is, and it keeps its cookies.
     \\          Defaults to 0, which disables it (sessions live until closed).
     \\  --port <INT>
     \\          Serve MCP over HTTP on this port instead of stdio. Clients POST
