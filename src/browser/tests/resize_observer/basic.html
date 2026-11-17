@@ -3,6 +3,7 @@
 <script src="../testing.js"></script>
 <div id="target" style="width: 100px; height: 60px;">Target Element</div>
 <div id="hidden" style="width: 50px; display: none;">Hidden</div>
+<div id="auto">Auto height</div>
 
 <script id="initial" type=module>
   {
@@ -63,6 +64,30 @@
         testing.expectEqual(hidden, hiddenEntries[0].target);
         testing.expectEqual(0, hiddenEntries[0].contentRect.width);
         testing.expectEqual(0, hiddenEntries[0].contentRect.height);
+    });
+  }
+</script>
+
+<script id="initial_for_auto_height" type=module>
+  {
+    // A box with no declared height reports the height of its content,
+    // like getBoundingClientRect.
+    const state = await testing.async();
+    const auto = document.getElementById('auto');
+    let autoEntries = null;
+    const autoObserver = new ResizeObserver((entries) => {
+        autoEntries = entries;
+    });
+    autoObserver.observe(auto);
+    await testing.nextFrame();
+    autoObserver.disconnect();
+
+    state.resolve();
+    await state.done(() => {
+        testing.expectEqual(1, autoEntries.length);
+        const height = autoEntries[0].contentRect.height;
+        testing.expectTrue(height > 0);
+        testing.expectEqual(auto.getBoundingClientRect().height, height);
     });
   }
 </script>
