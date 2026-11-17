@@ -287,7 +287,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
         },
         .pointer => return .{
             .local = self,
-            .handle = try self.wrapMostSpecific(js_obj_handle, value),
+            .handle = try self.wrapMostSpecific(js_obj_handle, value, null),
         },
         else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
     }
@@ -1305,12 +1305,18 @@ const Resolved = struct {
 };
 // Walks value's _type chain down to the most specific type (see Resolved) and
 // returns that instance's JS object, creating it on first use. The identity
-// lookup happens at the leaf, so a hit costs one walk and never builds a
-// Resolved. Only the small handle travels back up the chain.
-fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !*const v8.Object {
+// lookup happens at the first level whose key is the chain root's (see
+// keyIsChainRoot), so a hit usually skips the walk and never builds a
+// Resolved. `global` is the empty identity slot once that lookup missed.
+fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype, global: ?*v8.Global) !*const v8.Object {
     const T = bridge.Struct(@TypeOf(value));
+    const slot: ?*v8.Global = if (comptime keyIsChainRoot(T)) global orelse switch (try self.lookupIdentity(value)) {
+        .found => |handle| return handle,
+        .empty => |g| g,
+    } else global;
+
     if (!@hasField(T, "_type")) {
-        return self.wrapLeaf(js_obj_handle, T, value);
+        return self.wrapLeaf(js_obj_handle, T, value, slot);
     }
 
     // A bare-tag _type means the subtypes are chain members, not payloads
@@ -1322,15 +1328,15 @@ fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value:
                 if (S == T) {
                     // A tag can map to the type itself (e.g. Media.generic);
                     // the value is already the most specific type.
-                    return self.wrapLeaf(js_obj_handle, T, value);
+                    return self.wrapLeaf(js_obj_handle, T, value, slot);
                 }
-                return self.wrapMostSpecific(js_obj_handle, value.subtype(S));
+                return self.wrapMostSpecific(js_obj_handle, value.subtype(S), slot);
             },
         }
     }
 
     if (comptime @typeInfo(@TypeOf(value._type)) != .@"union") {
-        return self.wrapLeaf(js_obj_handle, T, value);
+        return self.wrapLeaf(js_obj_handle, T, value, slot);
     }
 
     const U = @typeInfo(@TypeOf(value._type)).@"union";
@@ -1342,28 +1348,80 @@ fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value:
                 .void => {
                     // Unusual case, but the Event (and maybe others) can be
                     // returned as-is. In that case, it has a dummy void type.
-                    return self.wrapLeaf(js_obj_handle, T, value);
+                    return self.wrapLeaf(js_obj_handle, T, value, slot);
                 },
                 else => @compileError(@typeName(field_type) ++ " has an unsupported _type field"),
             };
-            return self.wrapMostSpecific(js_obj_handle, child);
+            return self.wrapMostSpecific(js_obj_handle, child, slot);
         }
     }
     unreachable;
 }
 
-fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: type, value: *T) !*const v8.Object {
+fn wrapLeaf(self: *const Local, js_obj_handle: ?*const v8.Object, comptime T: type, value: *T, global: ?*v8.Global) !*const v8.Object {
     if (comptime lp.IS_DEBUG) {
         assertChainContiguity(T, value);
     }
-    const gop = try self.ctx.addIdentity(js.Identity.keyOf(value));
-    if (gop.found_existing) {
-        // we've seen this instance before, return the same object
-        return @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle));
+    // null when T keeps a subtype that embeds it (e.g. EventTarget.generic).
+    const slot = global orelse switch (try self.lookupIdentity(value)) {
+        .found => |handle| return handle,
+        .empty => |g| g,
+    };
+    if (comptime lp.IS_DEBUG) {
+        // A slot found higher up the chain must be this instance's.
+        std.debug.assert(self.ctx.identity.identity_map.getPtr(js.Identity.keyOf(value)) == slot);
     }
     const resolved = resolveT(T, value);
     const store_tagged = comptime !@hasDecl(T.JsApi.Meta, "empty_with_no_proto");
-    return self.wrapNew(js_obj_handle, &resolved, gop.value_ptr, store_tagged);
+    return self.wrapNew(js_obj_handle, &resolved, slot, store_tagged);
+}
+
+const IdentityLookup = union(enum) {
+    // We've seen this instance before: its JS object.
+    found: *const v8.Object,
+    // First time: the new identity slot for wrapNew to fill.
+    empty: *v8.Global,
+};
+
+fn lookupIdentity(self: *const Local, value: anytype) !IdentityLookup {
+    const gop = try self.ctx.addIdentity(js.Identity.keyOf(value));
+    if (gop.found_existing) {
+        return .{ .found = @ptrCast(v8.v8__Global__Get(gop.value_ptr, self.isolate.handle)) };
+    }
+    return .{ .empty = gop.value_ptr };
+}
+
+// Whether Identity.keyOf gives the chain root for T, whatever the most specific
+// type turns out to be. It doesn't when a direct subtype holds T by value as
+// its `_proto` (Node embeds EventTarget): T then sits inside that subtype.
+fn keyIsChainRoot(comptime T: type) bool {
+    comptime {
+        if (!@hasField(T, "_type")) {
+            return true;
+        }
+        const Tag = @FieldType(T, "_type");
+        if (@typeInfo(Tag) == .@"enum" and @hasDecl(T, "Subtype")) {
+            for (std.enums.values(Tag)) |tag| {
+                if (embedsProto(T.Subtype(tag), T)) return false;
+            }
+            return true;
+        }
+        if (@typeInfo(Tag) == .@"union") {
+            for (@typeInfo(Tag).@"union".field_types) |FT| {
+                const S = switch (@typeInfo(FT)) {
+                    .pointer => |ptr| ptr.child,
+                    .@"struct" => FT,
+                    else => continue,
+                };
+                if (embedsProto(S, T)) return false;
+            }
+        }
+        return true;
+    }
+}
+
+fn embedsProto(comptime S: type, comptime T: type) bool {
+    return S != T and @hasField(S, "_proto") and @FieldType(S, "_proto") == T;
 }
 
 // The first time an instance goes to JS. Kept out of line: wrapLeaf is
