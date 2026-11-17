@@ -1330,6 +1330,12 @@ fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value:
                     // the value is already the most specific type.
                     return self.wrapLeaf(js_obj_handle, T, value, slot);
                 }
+                comptime {
+                    @setEvalBranchQuota(1_000_000);
+                    if (keyIsChainRoot(T) and Factory.chainOffsetOf(S, T) != Factory.chainOffsetOf(T, T)) {
+                        @compileError(@typeName(T) ++ " -> " ++ @typeName(S) ++ ": identity key differs from the chain root's");
+                    }
+                }
                 return self.wrapMostSpecific(js_obj_handle, value.subtype(S), slot);
             },
         }
@@ -1352,6 +1358,13 @@ fn wrapMostSpecific(self: *const Local, js_obj_handle: ?*const v8.Object, value:
                 },
                 else => @compileError(@typeName(field_type) ++ " has an unsupported _type field"),
             };
+            comptime {
+                @setEvalBranchQuota(1_000_000);
+                const S = bridge.Struct(@TypeOf(child));
+                if (keyIsChainRoot(T) and Factory.chainOffsetOf(S, T) != Factory.chainOffsetOf(T, T)) {
+                    @compileError(@typeName(T) ++ " -> " ++ @typeName(S) ++ ": identity key differs from the chain root's");
+                }
+            }
             return self.wrapMostSpecific(js_obj_handle, child, slot);
         }
     }
