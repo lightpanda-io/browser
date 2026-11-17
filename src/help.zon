@@ -248,11 +248,23 @@
     \\          request with its Mcp-Session-Id gets 404, so the client starts
     \\          a new session. The default session is never closed.
     \\          Defaults to 0, which disables it (sessions live until closed).
+    \\  --list-tools
+    \\          Print every tool name, comma-separated as --tools takes them,
+    \\          and exit.
     \\  --port <INT>
     \\          Serve MCP over HTTP on this port instead of stdio. Clients POST
     \\          JSON-RPC to /mcp; route requests to a session with the
     \\          Mcp-Session-Id header.
     \\          Defaults to stdio (no HTTP server).
+    \\  --tools <LIST>
+    \\          Comma-separated names of the only tools to expose, e.g.
+    \\          --tools goto,tree,click. The others are neither listed nor
+    \\          callable, which keeps their definitions out of the client's
+    \\          context. It is not a sandbox: a listed tool keeps its full
+    \\          reach (run and waitForScript execute scripts, markdown takes
+    \\          a url), and resources are unaffected. Can be repeated. See
+    \\          --list-tools for the names.
+    \\          Defaults to every tool.
     ,
     .agent =
     \\agent command

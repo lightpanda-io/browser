@@ -99,6 +99,13 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
             try lp.Agent.listModels(allocator, opts);
             return std.process.cleanExit(lp.io);
         },
+        .mcp => |opts| if (opts.list_tools) {
+            var buf: [1024]u8 = undefined;
+            var stdout = std.Io.File.stdout().writerStreaming(lp.io, &buf);
+            try lp.mcp.tools.writeNames(&stdout.interface);
+            try stdout.interface.flush();
+            return std.process.cleanExit(lp.io);
+        },
         else => {},
     }
 

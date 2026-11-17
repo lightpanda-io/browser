@@ -243,6 +243,10 @@ Add to your MCP configuration:
 }
 ```
 
+To keep the tool definitions out of the client's context, expose only the
+tools you need with `--tools goto,tree,click`. `lightpanda mcp --list-tools`
+prints every tool name in that format.
+
 #### HTTP transport and independent sessions
 
 For serving several agents from one process, start the MCP server over HTTP
