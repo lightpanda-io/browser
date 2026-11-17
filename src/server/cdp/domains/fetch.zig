@@ -237,6 +237,27 @@ fn pausedResponse(target: *CDP.Target, request_id: []const u8) !?*HttpClient.Tra
     return transfer;
 }
 
+// The transfer behind an interception pause, or null once it's no longer paused.
+fn pausedTransfer(client: *HttpClient, transfer_id: u32) ?*HttpClient.Transfer {
+    const transfer = client.findTransfer(transfer_id) orelse return null;
+    if (transfer.state != .parked) {
+        // the transfer can be aborted and still findable.
+        return null;
+    }
+    return switch (transfer.state.parked) {
+        .intercept_request, .intercept_auth, .intercept_response => transfer,
+        .cors, .robots => {
+            if (comptime lp.IS_DEBUG) {
+                // should not be reachable: every resume removes the id first,
+                // and these gates come after interception
+                unreachable;
+            }
+            // safer fallback in release
+            return null;
+        },
+    };
+}
+
 fn continueResponse(cmd: *CDP.Command) !void {
     const target = try cmd.target();
     const params = (try cmd.params(struct {
@@ -319,7 +340,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
     // Transfer may have been destroyed out-of-band between pause and now
     // (e.g. frame shutdown). Treat as a no-op rather than an error — the CDP
     // client's view of "this request still exists" is just stale.
-    const transfer = client.findTransfer(transfer_id) orelse {
+    const transfer = pausedTransfer(client, transfer_id) orelse {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "continue" });
         return cmd.sendResult(null, .{});
     };
@@ -449,7 +470,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
     const intercept_id = try idFromRequestId(params.requestId);
 
     const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
-    const transfer = client.findTransfer(transfer_id) orelse {
+    const transfer = pausedTransfer(client, transfer_id) orelse {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fulfill" });
         return cmd.sendResult(null, .{});
     };
@@ -486,7 +507,7 @@ fn failRequest(cmd: *CDP.Command) !void {
     const intercept_id = try idFromRequestId(params.requestId);
 
     const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
-    const transfer = client.findTransfer(transfer_id) orelse {
+    const transfer = pausedTransfer(client, transfer_id) orelse {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fail" });
         return cmd.sendResult(null, .{});
     };
@@ -1679,4 +1700,56 @@ test "cdp.Fetch: cdpErrorReason" {
     try testing.expectEqual(network.ErrorReason.ConnectionReset, cdpErrorReason(error.RecvError));
     try testing.expectEqual(network.ErrorReason.ConnectionReset, cdpErrorReason(error.SendError));
     try testing.expectEqual(network.ErrorReason.Failed, cdpErrorReason(error.SslConnectError));
+}
+
+// Page.stopLoading cancels a paused request, and the XHR's onabort runs a sync
+// XHR. That nested wait dispatches the Fetch command the client had already
+// sent for the request: the transfer is still findable, but it's being
+// aborted, not paused. The command must not resume or fail it again.
+fn expectCommandOnStoppedPauseIsNoop(command: anytype) !void {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SP", .session_id = "SID-SP", .target_id = "TID-SP-0000000".*, .url = "hi.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Fetch.enable", .params = .{ .patterns = .{.{ .urlPattern = "*/xhr" }} } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const frame = (try testing.firstTarget(bc)).mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\ window.sync_status = 0;
+        \\ const x = new XMLHttpRequest();
+        \\ x.open('GET', 'http://127.0.0.1:9582/xhr');
+        \\ x.onabort = () => {
+        \\   const s = new XMLHttpRequest();
+        \\   s.open('GET', 'http://127.0.0.1:9582/xhr/json', false);
+        \\   s.send();
+        \\   window.sync_status = s.status;
+        \\ };
+        \\ x.send();
+    , null);
+    try ResponseStageProbe.tickUntilPaused(bc, 1);
+
+    try ctx.queueMessage(command);
+    try ctx.processMessage(.{ .id = 3, .method = "Page.stopLoading" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    const v = try ls.local.exec("window.sync_status", null);
+    try testing.expectEqual(200, try v.toI32());
+    try testing.expectEqual(0, bc.cdp.browser.http_client.intercepted);
+}
+
+test "cdp.Fetch: continueRequest on a pause stopLoading is aborting is a no-op" {
+    try expectCommandOnStoppedPauseIsNoop(.{ .id = 2, .method = "Fetch.continueRequest", .params = .{ .requestId = "INT-0000000001" } });
+}
+
+test "cdp.Fetch: failRequest on a pause stopLoading is aborting is a no-op" {
+    try expectCommandOnStoppedPauseIsNoop(.{ .id = 2, .method = "Fetch.failRequest", .params = .{ .requestId = "INT-0000000001", .errorReason = "Failed" } });
+}
+
+test "cdp.Fetch: fulfillRequest on a pause stopLoading is aborting is a no-op" {
+    try expectCommandOnStoppedPauseIsNoop(.{ .id = 2, .method = "Fetch.fulfillRequest", .params = .{ .requestId = "INT-0000000001", .responseCode = 200 } });
 }
