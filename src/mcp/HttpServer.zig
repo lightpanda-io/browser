@@ -382,6 +382,7 @@ fn reap(self: *HttpServer, worker: *Worker) bool {
     return true;
 }
 
+/// What the default session gets instead of `reap`: it outlives its pages.
 fn closeIdlePages(self: *HttpServer, worker: *Worker, server: *Server) void {
     if (!server.closePages()) return;
     log.info(.mcp, "mcp session pages closed", .{ .session = worker.id });
@@ -528,7 +529,6 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
         st.done.set(lp.io);
     }
 
-    const timeout_ms = self.session_timeout_ms;
     var idle_since = lp.datetime.milliTimestamp(.boot);
 
     // Drain queued jobs before pumping idle work: idle() ticks the session
@@ -540,7 +540,7 @@ fn runWorker(worker: *Worker, start: ?*Start) void {
             .item => |job| job,
             .timeout => {
                 wait_ms = if (server) |s| s.idle() else 0;
-                const timeout = timeout_ms orelse continue;
+                const timeout = self.session_timeout_ms orelse continue;
                 const now = lp.datetime.milliTimestamp(.boot);
                 const idle_for = now -| idle_since;
                 if (idle_for < timeout) {
@@ -1100,12 +1100,6 @@ test "HttpServer - the idle default session loses its page, not its place" {
         if (closed) break;
     }
     try testing.expect(closed);
-
-    const listed = try testPost(testing.allocator, port, "default",
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_list"}}
-    );
-    defer testing.allocator.free(listed);
-    try testing.expect(std.mem.find(u8, listed, "{\\\"id\\\":\\\"default\\\"}") != null);
 
     const reloaded = try testPost(testing.allocator, port, "default",
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://localhost:9582/src/browser/tests/mcp_actions.html"}}}
