@@ -2356,7 +2356,7 @@ pub const Request = struct {
     }
 };
 
-const SyncResponse = struct {
+pub const SyncResponse = struct {
     status: u16,
     body: Body,
     status_text: http.StatusText,

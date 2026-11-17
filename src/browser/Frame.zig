@@ -174,6 +174,9 @@ _intersection: observers.Intersection = .{},
 
 _css_animations: css_animations.State = .{},
 
+// resolved url => preloaded stylesheet
+_preloaded_stylesheets: std.StringHashMapUnmanaged(*preload.Stylesheet) = .empty,
+
 // Slots that need slotchange events to be fired, in signal order. Delivered
 // by deliverMutations because there is specific timing with for these events
 // with respect to mutations
@@ -570,6 +573,14 @@ pub fn deinit(self: *Frame) void {
     self._script_manager.base.shutdown = true;
 
     self._script_manager.deinit();
+
+    {
+        var it = self._preloaded_stylesheets.valueIterator();
+        while (it.next()) |sheet| {
+            sheet.*.deinit();
+        }
+    }
+
     self._style_manager.deinit();
 
     self._call_arena.release();
@@ -583,6 +594,7 @@ pub fn resetLocalArena(self: *Frame) void {
 }
 
 pub fn viewportChanged(self: *Frame) void {
+    self._style_manager.viewportChanged();
     var i: usize = 0;
     while (i < self._media_query_lists.items.len) : (i += 1) {
         self._media_query_lists.items[i].viewportChanged();
@@ -1344,6 +1356,23 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
     return self._session.browser.http_client.newRequest(req, &self._http_owner);
+}
+
+// The request for a <link rel=stylesheet>, not yet submitted.
+pub fn stylesheetRequest(self: *Frame, url: [:0]const u8) !*HttpClient.Transfer {
+    const transfer = try self._session.browser.http_client.newRequest(.{
+        .url = url,
+        .method = .GET,
+        .origin = self.origin,
+        .request_mode = .no_cors,
+        .credentials_mode = .same_origin,
+        .resource_type = .stylesheet,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, &self._http_owner);
+    errdefer transfer.deinit();
+    try transfer.setHeader("Accept", "text/css,*/*;q=0.1", .{});
+    try self.headersForRequest(transfer, .{});
+    return transfer;
 }
 
 // Synchronously abort every transfer and WebSocket owned by this frame
@@ -2743,31 +2772,6 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         return;
     };
 
-    const http_client = &session.browser.http_client;
-
-    // `syncRequest` below registers a blocking request for this frame; the
-    // client's dispatcher holds back every OTHER transfer's callbacks for
-    // the frame while it's registered (they'd run JS on the parser's stack)
-    // and delivers them on the next tick after the sync fetch returns.
-
-    const transfer = http_client.newRequest(.{
-        .url = resolved,
-        .method = .GET,
-        .origin = self.origin,
-        .request_mode = .no_cors,
-        .credentials_mode = .same_origin,
-        .resource_type = .stylesheet,
-        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
-    }, &self._http_owner) catch |err| {
-        log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.queueLinkEvent(link, .@"error", generation);
-    };
-    {
-        errdefer transfer.deinit();
-        try transfer.setHeader("Accept", "text/css,*/*;q=0.1", .{});
-        try self.headersForRequest(transfer, .{});
-    }
-
     // Set the script-manager `is_evaluating` flag for the same reason
     // `ScriptManager.addFromElement` does: `syncRequest` pumps the CDP
     // socket inline, so a `Target.closeTarget` / `Page.close` arriving
@@ -2780,10 +2784,28 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = transfer.submitSync(.{}) catch |err| {
-        log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
-        return self.queueLinkEvent(link, .@"error", generation);
+    var response = switch (preload.takeStylesheet(self, resolved)) {
+        .response => |res| res,
+        .none => blk: { // wasn't preloaded
+            // `syncRequest` below registers a blocking request for this frame; the
+            // client's dispatcher holds back every OTHER transfer's callbacks for
+            // the frame while it's registered (they'd run JS on the parser's stack)
+            // and delivers them on the next tick after the sync fetch returns.
+            const transfer = self.stylesheetRequest(resolved) catch |err| {
+                log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+                return self.queueLinkEvent(link, .@"error", generation);
+            };
+            break :blk transfer.submitSync(.{}) catch |err| {
+                log.debug(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+                return self.queueLinkEvent(link, .@"error", generation);
+            };
+        },
+        .err => {
+            // already logged
+            return self.queueLinkEvent(link, .@"error", generation);
+        },
     };
+
     defer response.deinit();
 
     if (response.status < 200 or response.status >= 300) {

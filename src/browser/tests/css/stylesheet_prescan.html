@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+  The preload scanner (frame/preload.zig) starts every stylesheet below
+  before the parse does, and each <link> then takes that fetch rather than
+  issuing its own.
+
+  The N-th serve of /serve-count/<name>.css sets --serve-count-<name>: N, so
+  a value of 1 means the prescan's fetch was reused and 2 means the link
+  fetched it again.
+-->
+
+<link rel="stylesheet" href="/serve-count/prescan_sheet.css">
+
+<script id="blocking">
+  // Still parser-blocking: the sheet is applied before the next script runs.
+  {
+    const style = getComputedStyle(document.documentElement);
+    testing.expectEqual('1', style.getPropertyValue('--serve-count-prescan_sheet').trim());
+    testing.expectEqual(1, document.styleSheets.length);
+  }
+</script>
+
+<!-- Past a script, where the parser itself only gets once that script ran. -->
+<link id="after" rel="stylesheet" href="/serve-count/prescan_sheet_after_script.css">
+
+<script id="after_script">
+  {
+    const style = getComputedStyle(document.documentElement);
+    testing.expectEqual('1', style.getPropertyValue('--serve-count-prescan_sheet_after_script').trim());
+    testing.expectEqual(2, document.styleSheets.length);
+    testing.expectEqual(document.getElementById('after'), document.styleSheets[1].ownerNode);
+  }
+</script>
+
+<!--
+  The prescan's fetch of this one fails (a body that doesn't decode). The
+  link reports that failure rather than fetching the sheet again.
+-->
+<link id="failed" rel="stylesheet" href="/serve-count/prescan_sheet_failed.css">
+
+<script id="events">
+  {
+    let loaded = 0;
+    let errored = [];
+    for (const link of document.querySelectorAll('link')) {
+      link.addEventListener('load', () => { loaded += 1; });
+      link.addEventListener('error', () => { errored.push(link.id); });
+    }
+    testing.onload(() => {
+      testing.expectEqual(2, loaded);
+      testing.expectEqual(['failed'], errored);
+    });
+  }
+</script>
+
+<script id="failed_serve_count" type=module>
+  const state = await testing.async();
+  // The .js route shares the counter: 2 here means the sheet was served once.
+  const res = await fetch('/serve-count/prescan_sheet_failed.js');
+  const body = await res.text();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('window.__serve_count_prescan_sheet_failed = 2;', body);
+  });
+</script>
