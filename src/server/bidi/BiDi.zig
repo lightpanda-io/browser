@@ -61,7 +61,7 @@ mode: Mode,
 // one message at a time.
 message_arena: std.heap.ArenaAllocator,
 
-// Allocations that live for the whole session (subscriptions).
+// Allocations that live for the whole session (subscriptions, preload scripts).
 session_arena: std.heap.ArenaAllocator,
 
 // The active session
@@ -89,6 +89,9 @@ pending: std.ArrayList(*script.Pending) = .empty,
 // The HTTP session's execute/sync and execute/async, awaiting a promise or
 // the callback an async script was handed.
 execute_pending: std.ArrayList(*execute.Pending) = .empty,
+
+// script.addPreloadScript registrations, run in each new document
+preload_scripts: std.ArrayList(script.PreloadScript) = .empty,
 
 // The HTTP session's timeouts. BiDi has no equivalent.
 timeouts: Timeouts = .{},
@@ -186,6 +189,7 @@ pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
 
     try self.newUserContext("default");
     try @import("browsing_context.zig").registerNotifications(self);
+    try script.registerNotifications(self);
 }
 
 pub fn deinit(self: *BiDi) void {
