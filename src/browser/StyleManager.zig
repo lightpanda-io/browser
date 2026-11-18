@@ -2511,7 +2511,8 @@ const property_reach = blk: {
         const id = @field(properties.Id, name);
         if (std.mem.findScalar(properties.Id, &layout_ignores, id) == null) {
             // a height reaches only the vertical layout, not the widths
-            memos.insert(if (id == .height) .heights else .layout);
+            const height = id == .height or id == .@"min-height" or id == .@"max-height";
+            memos.insert(if (height) .heights else .layout);
         }
         result[@backingInt(id)] = memos;
     }
@@ -3415,6 +3416,18 @@ pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?BoxLength, 
     self.rebuildIfDirty() catch return .{ .min = null, .max = null };
     const geometry = self.geometryProps(el);
     return .{ .min = self.widthLimit(el, geometry.min_width), .max = self.widthLimit(el, geometry.max_width) };
+}
+
+/// min-height and max-height in px. Null if there's no limit (aka auto),
+pub fn heightLimits(self: *StyleManager, el: *Element) struct { min: ?f64, max: ?f64 } {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{ .min = null, .max = null };
+    const geometry = self.geometryProps(el);
+    return .{ .min = self.heightLimit(el, geometry.min_height), .max = self.heightLimit(el, geometry.max_height) };
+}
+
+fn heightLimit(self: *StyleManager, el: *Element, length: Length) ?f64 {
+    return @max(0, length.resolve(self, el) orelse return null);
 }
 
 fn widthLimit(self: *StyleManager, el: *Element, length: Length) ?BoxLength {
@@ -5437,7 +5450,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "min-height", "max-height", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -5451,6 +5464,8 @@ const Geometry = struct {
         height: ?Length = null,
         min_width: ?Length = null,
         max_width: ?Length = null,
+        min_height: ?Length = null,
+        max_height: ?Length = null,
         margin_left: ?Length = null,
         margin_right: ?Length = null,
         left: ?Length = null,
@@ -5541,6 +5556,12 @@ const Geometry = struct {
                 },
                 .@"max-width" => {
                     self.max_width = Length.parse(value);
+                },
+                .@"min-height" => {
+                    self.min_height = Length.parse(value);
+                },
+                .@"max-height" => {
+                    self.max_height = Length.parse(value);
                 },
                 .@"z-index" => {
                     if (zIndexNegative(value)) |negative| {
@@ -5729,7 +5750,7 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u368) {
+    const Computed = packed struct(u440) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -5743,6 +5764,8 @@ const Geometry = struct {
         // auto, none and the intrinsic keywords don't limit
         min_width: Length = .{},
         max_width: Length = .{},
+        min_height: Length = .{},
+        max_height: Length = .{},
         // auto, and values that need layout, are 0
         margin_left: Length = .{},
         margin_right: Length = .{},
@@ -8925,7 +8948,7 @@ test "StyleManager: records: a group allocates the chunks it reaches" {
 }
 
 test "StyleManager: records: geometry packs its lengths' units with the flags" {
-    try testing.expectEqual(52, @sizeOf(Records(Geometry.Stored).Entry));
+    try testing.expectEqual(60, @sizeOf(Records(Geometry.Stored).Entry));
 
     // Each field apart from its neighbours
     const names = Geometry.Stored.names;

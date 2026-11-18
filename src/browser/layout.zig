@@ -770,7 +770,7 @@ fn gridResumePoint(self: *Element, parent: *Element, owner: *Frame) ?ResumePoint
     return row_start;
 }
 
-/// The declared height, else the content's
+/// The declared height, else the content's (within min-height and max-height)
 pub fn boxHeight(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     // Both in one read: a box without its height usually lacks its content's
@@ -782,14 +782,33 @@ pub fn boxHeight(self: *Element, owner: *Frame) f64 {
     defer StyleManager.fill_check.exit(fill);
 
     const own = self.getElementAxis(owner, .height);
-    if (own.explicit or self.isRootContainer()) {
+    if (self.isRootContainer()) {
         style_manager.setCacheLayout(self, .box_height, own.value);
         return own.value;
     }
+    if (own.explicit) {
+        const height = clampHeight(self, own.value, owner);
+        style_manager.setCacheLayout(self, .box_height, height);
+        return height;
+    }
     const content = cached.content orelse measureContentHeight(self, owner);
-    const height = @max(own.value, content);
+    const height = clampHeight(self, @max(own.value, content), owner);
     style_manager.setCacheHeights(self, content, height);
     return height;
+}
+
+fn clampHeight(self: *Element, height: f64, owner: *Frame) f64 {
+    const limits = owner._style_manager.heightLimits(self);
+    var clamped = height;
+    if (limits.max) |max| {
+        // max-height clamps the height
+        clamped = @min(clamped, max);
+    }
+    if (limits.min) |min| {
+        // min-height has the final say
+        clamped = @max(clamped, min);
+    }
+    return clamped;
 }
 
 /// The height the children take

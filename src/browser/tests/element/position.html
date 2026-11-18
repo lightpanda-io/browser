@@ -1851,3 +1851,58 @@
   wrap.remove();
 }
 </script>
+
+<style>
+  .mhTall { min-height: 80px; }
+</style>
+<script id="heightLimits">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const block = '<div style="height: 100px"></div>';
+
+  // min-height raises an empty box, max-height caps its content, and the
+  // next box starts after the capped height
+  wrap.innerHTML = `<div id="mh-min" style="min-height: 50px"></div><div id="mh-max" style="max-height: 30px">${block}</div><div id="mh-after"></div>`;
+  testing.expectEqual(50, rect('mh-min').height);
+  testing.expectEqual(30, rect('mh-max').height);
+  testing.expectEqual(rect('mh-max').top + 30, rect('mh-after').top);
+
+  // max-height beats height, min-height beats both
+  wrap.innerHTML = '<div id="mh-height" style="height: 100px; max-height: 40px"></div><div id="mh-wins" style="max-height: 10px; min-height: 20px"></div>';
+  testing.expectEqual(40, rect('mh-height').height);
+  testing.expectEqual(20, rect('mh-wins').height);
+
+  // Font and viewport units; a percentage of an auto height doesn't limit
+  wrap.innerHTML = `<div id="mh-units" style="min-height: calc(10vh + 1rem)"></div><div id="mh-percent" style="max-height: 10%">${block}</div>`;
+  testing.expectTrue(Math.abs(window.innerHeight / 10 + 16 - rect('mh-units').height) < 0.1);
+  testing.expectEqual(100, rect('mh-percent').height);
+
+  // A collapsed box keeps its content's scroll height; a capped scroller
+  // scrolls no further than its content
+  wrap.innerHTML = `<div id="mh-collapsed" style="max-height: 0; overflow: hidden">${block}</div><div id="mh-scroller" style="max-height: 50px; overflow: auto"><div style="height: 200px"></div></div>`;
+  testing.expectEqual(0, rect('mh-collapsed').height);
+  testing.expectEqual(100, $('#mh-collapsed').scrollHeight);
+  const scroller = $('#mh-scroller');
+  testing.expectEqual(50, scroller.clientHeight);
+  scroller.scrollTop = 9999;
+  testing.expectEqual(150, scroller.scrollTop);
+
+  // Inline writes and class changes move what comes after
+  wrap.innerHTML = `<div id="mh-dyn">${block}</div><div id="mh-next"></div>`;
+  const dyn = $('#mh-dyn');
+  dyn.style.maxHeight = '20px';
+  testing.expectEqual(20, rect('mh-dyn').height);
+  testing.expectEqual(rect('mh-dyn').top + 20, rect('mh-next').top);
+  dyn.style.maxHeight = '';
+  testing.expectEqual(rect('mh-dyn').top + 100, rect('mh-next').top);
+  dyn.innerHTML = '';
+  dyn.classList.add('mhTall');
+  testing.expectEqual(80, rect('mh-dyn').height);
+  testing.expectEqual(rect('mh-dyn').top + 80, rect('mh-next').top);
+
+  wrap.remove();
+}
+</script>

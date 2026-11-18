@@ -1921,7 +1921,12 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 /// without an explicit size the client and content measurements collapse onto
 /// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    if (self.isRootContainer() or !self.getElementAxis(frame, axis).explicit) {
+    if (self.isRootContainer()) {
+        return null;
+    }
+
+    if (axis == .width and self.getElementAxis(frame, axis).explicit == false) {
+        // auto width isn't a limit
         return null;
     }
     const client = self.clientAxis(frame, axis);
