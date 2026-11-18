@@ -290,27 +290,28 @@ fn resetForLoad(self: *Media) void {
     self._error = null;
 }
 
+// The frame whose scheduler runs the element's tasks: its document's, not the
+// caller's, and only while that frame is still running.
+fn taskFrame(self: *Media, frame: *Frame) ?*Frame {
+    const owner = self.asNode().ownerFrame(frame) orelse return null;
+    return if (owner.isGoingAway()) null else owner;
+}
+
 fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
     const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
-// The start of the resource selection algorithm. The rest runs in a task.
+// Resource selection, which runs in a task. The element's state only changes
+// once a source could be read.
 // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-algorithm
 fn selectResource(self: *Media, frame: *Frame) !void {
-    if (frame.isGoingAway()) {
-        return;
-    }
     // A document without a browsing context (DOMParser et al.) loads nothing.
-    if (self.asElement().getDocument(frame)._frame == null) {
-        return;
-    }
+    const owner = self.taskFrame(frame) orelse return;
     if (self.asElement().getAttributeInterned("src") == null and self.firstSource(null) == null) {
-        self._network_state = .NETWORK_EMPTY;
         return;
     }
-    self._network_state = .NETWORK_NO_SOURCE;
-    try Task.schedule(self, frame, .load);
+    try Task.schedule(self, owner, .load);
 }
 
 fn firstSource(self: *Media, after: ?*Node) ?*Source {
@@ -375,12 +376,27 @@ fn readDuration(self: *Media, arena: Allocator, frame: *Frame) ?f64 {
 // In seconds. Only for a WAV file in a data: URL: nothing is fetched.
 fn sourceDuration(arena: Allocator, src: []const u8, frame: *Frame) ?f64 {
     const url = URL.resolve(arena, frame.base(), src, .{ .encoding = frame.charset }) catch return null;
-    if (std.mem.startsWith(u8, url, "data:") == false) {
+    if (isWavDataUrl(url) == false) {
         return null;
     }
     const parsed = data_url.parse(arena, url) catch return null;
     const file = wav.parse(parsed.body) catch return null;
     return @as(f64, @floatFromInt(file.frames)) / file.sample_rate;
+}
+
+// Told by its type, so that no other data: URL is decoded for nothing.
+fn isWavDataUrl(url: []const u8) bool {
+    if (std.mem.startsWith(u8, url, "data:") == false) {
+        return false;
+    }
+    const meta = url["data:".len .. std.mem.findScalar(u8, url, ',') orelse return false];
+    const essence = std.mem.trim(u8, meta[0 .. std.mem.findScalar(u8, meta, ';') orelse meta.len], " ");
+    inline for (.{ "audio/wav", "audio/wave", "audio/x-wav", "audio/vnd.wave" }) |mime| {
+        if (std.ascii.eqlIgnoreCase(essence, mime)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The current playback position.
@@ -402,8 +418,10 @@ fn startClock(self: *Media, frame: *Frame) !void {
     if (self._paused or std.math.isNan(self._duration) or (self._playback_rate > 0) == false) {
         return;
     }
+    // Time stops with the element's frame.
+    const owner = self.taskFrame(frame) orelse return;
     self._clock_started = lp.datetime.milliTimestamp(.boot);
-    try Clock.schedule(self, frame);
+    try Clock.schedule(self, owner);
 }
 
 // "timeupdate [...] at least every 250ms"
@@ -479,8 +497,14 @@ const Clock = struct {
         return null;
     }
 
+    // The frame is going away. The element can outlive it: a script of
+    // another frame may still hold it.
     fn finalizer(ctx: *anyopaque) void {
         const self: *Clock = @ptrCast(@alignCast(ctx));
+        if (self.media) |media| {
+            media.stopClock();
+            media._clock = null;
+        }
         self.frame._factory.destroy(self);
     }
 };
@@ -496,7 +520,8 @@ fn seek(self: *Media, to: f64, frame: *Frame) !void {
         // the task of an earlier seek is still to run
         return;
     }
-    try Task.schedule(self, frame, .seek);
+    const owner = self.taskFrame(frame) orelse return;
+    try Task.schedule(self, owner, .seek);
     self._seeking = true;
 }
 
@@ -522,7 +547,7 @@ const Task = struct {
     generation: u32,
     step: Step,
 
-    const Step = enum { load, seek };
+    const Step = enum { load, seek, removed };
 
     fn schedule(media: *Media, frame: *Frame, step: Step) !void {
         const self = try frame._factory.create(Task{
@@ -550,12 +575,18 @@ const Task = struct {
         switch (task.step) {
             .load => try media.loadResource(task.frame),
             .seek => try media.finishSeek(task.frame),
+            // "When a media element is removed from a document [...] if the
+            // media element is in a document, return", else pause.
+            .removed => if (media.asNode().isConnected() == false) try media.pause(task.frame),
         }
         return null;
     }
 
     fn finalizer(ctx: *anyopaque) void {
         const self: *Task = @ptrCast(@alignCast(ctx));
+        if (self.step == .seek and self.generation == self.media._generation) {
+            self.media._seeking = false;
+        }
         self.frame._factory.destroy(self);
     }
 };
@@ -617,6 +648,9 @@ fn getPlaybackRate(self: *const Media) f64 {
 }
 
 fn setPlaybackRate(self: *Media, value: f64, frame: *Frame) !void {
+    if (std.math.isFinite(value) == false) {
+        return error.TypeError;
+    }
     // the time played so far went at the previous rate
     self.stopClock();
     self._playback_rate = value;
@@ -624,6 +658,9 @@ fn setPlaybackRate(self: *Media, value: f64, frame: *Frame) !void {
 }
 
 fn setCurrentTime(self: *Media, value: f64, frame: *Frame) !void {
+    if (std.math.isFinite(value) == false) {
+        return error.TypeError;
+    }
     if (std.math.isNan(self._duration)) {
         // no timeline to seek in
         self._current_time = value;
@@ -750,8 +787,24 @@ pub const Build = struct {
             return;
         }
         const self = element.as(Media);
-        self.resetForLoad();
+        if (std.math.isNan(self._duration)) {
+            // nothing loaded to reset, only a pending load to drop
+            self._generation +%= 1;
+        } else {
+            self.resetForLoad();
+        }
         try self.selectResource(frame);
+    }
+
+    // An element playing out its timeline pauses once it has left its
+    // document, unless it is back in one by the time the task runs.
+    pub fn disconnected(element: *Element, frame: *Frame) !void {
+        const self = element.as(Media);
+        if (self._clock_started == null) {
+            return;
+        }
+        const owner = self.taskFrame(frame) orelse return;
+        try Task.schedule(self, owner, .removed);
     }
 };
 

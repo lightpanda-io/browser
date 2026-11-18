@@ -83,7 +83,7 @@
 
 <script id="playback" type=module>
   const state = await testing.async();
-  const audio = new Audio(wav(0.4));
+  const audio = new Audio(wav(0.8));
   const events = record(audio, ['pause', 'ended']);
   let updates = 0;
   let last = 0;
@@ -102,12 +102,13 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(true, midway > 0 && midway < 0.4);
+    testing.expectEqual(true, midway > 0 && midway < 0.8);
     testing.expectEqual(false, ended_midway);
-    testing.expectEqual(true, updates > 0);
+    // along the way, and at the end
+    testing.expectEqual(true, updates > 1);
     testing.expectEqual(false, backwards);
     testing.expectEqual('pause,ended', events.join(','));
-    testing.expectEqual(0.4, audio.currentTime);
+    testing.expectEqual(0.8, audio.currentTime);
     testing.expectEqual(true, audio.ended);
     testing.expectEqual(true, audio.paused);
   });
@@ -249,6 +250,79 @@
   });
 </script>
 
+<script id="non_finite" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(2));
+  await once(audio, 'loadedmetadata');
+  audio.currentTime = 1;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectError('TypeError', () => { audio.currentTime = NaN; });
+    testing.expectError('TypeError', () => { audio.currentTime = undefined; });
+    testing.expectError('TypeError', () => { audio.currentTime = Infinity; });
+    testing.expectError('TypeError', () => { audio.playbackRate = NaN; });
+    testing.expectEqual(1, audio.currentTime);
+    testing.expectEqual(false, audio.ended);
+    testing.expectEqual(1, audio.playbackRate);
+  });
+</script>
+
+<script id="removed_from_document" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(5));
+  document.body.append(audio);
+  const moved = record(audio, ['pause']);
+  await audio.play();
+
+  // still in a document once the task runs
+  const div = document.body.appendChild(document.createElement('div'));
+  div.append(audio);
+  await sleep(50);
+  const paused_moved = audio.paused;
+
+  const paused = once(audio, 'pause');
+  div.remove();
+  await paused;
+  const position = audio.currentTime;
+  await sleep(100);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, paused_moved);
+    testing.expectEqual('pause', moved.join(','));
+    testing.expectEqual(true, audio.paused);
+    testing.expectEqual(position, audio.currentTime);
+  });
+</script>
+
+<script id="frame_removed" type=module>
+  // The element outlives its frame, and its clock doesn't.
+  const state = await testing.async();
+  const iframe = document.body.appendChild(document.createElement('iframe'));
+  const audio = new iframe.contentWindow.Audio(wav(5));
+  await once(audio, 'loadedmetadata');
+  await audio.play();
+  await sleep(50);
+  iframe.remove();
+
+  const stopped_at = audio.currentTime;
+  await sleep(100);
+  const later = audio.currentTime;
+  audio.currentTime = 1;
+  await sleep(100);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(stopped_at, later);
+    testing.diverges('Chrome also pauses the element and takes it back to 0', () => {
+      testing.expectEqual(true, stopped_at > 0);
+    });
+    testing.expectEqual(1, audio.currentTime);
+    testing.expectEqual(false, audio.seeking);
+  });
+</script>
+
 <script id="unreadable_source" type=module>
   const state = await testing.async();
   const audio = new Audio('data:audio/wav;base64,AAAA');
@@ -264,6 +338,30 @@
     // Chrome fires error and rejects play()
     testing.diverges('Lightpanda fakes playback of a source it cannot read', () => {
       testing.expectEqual(true, resolved);
+    });
+  });
+</script>
+
+<script id="unreadable_source_state" type=module>
+  // A source that isn't read changes nothing: no selection, no reset.
+  const state = await testing.async();
+  const video = document.createElement('video');
+  testing.beginBrowserLog('missing media files');
+  video.src = 'movie.mp4';
+  const source_set = video.networkState;
+  await video.play().catch(() => {});
+  video.src = 'other.mp4';
+  await sleep(50);
+  testing.endBrowserLog();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, isNaN(video.duration));
+    testing.diverges('Lightpanda does not run resource selection for a source it cannot read', () => {
+      testing.expectEqual(0, source_set);
+      testing.expectEqual(false, video.paused);
+      testing.expectEqual(4, video.readyState);
+      testing.expectEqual(1, video.networkState);
     });
   });
 </script>
