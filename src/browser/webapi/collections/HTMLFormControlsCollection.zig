@@ -72,7 +72,7 @@ fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame)
     var count: u32 = 0;
     var first_element: ?*Element = null;
 
-    var it = try self.iterator();
+    var it = self.iterator();
     while (it.next()) |element| {
         if (matchesName(element, name)) {
             if (first_element == null) {
@@ -132,7 +132,7 @@ pub fn matchesName(element: *Element, name: []const u8) bool {
 }
 
 // used internally, by HTMLFormControlsCollection and RadioNodeList
-pub fn iterator(self: *HTMLFormControlsCollection) !Iterator {
+pub fn iterator(self: *HTMLFormControlsCollection) Iterator {
     const form_collection = self._proto._data.form;
     return .{
         .tw = form_collection._tw.clone(),
@@ -183,7 +183,7 @@ pub const JsApi = struct {
             return false;
         }
 
-        var it = try self.iterator();
+        var it = self.iterator();
         while (it.next()) |element| {
             if (matchesName(element, name)) {
                 return true;

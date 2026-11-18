@@ -444,9 +444,9 @@ pub const Serializer = struct {
                 return .{ .other = "nodelist" };
             }
             const frame = self.frame;
-            const nodes = try self.arena.alloc(Remote, try list.length(frame));
+            const nodes = try self.arena.alloc(Remote, list.length(frame));
             for (nodes, 0..) |*item, i| {
-                const dom_node = (try list.getAtIndex(i, frame)) orelse unreachable;
+                const dom_node = list.getAtIndex(i, frame) orelse unreachable;
                 item.* = .{ .body = .{ .node = try self.node(dom_node, 0) } };
             }
             return .{ .nodelist = nodes };

@@ -58,7 +58,7 @@ pub fn acquireRef(self: *NodeList) void {
     self._rc.acquire();
 }
 
-pub fn length(self: *NodeList, frame: *Frame) !u32 {
+pub fn length(self: *NodeList, frame: *Frame) u32 {
     return switch (self._data) {
         .child_nodes => |impl| impl.length(frame),
         .selector_list => |impl| @intCast(impl.getLength()),
@@ -68,10 +68,10 @@ pub fn length(self: *NodeList, frame: *Frame) !u32 {
 }
 
 fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
-    return try self.getAtIndex(index, frame) orelse return error.NotHandled;
+    return self.getAtIndex(index, frame) orelse return error.NotHandled;
 }
 
-pub fn getAtIndex(self: *NodeList, index: usize, frame: *Frame) !?*Node {
+pub fn getAtIndex(self: *NodeList, index: usize, frame: *Frame) ?*Node {
     return switch (self._data) {
         .child_nodes => |impl| impl.getAtIndex(index, frame),
         .selector_list => |impl| impl.getAtIndex(index),
@@ -95,7 +95,7 @@ pub fn entries(self: *NodeList, frame: *Frame) !*EntryIterator {
 pub fn forEach(self: *NodeList, cb: js.Function, frame: *Frame) !void {
     var i: i32 = 0;
     while (true) : (i += 1) {
-        const node = try self.getAtIndex(@intCast(i), frame) orelse return;
+        const node = self.getAtIndex(@intCast(i), frame) orelse return;
 
         var caught: js.TryCatch.Caught = .{};
         cb.tryCall(void, .{ node, i, self }, &caught) catch |err| {
@@ -129,9 +129,9 @@ const Iterator = struct {
         self.list.acquireRef();
     }
 
-    pub fn next(self: *Iterator, frame: *Frame) !?Entry {
+    pub fn next(self: *Iterator, frame: *Frame) ?Entry {
         const index = self.index;
-        const node = try self.list.getAtIndex(index, frame) orelse return null;
+        const node = self.list.getAtIndex(index, frame) orelse return null;
         self.index = index + 1;
         return .{ index, node };
     }
@@ -155,7 +155,7 @@ pub const JsApi = struct {
     pub const symbol_iterator = bridge.iterator(NodeList.values, .{});
 
     fn getIndexes(self: *NodeList, frame: *Frame) !js.Array {
-        const len = try self.length(frame);
+        const len = self.length(frame);
         var arr = frame.js.local.?.newArray(len);
         for (0..len) |i| {
             _ = try arr.set(@intCast(i), i, .{});
