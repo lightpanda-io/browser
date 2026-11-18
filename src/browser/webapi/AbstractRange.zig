@@ -337,8 +337,8 @@ pub const JsApi = struct {
     };
 
     pub const startContainer = bridge.accessor(AbstractRange.getStartContainer, null, .{});
-    pub const startOffset = bridge.fastAccessor(AbstractRange.getStartOffset, null, .{ .getter = .unsafe });
+    pub const startOffset = bridge.accessor("_start_offset", null, .{});
     pub const endContainer = bridge.accessor(AbstractRange.getEndContainer, null, .{});
-    pub const endOffset = bridge.fastAccessor(AbstractRange.getEndOffset, null, .{ .getter = .unsafe });
-    pub const collapsed = bridge.fastAccessor(AbstractRange.getCollapsed, null, .{ .getter = .unsafe });
+    pub const endOffset = bridge.accessor("_end_offset", null, .{});
+    pub const collapsed = bridge.accessor(AbstractRange.getCollapsed, null, .{});
 };

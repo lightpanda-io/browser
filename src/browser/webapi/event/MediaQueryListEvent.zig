@@ -74,10 +74,6 @@ pub fn asEvent(self: *MediaQueryListEvent) *Event {
     return self._proto;
 }
 
-pub fn getMatches(self: *const MediaQueryListEvent) bool {
-    return self._matches;
-}
-
 pub fn getMedia(self: *const MediaQueryListEvent) []const u8 {
     return self._media;
 }
@@ -91,6 +87,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(MediaQueryListEvent.init, .{});
-    pub const matches = bridge.fastAccessor(MediaQueryListEvent.getMatches, null, .{ .getter = .unsafe });
+    pub const matches = bridge.accessor("_matches", null, .{});
     pub const media = bridge.accessor(MediaQueryListEvent.getMedia, null, .{});
 };

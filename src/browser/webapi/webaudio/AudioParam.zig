@@ -142,18 +142,6 @@ fn setAutomationRate(self: *AudioParam, value: []const u8) !void {
     self._rate = rate;
 }
 
-fn getDefaultValue(self: *const AudioParam) f32 {
-    return self._default;
-}
-
-fn getMinValue(self: *const AudioParam) f32 {
-    return self._min;
-}
-
-fn getMaxValue(self: *const AudioParam) f32 {
-    return self._max;
-}
-
 fn setValueAtTime(self: *AudioParam, value: f32, start_time: f64) !*AudioParam {
     try finite(value);
     const time = try self.eventTime(start_time);
@@ -356,11 +344,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.fastAccessor(AudioParam.getValue, AudioParam.setValue, .{ .getter = .unsafe, .setter = .safe });
+    pub const value = bridge.accessor(AudioParam.getValue, AudioParam.setValue, .{});
     pub const automationRate = bridge.accessor(AudioParam.getAutomationRate, AudioParam.setAutomationRate, .{});
-    pub const defaultValue = bridge.fastAccessor(AudioParam.getDefaultValue, null, .{ .getter = .unsafe });
-    pub const minValue = bridge.fastAccessor(AudioParam.getMinValue, null, .{ .getter = .unsafe });
-    pub const maxValue = bridge.fastAccessor(AudioParam.getMaxValue, null, .{ .getter = .unsafe });
+    pub const defaultValue = bridge.accessor("_default", null, .{});
+    pub const minValue = bridge.accessor("_min", null, .{});
+    pub const maxValue = bridge.accessor("_max", null, .{});
     pub const setValueAtTime = bridge.function(AudioParam.setValueAtTime, .{});
     pub const linearRampToValueAtTime = bridge.function(AudioParam.linearRampToValueAtTime, .{});
     pub const exponentialRampToValueAtTime = bridge.function(AudioParam.exponentialRampToValueAtTime, .{});

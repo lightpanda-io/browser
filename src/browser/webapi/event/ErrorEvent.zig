@@ -101,14 +101,6 @@ fn getFilename(self: *const ErrorEvent) []const u8 {
     return self._filename;
 }
 
-fn getLineNumber(self: *const ErrorEvent) u32 {
-    return self._line_number;
-}
-
-fn getColumnNumber(self: *const ErrorEvent) u32 {
-    return self._column_number;
-}
-
 fn getError(self: *const ErrorEvent) ?js.Value.Global {
     return self._error;
 }
@@ -127,8 +119,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(ErrorEvent.init, .{});
     pub const message = bridge.accessor(ErrorEvent.getMessage, null, .{});
     pub const filename = bridge.accessor(ErrorEvent.getFilename, null, .{});
-    pub const lineno = bridge.fastAccessor(ErrorEvent.getLineNumber, null, .{ .getter = .unsafe });
-    pub const colno = bridge.fastAccessor(ErrorEvent.getColumnNumber, null, .{ .getter = .unsafe });
+    pub const lineno = bridge.accessor("_line_number", null, .{});
+    pub const colno = bridge.accessor("_column_number", null, .{});
     pub const @"error" = bridge.accessor(ErrorEvent.getError, null, .{ .null_as_undefined = true });
 };
 

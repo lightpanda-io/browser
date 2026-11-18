@@ -172,6 +172,6 @@ pub const JsApi = struct {
 
     pub const read = bridge.function(ReadableStreamDefaultReader.read, .{});
     pub const cancel = bridge.function(ReadableStreamDefaultReader.cancel, .{});
-    pub const releaseLock = bridge.fastFunction(ReadableStreamDefaultReader.releaseLock, .{});
+    pub const releaseLock = bridge.function(ReadableStreamDefaultReader.releaseLock, .{});
     pub const closed = bridge.accessor(ReadableStreamDefaultReader.getClosed, null, .{});
 };

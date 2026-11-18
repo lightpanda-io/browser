@@ -207,5 +207,5 @@ pub const JsApi = struct {
     pub const protocol = bridge.accessor(Location.getProtocol, null, .{});
     pub const assign = bridge.function(Location.assign, .{});
     pub const replace = bridge.function(Location.replace, .{});
-    pub const reload = bridge.fastFunction(Location.reload, .{});
+    pub const reload = bridge.function(Location.reload, .{});
 };

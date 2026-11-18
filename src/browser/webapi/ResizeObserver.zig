@@ -297,14 +297,6 @@ pub const ResizeObserverSize = struct {
         });
     }
 
-    fn getInlineSize(self: *const ResizeObserverSize) f64 {
-        return self._inline_size;
-    }
-
-    fn getBlockSize(self: *const ResizeObserverSize) f64 {
-        return self._block_size;
-    }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(ResizeObserverSize);
 
@@ -313,8 +305,8 @@ pub const ResizeObserverSize = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const inlineSize = bridge.fastAccessor(ResizeObserverSize.getInlineSize, null, .{ .getter = .unsafe });
-        pub const blockSize = bridge.fastAccessor(ResizeObserverSize.getBlockSize, null, .{ .getter = .unsafe });
+        pub const inlineSize = bridge.accessor("_inline_size", null, .{});
+        pub const blockSize = bridge.accessor("_block_size", null, .{});
     };
 };
 
@@ -328,8 +320,8 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(ResizeObserver.init, .{});
     pub const observe = bridge.function(ResizeObserver.observe, .{});
-    pub const unobserve = bridge.fastFunction(ResizeObserver.unobserve, .{});
-    pub const disconnect = bridge.fastFunction(ResizeObserver.disconnect, .{});
+    pub const unobserve = bridge.function(ResizeObserver.unobserve, .{});
+    pub const disconnect = bridge.function(ResizeObserver.disconnect, .{});
 };
 
 const testing = @import("../../testing.zig");

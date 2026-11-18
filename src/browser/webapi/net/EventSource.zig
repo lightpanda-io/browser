@@ -533,10 +533,6 @@ fn getReadyState(self: *const EventSource) u16 {
     return @backingInt(self._ready_state);
 }
 
-fn getWithCredentials(self: *const EventSource) bool {
-    return self._with_credentials;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(EventSource);
 
@@ -553,13 +549,13 @@ pub const JsApi = struct {
 
     pub const url = bridge.accessor(EventSource.getUrl, null, .{});
     pub const readyState = bridge.accessor(EventSource.getReadyState, null, .{});
-    pub const withCredentials = bridge.fastAccessor(EventSource.getWithCredentials, null, .{ .getter = .unsafe });
+    pub const withCredentials = bridge.accessor("_with_credentials", null, .{});
 
     pub const onopen = EventTarget.handlerAccessor(EventSource, "open");
     pub const onmessage = EventTarget.handlerAccessor(EventSource, "message");
     pub const onerror = EventTarget.handlerAccessor(EventSource, "error");
 
-    pub const close = bridge.fastFunction(EventSource.close, .{});
+    pub const close = bridge.function(EventSource.close, .{});
 };
 
 const testing = @import("../../../testing.zig");

@@ -50,10 +50,6 @@ fn getIndex(self: *const NavigationDestination, frame: *Frame) i64 {
     return entry.index(frame);
 }
 
-fn getSameDocument(self: *const NavigationDestination) bool {
-    return self._same_document;
-}
-
 const StateReturn = union(enum) { value: ?js.Value, undefined: void };
 
 fn getState(self: *const NavigationDestination, frame: *Frame) !StateReturn {
@@ -72,7 +68,7 @@ pub const JsApi = struct {
     pub const url = bridge.accessor(NavigationDestination.getUrl, null, .{});
     pub const key = bridge.accessor(NavigationDestination.getKey, null, .{});
     pub const id = bridge.accessor(NavigationDestination.getId, null, .{});
-    pub const index = bridge.fastAccessor(NavigationDestination.getIndex, null, .{ .getter = .safe });
-    pub const sameDocument = bridge.fastAccessor(NavigationDestination.getSameDocument, null, .{ .getter = .unsafe });
+    pub const index = bridge.accessor(NavigationDestination.getIndex, null, .{});
+    pub const sameDocument = bridge.accessor("_same_document", null, .{});
     pub const getState = bridge.function(NavigationDestination.getState, .{});
 };

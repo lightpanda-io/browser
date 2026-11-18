@@ -145,10 +145,6 @@ fn getMatrix(self: *Transform) *DOMMatrix {
     return self._matrix;
 }
 
-fn getAngle(self: *const Transform) f64 {
-    return self._angle;
-}
-
 fn setMatrix(self: *Transform, init: ?DOMMatrix2DInit) !void {
     const parsed = try fixup2D(init orelse .{});
     try self.applyState(.{ .typ = 1, .angle = 0, .cx = 0, .cy = 0, .matrix = parsed.m, .is_2d = true });
@@ -322,11 +318,11 @@ pub const JsApi = struct {
 
     pub const @"type" = bridge.accessor(Transform.getType, null, .{});
     pub const matrix = bridge.accessor(Transform.getMatrix, null, .{});
-    pub const angle = bridge.fastAccessor(Transform.getAngle, null, .{ .getter = .unsafe });
+    pub const angle = bridge.accessor("_angle", null, .{});
     pub const setMatrix = bridge.function(Transform.setMatrix, .{});
-    pub const setTranslate = bridge.fastFunction(Transform.setTranslate, .{});
-    pub const setScale = bridge.fastFunction(Transform.setScale, .{});
-    pub const setRotate = bridge.fastFunction(Transform.setRotate, .{});
-    pub const setSkewX = bridge.fastFunction(Transform.setSkewX, .{});
-    pub const setSkewY = bridge.fastFunction(Transform.setSkewY, .{});
+    pub const setTranslate = bridge.function(Transform.setTranslate, .{});
+    pub const setScale = bridge.function(Transform.setScale, .{});
+    pub const setRotate = bridge.function(Transform.setRotate, .{});
+    pub const setSkewX = bridge.function(Transform.setSkewX, .{});
+    pub const setSkewY = bridge.function(Transform.setSkewY, .{});
 };

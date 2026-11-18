@@ -39,22 +39,14 @@ const StorageEstimate = struct {
     _quota: u64,
     _usage: u64,
 
-    fn getUsage(self: *const StorageEstimate) u64 {
-        return self._usage;
-    }
-
-    fn getQuota(self: *const StorageEstimate) u64 {
-        return self._quota;
-    }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(StorageEstimate);
         pub const Meta = struct {
             pub const name = "StorageEstimate";
             pub var class_id: bridge.ClassId = undefined;
         };
-        pub const quota = bridge.fastAccessor(getQuota, null, .{ .getter = .unsafe });
-        pub const usage = bridge.fastAccessor(getUsage, null, .{ .getter = .unsafe });
+        pub const quota = bridge.accessor("_quota", null, .{});
+        pub const usage = bridge.accessor("_usage", null, .{});
     };
 };
 

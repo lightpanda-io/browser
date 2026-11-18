@@ -42,12 +42,6 @@ pub const ConstructorSettings = struct {
     pixelFormat: String = .wrap("rgba-unorm8"),
 };
 
-//pub fn init(width: u32, height: u32, exec: *Execution) !*ImageData {}
-//pub fn initWithSettings(width: u32, height: u32, settings: ConstructorSettings, exec: *Execution) !*ImageData {}
-
-//bridge.constructor(.{ init, initWithSettings }, .{});
-//bridge.constructor(.{ init, initWithSettings }, .{});
-
 pub fn init(width: u32, height: u32, maybe_settings: ?ConstructorSettings, exec: *Execution) !*ImageData {
     try validateDimension(width);
     try validateDimension(height);
@@ -159,14 +153,6 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*ImageD
     });
 }
 
-pub fn getWidth(self: *const ImageData) u32 {
-    return self._width;
-}
-
-pub fn getHeight(self: *const ImageData) u32 {
-    return self._height;
-}
-
 pub fn getData(self: *const ImageData) js.ArrayBufferRef(.uint8_clamped).Global {
     return self._data;
 }
@@ -213,8 +199,8 @@ pub const JsApi = struct {
     pub const pixelFormat = bridge.property("rgba-unorm8", .{ .template = false, .readonly = true });
 
     pub const data = bridge.accessor(ImageData.getData, null, .{});
-    pub const width = bridge.fastAccessor(ImageData.getWidth, null, .{ .getter = .unsafe });
-    pub const height = bridge.fastAccessor(ImageData.getHeight, null, .{ .getter = .unsafe });
+    pub const width = bridge.accessor("_width", null, .{});
+    pub const height = bridge.accessor("_height", null, .{});
 };
 
 const testing = @import("../../testing.zig");

@@ -115,10 +115,6 @@ fn setVertical(self: *VTTCue, value: []const u8) void {
     self._vertical = Direction.fromString(value) orelse return;
 }
 
-fn getSnapToLines(self: *const VTTCue) bool {
-    return self._snap_to_lines;
-}
-
 fn setSnapToLines(self: *VTTCue, value: bool) void {
     self._snap_to_lines = value;
 }
@@ -195,10 +191,6 @@ fn setPositionAlign(self: *VTTCue, value: []const u8) void {
     self._position_align = std.meta.stringToEnum(PositionAlign, value) orelse return;
 }
 
-pub fn getSize(self: *const VTTCue) f64 {
-    return self._size;
-}
-
 fn setSize(self: *VTTCue, value: f64) !void {
     if (std.math.isFinite(value) == false) {
         return error.TypeError;
@@ -234,14 +226,14 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(VTTCue.constructor, .{});
     pub const text = bridge.accessor(VTTCue.getText, VTTCue.setText, .{});
-    pub const region = bridge.fastAccessor(VTTCue.getRegion, VTTCue.setRegion, .{ .setter = .safe });
+    pub const region = bridge.accessor(VTTCue.getRegion, VTTCue.setRegion, .{});
     pub const vertical = bridge.accessor(VTTCue.getVertical, VTTCue.setVertical, .{});
-    pub const snapToLines = bridge.fastAccessor(VTTCue.getSnapToLines, VTTCue.setSnapToLines, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const snapToLines = bridge.accessor("_snap_to_lines", VTTCue.setSnapToLines, .{});
     pub const line = bridge.accessor(VTTCue.getLine, VTTCue.setLine, .{});
     pub const lineAlign = bridge.accessor(VTTCue.getLineAlign, VTTCue.setLineAlign, .{});
     pub const position = bridge.accessor(VTTCue.getPosition, VTTCue.setPosition, .{});
     pub const positionAlign = bridge.accessor(VTTCue.getPositionAlign, VTTCue.setPositionAlign, .{});
-    pub const size = bridge.fastAccessor(VTTCue.getSize, VTTCue.setSize, .{ .getter = .unsafe, .setter = .safe });
+    pub const size = bridge.accessor("_size", VTTCue.setSize, .{});
     pub const @"align" = bridge.accessor(VTTCue.getAlign, VTTCue.setAlign, .{});
     pub const getCueAsHTML = bridge.function(VTTCue.getCueAsHTML, .{});
 };
