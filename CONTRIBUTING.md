@@ -45,29 +45,6 @@ design while it's already written.
 
 Large PRs opened without a prior discussion are likely to be closed.
 
-### Automated triage
-
-A bot checks every new pull request against the list above, using its size
-and the files it touches. If it looks large and was not discussed, the bot
-labels it `needs-discussion` and explains why. A maintainer then decides
-whether to close it. To get it through:
-
-1. Open an issue and agree on the approach with a maintainer, who then labels
-   the issue `accepted`.
-2. Add `Fixes #<issue>` to the pull request description.
-
-Contributors who have landed a few good pull requests are added to
-[`.github/trusted-contributors`](.github/trusted-contributors) by a maintainer
-and skip this check. Maintainers can also wave a single pull request through
-with the `triage-override` label.
-
-### Inactive issues and pull requests
-
-An issue or pull request with no activity for 30 days is labeled `stale` and
-gets a reminder. If nothing happens for another 14 days, it is closed. Any
-comment or push resets the clock. Maintainers can exempt one with the
-`keep-open` label.
-
 ## Real-world impact
 
 If possible, when opening an issue or a PR, include real-world examples, e.g.
