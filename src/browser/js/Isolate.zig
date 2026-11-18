@@ -62,6 +62,13 @@ pub fn notifyContextDisposed(self: Isolate) void {
     v8.v8__Isolate__ContextDisposedNotification(self.handle);
 }
 
+// ICU's default time zone moved: drop the zone and UTC offsets V8 cached for
+// Date and Intl. `.redetect` first puts the default back on the host's zone
+// (TZ, which --timezone sets, then the system setting).
+pub fn timeZoneChanged(self: Isolate, detection: enum { skip, redetect }) void {
+    v8.v8__Isolate__DateTimeConfigurationChangeNotification(self.handle, detection == .redetect);
+}
+
 pub fn getHeapStatistics(self: Isolate) v8.HeapStatistics {
     var res: v8.HeapStatistics = undefined;
     v8.v8__Isolate__GetHeapStatistics(self.handle, &res);

@@ -81,6 +81,10 @@ renderer: ?*lp.screenshot.Renderer = null,
 // Runtime geolocation override
 geolocation_override: ?Geolocation.Override = null,
 
+// Set while Emulation.setTimezoneOverride has moved ICU's default time zone,
+// so closing the session knows to put the host's zone back.
+timezone_overridden: bool = false,
+
 // Every Document allocated in this browser session, allows nodes to refer to
 // documents by their index. (TODO: this will probably eventually be moved
 // to the Page, but we need other changes first)
@@ -245,6 +249,24 @@ pub fn getViewport(self: *const Browser) Viewport {
     return self.viewport_override orelse Viewport.default;
 }
 
+// ICU has one default time zone per process, so the override reaches every
+// isolate; only this one is told to drop its cached offsets.
+pub fn setTimezoneOverride(self: *Browser, id: [:0]const u8) error{UnknownTimeZone}!void {
+    if (!js.v8.v8__V8__SetDefaultTimeZone(id)) {
+        return error.UnknownTimeZone;
+    }
+    self.timezone_overridden = true;
+    self.env.isolate.timeZoneChanged(.skip);
+}
+
+pub fn clearTimezoneOverride(self: *Browser) void {
+    if (!self.timezone_overridden) {
+        return;
+    }
+    self.timezone_overridden = false;
+    self.env.isolate.timeZoneChanged(.redetect);
+}
+
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {
     self.closeSession();
     self.session = @as(Session, undefined);
@@ -260,6 +282,7 @@ pub fn closeSession(self: *Browser) void {
         self.session = null;
         self.viewport_override = null;
     }
+    self.clearTimezoneOverride();
     self.flushArenaMemory();
 }
 
