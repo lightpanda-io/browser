@@ -236,12 +236,19 @@ fn addPreloadScript(cmd: *BiDi.Command) !void {
         if (user_contexts.len == 0) {
             return cmd.sendError("invalid argument", "userContexts is empty");
         }
+        // "default" always exists, even while another user context is active.
         for (user_contexts) |id| {
-            if (std.mem.eql(u8, id, bidi.user_context.id()) == false) {
+            if (std.mem.eql(u8, id, "default") == false and std.mem.eql(u8, id, bidi.user_context.id()) == false) {
                 return cmd.sendError("no such user context", "unknown user context");
             }
         }
-        user_context = bidi.user_context._id;
+        // Only "default" and the active one exist, so two different ids are
+        // every user context.
+        user_context = for (user_contexts[1..]) |id| {
+            if (std.mem.eql(u8, id, user_contexts[0]) == false) {
+                break null;
+            }
+        } else .init(user_contexts[0]);
     }
 
     // \n in case the functionDeclaration ends with a comment.
@@ -1677,4 +1684,51 @@ test "bidi.script: addPreloadScript validation" {
         .params = .{ .functionDeclaration = "() => {}", .userContexts = .{"default"} },
     });
     try ctx.expectSentResult(null, .{ .id = 6 });
+}
+
+test "bidi.script: addPreloadScript userContexts" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.startSession();
+    try ctx.processMessage(.{ .id = 1, .method = "browser.createUserContext", .params = struct {}{} });
+    const user_context = try testing.arena.dupe(u8, ctx.bidi().user_context.id());
+
+    // "default" still exists while another user context is active.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => { window.preloaded = 'default'; }", .userContexts = .{"default"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual("default", ctx.bidi().preload_scripts.items[0].user_context.?.slice());
+
+    // Both user contexts: every one.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => { window.both = true; }", .userContexts = .{ "default", user_context } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(null, ctx.bidi().preload_scripts.items[1].user_context);
+
+    // Only the "both" script runs in the active user context.
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.create", .params = .{ .type = "tab", .userContext = user_context } });
+    const context_id = try testing.arena.dupe(u8, &(ctx.bidi().browsing_context orelse return error.NoBrowsingContext).id);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/values.html", .wait = "complete" },
+    });
+    try ctx.wait();
+
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.evaluate",
+        .params = .{ .expression = "[window.preloaded, window.both]", .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "array", .value = .{
+        .{ .type = "undefined" },
+        .{ .type = "boolean", .value = true },
+    } } }, .{ .id = 6 });
 }
