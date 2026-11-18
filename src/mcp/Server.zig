@@ -176,6 +176,20 @@ pub fn idle(self: *Self) u31 {
     return entry.session.idleSlice();
 }
 
+/// False if the session had no page.
+pub fn closePages(self: *Self) bool {
+    const entry = self.active_session;
+    const session = entry.session;
+    if (!session.hasPage()) return false;
+    entry.enterIsolate();
+    defer entry.exitIsolate();
+    while (session.pages.items.len > 0) {
+        lp.tools.closePage(session, &entry.registry, session.pages.items[0].frame._frame_id);
+    }
+    session.processDestroyQueues();
+    return true;
+}
+
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
     if (self.replySuppressed(id)) return;
     return self.transport.sendError(id, code, message);

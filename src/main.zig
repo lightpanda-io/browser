@@ -253,7 +253,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                     log.fatal(.mcp, "invalid address", .{ .err = err, .host = opts.host, .port = port });
                     return err;
                 };
-                const http_server = try lp.mcp.HttpServer.init(allocator, app);
+                const http_server = try lp.mcp.HttpServer.init(allocator, app, app.config.httpSessionTimeout());
                 defer http_server.deinit();
                 // A signal stops the accept loop, run() returns, deinit joins.
                 try sighandler.on(lp.mcp.HttpServer.stop, .{http_server});
