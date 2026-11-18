@@ -476,6 +476,10 @@ test "WebApi: layer order cascade" {
     try testing.htmlRunner("css/layer_order_cascade.html", .{});
 }
 
+test "WebApi: supports @-rule cascade" {
+    try testing.htmlRunner("css/supports_at_rule_cascade.html", .{});
+}
+
 test "WebApi: CSS nesting" {
     try testing.htmlRunner("css/nesting.html", .{});
 }

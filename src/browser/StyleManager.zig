@@ -26,6 +26,7 @@ const text_measure = @import("text_measure.zig");
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
+const supports = @import("css/supports.zig");
 const Animation = @import("css/Animation.zig");
 const properties = @import("css/properties.zig");
 const DeclarationBlock = @import("css/DeclarationBlock.zig");
@@ -370,10 +371,10 @@ fn addStoredRules(self: *StyleManager, build_arena: Allocator, store: *const Rul
                 }
             },
             .media => try self.applyMediaRule(build_arena, entry, depth, layer, nest),
+            .supports => try self.applySupportsRule(build_arena, entry, depth, layer, nest),
             .layer => try self.applyLayerRule(build_arena, entry, depth, layer, nest),
             .keyframes => try self.addKeyframes(entry.text()),
-            // `@supports` isn't evaluated: its rules are dropped. The others
-            // (`@font-face`, …) hold nothing the cascade reads.
+            // The others (`@font-face`, …) hold nothing the cascade reads.
             else => {},
         }
     }
@@ -385,6 +386,17 @@ fn applyMediaRule(self: *StyleManager, build_arena: Allocator, entry: *const Rul
     // Without a block, it's nothing
     const children = entry._children orelse return;
     if (MediaQuery.matches(CssParser.atRulePrelude(entry.text()), self.frame.page.getViewport()) == false) {
+        return;
+    }
+    try self.applyGroupRules(build_arena, entry, children, depth + 1, layer, nest);
+}
+
+/// Apply an `@supports` rule: when its condition holds, its rules as if they
+/// lived where the rule does. A false or invalid condition drops them. The
+/// condition is answered as CSS.supports() answers it.
+fn applySupportsRule(self: *StyleManager, build_arena: Allocator, entry: *const RuleStore.Entry, depth: u8, layer: u16, nest: ?[]const u8) Allocator.Error!void {
+    const children = entry._children orelse return;
+    if (supports.rule(build_arena, CssParser.atRulePrelude(entry.text())) == false) {
         return;
     }
     try self.applyGroupRules(build_arena, entry, children, depth + 1, layer, nest);
