@@ -1561,29 +1561,30 @@ test "bidi.script: commands need a session" {
 }
 
 test "bidi.script: addPreloadScript runs before the document's scripts" {
+    testing.expectLog(&.{ .page_error, .page_error, .page_error, .page_error });
     var ctx = try testing.context();
     defer ctx.deinit();
 
     const context_id = try ctx.createContext(.{});
 
+    // A throw doesn't stop the next preload script.
     try ctx.processMessage(.{
         .id = 1,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => { throw new Error('nope'); }" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
         .method = "script.addPreloadScript",
         .params = .{
             .functionDeclaration = "() => { window.preloaded = (window.preloaded || 0) + 1; } // comment",
             .contexts = .{context_id},
         },
     });
-    const script_id = try testing.arena.dupe(u8, &ctx.bidi().preload_scripts.items[0].id);
-    try ctx.expectSentResult(.{ .script = script_id }, .{ .id = 1 });
-
-    // A throw doesn't stop the next preload script.
-    try ctx.processMessage(.{
-        .id = 2,
-        .method = "script.addPreloadScript",
-        .params = .{ .functionDeclaration = "() => { throw new Error('nope'); }" },
-    });
-    try ctx.expectSentResult(null, .{ .id = 2 });
+    const script_id = try testing.arena.dupe(u8, &ctx.bidi().preload_scripts.items[1].id);
+    try ctx.expectSentResult(.{ .script = script_id }, .{ .id = 2 });
 
     try ctx.processMessage(.{
         .id = 3,
