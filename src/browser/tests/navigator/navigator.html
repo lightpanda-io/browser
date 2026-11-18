@@ -45,7 +45,9 @@
   // the signal reflects an explicit user preference (Firefox defaults to false;
   // Chrome doesn't expose the property at all). A true default makes
   // GPC-compliant consent managers reject-all and skip their consent UI.
-  testing.expectEqual(false, navigator.globalPrivacyControl);
+  testing.diverges("Chrome doesn't expose globalPrivacyControl", () => {
+    testing.expectEqual(false, navigator.globalPrivacyControl);
+  });
 
   // Every Navigator attribute must be a native accessor on the prototype
   function expectNativeAccessor(name) {
@@ -63,7 +65,9 @@
   ]) {
     expectNativeAccessor(name);
   }
-  expectNativeAccessor('globalPrivacyControl');
+  testing.diverges("Chrome doesn't expose globalPrivacyControl", () => {
+    expectNativeAccessor('globalPrivacyControl');
+  });
 </script>
 
 <script id=navigator_plugins_named_presence>
