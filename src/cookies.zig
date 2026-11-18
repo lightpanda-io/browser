@@ -115,24 +115,29 @@ fn writeJson(jar: *const Cookie.Jar, w: *std.Io.Writer) !void {
         }
 
         try w.writeAll("\n  ");
-        try std.json.Stringify.value(JsonCookie{
-            .name = c.name,
-            .value = c.value,
-            .domain = c.domain,
-            .path = c.path,
-            .expires = c.expires,
-            .secure = c.secure,
-            .httpOnly = c.http_only,
-            // Left out for an unspecified cookie, as Network.getCookies
-            // does, so that it's still Lax by default once loaded back.
-            .sameSite = if (c.same_site_default) null else @tagName(c.same_site),
-        }, .{ .emit_null_optional_fields = false }, w);
+        try writeCookieJson(c, w);
     }
 
     if (jar.len > 0) {
         try w.writeByte('\n');
     }
     try w.writeAll("]\n");
+}
+
+/// One cookie as the object `--cookie-jar` files hold.
+pub fn writeCookieJson(c: *const Cookie, w: *std.Io.Writer) !void {
+    try std.json.Stringify.value(JsonCookie{
+        .name = c.name,
+        .value = c.value,
+        .domain = c.domain,
+        .path = c.path,
+        .expires = c.expires,
+        .secure = c.secure,
+        .httpOnly = c.http_only,
+        // Left out for an unspecified cookie, as Network.getCookies
+        // does, so that it's still Lax by default once loaded back.
+        .sameSite = if (c.same_site_default) null else @tagName(c.same_site),
+    }, .{ .emit_null_optional_fields = false }, w);
 }
 
 const JsonCookie = struct {

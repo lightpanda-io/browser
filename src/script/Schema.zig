@@ -121,7 +121,7 @@ pub fn positionalFor(tool: BrowserTool) []const []const u8 {
 
 /// What the tool's page method returns to a script, as markdown for the
 /// generated reference (`zig build docs`). Null for the tools a script can't
-/// call. Exhaustive so a new recorded tool has to document its return value.
+/// call. Exhaustive so a new scriptable tool has to document its return value.
 pub fn scriptReturns(tool: BrowserTool) ?[]const u8 {
     // What `finalizeAction` appends to every action's status line.
     const page_state = ", then the resulting page's URL, HTTP status and title";
@@ -145,7 +145,8 @@ pub fn scriptReturns(tool: BrowserTool) ?[]const u8 {
         .waitForScript => "`Script returned truthy.`",
         .waitForState => "`Page reached <state>.`",
         .callPageTool => "The tool's result as a string",
-        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => null,
+        .getCookies => "An array of cookie objects (`name`, `value`, `domain`, `path`, `expires`, `secure`, `httpOnly`, `sameSite`), empty when none match",
+        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getEnv, .popups, .pageTools => null,
     };
 }
 

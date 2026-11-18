@@ -74,18 +74,18 @@ fn render(w: *std.Io.Writer) std.Io.Writer.Error!void {
     try w.writeAll(prose_tail ++ "\n");
 }
 
-/// The generated primitives reference: one table row per recorded tool
+/// The generated primitives reference: one table row per scriptable tool
 /// plus an options list surfacing the per-parameter schema descriptions.
 fn writeReference(w: *std.Io.Writer) std.Io.Writer.Error!void {
     try w.writeAll(table_head ++ "\n");
     for (Schema.all()) |*s| {
-        if (!s.tool.isRecorded()) continue;
+        if (!s.tool.isScriptable()) continue;
         try writeRow(w, s);
     }
 
     try w.writeAll("\nOptions (the trailing `{ … }` object; every option may be omitted):\n\n");
     for (Schema.all()) |*s| {
-        if (!s.tool.isRecorded() or s.tool == .extract) continue;
+        if (!s.tool.isScriptable() or s.tool == .extract) continue;
         if (!hasOptions(s)) continue;
         try w.print("- `{s}`:", .{s.tool_name});
         for (s.fields) |f| {
@@ -198,7 +198,7 @@ fn positionalOptional(s: *const Schema, p: []const u8) bool {
 
 /// Curated per-tool script semantics the JSON schema can't express.
 /// Exhaustive so adding or renaming a tool is a compile error until it
-/// makes an explicit choice; non-recorded tools have no script form.
+/// makes an explicit choice; non-scriptable tools have no script form.
 fn note(tool: browser_tools.Tool) []const u8 {
     return switch (tool) {
         .goto => "Navigates the page (re-navigating reuses the same object). Waits for `load`. Rejects on navigation failure; a **timeout does NOT reject** (the page may still be usable). Default timeout 10000 ms.",
@@ -216,7 +216,8 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .login => "Fills the sign-in fields the decision model picks and submits. Credentials go in as `$LP_*` placeholders. Pass the `*Selector` fields from an earlier result to replay with no model call; otherwise needs " ++ lp.App.decision_env_hint ++ ".",
         .findElement => "`name` is a case-insensitive substring, or a JS regex literal like `/sign (in|up)/` (also case-insensitive).",
         .callPageTool => "Runs a tool the page registered through WebMCP; returns its text result.",
-        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .pageTools => "",
+        .getCookies => "Returns an array of cookie objects for the page's host, HttpOnly ones included; `[]` when none match.",
+        .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .consoleLogs, .getUrl, .getEnv, .popups, .pageTools => "",
     };
 }
 
@@ -337,12 +338,12 @@ const prose_tail =
 
 const testing = @import("../testing.zig");
 
-test "skill: every recorded tool is documented, no non-recorded one is" {
+test "skill: every scriptable tool is documented, no other one is" {
     const body = text();
     inline for (comptime std.meta.tags(browser_tools.Tool)) |tool| {
         const call = "page." ++ @tagName(tool) ++ "(";
         const documented = std.mem.find(u8, body, call) != null;
-        try testing.expect(documented == tool.isRecorded());
+        try testing.expect(documented == tool.isScriptable());
     }
     try testing.expect(std.mem.find(u8, body, "await page.goto(") != null);
 }
