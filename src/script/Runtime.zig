@@ -1259,6 +1259,13 @@ test "agent script runtime: page.getCookies returns cookie objects, also in a re
 
     try testing.test_session.cookie_jar.populateFromResponse("http://localhost:9582", "session=abc; Path=/; HttpOnly");
     try testing.test_session.cookie_jar.populateFromResponse("http://other.test/", "tracking=xyz; Path=/");
+    // Expired after it was stored, on a host the script never requests, so only
+    // `getCookies` itself can purge it.
+    try testing.test_session.cookie_jar.populateFromResponse("http://other.test/", "stale=old; Path=/");
+    var it = testing.test_session.cookie_jar.iterator();
+    while (it.next()) |c| {
+        if (std.mem.eql(u8, c.name, "stale")) c.expires = 1;
+    }
 
     try runTestScript(runtime,
         \\const page = new Page();

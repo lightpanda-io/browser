@@ -2351,6 +2351,7 @@ fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?st
     const args = try parseArgsOrDefault(Params, arena, arguments);
 
     const jar = &session.cookie_jar;
+    jar.removeExpired(null);
     if (jar.len == 0) return switch (format) {
         .text => "No cookies.",
         .json => "[]",
