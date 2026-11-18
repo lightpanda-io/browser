@@ -38,7 +38,7 @@ const Frame = lp.Frame;
 const Self = @This();
 
 dom_node: *Node,
-registry: *NodeRegistry,
+registry: Registry,
 frame: *Frame, // we never visit iframes, every node we visit is in the same frame as dom_node
 arena: std.mem.Allocator,
 prune: bool,
@@ -47,6 +47,13 @@ max_depth: u32,
 max_bytes: ?u32,
 ids: bool,
 link_urls: bool,
+
+pub const Registry = union(enum) {
+    // ids a client can later resolve back to their node
+    persisted: *NodeRegistry,
+    // one-shot dump that can't be reversed, e.g. --dump semantic_tree
+    ephemeral: *NodeRegistry.Id,
+};
 
 pub const Opts = struct {
     prune: bool = true,
@@ -67,7 +74,7 @@ pub const Opts = struct {
 /// that owns `node`. A node whose document has no frame (DOMParser, XHR, or
 /// a frame that has since navigated away) has no styles or layout to
 /// describe.
-pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, frame: *Frame, opts: Opts) error{FramelessNode}!Self {
+pub fn init(arena: std.mem.Allocator, node: *Node, registry: Registry, frame: *Frame, opts: Opts) error{FramelessNode}!Self {
     return .{
         .dom_node = node,
         .registry = registry,
@@ -203,7 +210,7 @@ const LineCollector = struct {
         try self.text.writer.splatByteAll(' ', self.depth());
         const line = try self.tree.writeTextLine(&self.text.writer, node, data);
         try self.text.writer.writeByte('\n');
-        try self.append(data, start, .{
+        try self.append(node, data, start, .{
             .hidden = false,
             .contentful = line.contentful,
             .priority = linePriority(node, data, self.focused),
@@ -211,11 +218,11 @@ const LineCollector = struct {
         return line.children;
     }
 
-    pub fn visitPruned(self: *LineCollector, _: *Node, data: *NodeData) !bool {
+    pub fn visitPruned(self: *LineCollector, node: *Node, data: *NodeData) !bool {
         // The walk root always gets a line, so the output has a single top.
         const anchor = (structural_roles.get(data.role) orelse .wrapper) == .anchor;
         if (self.current != null and !anchor) return false;
-        try self.append(data, self.text.written().len, .{ .hidden = true, .contentful = false, .priority = .text });
+        try self.append(node, data, self.text.written().len, .{ .hidden = true, .contentful = false, .priority = .text });
         return true;
     }
 
@@ -229,13 +236,17 @@ const LineCollector = struct {
 
     const Own = struct { hidden: bool, contentful: bool, priority: Priority };
 
-    fn append(self: *LineCollector, data: *const NodeData, start: usize, own: Own) !void {
+    fn append(self: *LineCollector, node: *Node, data: *NodeData, start: usize, own: Own) !void {
         const inherited = if (self.current) |p| self.lines.items[p].critical_subtree else false;
         const role_scope = critical_roles.get(data.role);
         const critical = inherited or role_scope != null;
         const chrome = (if (self.current) |p| self.lines.items[p].chrome_subtree else false) or chrome_roles.has(data.role);
+
+        // delay generating the id / tracking the node in the registry until
+        // we know the node actually gets added.
+        const id = try self.tree.nodeId(node, data);
         try self.lines.append(self.tree.arena, .{
-            .id = data.id,
+            .id = id,
             .start = @intCast(start),
             .end = @intCast(self.text.written().len),
             .depth = self.depth(),
@@ -439,7 +450,7 @@ const OptionData = struct {
 };
 
 const NodeData = struct {
-    id: NodeRegistry.Id,
+    id: ?NodeRegistry.Id = null, // registered on first use
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
@@ -568,7 +579,6 @@ fn visitNode(
         return;
     }
 
-    const cdp_node = try self.registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
 
@@ -683,7 +693,6 @@ fn visitNode(
     var opened = false;
     var children: Walk = .all;
     var data: NodeData = .{
-        .id = cdp_node.id,
         .axn = axn,
         .role = role,
         .name = name,
@@ -775,11 +784,12 @@ const JsonVisitor = struct {
     pub fn visit(self: *JsonVisitor, node: *Node, data: *NodeData) !Walk {
         try self.jw.beginObject();
 
+        const id = try self.tree.nodeId(node, data);
         try self.jw.objectField("nodeId");
-        try self.jw.write(try self.tree.arena.print("{d}", .{data.id}));
+        try self.jw.write(try self.tree.arena.print("{d}", .{id}));
 
         try self.jw.objectField("backendDOMNodeId");
-        try self.jw.write(data.id);
+        try self.jw.write(id);
 
         try self.jw.objectField("nodeName");
         try self.jw.write(data.tag_name);
@@ -938,6 +948,23 @@ fn textName(node: *Node, data: *const NodeData) ?[]const u8 {
     return if (trimmed.len > 0) trimmed else null;
 }
 
+fn nodeId(self: Self, node: *Node, data: *NodeData) !NodeRegistry.Id {
+    if (data.id) |id| return id;
+    const id = try self.newId(node);
+    data.id = id;
+    return id;
+}
+
+fn newId(self: Self, node: *Node) !NodeRegistry.Id {
+    switch (self.registry) {
+        .persisted => |registry| return (try registry.register(node)).id,
+        .ephemeral => |last_id| {
+            last_id.* += 1;
+            return last_id.*;
+        },
+    }
+}
+
 fn isTextOnly(data: *const NodeData) bool {
     return isOneOf(data.role, &.{ "StaticText", "none", "generic" });
 }
@@ -959,7 +986,7 @@ fn writeTextLine(self: Self, writer: *std.Io.Writer, node: *Node, data: *NodeDat
     // first field.
     var sep: []const u8 = "";
     if (self.ids) {
-        try writer.print("{d}", .{data.id});
+        try writer.print("{d}", .{try self.nodeId(node, data)});
         if (data.interactive) {
             try writer.writeAll(if (data.disabled) " [i:disabled]" else " [i]");
         }
@@ -1167,7 +1194,7 @@ pub fn nodeDetails(self: Self) !NodeDetails {
     const node = self.dom_node;
     const frame = self.frame;
 
-    const cdp_node = try self.registry.register(node);
+    const id = try self.newId(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
     var labels: Label.LabelByForIndex = .{};
@@ -1226,7 +1253,7 @@ pub fn nodeDetails(self: Self) !NodeDetails {
     }
 
     return .{
-        .backendNodeId = cdp_node.id,
+        .backendNodeId = id,
         .tag_name = tag_name,
         .role = role,
         .name = name,
@@ -1254,12 +1281,36 @@ test "SemanticTree backendDOMNodeId" {
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = false });
 
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
     try testing.expect(std.mem.find(u8, json_str, "\"backendDOMNodeId\":") != null);
+}
+
+test "SemanticTree: ephemeral ids count the printed nodes" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/registry1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const root = frame.window._document.asNode();
+
+    // Both register on print, so a fresh registry hands out the same ids.
+    var want: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const persisted: Self = try .init(testing.arena_allocator, root, .{ .persisted = &registry }, frame, .{});
+    try persisted.textStringify(&want.writer);
+
+    var last_id: NodeRegistry.Id = 0;
+    var got: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const ephemeral: Self = try .init(testing.arena_allocator, root, .{ .ephemeral = &last_id }, frame, .{});
+    try ephemeral.textStringify(&got.writer);
+
+    try testing.expectEqual(want.written(), got.written());
+    try testing.expect(std.mem.startsWith(u8, got.written(), "1 "));
+    try testing.expectEqual(registry.lookup_by_id.count(), last_id);
 }
 
 test "SemanticTree: JSON exposes custom ARIA states without changing native checked" {
@@ -1269,7 +1320,7 @@ test "SemanticTree: JSON exposes custom ARIA states without changing native chec
     var page = try testing.pageTest("cdp/ax_aria_states.html", .{});
     defer page.close();
     const frame = page.frame().?;
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = false });
 
     const json = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json);
@@ -1330,7 +1381,7 @@ test "SemanticTree text without ids, with link targets" {
         \\<button>Send</button>
     );
 
-    const st: Self = try .init(testing.arena_allocator, div.asNode(), &registry, frame, .{ .ids = false, .link_urls = true });
+    const st: Self = try .init(testing.arena_allocator, div.asNode(), .{ .persisted = &registry }, frame, .{ .ids = false, .link_urls = true });
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try st.textStringify(&aw.writer);
@@ -1357,7 +1408,7 @@ test "SemanticTree max_depth" {
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false, .max_depth = 1 });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = false, .max_depth = 1 });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -1376,7 +1427,7 @@ test "SemanticTree: a slotted element inherits its slot's display" {
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = false });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -1395,7 +1446,7 @@ test "SemanticTree: visibility:hidden drops the element, not a visible descendan
     const frame = page.frame().?;
 
     for ([_]bool{ false, true }) |prune| {
-        const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = prune });
+        const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = prune });
 
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
@@ -1418,7 +1469,7 @@ test "SemanticTree: the cascade decides whether `hidden` hides, not the raw attr
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .prune = false });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -1456,7 +1507,7 @@ test "SemanticTree: deep nesting doesn't overflow the native stack" {
     try link.setAttribute(.wrap("href"), .wrap("#"), frame);
     _ = try link.asNode().appendChild(top, frame);
 
-    const st: Self = try .init(testing.arena_allocator, link.asNode(), &registry, frame, .{});
+    const st: Self = try .init(testing.arena_allocator, link.asNode(), .{ .persisted = &registry }, frame, .{});
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
 
@@ -1474,7 +1525,7 @@ test "SemanticTree: a named heading or code keeps its links" {
     const frame = page.frame().?;
 
     for ([_]bool{ false, true }) |interactive_only| {
-        const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .interactive_only = interactive_only });
+        const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .interactive_only = interactive_only });
 
         var aw: std.Io.Writer.Allocating = .init(testing.allocator);
         defer aw.deinit();
@@ -1500,7 +1551,7 @@ test "SemanticTree: a multi-line name or value stays on its node's line" {
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{});
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{});
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -1521,7 +1572,7 @@ test "SemanticTree: maxBytes keeps alerts and controls, marks the rest" {
     const frame = page.frame().?;
 
     const max_bytes = 500;
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .max_bytes = max_bytes });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -1548,7 +1599,7 @@ test "SemanticTree: maxBytes keeps a dialog, not its text" {
     const frame = page.frame().?;
 
     const max_bytes = 300;
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .max_bytes = max_bytes });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -1569,7 +1620,7 @@ test "SemanticTree: maxBytes ranks headings first and navigation last" {
     const frame = page.frame().?;
 
     const max_bytes = 300;
-    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .max_bytes = max_bytes });
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), .{ .persisted = &registry }, frame, .{ .max_bytes = max_bytes });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();

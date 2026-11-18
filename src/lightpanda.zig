@@ -557,10 +557,8 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
             try pdf.print(arena.allocator(), state, .{}, writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
-            var registry = NodeRegistry.init(app.allocator);
-            defer registry.deinit();
-
-            const st: SemanticTree = try .init(frame.call_arena, state.root, &registry, frame, .{
+            var last_id: NodeRegistry.Id = 0;
+            const st: SemanticTree = try .init(frame.call_arena, state.root, .{ .ephemeral = &last_id }, frame, .{
                 .prune = (mode == .semantic_tree_text),
             });
 

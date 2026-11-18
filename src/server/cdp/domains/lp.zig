@@ -148,7 +148,7 @@ fn getSemanticTree(cmd: anytype) !void {
     else
         root.document.asNode();
 
-    const st = SemanticTree.init(cmd.arena, dom_node, &target.node_registry, root, .{
+    const st = SemanticTree.init(cmd.arena, dom_node, .{ .persisted = &target.node_registry }, root, .{
         .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
         .max_depth = params.maxDepth orelse std.math.maxInt(u32) - 1,
@@ -287,7 +287,7 @@ fn getNodeDetails(cmd: anytype) !void {
     const root = target.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = (target.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
-    const st = SemanticTree.init(cmd.arena, node, &target.node_registry, root, .{}) catch return error.InvalidNodeId;
+    const st = SemanticTree.init(cmd.arena, node, .{ .persisted = &target.node_registry }, root, .{}) catch return error.InvalidNodeId;
     const details = st.nodeDetails() catch return error.InternalError;
 
     return cmd.sendResult(.{

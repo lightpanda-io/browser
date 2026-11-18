@@ -162,7 +162,7 @@ const StateOpts = struct {
 /// on (form fields, dialogs, the title of an iframe holding a CAPTCHA) and,
 /// without node ids, is about as long.
 fn buildState(arena: std.mem.Allocator, page: *Frame, node: *DOMNode, registry: *NodeRegistry, opts: StateOpts) !Content {
-    const tree = lp.SemanticTree.init(arena, node, registry, page, .{ .ids = opts.ids, .link_urls = opts.link_urls }) catch return error.InternalError;
+    const tree = lp.SemanticTree.init(arena, node, .{ .persisted = registry }, page, .{ .ids = opts.ids, .link_urls = opts.link_urls }) catch return error.InternalError;
     var aw: std.Io.Writer.Allocating = .init(arena);
     tree.textStringify(&aw.writer) catch return error.InternalError;
 
