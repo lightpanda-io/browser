@@ -380,8 +380,7 @@ const CorsPreflightContext = struct {
             const headers_wildcard = std.mem.eql(u8, allow_headers, "*") and !self.wants_credentials;
 
             for (self.request_headers) |name| {
-                const is_authorization = std.ascii.eqlIgnoreCase(name, "authorization");
-                if (headers_wildcard and !is_authorization) continue;
+                if (headers_wildcard) continue;
 
                 if (!headerAllowed(allow_headers, name)) {
                     log.debug(.cors, "preflight blocked", .{

@@ -156,8 +156,7 @@ fn matches(entry: Entry, method: http.Method, authored_headers: []const []const 
         return false;
     }
     for (authored_headers) |name| {
-        const is_authorization = std.ascii.eqlIgnoreCase(name, "authorization");
-        if (entry.headers_wildcard and !is_authorization) continue;
+        if (entry.headers_wildcard) continue;
         var found = false;
         for (entry.headers) |allowed| {
             if (std.ascii.eqlIgnoreCase(allowed, name)) {
@@ -400,7 +399,10 @@ test "CorsStore: credentialed and non-credentialed grants for same origin/target
     try testing.expect(try store.coversRequest(allocator, .{ .origin = origin, .target = target, .credentials = false }, .GET, &.{"x-anything"}));
 }
 
-test "CorsStore: covers never lets a wildcard cover Authorization" {
+// http://crbug.com/40168475
+// https://github.com/whatwg/fetch/issues/1919
+// https://github.com/servo/servo/pull/47600
+test "CorsStore: a wildcard covers Authorization" {
     const allocator = testing.allocator;
     var store = CorsStore.init(allocator, 10);
     defer store.deinit();
@@ -414,6 +416,6 @@ test "CorsStore: covers never lets a wildcard cover Authorization" {
         .expires_at = std.math.maxInt(u64),
     });
 
-    try testing.expect(!try store.coversRequest(allocator, key, .GET, &.{"authorization"}));
+    try testing.expect(try store.coversRequest(allocator, key, .GET, &.{"authorization"}));
     try testing.expect(try store.coversRequest(allocator, key, .GET, &.{"x-anything"}));
 }
