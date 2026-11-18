@@ -2,9 +2,11 @@ const std = @import("std");
 
 const lp = @import("lightpanda");
 const js = lp.js;
+const log = lp.log;
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
 
+const cli = @import("../cli.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const McpTool = protocol.Tool;
@@ -164,10 +166,54 @@ const ExtraTool = enum(u8) {
     run = 204,
 };
 
+pub const tool_names = blk: {
+    var names: [all_tools.len][]const u8 = undefined;
+    for (all_tools, 0..) |tool, i| names[i] = tool.name;
+    break :blk names;
+};
+
+/// Which of `all_tools` a server exposes, by index.
+pub const Enabled = std.StaticBitSet(all_tools.len);
+
+/// Parses the comma-separated names `--tools` takes. An unknown name, or
+/// no name at all, is logged here.
+pub fn parseEnabled(names: []const u8) error{InvalidArgument}!Enabled {
+    var enabled: Enabled = .empty;
+    var it = std.mem.tokenizeAny(u8, names, ", ");
+    while (it.next()) |name| {
+        const index = indexOf(name) orelse return cli.invalidChoice("--tools", "", name, &tool_names);
+        enabled.set(index);
+    }
+    if (enabled.count() == 0) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--tools", .value = names, .hint = "expected tool names, see --list-tools" });
+        return error.InvalidArgument;
+    }
+    return enabled;
+}
+
+/// Writes every tool name in the format `--tools` takes.
+pub fn writeNames(writer: *std.Io.Writer) !void {
+    for (tool_names, 0..) |name, i| {
+        if (i != 0) try writer.writeByte(',');
+        try writer.writeAll(name);
+    }
+    try writer.writeByte('\n');
+}
+
+fn indexOf(name: []const u8) ?usize {
+    for (tool_names, 0..) |tool_name, i| {
+        if (std.mem.eql(u8, tool_name, name)) return i;
+    }
+    return null;
+}
+
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    _ = arena;
     const id = req.id orelse return;
-    try server.sendResult(id, .{ .tools = &all_tools });
+    var enabled: std.ArrayList(McpTool) = try .initCapacity(arena, all_tools.len);
+    for (all_tools, 0..) |tool, i| {
+        if (server.enabled_tools.isSet(i)) enabled.appendAssumeCapacity(tool);
+    }
+    try server.sendResult(id, .{ .tools = enabled.items });
 }
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -177,6 +223,12 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     const call_params = browser_tools.parseValue(protocol.CallParams, arena, params) catch {
         return server.sendError(id, .InvalidParams, "Invalid params");
     };
+
+    if (indexOf(call_params.name)) |index| {
+        if (!server.enabled_tools.isSet(index)) {
+            return server.sendError(id, .MethodNotFound, "Tool not enabled: the server was started with --tools and this one is not in its list");
+        }
+    }
 
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
         const start = lp.datetime.milliTimestamp(.awake);
@@ -440,6 +492,53 @@ test "MCP - tool telemetry ids are distinct" {
         try testing.expect(!seen.isSet(@backingInt(t)));
         seen.set(@backingInt(t));
     }
+}
+
+test "MCP - --tools exposes only the tools it names" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+    );
+    try testing.expectEqual(all_tools.len, std.mem.count(u8, out.written(), "\"inputSchema\""));
+    out.clearRetainingCapacity();
+
+    server.enabled_tools = try parseEnabled("getUrl, session_list,goto");
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+    );
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .tools = &.{ .{ .name = "goto" }, .{ .name = "getUrl" }, .{ .name = "session_list" } },
+    } }, out.written());
+    try testing.expectEqual(3, std.mem.count(u8, out.written(), "\"inputSchema\""));
+    out.clearRetainingCapacity();
+
+    try router.handleMessage(server, testing.arena_allocator,
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getUrl","arguments":{}}}
+    );
+    try testing.expectJson(.{ .id = 3, .result = .{ .isError = false } }, out.written());
+    out.clearRetainingCapacity();
+
+    inline for (.{ "evaluate", "save" }) |name| {
+        try router.handleMessage(server, testing.arena_allocator, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"" ++ name ++ "\",\"arguments\":{\"script\":\"1\",\"path\":\"x.js\"}}}");
+        try testing.expectJson(.{ .id = 4, .@"error" = .{ .code = -32601 } }, out.written());
+        try testing.expect(std.mem.find(u8, out.written(), "--tools") != null);
+        out.clearRetainingCapacity();
+    }
+}
+
+test "MCP - --tools rejects a name that is not a tool" {
+    log.expectLog(&.{ .app, .app });
+    try testing.expectError(error.InvalidArgument, parseEnabled("goto,markdwon"));
+    try testing.expectError(error.InvalidArgument, parseEnabled(" ,"));
+
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try writeNames(&out.writer);
+    const listed = std.mem.trimEnd(u8, out.written(), "\n");
+    try testing.expectEqual(all_tools.len, (try parseEnabled(listed)).count());
 }
 
 test "MCP - tools/list carries titles and annotations" {

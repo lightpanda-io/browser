@@ -354,6 +354,16 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     target.* = .html;
 }
 
+const McpTools = lp.mcp.tools.Enabled;
+
+/// A repeated `--tools` adds to the list.
+fn toolsValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?McpTools) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    var enabled = try lp.mcp.tools.parseEnabled(str);
+    if (target.*) |earlier| enabled.setUnion(earlier);
+    target.* = enabled;
+}
+
 pub const AiProvider = std.meta.Tag(zenai.provider.Client);
 
 /// Per-turn reasoning budget for `agent` mode, mirroring Claude's effort
@@ -491,6 +501,8 @@ pub const Commands = cli.Builder(.{
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
             .{ .name = "http_session_timeout", .type = u32, .default = 0 },
+            .{ .name = "tools", .type = ?McpTools, .validator = toolsValidator, .choices = &lp.mcp.tools.tool_names },
+            .{ .name = "list_tools", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -1023,6 +1035,14 @@ pub fn httpSessionTimeout(self: *const Config) ?u64 {
     };
 }
 
+/// The tools the MCP server exposes: every one unless `--tools` named some.
+pub fn mcpTools(self: *const Config) McpTools {
+    return switch (self.mode) {
+        .mcp => |opts| opts.tools orelse .full,
+        else => .full,
+    };
+}
+
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_pending_connections,
@@ -1521,6 +1541,43 @@ test "Config: parseArgs --http-session-timeout" {
         const proc_args: std.process.Args = .{ .vector = &argv };
         const config = try parseArgs(arena.allocator(), proc_args);
         try std.testing.expectEqual(null, config.httpSessionTimeout());
+    }
+}
+
+test "Config: mcp --tools and --list-tools" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp" };
+        const config = try parseArgs(arena.allocator(), .{ .vector = &argv });
+        try std.testing.expectEqual(McpTools.full, config.mcpTools());
+        try std.testing.expectEqual(false, config.mode.mcp.list_tools);
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--tools", "goto,tree" };
+        const config = try parseArgs(arena.allocator(), .{ .vector = &argv });
+        try std.testing.expectEqual(try lp.mcp.tools.parseEnabled("tree,goto"), config.mcpTools());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--tools", "goto", "--tools", "tree,goto" };
+        const config = try parseArgs(arena.allocator(), .{ .vector = &argv });
+        try std.testing.expectEqual(try lp.mcp.tools.parseEnabled("goto,tree"), config.mcpTools());
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--tools", "goto,markdwon" };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(arena.allocator(), .{ .vector = &argv }));
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--list-tools" };
+        const config = try parseArgs(arena.allocator(), .{ .vector = &argv });
+        try std.testing.expectEqual(true, config.mode.mcp.list_tools);
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "mcp", "--tools" };
+        try std.testing.expectError(error.MissingArgument, parseArgs(arena.allocator(), .{ .vector = &argv }));
     }
 }
 

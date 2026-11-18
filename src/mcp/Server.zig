@@ -102,6 +102,8 @@ progress: u32 = 0,
 /// The tool call being dispatched; borrows its request arena.
 in_flight_id: ?RequestId = null,
 
+enabled_tools: tools.Enabled,
+
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
     return initSession(allocator, app, .lines(writer), default_session_id);
 }
@@ -134,6 +136,7 @@ pub fn initSession(allocator: std.mem.Allocator, app: *App, sink: ?Transport.Sin
         .active_session = entry,
         .session_id = id,
         .transport = .init(allocator, sink),
+        .enabled_tools = app.config.mcpTools(),
     };
 
     entry.session.cancel_hook = .{ .context = self, .check = cancelledCheck };
