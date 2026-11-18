@@ -499,7 +499,7 @@ pub const Commands = cli.Builder(.{
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "cdp_port", .type = ?u16 },
             .{ .name = "http_session_timeout", .type = u32, .default = 0 },
-            .{ .name = "tools", .type = ?McpTools, .validator = toolsValidator },
+            .{ .name = "tools", .type = ?McpTools, .validator = toolsValidator, .choices = &lp.mcp.tools.tool_names },
             .{ .name = "list_tools", .type = bool },
         },
         .shared_options = CommonOptions,

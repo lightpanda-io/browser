@@ -256,14 +256,14 @@
     \\          JSON-RPC to /mcp; route requests to a session with the
     \\          Mcp-Session-Id header.
     \\          Defaults to stdio (no HTTP server).
-    \\  --tools <LIST>
-    \\          Comma-separated names of the only tools to expose, e.g.
-    \\          --tools goto,tree,click. The others are neither listed nor
-    \\          callable, which keeps their definitions out of the client's
-    \\          context. It is not a sandbox: a listed tool keeps its full
-    \\          reach (run and waitForScript execute scripts, markdown takes
-    \\          a url), and resources are unaffected. Can be repeated. See
-    \\          --list-tools for the names.
+    \\  --tools <NAME>
+    \\          Expose only this tool. Can be passed multiple times, and each
+    \\          value can be a comma-separated list, e.g. --tools goto,tree,click.
+    \\          The others are neither listed nor callable, which keeps their
+    \\          definitions out of the client's context. It is not a sandbox:
+    \\          a listed tool keeps its full reach (run and waitForScript
+    \\          execute scripts, markdown takes a url), and resources are
+    \\          unaffected. See --list-tools for the names.
     \\          Defaults to every tool.
     ,
     .agent =

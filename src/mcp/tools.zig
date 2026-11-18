@@ -166,7 +166,7 @@ const ExtraTool = enum(u8) {
     run = 204,
 };
 
-const tool_names = blk: {
+pub const tool_names = blk: {
     var names: [all_tools.len][]const u8 = undefined;
     for (all_tools, 0..) |tool, i| names[i] = tool.name;
     break :blk names;

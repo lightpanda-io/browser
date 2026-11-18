@@ -95,6 +95,9 @@ const string = @import("string.zig");
 ///   - `path: bool` (optional) — the value is a file or directory path, so
 ///     shell completion offers files. Also allowed on a variant and on a
 ///     positional.
+///   - `choices: []const []const u8` (optional) — the names shell completion
+///     offers as a comma-separated list, for an option whose `validator`
+///     takes names its type doesn't carry.
 ///
 /// ## Supported types and their defaults
 ///
@@ -643,6 +646,7 @@ pub fn Builder(comptime commands: anytype) type {
         /// Takes an option or a positional.
         fn completionValues(comptime option: anytype) Completion.Values {
             if (@hasField(@TypeOf(option), "path") and option.path) return .path;
+            if (@hasField(@TypeOf(option), "choices")) return .{ .list_of = option.choices };
             const T = if (@typeInfo(@TypeOf(option.type)) == .@"struct") option.type.cli else option.type;
             const Child = switch (@typeInfo(T)) {
                 .optional => |optional| optional.child,
@@ -1035,6 +1039,7 @@ test "cli: completion_spec" {
                 .{ .name = "dump", .type = ?Format },
                 .{ .name = "strip_mode", .type = Strip, .default = Strip{} },
                 .{ .name = "attach", .short = 'a', .type = []const u8, .multiple = true },
+                .{ .name = "only", .type = ?std.StaticBitSet(2), .choices = &.{ "a", "b" } },
                 .{ .name = "wait_script", .type = ?[]const u8, .variants = .{.{ .name = "wait_script_file", .path = true }} },
             },
             .shared_options = shared,
@@ -1051,7 +1056,7 @@ test "cli: completion_spec" {
     try std.testing.expectEqualDeep(Completion.Values{ .one_of = &.{ "fetch", "version", "help" } }, spec[2].positional.?.values);
 
     const flags = spec[0].flags;
-    const names = [_][]const u8{ "--host", "--dump", "--strip-mode", "--attach", "--wait-script", "--wait-script-file", "--verbose" };
+    const names = [_][]const u8{ "--host", "--dump", "--strip-mode", "--attach", "--only", "--wait-script", "--wait-script-file", "--verbose" };
     try std.testing.expectEqual(names.len, flags.len);
     for (names, flags) |name, flag| try std.testing.expectEqualStrings(name, flag.name);
 
@@ -1059,7 +1064,9 @@ test "cli: completion_spec" {
     try std.testing.expectEqualDeep(Completion.Values{ .one_of = &.{ "html", "markdown" } }, flags[1].values);
     try std.testing.expectEqualDeep(Completion.Values{ .list_of = &.{ "js", "css" } }, flags[2].values);
     try std.testing.expectEqual('a', flags[3].short.?);
-    try std.testing.expectEqual(.any, flags[4].values);
-    try std.testing.expectEqual(.path, flags[5].values);
-    try std.testing.expectEqual(.none, flags[6].values);
+    // A packed struct's own field names aren't offered once `choices` is set.
+    try std.testing.expectEqualDeep(Completion.Values{ .list_of = &.{ "a", "b" } }, flags[4].values);
+    try std.testing.expectEqual(.any, flags[5].values);
+    try std.testing.expectEqual(.path, flags[6].values);
+    try std.testing.expectEqual(.none, flags[7].values);
 }
