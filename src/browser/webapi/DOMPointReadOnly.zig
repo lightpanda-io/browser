@@ -134,19 +134,6 @@ fn matrixTransform(self: *const DOMPointReadOnly, matrix_: ?Matrix.DOMMatrixInit
     );
 }
 
-pub fn getX(self: *const DOMPointReadOnly) f64 {
-    return self._x;
-}
-pub fn getY(self: *const DOMPointReadOnly) f64 {
-    return self._y;
-}
-fn getZ(self: *const DOMPointReadOnly) f64 {
-    return self._z;
-}
-fn getW(self: *const DOMPointReadOnly) f64 {
-    return self._w;
-}
-
 pub fn setCoordinate(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64) !void {
     if (self._read_only) return error.NoModificationAllowed;
     if (self._restricted and !std.math.isFinite(value)) return error.TypeError;
@@ -207,10 +194,10 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(DOMPointReadOnly.init, .{});
     pub const fromPoint = bridge.function(DOMPointReadOnly.fromPoint, .{ .static = true });
-    pub const x = bridge.fastAccessor(DOMPointReadOnly.getX, null, .{ .getter = .unsafe });
-    pub const y = bridge.fastAccessor(DOMPointReadOnly.getY, null, .{ .getter = .unsafe });
-    pub const z = bridge.fastAccessor(DOMPointReadOnly.getZ, null, .{ .getter = .unsafe });
-    pub const w = bridge.fastAccessor(DOMPointReadOnly.getW, null, .{ .getter = .unsafe });
+    pub const x = bridge.accessor("_x", null, .{});
+    pub const y = bridge.accessor("_y", null, .{});
+    pub const z = bridge.accessor("_z", null, .{});
+    pub const w = bridge.accessor("_w", null, .{});
 
     pub const matrixTransform = bridge.function(DOMPointReadOnly.matrixTransform, .{});
     pub const toJSON = bridge.function(DOMPointReadOnly.toJSON, .{});

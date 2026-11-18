@@ -88,22 +88,6 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*DOMRec
     return createBare(try readData(reader), &page.factory);
 }
 
-pub fn getX(self: *const DOMRectReadOnly) f64 {
-    return self._x;
-}
-
-pub fn getY(self: *const DOMRectReadOnly) f64 {
-    return self._y;
-}
-
-pub fn getWidth(self: *const DOMRectReadOnly) f64 {
-    return self._width;
-}
-
-pub fn getHeight(self: *const DOMRectReadOnly) f64 {
-    return self._height;
-}
-
 pub fn getTop(self: *const DOMRectReadOnly) f64 {
     return @min(self._y, self._y + self._height);
 }
@@ -153,14 +137,14 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(DOMRectReadOnly.init, .{});
     pub const fromRect = bridge.function(DOMRectReadOnly.fromRect, .{ .static = true });
 
-    pub const x = bridge.fastAccessor(DOMRectReadOnly.getX, null, .{ .getter = .unsafe });
-    pub const y = bridge.fastAccessor(DOMRectReadOnly.getY, null, .{ .getter = .unsafe });
-    pub const width = bridge.fastAccessor(DOMRectReadOnly.getWidth, null, .{ .getter = .unsafe });
-    pub const height = bridge.fastAccessor(DOMRectReadOnly.getHeight, null, .{ .getter = .unsafe });
-    pub const top = bridge.fastAccessor(DOMRectReadOnly.getTop, null, .{ .getter = .unsafe });
-    pub const right = bridge.fastAccessor(DOMRectReadOnly.getRight, null, .{ .getter = .unsafe });
-    pub const bottom = bridge.fastAccessor(DOMRectReadOnly.getBottom, null, .{ .getter = .unsafe });
-    pub const left = bridge.fastAccessor(DOMRectReadOnly.getLeft, null, .{ .getter = .unsafe });
+    pub const x = bridge.accessor("_x", null, .{});
+    pub const y = bridge.accessor("_y", null, .{});
+    pub const width = bridge.accessor("_width", null, .{});
+    pub const height = bridge.accessor("_height", null, .{});
+    pub const top = bridge.accessor(DOMRectReadOnly.getTop, null, .{});
+    pub const right = bridge.accessor(DOMRectReadOnly.getRight, null, .{});
+    pub const bottom = bridge.accessor(DOMRectReadOnly.getBottom, null, .{});
+    pub const left = bridge.accessor(DOMRectReadOnly.getLeft, null, .{});
 
     pub const toJSON = bridge.function(DOMRectReadOnly.toJSON, .{});
 };

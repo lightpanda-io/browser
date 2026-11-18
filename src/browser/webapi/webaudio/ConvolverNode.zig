@@ -107,10 +107,6 @@ fn setBuffer(self: *ConvolverNode, buffer_: ?*AudioBuffer) !void {
     self._buffer = buffer;
 }
 
-fn getNormalize(self: *const ConvolverNode) bool {
-    return self._normalize;
-}
-
 fn setNormalize(self: *ConvolverNode, normalize: bool) void {
     self._normalize = normalize;
 }
@@ -137,6 +133,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(ConvolverNode.constructor, .{});
-    pub const buffer = bridge.fastAccessor(ConvolverNode.getBuffer, ConvolverNode.setBuffer, .{ .setter = .safe });
-    pub const normalize = bridge.fastAccessor(ConvolverNode.getNormalize, ConvolverNode.setNormalize, .{ .getter = .unsafe, .setter = .unsafe });
+    pub const buffer = bridge.accessor(ConvolverNode.getBuffer, ConvolverNode.setBuffer, .{});
+    pub const normalize = bridge.accessor("_normalize", ConvolverNode.setNormalize, .{});
 };

@@ -301,10 +301,6 @@ fn getKeyPath(self: *IDBObjectStore, exec: *Execution) !js.Value {
     return idb.cachedKeyPathJs(&self._key_path_js, self._txn, self._key_path, exec);
 }
 
-fn getAutoIncrement(self: *const IDBObjectStore) bool {
-    return self._auto_increment;
-}
-
 fn getTransaction(self: *IDBObjectStore) *IDBTransaction {
     return self._txn;
 }
@@ -666,7 +662,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(IDBObjectStore.getName, IDBObjectStore.setName, .{});
     pub const keyPath = bridge.accessor(IDBObjectStore.getKeyPath, null, .{});
-    pub const autoIncrement = bridge.fastAccessor(IDBObjectStore.getAutoIncrement, null, .{ .getter = .unsafe });
+    pub const autoIncrement = bridge.accessor("_auto_increment", null, .{});
     pub const transaction = bridge.accessor(IDBObjectStore.getTransaction, null, .{ .null_as_undefined = true });
     pub const add = bridge.function(IDBObjectStore.add, .{});
     pub const put = bridge.function(IDBObjectStore.put, .{});

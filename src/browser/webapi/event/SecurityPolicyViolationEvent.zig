@@ -153,14 +153,6 @@ fn getStatusCode(self: *const SecurityPolicyViolationEvent) u16 {
     return self._status_code;
 }
 
-fn getLineNumber(self: *const SecurityPolicyViolationEvent) u32 {
-    return self._line_number;
-}
-
-fn getColumnNumber(self: *const SecurityPolicyViolationEvent) u32 {
-    return self._column_number;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(SecurityPolicyViolationEvent);
 
@@ -180,8 +172,8 @@ pub const JsApi = struct {
     pub const sample = bridge.accessor(SecurityPolicyViolationEvent.getSample, null, .{});
     pub const disposition = bridge.accessor(SecurityPolicyViolationEvent.getDisposition, null, .{});
     pub const statusCode = bridge.accessor(SecurityPolicyViolationEvent.getStatusCode, null, .{});
-    pub const lineNumber = bridge.fastAccessor(SecurityPolicyViolationEvent.getLineNumber, null, .{ .getter = .unsafe });
-    pub const columnNumber = bridge.fastAccessor(SecurityPolicyViolationEvent.getColumnNumber, null, .{ .getter = .unsafe });
+    pub const lineNumber = bridge.accessor("_line_number", null, .{});
+    pub const columnNumber = bridge.accessor("_column_number", null, .{});
 };
 
 const testing = @import("../../../testing.zig");

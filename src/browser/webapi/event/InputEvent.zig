@@ -139,10 +139,6 @@ fn getInputType(self: *const InputEvent) []const u8 {
     return self._input_type;
 }
 
-fn getIsComposing(self: *const InputEvent) bool {
-    return self._is_composing;
-}
-
 fn getTargetRanges(self: *InputEvent, frame: *Frame) ![]const *StaticRange {
     const event = self.asEvent();
     if (event._dispatch_target != null and event._event_phase == .none) {
@@ -197,7 +193,7 @@ pub const JsApi = struct {
     pub const data = bridge.accessor(InputEvent.getData, null, .{});
     pub const dataTransfer = bridge.accessor(InputEvent.getDataTransfer, null, .{});
     pub const inputType = bridge.accessor(InputEvent.getInputType, null, .{});
-    pub const isComposing = bridge.fastAccessor(InputEvent.getIsComposing, null, .{ .getter = .unsafe });
+    pub const isComposing = bridge.accessor("_is_composing", null, .{});
     pub const getTargetRanges = bridge.function(InputEvent.getTargetRanges, .{});
 };
 

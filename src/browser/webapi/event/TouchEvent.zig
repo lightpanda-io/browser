@@ -169,22 +169,6 @@ fn getChangedTouches(self: *TouchEvent) !*TouchList {
     return self.touchList(self._changed_touches, &self._changed_list);
 }
 
-pub fn getAltKey(self: *const TouchEvent) bool {
-    return self._alt_key;
-}
-
-pub fn getMetaKey(self: *const TouchEvent) bool {
-    return self._meta_key;
-}
-
-pub fn getCtrlKey(self: *const TouchEvent) bool {
-    return self._ctrl_key;
-}
-
-pub fn getShiftKey(self: *const TouchEvent) bool {
-    return self._shift_key;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TouchEvent);
 
@@ -197,10 +181,10 @@ pub const JsApi = struct {
     pub const touches = bridge.accessor(TouchEvent.getTouches, null, .{});
     pub const targetTouches = bridge.accessor(TouchEvent.getTargetTouches, null, .{});
     pub const changedTouches = bridge.accessor(TouchEvent.getChangedTouches, null, .{});
-    pub const altKey = bridge.fastAccessor(TouchEvent.getAltKey, null, .{ .getter = .unsafe });
-    pub const metaKey = bridge.fastAccessor(TouchEvent.getMetaKey, null, .{ .getter = .unsafe });
-    pub const ctrlKey = bridge.fastAccessor(TouchEvent.getCtrlKey, null, .{ .getter = .unsafe });
-    pub const shiftKey = bridge.fastAccessor(TouchEvent.getShiftKey, null, .{ .getter = .unsafe });
+    pub const altKey = bridge.accessor("_alt_key", null, .{});
+    pub const metaKey = bridge.accessor("_meta_key", null, .{});
+    pub const ctrlKey = bridge.accessor("_ctrl_key", null, .{});
+    pub const shiftKey = bridge.accessor("_shift_key", null, .{});
 };
 
 const testing = @import("../../../testing.zig");

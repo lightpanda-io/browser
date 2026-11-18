@@ -52,18 +52,6 @@ pub fn releaseRef(self: *TextMetrics, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getWidth(self: *const TextMetrics) f64 {
-    return self._width;
-}
-
-fn getAscent(self: *const TextMetrics) f64 {
-    return self._ascent;
-}
-
-fn getDescent(self: *const TextMetrics) f64 {
-    return self._descent;
-}
-
 fn getIdeographicBaseline(self: *const TextMetrics) f64 {
     return -self._descent;
 }
@@ -76,16 +64,16 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.fastAccessor(TextMetrics.getWidth, null, .{ .getter = .unsafe });
+    pub const width = bridge.accessor("_width", null, .{});
     pub const actualBoundingBoxLeft = bridge.property(0.0, .{ .template = false });
-    pub const actualBoundingBoxRight = bridge.fastAccessor(TextMetrics.getWidth, null, .{ .getter = .unsafe });
-    pub const actualBoundingBoxAscent = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
-    pub const actualBoundingBoxDescent = bridge.fastAccessor(TextMetrics.getDescent, null, .{ .getter = .unsafe });
-    pub const fontBoundingBoxAscent = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
-    pub const fontBoundingBoxDescent = bridge.fastAccessor(TextMetrics.getDescent, null, .{ .getter = .unsafe });
-    pub const emHeightAscent = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
-    pub const emHeightDescent = bridge.fastAccessor(TextMetrics.getDescent, null, .{ .getter = .unsafe });
-    pub const hangingBaseline = bridge.fastAccessor(TextMetrics.getAscent, null, .{ .getter = .unsafe });
+    pub const actualBoundingBoxRight = bridge.accessor("_width", null, .{});
+    pub const actualBoundingBoxAscent = bridge.accessor("_ascent", null, .{});
+    pub const actualBoundingBoxDescent = bridge.accessor("_descent", null, .{});
+    pub const fontBoundingBoxAscent = bridge.accessor("_ascent", null, .{});
+    pub const fontBoundingBoxDescent = bridge.accessor("_descent", null, .{});
+    pub const emHeightAscent = bridge.accessor("_ascent", null, .{});
+    pub const emHeightDescent = bridge.accessor("_descent", null, .{});
+    pub const hangingBaseline = bridge.accessor("_ascent", null, .{});
     pub const alphabeticBaseline = bridge.property(0.0, .{ .template = false });
-    pub const ideographicBaseline = bridge.fastAccessor(TextMetrics.getIdeographicBaseline, null, .{ .getter = .unsafe });
+    pub const ideographicBaseline = bridge.accessor(TextMetrics.getIdeographicBaseline, null, .{});
 };

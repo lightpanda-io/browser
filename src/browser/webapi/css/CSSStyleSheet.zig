@@ -108,10 +108,6 @@ pub fn getTitle(self: *const CSSStyleSheet) []const u8 {
     return self._title;
 }
 
-fn getDisabled(self: *const CSSStyleSheet) bool {
-    return self._disabled;
-}
-
 pub fn setDisabled(self: *CSSStyleSheet, disabled: bool, frame: *Frame) void {
     if (self._disabled == disabled) {
         return;
@@ -448,11 +444,11 @@ pub const JsApi = struct {
     pub const ownerNode = bridge.accessor(CSSStyleSheet.getOwnerNode, null, .{ .null_as_undefined = true });
     pub const href = bridge.accessor(CSSStyleSheet.getHref, null, .{ .null_as_undefined = true });
     pub const title = bridge.accessor(CSSStyleSheet.getTitle, null, .{});
-    pub const disabled = bridge.fastAccessor(CSSStyleSheet.getDisabled, CSSStyleSheet.setDisabled, .{ .getter = .unsafe, .setter = .safe });
+    pub const disabled = bridge.accessor("_disabled", CSSStyleSheet.setDisabled, .{});
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
     pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
     pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});
-    pub const deleteRule = bridge.fastFunction(CSSStyleSheet.deleteRule, .{});
+    pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{});
     pub const replace = bridge.function(CSSStyleSheet.replace, .{});
     pub const replaceSync = bridge.function(CSSStyleSheet.replaceSync, .{});
 };

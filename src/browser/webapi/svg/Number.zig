@@ -49,10 +49,6 @@ pub fn releaseRef(self: *Number, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getValue(self: *const Number) f32 {
-    return self._value;
-}
-
 pub fn setValue(self: *Number, value: f32) !void {
     // WebIDL float is restricted, and the bridge does not police that for us.
     if (!std.math.isFinite(value)) {
@@ -69,5 +65,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.fastAccessor(Number.getValue, Number.setValue, .{ .getter = .unsafe, .setter = .safe });
+    pub const value = bridge.accessor("_value", Number.setValue, .{});
 };

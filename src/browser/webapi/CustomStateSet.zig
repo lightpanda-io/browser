@@ -45,10 +45,6 @@ fn has(self: *const CustomStateSet, value: String) bool {
     return self.indexOf(value) != null;
 }
 
-fn getSize(self: *const CustomStateSet) u32 {
-    return self._size;
-}
-
 fn add(self: *CustomStateSet, value: String, frame: *Frame) !*CustomStateSet {
     if (self.indexOf(value) != null) {
         return self;
@@ -163,11 +159,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const size = bridge.fastAccessor(CustomStateSet.getSize, null, .{ .getter = .unsafe });
+    pub const size = bridge.accessor("_size", null, .{});
     pub const has = bridge.function(CustomStateSet.has, .{});
     pub const add = bridge.function(CustomStateSet.add, .{});
     pub const delete = bridge.function(CustomStateSet.delete, .{});
-    pub const clear = bridge.fastFunction(CustomStateSet.clear, .{});
+    pub const clear = bridge.function(CustomStateSet.clear, .{});
     pub const keys = bridge.function(CustomStateSet.values, .{});
     pub const values = bridge.function(CustomStateSet.values, .{});
     pub const entries = bridge.function(CustomStateSet.entries, .{});

@@ -90,14 +90,6 @@ pub fn acquireRef(self: *TextDecoder) void {
     self._rc.acquire();
 }
 
-fn getIgnoreBOM(self: *const TextDecoder) bool {
-    return self._ignore_bom;
-}
-
-fn getFatal(self: *const TextDecoder) bool {
-    return self._fatal;
-}
-
 fn getEncoding(self: *TextDecoder) ![]const u8 {
     // Spec requires lowercase encoding name
     // Allocate buffer for lowercase name on first access
@@ -234,8 +226,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(TextDecoder.init, .{});
     pub const decode = bridge.function(TextDecoder.decode, .{});
     pub const encoding = bridge.accessor(TextDecoder.getEncoding, null, .{});
-    pub const fatal = bridge.fastAccessor(TextDecoder.getFatal, null, .{ .getter = .unsafe });
-    pub const ignoreBOM = bridge.fastAccessor(TextDecoder.getIgnoreBOM, null, .{ .getter = .unsafe });
+    pub const fatal = bridge.accessor("_fatal", null, .{});
+    pub const ignoreBOM = bridge.accessor("_ignore_bom", null, .{});
 };
 
 const testing = @import("../../../testing.zig");

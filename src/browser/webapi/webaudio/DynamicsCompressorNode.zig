@@ -115,10 +115,6 @@ fn getRelease(self: *const DynamicsCompressorNode) *AudioParam {
     return self._release;
 }
 
-fn getReduction(self: *const DynamicsCompressorNode) f32 {
-    return self._reduction;
-}
-
 // The kernel runs two channels whatever the input, as Chrome's does.
 pub fn process(self: *DynamicsCompressorNode, r: *render.Quantum, input: *const Bus, output: *Bus) !void {
     const params: Compressor.Params = .{
@@ -153,5 +149,5 @@ pub const JsApi = struct {
     pub const ratio = bridge.accessor(DynamicsCompressorNode.getRatio, null, .{});
     pub const attack = bridge.accessor(DynamicsCompressorNode.getAttack, null, .{});
     pub const release = bridge.accessor(DynamicsCompressorNode.getRelease, null, .{});
-    pub const reduction = bridge.fastAccessor(DynamicsCompressorNode.getReduction, null, .{ .getter = .unsafe });
+    pub const reduction = bridge.accessor("_reduction", null, .{});
 };

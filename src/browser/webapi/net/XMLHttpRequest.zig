@@ -202,19 +202,11 @@ pub fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
 
-fn getWithCredentials(self: *const XMLHttpRequest) bool {
-    return self._with_credentials;
-}
-
 fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
     if (self._ready_state != .unsent and self._ready_state != .opened) {
         return error.InvalidStateError;
     }
     self._with_credentials = value;
-}
-
-fn getTimeout(self: *const XMLHttpRequest) u32 {
-    return self._timeout;
 }
 
 pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !void {
@@ -989,14 +981,14 @@ pub const JsApi = struct {
 
     pub const onreadystatechange = EventTarget.handlerAccessor(XMLHttpRequest, "readystatechange");
     pub const upload = bridge.accessor(XMLHttpRequest.getUpload, null, .{});
-    pub const timeout = bridge.fastAccessor(XMLHttpRequest.getTimeout, XMLHttpRequest.setTimeout, .{ .getter = .unsafe, .setter = .safe });
-    pub const withCredentials = bridge.fastAccessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{ .getter = .unsafe, .setter = .safe });
+    pub const timeout = bridge.accessor("_timeout", XMLHttpRequest.setTimeout, .{});
+    pub const withCredentials = bridge.accessor("_with_credentials", XMLHttpRequest.setWithCredentials, .{});
     pub const open = bridge.function(XMLHttpRequest.open, .{});
     pub const send = bridge.function(XMLHttpRequest.send, .{});
     pub const responseType = bridge.accessor(XMLHttpRequest.getResponseType, XMLHttpRequest.setResponseType, .{});
     pub const status = bridge.accessor(XMLHttpRequest.getStatus, null, .{});
     pub const statusText = bridge.accessor(XMLHttpRequest.getStatusText, null, .{});
-    pub const readyState = bridge.fastAccessor(XMLHttpRequest.getReadyState, null, .{ .getter = .unsafe });
+    pub const readyState = bridge.accessor(XMLHttpRequest.getReadyState, null, .{});
     pub const response = bridge.accessor(XMLHttpRequest.getResponse, null, .{});
     pub const responseText = bridge.accessor(XMLHttpRequest.getResponseText, null, .{});
     pub const responseXML = bridge.accessor(XMLHttpRequest.getResponseXML, null, .{});
@@ -1005,7 +997,7 @@ pub const JsApi = struct {
     pub const overrideMimeType = bridge.function(XMLHttpRequest.overrideMimeType, .{});
     pub const getResponseHeader = bridge.function(XMLHttpRequest.getResponseHeader, .{});
     pub const getAllResponseHeaders = bridge.function(XMLHttpRequest.getAllResponseHeaders, .{});
-    pub const abort = bridge.fastFunction(XMLHttpRequest.abort, .{});
+    pub const abort = bridge.function(XMLHttpRequest.abort, .{});
 };
 
 const testing = @import("../../../testing.zig");
