@@ -25,6 +25,7 @@ const text_measure = @import("text_measure.zig");
 
 const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
+const Tokenizer = @import("css/Tokenizer.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Animation = @import("css/Animation.zig");
 const properties = @import("css/properties.zig");
@@ -2004,7 +2005,7 @@ fn memoizedHeightDeclared(self: *StyleManager, el: *Element) bool {
         return false;
     }
     const stored = group.memo.get(el) orelse return false;
-    return @TypeOf(group.*).load(stored).height.resolve(self.frame.page.getViewport()) != null;
+    return @TypeOf(group.*).load(stored).height.resolves();
 }
 
 // Whether `child` entering or leaving between `previous` and `next` can
@@ -2952,19 +2953,19 @@ pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Ax
     self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
     const length = @field(self.geometryProps(el), @tagName(axis));
-    return length.resolve(self.frame.page.getViewport());
+    return @max(0, length.resolve(self, el) orelse return null);
 }
 
 /// Like declaredSize, but only the inline style counts.
 pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
     self.assertOwns(el);
     const length = @field(inlineDeclared(Geometry.Declared, el, self.frame).props(.any), @tagName(axis)) orelse return null;
-    return length.resolve(self.frame.page.getViewport());
+    return @max(0, length.resolve(self, el) orelse return null);
 }
 
 pub const WidthSizing = union(enum) {
     fixed: f64, // A resolved length
-    percent: f64, // A fraction of the containing block
+    percent: Percent, // Of the containing block
     fill, // The containing block's width
     grow, // A flex item that grows
     shrink, // Shrink-to-fit its content
@@ -2981,11 +2982,14 @@ pub fn widthSizing(self: *StyleManager, el: *Element) WidthSizing {
     }
 
     const width = self.geometryProps(el).width;
-    switch (width.unit) {
-        .px, .vw, .vh => return .{ .fixed = width.resolve(self.frame.page.getViewport()).? },
-        .percent => return .{ .percent = @as(f64, width.value) / 100.0 },
-        .content => return .shrink,
-        .auto => {},
+    if (width.percentage()) |percent| {
+        return .{ .percent = percent };
+    }
+    if (width.resolve(self, el)) |px| {
+        return .{ .fixed = @max(0, px) };
+    }
+    if (width.unit == .content) {
+        return .shrink;
     }
     const flow = self.flowProps(el);
     if (flow.position.outOfFlow()) {
@@ -3043,7 +3047,7 @@ pub fn inlineMargins(self: *StyleManager, el: *Element, containing_width: ?f64) 
     self.assertOwns(el);
     self.rebuildIfDirty() catch return 0;
     const geometry = self.geometryProps(el);
-    return self.inlineSum(geometry.margin_left, geometry.margin_right, containing_width);
+    return self.inlineSum(el, geometry.margin_left, geometry.margin_right, containing_width);
 }
 
 /// The left and right offsets of a positioned box, 0 for one in flow. A
@@ -3055,20 +3059,17 @@ pub fn inlineInsets(self: *StyleManager, el: *Element, containing_width: f64) f6
         return 0;
     }
     const geometry = self.geometryProps(el);
-    return self.inlineSum(geometry.left, geometry.right, containing_width);
+    return self.inlineSum(el, geometry.left, geometry.right, containing_width);
 }
 
 // A left and right length together, in px. A percentage resolves against
 // the containing block's width (0 when it isn't known); auto and values
 // that need layout are 0.
-fn inlineSum(self: *StyleManager, left: Length, right: Length, containing_width: ?f64) f64 {
-    const viewport = self.frame.page.getViewport();
+fn inlineSum(self: *StyleManager, el: *Element, left: Length, right: Length, containing_width: ?f64) f64 {
     var total: f64 = 0;
     for ([_]Length{ left, right }) |length| {
-        total += length.resolve(viewport) orelse switch (length.unit) {
-            .percent => if (containing_width) |width| @as(f64, length.value) / 100.0 * width else 0,
-            else => 0,
-        };
+        total += length.resolve(self, el) orelse
+            if (length.percentage()) |percent| (if (containing_width) |width| percent.of(width) else 0) else 0;
     }
     return total;
 }
@@ -3393,34 +3394,34 @@ pub fn clipsOverflowX(self: *StyleManager, el: *Element) bool {
 /// A length that may depend on the containing block's size.
 pub const BoxLength = union(enum) {
     px: f64,
-    percent: f64, // A fraction of the containing block
+    percent: Percent, // Of the containing block
 };
 
 pub const Side = enum { top, right, bottom, left };
 
-/// A positioned box's inset on one side. Null for auto, and for values that
-/// need layout (em, calc).
-pub fn inset(self: *StyleManager, el: *Element, comptime side: Side) ?BoxLength {
+/// A positioned box's insets on one axis's two sides (top and bottom, or
+/// left and right). Null for auto, and for values that need layout.
+pub fn insets(self: *StyleManager, el: *Element, comptime start: Side, comptime end: Side) [2]?BoxLength {
     self.assertOwns(el);
-    self.rebuildIfDirty() catch return null;
-    return self.widthLimit(@field(self.geometryProps(el), @tagName(side)));
+    self.rebuildIfDirty() catch return .{ null, null };
+    const geometry = self.geometryProps(el);
+    return .{ self.widthLimit(el, @field(geometry, @tagName(start))), self.widthLimit(el, @field(geometry, @tagName(end))) };
 }
 
 /// min-width and max-width. Null where they don't limit: auto, none, the
-/// intrinsic keywords, and values that need layout (em, calc).
+/// intrinsic keywords, and values that need layout.
 pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?BoxLength, max: ?BoxLength } {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{ .min = null, .max = null };
     const geometry = self.geometryProps(el);
-    return .{ .min = self.widthLimit(geometry.min_width), .max = self.widthLimit(geometry.max_width) };
+    return .{ .min = self.widthLimit(el, geometry.min_width), .max = self.widthLimit(el, geometry.max_width) };
 }
 
-fn widthLimit(self: *StyleManager, length: Length) ?BoxLength {
-    return switch (length.unit) {
-        .auto, .content => null,
-        .percent => .{ .percent = @as(f64, length.value) / 100.0 },
-        .px, .vw, .vh => .{ .px = length.resolve(self.frame.page.getViewport()).? },
-    };
+fn widthLimit(self: *StyleManager, el: *Element, length: Length) ?BoxLength {
+    if (length.percentage()) |percent| {
+        return .{ .percent = percent };
+    }
+    return .{ .px = length.resolve(self, el) orelse return null };
 }
 
 // row_shrink is a flex row's shrink ratio, not a width. Offsets aren't a
@@ -4953,39 +4954,43 @@ fn isInheritKeyword(value: []const u8) bool {
     return inheritsKeyword(value) or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer");
 }
 
-/// A declared width or height. Values that need layout (auto, em, calc) are
-/// `auto`: they win the cascade but give no size. The intrinsic sizes, which
-/// follow the content, are `content`. A `percent` resolves against the
-/// containing block, which only the width axis knows.
-pub const Length = packed struct(u35) {
+/// A declared width or height. Values that need layout (auto, a calc() we
+/// can't reduce) are `auto`: they win the cascade but give no size. The
+/// intrinsic sizes, which follow the content, are `content`. A `percent`
+/// resolves against the containing block, which only the width axis knows.
+pub const Length = packed struct(u36) {
     value: f32 = 0,
     unit: Unit = .auto,
 
-    const Unit = enum(u3) { auto, content, px, vw, vh, percent };
+    // for space-saving, calc() is reduced to one relative term and a px term,
+    // allowing us to store both directly.
+    const Unit = enum(u4) { auto, content, px, vw, vh, percent, em, rem, calc_percent, calc_vw, calc_vh, calc_em, calc_rem };
 
     fn parse(text: []const u8) Length {
         if (isIntrinsic(text)) {
             return .{ .unit = .content };
         }
+        if (Calc.isCalc(text)) {
+            return Calc.parse(text);
+        }
         const parsed = units.parse(text) catch return .{};
         if (parsed.value < 0) {
             return .{};
         }
-        return switch (parsed.unit) {
-            inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
-            .percentage => .{ .value = @floatCast(parsed.value), .unit = .percent },
-            else => .{
-                .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
-                .unit = .px,
-            },
-        };
+        return fromParsed(parsed);
     }
 
     // A margin may be negative and has no intrinsic sizes; auto is 0.
     fn parseMargin(text: []const u8) Length {
-        const parsed = units.parse(text) catch return .{};
+        if (Calc.isCalc(text)) {
+            return Calc.parse(text);
+        }
+        return fromParsed(units.parse(text) catch return .{});
+    }
+
+    fn fromParsed(parsed: units.Parsed) Length {
         return switch (parsed.unit) {
-            inline .vw, .vh => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
+            inline .vw, .vh, .em, .rem => |unit| .{ .value = @floatCast(parsed.value), .unit = @field(Unit, @tagName(unit)) },
             .percentage => .{ .value = @floatCast(parsed.value), .unit = .percent },
             else => .{
                 .value = @floatCast(parsed.value * (units.absoluteLengthFactor(parsed.unit) orelse return .{})),
@@ -5003,14 +5008,294 @@ pub const Length = packed struct(u35) {
         return std.ascii.startsWithIgnoreCase(text, "fit-content(");
     }
 
-    fn resolve(self: Length, viewport: Viewport) ?f64 {
-        const value: f64 = self.value;
+    // Whether resolve() gives a value
+    fn resolves(self: Length) bool {
         return switch (self.unit) {
-            .auto, .content, .percent => null,
-            .px => value,
-            .vw, .vh => value * @as(f64, @floatFromInt(if (self.unit == .vw) viewport.width else viewport.height)) / 100.0,
+            .auto, .content, .percent, .calc_percent => false,
+            else => true,
         };
     }
+
+    // In px; null for what doesn't resolve on its own (auto, the intrinsic
+    // sizes, a percentage).
+    fn resolve(self: Length, style_manager: *StyleManager, el: *Element) ?f64 {
+        return switch (self.unit) {
+            .auto, .content, .percent, .calc_percent => null,
+            .px => self.value,
+            else => self.resolveRelative(style_manager, el),
+        };
+    }
+
+    /// If this gets inlined, then resolve() becomes too big to inline into
+    /// its callers, and that costs us more performance (hit testing went +3%
+    /// instructions)
+    noinline fn resolveRelative(self: Length, style_manager: *StyleManager, el: *Element) f64 {
+        return switch (self.unit) {
+            .vw, .vh, .em, .rem => self.value * unitSize(self.unit, style_manager, el),
+            .calc_vw, .calc_vh, .calc_em, .calc_rem => {
+                const terms = Calc.unpack(self.value);
+                return terms.px + terms.coefficient * unitSize(self.unit, style_manager, el);
+            },
+            else => unreachable,
+        };
+    }
+
+    // A percentage, as a fraction of the containing block plus px.
+    fn percentage(self: Length) ?Percent {
+        return switch (self.unit) {
+            .percent => .{ .fraction = @as(f64, self.value) / 100.0 },
+            .calc_percent => {
+                const terms = Calc.unpack(self.value);
+                return .{ .fraction = terms.coefficient / 100.0, .px = terms.px };
+            },
+            else => null,
+        };
+    }
+
+    // The px in one of a relative unit
+    fn unitSize(unit: Unit, style_manager: *StyleManager, el: *Element) f64 {
+        return switch (unit) {
+            .vw, .vh, .calc_vw, .calc_vh => {
+                const viewport = style_manager.frame.page.getViewport();
+                return @as(f64, @floatFromInt(if (unit == .vw or unit == .calc_vw) viewport.width else viewport.height)) / 100.0;
+            },
+            .em, .calc_em => style_manager.computedFontSize(el),
+            .rem, .calc_rem => style_manager.computedFontSize(style_manager.frame.document.getDocumentElement()),
+            else => unreachable,
+        };
+    }
+};
+
+/// A percentage of the containing block, plus a px offset (calc(100% - 2rem)).
+pub const Percent = struct {
+    fraction: f64,
+    px: f64 = 0,
+
+    pub fn of(self: Percent, base: f64) f64 {
+        return self.fraction * base + self.px;
+    }
+};
+
+/// calc() reduced to a sum of terms, one per unit. A Length holds px
+/// and at most one relative term (%, vw, vh, em, rem), each an f16 in the
+/// value's bits. This is the only way I could make it fit, without growing
+/// the type or storing it in a separate lookup. It means a calc(100% - 2rem)
+/// stores the rem as pixels (DEFAULT_FONT_SIZE); a rem that's the only
+/// relative term is kept. Not a huge deal given that we only track inline
+/// font-sizes for now.
+const Calc = struct {
+    // Indexed by Term
+    terms: [6]f64 = @splat(0),
+    // A <number> (in px's slot), not a length: what * and / scale by
+    number: bool = false,
+
+    const Term = enum { px, percent, vw, vh, em, rem };
+
+    // The value's bits: two f16s. Both finite, the f32 is too (its exponent
+    // is in the high f16's), so it's never a NaN to compare.
+    const Packed = packed struct(u32) { px: f16, coefficient: f16 };
+
+    fn isCalc(text: []const u8) bool {
+        return std.ascii.startsWithIgnoreCase(text, "calc(");
+    }
+
+    fn parse(text: []const u8) Length {
+        var parser: Parser = .{ .tokenizer = .{ .input = text } };
+        const calc = parser.calc() orelse return .{};
+        if (parser.nextToken() != null) {
+            return .{};
+        }
+        return calc.toLength();
+    }
+
+    fn toLength(self: Calc) Length {
+        if (self.number) {
+            return .{};
+        }
+        var relative: ?Term = null;
+        var px = self.terms[@backingInt(Term.px)];
+        for (self.terms[1..], 1..) |coefficient, i| {
+            if (coefficient == 0) continue;
+            const term: Term = @fromBackingInt(@intCast(i));
+            if (relative == null) {
+                relative = term;
+                continue;
+            }
+            // rem is last: next to another relative term, it's px
+            if (term != .rem) {
+                return .{};
+            }
+            px += coefficient * DEFAULT_FONT_SIZE;
+        }
+        const term = relative orelse return .{ .value = @floatCast(px), .unit = .px };
+        const coefficient = self.terms[@backingInt(term)];
+        if (px == 0) {
+            return .{ .value = @floatCast(coefficient), .unit = switch (term) {
+                .px => unreachable,
+                .percent => .percent,
+                inline else => |t| @field(Length.Unit, @tagName(t)),
+            } };
+        }
+        const pair: Packed = .{ .px = @floatCast(px), .coefficient = truncate(coefficient) };
+        if (std.math.isFinite(pair.px) == false or std.math.isFinite(pair.coefficient) == false) {
+            return .{};
+        }
+        return .{ .value = @bitCast(pair), .unit = switch (term) {
+            .px => unreachable,
+            inline else => |t| @field(Length.Unit, "calc_" ++ @tagName(t)),
+        } };
+    }
+
+    // Rounded toward zero. An f16 has 11 bits of precision: to the nearest,
+    // 33.3333% is 33.34375%, and three of those are wider than their row.
+    fn truncate(value: f64) f16 {
+        const nearest: f16 = @floatCast(value);
+        if (std.math.isFinite(nearest) == false or @abs(@as(f64, nearest)) <= @abs(value)) {
+            return nearest;
+        }
+        // not 0, it's past value: the bits below are the next one down
+        return @bitCast(@as(u16, @bitCast(nearest)) - 1);
+    }
+
+    fn unpack(value: f32) struct { coefficient: f64, px: f64 } {
+        const pair: Packed = @bitCast(value);
+        return .{ .coefficient = pair.coefficient, .px = pair.px };
+    }
+
+    fn add(self: Calc, other: Calc, sign: f64) ?Calc {
+        if (self.number != other.number) {
+            return null;
+        }
+        var sum = self;
+        for (&sum.terms, other.terms) |*term, o| {
+            term.* += sign * o;
+        }
+        return sum;
+    }
+
+    fn scale(self: Calc, factor: f64) Calc {
+        var scaled = self;
+        for (&scaled.terms) |*term| {
+            term.* *= factor;
+        }
+        return scaled;
+    }
+
+    // Recursive descent over the tokens: a sum of products of values. A + or
+    // - needs whitespace around it, so `100%-2px` (a percentage, then -2px)
+    // doesn't parse, as in a browser.
+    const Parser = struct {
+        tokenizer: Tokenizer,
+        depth: u8 = 0,
+
+        // Past `calc(`, through its `)`
+        fn calc(self: *Parser) ?Calc {
+            const first = self.nextToken() orelse return null;
+            if (first != .function or std.ascii.eqlIgnoreCase(first.function, "calc") == false) {
+                return null;
+            }
+            return self.group();
+        }
+
+        // A sum and its closing parenthesis
+        fn group(self: *Parser) ?Calc {
+            if (self.depth == 16) {
+                return null;
+            }
+            self.depth += 1;
+            defer self.depth -= 1;
+            const total = self.sum() orelse return null;
+            const close = self.nextToken() orelse return null;
+            return if (close == .close_parenthesis) total else null;
+        }
+
+        fn sum(self: *Parser) ?Calc {
+            var total = self.product() orelse return null;
+            while (self.peekDelim("+-")) |op| {
+                _ = self.nextToken();
+                total = total.add(self.product() orelse return null, if (op == '+') 1 else -1) orelse return null;
+            }
+            return total;
+        }
+
+        fn product(self: *Parser) ?Calc {
+            var total = self.value() orelse return null;
+            while (self.peekDelim("*/")) |op| {
+                _ = self.nextToken();
+                const operand = self.value() orelse return null;
+                if (op == '*') {
+                    if (operand.number) {
+                        total = total.scale(operand.terms[0]);
+                    } else if (total.number) {
+                        total = operand.scale(total.terms[0]);
+                    } else {
+                        return null;
+                    }
+                } else {
+                    const divisor = operand.terms[0];
+                    if (operand.number == false or divisor == 0) {
+                        return null;
+                    }
+                    total = total.scale(1 / divisor);
+                }
+            }
+            return total;
+        }
+
+        fn value(self: *Parser) ?Calc {
+            var result: Calc = .{};
+            switch (self.nextToken() orelse return null) {
+                .number => |n| {
+                    result.number = true;
+                    result.terms[0] = n.value;
+                },
+                .percentage => |p| result.terms[@backingInt(Term.percent)] = @as(f64, p.unit_value) * 100,
+                .dimension => |d| {
+                    const unit = units.lookup(d.unit) orelse return null;
+                    const n: f64 = d.value;
+                    switch (unit) {
+                        .vw => result.terms[@backingInt(Term.vw)] = n,
+                        .vh => result.terms[@backingInt(Term.vh)] = n,
+                        .em => result.terms[@backingInt(Term.em)] = n,
+                        .rem => result.terms[@backingInt(Term.rem)] = n,
+                        else => result.terms[0] = n * (units.absoluteLengthFactor(unit) orelse return null),
+                    }
+                },
+                .parenthesis_block => return self.group(),
+                .function => |name| {
+                    if (std.ascii.eqlIgnoreCase(name, "calc") == false) {
+                        return null;
+                    }
+                    return self.group();
+                },
+                else => return null,
+            }
+            return result;
+        }
+
+        // The next token, past whitespace and comments
+        fn nextToken(self: *Parser) ?Tokenizer.Token {
+            while (self.tokenizer.next()) |token| {
+                switch (token) {
+                    .white_space, .comment => {},
+                    else => return token,
+                }
+            }
+            return null;
+        }
+
+        // An operator from `ops` next, without consuming it
+        fn peekDelim(self: *Parser, comptime ops: []const u8) ?u8 {
+            const saved = self.tokenizer.position;
+            const token = self.nextToken();
+            self.tokenizer.position = saved;
+            const t = token orelse return null;
+            if (t != .delim or std.mem.findScalar(u8, ops, t.delim) == null) {
+                return null;
+            }
+            return t.delim;
+        }
+    };
 };
 
 /// Whether an element is rendered and takes pointer input.
@@ -5274,7 +5559,7 @@ const Geometry = struct {
         fn boxSides(value: []const u8) ?Sides {
             var count: usize = 0;
             var tokens: [4][]const u8 = undefined;
-            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            var it: Components = .{ .value = value };
             while (it.next()) |token| : (count += 1) {
                 if (count == tokens.len) {
                     return null;
@@ -5295,13 +5580,40 @@ const Geometry = struct {
 
         // `start [end]` (margin-inline, inset-inline), in a left-to-right flow
         fn inlineSides(value: []const u8) ?Sides {
-            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            var it: Components = .{ .value = value };
             const start = it.next() orelse return null;
             return .{
                 .left = Length.parseMargin(start),
                 .right = Length.parseMargin(it.next() orelse start),
             };
         }
+
+        // A shorthand's values: split at whitespace, but not inside a
+        // function's parentheses (`0 calc(100% - 2rem)`).
+        const Components = struct {
+            value: []const u8,
+            pos: usize = 0,
+
+            fn next(self: *Components) ?[]const u8 {
+                const v = self.value;
+                while (self.pos < v.len and std.ascii.isWhitespace(v[self.pos])) {
+                    self.pos += 1;
+                }
+                if (self.pos == v.len) {
+                    return null;
+                }
+                const start = self.pos;
+                var depth: usize = 0;
+                while (self.pos < v.len) : (self.pos += 1) {
+                    switch (v[self.pos]) {
+                        '(' => depth += 1,
+                        ')' => depth -|= 1,
+                        else => |c| if (depth == 0 and std.ascii.isWhitespace(c)) break,
+                    }
+                }
+                return v[start..self.pos];
+            }
+        };
 
         // `overlay` is Chrome's legacy alias of auto.
         fn overflowScrolls(value: []const u8) bool {
@@ -5417,7 +5729,7 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u358) {
+    const Computed = packed struct(u368) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -5447,9 +5759,9 @@ const Geometry = struct {
     // struct of arrays ("specialized", because the unit is bit-packed into bits)
     const Stored = struct {
         values: [length_count]f32,
-        // each length's unit, then the bools: apart so neither needs a u64,
-        // which would pad the record
-        units: u32,
+        // each length's unit, two per byte, then the bools: bytes, so
+        // neither needs a u64, which would pad the record
+        units: [(length_count + 1) / 2]u8,
         flags: u8,
 
         const names = @typeInfo(Computed).@"struct".field_names;
@@ -5457,19 +5769,19 @@ const Geometry = struct {
         const length_count = std.mem.count(type, types, &.{Length});
 
         comptime {
-            std.debug.assert(length_count * @bitSizeOf(Length.Unit) <= 32);
+            std.debug.assert(@bitSizeOf(Length.Unit) == 4);
             std.debug.assert(names.len - length_count <= 8);
         }
 
         fn pack(computed: Computed) Stored {
-            var stored: Stored = .{ .values = undefined, .units = 0, .flags = 0 };
+            var stored: Stored = .{ .values = undefined, .units = @splat(0), .flags = 0 };
             comptime var length = 0;
             comptime var flag = 0;
             inline for (names, types) |name, T| {
                 const value = @field(computed, name);
                 if (T == Length) {
                     stored.values[length] = value.value;
-                    stored.units |= @as(u32, @backingInt(value.unit)) << (length * @bitSizeOf(Length.Unit));
+                    stored.units[length / 2] |= @as(u8, @backingInt(value.unit)) << (length % 2 * 4);
                     length += 1;
                 } else {
                     stored.flags |= @as(u8, @intFromBool(value)) << flag;
@@ -5485,7 +5797,7 @@ const Geometry = struct {
             comptime var flag = 0;
             inline for (names, types) |name, T| {
                 if (T == Length) {
-                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.units >> (length * @bitSizeOf(Length.Unit)));
+                    const unit: std.meta.Tag(Length.Unit) = @truncate(self.units[length / 2] >> (length % 2 * 4));
                     @field(computed, name) = .{ .value = self.values[length], .unit = @fromBackingInt(unit) };
                     length += 1;
                 } else {
@@ -6663,6 +6975,9 @@ pub const DEFAULT_FONT_SIZE = 16;
 
 /// Computed font-size in CSS pixels. We do what we can, namely inline styles
 /// font-related attributes, up the parent chain.
+/// Reading sheets here would make the root's font size differ from 16px:
+/// calc() folds a rem next to another relative term at DEFAULT_FONT_SIZE
+/// (see Calc), so that needs revisiting then.
 pub fn computedFontSize(self: *StyleManager, element: ?*Element) f64 {
     self.assertOwns(element);
     return self.computedFontSizeAt(element, 0);
@@ -7080,7 +7395,7 @@ test "StyleManager: inlineDeclared: scan matches the parsed style object" {
         .{ .geometry = .{ .width = .{ .value = 100, .unit = .px }, .height = .{ .value = 96, .unit = .px } } },
         .{ .geometry = .{ .height = .{} } },
         .{ .geometry = .{ .width = .{ .value = 50, .unit = .percent }, .height = .{} } },
-        .{ .geometry = .{ .width = .{} } },
+        .{ .geometry = .{ .width = .{ .value = 2, .unit = .em } } },
         .{ .visibility = .{ .display = .flex, .box = .block_level } },
         .{ .visibility = .{ .display = .grid, .box = .atomic_inline } },
         .{ .geometry = .{ .width = .{ .unit = .content } }, .flow = .{ .position = .absolute, .floated = true } },
@@ -8636,6 +8951,62 @@ test "StyleManager: records: geometry packs its lengths' units with the flags" {
         }
     }
     try testing.expectEqual(computed, Geometry.Stored.pack(computed).unpack());
+}
+
+test "StyleManager: calc() reduces to px and one relative term" {
+    const Case = struct { []const u8, Length.Unit, f64, f64 };
+    // unit, then the relative coefficient (or the plain value) and the px
+    const cases = [_]Case{
+        .{ "calc(10px + 2px)", .px, 12, 0 },
+        .{ "calc(1in - 2 * 8px)", .px, 80, 0 },
+        .{ "calc(2rem)", .rem, 2, 0 },
+        .{ "calc(1rem + 4px)", .calc_rem, 1, 4 },
+        .{ "calc(2rem - 1rem - 1rem + 4px)", .px, 4, 0 },
+        .{ "calc(50%)", .percent, 50, 0 },
+        .{ "calc(100% / 3)", .percent, 100.0 / 3.0, 0 },
+        .{ "CALC(100% - 2rem)", .calc_percent, 100, -32 },
+        .{ "calc( 100vh - (64px + 1rem) )", .calc_vh, 100, -80 },
+        .{ "calc(2 * (10vw + 5px))", .calc_vw, 20, 10 },
+        .{ "calc(1em + calc(4px / 2))", .calc_em, 1, 2 },
+        .{ "calc(-50% + 10px)", .calc_percent, -50, 10 },
+        .{ "calc(100% - 100%)", .px, 0, 0 },
+    };
+    for (cases) |case| {
+        const text, const unit, const coefficient, const px = case;
+        const length = Length.parse(text);
+        try testing.expectEqual(unit, length.unit);
+        switch (unit) {
+            .calc_percent, .calc_vw, .calc_vh, .calc_em, .calc_rem => {
+                const terms = Calc.unpack(length.value);
+                try testing.expectDelta(coefficient, terms.coefficient, 0.05);
+                try testing.expectEqual(px, terms.px);
+            },
+            else => try testing.expectDelta(coefficient, length.value, 0.0001),
+        }
+    }
+
+    // The relative term never rounds up
+    try testing.expectEqual(33.3125, Calc.unpack(Length.parse("calc(33.3333% - 20px)").value).coefficient);
+    try testing.expectEqual(-33.3125, Calc.unpack(Length.parse("calc(20px - 33.3333%)").value).coefficient);
+    try testing.expectEqual(66.625, Calc.unpack(Length.parse("calc(66.6667% - 20px)").value).coefficient);
+
+    // What doesn't reduce is auto
+    for ([_][]const u8{
+        "calc(100% - 2em)", // two relative terms
+        "calc(100%-2px)", // no whitespace around the operator
+        "calc(10px * 2px)",
+        "calc(10px / 0)",
+        "calc(10px + 2)",
+        "calc(3)",
+        "calc(var(--x) * 2)",
+        "calc(min(10px, 5%))",
+        "calc(10px",
+        "calc(10px))",
+        "calc(10px) 5px",
+        "calc(100000px + 10%)", // past f16
+    }) |text| {
+        try testing.expectEqual(Length{}, Length.parse(text));
+    }
 }
 
 test "StyleManager: records: the layout memo keeps each kind apart" {
