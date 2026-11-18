@@ -37,25 +37,15 @@ pub fn Builder(comptime T: type) type {
             return Constructor.init(T, func, opts);
         }
 
+        /// The getter and the setter each get a V8 Fast API variant next to
+        /// their regular callback when `reflect.fast.isEligible` accepts them.
+        /// The getter can also be the name of a field to read off the receiver.
         pub fn accessor(comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
             return Accessor.init(T, getter, setter, opts);
         }
 
         pub fn function(comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
             return Function.init(T, func, opts);
-        }
-
-        /// Creates both fast and regular variant for a given function. Function
-        /// generation may fail if the required signature is not satisfied. If
-        /// that happens, you may want to fallback to `bridge.function`.
-        pub fn fastFunction(comptime func: anytype, comptime opts: Caller.FastFunction.Options) FastFunction {
-            return .init(T, func, opts);
-        }
-
-        /// Like `accessor`, with a fast variant for the getter and/or the
-        /// setter; `opts.getter` and `opts.setter` pick which and how.
-        pub fn fastAccessor(comptime getter: anytype, comptime setter: anytype, comptime opts: FastAccessor.Opts) FastAccessor {
-            return .init(T, getter, setter, opts);
         }
 
         pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
@@ -158,7 +148,7 @@ pub const Function = struct {
             .wpt_only = opts.wpt_only,
             .js_name = opts.js_name,
             .exposed = opts.exposed,
-            .rejects_bad_receiver = returnsPromise(@TypeOf(func)),
+            .rejects_bad_receiver = reflect.returnsPromise(@TypeOf(func)),
             .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -169,14 +159,6 @@ pub const Function = struct {
     }
 
     pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
-
-    fn returnsPromise(comptime F: type) bool {
-        const R = @typeInfo(F).@"fn".return_type orelse return false;
-        return switch (@typeInfo(R)) {
-            .error_union => |eu| eu.payload,
-            else => R,
-        } == js.Promise;
-    }
 
     fn getArity(comptime T: type, comptime start: usize) usize {
         const Execution = js.Execution;
@@ -218,67 +200,6 @@ pub const Function = struct {
     }
 };
 
-const FnOptions = struct {
-    noop: bool = false,
-    static: bool = false,
-    wpt_only: bool = false,
-    deletable: bool = true,
-    as_typed_array: bool = false,
-    null_as_undefined: bool = false,
-    cache: ?Caller.Function.Opts.Caching = null,
-    embedded_receiver: bool = false,
-    exposed: Caller.Function.Opts.Exposed = .both,
-    ce_reactions: bool = false,
-    unforgeable: bool = false,
-    /// Create V8 Fast Function variant for this function. Setting this to true
-    /// causes function to inspected in comptime for Fast API eligibility.
-    fast: bool = false,
-    /// Whether setup `Caller` for this function. Affects both variants if
-    /// `fast` is set. Unsetting this option should be rare, yet, having the
-    /// ability to do, gives more control.
-    setup_caller: bool = true,
-};
-
-//pub fn Fn(comptime function: anytype, comptime options: FnOptions) type {
-//    return struct {
-//        pub const has_fast_variant = options.fast;
-//
-//        slow: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
-//        fast: if (has_fast_variant) *const v8.CFunction else void,
-//    };
-//}
-
-pub const FastFunction = struct {
-    static: bool,
-    // JS-visible `length`; follows the slow path's rules (see `Function.getArity`).
-    arity: usize,
-    exposed: Caller.Function.Opts.Exposed,
-    /// V8 still requires us to create a slow variant.
-    slow: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
-    fast: *const v8.CFunction,
-
-    fn init(
-        comptime T: type,
-        comptime func: anytype,
-        comptime opts: Caller.FastFunction.Options,
-    ) FastFunction {
-        return .{
-            .static = opts.static,
-            .arity = comptime Function.getArity(@TypeOf(func), if (opts.static) 0 else 1),
-            .exposed = opts.exposed,
-            .slow = struct {
-                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    return Caller.Function.call(T, handle.?, func, .{
-                        .static = opts.static,
-                        .exposed = opts.exposed,
-                    });
-                }
-            }.wrap,
-            .fast = Caller.FastFunction.create(func, opts),
-        };
-    }
-};
-
 pub const Accessor = struct {
     static: bool = false,
     deletable: bool = true,
@@ -288,8 +209,15 @@ pub const Accessor = struct {
     cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+    fast_getter: ?*const v8.CFunction = null,
+    fast_setter: ?*const v8.CFunction = null,
 
-    fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
+    fn init(
+        comptime T: type,
+        comptime getter_func_or_field: anytype,
+        comptime setter: anytype,
+        comptime opts: Caller.Function.Opts,
+    ) Accessor {
         var accessor = Accessor{
             .cache = opts.cache,
             .static = opts.static,
@@ -299,21 +227,54 @@ pub const Accessor = struct {
             .exposed = opts.exposed,
         };
 
-        if (@typeInfo(@TypeOf(getter)) != .null) {
-            const getter_opts = if (opts.ce_reactions == false) opts else blk: {
-                var o = opts;
-                o.ce_reactions = false;
-                break :blk o;
-            };
+        const getter_opts = if (opts.ce_reactions == false) opts else blk: {
+            var o = opts;
+            o.ce_reactions = false;
+            break :blk o;
+        };
 
-            accessor.getter = struct {
-                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, getter, getter_opts);
+        switch (@typeInfo(@TypeOf(getter_func_or_field))) {
+            // Getter is passed as a function.
+            .@"fn" => {
+                const func = getter_func_or_field;
+                accessor.fast_getter = createFast(func, getter_opts);
+                accessor.getter = struct {
+                    fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                        Caller.Function.call(T, handle.?, func, getter_opts);
+                    }
+                }.wrap;
+            },
+            // Getter is just a field read; passed as the name of the field.
+            .pointer => {
+                const field: []const u8 = getter_func_or_field;
+                if (opts.static) {
+                    @compileError("a field getter cannot be static: " ++ field);
                 }
-            }.wrap;
+                // A field getter always has a fast variant, so it takes only
+                // the options that one can honor.
+                if (!reflect.fast.hasSupportedOptions(getter_opts)) {
+                    @compileError("a field getter only takes options a fast variant supports: " ++ @typeName(T) ++ "." ++ field);
+                }
+
+                accessor.fast_getter = Caller.FastFunction.createFieldGetter(T, field);
+                accessor.getter = struct {
+                    fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                        const func = struct {
+                            fn wrap(self: *const T) @FieldType(T, field) {
+                                return @field(self, field);
+                            }
+                        }.wrap;
+                        Caller.Function.call(T, handle.?, func, getter_opts);
+                    }
+                }.wrap;
+            },
+            // Getter is not provided.
+            .null => {},
+            else => @compileError("unexpected getter accessor type: " ++ @typeName(@TypeOf(getter_func_or_field))),
         }
 
         if (@typeInfo(@TypeOf(setter)) != .null) {
+            accessor.fast_setter = createFast(setter, opts);
             accessor.setter = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     Caller.Function.call(T, handle.?, setter, opts);
@@ -323,96 +284,14 @@ pub const Accessor = struct {
 
         return accessor;
     }
-};
 
-pub const FastAccessor = struct {
-    static: bool = false,
-    exposed: Caller.Function.Opts.Exposed = .both,
-    getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
-    setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
-    fast_getter: ?*const v8.CFunction = null,
-    fast_setter: ?*const v8.CFunction = null,
-
-    pub const Opts = struct {
-        static: bool = false,
-        exposed: Caller.Function.Opts.Exposed = .both,
-        /// How the getter gets called; see `Side`.
-        getter: Side = .slow,
-        /// How the setter gets called; see `Side`.
-        setter: Side = .slow,
-
-        /// `.slow` leaves that side without a fast variant. The other two
-        /// are `Caller.FastFunction.Options.Mode`; a getter often qualifies
-        /// for `.unsafe` while its setter doesn't, hence the choice per side.
-        pub const Side = enum { slow, safe, unsafe };
-    };
-
-    fn init(
-        comptime T: type,
-        comptime maybe_getter_function: anytype,
-        comptime maybe_setter_function: anytype,
-        comptime opts: Opts,
-    ) FastAccessor {
-        if (opts.getter == .slow and opts.setter == .slow) {
-            @compileError("fast accessor without a fast side; prefer `bridge.accessor`");
+    /// The fast variant for one side; null if that side isn't eligible, in
+    /// which case it only has its regular callback.
+    fn createFast(comptime function: anytype, comptime opts: Caller.Function.Opts) ?*const v8.CFunction {
+        if (!reflect.fast.isEligible(@TypeOf(function), opts)) {
+            return null;
         }
-
-        var accessor: FastAccessor = .{
-            .static = opts.static,
-            .exposed = opts.exposed,
-        };
-
-        if (@typeInfo(@TypeOf(maybe_getter_function)) != .null) {
-            const function = maybe_getter_function;
-            accessor.fast_getter = createFast(function, opts, opts.getter);
-            // Regular path.
-            accessor.getter = struct {
-                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, function, .{
-                        .static = opts.static,
-                        .exposed = opts.exposed,
-                    });
-                }
-            }.wrap;
-        } else if (opts.getter != .slow) {
-            @compileError("fast getter requested but there is no getter");
-        }
-
-        if (@typeInfo(@TypeOf(maybe_setter_function)) != .null) {
-            const function = maybe_setter_function;
-            accessor.fast_setter = createFast(function, opts, opts.setter);
-            // Regular path.
-            accessor.setter = struct {
-                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    Caller.Function.call(T, handle.?, function, .{
-                        .static = opts.static,
-                        .exposed = opts.exposed,
-                    });
-                }
-            }.wrap;
-        } else if (opts.setter != .slow) {
-            @compileError("fast setter requested but there is no setter");
-        }
-
-        return accessor;
-    }
-
-    /// The fast variant for one side; null if that side stays slow.
-    fn createFast(comptime function: anytype, comptime opts: Opts, comptime side: Opts.Side) ?*const v8.CFunction {
-        const options: Caller.FastFunction.Options = .{
-            .static = opts.static,
-            .exposed = opts.exposed,
-            .mode = switch (side) {
-                .slow => return null,
-                .safe => .safe,
-                .unsafe => .unsafe,
-            },
-        };
-        const Fn = @TypeOf(function);
-        if (!Caller.FastFunction.isEligible(Fn, options)) {
-            @compileError("function is not eligible for fast variant: " ++ @typeName(Fn));
-        }
-        return Caller.FastFunction.create(function, options);
+        return Caller.FastFunction.create(function, .{ .static = opts.static });
     }
 };
 
