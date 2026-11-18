@@ -589,13 +589,13 @@ fn getBoxModel(cmd: *CDP.Command) !void {
 
     const node = try getNode(cmd.arena, target, cmd.routing_session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    // TODO an element without a box (display: none) gets a zero-size box, but
-    // Chrome sends "Could not compute box model.", as we already do for text.
     // TODO implement for document.
-    // Text gets the bounding box of its lines, as in Chrome.
-    const rect = if (node.dom.is(DOMNode.Element)) |element|
-        viewportRect(element, frame)
-    else if (node.dom.is(DOMNode.CData.Text)) |text|
+    const rect = if (node.dom.is(DOMNode.Element)) |element| blk: {
+        // A zero-size box still has a model. Check layout participation before
+        // measuring, so display:none on the element or an ancestor has no box.
+        if (!element.isVisible(frame)) return cmd.sendError(-32000, "Could not compute box model.", .{});
+        break :blk toTopViewport(element.boundingClientRectValuesForVisible(frame), node.dom, frame);
+    } else if (node.dom.is(DOMNode.CData.Text)) |text|
         textViewportRect(text, frame) orelse return cmd.sendError(-32000, "Could not compute box model.", .{})
     else
         return cmd.sendError(-32000, "Could not compute box model.", .{});
@@ -1673,7 +1673,7 @@ test "cdp.dom: getBoxModel" {
 
     // Box model on the <p> nodeId returned above.
     // Note: nodeId 6 is <head>, which is `display: none` per HTML Rendering
-    // §15.3.1, so its box model is all-zeros — exercise a visible element.
+    // §15.3.1, so it has no box model — exercise a visible element.
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.getBoxModel",
@@ -1689,6 +1689,46 @@ test "cdp.dom: getBoxModel" {
         .width = 1920,
         .height = 20,
     } }, .{ .id = 5 });
+}
+
+test "cdp.dom: getBoxModel distinguishes missing boxes from hidden or empty boxes" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame().?;
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun(
+            \\document.body.innerHTML = `
+            \\  <a id="absent" style="display:none">absent</a>
+            \\  <div style="display:none"><a id="child">child</a></div>
+            \\  <a id="invisible" style="visibility:hidden;display:block;width:12px;height:8px">link</a>
+            \\  <div id="empty" style="width:0;height:0"></div>`;
+        , null);
+    }
+
+    const Case = struct { dom_id: []const u8, size: ?[2]i64 = null };
+    const cases = [_]Case{
+        .{ .dom_id = "absent" },
+        .{ .dom_id = "child" },
+        .{ .dom_id = "invisible", .size = .{ 12, 8 } },
+        .{ .dom_id = "empty", .size = .{ 0, 0 } },
+    };
+    for (cases, 1..) |case, i| {
+        const msg_id: i64 = @intCast(i);
+        const node = try target.node_registry.register(frame.document.getElementById(case.dom_id).?.asNode());
+        try ctx.processMessage(.{ .id = msg_id, .method = "DOM.getBoxModel", .params = .{ .nodeId = node.id } });
+        if (case.size) |size| {
+            const model = (try testing.sentResult(&ctx, msg_id)).get("model").?.object;
+            try testing.expectEqual(size[0], model.get("width").?.integer);
+            try testing.expectEqual(size[1], model.get("height").?.integer);
+        } else {
+            try ctx.expectSentError(-32000, "Could not compute box model.", .{ .id = i });
+        }
+    }
 }
 
 test "cdp.dom: getBoxModel of a text node" {

@@ -886,7 +886,17 @@ pub const Writer = struct {
             },
             .select => blk: {
                 const select = el.as(DOMNode.Element.Html.Select);
-                const val = select.getValue(self.frame);
+                if (!select.isMenuList()) break :blk null;
+                const option = select.selectedOption() orelse break :blk null;
+                const option_el = option.asElement();
+                // A menu displays the live option's label, independently of
+                // the value submitted with the form.
+                const val = option_el.getAttributeInterned("aria-label") orelse label: {
+                    if (option_el.getAttributeSafe(comptime .wrap("label"))) |label| {
+                        if (label.len > 0) break :label std.mem.trim(u8, label, &std.ascii.whitespace);
+                    }
+                    break :label option.getText(self.frame);
+                };
                 if (val.len == 0) break :blk null;
                 break :blk val;
             },
