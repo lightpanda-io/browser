@@ -50,7 +50,10 @@ console_sink: ?*std.Io.Writer = null,
 result_sink: ?*std.Io.Writer = null,
 /// In-flight async `goto`s; emptied before each `runSource` returns.
 pending_gotos: std.ArrayList(PendingGoto),
-/// Restarted per `runSource`; backs `PendingGoto.deadline_ms`.
+/// In-flight `evaluate`s whose page promise hasn't settled; emptied before each
+/// `runSource` returns.
+pending_evaluates: std.ArrayList(PendingEvaluate),
+/// Restarted per `runSource`; backs the pending entries' `deadline_ms`.
 run_timer: std.Io.Timestamp,
 /// Cancels a run that outlives it. Null runs without a deadline.
 timeout_ms: ?u32 = null,
@@ -95,6 +98,42 @@ const PendingGoto = struct {
         v8.v8__Global__Reset(&self.resolver);
         v8.v8__Global__Reset(&self.receiver);
     }
+};
+
+/// An `evaluate` waiting on its page promise.
+const PendingEvaluate = struct {
+    handle: browser_tools.EvaluateHandle,
+    resolver: v8.Global,
+    /// Owns the call's arguments and, later, its result text.
+    arena: std.heap.ArenaAllocator,
+    call: EvaluateCall,
+    /// `run_timer` reading (ms) past which the promise is given up on.
+    deadline_ms: u64,
+
+    fn deinit(self: *PendingEvaluate) void {
+        v8.v8__Global__Reset(&self.resolver);
+        self.arena.deinit();
+    }
+};
+
+/// What reporting an evaluate needs once it settles.
+const EvaluateCall = struct {
+    frame_id: u32,
+    args: ?std.json.Value,
+    /// `datetime.milliTimestamp(.awake)` at start, for telemetry.
+    started_ms: u64,
+};
+
+/// Why `failAllPending` gives up on what is still in flight, as the message
+/// each kind of call rejects with.
+const Abandon = struct {
+    goto: []const u8,
+    evaluate: []const u8,
+
+    const cancelled: Abandon = .{ .goto = "navigation cancelled", .evaluate = "promise: cancelled" };
+    const abandoned: Abandon = .{ .goto = "navigation abandoned", .evaluate = "promise: the script ended before it settled" };
+    const failed: Abandon = .{ .goto = "navigation failed", .evaluate = "promise: tick failed" };
+    const out_of_memory: Abandon = .{ .goto = "out of memory", .evaluate = "out of memory" };
 };
 
 pub const ConsoleMethod = enum {
@@ -153,6 +192,7 @@ pub fn init(
         .primitive_data = undefined,
         .console_data = undefined,
         .pending_gotos = .empty,
+        .pending_evaluates = .empty,
         .run_timer = undefined,
     };
     errdefer self.call_arena.deinit();
@@ -176,6 +216,8 @@ pub fn deinit(self: *Runtime) void {
     // mid-flight can leave some).
     for (self.pending_gotos.items) |*pending| pending.reset();
     self.pending_gotos.deinit(self.allocator);
+    self.dropPendingEvaluates();
+    self.pending_evaluates.deinit(self.allocator);
     self.resetContext();
     self.env.deinit();
     self.call_arena.deinit();
@@ -562,20 +604,15 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
         return self.throwError("this run only reads pages; it doesn't click, type keys, run page JavaScript, log in or write files");
     }
 
-    const args = self.buildArgs(arena, context, tool, info) catch |err| switch (err) {
-        error.OutOfMemory => return self.throwError("out of memory"),
-        error.JsException => return,
-        error.InvalidArguments => return self.throwTypeError("invalid arguments"),
-    };
+    // Its arguments go in an arena that can outlive this call.
+    if (tool == .evaluate) return self.invokeEvaluate(context, info);
+
+    const args = self.checkedArgs(arena, context, tool, info) catch return;
 
     if (tool == .goto) return self.invokeGoto(arena, context, info, args);
+    std.debug.assert(!tool.isAsync());
 
-    // Route the call at the receiver's own frame: sibling pages may coexist, so
-    // `pages[0]` is not necessarily this handle's page.
-    const frame_id = self.receiverFrameId(context, info) orelse
-        return self.throwError("page is not navigated or has been closed; call page.goto(url) first");
-    if (self.session.findFrameByFrameId(frame_id) == null)
-        return self.throwError("page handle is no longer valid; the page was closed");
+    const frame_id = self.checkedReceiverFrame(context, info) catch return;
 
     self.session.setToolFrameOverride(frame_id);
     defer self.session.setToolFrameOverride(null);
@@ -635,7 +672,7 @@ fn invokeGoto(
         .frame_id = started.frame_id,
         .resolver = undefined,
         .receiver = undefined,
-        .deadline_ms = @as(u64, @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds())) + started.timeout_ms,
+        .deadline_ms = self.elapsedMs() + started.timeout_ms,
         .until = started.until,
         .started_ms = started_ms,
     };
@@ -647,11 +684,156 @@ fn invokeGoto(
     };
 }
 
-/// Drive every in-flight `goto` to completion: each pass ticks the browser over
-/// the pending frames, settles those that finished, then drains microtasks so
-/// awaiting continuations run (and may start more gotos). Ends when the root
-/// Promise settles, no gotos remain, or the script is cancelled.
+/// Run the receiver Page's `evaluate` and return a Promise of its result. Page
+/// code that returns a still-pending promise leaves it to `driveAsync`, which
+/// is what lets `Promise.all([page.evaluate(a), page.evaluate(b)])` overlap
+/// their fetches.
+fn invokeEvaluate(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo) void {
+    // Moves into `pending_evaluates` when the page promise is still pending.
+    var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
+    var keep_arena = false;
+    defer if (!keep_arena) arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const args = self.checkedArgs(arena, context, .evaluate, info) catch return;
+    const frame_id = self.checkedReceiverFrame(context, info) catch return;
+
+    const resolver = v8.v8__Promise__Resolver__New(context) orelse
+        return self.throwError("internal: resolver alloc failed");
+    const promise = v8.v8__Promise__Resolver__GetPromise(resolver) orelse
+        return self.throwError("internal: promise alloc failed");
+    self.setReturnValue(info, @ptrCast(promise));
+
+    var call: EvaluateCall = .{ .frame_id = frame_id, .args = args, .started_ms = lp.datetime.milliTimestamp(.awake) };
+    // Settle the resolver only after the block, as in `invokeGoto`.
+    const maybe_started: browser_tools.ToolError!browser_tools.StartedEvaluate = blk: {
+        self.session.setToolFrameOverride(frame_id);
+        defer self.session.setToolFrameOverride(null);
+        self.session.browser.env.isolate.enter();
+        defer self.session.browser.env.isolate.exit();
+        break :blk browser_tools.startEvaluate(arena, self.session, self.registry, args);
+    };
+    const started = maybe_started catch |err|
+        return self.settleEvaluate(context, resolver, arena, call, err);
+
+    switch (started) {
+        .done => |result| self.settleEvaluate(context, resolver, arena, call, result),
+        .pending => |handle| {
+            call.frame_id = handle.frame_id;
+            var pending: PendingEvaluate = .{
+                .handle = handle,
+                .resolver = undefined,
+                .arena = arena_state,
+                .call = call,
+                .deadline_ms = self.elapsedMs() + browser_tools.eval_promise_timeout_ms,
+            };
+            v8.v8__Global__New(self.env.isolate.handle, resolver, &pending.resolver);
+            self.pending_evaluates.append(self.allocator, pending) catch {
+                v8.v8__Global__Reset(&pending.resolver);
+                self.abandonEvaluate(&handle);
+                return self.settleEvaluate(context, resolver, arena, call, error.OutOfMemory);
+            };
+            keep_arena = true;
+        },
+    }
+}
+
+/// Resolve or reject one evaluate's Promise with its result, and report the
+/// call: it settles here, outside `browser_tools.call`.
+fn settleEvaluate(
+    self: *Runtime,
+    context: *const v8.Context,
+    resolver: *const v8.PromiseResolver,
+    arena: std.mem.Allocator,
+    call: EvaluateCall,
+    result: browser_tools.ToolError!browser_tools.ToolResult,
+) void {
+    {
+        self.session.setToolFrameOverride(call.frame_id);
+        defer self.session.setToolFrameOverride(null);
+        browser_tools.reportCall(self.session, .evaluate, "evaluate", call.args, .script, result, call.started_ms);
+    }
+    const r = result catch |err| return self.rejectResolver(context, resolver, toolErrorMessage(arena, .evaluate, err));
+    if (r.is_error) return self.rejectResolver(context, resolver, r.text);
+    const text = self.env.isolate.initStringHandle(r.text) catch
+        return self.rejectResolver(context, resolver, "RangeError: Invalid string length");
+    self.resolveResolver(context, resolver, @ptrCast(text));
+}
+
+fn settlePendingEvaluate(self: *Runtime, context: *const v8.Context, pending: *PendingEvaluate, result: browser_tools.ToolError!browser_tools.ToolResult) void {
+    const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
+    self.settleEvaluate(context, resolver, pending.arena.allocator(), pending.call, result);
+}
+
+/// The result of a pending evaluate that settled, lost its document or ran past
+/// its deadline, null while it is still waiting.
+fn pollPending(self: *Runtime, pending: *PendingEvaluate, now_ms: u64) browser_tools.ToolError!?browser_tools.ToolResult {
+    // Browser-side work, under the browser's isolate and aimed at the
+    // evaluate's own page: finishing reads `session.currentFrame()`.
+    self.session.setToolFrameOverride(pending.handle.frame_id);
+    defer self.session.setToolFrameOverride(null);
+    self.session.browser.env.isolate.enter();
+    defer self.session.browser.env.isolate.exit();
+
+    if (try browser_tools.pollEvaluate(pending.arena.allocator(), self.session, self.registry, &pending.handle)) |result| return result;
+    if (now_ms < pending.deadline_ms) return null;
+    browser_tools.abandonEvaluate(self.session, &pending.handle);
+    return .{ .text = "promise: timed out waiting for resolution", .is_error = true };
+}
+
+/// Settle each pending evaluate whose page promise settled, whose document went
+/// away or whose deadline passed, compacting survivors back in place. Returns
+/// whether any settled.
+fn settleEvaluates(self: *Runtime, context: *const v8.Context) bool {
+    if (self.pending_evaluates.items.len == 0) return false;
+    const now_ms = self.elapsedMs();
+    var write: usize = 0;
+    for (self.pending_evaluates.items) |*pending| {
+        const settled: browser_tools.ToolError!browser_tools.ToolResult = if (self.pollPending(pending, now_ms)) |polled|
+            polled orelse {
+                self.pending_evaluates.items[write] = pending.*;
+                write += 1;
+                continue;
+            }
+        else |err|
+            err;
+        self.settlePendingEvaluate(context, pending, settled);
+        pending.deinit();
+    }
+    const settled_any = write != self.pending_evaluates.items.len;
+    self.pending_evaluates.shrinkRetainingCapacity(write);
+    return settled_any;
+}
+
+fn abandonEvaluate(self: *Runtime, handle: *const browser_tools.EvaluateHandle) void {
+    self.session.browser.env.isolate.enter();
+    defer self.session.browser.env.isolate.exit();
+    browser_tools.abandonEvaluate(self.session, handle);
+}
+
+/// Free every still-pending evaluate without settling its Promise.
+fn dropPendingEvaluates(self: *Runtime) void {
+    for (self.pending_evaluates.items) |*pending| {
+        self.abandonEvaluate(&pending.handle);
+        pending.deinit();
+    }
+    self.pending_evaluates.clearRetainingCapacity();
+}
+
+fn toolErrorMessage(arena: std.mem.Allocator, tool: BrowserTool, err: browser_tools.ToolError) []const u8 {
+    return switch (err) {
+        error.OutOfMemory => "out of memory",
+        error.FrameNotLoaded => "no page loaded - run page.goto(url) first",
+        else => arena.print("{s} failed: {s}", .{ @tagName(tool), browser_tools.errorMessage(err) }) catch "out of memory",
+    };
+}
+
+/// Drive every in-flight `goto` and `evaluate` to completion: each pass ticks
+/// the browser over their frames, settles those that finished, then drains
+/// microtasks so awaiting continuations run (and may start more). Ends when the
+/// root Promise settles, nothing is in flight, or the script is cancelled.
 fn driveAsync(self: *Runtime, context: *const v8.Context, try_catch: *const v8.TryCatch, root: *const v8.Promise) void {
+    const tick_ms = 50;
     var runner = self.session.runner(.{});
 
     var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
@@ -664,65 +846,83 @@ fn driveAsync(self: *Runtime, context: *const v8.Context, try_catch: *const v8.T
         const state = promiseState(root);
         if (state == v8.kFulfilled or state == v8.kRejected) break;
         if (v8.v8__TryCatch__HasCaught(try_catch)) break;
-        if (self.pending_gotos.items.len == 0) break;
+        if (self.pending_gotos.items.len == 0 and self.pending_evaluates.items.len == 0) break;
         if (self.session.isCancelled()) {
-            self.failAllPending(context, "navigation cancelled");
+            self.failAllPending(context, .cancelled);
             break;
         }
 
+        // The gotos' conditions come first, lined up with `pending_gotos`. An
+        // evaluate's only keeps its page ticking: without a condition the tick
+        // doesn't pump HTTP, and its fetches would never land.
+        const goto_count = self.pending_gotos.items.len;
         _ = arena_state.reset(.retain_capacity);
-        const conditions = arena_state.allocator().alloc(lp.Session.Runner.WaitCondition, self.pending_gotos.items.len) catch {
-            self.failAllPending(context, "out of memory");
+        const conditions = arena_state.allocator().alloc(lp.Session.Runner.WaitCondition, goto_count + self.pending_evaluates.items.len) catch {
+            self.failAllPending(context, .out_of_memory);
             break;
         };
-        for (self.pending_gotos.items, conditions) |pending, *condition| {
+        var soonest: u64 = std.math.maxInt(u64);
+        for (self.pending_gotos.items, conditions[0..goto_count]) |pending, *condition| {
             condition.* = .{ .frame_id = pending.frame_id, .until = pending.until };
+            soonest = @min(soonest, pending.deadline_ms);
         }
+        for (self.pending_evaluates.items, conditions[goto_count..]) |pending, *condition| {
+            condition.* = .{ .frame_id = pending.handle.frame_id };
+            soonest = @min(soonest, pending.deadline_ms);
+        }
+        const until_soonest_ms = soonest -| self.elapsedMs();
 
         // Browser-side tick: run under the browser's isolate, exit before the
         // agent-side settling below (the Runtime owns a separate isolate).
         var tick_failed = false;
+        // How long the page has nothing due for, when the tick didn't wait.
+        var idle_ms: u64 = 0;
         {
             // Publish the soonest pending deadline as the http client's sync
             // deadline: a parser-blocking subresource fetched during this tick
             // spins inside `submitSync` on the same stack and would otherwise
             // hold the tick past every deadline (see HttpClient.wait_deadline_ms).
-            const run_timer_ms: u64 = @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds());
-            var soonest: u64 = std.math.maxInt(u64);
-            for (self.pending_gotos.items) |pending| {
-                soonest = @min(soonest, pending.deadline_ms);
-            }
             const http_client = &self.session.browser.http_client;
-            if (soonest != std.math.maxInt(u64)) {
-                http_client.setWaitDeadline(lp.datetime.milliTimestamp(.boot) + (soonest -| run_timer_ms));
-            } else {
-                http_client.setWaitDeadline(null);
-            }
+            http_client.setWaitDeadline(lp.datetime.milliTimestamp(.boot) + until_soonest_ms);
             defer http_client.setWaitDeadline(null);
 
             self.session.browser.env.isolate.enter();
             defer self.session.browser.env.isolate.exit();
-            _ = runner.tick(50, conditions) catch {
+            if (runner.tick(tick_ms, conditions)) |ticked| {
+                idle_ms = switch (ticked) {
+                    .done => tick_ms,
+                    .ok => |next_ms| next_ms,
+                };
+            } else |_| {
                 tick_failed = true;
-            };
+            }
         }
         if (tick_failed) {
-            self.failAllPending(context, "navigation failed");
+            self.failAllPending(context, .failed);
             break;
         }
 
-        self.settleCompleted(context, conditions);
+        self.settleCompleted(context, conditions[0..goto_count]);
+        const settled_evaluate = self.settleEvaluates(context);
         self.env.performIsolateMicrotasks();
+
+        // Only page promises left, and none moved: the tick returns at once
+        // when the page has nothing due, so wait here rather than spin, as
+        // `Runner.waitUntil` does.
+        if (!settled_evaluate and goto_count == 0 and self.pending_evaluates.items.len > 0) {
+            const sleep_ms: u32 = @intCast(@min(until_soonest_ms, idle_ms));
+            if (sleep_ms > 0) lp.io.sleep(.fromMilliseconds(sleep_ms), .awake) catch {};
+        }
     }
 
-    // Reject anything still in flight (fire-and-forget goto, or a broken-out loop).
-    self.failAllPending(context, "navigation abandoned");
+    // Reject anything still in flight (fire-and-forget call, or a broken-out loop).
+    self.failAllPending(context, .abandoned);
 }
 
 /// Settle each pending goto that finished or timed out, compacting survivors back
 /// in place. `conditions[i]` lines up with `pending_gotos.items[i]` (same pass).
 fn settleCompleted(self: *Runtime, context: *const v8.Context, conditions: []const lp.Session.Runner.WaitCondition) void {
-    const now_ms: u64 = @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds());
+    const now_ms = self.elapsedMs();
     var write: usize = 0;
     for (conditions, 0..) |condition, i| {
         const pending = &self.pending_gotos.items[i];
@@ -792,15 +992,26 @@ fn recordGoto(self: *Runtime, outcome: TelemetryOutcome, started_ms: u64) void {
     self.app.telemetry.recordTool(BrowserTool.goto.telemetryId(), .script, outcome, started_ms);
 }
 
-/// Reject every still-pending goto and clear the list, freeing all Globals.
-fn failAllPending(self: *Runtime, context: *const v8.Context, message: []const u8) void {
+/// Reject every still-pending goto and evaluate and clear both lists, freeing
+/// all Globals.
+fn failAllPending(self: *Runtime, context: *const v8.Context, why: Abandon) void {
     for (self.pending_gotos.items) |*pending| {
         const resolver: *const v8.PromiseResolver = @ptrCast(v8.v8__Global__Get(&pending.resolver, self.env.isolate.handle));
-        self.rejectResolver(context, resolver, message);
+        self.rejectResolver(context, resolver, why.goto);
         self.recordGoto(.cancelled, pending.started_ms);
         pending.reset();
     }
     self.pending_gotos.clearRetainingCapacity();
+
+    for (self.pending_evaluates.items) |*pending| {
+        self.settlePendingEvaluate(context, pending, .{ .text = why.evaluate, .is_error = true });
+    }
+    self.dropPendingEvaluates();
+}
+
+/// Milliseconds since the Runtime started, the clock deadlines are kept on.
+fn elapsedMs(self: *const Runtime) u64 {
+    return @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds());
 }
 
 fn resolveResolver(_: *Runtime, context: *const v8.Context, resolver: *const v8.PromiseResolver, value: *const v8.Value) void {
@@ -819,6 +1030,20 @@ fn bindFrameId(self: *Runtime, context: *const v8.Context, this: *const v8.Objec
     const value = v8.v8__Integer__NewFromUnsigned(self.env.isolate.handle, frame_id) orelse
         return error.RuntimeInitFailed;
     return self.setObjectProperty(context, this, frame_id_key, @ptrCast(value));
+}
+
+/// The receiver's own frame, or a thrown error when it has none: sibling pages
+/// may coexist, so `pages[0]` is not necessarily this handle's page.
+fn checkedReceiverFrame(self: *Runtime, context: *const v8.Context, info: *const v8.FunctionCallbackInfo) error{Thrown}!u32 {
+    const frame_id = self.receiverFrameId(context, info) orelse {
+        self.throwError("page is not navigated or has been closed; call page.goto(url) first");
+        return error.Thrown;
+    };
+    if (self.session.findFrameByFrameId(frame_id) == null) {
+        self.throwError("page handle is no longer valid; the page was closed");
+        return error.Thrown;
+    }
+    return frame_id;
 }
 
 /// Frame id a method's receiver was bound to (`this.__lpFrameId`), or null when
@@ -883,12 +1108,29 @@ fn callTool(
 
     const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{ .source = .script }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
-        else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), browser_tools.errorMessage(err) }) catch return error.OutOfMemory },
+        else => return .{ .fail = toolErrorMessage(arena, tool, err) },
     };
 
     if (result.is_error) return .{ .fail = result.text };
     return .{ .ok = result.text };
+}
+
+/// `buildArgs`, with its failures already thrown into the script.
+fn checkedArgs(
+    self: *Runtime,
+    arena: std.mem.Allocator,
+    context: *const v8.Context,
+    tool: BrowserTool,
+    info: *const v8.FunctionCallbackInfo,
+) error{Thrown}!?std.json.Value {
+    return self.buildArgs(arena, context, tool, info) catch |err| {
+        switch (err) {
+            error.OutOfMemory => self.throwError("out of memory"),
+            error.JsException => {},
+            error.InvalidArguments => self.throwTypeError("invalid arguments"),
+        }
+        return error.Thrown;
+    };
 }
 
 const BuildArgsError = error{
@@ -1239,7 +1481,7 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
         \\const page = new Page();
         \\const same = await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\if (same !== page) throw new Error("page.goto should resolve the same page object");
-        \\const text = page.evaluate("document.getElementById('btn').textContent");
+        \\const text = await page.evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("evaluate ran in the wrong context: " + text);
     );
 
@@ -1391,6 +1633,127 @@ test "agent script runtime: parallel gotos coexist and route per page" {
     );
 }
 
+test "agent script runtime: evaluates awaited together overlap their fetches" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    // Four 150 ms responses: one after the other they take 600 ms.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const slow = (n) => page.evaluate(`fetch("/goto_timeout/script.js?delay_ms=150&n=${n}").then((r) => r.status + ":" + ${n})`);
+        \\const started = Date.now();
+        \\const got = await Promise.all([slow(1), slow(2), slow(3), slow(4)]);
+        \\const elapsed = Date.now() - started;
+        \\if (got.join() !== "200:1,200:2,200:3,200:4") throw new Error("results: " + got.join());
+        \\if (elapsed >= 450) throw new Error("evaluates ran one after the other: " + elapsed + " ms");
+    );
+}
+
+test "agent script runtime: evaluate names the argument it rejects" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const message = (call) => call().then(() => "resolved", (e) => e.message);
+        \\const missing = await message(() => page.evaluate({}));
+        \\if (missing !== "missing required argument 'script'") throw new Error(missing);
+        \\const mistyped = await message(() => page.evaluate({ script: 5 }));
+        \\if (mistyped !== "argument 'script' must be a string, got integer 5") throw new Error(mistyped);
+        \\if (await page.evaluate({ Script: "1 + 1" }) !== "2") throw new Error("PascalCase key");
+    );
+}
+
+test "agent script runtime: pending evaluates settle on their own page" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const a = new Page();
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\const later = "new Promise((resolve) => setTimeout(() => resolve(location.pathname), 20))";
+        \\const [pa, pb] = await Promise.all([a.evaluate(later), b.evaluate(later)]);
+        \\if (!pa.endsWith("/mcp_actions.html")) throw new Error("page a: " + pa);
+        \\if (!pb.endsWith("/runner1.html")) throw new Error("page b: " + pb);
+        \\// An object comes back as JSON text, as it does from a value that isn't a promise.
+        \\const obj = await a.evaluate("new Promise((resolve) => setTimeout(() => resolve({ n: 1 }), 5))");
+        \\if (obj !== '{"n":1}') throw new Error("object: " + obj);
+    );
+}
+
+test "agent script runtime: a pending evaluate rejects with the page's reason, or when its page goes away" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const rejected = await page.evaluate("new Promise((_, reject) => setTimeout(() => reject(new Error('page said no')), 5))").then(() => null, (e) => e.message);
+        \\if (rejected === null || !rejected.includes("page said no")) throw new Error("rejection: " + rejected);
+        \\
+        \\const never = page.evaluate("new Promise(() => {})");
+        \\await page.goto("http://localhost:9582/src/browser/tests/runner/runner1.html");
+        \\const gone = await never.then(() => null, (e) => e.message);
+        \\if (gone === null || !gone.includes("navigated or closed")) throw new Error("navigation: " + gone);
+        \\if (await page.evaluate("location.pathname.split('/').pop()") !== "runner1.html") throw new Error("page unusable after the rejection");
+    );
+}
+
+test "agent script runtime: a script can end with an evaluate still pending" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    var returned: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    runtime.result_sink = &returned.writer;
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.evaluate("new Promise(() => {})");
+        \\return "done";
+    );
+    try testing.expectString("done\n", returned.written());
+    try testing.expectEqual(0, runtime.pending_evaluates.items.len);
+
+    // And the next run starts clean.
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\if (await page.evaluate("Promise.resolve(2)") !== "2") throw new Error("second run");
+    );
+}
+
 test "agent script runtime: goto resolves $LP_* placeholders" {
     defer testing.test_session.closeAllPages();
 
@@ -1448,7 +1811,7 @@ test "agent script runtime: a tool-triggered navigation keeps the handle routabl
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_nav.html");
         \\page.click("#navlink");
-        \\const href = page.evaluate("location.href");
+        \\const href = await page.evaluate("location.href");
         \\if (href !== "about:blank") throw new Error("expected about:blank, got: " + href);
     );
 }
@@ -1538,7 +1901,7 @@ test "agent script runtime: goto resolves when the load completes within the tim
     try runTestScript(runtime,
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/goto_timeout/page.html?delay_ms=100", { timeout: 15000 });
-        \\const status = page.evaluate("document.getElementById('status').textContent");
+        \\const status = await page.evaluate("document.getElementById('status').textContent");
         \\if (status !== "script ran") throw new Error("blocking script did not run before load: '" + status + "'");
     );
 }
@@ -1638,7 +2001,7 @@ test "agent script runtime: strict-mode scripts can call primitives" {
         \\"use strict";
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\const text = page.evaluate("document.getElementById('btn').textContent");
+        \\const text = await page.evaluate("document.getElementById('btn').textContent");
         \\if (text !== "Click Me") throw new Error("strict-mode evaluate failed: " + text);
     );
 }
@@ -1677,12 +2040,12 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
     try runTestScript(runtime,
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\// toJSON re-enters evaluate mid-marshal; the outer extract must still see "#btn".
-        \\const data = page.extract({ button: { toJSON() { return page.evaluate("'#btn'"); } } });
+        \\// toJSON re-enters a primitive mid-marshal; the outer extract must still see "#btn".
+        \\const data = page.extract({ button: { toJSON() { page.waitForSelector("#btn"); return "#btn"; } } });
         \\if (data.button !== "Click Me") throw new Error("re-entrant extract corrupted: " + JSON.stringify(data));
         \\// toString re-enters a primitive mid-loop; the console buffer must survive.
         \\let probed = 0;
-        \\console.log("value", { toString() { probed += 1; return page.evaluate("'ok'"); } }, "tail");
+        \\console.log("value", { toString() { probed += 1; page.waitForSelector("#btn"); return "ok"; } }, "tail");
         \\if (probed !== 1) throw new Error("console toString re-entry not exercised");
     );
     try testing.expectString("value ok tail\n", sink.written());
@@ -1793,9 +2156,9 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
         \\const agentOnly = "secret";
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\if (page.evaluate("typeof Page") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
-        \\if (page.evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
-        \\if (page.evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
+        \\if (await page.evaluate("typeof Page") !== "undefined") throw new Error("agent primitive leaked to page evaluate");
+        \\if (await page.evaluate("typeof agentOnly") !== "undefined") throw new Error("agent binding leaked to page evaluate");
+        \\if (await page.evaluate("typeof document") !== "object") throw new Error("page evaluate did not run in the page context");
     );
 }
 
@@ -1859,8 +2222,8 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
         \\const active = () => page.evaluate("document.activeElement === document.body ? 'body' : document.activeElement.id");
-        \\const expectActive = (id, what) => { const got = active(); if (got !== id) throw new Error(what + " (active: " + got + ")"); };
-        \\page.evaluate(`
+        \\const expectActive = async (id, what) => { const got = await active(); if (got !== id) throw new Error(what + " (active: " + got + ")"); };
+        \\await page.evaluate(`
         \\  const add = (tag, id, attrs = {}, parent = document.body, ns = null) => {
         \\    const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
         \\    e.id = id;
@@ -1884,36 +2247,36 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\  add('rect', 'dynSvgRect', { tabindex: '0', width: '100', height: '40' }, add('svg', 'dynSvg', {}, document.body, SVG), SVG);
         \\`);
         \\page.click("#dynChild");
-        \\expectActive("dynFocus", "child click did not focus tabindex ancestor");
+        \\await expectActive("dynFocus", "child click did not focus tabindex ancestor");
         \\page.click("#dynNeg");
-        \\expectActive("dynNeg", "tabindex=-1 was not mouse-focusable");
+        \\await expectActive("dynNeg", "tabindex=-1 was not mouse-focusable");
         \\page.click("#dynBad");
-        \\expectActive("body", "unparsable tabindex was mouse-focusable");
+        \\await expectActive("body", "unparsable tabindex was mouse-focusable");
         \\page.click("#dynBadBtn");
-        \\expectActive("dynBadBtn", "unparsable tabindex on a native button lost native mousedown focusability");
+        \\await expectActive("dynBadBtn", "unparsable tabindex on a native button lost native mousedown focusability");
         \\// Toolbar idiom: preventDefault() on mousedown preserves existing focus.
         \\page.click("#inp");
-        \\expectActive("inp", "setup failed");
+        \\await expectActive("inp", "setup failed");
         \\page.click("#toolbarBtn");
-        \\expectActive("inp", "preventDefault on mousedown did not protect focus");
+        \\await expectActive("inp", "preventDefault on mousedown did not protect focus");
         \\// Label click focuses its labeled control.
         \\page.click("#dynLabel");
-        \\expectActive("dynLabInp", "clicking label did not focus its control");
+        \\await expectActive("dynLabInp", "clicking label did not focus its control");
         \\// Verified against Chrome.
         \\page.click("#dynHostSpan");
-        \\expectActive("dynHost", "span inside contenteditable did not focus host");
+        \\await expectActive("dynHost", "span inside contenteditable did not focus host");
         \\page.click("#dynInnerSpan");
-        \\expectActive("dynOuter", "nested contenteditable did not focus the outer host");
+        \\await expectActive("dynOuter", "nested contenteditable did not focus the outer host");
         \\page.click("#dynGapSpan");
-        \\expectActive("dynGapOuter", "an ancestor without contenteditable split the editable region");
+        \\await expectActive("dynGapOuter", "an ancestor without contenteditable split the editable region");
         \\page.click("#dynIslandSpan");
-        \\expectActive("dynIsland", "contenteditable=false island did not take its own focus");
+        \\await expectActive("dynIsland", "contenteditable=false island did not take its own focus");
         \\page.click("#dynReentrySpan");
-        \\expectActive("dynReentry", "contenteditable inside a false island did not focus its own host");
+        \\await expectActive("dynReentry", "contenteditable inside a false island did not focus its own host");
         \\// An explicit tabindex is focusable on a non-HTML element too.
         \\page.click("#inp");
         \\page.click("#dynSvgRect");
-        \\expectActive("dynSvgRect", "svg [tabindex] click did not focus the svg element");
+        \\await expectActive("dynSvgRect", "svg [tabindex] click did not focus the svg element");
     );
 }
 
@@ -1936,23 +2299,23 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
         \\await page.goto({ url: "http://localhost:9582/src/browser/tests/mcp_actions.html", timeout: 5000 });
         \\// Single selector positional.
         \\page.click("#btn");
-        \\if (page.evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
+        \\if (await page.evaluate("String(window.clicked)") !== "true") throw new Error("click positional failed");
         \\// Two positionals: selector, value.
         \\page.fill("#inp", "hello");
-        \\if (page.evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
+        \\if (await page.evaluate("window.inputVal") !== "hello") throw new Error("fill two-positional failed");
         \\page.selectOption("#sel", "opt2");
-        \\if (page.evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
+        \\if (await page.evaluate("window.selChanged") !== "opt2") throw new Error("selectOption two-positional failed");
         \\// Bool positional, and the default-true shorthand when omitted.
         \\if (!page.setChecked("#chk").includes("to checked")) throw new Error("setChecked default-true failed");
-        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "true") throw new Error("setChecked(true) did not check the box");
+        \\if (await page.evaluate("String(document.getElementById('chk').checked)") !== "true") throw new Error("setChecked(true) did not check the box");
         \\if (!page.setChecked("#chk", false).includes("to unchecked")) throw new Error("setChecked bool positional failed");
-        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked(false) did not uncheck the box");
+        \\if (await page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked(false) did not uncheck the box");
         \\// Repeat call to the same state is an idempotent no-op, not a toggle.
         \\page.setChecked("#chk", false);
-        \\if (page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked no-op toggled the box");
+        \\if (await page.evaluate("String(document.getElementById('chk').checked)") !== "false") throw new Error("setChecked no-op toggled the box");
         \\// Selector-first press, and a null selector for a page/focused key press.
         \\page.press("#keyTarget", "Enter");
-        \\if (page.evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");
+        \\if (await page.evaluate("window.keyPressed") !== "Enter") throw new Error("selector-first press failed");
         \\page.press(null, "a");
     );
 

@@ -317,6 +317,23 @@ test "record keeps the load wait when goto is followed by extract" {
     );
 }
 
+test "record awaits evaluate" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try recorder.record(parseLine(aa, "/evaluate script='document.title'"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto(\"https://example.com\");\nawait page.evaluate(\"document.title\");\n",
+        recorder.bytes(),
+    );
+}
+
 test "record preserves an explicit waitUntil on goto" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
