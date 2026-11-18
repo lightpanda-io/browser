@@ -1819,6 +1819,9 @@
   testing.expectEqual(568, rect('ca-width').width);
   // A size never goes below 0
   testing.expectEqual(0, rect('ca-negative').width);
+  wrap.insertAdjacentHTML('beforeend', '<div id="ca-negative-max" style="max-width: calc(10px - 50px)"></div><div id="ca-negative-min" style="width: 30px; min-width: calc(1vw - 5000px)"></div>');
+  testing.expectEqual(0, rect('ca-negative-max').width);
+  testing.expectEqual(30, rect('ca-negative-min').width);
   testing.expectEqual(316, rect('ca-max').width);
   testing.expectEqual(560, rect('ca-margin').width);
 
@@ -1832,6 +1835,18 @@
   // Chrome snaps it to 1/64px
   testing.expectTrue(Math.abs(window.innerHeight / 10 + 4 - rect('ca-vh').height) < 0.1);
   testing.expectEqual(98, rect('ca-vh').width);
+
+  // Thirds fit their row: the percentage rounds down
+  wrap.innerHTML = '<div id="ca-third" style="width: calc(33.3333% - 20px)"></div>';
+  testing.expectEqual(179.875, rect('ca-third').width);
+
+  // A rem on its own follows the root's font size
+  wrap.innerHTML = '<div id="ca-rem" style="width: calc(2rem + 4px)"></div>';
+  testing.expectEqual(36, rect('ca-rem').width);
+  document.documentElement.style.fontSize = '20px';
+  testing.expectEqual(44, rect('ca-rem').width);
+  document.documentElement.style.fontSize = '';
+  testing.expectEqual(36, rect('ca-rem').width);
 
   wrap.remove();
 }

@@ -249,7 +249,8 @@ fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution 
 
 fn resolveWidthLimit(self: *Element, limit: StyleManager.BoxLength, resolve_percent: bool, owner: *Frame) ?f64 {
     return switch (limit) {
-        .px => |px| px,
+        // a calc() can go below 0, a limit can't
+        .px => |px| @max(0, px),
         .percent => |percent| if (resolve_percent) @max(0, percent.of(containingBlockWidth(self, owner))) else null,
     };
 }

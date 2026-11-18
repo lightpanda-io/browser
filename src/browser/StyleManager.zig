@@ -2005,7 +2005,7 @@ fn memoizedHeightDeclared(self: *StyleManager, el: *Element) bool {
         return false;
     }
     const stored = group.memo.get(el) orelse return false;
-    return @TypeOf(group.*).load(stored).height.resolve(self, el) != null;
+    return @TypeOf(group.*).load(stored).height.resolves();
 }
 
 // Whether `child` entering or leaving between `previous` and `next` can
@@ -4964,7 +4964,7 @@ pub const Length = packed struct(u36) {
 
     // for space-saving, calc() is reduced to one relative term and a px term,
     // allowing us to store both directly.
-    const Unit = enum(u4) { auto, content, px, vw, vh, percent, em, rem, calc_percent, calc_vw, calc_vh, calc_em };
+    const Unit = enum(u4) { auto, content, px, vw, vh, percent, em, rem, calc_percent, calc_vw, calc_vh, calc_em, calc_rem };
 
     fn parse(text: []const u8) Length {
         if (isIntrinsic(text)) {
@@ -5008,6 +5008,14 @@ pub const Length = packed struct(u36) {
         return std.ascii.startsWithIgnoreCase(text, "fit-content(");
     }
 
+    // Whether resolve() gives a value
+    fn resolves(self: Length) bool {
+        return switch (self.unit) {
+            .auto, .content, .percent, .calc_percent => false,
+            else => true,
+        };
+    }
+
     // In px; null for what doesn't resolve on its own (auto, the intrinsic
     // sizes, a percentage).
     fn resolve(self: Length, style_manager: *StyleManager, el: *Element) ?f64 {
@@ -5024,7 +5032,7 @@ pub const Length = packed struct(u36) {
     noinline fn resolveRelative(self: Length, style_manager: *StyleManager, el: *Element) f64 {
         return switch (self.unit) {
             .vw, .vh, .em, .rem => self.value * unitSize(self.unit, style_manager, el),
-            .calc_vw, .calc_vh, .calc_em => {
+            .calc_vw, .calc_vh, .calc_em, .calc_rem => {
                 const terms = Calc.unpack(self.value);
                 return terms.px + terms.coefficient * unitSize(self.unit, style_manager, el);
             },
@@ -5052,7 +5060,7 @@ pub const Length = packed struct(u36) {
                 return @as(f64, @floatFromInt(if (unit == .vw or unit == .calc_vw) viewport.width else viewport.height)) / 100.0;
             },
             .em, .calc_em => style_manager.computedFontSize(el),
-            .rem => style_manager.computedFontSize(style_manager.frame.document.getDocumentElement()),
+            .rem, .calc_rem => style_manager.computedFontSize(style_manager.frame.document.getDocumentElement()),
             else => unreachable,
         };
     }
@@ -5069,18 +5077,19 @@ pub const Percent = struct {
 };
 
 /// calc() reduced to a sum of terms, one per unit. A Length holds px
-/// and at most one relative term (%, vw, vh, em), each an f16 in the value's
-/// bits. This is the only way I could make it fit, without growing the type
-/// or storing it in a separate lookup. It means a calc(100% - 2rem) stores
-/// the rem as pixels (DEFAULT_FONT_SIZE). Not a huge deal given that we only
-/// track inline font-sizes for now.
+/// and at most one relative term (%, vw, vh, em, rem), each an f16 in the
+/// value's bits. This is the only way I could make it fit, without growing
+/// the type or storing it in a separate lookup. It means a calc(100% - 2rem)
+/// stores the rem as pixels (DEFAULT_FONT_SIZE); a rem that's the only
+/// relative term is kept. Not a huge deal given that we only track inline
+/// font-sizes for now.
 const Calc = struct {
     // Indexed by Term
-    terms: [5]f64 = @splat(0),
+    terms: [6]f64 = @splat(0),
     // A <number> (in px's slot), not a length: what * and / scale by
     number: bool = false,
 
-    const Term = enum { px, percent, vw, vh, em };
+    const Term = enum { px, percent, vw, vh, em, rem };
 
     // The value's bits: two f16s. Both finite, the f32 is too (its exponent
     // is in the high f16's), so it's never a NaN to compare.
@@ -5104,14 +5113,20 @@ const Calc = struct {
             return .{};
         }
         var relative: ?Term = null;
+        var px = self.terms[@backingInt(Term.px)];
         for (self.terms[1..], 1..) |coefficient, i| {
             if (coefficient == 0) continue;
-            if (relative != null) {
+            const term: Term = @fromBackingInt(@intCast(i));
+            if (relative == null) {
+                relative = term;
+                continue;
+            }
+            // rem is last: next to another relative term, it's px
+            if (term != .rem) {
                 return .{};
             }
-            relative = @fromBackingInt(@intCast(i));
+            px += coefficient * DEFAULT_FONT_SIZE;
         }
-        const px = self.terms[@backingInt(Term.px)];
         const term = relative orelse return .{ .value = @floatCast(px), .unit = .px };
         const coefficient = self.terms[@backingInt(term)];
         if (px == 0) {
@@ -5121,7 +5136,7 @@ const Calc = struct {
                 inline else => |t| @field(Length.Unit, @tagName(t)),
             } };
         }
-        const pair: Packed = .{ .px = @floatCast(px), .coefficient = @floatCast(coefficient) };
+        const pair: Packed = .{ .px = @floatCast(px), .coefficient = truncate(coefficient) };
         if (std.math.isFinite(pair.px) == false or std.math.isFinite(pair.coefficient) == false) {
             return .{};
         }
@@ -5129,6 +5144,17 @@ const Calc = struct {
             .px => unreachable,
             inline else => |t| @field(Length.Unit, "calc_" ++ @tagName(t)),
         } };
+    }
+
+    // Rounded toward zero. An f16 has 11 bits of precision: to the nearest,
+    // 33.3333% is 33.34375%, and three of those are wider than their row.
+    fn truncate(value: f64) f16 {
+        const nearest: f16 = @floatCast(value);
+        if (std.math.isFinite(nearest) == false or @abs(@as(f64, nearest)) <= @abs(value)) {
+            return nearest;
+        }
+        // not 0, it's past value: the bits below are the next one down
+        return @bitCast(@as(u16, @bitCast(nearest)) - 1);
     }
 
     fn unpack(value: f32) struct { coefficient: f64, px: f64 } {
@@ -5231,7 +5257,7 @@ const Calc = struct {
                         .vw => result.terms[@backingInt(Term.vw)] = n,
                         .vh => result.terms[@backingInt(Term.vh)] = n,
                         .em => result.terms[@backingInt(Term.em)] = n,
-                        .rem => result.terms[0] = n * DEFAULT_FONT_SIZE,
+                        .rem => result.terms[@backingInt(Term.rem)] = n,
                         else => result.terms[0] = n * (units.absoluteLengthFactor(unit) orelse return null),
                     }
                 },
@@ -6950,7 +6976,8 @@ pub const DEFAULT_FONT_SIZE = 16;
 /// Computed font-size in CSS pixels. We do what we can, namely inline styles
 /// font-related attributes, up the parent chain.
 /// Reading sheets here would make the root's font size differ from 16px:
-/// calc() folds a rem at DEFAULT_FONT_SIZE (see Calc), so give it a unit then.
+/// calc() folds a rem next to another relative term at DEFAULT_FONT_SIZE
+/// (see Calc), so that needs revisiting then.
 pub fn computedFontSize(self: *StyleManager, element: ?*Element) f64 {
     self.assertOwns(element);
     return self.computedFontSizeAt(element, 0);
@@ -8932,7 +8959,9 @@ test "StyleManager: calc() reduces to px and one relative term" {
     const cases = [_]Case{
         .{ "calc(10px + 2px)", .px, 12, 0 },
         .{ "calc(1in - 2 * 8px)", .px, 80, 0 },
-        .{ "calc(2rem)", .px, 32, 0 },
+        .{ "calc(2rem)", .rem, 2, 0 },
+        .{ "calc(1rem + 4px)", .calc_rem, 1, 4 },
+        .{ "calc(2rem - 1rem - 1rem + 4px)", .px, 4, 0 },
         .{ "calc(50%)", .percent, 50, 0 },
         .{ "calc(100% / 3)", .percent, 100.0 / 3.0, 0 },
         .{ "CALC(100% - 2rem)", .calc_percent, 100, -32 },
@@ -8947,7 +8976,7 @@ test "StyleManager: calc() reduces to px and one relative term" {
         const length = Length.parse(text);
         try testing.expectEqual(unit, length.unit);
         switch (unit) {
-            .calc_percent, .calc_vw, .calc_vh, .calc_em => {
+            .calc_percent, .calc_vw, .calc_vh, .calc_em, .calc_rem => {
                 const terms = Calc.unpack(length.value);
                 try testing.expectDelta(coefficient, terms.coefficient, 0.05);
                 try testing.expectEqual(px, terms.px);
@@ -8955,6 +8984,11 @@ test "StyleManager: calc() reduces to px and one relative term" {
             else => try testing.expectDelta(coefficient, length.value, 0.0001),
         }
     }
+
+    // The relative term never rounds up
+    try testing.expectEqual(33.3125, Calc.unpack(Length.parse("calc(33.3333% - 20px)").value).coefficient);
+    try testing.expectEqual(-33.3125, Calc.unpack(Length.parse("calc(20px - 33.3333%)").value).coefficient);
+    try testing.expectEqual(66.625, Calc.unpack(Length.parse("calc(66.6667% - 20px)").value).coefficient);
 
     // What doesn't reduce is auto
     for ([_][]const u8{
