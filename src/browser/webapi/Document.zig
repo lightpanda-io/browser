@@ -1006,11 +1006,17 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
     // inside their slot, as layout.zig lays them out); topmost = last visited
     // element whose rect contains (x, y).
     //
+    // Positioned boxes and their subtrees paint above the normal flow, in
+    // tree order (CSS 2.1 Appendix E, z-index: auto). So a hit there wins
+    // over one in the flow, even one that comes later in the tree. Those
+    // with a negative z-index paint below the flow instead, so they lose to
+    // it. Other z-index values aren't ordered: they count as auto.
+    //
     // A display:none or inert subtree isn't walked: nothing in it opts out.
     // Neither is one whose band the point is outside of (see
     // StyleManager.HitBands), once a walk has recorded them: `recording`
     // is that walk, which skips nothing but display:none.
-    var topmost: ?*Element = null;
+    var topmost: std.EnumArray(StyleManager.HitFacts.PaintLayer, ?*Element) = .initFill(null);
 
     const root = self.asNode();
     const owner = root.ownerFrame(frame) orelse return null;
@@ -1069,6 +1075,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             // The bands don't know about inert, an attribute nothing else
             // here tracks: recording walks its subtree, for the boxes only.
             const inert = above.inert or element.hasInertAttribute();
+            const layer = facts.layer.under(above.layer);
             if (inert and recording == false) {
                 continue;
             }
@@ -1081,13 +1088,13 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
             var left: ?f64 = null;
             if (inert == false and facts.hittable and y >= top and y <= top + (recorded_height orelse layout.boxHeight(element, owner))) {
                 if (ignore_x) {
-                    topmost = element;
+                    topmost.set(layer, element);
                 } else {
                     // only bother calculating the horiziontal position for
                     // elements contained by the vertical band
                     const l = HitLevel.leftOf(levels.items, element, facts, level, owner, frame);
                     if (x >= l and x <= l + element.boxAxis(frame, .width)) {
-                        topmost = element;
+                        topmost.set(layer, element);
                     }
                     left = l;
                 }
@@ -1108,6 +1115,7 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
                 .up = level,
                 .band = band,
                 .inert = inert,
+                .layer = layer,
             });
             level = @intCast(levels.items.len - 1);
         }
@@ -1125,8 +1133,9 @@ fn hitTestImpl(self: *Document, viewport_x: f64, viewport_y: f64, ignore_x: bool
         HitLevel.close(&levels, 1, recording, style_manager);
         style_manager.hitBandsRecorded();
     }
-    style_manager.setLastHit(point, topmost);
-    return topmost;
+    const hit = topmost.get(.positioned) orelse topmost.get(.flow) orelse topmost.get(.below);
+    style_manager.setLastHit(point, hit);
+    return hit;
 }
 
 // An element whose children hitTestImpl is walking: where they are placed
@@ -1147,6 +1156,7 @@ const HitLevel = struct {
     // When recording: element's box and those of its subtree walked so far
     band: StyleManager.HitBand = .none,
     inert: bool = false, // element or an ancestor
+    layer: StyleManager.HitFacts.PaintLayer = .flow, // see hitTestImpl
 
     // Drops the levels from `keep` up: their subtrees are walked. When
     // recording, each one's band is final, and part of its parent's.
