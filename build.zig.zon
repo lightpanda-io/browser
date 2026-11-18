@@ -52,8 +52,15 @@
             .hash = "pcre2-10.50.0-DEV-IZ6r6yDTrgCmI3jcBntPIdZLWLhNORGZZSi8hxQkc11x",
         },
         .translate_c = .{
-            .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.0#0da7a16c3235b935b82421646076e0657cda21f6",
+            .url = "git+https://github.com/lightpanda-io/translate-c?ref=2.0.0#0da7a16c3235b935b82421646076e0657cda21f6",
             .hash = "translate_c-2.0.0-Q_BUWltOBwA0229IE8wwSxxGzOxyRso3hvcb1nN8oJX_",
+        },
+        // translate_c fetches aro from Codeberg. Dependencies are deduplicated by
+        // hash and the root manifest is resolved first, so declaring it here
+        // fetches it from our GitHub mirror instead.
+        .aro = .{
+            .url = "git+https://github.com/lightpanda-io/arocc?ref=translate-c-2.0.0#d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b",
+            .hash = "aro-0.0.0-JSD1QtuBNwCASyBtNF3pqTl_W3oAJQGEVyFAtrBSE_Pa",
         },
     },
     .paths = .{""},
