@@ -175,12 +175,12 @@ pub const PreloadScript = struct {
 
     // At most one of these is set. Neither means every navigable.
     context: ?[36]u8,
-    user_context: ?[]const u8,
+    user_context: ?BiDi.UserContext.Id,
 
     // A preload script targeting a navigable also runs in its descendants.
     fn appliesTo(self: *const PreloadScript, bidi: *BiDi, frame: *const Frame) bool {
         if (self.user_context) |user_context| {
-            return std.mem.eql(u8, user_context, bidi.user_context.id());
+            return std.mem.eql(u8, user_context.slice(), bidi.user_context.id());
         }
         const context = self.context orelse return true;
         const ctx = bidi.browsing_context orelse return false;
@@ -231,7 +231,7 @@ fn addPreloadScript(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     const allocator = bidi.session_arena.allocator();
 
-    var user_context: ?[]const u8 = null;
+    var user_context: ?BiDi.UserContext.Id = null;
     if (p.userContexts) |user_contexts| {
         if (user_contexts.len == 0) {
             return cmd.sendError("invalid argument", "userContexts is empty");
@@ -241,7 +241,7 @@ fn addPreloadScript(cmd: *BiDi.Command) !void {
                 return cmd.sendError("no such user context", "unknown user context");
             }
         }
-        user_context = try allocator.dupe(u8, bidi.user_context.id());
+        user_context = bidi.user_context._id;
     }
 
     // \n in case the functionDeclaration ends with a comment.

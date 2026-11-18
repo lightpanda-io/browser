@@ -268,17 +268,31 @@ pub fn replaceSession(self: *BiDi, id: []const u8) !void {
 
 fn newUserContext(self: *BiDi, id: []const u8) !void {
     const session = try self.browser.newSession(self.notification);
-    self.user_context = .{ .session = session, .id_len = @intCast(id.len), .id_buf = undefined };
-    @memcpy(self.user_context.id_buf[0..id.len], id);
+    self.user_context = .{ .session = session, ._id = .init(id) };
 }
 
-const UserContext = struct {
-    id_len: u8,
-    id_buf: [36]u8, // "default" or uuid
+pub const UserContext = struct {
+    _id: Id,
     session: *Session,
 
+    // "default" or a uuid, so it fits a fixed buffer.
+    pub const Id = struct {
+        len: u8,
+        buf: [36]u8,
+
+        pub fn init(value: []const u8) Id {
+            var self: Id = .{ .len = @intCast(value.len), .buf = undefined };
+            @memcpy(self.buf[0..value.len], value);
+            return self;
+        }
+
+        pub fn slice(self: *const Id) []const u8 {
+            return self.buf[0..self.len];
+        }
+    };
+
     pub fn id(self: *const UserContext) []const u8 {
-        return self.id_buf[0..self.id_len];
+        return self._id.slice();
     }
 
     pub fn isDefault(self: *const UserContext) bool {
