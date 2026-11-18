@@ -508,7 +508,7 @@ fn getValidity(self: *Select, frame: *Frame) !*ValidityState {
     return v;
 }
 
-fn getValidationMessage(self: *const Select) []const u8 {
+pub fn getValidationMessage(self: *const Select) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please select an item in the list.";

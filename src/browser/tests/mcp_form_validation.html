@@ -1,0 +1,14 @@
+<form>
+  <input id="zip" name="postalCode">
+  <input type="password" id="password">
+  <input type="number" min="0" step="2" value="3">
+  <textarea required disabled></textarea>
+  <select required><option value=""></option></select>
+</form>
+<script>
+  document.querySelector("#zip").setCustomValidity("Outside delivery area");
+  document.querySelector("#password").setCustomValidity("private value");
+  document.forms[0].requestSubmit();
+  window.invalidEvents = 0;
+  document.addEventListener("invalid", () => window.invalidEvents++, true);
+</script>

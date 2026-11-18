@@ -50,6 +50,7 @@ const FormField = struct {
     value: ?[]const u8,
     placeholder: ?[]const u8,
     options: []SelectOption,
+    validation_message: []const u8 = "",
 
     pub fn jsonStringify(self: *const FormField, jw: anytype) !void {
         try jw.beginObject();
@@ -81,6 +82,11 @@ const FormField = struct {
         if (self.value) |v| {
             try jw.objectField("value");
             try jw.write(v);
+        }
+
+        if (self.validation_message.len != 0) {
+            try jw.objectField("validationMessage");
+            try jw.write(self.validation_message);
         }
 
         if (self.placeholder) |v| {
@@ -158,6 +164,7 @@ pub fn collectForms(
     arena: Allocator,
     root: *Node,
     frame: *Frame,
+    include_validation: bool,
 ) ![]FormInfo {
     var forms: std.ArrayList(FormInfo) = .empty;
 
@@ -165,7 +172,7 @@ pub fn collectForms(
     while (tw.next()) |form| {
         const el = form.asElement();
 
-        const fields = try collectFormFields(arena, form, frame);
+        const fields = try collectFormFields(arena, form, frame, include_validation);
         if (fields.len == 0) continue;
 
         const action_attr = el.getAttributeInterned("action");
@@ -186,6 +193,7 @@ fn collectFormFields(
     arena: Allocator,
     form: *Element.Html.Form,
     frame: *Frame,
+    include_validation: bool,
 ) ![]FormField {
     var fields: std.ArrayList(FormField) = .empty;
 
@@ -208,6 +216,8 @@ fn collectFormFields(
                 .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = input.getRedactedValue(),
+                // A site-authored password validation message can echo the value.
+                .validation_message = if (include_validation and input._input_type != .password) input.getValidationMessage(frame) else "",
                 .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
@@ -223,6 +233,7 @@ fn collectFormFields(
                 .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = textarea.getValue(),
+                .validation_message = if (include_validation) textarea.getValidationMessage() else "",
                 .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
@@ -240,6 +251,7 @@ fn collectFormFields(
                 .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = select.getValue(frame),
+                .validation_message = if (include_validation) select.getValidationMessage() else "",
                 .placeholder = null,
                 .options = options,
             });
@@ -278,7 +290,7 @@ fn testForms(html: []const u8) ![]FormInfo {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
-    return collectForms(frame.call_arena, div.asNode(), frame);
+    return collectForms(frame.call_arena, div.asNode(), frame, false);
 }
 
 test "browser.forms: login form" {

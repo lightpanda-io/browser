@@ -372,7 +372,7 @@ fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     return try frame.local_arena.print("C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
-fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
+pub fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please fill out this field.";
@@ -386,6 +386,7 @@ fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
     if (self.suffersTooShort()) return "Please lengthen this text.";
     if (self.suffersRangeUnderflow()) return "Value is too small.";
     if (self.suffersRangeOverflow()) return "Value is too large.";
+    if (self.suffersStepMismatch()) return "Please enter a value that matches the step.";
     return "";
 }
 

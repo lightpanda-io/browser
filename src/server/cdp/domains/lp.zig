@@ -352,6 +352,8 @@ fn getPageStatus(cmd: anytype) !void {
 }
 
 fn detectForms(cmd: anytype) !void {
+    const Params = struct { includeValidation: bool = false };
+    const params = (try cmd.params(Params)) orelse Params{};
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
@@ -359,6 +361,7 @@ fn detectForms(cmd: anytype) !void {
         cmd.arena,
         frame.document.asNode(),
         frame,
+        params.includeValidation,
     );
 
     try lp.forms.registerNodes(forms_data, &target.node_registry);
