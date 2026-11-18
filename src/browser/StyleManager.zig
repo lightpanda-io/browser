@@ -8838,21 +8838,26 @@ test "StyleManager: memo: an offset cut from the placed ones doesn't come back" 
     const middle = first.nextSibling().?;
     const last = middle.nextSibling().?.as(Element);
 
-    // An empty box is 5px tall
-    try testing.expectEqual(15, layout.boxTop(last, frame));
+    // An empty box is 0px tall
+    try testing.expectEqual(10, layout.boxTop(last, frame));
     // Text makes the middle one taller: the last is no longer placed
     _ = try middle.appendChild(try doc.createTextNode("text"), frame);
     // An element before them takes index 0, and the middle one is placed
-    // again, at the last one's old index
-    _ = try box.insertBefore((try doc.createElement("div", null, frame)).asNode(), first, frame);
+    // again, at the last one's old index. It is 5px tall, so a stale offset
+    // shows.
+    const spacer = try doc.createElement("div", null, frame);
+    try spacer.setAttribute(comptime .wrap("style"), comptime .wrap("height: 5px"), frame);
+    _ = try box.insertBefore(spacer.asNode(), first, frame);
     const below = layout.boxTop(middle.as(Element), frame) + layout.boxHeight(middle.as(Element), frame);
-    try testing.expect(below > 20);
+    try testing.expect(below > 15);
     try testing.expectEqual(below, layout.boxTop(last, frame));
 
     // The same through a height write
     const style = (try middle.as(Element).getOrCreateStyle(frame)).asCSSStyleDeclaration();
     try style.setProperty("height", "50px", null, frame);
-    _ = try box.insertBefore((try doc.createElement("div", null, frame)).asNode(), first, frame);
+    const other_spacer = try doc.createElement("div", null, frame);
+    try other_spacer.setAttribute(comptime .wrap("style"), comptime .wrap("height: 5px"), frame);
+    _ = try box.insertBefore(other_spacer.asNode(), first, frame);
     try testing.expectEqual(20, layout.boxTop(middle.as(Element), frame));
     try testing.expectEqual(70, layout.boxTop(last, frame));
 }
@@ -9043,7 +9048,8 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                     }
                     const top = layout.boxTop(el, frame);
                     const left = el.horizontalPosition(frame);
-                    if (y >= top and y <= top + layout.boxHeight(el, frame) and x >= left and x <= left + el.boxAxis(frame, .width)) {
+                    const height = layout.boxHeight(el, frame);
+                    if (height > 0 and y >= top and y <= top + height and x >= left and x <= left + el.boxAxis(frame, .width)) {
                         expected = el;
                     }
                 }

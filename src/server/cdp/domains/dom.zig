@@ -983,7 +983,7 @@ test "cdp.dom: scrollIntoViewIfNeeded brings the node's quads into the viewport"
     // Push the target below the fold.
     _ = try ls.local.compileAndRun(
         \\const far = document.getElementById('btn');
-        \\for (let i = 0; i < 300; i++) document.body.insertBefore(document.createElement('p'), far);
+        \\for (let i = 0; i < 300; i++) document.body.insertBefore(document.createElement('p'), far).textContent = 'x';
     , null);
     try testing.expect((try ls.local.compileAndRun("far.getBoundingClientRect().top > window.innerHeight", null)).isTrue());
 

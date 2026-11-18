@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!-- https://github.com/lightpanda-io/browser/issues/4371 -->
+<body>
+  <div id="track" style="position:relative;width:300px;height:20px">
+    <div id="knob" style="position:absolute;left:0;top:15px;width:20px;height:20px"></div>
+  </div>
+  <div id="out"></div>
+</body>
+
+<script id="empty_block_has_no_height">
+{
+  // An empty block with no explicit height is 0px tall in Chrome.
+  const r = document.getElementById('out').getBoundingClientRect();
+  testing.expectEqual(0, r.height);
+}
+</script>
+
+<script id="empty_block_does_not_cover_knob">
+{
+  const knob = document.getElementById('knob');
+  const k = knob.getBoundingClientRect();
+  const x = k.left + k.width / 2;
+
+  // The knob overflows #track and overlaps where #out starts. #out is
+  // empty, so every point of the knob must hit the knob, not #out.
+  for (let y = k.top + 0.5; y < k.bottom; y += 1) {
+    testing.expectEqual('knob', document.elementFromPoint(x, y)?.id);
+  }
+
+  const o = document.getElementById('out').getBoundingClientRect();
+  testing.expectEqual('knob', document.elementFromPoint(x, o.top + 0.5)?.id);
+}
+</script>

@@ -136,11 +136,20 @@
 
 <script id=nested_root_tags_are_not_roots>
   // A <body> or <html> placed inside body is sized like any other element
-  // (5px each), not as the document root, which recursed forever.
+  // (one line each, like a <div>), not as the document root, which recursed
+  // forever.
   const before = document.documentElement.scrollHeight;
+  const line = document.body.appendChild(document.createElement('div'));
+  line.textContent = 'x';
+  const line_height = document.documentElement.scrollHeight - before;
+  line.remove();
+  testing.expectTrue(line_height > 0);
+
   const nested_body = document.body.appendChild(document.createElement('body'));
+  nested_body.textContent = 'x';
   const nested_html = document.body.appendChild(document.createElement('html'));
-  testing.expectEqual(before + 10, document.documentElement.scrollHeight);
+  nested_html.textContent = 'x';
+  testing.expectEqual(before + 2 * line_height, document.documentElement.scrollHeight);
   testing.expectTrue(document.documentElement.scrollWidth > 0);
   nested_body.remove();
   nested_html.remove();
