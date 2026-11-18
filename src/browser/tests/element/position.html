@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <meta charset="UTF-8">
-<meta name=lp-mode content="skipped: asserts our approximate layout (5px default boxes, estimated text widths), not Chrome's real layout">
+<meta name=lp-mode content="skipped: asserts our approximate layout, not Chrome's real layout">
 <script src="../testing.js"></script>
 
 <div id="test1">Test Element</div>
@@ -1760,6 +1760,78 @@
   wrap.innerHTML = `<span id="tw-shrink" style="display: inline-block">${words}</span>`;
   const shrink = rect('tw-shrink').width;
   testing.expectTrue(shrink <= window.innerWidth && shrink > window.innerWidth - 100);
+
+  wrap.remove();
+}
+</script>
+
+<style>
+  .remBox { width: 10rem; height: 2rem; }
+</style>
+<script id="fontRelativeLengths">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // A rem is the root's font size, from a sheet too
+  wrap.innerHTML = '<div id="fr-rem" class="remBox"></div>';
+  testing.expectEqual(160, rect('fr-rem').width);
+  testing.expectEqual(32, rect('fr-rem').height);
+
+  // An em is the box's own font size, inherited or not
+  wrap.innerHTML = '<div style="font-size: 20px"><div id="fr-inherited" style="width: 5em; height: 1em"></div><div id="fr-own" style="width: 5em; font-size: 10px"></div></div>';
+  testing.expectEqual(100, rect('fr-inherited').width);
+  testing.expectEqual(20, rect('fr-inherited').height);
+  testing.expectEqual(50, rect('fr-own').width);
+
+  // Limits, margins and insets take them too
+  wrap.innerHTML = '<div id="fr-max" style="max-width: 10em"></div><div id="fr-min" style="display: inline-block; min-width: 3rem"></div><div id="fr-margin" style="margin-left: 2rem; margin-right: 1em"></div><div style="position: relative; width: 300px; height: 10px"><div id="fr-inset" style="position: absolute; left: 1em; right: 1em"></div></div>';
+  testing.expectEqual(160, rect('fr-max').width);
+  testing.expectEqual(48, rect('fr-min').width);
+  testing.expectEqual(600 - 32 - 16, rect('fr-margin').width);
+  testing.expectEqual(300 - 32, rect('fr-inset').width);
+
+  // A font size change resizes them
+  wrap.innerHTML = '<div id="fr-parent" style="font-size: 10px"><div id="fr-child" style="width: 4em"></div></div><div id="fr-rem2" class="remBox"></div>';
+  testing.expectEqual(40, rect('fr-child').width);
+  $('#fr-parent').style.fontSize = '30px';
+  testing.expectEqual(120, rect('fr-child').width);
+  document.documentElement.style.fontSize = '20px';
+  testing.expectEqual(200, rect('fr-rem2').width);
+  document.documentElement.style.fontSize = '';
+  testing.expectEqual(160, rect('fr-rem2').width);
+
+  wrap.remove();
+}
+</script>
+
+<script id="calcLengths">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // A percentage and a px (or rem) term together
+  wrap.innerHTML = '<div id="ca-width" style="width: calc(100% - 2rem)"></div><div id="ca-negative" style="width: calc(50% - 400px)"></div><div id="ca-max" style="max-width: calc(50% + 1rem)"></div><div id="ca-margin" style="margin: 0 calc(1rem + 4px)"></div>';
+  testing.expectEqual(568, rect('ca-width').width);
+  // A size never goes below 0
+  testing.expectEqual(0, rect('ca-negative').width);
+  testing.expectEqual(316, rect('ca-max').width);
+  testing.expectEqual(560, rect('ca-margin').width);
+
+  // A flex item's percentage is of its row
+  wrap.innerHTML = '<div style="display: flex"><div id="ca-item" style="width: calc(50% - 10px); flex-shrink: 0"></div></div>';
+  testing.expectEqual(290, rect('ca-item').width);
+
+  // Insets, and terms that resolve without a containing block
+  wrap.innerHTML = '<div style="position: relative; width: 300px; height: 10px"><div id="ca-inset" style="position: absolute; left: calc(10% + 5px); right: 0"></div></div><div id="ca-vh" style="height: calc(10vh + 4px); width: calc(2em * 3 + 2px)"></div>';
+  testing.expectEqual(265, rect('ca-inset').width);
+  // Chrome snaps it to 1/64px
+  testing.expectTrue(Math.abs(window.innerHeight / 10 + 4 - rect('ca-vh').height) < 0.1);
+  testing.expectEqual(98, rect('ca-vh').width);
 
   wrap.remove();
 }

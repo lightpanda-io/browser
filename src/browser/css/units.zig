@@ -74,6 +74,16 @@ const suffixes = [_]struct { []const u8, Unit }{
     .{ "vw", .vw },
 };
 
+/// The unit a suffix names (`px`, `rem`, `%`...), any case.
+pub fn lookup(sfx: []const u8) ?Unit {
+    for (suffixes) |entry| {
+        if (std.ascii.eqlIgnoreCase(sfx, entry[0])) {
+            return entry[1];
+        }
+    }
+    return null;
+}
+
 pub fn parse(input: []const u8) error{SyntaxError}!Parsed {
     const value = std.mem.trim(u8, input, WHITESPACE);
     if (value.len == 0) {

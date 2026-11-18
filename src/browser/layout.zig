@@ -67,7 +67,7 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
         }
         const width = if (own.explicit) own.value else switch (sizing) {
             .fixed => |width| width,
-            .percent => |fraction| fraction * containingBlockWidth(self, owner),
+            .percent => |percent| @max(0, percent.of(containingBlockWidth(self, owner))),
             .fill => fillWidth(self, owner),
             .grow, .shrink => shrunk: {
                 // The boxes inside it take their width from its content's
@@ -122,7 +122,7 @@ fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
     const own = self.getElementAxis(owner, .width);
     const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
         .fixed => |width| width,
-        .percent => |fraction| fraction * row_width,
+        .percent => |percent| @max(0, percent.of(row_width)),
         .shrink, .grow, .fill => @max(own.value, contentWidth(self, .full, owner)),
         .contents => return .{
             .base = widthContribution(self, .full, owner),
@@ -250,7 +250,7 @@ fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution 
 fn resolveWidthLimit(self: *Element, limit: StyleManager.BoxLength, resolve_percent: bool, owner: *Frame) ?f64 {
     return switch (limit) {
         .px => |px| px,
-        .percent => |fraction| if (resolve_percent) fraction * containingBlockWidth(self, owner) else null,
+        .percent => |percent| if (resolve_percent) @max(0, percent.of(containingBlockWidth(self, owner))) else null,
     };
 }
 
@@ -563,8 +563,8 @@ pub const Anchor = struct {
             return null;
         }
         const start, const end = switch (axis) {
-            .vertical => .{ style_manager.inset(el, .top), style_manager.inset(el, .bottom) },
-            .horizontal => .{ style_manager.inset(el, .left), style_manager.inset(el, .right) },
+            .vertical => style_manager.insets(el, .top, .bottom),
+            .horizontal => style_manager.insets(el, .left, .right),
         };
         if (start == null and end == null) {
             return null;
@@ -592,8 +592,8 @@ pub fn relativeShift(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
         return 0;
     }
     const start, const end = switch (axis) {
-        .vertical => .{ style_manager.inset(el, .top), style_manager.inset(el, .bottom) },
-        .horizontal => .{ style_manager.inset(el, .left), style_manager.inset(el, .right) },
+        .vertical => style_manager.insets(el, .top, .bottom),
+        .horizontal => style_manager.insets(el, .left, .right),
     };
     const base = style_manager.containingBlock(el);
     if (start) |s| {
@@ -608,7 +608,7 @@ pub fn relativeShift(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
 fn resolveInset(length: StyleManager.BoxLength, base: ?*Element, comptime axis: Axis, owner: *Frame) f64 {
     return switch (length) {
         .px => |px| px,
-        .percent => |fraction| fraction * containingSize(base, axis, owner),
+        .percent => |percent| percent.of(containingSize(base, axis, owner)),
     };
 }
 
