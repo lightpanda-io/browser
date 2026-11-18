@@ -372,9 +372,18 @@ fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     return try frame.local_arena.print("C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
-pub fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
+fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
+    return self.validationMessage(frame, false);
+}
+
+pub fn getRedactedValidationMessage(self: *Input, frame: *Frame) []const u8 {
+    return self.validationMessage(frame, self._input_type == .password);
+}
+
+fn validationMessage(self: *Input, frame: *Frame, redact_custom: bool) []const u8 {
     if (!self.getWillValidate()) return "";
-    if (self._custom_validity) |msg| return msg;
+    // A site's custom message can echo the typed password.
+    if (self._custom_validity) |msg| return if (redact_custom) "Please enter a valid value." else msg;
     if (self.suffersValueMissing()) return "Please fill out this field.";
     if (self.suffersTypeMismatch()) return switch (self._input_type) {
         .email => "Please enter an email address.",

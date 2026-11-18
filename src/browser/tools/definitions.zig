@@ -302,7 +302,7 @@ pub fn of(tool: Tool) Definition {
                 \\  "properties": {
                 \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
                 \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                \\    "includeValidation": { "type": "boolean", "description": "Include non-empty validationMessage on non-password fields. Defaults to false." }
+                \\    "includeValidation": { "type": "boolean", "description": "Include non-empty validationMessage. Custom password messages use a generic error. Defaults to false." }
                 \\  }
                 \\}
             ),

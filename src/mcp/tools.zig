@@ -2699,12 +2699,13 @@ test "MCP - detectForms explains a rejected field without triggering validation"
     const forms = try std.json.parseFromSliceLeaky([]Form, aa, try testToolText(aa, out.written()), .{ .ignore_unknown_fields = true });
     try testing.expectEqual(1, forms.len);
     const fields = forms[0].fields;
-    try testing.expectEqual(5, fields.len);
+    try testing.expectEqual(6, fields.len);
     try testing.expectEqual("Outside delivery area", fields[0].validationMessage.?);
-    try testing.expectEqual(null, fields[1].validationMessage);
+    try testing.expectEqual("Please enter a valid value.", fields[1].validationMessage.?);
     try testing.expect(fields[2].validationMessage != null);
     try testing.expectEqual(null, fields[3].validationMessage);
     try testing.expect(fields[4].validationMessage != null);
+    try testing.expectEqual("Please fill out this field.", fields[5].validationMessage.?);
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"window.invalidEvents"}}}

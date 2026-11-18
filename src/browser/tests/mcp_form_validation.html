@@ -4,10 +4,13 @@
   <input type="number" min="0" step="2" value="3">
   <textarea required disabled></textarea>
   <select required><option value=""></option></select>
+  <input type="password" required>
 </form>
 <script>
   document.querySelector("#zip").setCustomValidity("Outside delivery area");
-  document.querySelector("#password").setCustomValidity("private value");
+  const password = document.querySelector("#password");
+  password.value = "private value";
+  password.setCustomValidity(password.value);
   document.forms[0].requestSubmit();
   window.invalidEvents = 0;
   document.addEventListener("invalid", () => window.invalidEvents++, true);

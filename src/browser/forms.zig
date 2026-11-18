@@ -216,8 +216,7 @@ fn collectFormFields(
                 .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = input.getRedactedValue(),
-                // A site-authored password validation message can echo the value.
-                .validation_message = if (include_validation and input._input_type != .password) input.getValidationMessage(frame) else "",
+                .validation_message = if (include_validation) input.getRedactedValidationMessage(frame) else "",
                 .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
