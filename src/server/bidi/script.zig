@@ -128,7 +128,7 @@ fn callFunction(cmd: *BiDi.Command) !void {
     if (declaration.isFunction() == false) {
         return cmd.sendError("invalid argument", "functionDeclaration is not a function");
     }
-    const function = js.Function{ .local = &ls.local, .handle = @ptrCast(declaration.handle) };
+    const function = declaration.toFunction();
 
     const arguments = try arena.alloc(js.Value, p.arguments.len);
     for (p.arguments, arguments) |argument, *js_argument| {
@@ -308,7 +308,7 @@ fn onFrameNavigated(ptr: *anyopaque, msg: *const Notification.FrameNavigated) !v
             log.debug(.bidi, "preload script not a function", .{ .id = &preload.id });
             continue;
         }
-        const function = js.Function{ .local = &ls.local, .handle = @ptrCast(declaration.handle) };
+        const function = declaration.toFunction();
         // A throw is reported on the window, like any script's.
         function.callWithThisReport({}, .{}) catch |err| {
             log.debug(.bidi, "preload script", .{ .id = &preload.id, .err = err });
