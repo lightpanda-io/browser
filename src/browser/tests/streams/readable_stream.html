@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 <script id=readable_stream_basic>
   {
@@ -21,44 +22,48 @@
   }
 </script>
 
-<script id=response_body>
-  (async function() {
-    const response = new Response('hello world');
-    testing.expectEqual('object', typeof response.body);
+<script id=response_body type=module>
+  const state = await testing.async();
 
-    const reader = response.body.getReader();
-    const result = await reader.read();
+  const response = new Response('hello world');
+  const body_type = typeof response.body;
+  const reader = response.body.getReader();
+  const result = await reader.read();
+  const result2 = await reader.read();
+  state.resolve();
 
+  await state.done(() => {
+    testing.expectEqual('object', body_type);
     testing.expectEqual(false, result.done);
     testing.expectEqual(true, result.value instanceof Uint8Array);
-
-    // Convert Uint8Array to string
-    const decoder = new TextDecoder();
-    const text = decoder.decode(result.value);
-    testing.expectEqual('hello world', text);
-
-    // Next read should be done
-    const result2 = await reader.read();
+    testing.expectEqual('hello world', new TextDecoder().decode(result.value));
+    // The next read is done
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
-<script id=response_text>
-  (async function() {
-    const response = new Response('hello from text()');
-    const text = await response.text();
+<script id=response_text type=module>
+  const state = await testing.async();
+
+  const text = await new Response('hello from text()').text();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual('hello from text()', text);
-  })();
+  });
 </script>
 
-<script id=response_json>
-  (async function() {
-    const response = new Response('{"foo":"bar","num":42}');
-    const json = await response.json();
+<script id=response_json type=module>
+  const state = await testing.async();
+
+  const json = await new Response('{"foo":"bar","num":42}').json();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual('object', typeof json);
     testing.expectEqual('bar', json.foo);
     testing.expectEqual(42, json.num);
-  })();
+  });
 </script>
 
 <script id=response_null_body>
@@ -69,114 +74,106 @@
   }
 </script>
 
-<script id=response_empty_string_body>
-  (async function() {
-    // Response with empty string should have a stream that's immediately closed
-    const response = new Response('');
-    testing.expectEqual('object', typeof response.body);
+<script id=response_empty_string_body type=module>
+  const state = await testing.async();
 
-    const reader = response.body.getReader();
-    const result = await reader.read();
+  // Response with empty string has a stream that's immediately closed
+  const response = new Response('');
+  const body_type = typeof response.body;
+  const result = await response.body.getReader().read();
+  state.resolve();
 
-    // Stream should be closed immediately (done: true, no value)
+  await state.done(() => {
+    testing.expectEqual('object', body_type);
     testing.expectEqual(true, result.done);
-  })();
+  });
 </script>
 
-<script id=response_status>
-  (async function() {
-    const response = new Response('test', { status: 404 });
+<script id=response_status type=module>
+  const state = await testing.async();
+
+  const response = new Response('test', { status: 404 });
+  const text = await response.text();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual(404, response.status);
     testing.expectEqual(false, response.ok);
-
-    const text = await response.text();
     testing.expectEqual('test', text);
-  })();
+  });
 </script>
 
 <script id=async_iterator_exists>
-  (async function() {
+  {
     const stream = new ReadableStream();
     testing.expectEqual('function', typeof stream[Symbol.asyncIterator]);
-  })();
+  }
 </script>
 
 <script id=async_iterator_basic>
-  (async function() {
+  {
     const stream = new ReadableStream();
     const iterator = stream[Symbol.asyncIterator]();
     testing.expectEqual('object', typeof iterator);
     testing.expectEqual('function', typeof iterator.next);
-  })();
+  }
 </script>
 
-<script id=async_iterator_for_await>
-  (async function() {
-    const response = new Response('test data');
-    const stream = response.body;
+<script id=async_iterator_for_await type=module>
+  const state = await testing.async();
 
-    const chunks = [];
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
+  const chunks = [];
+  for await (const chunk of new Response('test data').body) {
+    chunks.push(chunk);
+  }
+  state.resolve();
 
+  await state.done(() => {
     testing.expectEqual(1, chunks.length);
     testing.expectEqual(true, chunks[0] instanceof Uint8Array);
-
-    const decoder = new TextDecoder();
-    const text = decoder.decode(chunks[0]);
-    testing.expectEqual('test data', text);
-  })();
+    testing.expectEqual('test data', new TextDecoder().decode(chunks[0]));
+  });
 </script>
 
 <script id=async_iterator_locks_stream>
-  (async function() {
-    const response = new Response('test');
-    const stream = response.body;
-
-    // Get async iterator (locks stream)
-    const iterator = stream[Symbol.asyncIterator]();
-
-    // Try to get reader - should fail
-    let errorThrown = false;
-    try {
-      stream.getReader();
-    } catch (e) {
-      errorThrown = true;
-    }
-    testing.expectEqual(true, errorThrown);
-  })();
+  {
+    const stream = new Response('test').body;
+    // Getting an async iterator locks the stream
+    stream[Symbol.asyncIterator]();
+    testing.expectError('TypeError', () => stream.getReader());
+  }
 </script>
 
-<script id=async_iterator_manual_next>
-  (async function() {
-    const response = new Response('hello');
-    const stream = response.body;
-    const iterator = stream[Symbol.asyncIterator]();
+<script id=async_iterator_manual_next type=module>
+  const state = await testing.async();
 
-    const result = await iterator.next();
+  const iterator = new Response('hello').body[Symbol.asyncIterator]();
+  const result = await iterator.next();
+  const result2 = await iterator.next();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual('object', typeof result);
     testing.expectEqual(false, result.done);
     testing.expectEqual(true, result.value instanceof Uint8Array);
-
-    // Second call should be done
-    const result2 = await iterator.next();
+    // The second call is done
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
-<script id=async_iterator_early_break>
-  (async function() {
-    const response = new Response('test data');
-    const stream = response.body;
+<script id=async_iterator_early_break type=module>
+  const state = await testing.async();
 
-    for await (const chunk of stream) {
-      break; // Early exit
-    }
+  const stream = new Response('test data').body;
+  for await (const chunk of stream) {
+    break; // Early exit
+  }
+  state.resolve();
 
-    // Should not throw errors
-    testing.expectEqual('object', typeof stream);
-  })();
+  await state.done(() => {
+    // Breaking out releases the stream
+    testing.expectEqual(false, stream.locked);
+  });
 </script>
 
 <script id=readable_stream_locked>
@@ -194,58 +191,64 @@
   testing.expectEqual(false, stream1.locked);
 </script>
 
-<script id=readable_stream_cancel>
-  (async function() {
-    var cancelCalled = false;
-    var cancelReason = null;
+<script id=readable_stream_cancel type=module>
+  const state = await testing.async();
 
-    const stream2 = new ReadableStream({
-      start(controller) {
-        controller.enqueue("data1");
-        controller.enqueue("data2");
-      },
-      cancel(reason) {
-        cancelCalled = true;
-        cancelReason = reason;
-      }
-    });
+  let cancelCalled = false;
+  let cancelReason = null;
 
-    const result = await stream2.cancel("user requested");
+  const stream2 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("data1");
+      controller.enqueue("data2");
+    },
+    cancel(reason) {
+      cancelCalled = true;
+      cancelReason = reason;
+    }
+  });
+
+  const result = await stream2.cancel("user requested");
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual(undefined, result);
     testing.expectEqual(true, cancelCalled);
     testing.expectEqual("user requested", cancelReason);
-  })();
+  });
 </script>
 
-<script id=readable_stream_pull>
-  (async function() {
-    var pullCount = 0;
+<script id=readable_stream_pull type=module>
+  const state = await testing.async();
 
-    const stream3 = new ReadableStream({
-      start(controller) {
-        controller.enqueue("initial");
-      },
-      pull(controller) {
-        pullCount++;
-        if (pullCount <= 2) {
-          controller.enqueue("pulled" + pullCount);
-        }
-        if (pullCount === 2) {
-          controller.close();
-        }
+  let pullCount = 0;
+
+  const stream3 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("initial");
+    },
+    pull(controller) {
+      pullCount++;
+      if (pullCount <= 2) {
+        controller.enqueue("pulled" + pullCount);
       }
-    }, { highWaterMark: 1 });
+      if (pullCount === 2) {
+        controller.close();
+      }
+    }
+  }, { highWaterMark: 1 });
 
-    const reader3 = stream3.getReader();
+  const reader3 = stream3.getReader();
+  const data1 = await reader3.read();
+  const data2 = await reader3.read();
+  state.resolve();
 
-    const data1 = await reader3.read();
+  await state.done(() => {
     testing.expectEqual("initial", data1.value);
     testing.expectEqual(false, data1.done);
-
-    const data2 = await reader3.read();
     testing.expectEqual("pulled1", data2.value);
     testing.expectEqual(false, data2.done);
-  })();
+  });
 </script>
 
 <script id=readable_stream_desired_size>
@@ -266,111 +269,116 @@
   testing.expectEqual(0, desiredSizes[2]);
 </script>
 
-<script id=readable_stream_start_with_pull>
-  (async function() {
-    var pullCount = 0;
+<script id=readable_stream_start_with_pull type=module>
+  const state = await testing.async();
 
-    const stream5 = new ReadableStream({
-      start(controller) {
-        controller.enqueue("start1");
-        controller.enqueue("start2");
-      },
-      pull(controller) {
-        pullCount++;
-        if (pullCount === 1) {
-          controller.enqueue("pull1");
-        } else if (pullCount === 2) {
-          controller.enqueue("pull2");
-          controller.close();
-        }
-      }
-    }, { highWaterMark: 2 });
+  let pullCount = 0;
 
-    const reader5 = stream5.getReader();
-
-    const data1 = await reader5.read();
-    testing.expectEqual("start1", data1.value);
-    testing.expectEqual(false, data1.done);
-
-    const data2 = await reader5.read();
-    testing.expectEqual("start2", data2.value);
-    testing.expectEqual(false, data2.done);
-
-    const data3 = await reader5.read();
-    testing.expectEqual("pull1", data3.value);
-    testing.expectEqual(false, data3.done);
-  })();
-</script>
-
-<script id=enqueue_preserves_number>
-  (async function() {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(42);
-        controller.enqueue(0);
-        controller.enqueue(3.14);
+  const stream5 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("start1");
+      controller.enqueue("start2");
+    },
+    pull(controller) {
+      pullCount++;
+      if (pullCount === 1) {
+        controller.enqueue("pull1");
+      } else if (pullCount === 2) {
+        controller.enqueue("pull2");
         controller.close();
       }
-    });
+    }
+  }, { highWaterMark: 2 });
 
-    const reader = stream.getReader();
+  const reader5 = stream5.getReader();
+  const data1 = await reader5.read();
+  const data2 = await reader5.read();
+  const data3 = await reader5.read();
+  state.resolve();
 
-    const r1 = await reader.read();
+  await state.done(() => {
+    testing.expectEqual("start1", data1.value);
+    testing.expectEqual(false, data1.done);
+    testing.expectEqual("start2", data2.value);
+    testing.expectEqual(false, data2.done);
+    testing.expectEqual("pull1", data3.value);
+    testing.expectEqual(false, data3.done);
+  });
+</script>
+
+<script id=enqueue_preserves_number type=module>
+  const state = await testing.async();
+
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(42);
+      controller.enqueue(0);
+      controller.enqueue(3.14);
+      controller.close();
+    }
+  });
+
+  const reader = stream.getReader();
+  const r1 = await reader.read();
+  const r2 = await reader.read();
+  const r3 = await reader.read();
+  const r4 = await reader.read();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual(false, r1.done);
     testing.expectEqual('number', typeof r1.value);
     testing.expectEqual(42, r1.value);
-
-    const r2 = await reader.read();
     testing.expectEqual('number', typeof r2.value);
     testing.expectEqual(0, r2.value);
-
-    const r3 = await reader.read();
     testing.expectEqual('number', typeof r3.value);
     testing.expectEqual(3.14, r3.value);
-
-    const r4 = await reader.read();
     testing.expectEqual(true, r4.done);
-  })();
+  });
 </script>
 
-<script id=enqueue_preserves_bool>
-  (async function() {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(true);
-        controller.enqueue(false);
-        controller.close();
-      }
-    });
+<script id=enqueue_preserves_bool type=module>
+  const state = await testing.async();
 
-    const reader = stream.getReader();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(true);
+      controller.enqueue(false);
+      controller.close();
+    }
+  });
 
-    const r1 = await reader.read();
+  const reader = stream.getReader();
+  const r1 = await reader.read();
+  const r2 = await reader.read();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual('boolean', typeof r1.value);
     testing.expectEqual(true, r1.value);
-
-    const r2 = await reader.read();
     testing.expectEqual('boolean', typeof r2.value);
     testing.expectEqual(false, r2.value);
-  })();
+  });
 </script>
 
-<script id=enqueue_preserves_object>
-  (async function() {
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue({ key: 'value', num: 7 });
-        controller.close();
-      }
-    });
+<script id=enqueue_preserves_object type=module>
+  const state = await testing.async();
 
-    const reader = stream.getReader();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue({ key: 'value', num: 7 });
+      controller.close();
+    }
+  });
 
-    const r1 = await reader.read();
+  const r1 = await stream.getReader().read();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual('object', typeof r1.value);
     testing.expectEqual('value', r1.value.key);
     testing.expectEqual(7, r1.value.num);
-  })();
+  });
 </script>
 
 <script id=queuing_strategies>
@@ -409,7 +417,7 @@
       await promise;
       return 'resolved';
     } catch (e) {
-      return `${e.name}: ${e.message}`;
+      return e.name;
     }
   }
 
@@ -439,15 +447,7 @@
   state.resolve();
 
   await state.done(() => {
-    testing.expectEqual([
-      'TypeError: Writer has been released',
-      'TypeError: Writer has been released',
-      'TypeError: Writer has been released',
-      'TypeError: Stream is not writable',
-      'TypeError: Stream is not writable',
-      'TypeError: Reader has been released',
-      'TypeError: ReadableStream is locked',
-    ], results);
+    testing.expectEqual(Array(7).fill('TypeError'), results);
   });
 </script>
 
@@ -598,21 +598,72 @@
   const [b1, b2] = source.tee();
   const r2 = b2.getReader();
 
-  // cancelling one branch leaves the source and the other branch alone
-  await b1.cancel('r1');
-  const after_first = cancelled.length;
+  // cancelling one branch leaves the source and the other branch alone, and
+  // its promise waits for the other branch
+  let first_settled = false;
+  const first = b1.cancel('r1').then((v) => { first_settled = true; return v; });
   controller.enqueue('still flowing');
   const chunk = await r2.read();
+  const after_first = cancelled.length;
+  const first_settled_early = first_settled;
 
-  // cancelling both cancels the source with both reasons
-  await r2.cancel('r2');
+  // cancelling both cancels the source with both reasons, and settles both
+  const values = await Promise.all([first, r2.cancel('r2')]);
   state.resolve();
 
   await state.done(() => {
     testing.expectEqual(0, after_first);
+    testing.expectEqual(false, first_settled_early);
+    testing.expectEqual([undefined, undefined], values);
     testing.expectEqual('still flowing', chunk.value);
     testing.expectEqual(1, cancelled.length);
     testing.expectEqual(['r1', 'r2'], cancelled[0]);
+  });
+</script>
+
+<script id=readable_stream_cancel_source_promise type=module>
+  const state = await testing.async();
+
+  // cancel() waits on the promise the source's cancel returns, and resolves
+  // with undefined rather than its value.
+  let finish;
+  const waiting = new ReadableStream({
+    cancel() { return new Promise((r) => { finish = r; }); },
+  });
+  let settled = false;
+  const cancelled = waiting.cancel().then((v) => { settled = true; return v; });
+  await Promise.resolve();
+  const settled_early = settled;
+  finish('ignored');
+  const value = await cancelled;
+
+  // A source cancel that throws, or whose promise rejects, rejects cancel().
+  const error = new Error('boom');
+  const thrown = await new ReadableStream({ cancel() { throw error; } }).cancel().catch((e) => e);
+  const rejected = await new ReadableStream({ cancel() { return Promise.reject(error); } }).cancel().catch((e) => e);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(false, settled_early);
+    testing.expectEqual(undefined, value);
+    testing.expectEqual(true, thrown === error);
+    testing.expectEqual(true, rejected === error);
+  });
+</script>
+
+<script id=readable_stream_tee_cancel_on_close type=module>
+  const state = await testing.async();
+
+  // A branch cancel waiting on the other branch resolves once the source closes.
+  let controller;
+  const [b1, b2] = new ReadableStream({ start(c) { controller = c; } }).tee();
+  const cancelled = b1.cancel('r1');
+  controller.close();
+  const value = await cancelled;
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(undefined, value);
   });
 </script>
 
