@@ -637,6 +637,30 @@ fn prepareArgs(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value)
     return .{ .ok = .{ .normalized = normalized, .substituted = try substituteStringArgs(arena, tool, normalized) } };
 }
 
+fn ParsedArgs(comptime T: type) type {
+    return union(enum) {
+        ok: T,
+        /// The in-band diagnostic to answer with.
+        invalid: ToolResult,
+    };
+}
+
+/// `prepareArgs` then `parseArgs`, for the paths that bypass `call`.
+fn parsePreparedArgs(comptime T: type, arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ToolError!ParsedArgs(T) {
+    const prepared = switch (try prepareArgs(arena, tool, arguments)) {
+        .invalid => |result| return .{ .invalid = result },
+        .ok => |args| args,
+    };
+    const parsed = parseArgs(T, arena, prepared.substituted) catch |err| {
+        if (err == error.InvalidParams) {
+            if (diagnoseArgTypes(arena, tool, prepared.normalized)) |msg|
+                return .{ .invalid = .invalidParams(msg) };
+        }
+        return err;
+    };
+    return .{ .ok = parsed };
+}
+
 fn callInner(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -1393,17 +1417,9 @@ pub fn startEvaluate(
     registry: *NodeRegistry,
     arguments: ?std.json.Value,
 ) ToolError!StartedEvaluate {
-    // This path bypasses `call`, so it prepares and diagnoses its own arguments.
-    const prepared = switch (try prepareArgs(arena, .evaluate, arguments)) {
+    const args = switch (try parsePreparedArgs(EvaluateParams, arena, .evaluate, arguments)) {
         .invalid => |result| return .{ .done = result },
         .ok => |args| args,
-    };
-    const args = parseArgs(EvaluateParams, arena, prepared.substituted) catch |err| {
-        if (err == error.InvalidParams) {
-            if (diagnoseArgTypes(arena, .evaluate, prepared.normalized)) |msg|
-                return .{ .done = .invalidParams(msg) };
-        }
-        return err;
     };
     return beginEvaluate(arena, session, registry, args, .hand_back);
 }
@@ -2635,10 +2651,14 @@ fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8,
 const default_nav_wait: lp.Config.WaitUntil = .load;
 const default_nav_timeout_ms: u32 = 10000;
 
-pub const StartedGoto = struct {
-    frame_id: u32,
-    timeout_ms: u32,
-    until: lp.Config.WaitUntil,
+pub const StartedGoto = union(enum) {
+    started: struct {
+        frame_id: u32,
+        timeout_ms: u32,
+        until: lp.Config.WaitUntil,
+    },
+    /// What is wrong with the arguments; nothing was navigated.
+    invalid: []const u8,
 };
 
 /// Open a fresh top-level page and start its navigation. The frame is non-null
@@ -2700,15 +2720,17 @@ pub fn startGoto(
     arguments: ?std.json.Value,
     receiver_frame_id: ?u32,
 ) ToolError!StartedGoto {
-    // This path bypasses `call`, so it needs its own `$LP_*` substitution pass.
-    const args = try parseArgs(GotoParams, arena, try substituteStringArgs(arena, .goto, arguments));
+    const args = switch (try parsePreparedArgs(GotoParams, arena, .goto, arguments)) {
+        .invalid => |result| return .{ .invalid = result.text },
+        .ok => |args| args,
+    };
     if (receiver_frame_id) |fid| closePage(session, registry, fid);
     const page = try openPage(session, args.url);
-    return .{
+    return .{ .started = .{
         .frame_id = page.frame_id,
         .timeout_ms = args.timeout orelse default_nav_timeout_ms,
         .until = args.waitUntil,
-    };
+    } };
 }
 
 const PerformGotoOpts = struct {

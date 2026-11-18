@@ -663,9 +663,15 @@ fn invokeGoto(
         defer self.session.browser.env.isolate.exit();
         break :blk browser_tools.startGoto(arena, self.session, self.registry, args, receiver_frame_id);
     };
-    const started = maybe_started catch |err| {
+    const started = switch (maybe_started catch |err| {
         self.recordGoto(browser_tools.errorOutcome(err), started_ms);
         return self.rejectResolver(context, resolver, "navigation failed");
+    }) {
+        .started => |started| started,
+        .invalid => |message| {
+            self.recordGoto(browser_tools.errorOutcome(error.InvalidParams), started_ms);
+            return self.rejectResolver(context, resolver, message);
+        },
     };
 
     var pending: PendingGoto = .{
@@ -1655,7 +1661,7 @@ test "agent script runtime: evaluates awaited together overlap their fetches" {
     );
 }
 
-test "agent script runtime: evaluate names the argument it rejects" {
+test "agent script runtime: goto and evaluate name the argument they reject" {
     defer testing.test_session.closeAllPages();
 
     var registry = NodeRegistry.init(testing.allocator);
@@ -1665,14 +1671,20 @@ test "agent script runtime: evaluate names the argument it rejects" {
     defer runtime.deinit();
 
     try runTestScript(runtime,
+        \\const location = "http://localhost:9582/src/browser/tests/mcp_actions.html";
         \\const page = new Page();
-        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\await page.goto(location);
         \\const message = (call) => call().then(() => "resolved", (e) => e.message);
         \\const missing = await message(() => page.evaluate({}));
         \\if (missing !== "missing required argument 'script'") throw new Error(missing);
         \\const mistyped = await message(() => page.evaluate({ script: 5 }));
         \\if (mistyped !== "argument 'script' must be a string, got integer 5") throw new Error(mistyped);
         \\if (await page.evaluate({ Script: "1 + 1" }) !== "2") throw new Error("PascalCase key");
+        \\const no_url = await message(() => new Page().goto({}));
+        \\if (no_url !== "missing required argument 'url'") throw new Error(no_url);
+        \\const bad_timeout = await message(() => page.goto(location, { timeout: "soon" }));
+        \\if (!bad_timeout.startsWith("argument 'timeout' must be")) throw new Error(bad_timeout);
+        \\if (!(await page.evaluate("location.pathname")).endsWith("/mcp_actions.html")) throw new Error("a rejected goto replaced the page");
     );
 }
 
@@ -1787,12 +1799,12 @@ test "agent script runtime: goto with invalid arguments rejects instead of crash
     defer runtime.deinit();
 
     // A goto that fails to start (vs. mid-flight) settles on the startGoto
-    // error path.
+    // path, with the argument diagnostic a blocking call would give.
     try runTestScript(runtime,
         \\const page = new Page();
         \\let caught = "";
         \\try { await page.goto(null); } catch (e) { caught = String(e); }
-        \\if (!caught.toLowerCase().includes("navigation")) throw new Error("expected a navigation rejection, got: " + caught);
+        \\if (caught !== "Error: missing required argument 'url'") throw new Error("expected the missing url, got: " + caught);
     );
 }
 
