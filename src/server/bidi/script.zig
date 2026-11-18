@@ -177,6 +177,10 @@ pub const PreloadScript = struct {
     context: ?[36]u8,
     user_context: ?BiDi.UserContext.Id,
 
+    // The arguments the function is called with. The page's functions point
+    // into this slice, and can outlive this registration.
+    channels: []Channel,
+
     // A preload script targeting a navigable also runs in its descendants.
     fn appliesTo(self: *const PreloadScript, bidi: *BiDi, frame: *const Frame) bool {
         if (self.user_context) |user_context| {
@@ -195,10 +199,58 @@ pub const PreloadScript = struct {
     }
 };
 
+// A preload script argument: the page gets a function, and each call sends
+// a script.message event carrying the (serialized) value it was given.
+const Channel = struct {
+    bidi: *BiDi,
+    id: []const u8,
+    opts: remote_value.Serializer.Options,
+
+    // The ChannelValue a client sends.
+    const Param = struct {
+        type: []const u8,
+        value: struct {
+            channel: []const u8,
+            serializationOptions: remote_value.SerializationOptions = .{},
+            ownership: ResultOwnership = .none,
+        },
+    };
+
+    fn send(self: *Channel, value_: ?js.Value, exec: *const js.Execution) void {
+        self.trySend(value_, exec) catch |err| {
+            log.warn(.bidi, "channel message", .{ .channel = self.id, .err = err });
+        };
+    }
+
+    fn trySend(self: *const Channel, value_: ?js.Value, exec: *const js.Execution) !void {
+        const bidi = self.bidi;
+        const frame = switch (exec.js.global) {
+            .frame => |frame| frame,
+            .worker => return,
+        };
+        // There are no navigables for iframes, so a message from one is
+        // reported against the top-level navigable.
+        const ctx = &(bidi.browsing_context orelse return);
+        const local = exec.js.local.?;
+        const value = value_ orelse try local.zigValueToJs({}, .{});
+
+        const arena = try bidi.app.arena_pool.acquire(.small, "bidi channel");
+        defer arena.release();
+
+        var serializer = remote_value.Serializer.init(bidi, arena.allocator(), frame, local, self.opts);
+        const data = try serializer.run(value);
+        return bidi.sendEvent("script.message", .{
+            .channel = self.id,
+            .data = data,
+            .source = .{ .realm = &ctx.realm_id, .context = &ctx.id },
+        });
+    }
+};
+
 fn addPreloadScript(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         functionDeclaration: []const u8,
-        arguments: []const std.json.Value = &.{},
+        arguments: []const Channel.Param = &.{},
         contexts: ?[]const []const u8 = null,
         userContexts: ?[]const []const u8 = null,
         sandbox: ?[]const u8 = null,
@@ -207,9 +259,10 @@ fn addPreloadScript(cmd: *BiDi.Command) !void {
     if (p.sandbox != null) {
         return cmd.sendError("unsupported operation", "sandboxes are not supported");
     }
-    // The arguments can only be channels, and we don't send script.message.
-    if (p.arguments.len > 0) {
-        return cmd.sendError("unsupported operation", "channels are not supported");
+    for (p.arguments) |argument| {
+        if (std.mem.eql(u8, argument.type, "channel") == false) {
+            return cmd.sendError("invalid argument", "arguments must be channels");
+        }
     }
     if (p.contexts != null and p.userContexts != null) {
         return cmd.sendError("invalid argument", "contexts and userContexts are mutually exclusive");
@@ -251,6 +304,15 @@ fn addPreloadScript(cmd: *BiDi.Command) !void {
         } else .init(user_contexts[0]);
     }
 
+    const channels = try allocator.alloc(Channel, p.arguments.len);
+    for (p.arguments, channels) |argument, *channel| {
+        channel.* = .{
+            .bidi = bidi,
+            .id = try allocator.dupe(u8, argument.value.channel),
+            .opts = argument.value.serializationOptions.options(argument.value.ownership == .root),
+        };
+    }
+
     // \n in case the functionDeclaration ends with a comment.
     const source = try std.fmt.allocPrint(allocator, "({s}\n)", .{p.functionDeclaration});
 
@@ -259,6 +321,7 @@ fn addPreloadScript(cmd: *BiDi.Command) !void {
         .source = source,
         .context = context,
         .user_context = user_context,
+        .channels = channels,
     };
     uuidv4(&preload.id);
     try bidi.preload_scripts.append(allocator, preload);
@@ -316,8 +379,16 @@ fn onFrameNavigated(ptr: *anyopaque, msg: *const Notification.FrameNavigated) !v
             continue;
         }
         const function = declaration.toFunction();
+
+        // Not the message_arena: a navigation the page starts runs outside
+        // any command, so that arena isn't reset until the next one.
+        const arguments = try ls.local.call_arena.alloc(js.Function, preload.channels.len);
+        for (preload.channels, arguments) |*channel, *argument| {
+            argument.* = ls.local.newCallback(Channel.send, channel);
+        }
+
         // A throw is reported on the window, like any script's.
-        function.callWithThisReport({}, .{}) catch |err| {
+        function.callWithThisReport({}, arguments) catch |err| {
             log.debug(.bidi, "preload script", .{ .id = &preload.id, .err = err });
         };
     }
@@ -1732,4 +1803,62 @@ test "bidi.script: addPreloadScript userContexts" {
         .{ .type = "undefined" },
         .{ .type = "boolean", .value = true },
     } } }, .{ .id = 6 });
+}
+
+test "bidi.script: addPreloadScript channels" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"script.message"} } });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.addPreloadScript",
+        .params = .{
+            .functionDeclaration = "(send) => { if (window === top) { window.send = send; send({ a: 1 }); } }",
+            .arguments = .{.{ .type = "channel", .value = .{ .channel = "chan" } }},
+            .contexts = .{context_id},
+        },
+    });
+    const script_id = try testing.arena.dupe(u8, &ctx.bidi().preload_scripts.items[0].id);
+    try ctx.expectSentResult(.{ .script = script_id }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/values.html", .wait = "complete" },
+    });
+    try ctx.wait();
+
+    const realm = try testing.arena.dupe(u8, &ctx.bidi().browsing_context.?.realm_id);
+    try ctx.expectSentEvent("script.message", .{
+        .channel = "chan",
+        .data = .{ .type = "object", .value = .{.{ "a", .{ .type = "number", .value = 1 } }} },
+        .source = .{ .realm = realm, .context = context_id },
+    });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "script.removePreloadScript",
+        .params = .{ .script = script_id },
+    });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+
+    // The function keeps working after the preload script is gone, and a call
+    // without an argument sends undefined.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "script.evaluate",
+        .params = .{ .expression = "send(); send('later')", .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentEvent("script.message", .{ .channel = "chan", .data = .{ .type = "undefined" } });
+    try ctx.expectSentEvent("script.message", .{ .channel = "chan", .data = .{ .type = "string", .value = "later" } });
+
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .arguments = .{.{ .type = "number", .value = 1 }} },
+    });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 6 });
 }
