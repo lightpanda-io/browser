@@ -1899,7 +1899,8 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return height;
-    return @max(height, layout.contentHeight(self, owner));
+    // The box's height, not the declared one: min-height and max-height apply
+    return @max(layout.boxHeight(self, owner), layout.contentHeight(self, owner));
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
@@ -1921,7 +1922,12 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 /// without an explicit size the client and content measurements collapse onto
 /// the same sum. html and body scroll the viewport, clamped by Window.
 fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
-    if (self.isRootContainer() or !self.getElementAxis(frame, axis).explicit) {
+    if (self.isRootContainer()) {
+        return null;
+    }
+
+    if (axis == .width and self.getElementAxis(frame, axis).explicit == false) {
+        // auto width isn't a limit
         return null;
     }
     const client = self.clientAxis(frame, axis);
