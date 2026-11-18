@@ -1,58 +1,7 @@
 # Owners are requested as reviewers when a PR touches matching paths.
-# The last matching pattern wins, so broad paths come before narrow ones.
-# Paths without an owner request no one.
 
-# Build and docs
-/build.zig               @karlseguin @arrufat
-/build.zig.zon           @arrufat
-/Makefile                @arrufat
-/Dockerfile              @karlseguin @krichprollsch
-/README.md               @arrufat @krichprollsch
-/.github/workflows/      @krichprollsch @arrufat
-/.github/scripts/        @krichprollsch @arrufat
-/.github/trusted-contributors @karlseguin @krichprollsch @arrufat
-
-# Licensing
-/LICENSE                 @francisbouvier
-/LICENSING.md            @francisbouvier
-/CLA.md                  @francisbouvier
-
-# Browser core
-/src/browser/Frame.zig   @karlseguin @krichprollsch
-/src/browser/webapi/     @mookums @nikneym @krichprollsch
-/src/browser/webapi/net/     @mookums @nikneym
-/src/browser/webapi/storage/ @krichprollsch
-/src/browser/js/         @karlseguin
-/src/rust/html5ever/     @nikneym
-/src/sys/                @nikneym
-
-# Network
-/src/network/            @mookums @nikneym
-/src/network/cache/      @mookums
-/src/network/adblock/    @nikneym
-/src/network/CorsGate.zig    @mookums
-/src/network/CorsStore.zig   @mookums
-/src/network/RobotsGate.zig  @mookums
-/src/network/Robots.zig      @mookums
-
-# Servers
-/src/server/             @karlseguin @arrufat
-/src/server/cdp/         @krichprollsch @arrufat
-
-# Agent, scripting, tools and MCP
-/src/agent/              @arrufat
-/src/script/             @arrufat
-/src/mcp/                @arrufat
-/src/mcp.zig             @arrufat
-/src/browser/tools/      @arrufat
-/src/browser/tools.zig   @arrufat
-/src/SemanticTree.zig    @arrufat
-/src/ToolSession.zig     @arrufat
-
-# Release tooling
-/src/Updater.zig         @nikneym
-
-# Nix
-/flake.nix               @mookums
-/flake.lock              @mookums
-/nix/                    @mookums
+# PR triage: the rules and the list of contributors who skip them.
+/.github/workflows/pr-triage.yml  @krichprollsch @arrufat
+/.github/workflows/stale.yml      @krichprollsch @arrufat
+/.github/scripts/                 @krichprollsch @arrufat
+/.github/trusted-contributors     @karlseguin @krichprollsch @arrufat
