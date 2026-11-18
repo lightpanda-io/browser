@@ -129,7 +129,7 @@ const Iterator = struct {
         self.list.acquireRef();
     }
 
-    pub fn next(self: *Iterator, frame: *Frame) !?Entry {
+    pub fn next(self: *Iterator, frame: *Frame) ?Entry {
         const index = self.index;
         const node = self.list.getAtIndex(index, frame) orelse return null;
         self.index = index + 1;

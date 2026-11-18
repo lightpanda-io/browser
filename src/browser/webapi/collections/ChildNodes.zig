@@ -144,7 +144,7 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn next(self: *Iterator, frame: *const Frame) !?Entry {
+    pub fn next(self: *Iterator, frame: *const Frame) ?Entry {
         const index = self.index;
         const node = self.list.getAtIndex(index, frame) orelse return null;
         self.index = index + 1;
