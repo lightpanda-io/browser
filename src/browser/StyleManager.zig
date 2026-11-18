@@ -170,6 +170,10 @@ has: HasKeys = .{},
 // What a focus move reaches from the elements whose :focus match flips (the
 // old and new active elements), and from those whose :focus-within match does
 // (their ancestors, up to the first one holding both). Null: nothing reads it.
+// A rule declares a negative z-index: most pages have none, and hitFacts
+// then skips the geometry memo for boxes without an inline style.
+negative_z_rules: bool = false,
+
 focus_reach: ?ClassReach = null,
 focus_within_reach: ?ClassReach = null,
 
@@ -721,6 +725,9 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     try self.collectAttributeNames(selector, false);
     self.siblings.addNext(nextReach(selector));
     try self.collectClassReach(selector, .subtree, true, matched.rightmost());
+    if (props.geometry.z_negative == true or important.geometry.z_negative == true) {
+        self.negative_z_rules = true;
+    }
     const rank_and_order = try self.nextPriority(layer);
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
@@ -2268,7 +2275,8 @@ pub fn inlineStyleWritten(self: *StyleManager, el: *Element, id: properties.Id) 
     if (self.dirty or self.reads_style_attribute) {
         return false;
     }
-    self.invalidateInline(el, propertyReach(id));
+    // z-index orders boxes, it doesn't move them
+    self.invalidateInline(el, propertyReach(id), id != .@"z-index");
     return true;
 }
 
@@ -2288,7 +2296,7 @@ pub fn styleAttributeChanged(self: *StyleManager, el: *Element, old: ?[]const u8
             reach.insert(memo);
         }
     }
-    self.invalidateInline(el, reach);
+    self.invalidateInline(el, reach, true);
     return true;
 }
 
@@ -2333,8 +2341,8 @@ fn nextReaching(it: *CssParser.DeclarationsIterator, memo: Memo) ?Reaching {
     return null;
 }
 
-fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos) void {
-    if (reach.count() != 0) {
+fn invalidateInline(self: *StyleManager, el: *Element, reach: Memos, moves_box: bool) void {
+    if (moves_box and reach.count() != 0) {
         self.inline_bumps += 1;
     }
     // A transform reaches no memo, but moves the origins (translateX)
@@ -2476,13 +2484,13 @@ fn heightWritten(self: *StyleManager, el: *Element) void {
 }
 
 /// Each known property's memos: the ones that read it. A property not listed
-/// reaches nothing. transform/z-index/custom properties...no memo reads them.
+/// reaches nothing. transform/custom properties...no memo reads them.
 /// Nothing substitutes var() (yet).
 const property_reach = blk: {
     // layout reads everything, except what we explicitly ignore (safer option)
     // A vertical inset only moves a positioned box, and that's applied on
-    // every read (layout.boxTop), never cached.
-    const layout_ignores = [_]properties.Id{ .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y", .top, .bottom, .@"inset-block", .@"inset-block-start", .@"inset-block-end" };
+    // every read (layout.boxTop), never cached. z-index only orders a hit.
+    const layout_ignores = [_]properties.Id{ .@"z-index", .visibility, .opacity, .@"pointer-events", .@"touch-action", .@"overscroll-behavior-x", .@"overscroll-behavior-y", .top, .bottom, .@"inset-block", .@"inset-block-start", .@"inset-block-end" };
 
     // font-size isn't cascaded by any group, but text wraps at it
     const names = Declarations.names ++ [_][]const u8{ "font", "font-size" };
@@ -2624,6 +2632,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.focus_reach = null;
     self.focus_within_reach = null;
     self.class_reach = .empty;
+    self.negative_z_rules = false;
     self.class_subjects = .empty;
     self.class_attribute = null;
     self.class_attribute_selectors = .empty;
@@ -2779,7 +2788,22 @@ pub const HitFacts = struct {
     // A wrapping grid: its in-flow children sit in its columns (gridOf)
     grid: bool = false,
     position: Position = .static,
+    layer: PaintLayer = .flow,
     line: Line = .line,
+
+    /// Where a box paints, which its subtree follows. Ordered so that a
+    /// box's is the highest of its own and its parent's.
+    pub const PaintLayer = enum(u2) {
+        flow,
+        // A positioned box: above the flow
+        positioned,
+        // One with a negative z-index: below the flow
+        below,
+
+        pub fn under(self: PaintLayer, parent: PaintLayer) PaintLayer {
+            return @fromBackingInt(@max(@backingInt(self), @backingInt(parent)));
+        }
+    };
 
     pub const Line = enum {
         block, // isBlockLevel
@@ -2796,6 +2820,13 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
     // On the root element it computes to block instead
     const contents = visibility.box == .contents and if (el.asNode().parentNode()) |parent| parent._type != .document else true;
     const in_flow = flow.position.outOfFlow() == false and flow.floated == false;
+    // display: contents has no box, so its position does nothing
+    const layer: HitFacts.PaintLayer = if (flow.position == .static or contents)
+        .flow
+    else if ((self.negative_z_rules or el._flags.has_inline_style) and self.geometryProps(el).z_negative)
+        .below
+    else
+        .positioned;
     return .{
         .display_none = visibility.display == .none,
         .hittable = !visibility.visibility_hidden and !visibility.pointer_events_none and contents == false,
@@ -2803,6 +2834,7 @@ pub fn hitFacts(self: *StyleManager, el: *Element) HitFacts {
         .row = visibility.display == .flex and visibility.flex_column == false,
         .grid = visibility.display == .grid and self.childFlow(el) == .grid,
         .position = flow.position,
+        .layer = layer,
         .line = switch (visibility.box) {
             .block_level, .table, .table_row => if (in_flow) .block else .line,
             .table_cell => if (in_flow) .cell else .line,
@@ -5120,7 +5152,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -5129,6 +5161,7 @@ const Geometry = struct {
         overflow_y_scrolls: ?bool = null,
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
+        z_negative: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
         min_width: ?Length = null,
@@ -5224,6 +5257,11 @@ const Geometry = struct {
                 .@"max-width" => {
                     self.max_width = Length.parse(value);
                 },
+                .@"z-index" => {
+                    if (zIndexNegative(value)) |negative| {
+                        self.z_negative = negative;
+                    }
+                },
                 else => {},
             }
         }
@@ -5314,6 +5352,16 @@ const Geometry = struct {
             return flexFactor(second) == 0;
         }
 
+        // Null for an invalid value, which drops the declaration.
+        fn zIndexNegative(value: []const u8) ?bool {
+            const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+            if (std.ascii.eqlIgnoreCase(trimmed, "auto") or std.ascii.eqlIgnoreCase(trimmed, "initial")) {
+                return false;
+            }
+            const z = std.fmt.parseInt(i64, trimmed, 10) catch return null;
+            return z < 0;
+        }
+
         // `contain` keeps the scroll in the box, `none` also kills the bounce we
         // don't render anyway; only `auto` lets a scroll chain outward.
         fn overscrollContains(value: []const u8) bool {
@@ -5369,7 +5417,7 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u357) {
+    const Computed = packed struct(u358) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -5377,6 +5425,7 @@ const Geometry = struct {
         overflow_y_scrolls: bool = false,
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
+        z_negative: bool = false,
         width: Length = .{},
         height: Length = .{},
         // auto, none and the intrinsic keywords don't limit
@@ -7795,6 +7844,62 @@ test "StyleManager: hit bands: the same point again doesn't walk" {
     try testing.expectEqual(null, try doc.hitTest(10, 60, frame));
 }
 
+test "StyleManager: hit bands: a z-index write keeps the layout memo and the bands" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".under { z-index: -1 }", frame);
+    _ = try html.insertBefore(style_el.asNode(), body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div style='position: absolute; top: 0; left: 0; width: 100px; height: 50px'><i></i></div>" ++
+        "<p style='width: 100px; height: 50px'></p>");
+    const div = body.firstChild().?.as(Element);
+    const p = body.lastChild().?.as(Element);
+
+    // A positioned box paints above the flow
+    try testing.expectEqual(div, (try doc.hitTest(10, 10, frame)).?);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+    try testing.expectEqual(true, sm.hit_bands.complete);
+    const layout_bumps = sm.layout_bumps;
+    const version = sm.hit_bands.version;
+    const walks = sm.hit_walks;
+
+    // Below it with a negative z-index, its subtree too
+    const style = (try div.getOrCreateStyle(frame)).asCSSStyleDeclaration();
+    try style.setProperty("z-index", "-1", null, frame);
+    try testing.expectEqual(p, (try doc.hitTest(10, 20, frame)).?);
+    try style.setProperty("z-index", "3", null, frame);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+    try style.setProperty("z-index", "-2", null, frame);
+    try testing.expectEqual(p, (try doc.hitTest(10, 20, frame)).?);
+    try style.setProperty("z-index", "auto", null, frame);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+    try style.setProperty("z-index", "-1", null, frame);
+    _ = try style.removeProperty("z-index", frame);
+    try testing.expectEqual(div, (try doc.hitTest(10, 20, frame)).?);
+
+    // Each write dropped the last hit, and nothing else
+    try testing.expectEqual(walks + 5, sm.hit_walks);
+    try testing.expectEqual(layout_bumps, sm.layout_bumps);
+    try testing.expectEqual(version, sm.hit_bands.version);
+    try testing.expectEqual(version, sm.hitVersion());
+    try testing.expectEqual(true, sm.hit_bands.complete);
+
+    // Through a rule
+    try div.setAttribute(comptime .wrap("class"), comptime .wrap("under"), frame);
+    try testing.expectEqual(p, (try doc.hitTest(10, 20, frame)).?);
+
+    // It does nothing on a box that isn't positioned
+    try style.setProperty("position", "static", null, frame);
+    try testing.expectEqual(.flow, sm.hitFacts(div).layer);
+}
+
 test "StyleManager: a viewport change drops the layout" {
     const layout = @import("layout.zig");
     const frame = try testing.createFrame();
@@ -8871,10 +8976,11 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
         \\.on + div { height: 18px } .on span { display: block; height: 4px }
         \\div:focus-within > .blk { height: 22px }
         ,
-        // Every sibling, :empty, flex rows and boxes sized by their content
+        // Every sibling, :empty, flex rows and boxes sized by their content.
+        // Positioned boxes paint below the flow.
         \\.blk { height: 10px } .tall { height: 30px } .box { height: 100px }
         \\.hid { display: none } .ib { display: inline-block }
-        \\.abs { position: absolute; top: 3px } .wide { width: 200px }
+        \\.abs { position: absolute; top: 3px; z-index: -1 } .wide { width: 200px }
         \\.tall ~ .blk { height: 9px } div:nth-child(2n) { height: 14px }
         \\.on:empty { height: 40px } :empty + .blk { height: 21px }
         \\.row { display: flex } .on > span { display: block; height: 4px }
@@ -9027,16 +9133,22 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
             for (0..24) |_| {
                 const x: f64 = @floatFromInt(random.uintLessThan(u16, 320));
                 const y: f64 = @floatFromInt(random.uintLessThan(u16, 400));
-                var expected: ?*Element = null;
+                // Positioned boxes and their subtrees paint above the flow,
+                // or below it with a negative z-index
+                var expected_flow: ?*Element = null;
+                var expected_positioned: ?*Element = null;
+                var expected_below: ?*Element = null;
                 var tw = TreeWalker.Full.init(html, .{});
                 while (tw.next()) |n| {
                     const el = n.is(Element) orelse continue;
                     var shown = true;
+                    var layer: HitFacts.PaintLayer = .flow;
                     var up: ?*Element = el;
                     while (up) |e| : (up = e.asNode().parentElement()) {
                         if (sm.hasDisplayNone(e)) {
                             shown = false;
                         }
+                        layer = layer.under(sm.hitFacts(e).layer);
                     }
                     if (shown == false or sm.isHitTestable(el) == false) {
                         continue;
@@ -9044,9 +9156,14 @@ test "StyleManager: memo: tree, class and focus changes keep only boxes that did
                     const top = layout.boxTop(el, frame);
                     const left = el.horizontalPosition(frame);
                     if (y >= top and y <= top + layout.boxHeight(el, frame) and x >= left and x <= left + el.boxAxis(frame, .width)) {
-                        expected = el;
+                        switch (layer) {
+                            .below => expected_below = el,
+                            .positioned => expected_positioned = el,
+                            .flow => expected_flow = el,
+                        }
                     }
                 }
+                const expected = expected_positioned orelse expected_flow orelse expected_below;
                 const hit = try doc.hitTest(x, y, frame);
                 if (hit != expected) {
                     std.debug.print("sheet {d} step {d} point {d},{d}: hit {?*} expected {?*}\n", .{ seed, step, x, y, hit, expected });

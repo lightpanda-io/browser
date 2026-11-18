@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+<body>
+<div id="hero" style="height:100px">
+  <div id="bg" style="position:absolute;top:0;left:0;width:2000px;height:2000px;z-index:-1"><span id="deco" style="display:block;height:2000px"></span></div>
+  <div id="cta" style="height:40px;width:100px">Buy</div>
+</div>
+<div id="over" style="position:absolute;top:60px;left:0;width:100px;height:20px"></div>
+</body>
+<script id="negative_z_paints_below_flow">
+{
+  const r = document.getElementById('cta').getBoundingClientRect();
+  testing.expectEqual('cta', document.elementFromPoint(r.left + 5, r.top + 5)?.id);
+}
+</script>
+
+<script id="positioned_paints_above_negative_z_and_flow">
+{
+  const r = document.getElementById('over').getBoundingClientRect();
+  testing.expectEqual('over', document.elementFromPoint(r.left + 5, r.top + 5)?.id);
+}
+</script>
+
+<script id="z_index_write_reorders">
+{
+  const cta = document.getElementById('cta');
+  const bg = document.getElementById('bg');
+  const r = cta.getBoundingClientRect();
+  bg.style.zIndex = 'auto';
+  testing.expectEqual('deco', document.elementFromPoint(r.left + 5, r.top + 5)?.id);
+  bg.style.zIndex = '-1';
+  testing.expectEqual('cta', document.elementFromPoint(r.left + 5, r.top + 5)?.id);
+}
+</script>
