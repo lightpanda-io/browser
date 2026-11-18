@@ -3418,7 +3418,7 @@ pub fn widthLimits(self: *StyleManager, el: *Element) struct { min: ?BoxLength, 
     return .{ .min = self.widthLimit(el, geometry.min_width), .max = self.widthLimit(el, geometry.max_width) };
 }
 
-/// min-height and max-height in px. Null if there's no limit (aka auto),
+/// min-height and max-height in px. Null if there's no limit (aka auto).
 pub fn heightLimits(self: *StyleManager, el: *Element) struct { min: ?f64, max: ?f64 } {
     self.assertOwns(el);
     self.rebuildIfDirty() catch return .{ .min = null, .max = null };

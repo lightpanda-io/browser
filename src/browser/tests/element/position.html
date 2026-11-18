@@ -1890,6 +1890,14 @@
   scroller.scrollTop = 9999;
   testing.expectEqual(150, scroller.scrollTop);
 
+  // The limits apply to a declared height's scroll height too
+  wrap.innerHTML = '<div id="mh-declared-max" style="height: 100px; max-height: 40px; overflow: auto"></div><div id="mh-declared-min" style="height: 10px; min-height: 50px"></div>';
+  const declared = $('#mh-declared-max');
+  testing.expectEqual(40, declared.clientHeight);
+  testing.expectEqual(40, declared.scrollHeight);
+  testing.expectEqual(50, $('#mh-declared-min').clientHeight);
+  testing.expectEqual(50, $('#mh-declared-min').scrollHeight);
+
   // Inline writes and class changes move what comes after
   wrap.innerHTML = `<div id="mh-dyn">${block}</div><div id="mh-next"></div>`;
   const dyn = $('#mh-dyn');

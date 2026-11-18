@@ -1899,7 +1899,8 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     }
 
     const owner = self.ownerFrame(frame) orelse return height;
-    return @max(height, layout.contentHeight(self, owner));
+    // The box's height, not the declared one: min-height and max-height apply
+    return @max(layout.boxHeight(self, owner), layout.contentHeight(self, owner));
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
