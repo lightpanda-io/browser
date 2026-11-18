@@ -29,7 +29,7 @@
   testing.expectError('NotSupportedError', () => new OfflineAudioContext(33, 5000, 44100));
   testing.expectError('NotSupportedError', () => new OfflineAudioContext(1, 0, 44100));
   testing.expectError('NotSupportedError', () => new OfflineAudioContext(1, 5000, 1000));
-  testing.expectError('TypeError', () => new OfflineAudioContext({sampleRate: 44100}));
+  testing.expectError('TypeError', () => new OfflineAudioContext({length: 128}));
 }
 </script>
 
