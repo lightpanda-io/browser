@@ -3435,6 +3435,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         try img.sourceChanged(self);
     } else if (child.is(Element.Html.Source)) |source| {
         try Element.Html.Picture.sourceInserted(parent, source, self);
+        try Element.Html.Media.sourceInserted(parent, self);
     } else if (child.is(Element.Html.Track)) |track| {
         try track.insertedInto(parent, self);
     }

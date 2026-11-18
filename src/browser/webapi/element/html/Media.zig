@@ -20,9 +20,11 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const URL = @import("../../../URL.zig");
 const Frame = @import("../../../Frame.zig");
 const Mime = @import("../../../Mime.zig");
 const Factory = @import("../../../Factory.zig");
+const data_url = @import("../../../data_url.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -30,12 +32,18 @@ const Event = @import("../../Event.zig");
 const reflection = @import("../reflection.zig");
 
 const HtmlElement = @import("../Html.zig");
+const Source = @import("Source.zig");
+const wav = @import("../../webaudio/dsp/wav.zig");
 const MediaError = @import("../../media/MediaError.zig");
 const TextTrack = @import("../../media/TextTrack.zig");
 const TextTrackList = @import("../../media/TextTrackList.zig");
 
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
+
+const log = lp.log;
+const String = lp.String;
+const Allocator = std.mem.Allocator;
 
 const Media = @This();
 
@@ -87,7 +95,17 @@ pub fn subtype(self: *const Media, comptime T: type) *T {
 _type: Type,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _paused: bool = true,
+// The playback position, as of `_clock_started` while the clock runs.
 _current_time: f64 = 0,
+// NaN until a source's metadata is read. Nothing is decoded and nothing plays:
+// a known duration is what gives the element a timeline.
+_duration: f64 = std.math.nan(f64),
+_seeking: bool = false,
+// When the position started advancing, on the scheduler's clock.
+_clock_started: ?u64 = null,
+_clock: ?*Clock = null,
+// bumped by each load. Drops the pending tasks of the previous one
+_generation: u32 = 0,
 _volume: f64 = 1.0,
 _muted: bool = false,
 _playback_rate: f64 = 1.0,
@@ -231,6 +249,9 @@ fn parseCodec(id: []const u8) ?ParsedCodec {
 }
 
 pub fn play(self: *Media, frame: *Frame) !js.Promise {
+    if (self.getEnded()) {
+        try self.seek(0, frame);
+    }
     const was_paused = self._paused;
     self._paused = false;
     self._ready_state = .HAVE_ENOUGH_DATA;
@@ -238,24 +259,35 @@ pub fn play(self: *Media, frame: *Frame) !js.Promise {
     if (was_paused) {
         try self.dispatchEvent("play", frame);
         try self.dispatchEvent("playing", frame);
+        try self.startClock(frame);
     }
     return frame.js.local.?.resolvePromise(js.Undefined{});
 }
 
 pub fn pause(self: *Media, frame: *Frame) !void {
     if (!self._paused) {
+        self.stopClock();
         self._paused = true;
         try self.dispatchEvent("pause", frame);
     }
 }
 
 pub fn load(self: *Media, frame: *Frame) !void {
+    self.resetForLoad();
+    try self.dispatchEvent("emptied", frame);
+    try self.selectResource(frame);
+}
+
+fn resetForLoad(self: *Media) void {
+    self._generation +%= 1;
     self._paused = true;
+    self._seeking = false;
+    self._clock_started = null;
     self._current_time = 0;
+    self._duration = std.math.nan(f64);
     self._ready_state = .HAVE_NOTHING;
     self._network_state = .NETWORK_LOADING;
     self._error = null;
-    try self.dispatchEvent("emptied", frame);
 }
 
 fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
@@ -263,16 +295,281 @@ fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
+// The start of the resource selection algorithm. The rest runs in a task.
+// https://html.spec.whatwg.org/multipage/media.html#concept-media-load-algorithm
+fn selectResource(self: *Media, frame: *Frame) !void {
+    if (frame.isGoingAway()) {
+        return;
+    }
+    // A document without a browsing context (DOMParser et al.) loads nothing.
+    if (self.asElement().getDocument(frame)._frame == null) {
+        return;
+    }
+    if (self.asElement().getAttributeInterned("src") == null and self.firstSource(null) == null) {
+        self._network_state = .NETWORK_EMPTY;
+        return;
+    }
+    self._network_state = .NETWORK_NO_SOURCE;
+    try Task.schedule(self, frame, .load);
+}
+
+fn firstSource(self: *Media, after: ?*Node) ?*Source {
+    var next = if (after) |node| node.nextSibling() else self.asNode().firstChild();
+    while (next) |node| : (next = node.nextSibling()) {
+        if (node.is(Source)) |source| {
+            return source;
+        }
+    }
+    return null;
+}
+
+// A <source> was inserted into `parent`. A media element that has nothing to
+// play yet tries again with it.
+pub fn sourceInserted(parent: *Node, frame: *Frame) !void {
+    const self = parent.is(Media) orelse return;
+    if (self.asElement().getAttributeInterned("src") != null or std.math.isNan(self._duration) == false) {
+        return;
+    }
+    self._generation +%= 1;
+    try self.selectResource(frame);
+}
+
+// Only a source whose duration can be read is loaded. Any other leaves the
+// element as it was: play() fakes playback, with no duration and no clock.
+fn loadResource(self: *Media, frame: *Frame) !void {
+    const arena = try frame._session.getArena(.medium, "Media.loadResource");
+    defer arena.release();
+
+    self._duration = self.readDuration(arena.allocator(), frame) orelse return;
+    self._current_time = std.math.clamp(self._current_time, 0, self._duration);
+    self._ready_state = .HAVE_ENOUGH_DATA;
+    self._network_state = .NETWORK_IDLE;
+
+    const generation = self._generation;
+    inline for (.{ "loadstart", "durationchange", "loadedmetadata", "loadeddata", "canplay", "canplaythrough" }) |name| {
+        try self.dispatchEvent(name, frame);
+        if (self._generation != generation) {
+            // a listener loaded another source
+            return;
+        }
+    }
+    // play() might not have waited for us.
+    try self.startClock(frame);
+}
+
+// The src attribute, or else the first <source> child that can be read.
+fn readDuration(self: *Media, arena: Allocator, frame: *Frame) ?f64 {
+    if (self.asElement().getAttributeInterned("src")) |src| {
+        return sourceDuration(arena, src, frame);
+    }
+    var source = self.firstSource(null);
+    while (source) |s| : (source = self.firstSource(s.asNode())) {
+        const src = s.asElement().getAttributeInterned("src") orelse continue;
+        if (sourceDuration(arena, src, frame)) |duration| {
+            return duration;
+        }
+    }
+    return null;
+}
+
+// In seconds. Only for a WAV file in a data: URL: nothing is fetched.
+fn sourceDuration(arena: Allocator, src: []const u8, frame: *Frame) ?f64 {
+    const url = URL.resolve(arena, frame.base(), src, .{ .encoding = frame.charset }) catch return null;
+    if (std.mem.startsWith(u8, url, "data:") == false) {
+        return null;
+    }
+    const parsed = data_url.parse(arena, url) catch return null;
+    const file = wav.parse(parsed.body) catch return null;
+    return @as(f64, @floatFromInt(file.frames)) / file.sample_rate;
+}
+
+// The current playback position.
+fn position(self: *const Media) f64 {
+    const started = self._clock_started orelse return self._current_time;
+    const elapsed: f64 = @floatFromInt(lp.datetime.milliTimestamp(.boot) - started);
+    return @min(self._current_time + elapsed / 1000 * self._playback_rate, self._duration);
+}
+
+fn stopClock(self: *Media) void {
+    self._current_time = self.position();
+    self._clock_started = null;
+}
+
+// (Re)starts the clock from the current position, if the element is playing
+// a source with a timeline.
+fn startClock(self: *Media, frame: *Frame) !void {
+    self.stopClock();
+    if (self._paused or std.math.isNan(self._duration) or (self._playback_rate > 0) == false) {
+        return;
+    }
+    self._clock_started = lp.datetime.milliTimestamp(.boot);
+    try Clock.schedule(self, frame);
+}
+
+// "timeupdate [...] at least every 250ms"
+// https://html.spec.whatwg.org/multipage/media.html#time-marches-on
+const TIMEUPDATE_MS = 250;
+
+// The delay to the next timeupdate, or to the end if that comes first.
+fn msToNextTick(self: *const Media) u32 {
+    const to_end = (self._duration - self.position()) * 1000 / self._playback_rate;
+    return @intFromFloat(std.math.clamp(@ceil(to_end), 1, TIMEUPDATE_MS));
+}
+
+fn tick(self: *Media, frame: *Frame) !void {
+    if (self._clock_started == null) {
+        return;
+    }
+    if (self.position() < self._duration) {
+        return self.dispatchEvent("timeupdate", frame);
+    }
+
+    // https://html.spec.whatwg.org/multipage/media.html#reaches-the-end
+    if (self.asConstElement().hasAttributeSafe(comptime .wrap("loop"))) {
+        return self.seek(0, frame);
+    }
+    self.stopClock();
+    try self.dispatchEvent("timeupdate", frame);
+    if (self._paused == false and self.getEnded()) {
+        self._paused = true;
+        try self.dispatchEvent("pause", frame);
+    }
+    try self.dispatchEvent("ended", frame);
+}
+
+// The task that moves a playing element along its timeline. `currentTime` is
+// computed when read, so the task is only here for the events.
+const Clock = struct {
+    // null once another clock took over
+    media: ?*Media,
+    frame: *Frame,
+
+    fn schedule(media: *Media, frame: *Frame) !void {
+        const self = try frame._factory.create(Clock{ .media = media, .frame = frame });
+        errdefer frame._factory.destroy(self);
+        // A page isn't done only once its media has played out.
+        try frame.js.scheduler.add(self, Clock.run, media.msToNextTick(), .{
+            .name = "Media.clock",
+            .blocks_done = false,
+            .finalizer = Clock.finalizer,
+        });
+        if (media._clock) |previous| {
+            previous.media = null;
+        }
+        media._clock = self;
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *Clock = @ptrCast(@alignCast(ctx));
+        const frame = self.frame;
+        if (self.media) |media| {
+            media.tick(frame) catch |err| {
+                log.warn(.frame, "media clock", .{ .err = err });
+            };
+        }
+
+        // The listeners can have paused the element, or restarted its clock.
+        if (self.media) |media| {
+            if (media._clock_started != null) {
+                return media.msToNextTick();
+            }
+            media._clock = null;
+        }
+        frame._factory.destroy(self);
+        return null;
+    }
+
+    fn finalizer(ctx: *anyopaque) void {
+        const self: *Clock = @ptrCast(@alignCast(ctx));
+        self.frame._factory.destroy(self);
+    }
+};
+
+// https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
+// There's no data to wait for: the new position is current at once, and the
+// events follow in a task.
+fn seek(self: *Media, to: f64, frame: *Frame) !void {
+    self._clock_started = null;
+    self._current_time = std.math.clamp(to, 0, self._duration);
+    try self.startClock(frame);
+    if (self._seeking) {
+        // the task of an earlier seek is still to run
+        return;
+    }
+    try Task.schedule(self, frame, .seek);
+    self._seeking = true;
+}
+
+fn finishSeek(self: *Media, frame: *Frame) !void {
+    const generation = self._generation;
+    try self.dispatchEvent("seeking", frame);
+    if (self._generation != generation) {
+        return;
+    }
+    self._seeking = false;
+    try self.dispatchEvent("timeupdate", frame);
+    if (self._generation != generation) {
+        return;
+    }
+    try self.dispatchEvent("seeked", frame);
+}
+
+// A task for the element's current source, dropped if the element has loaded
+// another by the time it runs.
+const Task = struct {
+    media: *Media,
+    frame: *Frame,
+    generation: u32,
+    step: Step,
+
+    const Step = enum { load, seek };
+
+    fn schedule(media: *Media, frame: *Frame, step: Step) !void {
+        const self = try frame._factory.create(Task{
+            .media = media,
+            .frame = frame,
+            .generation = media._generation,
+            .step = step,
+        });
+        errdefer frame._factory.destroy(self);
+        try frame.js.scheduler.add(self, Task.run, 0, .{
+            .name = "Media.task",
+            .finalizer = Task.finalizer,
+        });
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *Task = @ptrCast(@alignCast(ctx));
+        const task = self.*;
+        task.frame._factory.destroy(self);
+
+        const media = task.media;
+        if (task.generation != media._generation or task.frame.isGoingAway()) {
+            return null;
+        }
+        switch (task.step) {
+            .load => try media.loadResource(task.frame),
+            .seek => try media.finishSeek(task.frame),
+        }
+        return null;
+    }
+
+    fn finalizer(ctx: *anyopaque) void {
+        const self: *Task = @ptrCast(@alignCast(ctx));
+        self.frame._factory.destroy(self);
+    }
+};
+
 fn getPaused(self: *const Media) bool {
     return self._paused;
 }
 
 fn getCurrentTime(self: *const Media) f64 {
-    return self._current_time;
+    return self.position();
 }
 
-pub fn getDuration(_: *const Media) f64 {
-    return std.math.nan(f64);
+pub fn getDuration(self: *const Media) f64 {
+    return self._duration;
 }
 
 fn getReadyState(self: *const Media) u16 {
@@ -283,12 +580,13 @@ fn getNetworkState(self: *const Media) u16 {
     return @backingInt(self._network_state);
 }
 
-fn getEnded(_: *const Media) bool {
-    return false;
+// Never without a duration: NaN compares false.
+fn getEnded(self: *const Media) bool {
+    return self.position() >= self._duration and self.asConstElement().hasAttributeSafe(comptime .wrap("loop")) == false;
 }
 
-fn getSeeking(_: *const Media) bool {
-    return false;
+fn getSeeking(self: *const Media) bool {
+    return self._seeking;
 }
 
 fn getError(self: *const Media) ?*MediaError {
@@ -318,12 +616,20 @@ fn getPlaybackRate(self: *const Media) f64 {
     return self._playback_rate;
 }
 
-fn setPlaybackRate(self: *Media, value: f64) void {
+fn setPlaybackRate(self: *Media, value: f64, frame: *Frame) !void {
+    // the time played so far went at the previous rate
+    self.stopClock();
     self._playback_rate = value;
+    try self.startClock(frame);
 }
 
-fn setCurrentTime(self: *Media, value: f64) void {
-    self._current_time = value;
+fn setCurrentTime(self: *Media, value: f64, frame: *Frame) !void {
+    if (std.math.isNan(self._duration)) {
+        // no timeline to seek in
+        self._current_time = value;
+        return;
+    }
+    try self.seek(value, frame);
 }
 
 fn getTextTracks(self: *Media, frame: *Frame) !*TextTrackList {
@@ -430,6 +736,25 @@ fn setSrc(self: *Media, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
+pub const Build = struct {
+    pub fn created(node: *Node, frame: *Frame) !void {
+        const self = node.as(Media);
+        if (self.asElement().getAttributeInterned("src") != null) {
+            try self.selectResource(frame);
+        }
+    }
+
+    // Removing the src doesn't load anything, nor drop what's loaded.
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (name.eql(comptime .wrap("src")) == false) {
+            return;
+        }
+        const self = element.as(Media);
+        self.resetForLoad();
+        try self.selectResource(frame);
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Media);
 
@@ -483,4 +808,8 @@ pub const JsApi = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: Media" {
     try testing.htmlRunner("element/html/media.html", .{});
+}
+
+test "WebApi: Media clock" {
+    try testing.htmlRunner("element/html/media_clock.html", .{});
 }

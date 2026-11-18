@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="../../testing.js"></script>
+
+<script>
+  // A silent 8-bit mono PCM file of `seconds`, as a data: URL.
+  function wav(seconds) {
+    const rate = 8000;
+    const frames = Math.round(rate * seconds);
+    const bytes = new Uint8Array(44 + frames).fill(128);
+    const view = new DataView(bytes.buffer);
+    const ascii = (at, text) => {
+      for (let i = 0; i < text.length; i++) bytes[at + i] = text.charCodeAt(i);
+    };
+    ascii(0, 'RIFF');
+    view.setUint32(4, 36 + frames, true);
+    ascii(8, 'WAVEfmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // channels
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate, true); // bytes per second
+    view.setUint16(32, 1, true); // block align
+    view.setUint16(34, 8, true); // bits per sample
+    ascii(36, 'data');
+    view.setUint32(40, frames, true);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return 'data:audio/wav;base64,' + btoa(binary);
+  }
+
+  function record(media, names) {
+    const events = [];
+    for (const name of names) {
+      media.addEventListener(name, () => events.push(name));
+    }
+    return events;
+  }
+
+  const once = (media, name) => new Promise((resolve) => {
+    media.addEventListener(name, resolve, {once: true});
+  });
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+</script>
+
+<script id="metadata" type=module>
+  const state = await testing.async();
+  const audio = new Audio();
+  const events = record(audio, ['loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']);
+  audio.src = wav(0.5);
+  const before = audio.duration;
+  await once(audio, 'canplaythrough');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, isNaN(before));
+    testing.expectEqual('loadstart,durationchange,loadedmetadata,loadeddata,canplay,canplaythrough', events.join(','));
+    testing.expectEqual(0.5, audio.duration);
+    testing.expectEqual(4, audio.readyState);
+    testing.expectEqual(1, audio.networkState);
+    testing.expectEqual(0, audio.currentTime);
+    testing.expectEqual(true, audio.paused);
+    testing.expectEqual(false, audio.ended);
+  });
+</script>
+
+<script id="source_child" type=module>
+  const state = await testing.async();
+  const video = document.createElement('video');
+  const unknown = document.createElement('source');
+  unknown.src = 'data:video/mp4;base64,AAAA';
+  const source = document.createElement('source');
+  source.src = wav(0.25);
+  video.append(unknown, source);
+  await once(video, 'loadedmetadata');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0.25, video.duration);
+  });
+</script>
+
+<script id="playback" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(0.4));
+  const events = record(audio, ['pause', 'ended']);
+  let updates = 0;
+  let last = 0;
+  let backwards = false;
+  audio.addEventListener('timeupdate', () => {
+    updates += 1;
+    backwards ||= audio.currentTime < last;
+    last = audio.currentTime;
+  });
+
+  await audio.play();
+  await sleep(150);
+  const midway = audio.currentTime;
+  const ended_midway = audio.ended;
+  await once(audio, 'ended');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, midway > 0 && midway < 0.4);
+    testing.expectEqual(false, ended_midway);
+    testing.expectEqual(true, updates > 0);
+    testing.expectEqual(false, backwards);
+    testing.expectEqual('pause,ended', events.join(','));
+    testing.expectEqual(0.4, audio.currentTime);
+    testing.expectEqual(true, audio.ended);
+    testing.expectEqual(true, audio.paused);
+  });
+</script>
+
+<script id="pause_holds_position" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(5));
+  await audio.play();
+  await sleep(100);
+  audio.pause();
+  const paused_at = audio.currentTime;
+  await sleep(100);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, paused_at > 0 && paused_at < 5);
+    testing.expectEqual(paused_at, audio.currentTime);
+  });
+</script>
+
+<script id="seek" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(2));
+  await once(audio, 'loadedmetadata');
+
+  const events = record(audio, ['seeking', 'timeupdate', 'seeked']);
+  audio.currentTime = 1.5;
+  const seeking = audio.seeking;
+  const position = audio.currentTime;
+  await once(audio, 'seeked');
+  const seeking_after = audio.seeking;
+
+  // past the end
+  audio.currentTime = 10;
+  await once(audio, 'seeked');
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, seeking);
+    testing.expectEqual(1.5, position);
+    testing.expectEqual('seeking,timeupdate,seeked', events.slice(0, 3).join(','));
+    testing.expectEqual(false, seeking_after);
+    testing.expectEqual(2, audio.currentTime);
+    testing.expectEqual(true, audio.ended);
+    testing.expectEqual(true, audio.paused);
+  });
+</script>
+
+<script id="play_after_ended" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(5));
+  await once(audio, 'loadedmetadata');
+  audio.currentTime = 5;
+  await once(audio, 'seeked');
+  const ended = audio.ended;
+
+  // back to the start
+  const restarted = once(audio, 'seeked');
+  await audio.play();
+  await restarted;
+  const position = audio.currentTime;
+  const ended_playing = audio.ended;
+  audio.pause();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, ended);
+    testing.expectEqual(true, position < 1);
+    testing.expectEqual(false, ended_playing);
+  });
+</script>
+
+<script id="playback_rate" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(3));
+  audio.playbackRate = 10;
+  const start = performance.now();
+  await audio.play();
+  await once(audio, 'ended');
+  const elapsed = performance.now() - start;
+
+  state.resolve();
+  await state.done(() => {
+    // 300ms at this rate
+    testing.expectEqual(true, elapsed < 1500);
+    testing.expectEqual(3, audio.currentTime);
+  });
+</script>
+
+<script id="loop" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(0.2));
+  audio.loop = true;
+  const events = record(audio, ['ended']);
+  // wraps around
+  const wrapped = once(audio, 'seeked');
+  await audio.play();
+  await wrapped;
+  const paused = audio.paused;
+  const ended = audio.ended;
+  const position = audio.currentTime;
+  audio.pause();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, paused);
+    testing.expectEqual(false, ended);
+    testing.expectEqual(true, position < 0.2);
+    testing.expectEqual('', events.join(','));
+  });
+</script>
+
+<script id="load_and_src_change" type=module>
+  const state = await testing.async();
+  const audio = new Audio(wav(1));
+  await once(audio, 'loadedmetadata');
+
+  audio.currentTime = 0.5;
+  audio.load();
+  const reloading = [audio.duration, audio.currentTime, audio.readyState, audio.seeking];
+  await once(audio, 'loadedmetadata');
+  const reloaded = audio.duration;
+
+  audio.src = wav(2);
+  const changing = audio.duration;
+  await once(audio, 'loadedmetadata');
+  const changed = audio.duration;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, isNaN(reloading[0]));
+    testing.expectEqual(0, reloading[1]);
+    testing.expectEqual(0, reloading[2]);
+    testing.expectEqual(false, reloading[3]);
+    testing.expectEqual(1, reloaded);
+    testing.expectEqual(true, isNaN(changing));
+    testing.expectEqual(2, changed);
+  });
+</script>
+
+<script id="unreadable_source" type=module>
+  const state = await testing.async();
+  const audio = new Audio('data:audio/wav;base64,AAAA');
+  let resolved = false;
+  await audio.play().then(() => { resolved = true; }, () => {});
+  await sleep(50);
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, isNaN(audio.duration));
+    testing.expectEqual(0, audio.currentTime);
+    testing.expectEqual(false, audio.ended);
+    // Chrome fires error and rejects play()
+    testing.diverges('Lightpanda fakes playback of a source it cannot read', () => {
+      testing.expectEqual(true, resolved);
+    });
+  });
+</script>
