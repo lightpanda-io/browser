@@ -3513,6 +3513,160 @@ test "server: cdp guest keeps its page when the first session detaches" {
     try testing.expect(navigated);
 }
 
+test "server: cdp guest gets its own console handles and target events" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    const browser = try cdpCommand(&a, 3, "Target.getTargetInfo", "{}", null, null);
+    const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
+
+    var b = try createTestClient();
+    defer b.deinit();
+    try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+    const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    _ = try cdpCommand(&b, 2, "Target.setDiscoverTargets", "{\"discover\":true}", null, null);
+    _ = try cdpCommand(&b, 3, "Runtime.enable", "{}", session_b, null);
+    _ = try cdpCommand(&a, 4, "Runtime.enable", "{}", session_a, null);
+
+    // The first connection logs an object: each session can inspect it
+    // through the handle it was given.
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&a, 5, "Runtime.evaluate", "{\"expression\":\"console.log({answer: 42})\"}", session_a, &seen_by_a);
+    _ = try cdpCommand(&a, 6, "Runtime.evaluate", "{\"expression\":\"1\"}", session_a, &seen_by_a);
+    var seen_by_b: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&b, 4, "Runtime.evaluate", "{\"expression\":\"1\"}", session_b, &seen_by_b);
+
+    const handle_a = try consoleHandle(seen_by_a.items, session_a);
+    const handle_b = try consoleHandle(seen_by_b.items, session_b);
+    const props_a = try cdpCommand(&a, 7, "Runtime.getProperties", try arena.print("{{\"objectId\":\"{s}\",\"ownProperties\":true}}", .{handle_a}), session_a, null);
+    try testing.expectEqual("answer", props_a.get("result").?.array.items[0].object.get("name").?.string);
+    const props_b = try cdpCommand(&b, 5, "Runtime.getProperties", try arena.print("{{\"objectId\":\"{s}\",\"ownProperties\":true}}", .{handle_b}), session_b, null);
+    try testing.expectEqual("answer", props_b.get("result").?.array.items[0].object.get("name").?.string);
+
+    // A guest that discovers targets hears of the ones the others open and close.
+    const second = try cdpCommand(&a, 8, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const second_id = second.get("targetId").?.string;
+    _ = try cdpCommand(&a, 9, "Target.closeTarget", try arena.print("{{\"targetId\":\"{s}\"}}", .{second_id}), null, null);
+    _ = try cdpCommand(&a, 10, "Target.getTargets", "{}", null, null);
+
+    var discovered: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&b, 6, "Target.getTargets", "{}", null, &discovered);
+    try expectSessionEvent(discovered.items, "Target.targetCreated", second_id);
+    try expectSessionEvent(discovered.items, "Target.targetDestroyed", second_id);
+}
+
+test "server: cdp page socket gets its events without a session" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+
+    var c = try createTestClient();
+    defer c.deinit();
+    try c.handshake(try arena.print("/devtools/page/{s}", .{target_id}));
+
+    var seen: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&c, 1, "Log.enable", "{}", null, &seen);
+    _ = try cdpCommand(&c, 2, "Page.navigate", "{\"url\":\"http://127.0.0.1:9582/no-such-page\"}", null, &seen);
+    _ = try cdpCommand(&c, 3, "Runtime.evaluate", "{\"expression\":\"1\"}", null, &seen);
+    _ = try cdpCommand(&c, 4, "Log.disable", "{}", null, &seen);
+
+    // An intercepted request is paused, and continued, on the page socket.
+    _ = try cdpCommand(&c, 5, "Fetch.enable", "{}", null, &seen);
+    try c.bidiCommand("{\"id\":6,\"method\":\"Page.navigate\",\"params\":{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}}");
+    const paused = while (true) {
+        const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+        const raw = try arena.dupe(u8, msg.data);
+        if (msg.cleanup_fragment) {
+            c.reader.cleanup();
+        }
+        try seen.append(arena, raw);
+        if (std.mem.find(u8, raw, "Fetch.requestPaused") != null) {
+            break try std.json.parseFromSliceLeaky(std.json.Value, arena, raw, .{});
+        }
+    };
+    const request_id = paused.object.get("params").?.object.get("requestId").?.string;
+    _ = try cdpCommand(&c, 7, "Fetch.continueRequest", try arena.print("{{\"requestId\":\"{s}\"}}", .{request_id}), null, &seen);
+    _ = try cdpCommand(&c, 8, "Fetch.disable", "{}", null, &seen);
+    // the navigation's own result comes once it commits
+    _ = try cdpCommand(&c, 9, "LP.waitUntil", "{\"until\":\"load\",\"timeout\":3000}", null, &seen);
+
+    var logged = false;
+    var navigated = false;
+    for (seen.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "\"sessionId\"") == null);
+        logged = logged or std.mem.find(u8, raw, "Log.entryAdded") != null;
+        navigated = navigated or std.mem.find(u8, raw, "\"id\":6,") != null;
+    }
+    try testing.expect(logged);
+    try testing.expect(navigated);
+
+    // The connection that started the browser saw none of it.
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&a, 2, "Target.getTargets", "{}", null, &seen_by_a);
+    for (seen_by_a.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "Fetch.") == null);
+        try testing.expect(std.mem.find(u8, raw, "Log.") == null);
+        try testing.expect(std.mem.find(u8, raw, "Page.") == null);
+    }
+}
+
+test "server: cdp guest leaves in the middle of its navigation" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    const browser = try cdpCommand(&a, 3, "Target.getTargetInfo", "{}", null, null);
+    const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
+
+    {
+        var b = try createTestClient();
+        defer b.deinit();
+        try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+        const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+        try b.bidiCommand(try arena.print("{{\"id\":2,\"method\":\"Page.navigate\",\"params\":{{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}},\"sessionId\":\"{s}\"}}", .{session_b}));
+    }
+
+    // Its result has nowhere to go; the first connection sees the page it
+    // left behind, and no reply to a command it didn't send.
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&a, 40, "LP.waitUntil", "{\"until\":\"load\",\"timeout\":3000}", session_a, &seen_by_a);
+    const href = try cdpCommand(&a, 41, "Runtime.evaluate", "{\"expression\":\"location.href\",\"returnByValue\":true}", session_a, &seen_by_a);
+    try testing.expect(std.mem.endsWith(u8, href.get("result").?.object.get("value").?.string, "dom2.html"));
+    for (seen_by_a.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "\"id\":2,") == null);
+    }
+}
+
+// The objectId of the first argument of the Runtime.consoleAPICalled sent to `session_id`.
+fn consoleHandle(messages: []const []const u8, session_id: []const u8) ![]const u8 {
+    for (messages) |raw| {
+        if (std.mem.find(u8, raw, "Runtime.consoleAPICalled") == null) continue;
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, raw, .{});
+        const obj = value.object;
+        const sid = obj.get("sessionId") orelse continue;
+        if (std.mem.eql(u8, sid.string, session_id) == false) continue;
+        const args = obj.get("params").?.object.get("args").?.array.items;
+        if (args.len == 0) continue;
+        const object_id = args[0].object.get("objectId") orelse continue;
+        return object_id.string;
+    }
+    std.debug.print("no console handle on session {s}\n", .{session_id});
+    return error.EventNotSent;
+}
+
 fn expectSessionEvent(messages: []const []const u8, method: []const u8, session_id: []const u8) !void {
     for (messages) |raw| {
         if (std.mem.find(u8, raw, method) != null and std.mem.find(u8, raw, session_id) != null) {
