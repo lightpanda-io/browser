@@ -436,6 +436,7 @@ pub const Commands = cli.Builder(.{
             .{ .name = "advertise_host", .type = ?[]const u8 },
             // Repeatable; one server can speak several on the same port.
             .{ .name = "protocol", .type = Protocol, .multiple = true },
+            .{ .name = "cdp_allow_timezone_override", .type = bool },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
@@ -1028,6 +1029,15 @@ pub fn maxPendingConnections(self: *const Config) u31 {
         .serve => |opts| opts.cdp_max_pending_connections,
         .mcp => 128,
         else => unreachable,
+    };
+}
+
+/// Off by default: the override moves the time zone of the whole process, so
+/// every connection sees it, not only the one that asked.
+pub fn cdpAllowTimezoneOverride(self: *const Config) bool {
+    return switch (self.mode) {
+        .serve => |opts| opts.cdp_allow_timezone_override,
+        else => false,
     };
 }
 
