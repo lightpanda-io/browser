@@ -271,13 +271,18 @@ pub fn close(self: *Target) !void {
             try cdp.sendEvent("Inspector.detached", .{
                 .reason = "Render process gone.",
             }, .{ .session_id = session.id });
-            try cdp.sendEvent("Target.detachedFromTarget", .{
+            const detached = .{
                 .targetId = target_id,
                 .sessionId = session.id,
                 .reason = "Render process gone.",
-            }, .{ .session_id = session.parent_id });
+            };
+            if (session.parent_id) |parent_id| {
+                try cdp.sendEvent("Target.detachedFromTarget", detached, .{ .session_id = parent_id });
+            } else {
+                try CDP.sendEventTo(session.client, "Target.detachedFromTarget", detached);
+            }
         }
-        try cdp.sendEvent("Target.targetDestroyed", .{ .targetId = target_id }, .{});
+        try cdp.sendDiscoveryEvent("Target.targetDestroyed", .{ .targetId = target_id });
     }
 }
 

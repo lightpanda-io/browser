@@ -3472,6 +3472,47 @@ test "server: cdp join a browser" {
     }
 }
 
+test "server: cdp guest keeps its page when the first session detaches" {
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attach = try testing.arena_allocator.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    const browser = try cdpCommand(&a, 3, "Target.getTargetInfo", "{}", null, null);
+    const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
+
+    var b = try createTestClient();
+    defer b.deinit();
+    try b.handshake(try testing.arena_allocator.print("/devtools/browser/{s}", .{browser_id}));
+    const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+
+    _ = try cdpCommand(&a, 4, "Target.detachFromTarget", try testing.arena_allocator.print("{{\"sessionId\":\"{s}\"}}", .{session_a}), null, null);
+
+    var seen_by_b: std.ArrayList([]const u8) = .empty;
+    const navigate = "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}";
+    _ = try cdpCommand(&b, 2, "Page.navigate", navigate, session_b, &seen_by_b);
+    _ = try cdpCommand(&b, 3, "Runtime.evaluate", "{\"expression\":\"1\"}", session_b, &seen_by_b);
+    try expectSessionEvent(seen_by_b.items, "Page.frameNavigated", session_b);
+
+    // A page nobody is attached to can be driven through its own socket.
+    _ = try cdpCommand(&b, 4, "Target.detachFromTarget", try testing.arena_allocator.print("{{\"sessionId\":\"{s}\"}}", .{session_b}), null, null);
+    var c = try createTestClient();
+    defer c.deinit();
+    try c.handshake(try testing.arena_allocator.print("/devtools/page/{s}", .{target_id}));
+    var seen_by_c: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&c, 1, "Page.navigate", navigate, null, &seen_by_c);
+    _ = try cdpCommand(&c, 2, "Runtime.evaluate", "{\"expression\":\"1\"}", null, &seen_by_c);
+    var navigated = false;
+    for (seen_by_c.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, "\"sessionId\"") == null);
+        navigated = navigated or std.mem.find(u8, raw, "Page.frameNavigated") != null;
+    }
+    try testing.expect(navigated);
+}
+
 fn expectSessionEvent(messages: []const []const u8, method: []const u8, session_id: []const u8) !void {
     for (messages) |raw| {
         if (std.mem.find(u8, raw, method) != null and std.mem.find(u8, raw, session_id) != null) {

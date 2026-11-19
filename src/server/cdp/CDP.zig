@@ -266,6 +266,9 @@ fn attachPageGuest(self: *CDP, guest: *Client, target_id: []const u8) !void {
     const attached = try bc.attachSession(target, self.session_id_gen.next(), null, guest);
     attached.page_socket = true;
     guest.page_session = attached.id;
+    if (target.session_id == null) {
+        target.session_id = attached.id;
+    }
 }
 
 /// Worker thread. A guest's connection is gone (or going: `reply_close` when
@@ -560,6 +563,13 @@ const SendEventOpts = struct {
     session_id: ?[]const u8 = null,
 };
 pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts) !void {
+    if (opts.session_id) |session_id| {
+        if (self.browser_context) |*bc| {
+            if (bc.attached_sessions.get(session_id)) |attached| {
+                return attached.sendEvent(method, p);
+            }
+        }
+    }
     return self.sendJSON(.{
         .method = method,
         .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
@@ -578,6 +588,18 @@ pub fn sendDeferredResult(self: *CDP, command: Frame.CdpCommand, result: anytype
         .result = result,
         .sessionId = attached.stampedId(),
     }, .{});
+}
+
+/// A browser-level event about a target coming or going: for the current
+/// client, and for the others that asked to discover targets.
+pub fn sendDiscoveryEvent(self: *CDP, method: []const u8, p: anytype) !void {
+    const current = self.currentClient();
+    var it = self.allClients();
+    while (it.next()) |client| {
+        if (client == current or client.target_discover) {
+            try sendEventTo(client, method, p);
+        }
+    }
 }
 
 /// A browser-level event (no sessionId) for one particular client.
@@ -625,6 +647,15 @@ pub const BrowserContext = struct {
             sendInspectorMessage(self.client.link, msg, self.stampedId()) catch |err| {
                 log.debug(.cdp, "send inspector event", .{ .err = err });
             };
+        }
+
+        /// An event for this session alone, on its connection.
+        pub fn sendEvent(self: *const AttachedSession, method: []const u8, p: anytype) !void {
+            return sendJSONTo(self.client.link, .{
+                .method = method,
+                .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
+                .sessionId = self.stampedId(),
+            }, .{});
         }
 
         fn stampedId(self: *const AttachedSession) ?[]const u8 {
@@ -983,12 +1014,7 @@ pub const BrowserContext = struct {
     /// Returns false when no such session is attached.
     pub fn detachSession(self: *BrowserContext, session_id: []const u8) bool {
         const kv = self.attached_sessions.fetchOrderedRemove(session_id) orelse return false;
-        const target = kv.value.target;
-        if (target.session_id) |primary| {
-            if (std.mem.eql(u8, primary, session_id)) {
-                target.session_id = null;
-            }
-        }
+        self.releasePrimary(kv.value);
         self.destroySession(kv.value);
         return true;
     }
@@ -1050,14 +1076,22 @@ pub const BrowserContext = struct {
                 continue;
             }
             attached.target.fetchDisableForSession(attached.id);
-            if (attached.target.session_id) |primary| {
-                if (std.mem.eql(u8, primary, attached.id)) {
-                    attached.target.session_id = null;
-                }
-            }
             self.attached_sessions.orderedRemoveAt(i);
+            self.releasePrimary(attached);
             self.destroySession(attached);
         }
+    }
+
+    // `detached` is out of attached_sessions. If it was its target's primary
+    // session, the next one attached takes over: the page's other sessions
+    // (another connection's, say) keep their events and can still navigate.
+    fn releasePrimary(self: *BrowserContext, detached: *const AttachedSession) void {
+        const target = detached.target;
+        const primary = target.session_id orelse return;
+        if (std.mem.eql(u8, primary, detached.id) == false) return;
+        target.session_id = for (self.attached_sessions.values()) |attached| {
+            if (attached.target == target) break attached.id;
+        } else null;
     }
 
     pub fn detachAllSessions(self: *BrowserContext) void {

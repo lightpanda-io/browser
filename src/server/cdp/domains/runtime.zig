@@ -136,10 +136,7 @@ const ConsoleMessage = struct {
 };
 
 pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notification.ConsoleMessage) !void {
-    // The event goes to the primary session, so its argument handles are
-    // minted on the primary's inspector session.
-    const session_id = target.session_id orelse return;
-    const inspector_session = try target.inspectorSession(session_id);
+    if (target.session_id == null) return;
     const frame = eventFrame(target, event.frame_id) orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
@@ -148,28 +145,38 @@ pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notif
 
     const local = inspectedContext(target, event.local, &ls.local);
 
-    var args: std.ArrayList(RemoteObject) = .empty;
-    for (event.values) |value| {
-        const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
-        defer remote_object.deinit();
+    // Remote object ids belong to the inspector session that minted them, so
+    // each session gets the event with handles of its own.
+    for (target.bc.attached_sessions.values()) |attached| {
+        if (attached.target != target) continue;
 
-        const arg = try args.addOne(arena);
-        arg.* = .{
-            .type = try remote_object.getType(arena),
-            .subtype = try remote_object.getSubtype(arena),
-            .className = try remote_object.getClassName(arena),
-            .description = try remote_object.getDescription(arena),
-            .objectId = try remote_object.getObjectId(arena),
-        };
-        try arg.setPrimitive(arena, value);
+        var args: std.ArrayList(RemoteObject) = .empty;
+        for (event.values) |value| {
+            try args.append(arena, try remoteObject(arena, attached, local, value));
+        }
+
+        try attached.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
+            .type = @tagName(event.type),
+            .timestamp = event.timestamp,
+            .executionContextId = target.bc.inspector().getContextId(local),
+            .args = args.items,
+        });
     }
+}
 
-    return target.cdp.sendEvent("Runtime.consoleAPICalled", ConsoleMessage{
-        .type = @tagName(event.type),
-        .timestamp = event.timestamp,
-        .executionContextId = target.bc.inspector().getContextId(local),
-        .args = args.items,
-    }, .{ .session_id = session_id });
+fn remoteObject(arena: Allocator, attached: *CDP.BrowserContext.AttachedSession, local: *const js.Local, value: js.Value) !RemoteObject {
+    const remote_object = try attached.inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
+    defer remote_object.deinit();
+
+    var object: RemoteObject = .{
+        .type = try remote_object.getType(arena),
+        .subtype = try remote_object.getSubtype(arena),
+        .className = try remote_object.getClassName(arena),
+        .description = try remote_object.getDescription(arena),
+        .objectId = try remote_object.getObjectId(arena),
+    };
+    try object.setPrimitive(arena, value);
+    return object;
 }
 
 const ExceptionDetails = struct {
@@ -190,9 +197,7 @@ fn inspectedContext(target: *CDP.Target, local: *const js.Local, page: *const js
 }
 
 pub fn exceptionThrown(arena: Allocator, target: *CDP.Target, event: *const Notification.ExceptionThrown) !void {
-    // Like consoleAPICalled: the primary session's inspector mints the handle.
-    const session_id = target.session_id orelse return;
-    const inspector_session = try target.inspectorSession(session_id);
+    if (target.session_id == null) return;
     const frame = eventFrame(target, event.frame_id) orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
@@ -201,38 +206,32 @@ pub fn exceptionThrown(arena: Allocator, target: *CDP.Target, event: *const Noti
 
     const value = event.value;
     const local = inspectedContext(target, value.local, &ls.local);
-    const remote_object = try inspector_session.getRemoteObject(local, "", value) orelse return error.ContextNotFound;
-    defer remote_object.deinit();
-
-    var exception = RemoteObject{
-        .type = try remote_object.getType(arena),
-        .subtype = try remote_object.getSubtype(arena),
-        .className = try remote_object.getClassName(arena),
-        .description = try remote_object.getDescription(arena),
-        .objectId = try remote_object.getObjectId(arena),
-    };
-    try exception.setPrimitive(arena, value);
 
     // The location is 1-based, CDP's is 0-based.
     const location = event.location;
     const exception_id = target.next_exception_id;
     target.next_exception_id += 1;
 
-    return target.cdp.sendEvent("Runtime.exceptionThrown", .{
-        .timestamp = event.timestamp,
-        .exceptionDetails = ExceptionDetails{
-            .exceptionId = exception_id,
-            .text = switch (event.kind) {
-                .exception => "Uncaught",
-                .rejection => "Uncaught (in promise)",
+    // Like consoleAPICalled: each session's inspector mints its own handle.
+    for (target.bc.attached_sessions.values()) |attached| {
+        if (attached.target != target) continue;
+
+        try attached.sendEvent("Runtime.exceptionThrown", .{
+            .timestamp = event.timestamp,
+            .exceptionDetails = ExceptionDetails{
+                .exceptionId = exception_id,
+                .text = switch (event.kind) {
+                    .exception => "Uncaught",
+                    .rejection => "Uncaught (in promise)",
+                },
+                .lineNumber = location.line -| 1,
+                .columnNumber = location.column -| 1,
+                .url = if (location.url.len == 0) null else location.url,
+                .exception = try remoteObject(arena, attached, local, value),
+                .executionContextId = target.bc.inspector().getContextId(local),
             },
-            .lineNumber = location.line -| 1,
-            .columnNumber = location.column -| 1,
-            .url = if (location.url.len == 0) null else location.url,
-            .exception = exception,
-            .executionContextId = target.bc.inspector().getContextId(local),
-        },
-    }, .{ .session_id = session_id });
+        });
+    }
 }
 
 const testing = @import("../testing.zig");

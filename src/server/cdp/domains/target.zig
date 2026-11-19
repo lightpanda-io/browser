@@ -267,7 +267,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     // send targetCreated event
     // TODO: should this only be sent when Target.setDiscoverTargets
     // has been enabled?
-    try cmd.sendEvent("Target.targetCreated", .{
+    try cmd.cdp.sendDiscoveryEvent("Target.targetCreated", .{
         .targetInfo = TargetInfo{
             .attached = false,
             .targetId = target_id,
@@ -275,7 +275,7 @@ fn createTarget(cmd: *CDP.Command) !void {
             .browserContextId = bc.id,
             .url = "about:blank",
         },
-    }, .{});
+    });
 
     // attach to the target only if auto attach is set.
     if (cmd.cdp.currentClient().target_auto_attach) {
