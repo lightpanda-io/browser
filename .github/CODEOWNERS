@@ -1,0 +1,7 @@
+# Owners are requested as reviewers when a PR touches matching paths.
+
+# PR triage: the rules and the list of contributors who skip them.
+/.github/workflows/pr-triage.yml  @krichprollsch @arrufat
+/.github/workflows/stale.yml      @krichprollsch @arrufat
+/.github/scripts/                 @krichprollsch @arrufat
+/.github/trusted-contributors     @karlseguin @krichprollsch @arrufat

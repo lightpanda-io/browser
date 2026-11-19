@@ -1,0 +1,41 @@
+name: stale
+
+# Labels pull requests that have had no activity for 30 days as `stale`.
+# The label comes off on the next comment or push. `keep-open` exempts one.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      actions: write # the action caches its progress between runs
+      issues: write # labels go through the issues API
+      pull-requests: write
+
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          # Unless this repository variable is "true", the action only logs
+          # what it would do (dry run).
+          debug-only: ${{ vars.STALE_ENFORCE != 'true' }}
+
+          # Pull requests only, and labels only: nothing is closed and
+          # issues are left alone.
+          days-before-pr-stale: 30
+          days-before-issue-stale: -1
+          days-before-close: -1
+
+          stale-pr-label: stale
+          exempt-pr-labels: keep-open
+          exempt-draft-pr: true
