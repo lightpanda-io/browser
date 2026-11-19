@@ -749,22 +749,22 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
 
 // `nested`: an argument of :not(), :is()..., not a rule's own selector
 fn collectAttributeNames(self: *StyleManager, selector: Selector.Selector, nested: bool) Allocator.Error!void {
-    try self.collectCompoundAttributeNames(selector.first, nested);
-    for (selector.segments, 0..) |segment, i| {
+    try self.collectCompoundAttributeNames(selector.first(), nested);
+    for (selector.segments(), 0..) |segment, i| {
         switch (segment.combinator) {
             .subsequent_sibling => {
                 // `a ~ b`: an element entering or leaving changes b's match
                 // when it can be a. Unless a's own match reads its siblings
                 // (`x + a ~ b`, `a:first-child ~ b`): then anything moving
                 // before it can.
-                const left = if (i == 0) selector.first else selector.segments[i - 1].compound;
-                const reads = nested or readsSiblings(left) or (i != 0 and selector.segments[i - 1].combinator == .next_sibling);
+                const left = if (i == 0) selector.first() else selector.segments()[i - 1].compound();
+                const reads = nested or readsSiblings(left) or (i != 0 and selector.segments()[i - 1].combinator == .next_sibling);
                 try self.siblings.following.add(self.arena.allocator(), if (reads) null else left);
             },
             // counted by nextReach
             .next_sibling, .descendant, .child => {},
         }
-        try self.collectCompoundAttributeNames(segment.compound, nested);
+        try self.collectCompoundAttributeNames(segment.compound(), nested);
     }
 }
 
@@ -980,11 +980,11 @@ fn readsSiblings(compound: Selector.Compound) bool {
             else => continue,
         };
         for (nested) |selector| {
-            if (readsSiblings(selector.first)) {
+            if (readsSiblings(selector.first())) {
                 return true;
             }
-            for (selector.segments) |segment| {
-                if (segment.combinator == .next_sibling or segment.combinator == .subsequent_sibling or readsSiblings(segment.compound)) {
+            for (selector.segments()) |segment| {
+                if (segment.combinator == .next_sibling or segment.combinator == .subsequent_sibling or readsSiblings(segment.compound())) {
                     return true;
                 }
             }
@@ -1000,10 +1000,10 @@ fn readsSiblings(compound: Selector.Compound) bool {
 /// combinator starts over in another sibling list, but whatever it reaches is
 /// under a sibling that's dropped with its subtree. `~` is SiblingReads.later.
 fn nextReach(selector: Selector.Selector) usize {
-    var reach = compoundNextReach(selector.first);
+    var reach = compoundNextReach(selector.first());
     var deepest = reach;
-    for (selector.segments) |segment| {
-        const compound = compoundNextReach(segment.compound);
+    for (selector.segments()) |segment| {
+        const compound = compoundNextReach(segment.compound());
         reach = switch (segment.combinator) {
             .next_sibling => @max(reach + 1, compound),
             .subsequent_sibling, .descendant, .child => compound,
@@ -1177,12 +1177,12 @@ const HasKeys = struct {
             return;
         }
 
-        for (argument.segments) |segment| {
+        for (argument.segments()) |segment| {
             if (segment.combinator != .child) {
                 self.unbounded = true;
             }
         }
-        self.depth = @max(self.depth, argument.segments.len);
+        self.depth = @max(self.depth, argument.segments().len);
 
         if (try self.keys.add(allocator, argument.rightmost()) == false) {
             self.any = true;
@@ -1195,15 +1195,15 @@ const HasKeys = struct {
 
     // Whether a :has() argument's match can change without its subject moving.
     fn reachesOutside(selector: Selector.Selector) bool {
-        if (compoundReachesOutside(selector.first)) {
+        if (compoundReachesOutside(selector.first())) {
             return true;
         }
-        for (selector.segments) |segment| {
+        for (selector.segments()) |segment| {
             switch (segment.combinator) {
                 .next_sibling, .subsequent_sibling => return true,
                 .descendant, .child => {},
             }
-            if (compoundReachesOutside(segment.compound)) {
+            if (compoundReachesOutside(segment.compound())) {
                 return true;
             }
         }
@@ -1316,9 +1316,9 @@ const max_class_attribute_selectors = 256;
 // rule's selector, the enclosing compound's for an :is() argument. `own`:
 // that compound is the rule's subject, `rule_subject` (null: not known).
 fn collectClassReach(self: *StyleManager, selector: Selector.Selector, subject: ClassReach, own: bool, rule_subject: ?Selector.Compound) Allocator.Error!void {
-    const segments = selector.segments;
+    const segments = selector.segments();
     for (0..segments.len + 1) |i| {
-        const compound = if (i == 0) selector.first else segments[i - 1].compound;
+        const compound = if (i == 0) selector.first() else segments[i - 1].compound();
         // The combinator to the compound's right relates it to the subject.
         // In a :has() argument (.full) every compound reaches everything.
         const reach: ClassReach = if (i == segments.len or subject == .full) subject else switch (segments[i].combinator) {
@@ -4438,12 +4438,12 @@ fn placeSelector(selector: Selector.Selector) ?Placement {
 /// The compound a `>` requires the subject's parent to match, looking past
 /// any `+`/`~` chain (siblings share the parent).
 fn parentCompound(selector: Selector.Selector) ?Selector.Compound {
-    var i = selector.segments.len;
+    var i = selector.segments().len;
     while (i > 0) {
         i -= 1;
-        switch (selector.segments[i].combinator) {
+        switch (selector.segments()[i].combinator) {
             .next_sibling, .subsequent_sibling => {},
-            .child => return if (i == 0) selector.first else selector.segments[i - 1].compound,
+            .child => return if (i == 0) selector.first() else selector.segments()[i - 1].compound(),
             .descendant => return null,
         }
     }
@@ -4506,11 +4506,11 @@ const KeyBits = struct {
 /// the :where with respect to the priority, but we can unwrap so that it
 /// hopefully doesn't land in the .other list.
 fn unwrapWhere(selector: Selector.Selector) Selector.Selector {
-    if (selector.segments.len != 0 or selector.first.parts.len != 1) {
+    if (selector.segments().len != 0 or selector.first().parts.len != 1) {
         return selector;
     }
 
-    const inner = switch (selector.first.parts[0]) {
+    const inner = switch (selector.first().parts[0]) {
         .pseudo_class => |pc| switch (pc) {
             .where => |list| list,
             else => return selector,
@@ -4585,11 +4585,11 @@ pub fn computeSpecificity(selector: Selector.Selector) u32 {
     var elements: u32 = 0; // includes elements, pseudo-elements
 
     // Count specificity for first compound
-    countCompoundSpecificity(selector.first, &ids, &classes, &elements);
+    countCompoundSpecificity(selector.first(), &ids, &classes, &elements);
 
     // Count specificity for subsequent segments
-    for (selector.segments) |segment| {
-        countCompoundSpecificity(segment.compound, &ids, &classes, &elements);
+    for (selector.segments()) |segment| {
+        countCompoundSpecificity(segment.compound(), &ids, &classes, &elements);
     }
 
     // Pack into single u32: (ids << 20) | (classes << 10) | elements
@@ -7175,154 +7175,100 @@ test "StyleManager: text-transform without rules skips the memo" {
 
 test "StyleManager: computeSpecificity: element selector" {
     // div -> (0, 0, 1)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .tag = .div }} },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{.{ .tag = .div }} }, &.{});
     try testing.expectEqual(1, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: class selector" {
     // .foo -> (0, 1, 0)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .class = "foo" }} },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{.{ .class = "foo" }} }, &.{});
     try testing.expectEqual(1 << 10, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: id selector" {
     // #bar -> (1, 0, 0)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .id = "bar" }} },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{.{ .id = "bar" }} }, &.{});
     try testing.expectEqual(1 << 20, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: combined selector" {
     // div.foo#bar -> (1, 1, 1)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .tag = .div },
-            .{ .class = "foo" },
-            .{ .id = "bar" },
-        } },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .tag = .div },
+        .{ .class = "foo" },
+        .{ .id = "bar" },
+    } }, &.{});
     try testing.expectEqual((1 << 20) | (1 << 10) | 1, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: universal selector" {
     // * -> (0, 0, 0)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{.universal} },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{.universal} }, &.{});
     try testing.expectEqual(0, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: multiple classes" {
     // .a.b.c -> (0, 3, 0)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .class = "a" },
-            .{ .class = "b" },
-            .{ .class = "c" },
-        } },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .class = "a" },
+        .{ .class = "b" },
+        .{ .class = "c" },
+    } }, &.{});
     try testing.expectEqual(3 << 10, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: descendant combinator" {
     // div span -> (0, 0, 2)
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .tag = .div }} },
-        .segments = &.{
-            .{ .combinator = .descendant, .compound = .{ .parts = &.{.{ .tag = .span }} } },
-        },
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{.{ .tag = .div }} }, &.{
+        .init(.descendant, .{ .parts = &.{.{ .tag = .span }} }),
+    });
     try testing.expectEqual(2, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: :where() has zero specificity" {
     // :where(.foo) -> (0, 0, 0) regardless of what's inside
-    const inner_selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .class = "foo" }} },
-        .segments = &.{},
-    };
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .pseudo_class = .{ .where = &.{inner_selector} } },
-        } },
-        .segments = &.{},
-    };
+    const inner_selector = Selector.Selector.init(.{ .parts = &.{.{ .class = "foo" }} }, &.{});
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .pseudo_class = .{ .where = &.{inner_selector} } },
+    } }, &.{});
     try testing.expectEqual(0, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: :not() takes inner specificity" {
     // :not(.foo) -> (0, 1, 0) - takes specificity of .foo
-    const inner_selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .class = "foo" }} },
-        .segments = &.{},
-    };
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .pseudo_class = .{ .not = &.{inner_selector} } },
-        } },
-        .segments = &.{},
-    };
+    const inner_selector = Selector.Selector.init(.{ .parts = &.{.{ .class = "foo" }} }, &.{});
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .pseudo_class = .{ .not = &.{inner_selector} } },
+    } }, &.{});
     try testing.expectEqual(1 << 10, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: :is() takes most specific inner" {
     // :is(.foo, #bar) -> (1, 0, 0) - takes the most specific (#bar)
-    const class_selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .class = "foo" }} },
-        .segments = &.{},
-    };
-    const id_selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .id = "bar" }} },
-        .segments = &.{},
-    };
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .pseudo_class = .{ .is = &.{ class_selector, id_selector } } },
-        } },
-        .segments = &.{},
-    };
+    const class_selector = Selector.Selector.init(.{ .parts = &.{.{ .class = "foo" }} }, &.{});
+    const id_selector = Selector.Selector.init(.{ .parts = &.{.{ .id = "bar" }} }, &.{});
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .pseudo_class = .{ .is = &.{ class_selector, id_selector } } },
+    } }, &.{});
     try testing.expectEqual(1 << 20, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: never-matching attribute keeps attribute weight" {
     // :is([a^=""], div) -> (0, 1, 0): :is() takes its most specific argument,
     // matching or not
-    const never_selector = Selector.Selector{
-        .first = .{ .parts = &.{.never} },
-        .segments = &.{},
-    };
-    const tag_selector = Selector.Selector{
-        .first = .{ .parts = &.{.{ .tag = .div }} },
-        .segments = &.{},
-    };
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .pseudo_class = .{ .is = &.{ never_selector, tag_selector } } },
-        } },
-        .segments = &.{},
-    };
+    const never_selector = Selector.Selector.init(.{ .parts = &.{.never} }, &.{});
+    const tag_selector = Selector.Selector.init(.{ .parts = &.{.{ .tag = .div }} }, &.{});
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .pseudo_class = .{ .is = &.{ never_selector, tag_selector } } },
+    } }, &.{});
     try testing.expectEqual(1 << 10, computeSpecificity(selector));
 }
 
 test "StyleManager: computeSpecificity: pseudo-class (general)" {
     // :hover -> (0, 1, 0) - pseudo-classes count as class-level
-    const selector = Selector.Selector{
-        .first = .{ .parts = &.{
-            .{ .pseudo_class = .hover },
-        } },
-        .segments = &.{},
-    };
+    const selector = Selector.Selector.init(.{ .parts = &.{
+        .{ .pseudo_class = .hover },
+    } }, &.{});
     try testing.expectEqual(1 << 10, computeSpecificity(selector));
 }
 

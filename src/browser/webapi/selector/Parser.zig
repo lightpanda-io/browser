@@ -167,13 +167,13 @@ fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     var segments: std.ArrayList(Segment) = .empty;
     while (parser.skipSpaces()) {
         const combinator = parser.parseCombinator();
-        try segments.append(arena, .{
-            .combinator = combinator,
-            .compound = try parser.parseCompound(arena),
-        });
+        if (segments.items.len == Selector.Selector.max_len) {
+            return error.InvalidSelector;
+        }
+        try segments.append(arena, .init(combinator, try parser.parseCompound(arena)));
     }
 
-    return .{ .first = first, .segments = segments.items };
+    return .init(first, segments.items);
 }
 
 // Parts written with no whitespace between them ("div.a#b") form a compound.
@@ -181,6 +181,9 @@ fn parseCompound(self: *Parser, arena: Allocator) ParseError!Selector.Compound {
     _ = self.skipSpaces();
     var parts: std.ArrayList(Part) = .empty;
     while (true) {
+        if (parts.items.len == Selector.Selector.max_len) {
+            return error.InvalidSelector;
+        }
         try parts.append(arena, try self.parsePart(arena));
         if (!isStartOfPart(self.peek())) break;
     }
@@ -207,14 +210,15 @@ fn parseCombinator(self: *Parser) Combinator {
 const scope_anchor = [_]Part{.{ .pseudo_class = .scope }};
 
 fn absolutize(arena: Allocator, selector: Selector.Selector, combinator: Combinator) !Selector.Selector {
-    const segments = try arena.alloc(Segment, selector.segments.len + 1);
-    segments[0] = .{ .combinator = combinator, .compound = selector.first };
-    @memcpy(segments[1..], selector.segments);
+    const following = selector.segments();
+    if (following.len == Selector.Selector.max_len) {
+        return error.InvalidSelector;
+    }
+    const segments = try arena.alloc(Segment, following.len + 1);
+    segments[0] = .init(combinator, selector.first());
+    @memcpy(segments[1..], following);
 
-    return .{
-        .first = .{ .parts = &scope_anchor },
-        .segments = segments,
-    };
+    return .init(.{ .parts = &scope_anchor }, segments);
 }
 
 fn parsePart(self: *Parser, arena: Allocator) !Part {
@@ -2147,52 +2151,52 @@ test "Selector: Parser.has" {
     // No leading combinator: absolutized with an implied descendant combinator.
     {
         const selector = try parse(arena, "div:has(p)");
-        const args = selector.first.parts[1].pseudo_class.has;
+        const args = selector.first().parts[1].pseudo_class.has;
         try testing.expectEqual(1, args.len);
-        try testing.expectEqual(true, args[0].first.parts[0].pseudo_class == .scope);
-        try testing.expectEqual(1, args[0].segments.len);
-        try testing.expectEqual(.descendant, args[0].segments[0].combinator);
-        try testing.expectEqual(.p, args[0].segments[0].compound.parts[0].tag);
+        try testing.expectEqual(true, args[0].first().parts[0].pseudo_class == .scope);
+        try testing.expectEqual(1, args[0].segments().len);
+        try testing.expectEqual(.descendant, args[0].segments()[0].combinator);
+        try testing.expectEqual(.p, args[0].segments()[0].compound().parts[0].tag);
     }
 
     // Explicit leading combinators.
     {
         const selector = try parse(arena, "div:has(> p)");
-        const arg = selector.first.parts[1].pseudo_class.has[0];
-        try testing.expectEqual(true, arg.first.parts[0].pseudo_class == .scope);
-        try testing.expectEqual(.child, arg.segments[0].combinator);
+        const arg = selector.first().parts[1].pseudo_class.has[0];
+        try testing.expectEqual(true, arg.first().parts[0].pseudo_class == .scope);
+        try testing.expectEqual(.child, arg.segments()[0].combinator);
     }
 
     {
         const selector = try parse(arena, "li:has(~ li.active)");
-        const arg = selector.first.parts[1].pseudo_class.has[0];
-        try testing.expectEqual(.subsequent_sibling, arg.segments[0].combinator);
-        try testing.expectEqual(.li, arg.segments[0].compound.parts[0].tag);
-        try testing.expectEqual("active", arg.segments[0].compound.parts[1].class);
+        const arg = selector.first().parts[1].pseudo_class.has[0];
+        try testing.expectEqual(.subsequent_sibling, arg.segments()[0].combinator);
+        try testing.expectEqual(.li, arg.segments()[0].compound().parts[0].tag);
+        try testing.expectEqual("active", arg.segments()[0].compound().parts[1].class);
     }
 
     {
         const selector = try parse(arena, "span:has(+em)");
-        const arg = selector.first.parts[1].pseudo_class.has[0];
-        try testing.expectEqual(.next_sibling, arg.segments[0].combinator);
+        const arg = selector.first().parts[1].pseudo_class.has[0];
+        try testing.expectEqual(.next_sibling, arg.segments()[0].combinator);
     }
 
     // The argument's own combinators are preserved after the anchor segment.
     {
         const selector = try parse(arena, "div:has(~ p a)");
-        const arg = selector.first.parts[1].pseudo_class.has[0];
-        try testing.expectEqual(2, arg.segments.len);
-        try testing.expectEqual(.subsequent_sibling, arg.segments[0].combinator);
-        try testing.expectEqual(.descendant, arg.segments[1].combinator);
+        const arg = selector.first().parts[1].pseudo_class.has[0];
+        try testing.expectEqual(2, arg.segments().len);
+        try testing.expectEqual(.subsequent_sibling, arg.segments()[0].combinator);
+        try testing.expectEqual(.descendant, arg.segments()[1].combinator);
     }
 
     // Comma-separated relative selector list.
     {
         const selector = try parse(arena, "div:has(> p, ~ a)");
-        const args = selector.first.parts[1].pseudo_class.has;
+        const args = selector.first().parts[1].pseudo_class.has;
         try testing.expectEqual(2, args.len);
-        try testing.expectEqual(.child, args[0].segments[0].combinator);
-        try testing.expectEqual(.subsequent_sibling, args[1].segments[0].combinator);
+        try testing.expectEqual(.child, args[0].segments()[0].combinator);
+        try testing.expectEqual(.subsequent_sibling, args[1].segments()[0].combinator);
     }
 
     // A combinator with nothing after it is invalid.
@@ -2204,5 +2208,41 @@ test "Selector: Parser.has" {
     // Empty :has() stays invalid.
     {
         try testing.expectError(error.InvalidPseudoClass, parse(arena, "div:has()"));
+    }
+}
+
+test "Selector: Parser caps parts and segments at Selector.max_len" {
+    const arena = testing.arena_allocator;
+    const max = Selector.Selector.max_len;
+
+    try testing.expectEqual(24, @sizeOf(Selector.Selector));
+    try testing.expectEqual(16, @sizeOf(Segment));
+
+    {
+        const input = try arena.alloc(u8, (max + 1) * 2);
+        for (0..max + 1) |i| {
+            input[i * 2 ..][0..2].* = ".a".*;
+        }
+        const selector = try parse(arena, input[0 .. max * 2]);
+        try testing.expectEqual(max, selector.first().parts.len);
+        try testing.expectError(error.InvalidSelector, parse(arena, input));
+    }
+
+    {
+        // "a" then max + 1 times " a"
+        const input = try arena.alloc(u8, 1 + (max + 1) * 2);
+        input[0] = 'a';
+        for (0..max + 1) |i| {
+            input[1 + i * 2 ..][0..2].* = " a".*;
+        }
+        const longest = input[0 .. 1 + max * 2];
+        const selector = try parse(arena, longest);
+        try testing.expectEqual(max, selector.segments().len);
+        try testing.expectEqual(.a, selector.rightmost().parts[0].tag);
+        try testing.expectError(error.InvalidSelector, parse(arena, input));
+
+        // :has() adds the :scope anchor's segment
+        const has = try std.mem.concat(arena, u8, &.{ "div:has(", longest, ")" });
+        try testing.expectError(error.InvalidSelector, parse(arena, has));
     }
 }
