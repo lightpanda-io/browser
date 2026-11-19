@@ -22,6 +22,9 @@ const lp = @import("lightpanda");
 const string = @import("../../string.zig");
 const ArenaAllocator = @import("../../ArenaAllocator.zig");
 
+const Node = @import("../webapi/Node.zig");
+const Document = @import("../webapi/Document.zig");
+
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
@@ -158,12 +161,12 @@ pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *cons
     const info = FunctionCallbackInfo{ .handle = handle };
 
     if (!info.isConstructCall()) {
-        handleError(T, @TypeOf(func), local, error.InvalidArgument, info);
+        handleError(local, error.InvalidArgument, info, comptime .of(T), @typeName(@TypeOf(func)), comptime returnsPromise(@TypeOf(func)));
         return;
     }
 
     self._constructor(func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handleError(local, err, info, comptime .of(T), @typeName(@TypeOf(func)), comptime returnsPromise(@TypeOf(func)));
     };
 }
 
@@ -210,7 +213,7 @@ pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndex(T, local, func, idx, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -224,7 +227,7 @@ fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, inf
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, true, local, ret, info, opts);
+    return handleIndexedReturn(true, local, ret, info, opts);
 }
 
 pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
@@ -232,7 +235,7 @@ pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -246,7 +249,7 @@ fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, true, local, ret, info, opts);
+    return handleIndexedReturn(true, local, ret, info, opts);
 }
 
 pub fn setIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
@@ -254,7 +257,7 @@ pub fn setIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, js_val
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setIndex(T, local, func, idx, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -269,7 +272,7 @@ fn _setIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, js_
         @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
+    return handleIndexedReturn(comptime returnsBool(F), local, ret, info, opts);
 }
 
 pub fn deleteOrDefineIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
@@ -277,7 +280,7 @@ pub fn deleteOrDefineIndex(self: *Caller, comptime T: type, func: anytype, idx: 
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteOrDefineIndex(T, local, func, idx, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -291,7 +294,7 @@ fn _deleteOrDefineIndex(comptime T: type, local: *const Local, func: anytype, id
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
+    return handleIndexedReturn(comptime returnsBool(F), local, ret, info, opts);
 }
 
 pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
@@ -299,7 +302,7 @@ pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -314,7 +317,7 @@ fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *c
         @field(args, "3") = getGlobalArg(@TypeOf(args.@"3"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
+    return handleIndexedReturn(comptime returnsBool(F), local, ret, info, opts);
 }
 
 pub fn deleteOrDefineNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
@@ -322,7 +325,7 @@ pub fn deleteOrDefineNamedIndex(self: *Caller, comptime T: type, func: anytype, 
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _deleteOrDefineNamedIndex(T, local, func, name, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -336,7 +339,7 @@ fn _deleteOrDefineNamedIndex(comptime T: type, local: *const Local, func: anytyp
         @field(args, "2") = getGlobalArg(@TypeOf(args.@"2"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, comptime returnsBool(F), local, ret, info, opts);
+    return handleIndexedReturn(comptime returnsBool(F), local, ret, info, opts);
 }
 
 pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u32 {
@@ -344,7 +347,7 @@ pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *co
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getEnumerator(T, local, func, info, opts) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -357,7 +360,7 @@ fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: Pr
         @field(args, "1") = getGlobalArg(@TypeOf(args.@"1"), local.ctx);
     }
     const ret = @call(.auto, func, args);
-    return handleIndexedReturn(T, F, true, local, ret, info, opts);
+    return handleIndexedReturn(true, local, ret, info, opts);
 }
 
 pub fn getIndexQuery(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo) u32 {
@@ -365,7 +368,7 @@ pub fn getIndexQuery(self: *Caller, comptime T: type, func: anytype, idx: u32, h
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getIndexQuery(T, local, func, idx, info) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -386,7 +389,7 @@ pub fn getNamedQuery(self: *Caller, comptime T: type, func: anytype, name: *cons
 
     const info = PropertyCallbackInfo{ .handle = handle };
     return _getNamedQuery(T, local, func, name, info) catch |err| {
-        handleError(T, @TypeOf(func), local, err, info);
+        handlePropertyError(local, err, info);
         return js.Intercepted.no;
     };
 }
@@ -429,7 +432,7 @@ fn queryReturn(local: *const Local, ret: anytype, info: PropertyCallbackInfo) !u
     return js.Intercepted.yes;
 }
 
-fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
+fn handleIndexedReturn(comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u32 {
     // need to unwrap this error immediately for when opts.null_as_undefined == true
     // and we need to compare it to null;
     const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
@@ -443,7 +446,7 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: 
                         return js.Intercepted.no;
                     }
                 }
-                handleError(T, F, local, err, info);
+                handlePropertyError(local, err, info);
                 return js.Intercepted.no;
             };
         },
@@ -491,30 +494,15 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
 // (v8 API callbacks run in the caller's context, and our JS wrappers are
 // shared across the page's contexts). For DOM nodes, the relevant realm is
 // the node document's frame; otherwise fall back to the calling realm.
-fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
-    if (@TypeOf(info) != FunctionCallbackInfo) {
-        return local.*;
-    }
+fn errorLocal(local: *const Local, info: FunctionCallbackInfo, receiver: *const Receiver) Local {
+    const nodeOf = receiver.node orelse return local.*;
 
     const frame = switch (local.ctx.global) {
         .frame => |f| f,
         .worker => return local.*,
     };
 
-    const Node = @import("../webapi/Node.zig");
-    const Document = @import("../webapi/Document.zig");
-
-    const is_node_type = comptime blk: {
-        if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "JsApi")) break :blk false;
-        break :blk @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
-    };
-    if (comptime !is_node_type) {
-        return local.*;
-    }
-
-    const instance = TaggedOpaque.fromJS(*T, info.getThis()) catch return local.*;
-    const node = protoNode(T, instance);
-
+    const node = nodeOf(info) orelse return local.*;
     const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
         .document => node.subtype(Document),
         else => return local.*,
@@ -534,73 +522,110 @@ fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
     };
 }
 
+// What handleError needs from the receiver type T. Keeps handleError non-generic.
+const Receiver = struct {
+    type_name: []const u8,
+    // Null unless T is a Node: see errorLocal.
+    node: ?*const fn (FunctionCallbackInfo) ?*Node,
+
+    fn of(comptime T: type) *const Receiver {
+        const is_node_type = @typeInfo(T) == .@"struct" and @hasDecl(T, "JsApi") and
+            @import("bridge.zig").inheritsOrIs(T.JsApi, Node.JsApi);
+        const receiver: Receiver = .{
+            .type_name = @typeName(T),
+            .node = if (is_node_type) receiverNode(T) else null,
+        };
+        return &receiver;
+    }
+};
+
+fn receiverNode(comptime T: type) *const fn (FunctionCallbackInfo) ?*Node {
+    return &struct {
+        fn get(info: FunctionCallbackInfo) ?*Node {
+            const instance = TaggedOpaque.fromJS(*T, info.getThis()) catch return null;
+            return protoNode(T, instance);
+        }
+    }.get;
+}
+
 // Upcast a Node-descendant instance to *Node by walking the Proto chain.
 // Not every node type defines an asNode() helper (e.g. Comment, Text), but
 // inheritsOrIs guarantees Node is in the chain
-fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
-    if (T == @import("../webapi/Node.zig")) {
+fn protoNode(comptime T: type, instance: *T) *Node {
+    if (T == Node) {
         return instance;
     }
     return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
 }
 
-fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {
-    const isolate = local.isolate;
-
-    if (comptime lp.IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
+fn handleError(local: *const Local, err: anyerror, info: FunctionCallbackInfo, receiver: *const Receiver, func_name: []const u8, returns_promise: bool) void {
+    if (comptime lp.IS_DEBUG) {
         if (log.enabled(.js, .debug)) {
             const DOMException = @import("../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
                 // This isn't a DOMException, let's log it
-                logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+                logFunctionCallError(local, receiver.type_name, func_name, err, info);
             }
         }
     }
 
-    // early exit
-    switch (err) {
-        error.TryCatchRethrow => return,
+    if (isPending(err)) {
+        return;
+    }
+
+    const err_local = errorLocal(local, info, receiver);
+    const js_err = createError(local, &err_local, err);
+    if (returns_promise) {
+        rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info);
+        return;
+    }
+    info.getReturnValue().setValueHandle(local.isolate.throwException(js_err));
+}
+
+// Interceptors throw in the calling realm and never return promises.
+fn handlePropertyError(local: *const Local, err: anyerror, info: PropertyCallbackInfo) void {
+    if (isPending(err)) {
+        return;
+    }
+    const js_err = createError(local, local, err);
+    info.getReturnValue().setValueHandle(local.isolate.throwException(js_err));
+}
+
+fn isPending(err: anyerror) bool {
+    return switch (err) {
+        error.TryCatchRethrow => true,
         // A JS exception is already pending in the isolate (e.g. a value's
         // toString threw during argument conversion); throwing anything here
         // would replace the original exception the script expects to see.
-        error.JsException => return,
+        error.JsException => true,
         // The termination exception is pending; throwing here would replace
         // it with a catchable Error, letting the killed script keep running.
-        error.ExecutionTerminated => return,
-        else => {},
-    }
+        error.ExecutionTerminated => true,
+        else => false,
+    };
+}
 
-    const err_local = errorLocal(T, local, info);
+fn createError(local: *const Local, err_local: *const Local, err: anyerror) *const v8.Value {
+    const isolate = local.isolate;
     const env = local.ctx.env;
     const message = env.error_message orelse "";
     env.error_message = null;
 
-    const js_err: *const v8.Value = blk: {
-        // Error constructors use the isolate's current context: enter the
-        // receiver's realm so the exception gets its prototypes.
-        const entered = err_local.ctx != local.ctx;
-        if (entered) v8.v8__Context__Enter(err_local.handle);
-        defer if (entered) v8.v8__Context__Exit(err_local.handle);
+    // Error constructors use the isolate's current context: enter the
+    // receiver's realm so the exception gets its prototypes.
+    const entered = err_local.ctx != local.ctx;
+    if (entered) v8.v8__Context__Enter(err_local.handle);
+    defer if (entered) v8.v8__Context__Exit(err_local.handle);
 
-        break :blk switch (err) {
-            error.InvalidArgument => isolate.createTypeError("invalid argument"),
-            error.TypeError => isolate.createTypeError(message),
-            error.RangeError => isolate.createRangeError(""),
-            error.InvalidStringLength => isolate.createRangeError("Invalid string length"),
-            error.OutOfMemory => isolate.createError("out of memory"),
-            error.IllegalConstructor => isolate.createError("Illegal Constructor"),
-            error.TryCatchRethrow, error.JsException => unreachable, // early exited a few lines up
-            else => domExceptionToJs(&err_local, err) orelse isolate.createError(@errorName(err)),
-        };
+    return switch (err) {
+        error.InvalidArgument => isolate.createTypeError("invalid argument"),
+        error.TypeError => isolate.createTypeError(message),
+        error.RangeError => isolate.createRangeError(""),
+        error.InvalidStringLength => isolate.createRangeError("Invalid string length"),
+        error.OutOfMemory => isolate.createError("out of memory"),
+        error.IllegalConstructor => isolate.createError("Illegal Constructor"),
+        else => domExceptionToJs(err_local, err) orelse isolate.createError(@errorName(err)),
     };
-
-    if (comptime returnsPromise(F) and @TypeOf(info) == FunctionCallbackInfo) {
-        rejectOperation(&err_local, .{ .local = &err_local, .handle = js_err }, info);
-        return;
-    }
-
-    const js_exception = isolate.throwException(js_err);
-    info.getReturnValue().setValueHandle(js_exception);
 }
 
 // An operation that returns a promise must not throw. It rejects.
@@ -872,7 +897,7 @@ pub const Function = struct {
             callRejecting(T, &caller.local, info, func, opts) orelse return
         else
             _call(T, &caller.local, info, func, opts) catch |err| {
-                handleError(T, @TypeOf(func), &caller.local, err, info);
+                handleError(&caller.local, err, info, comptime .of(T), @typeName(@TypeOf(func)), false);
                 return;
             };
 
@@ -897,14 +922,14 @@ pub const Function = struct {
             if (try_catch.hasCaught()) {
                 if (local.ctx.env.terminatePending() == false) {
                     if (try_catch.exceptionValue()) |exception| {
-                        const err_local = errorLocal(T, local, info);
+                        const err_local = errorLocal(local, info, comptime .of(T));
                         rejectOperation(&err_local, exception, info);
                         return null;
                     }
                 }
                 try_catch.rethrow();
             }
-            handleError(T, @TypeOf(func), local, err, info);
+            handleError(local, err, info, comptime .of(T), @typeName(@TypeOf(func)), true);
             return null;
         };
         if (try_catch.hasCaught()) {
