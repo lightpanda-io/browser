@@ -456,7 +456,7 @@ pub const Combinator = enum {
 pub const Compound = struct {
     parts: []const Part,
 
-    pub fn format(self: Compound, writer: *std.Io.Writer) !void {
+    pub fn format(self: Compound, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         for (self.parts) |part| switch (part) {
             .id => |val| {
                 try writer.writeByte('#');
@@ -471,7 +471,27 @@ pub const Compound = struct {
             .universal => try writer.writeByte('*'),
             .pseudo_class => |val| {
                 try writer.writeByte(':');
-                try writer.writeAll(@tagName(val));
+                const name = switch (val) {
+                    .nth_child_of => "nth-child",
+                    .nth_last_child_of => "nth-last-child",
+                    else => @tagName(val),
+                };
+                for (name) |c| {
+                    try writer.writeByte(if (c == '_') '-' else c);
+                }
+                switch (val) {
+                    .not, .is, .where, .has => |list| try formatArgs(writer, list),
+                    .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type => |nth| {
+                        try writer.print("({d}n+{d})", .{ nth.a, nth.b });
+                    },
+                    .nth_child_of, .nth_last_child_of => |nth| {
+                        try writer.print("({d}n+{d} of ", .{ nth.pattern.a, nth.pattern.b });
+                        try formatList(writer, nth.selectors);
+                        try writer.writeByte(')');
+                    },
+                    .lang => |lang| try writer.print("({s})", .{lang}),
+                    else => {},
+                }
             },
             .attribute => |attr| {
                 try writer.print("[{f}", .{attr.original_name});
@@ -497,6 +517,21 @@ pub const Compound = struct {
             .never => try writer.writeAll("[never]"),
         };
     }
+
+    fn formatArgs(writer: *std.Io.Writer, list: []const Selector) std.Io.Writer.Error!void {
+        try writer.writeByte('(');
+        try formatList(writer, list);
+        try writer.writeByte(')');
+    }
+
+    fn formatList(writer: *std.Io.Writer, list: []const Selector) std.Io.Writer.Error!void {
+        for (list, 0..) |selector, i| {
+            if (i != 0) {
+                try writer.writeAll(", ");
+            }
+            try selector.format(writer);
+        }
+    }
 };
 
 // A segment represents a compound selector with the combinator that precedes it
@@ -514,7 +549,7 @@ pub const Segment = struct {
         return .{ .parts = self._parts[0..self._len] };
     }
 
-    pub fn format(self: Segment, writer: *std.Io.Writer) !void {
+    pub fn format(self: Segment, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self.combinator) {
             .descendant => try writer.writeByte(' '),
             .child => try writer.writeAll(" > "),
@@ -567,7 +602,7 @@ pub const Selector = struct {
         return parts[parts.len - 1] == .pseudo_element;
     }
 
-    pub fn format(self: Selector, writer: *std.Io.Writer) !void {
+    pub fn format(self: Selector, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try self.first().format(writer);
         for (self.segments()) |segment| {
             try segment.format(writer);
@@ -676,5 +711,21 @@ test "Selector: classAttributeContains matches a token split" {
             }
         }
         try testing.expectEqual(expected, classAttributeContains(attr, name));
+    }
+}
+
+test "Selector: format prints functional pseudo-class arguments" {
+    const arena = testing.arena_allocator;
+    const cases = [_][2][]const u8{
+        .{ ":where(.a > p, #b)", ":where(.a > p, #b)" },
+        .{ "div:not(.x):is(span ~ em)", "div:not(.x):is(span ~ em)" },
+        .{ "li:nth-child(2n+1 of .c)", "li:nth-child(2n+1 of .c)" },
+        .{ "p:nth-of-type(3)", "p:nth-of-type(0n+3)" },
+        .{ "div:has(> p)", "div:has(:scope > p)" },
+        .{ "p:lang(en)", "p:lang(en)" },
+    };
+    for (cases) |case| {
+        const selectors = try Parser.parseList(arena, case[0]);
+        try testing.expectEqual(case[1], try std.fmt.allocPrint(arena, "{f}", .{selectors[0]}));
     }
 }
