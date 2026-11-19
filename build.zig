@@ -574,10 +574,8 @@ fn linkCurl(b: *Build, mod: *Build.Module, deps: Deps, is_tsan: bool, section: b
     mod.linkLibrary(zlib);
 
     const brotli = buildBrotli(b, deps.target, deps.optimize, is_tsan, section);
-    inline for (brotli) |lib| {
-        curl.root_module.linkLibrary(lib);
-        mod.linkLibrary(lib);
-    }
+    curl.root_module.linkLibrary(brotli);
+    mod.linkLibrary(brotli);
 
     const zstd = buildZstd(b, deps.target, deps.optimize, is_tsan, section);
     curl.root_module.linkLibrary(zstd);
@@ -635,17 +633,17 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimiz
     return lib;
 }
 
-fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) [3]*Build.Step.Compile {
+fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) *Build.Step.Compile {
     const dep = b.dependency("brotli", .{});
 
     const mod = cLibModule(b, target, optimize, is_tsan);
     mod.addIncludePath(dep.path("c/include"));
 
-    const brotlicmn = sectionize(b.addLibrary(.{ .name = "brotlicommon", .root_module = mod }), section);
-    const brotlidec = sectionize(b.addLibrary(.{ .name = "brotlidec", .root_module = mod }), section);
-    const brotlienc = sectionize(b.addLibrary(.{ .name = "brotlienc", .root_module = mod }), section);
-
-    brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
+    // One archive: common, dec and enc share a module, so separate libraries
+    // each carried every object, which -fincremental's linker rejects as
+    // duplicate definitions.
+    const lib = sectionize(b.addLibrary(.{ .name = "brotli", .root_module = mod }), section);
+    lib.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     mod.addCSourceFiles(.{
         .root = dep.path("c/common"),
         .files = &.{
@@ -674,7 +672,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optim
         },
     });
 
-    return .{ brotlicmn, brotlidec, brotlienc };
+    return lib;
 }
 
 fn buildZstd(b: *Build, target: Build.ResolvedTarget, optimize: std.lang.Optimize, is_tsan: bool, section: bool) *Build.Step.Compile {
