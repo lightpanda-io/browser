@@ -52,7 +52,7 @@ _stored_error: ?js.Value.Global,
 _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
-_cancel: ?Cancel = null,
+_cancel_fn: ?js.Function.Global = null,
 _collected: bool = false,
 _disturbed: bool = false, // once cancelled, cannot be consumed again
 
@@ -86,11 +86,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const 
             try start.callRethrow(void, .{self._controller});
         }
 
-        if (src.cancel) |callback| {
-            self._cancel = .{
-                .callback = callback,
-            };
-        }
+        self._cancel_fn = src.cancel;
 
         if (src.pull) |pull| {
             self._pull_fn = pull;
@@ -267,14 +263,7 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
 
     switch (self._state) {
         .readable => {},
-        .closed => {
-            if (self._cancel) |c| {
-                if (c.resolver) |r| {
-                    return local.toLocal(r).promise();
-                }
-            }
-            return local.resolvePromise(.{});
-        },
+        .closed => return local.resolvePromise({}),
         .errored => {
             const resolver = local.createPromiseResolver();
             resolver.reject("ReadableStream.cancel", self._stored_error.?);
@@ -282,29 +271,9 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
         },
     }
 
-    if (self._cancel == null) {
-        self._cancel = Cancel{};
-    }
+    const resolver = local.createPromiseResolver();
 
-    var c = &self._cancel.?;
-    var resolver = blk: {
-        if (c.resolver) |r| {
-            break :blk local.toLocal(r);
-        }
-        var temp = local.createPromiseResolver();
-        c.resolver = try temp.persist();
-        break :blk temp;
-    };
-
-    // Execute the cancel callback if provided
-    if (c.callback) |cb| {
-        if (reason) |r| {
-            try local.toLocal(cb).call(void, .{r});
-        } else {
-            try local.toLocal(cb).call(void, .{});
-        }
-    }
-
+    // closed before the source's cancel runs
     self._state = .closed;
     self._controller.clearQueue();
 
@@ -317,9 +286,66 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
         r.release();
     }
     self._controller._pending_reads.clearRetainingCapacity();
-    resolver.resolve("ReadableStream.cancel", {});
+
+    const cb = self._cancel_fn orelse {
+        resolver.resolve("ReadableStream.cancel", {});
+        return resolver.promise();
+    };
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+
+    const callback = local.toLocal(cb);
+    const call_result = if (reason) |r| callback.callRethrow(js.Value, .{r}) else callback.callRethrow(js.Value, .{});
+    const source_result = call_result catch |err| {
+        if (err == error.ExecutionTerminated) {
+            return err;
+        }
+        if (try_catch.exceptionValue()) |exception| {
+            resolver.reject("ReadableStream.cancel", exception);
+        } else {
+            resolver.rejectError("ReadableStream.cancel", .{ .generic_error = @errorName(err) });
+        }
+        return resolver.promise();
+    };
+
+    if (source_result.isPromise() == false) {
+        resolver.resolve("ReadableStream.cancel", {});
+        return resolver.promise();
+    }
+
+    // The source's cancel returned a promise, wait for it (and then resolve
+    // with undefined)
+    const wait = try exec.page_arena.create(CancelWait);
+    wait.* = .{ .execution = exec, .resolver = try resolver.persist() };
+    const on_fulfilled = local.newCallback(CancelWait.onFulfilled, wait);
+    const on_rejected = local.newCallback(CancelWait.onRejected, wait);
+    _ = try source_result.toPromise().thenAndCatch(on_fulfilled, on_rejected);
     return resolver.promise();
 }
+
+const CancelWait = struct {
+    execution: *const Execution,
+    resolver: js.PromiseResolver.Global,
+
+    fn onFulfilled(self: *CancelWait) void {
+        defer self.resolver.deinit();
+        const local = self.execution.js.local.?;
+        local.toLocal(self.resolver).resolve("ReadableStream.cancel", {});
+    }
+
+    fn onRejected(self: *CancelWait, reason: ?js.Value) void {
+        defer self.resolver.deinit();
+        const local = self.execution.js.local.?;
+        const resolver = local.toLocal(self.resolver);
+        if (reason) |r| {
+            resolver.reject("ReadableStream.cancel", r);
+        } else {
+            resolver.reject("ReadableStream.cancel", {});
+        }
+    }
+};
 
 /// pipeThrough(transform) — pipes this readable stream through a transform stream,
 /// returning the readable side. `transform` is a JS object with `readable` and `writable` properties.
@@ -439,11 +465,6 @@ const PipeState = struct {
     }
 };
 
-const Cancel = struct {
-    callback: ?js.Function.Global = null,
-    resolver: ?js.PromiseResolver.Global = null,
-};
-
 /// tee() — https://streams.spec.whatwg.org/#readable-stream-default-tee
 /// Locks this stream and returns two branches which each receive every chunk.
 /// Like the spec, only a locked stream is rejected: teeing a closed or errored
@@ -470,7 +491,7 @@ pub fn tee(self: *ReadableStream, exec: *const Execution) ![2]*ReadableStream {
     inline for (&state.branches, 0..) |*branch, index| {
         branch.stream._pull_fn = pull;
         const on_cancel = try local.newCallback(TeeState.cancelBranch(index), state).persist();
-        branch.stream._cancel = .{ .callback = on_cancel };
+        branch.stream._cancel_fn = on_cancel;
     }
 
     // The spec's start algorithm resolves right away and then pulls each
@@ -493,6 +514,9 @@ const TeeState = struct {
     branches: [2]Branch,
     reading: bool = false,
     read_again: bool = false,
+    /// each branch returns the same promise, which is settled only once both
+    // branches are cancelled (or the source closes / errors).
+    cancel_resolver: ?js.PromiseResolver.Global = null,
 
     const Branch = struct {
         stream: *ReadableStream,
@@ -548,6 +572,7 @@ const TeeState = struct {
             if (branch.cancelled) continue;
             branch.stream._controller.close() catch {};
         }
+        self.settleCancel();
     }
 
     fn onReadRejected(self: *TeeState) void {
@@ -558,26 +583,49 @@ const TeeState = struct {
         for (&self.branches) |*branch| {
             branch.stream._controller.doError(reason) catch {};
         }
+        self.settleCancel();
+    }
+
+    /// The source closed or errored: a branch cancel still waiting on the
+    /// other branch resolves.
+    fn settleCancel(self: *TeeState) void {
+        if (self.branches[0].cancelled and self.branches[1].cancelled) {
+            return;
+        }
+        const resolver = self.cancel_resolver orelse return;
+        self.execution.js.local.?.toLocal(resolver).resolve("tee cancel", {});
+    }
+
+    fn cancelPromise(self: *TeeState) !js.PromiseResolver {
+        const local = self.execution.js.local.?;
+        if (self.cancel_resolver) |r| {
+            return local.toLocal(r);
+        }
+        const resolver = local.createPromiseResolver();
+        self.cancel_resolver = try resolver.persist();
+        return resolver;
     }
 
     /// The cancel callback of branch `index`. Each branch needs its own
     /// function, since all a callback gets back is the TeeState.
-    fn cancelBranch(comptime index: usize) fn (*TeeState, ?js.Value) void {
+    fn cancelBranch(comptime index: usize) fn (*TeeState, ?js.Value) anyerror!js.Promise {
         return struct {
-            fn cancel(self: *TeeState, reason: ?js.Value) void {
+            fn cancel(self: *TeeState, reason: ?js.Value) !js.Promise {
                 const branch = &self.branches[index];
                 branch.cancelled = true;
                 if (reason) |r| {
-                    branch.reason = r.persist() catch null;
+                    branch.reason = try r.persist();
                 }
+                const resolver = try self.cancelPromise();
                 if (self.branches[1 - index].cancelled) {
-                    self.cancelSource();
+                    self.cancelSource(resolver);
                 }
+                return resolver.promise();
             }
         }.cancel;
     }
 
-    fn cancelSource(self: *TeeState) void {
+    fn cancelSource(self: *TeeState, resolver: js.PromiseResolver) void {
         const exec = self.execution;
         const local = exec.js.local.?;
 
@@ -589,9 +637,11 @@ const TeeState = struct {
             if (branch.reason) |r| r.release();
             branch.reason = null;
         }
-        _ = self.source.cancel(composite.toValue(), exec) catch |err| {
+        const source_cancel = self.source.cancel(composite.toValue(), exec) catch |err| {
             log.warn(.js, "tee cancel source", .{ .err = err });
+            return resolver.rejectError("tee cancel", .{ .generic_error = @errorName(err) });
         };
+        resolver.resolve("tee cancel", source_cancel);
     }
 };
 

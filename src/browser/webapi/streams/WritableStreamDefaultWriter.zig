@@ -46,7 +46,7 @@ pub fn write(self: *WritableStreamDefaultWriter, chunk: js.Value, exec: *const E
         else => return err,
     };
 
-    return local.resolvePromise(.{});
+    return local.resolvePromise({});
 }
 
 pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
@@ -65,7 +65,7 @@ pub fn close(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Pro
         else => return err,
     };
 
-    return local.resolvePromise(.{});
+    return local.resolvePromise({});
 }
 
 /// An errored stream rejects with what it errored with; a closed one with a TypeError.
@@ -99,7 +99,7 @@ pub fn getClosed(self: *WritableStreamDefaultWriter, exec: *const Execution) !js
         return resolver.promise();
     }
 
-    return local.resolvePromise(.{});
+    return local.resolvePromise({});
 }
 
 pub fn getDesiredSize(self: *const WritableStreamDefaultWriter) ?i32 {
@@ -113,7 +113,7 @@ pub fn getDesiredSize(self: *const WritableStreamDefaultWriter) ?i32 {
 
 pub fn getReady(self: *WritableStreamDefaultWriter, exec: *const Execution) !js.Promise {
     _ = self;
-    return exec.js.local.?.resolvePromise(.{});
+    return exec.js.local.?.resolvePromise({});
 }
 
 pub const JsApi = struct {

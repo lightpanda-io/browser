@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<meta name=lp-mode content=test>
 <script src="../testing.js"></script>
 
 <script id=text_decoder_stream_encoding>
@@ -41,46 +42,52 @@
   }
 </script>
 
-<script id=text_decoder_stream_decode>
-  (async function() {
-    const tds = new TextDecoderStream();
+<script id=text_decoder_stream_decode type=module>
+  const state = await testing.async();
 
-    const writer = tds.writable.getWriter();
-    const reader = tds.readable.getReader();
+  const tds = new TextDecoderStream();
+  const writer = tds.writable.getWriter();
+  const reader = tds.readable.getReader();
 
-    // 'hello' in UTF-8 bytes
-    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
-    await writer.write(bytes);
-    await writer.close();
+  // The readable starts at a high-water mark of 0: a write only settles once
+  // it's read, so queue the writes and read.
+  // 'hello' in UTF-8 bytes
+  writer.write(new Uint8Array([104, 101, 108, 108, 111]));
+  writer.close();
 
-    const result = await reader.read();
+  const result = await reader.read();
+  const result2 = await reader.read();
+  state.resolve();
+
+  await state.done(() => {
     testing.expectEqual(false, result.done);
     testing.expectEqual('hello', result.value);
-
-    const result2 = await reader.read();
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
-<script id=text_decoder_stream_empty_chunk>
-  (async function() {
-    const tds = new TextDecoderStream();
-    const writer = tds.writable.getWriter();
-    const reader = tds.readable.getReader();
+<script id=text_decoder_stream_empty_chunk type=module>
+  const state = await testing.async();
 
-    // Write an empty chunk followed by real data
-    await writer.write(new Uint8Array([]));
-    await writer.write(new Uint8Array([104, 105]));
-    await writer.close();
+  const tds = new TextDecoderStream();
+  const writer = tds.writable.getWriter();
+  const reader = tds.readable.getReader();
 
-    // Empty chunk should be filtered out; first read gets "hi"
-    const result = await reader.read();
+  // Write an empty chunk followed by real data
+  writer.write(new Uint8Array([]));
+  writer.write(new Uint8Array([104, 105]));
+  writer.close();
+
+  const result = await reader.read();
+  const result2 = await reader.read();
+  state.resolve();
+
+  await state.done(() => {
+    // Empty chunk is filtered out; the first read gets "hi"
     testing.expectEqual(false, result.done);
     testing.expectEqual('hi', result.value);
-
-    const result2 = await reader.read();
     testing.expectEqual(true, result2.done);
-  })();
+  });
 </script>
 
 
@@ -152,7 +159,9 @@
     testing.expectEqual(['\u20ACA'], results.windows1252);
     testing.expectEqual(['\u3042'], results.shift_jis);
     testing.expectEqual(['a', 'b', 'cd'], results.sources);
-    testing.expectEqual(['a'], results.shared);
+    testing.diverges("Chrome rejects a SharedArrayBuffer chunk; the spec converts to AllowSharedBufferSource", () => {
+      testing.expectEqual(['a'], results.shared);
+    });
     testing.expectEqual(['a', '\uFFFD'], results.truncated);
     testing.expectEqual(['a\uFFFDb'], results.invalid);
     testing.expectEqual('TypeError', results.fatal_invalid);
