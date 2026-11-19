@@ -76,6 +76,12 @@ COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.
 COPY --from=0 /browser/zig-out/bin/lightpanda /bin/lightpanda
 COPY --from=1 /usr/bin/tini /usr/bin/tini
 
+# Run as a non-root user. The serve endpoint currently has no authentication
+# (see lightpanda-io/browser#3452), so the process user should not be root.
+# If you mount a volume for downloads or caches, chown it to this uid.
+RUN useradd --create-home --uid 1000 lightpanda
+USER lightpanda
+
 EXPOSE 9222/tcp
 
 # Lightpanda install only some signal handlers, and PID 1 doesn't have a default SIGTERM signal handler.
