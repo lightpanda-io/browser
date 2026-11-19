@@ -294,7 +294,7 @@ fn selectFirstEnabled(self: *const Select) void {
 
 // A menu list (Blink's UsesMenuList) always shows a selected option when it
 // has an enabled one; multiple selects and list boxes have no default.
-fn isMenuList(self: *const Select) bool {
+pub fn isMenuList(self: *const Select) bool {
     return self.getMultiple() == false and self.displaySize() < 2;
 }
 
@@ -309,7 +309,7 @@ fn displaySize(self: *const Select) i64 {
 
 // The first selected option in tree order. Disabled options count: they can be
 // selected by script, they just aren't submitted.
-fn selectedOption(self: *const Select) ?*Option {
+pub fn selectedOption(self: *const Select) ?*Option {
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
         if (option._selected) {

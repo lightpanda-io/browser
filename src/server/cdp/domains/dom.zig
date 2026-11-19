@@ -456,8 +456,13 @@ const BoxModel = struct {
 
 // Like Chrome, positions are in the top-level viewport: a node inside an
 // iframe is offset by where its frame sits.
-fn viewportRect(element: *DOMNode.Element, frame: *Frame) DOMNode.Element.DOMRect.Data {
-    return toTopViewport(element.boundingClientRectValues(frame), element.asNode(), frame);
+// null when the element has no box: display:none on it or an ancestor. A
+// zero-size or visibility:hidden element still has one.
+fn viewportRect(element: *DOMNode.Element, frame: *Frame) ?DOMNode.Element.DOMRect.Data {
+    if (!element.isVisible(frame)) {
+        return null;
+    }
+    return toTopViewport(element.boundingClientRectValuesForVisible(frame), element.asNode(), frame);
 }
 
 // `rect` is in the viewport of the frame that owns `node`.
@@ -549,10 +554,6 @@ fn getContentQuads(cmd: *CDP.Command) !void {
 
     const node = try getNode(cmd.arena, target, cmd.routing_session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    // TODO an element without a box (display: none) gets a zero-size quad, but
-    // Chrome sends "Could not compute content quads.", as we already do for text.
-    // visibility: hidden keeps its box, so it keeps its quads in Chrome too.
-
     // TODO implement for document.
     // Most likely document would require some hierachgy in the renderer. It is left unimplemented till we have a good example.
     // Elements like SVGElement may have multiple quads.
@@ -560,7 +561,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
     // Text gives one quad: the bounding box of all its lines. Chrome gives
     // one quad per line, but the layout only measures the whole box.
     const rect = if (node.dom.is(DOMNode.Element)) |element|
-        viewportRect(element, frame)
+        viewportRect(element, frame) orelse return cmd.sendError(-32000, "Could not compute content quads.", .{})
     else if (node.dom.is(DOMNode.CData.Text)) |text|
         textViewportRect(text, frame) orelse return cmd.sendError(-32000, "Could not compute content quads.", .{})
     else
@@ -589,12 +590,10 @@ fn getBoxModel(cmd: *CDP.Command) !void {
 
     const node = try getNode(cmd.arena, target, cmd.routing_session_id, params.nodeId, params.backendNodeId, params.objectId);
 
-    // TODO an element without a box (display: none) gets a zero-size box, but
-    // Chrome sends "Could not compute box model.", as we already do for text.
     // TODO implement for document.
     // Text gets the bounding box of its lines, as in Chrome.
     const rect = if (node.dom.is(DOMNode.Element)) |element|
-        viewportRect(element, frame)
+        viewportRect(element, frame) orelse return cmd.sendError(-32000, "Could not compute box model.", .{})
     else if (node.dom.is(DOMNode.CData.Text)) |text|
         textViewportRect(text, frame) orelse return cmd.sendError(-32000, "Could not compute box model.", .{})
     else
@@ -1673,7 +1672,7 @@ test "cdp.dom: getBoxModel" {
 
     // Box model on the <p> nodeId returned above.
     // Note: nodeId 6 is <head>, which is `display: none` per HTML Rendering
-    // §15.3.1, so its box model is all-zeros — exercise a visible element.
+    // §15.3.1, so it has no box model — exercise a visible element.
     try ctx.processMessage(.{
         .id = 5,
         .method = "DOM.getBoxModel",
@@ -1689,6 +1688,67 @@ test "cdp.dom: getBoxModel" {
         .width = 1920,
         .height = 20,
     } }, .{ .id = 5 });
+}
+
+test "cdp.dom: getBoxModel and getContentQuads distinguish missing boxes from hidden or empty boxes" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .url = "cdp/dom2.html" });
+    const target = try testing.firstTarget(bc);
+    const frame = target.mainFrame().?;
+    {
+        var scope: js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun(
+            \\document.body.innerHTML = `
+            \\  <a id="absent" style="display:none">absent</a>
+            \\  <div style="display:none"><a id="child">child</a></div>
+            \\  <a id="invisible" style="visibility:hidden;display:block;width:12px;height:8px">link</a>
+            \\  <div id="empty" style="width:0;height:0"></div>`;
+        , null);
+    }
+
+    const Case = struct { dom_id: []const u8, size: ?[2]i64 = null };
+    const cases = [_]Case{
+        .{ .dom_id = "absent" },
+        .{ .dom_id = "child" },
+        .{ .dom_id = "invisible", .size = .{ 12, 8 } },
+        .{ .dom_id = "empty", .size = .{ 0, 0 } },
+    };
+    for (cases, 1..) |case, i| {
+        const msg_id: i64 = @intCast(i);
+        const node = try target.node_registry.register(frame.document.getElementById(case.dom_id).?.asNode());
+        try ctx.processMessage(.{ .id = msg_id, .method = "DOM.getBoxModel", .params = .{ .nodeId = node.id } });
+        if (case.size) |size| {
+            const model = (try testing.sentResult(&ctx, msg_id)).get("model").?.object;
+            try testing.expectEqual(size[0], model.get("width").?.integer);
+            try testing.expectEqual(size[1], model.get("height").?.integer);
+        } else {
+            try ctx.expectSentError(-32000, "Could not compute box model.", .{ .id = i });
+        }
+
+        const quads_id = msg_id + 100;
+        try ctx.processMessage(.{ .id = quads_id, .method = "DOM.getContentQuads", .params = .{ .nodeId = node.id } });
+        if (case.size) |size| {
+            const quads = (try testing.sentResult(&ctx, quads_id)).get("quads").?.array.items;
+            try testing.expectEqual(1, quads.len);
+            const quad = quads[0].array.items;
+            const num = struct {
+                fn f(v: std.json.Value) f64 {
+                    return switch (v) {
+                        .integer => |n| @floatFromInt(n),
+                        .float => |n| n,
+                        else => unreachable,
+                    };
+                }
+            }.f;
+            try testing.expectEqual(@as(f64, @floatFromInt(size[0])), num(quad[2]) - num(quad[0]));
+            try testing.expectEqual(@as(f64, @floatFromInt(size[1])), num(quad[5]) - num(quad[1]));
+        } else {
+            try ctx.expectSentError(-32000, "Could not compute content quads.", .{ .id = i + 100 });
+        }
+    }
 }
 
 test "cdp.dom: getBoxModel of a text node" {
