@@ -177,19 +177,19 @@ fn writeAgentCommands(w: *Writer) Writer.Error!void {
     }
 }
 
-/// The methods `new Page()` carries in a PandaScript, i.e. the recorded tools
+/// The methods `new Page()` carries in a PandaScript, i.e. the scriptable tools
 /// plus the runtime's own page methods, and the `console` global.
 fn writePandascriptBuiltins(w: *Writer) Writer.Error!void {
     const table_head = "| Method | Call | Returns | Summary |\n|---|---|---|---|\n";
     try w.writeAll(banner);
     for (std.enums.values(Tool.Group)) |g| {
-        if (!hasRecorded(g)) continue;
+        if (!hasScriptable(g)) continue;
         try writeGroupHeading(w, g, "methods", table_head);
         for (Schema.all()) |*s| {
-            if (s.tool.group() != g or !s.tool.isRecorded()) continue;
+            if (s.tool.group() != g or !s.tool.isScriptable()) continue;
             try w.print("| [`{s}`]({f}) | `", .{ s.tool_name, Anchor{ .page = browser_tools_page, .name = s.tool_name } });
             try lp.skill.writeSignature(w, s);
-            // Non-null: `scriptReturns` covers every recorded tool.
+            // Non-null: `scriptReturns` covers every scriptable tool.
             try w.print("` | {f} | {f} |\n", .{ Cell{ .s = Schema.scriptReturns(s.tool).? }, Cell{ .s = s.summary } });
         }
         try w.writeAll("\n");
@@ -206,9 +206,9 @@ fn writePandascriptBuiltins(w: *Writer) Writer.Error!void {
     }
 }
 
-fn hasRecorded(g: Tool.Group) bool {
+fn hasScriptable(g: Tool.Group) bool {
     for (std.enums.values(Tool)) |t| {
-        if (t.group() == g and t.isRecorded()) return true;
+        if (t.group() == g and t.isScriptable()) return true;
     }
     return false;
 }
@@ -429,14 +429,14 @@ test "docs: agent-commands covers every slash command" {
     try testing.expect(std.mem.find(u8, out, "[`/goto <url> [timeout=…]") != null);
 }
 
-test "docs: pandascript-builtins lists exactly the recorded tools" {
+test "docs: pandascript-builtins lists exactly the scriptable tools" {
     const out = try render(writePandascriptBuiltins);
     defer testing.allocator.free(out);
     for (std.enums.values(Tool)) |t| {
         var buf: [64]u8 = undefined;
         const call = try std.mem.print(&buf, "page.{s}(", .{@tagName(t)});
-        try testing.expectEqual(@intFromBool(t.isRecorded()), std.mem.count(u8, out, call));
-        try testing.expectEqual(t.isRecorded(), Schema.scriptReturns(t) != null);
+        try testing.expectEqual(@intFromBool(t.isScriptable()), std.mem.count(u8, out, call));
+        try testing.expectEqual(t.isScriptable(), Schema.scriptReturns(t) != null);
     }
     try testing.expect(std.mem.find(u8, out, "`page.extract(schema)`") != null);
     try testing.expect(std.mem.find(u8, out, "| A status line starting `Clicked element (<target>)`, ") != null);

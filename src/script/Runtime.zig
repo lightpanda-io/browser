@@ -37,7 +37,7 @@ env: lp.js.Env,
 context: v8.Global,
 has_context: bool,
 call_arena: std.heap.ArenaAllocator,
-primitive_data: [recorded_tool_count]PrimitiveData,
+primitive_data: [scriptable_tool_count]PrimitiveData,
 console_data: [std.enums.values(ConsoleMethod).len]ConsoleData,
 /// Notified before each `console.*` line is written. The REPL uses it to
 /// clear the live spinner so script output starts on a clean line instead
@@ -62,14 +62,13 @@ read_only: bool = false,
 refused: ?BrowserTool = null,
 cancelled: std.atomic.Value(bool) = .init(false),
 
-/// The runtime installs exactly the recorded browser tools as script
-/// primitives — the same set the recorder writes — so every recorded call
-/// replays. `buildArgs` adapts each tool's JS calling convention to the JSON
+/// The runtime installs the scriptable browser tools as script primitives — a
+/// superset of what the recorder writes — so every recorded call replays. `buildArgs` adapts each tool's JS calling convention to the JSON
 /// `browser_tools.call` expects.
-const recorded_tool_count = blk: {
+const scriptable_tool_count = blk: {
     var n: usize = 0;
     for (std.enums.values(BrowserTool)) |t| {
-        if (t.isRecorded()) n += 1;
+        if (t.isScriptable()) n += 1;
     }
     break :blk n;
 };
@@ -218,10 +217,10 @@ fn createContext(self: *Runtime) InitError!void {
     const global = v8.v8__Context__Global(context) orelse return error.RuntimeInitFailed;
 
     // `Page` is the only global verb; `new Page()` attaches a method for each
-    // recorded tool, reusing these `primitive_data` entries — so fill them here.
+    // scriptable tool, reusing these `primitive_data` entries — so fill them here.
     var i: usize = 0;
     for (std.enums.values(BrowserTool)) |t| {
-        if (!t.isRecorded()) continue;
+        if (!t.isScriptable()) continue;
         self.primitive_data[i] = .{ .runtime = self, .tool = t };
         i += 1;
     }
@@ -498,7 +497,7 @@ fn closeCallback(info_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void
     self.invokeClose(info);
 }
 
-/// `new Page()`: attach a method for every recorded tool (including `goto`) plus
+/// `new Page()`: attach a method for every scriptable tool (including `goto`) plus
 /// `close`. `__lpFrameId` is left unset until the first `goto` navigates the page.
 fn construct(self: *Runtime, info: *const v8.FunctionCallbackInfo) void {
     if (!v8.v8__FunctionCallbackInfo__IsConstructCall(info)) {
@@ -527,7 +526,7 @@ const PageMethod = struct {
     returns: []const u8,
 };
 
-/// The page methods besides the recorded tools.
+/// The page methods besides the scriptable tools.
 pub const page_methods = [_]PageMethod{
     .{ .name = "close", .callback = closeCallback, .summary = "Stales the handle, so later calls on it fail. The page itself is reclaimed on the next `goto` or at script end.", .returns = "Nothing" },
 };
@@ -881,7 +880,7 @@ fn callTool(
     self.session.browser.env.isolate.enter();
     defer self.session.browser.env.isolate.exit();
 
-    const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{ .source = .script }) catch |err| switch (err) {
+    const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args, .{ .source = .script, .structured = true }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
         else => return .{ .fail = arena.print("{s} failed: {s}", .{ @tagName(tool), browser_tools.errorMessage(err) }) catch return error.OutOfMemory },
@@ -1245,6 +1244,43 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 
     const frame = testing.test_session.currentFrame().?;
     try testing.expect(std.mem.find(u8, frame.url, "/src/browser/tests/mcp_actions.html") != null);
+}
+
+test "agent script runtime: page.getCookies returns cookie objects, also in a read-only run" {
+    defer testing.test_session.closeAllPages();
+    defer testing.test_session.cookie_jar.clearRetainingCapacity();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+    runtime.read_only = true;
+
+    try testing.test_session.cookie_jar.populateFromResponse("http://localhost:9582", "session=abc; Path=/; HttpOnly");
+    try testing.test_session.cookie_jar.populateFromResponse("http://other.test/", "tracking=xyz; Path=/");
+    // Expired after it was stored, on a host the script never requests, so only
+    // `getCookies` itself can purge it.
+    try testing.test_session.cookie_jar.populateFromResponse("http://other.test/", "stale=old; Path=/");
+    var it = testing.test_session.cookie_jar.iterator();
+    while (it.next()) |c| {
+        if (std.mem.eql(u8, c.name, "stale")) c.expires = 1;
+    }
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const own = page.getCookies();
+        \\if (!Array.isArray(own) || own.length !== 1) throw new Error("own: " + JSON.stringify(own));
+        \\const c = own[0];
+        \\if (c.name !== "session" || c.value !== "abc" || c.domain !== "localhost" || c.path !== "/" || c.httpOnly !== true)
+        \\  throw new Error("cookie: " + JSON.stringify(c));
+        \\const other = page.getCookies({ url: "http://other.test/" });
+        \\if (other.length !== 1 || other[0].name !== "tracking") throw new Error("other: " + JSON.stringify(other));
+        \\if (page.getCookies({ all: true }).length !== 2) throw new Error("all");
+        \\const none = page.getCookies({ url: "http://nope.test/" });
+        \\if (!Array.isArray(none) || none.length !== 0) throw new Error("none: " + JSON.stringify(none));
+    );
 }
 
 test "agent script runtime: page.classify executes presets, categories and structured questions" {

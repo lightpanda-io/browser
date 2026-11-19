@@ -180,6 +180,12 @@ pub const Tool = enum {
         };
     }
 
+    /// Callable as `page.<tool>()` in a script: the recorded tools, plus the
+    /// reads a script needs that a recording would only carry as noise.
+    pub fn isScriptable(self: Tool) bool {
+        return self.isRecorded() or self == .getCookies;
+    }
+
     /// Whether the tool's script form returns a Promise and so is recorded with
     /// `await`. Only `goto` (navigation) is async; every other page method is
     /// synchronous. Exhaustive like the sibling predicates so adding an async
@@ -243,10 +249,11 @@ pub const Tool = enum {
     }
 
     /// Result text is JSON, so a script gets the parsed value, not the string.
+    /// `getCookies` is JSON only under `CallOpts.structured`.
     pub fn returnsJson(self: Tool) bool {
         return switch (self) {
-            .extract, .classify, .acceptCookies, .login => true,
-            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .pageTools, .callPageTool, .download => false,
+            .extract, .classify, .acceptCookies, .login, .getCookies => true,
+            .goto, .search, .markdown, .html, .links, .evaluate, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getEnv, .popups, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .pageTools, .callPageTool, .download => false,
         };
     }
 
@@ -476,6 +483,9 @@ pub const CallOpts = struct {
     page_tools_seen: ?*PageToolsSeen = null,
     /// Set by model-facing callers so `tree` can answer `delta`.
     tree_seen: ?*TreeSeen = null,
+    /// The caller parses the result, so `getCookies` answers in JSON rather
+    /// than the text lines a model reads.
+    structured: bool = false,
     source: TelemetryTool.Source,
 };
 
@@ -743,7 +753,7 @@ fn dispatch(
         .consoleLogs => .{ .text = try execConsoleLogs(arena, session) },
         .popups => execPopups(arena, session, registry, substituted),
         .getUrl => .{ .text = try execGetUrl(session) },
-        .getCookies => .{ .text = try execGetCookies(arena, session, substituted) },
+        .getCookies => .{ .text = try execGetCookies(arena, session, substituted, if (opts.structured) .json else .text) },
         .download => try execDownload(arena, session, substituted),
         .pageTools => .{ .text = try execPageTools(arena, session) },
         .callPageTool => execCallPageTool(arena, session, registry, substituted),
@@ -2336,37 +2346,56 @@ fn execPopups(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
     return .{ .text = try renderJson(arena, entries, .{}) };
 }
 
-fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value, format: enum { text, json }) ToolError![]const u8 {
     const Params = struct { url: ?[]const u8 = null, all: bool = false };
     const args = try parseArgsOrDefault(Params, arena, arguments);
 
     const jar = &session.cookie_jar;
-    if (jar.len == 0) return "No cookies.";
+    jar.removeExpired(null);
+    if (jar.len == 0) return switch (format) {
+        .text => "No cookies.",
+        .json => "[]",
+    };
 
     const filter_url: ?[:0]const u8 = blk: {
         if (args.all) break :blk null;
         if (args.url) |u| break :blk arena.dupeSentinel(u8, u, 0) catch return ToolError.InternalError;
         if (session.currentFrame()) |f| break :blk f.url;
-        return "No current page. Pass `url` to filter by host or `all=true` to list every cookie.";
+        return switch (format) {
+            .text => "No current page. Pass `url` to filter by host or `all=true` to list every cookie.",
+            .json => ToolError.FrameNotLoaded,
+        };
     };
     const host: ?[]const u8 = if (filter_url) |u| lp.URL.getHostname(u) else null;
 
     var aw: std.Io.Writer.Allocating = .init(arena);
     const writer = &aw.writer;
     var count: usize = 0;
+    if (format == .json) writer.writeByte('[') catch return ToolError.InternalError;
     var it = jar.iterator();
     while (it.next()) |cookie| {
         if (host) |h| if (!cookie.matchesHost(h)) continue;
-        writer.print("{s}={s}", .{ cookie.name, cookie.value }) catch return ToolError.InternalError;
-        writer.print("; domain={s}; path={s}", .{ cookie.domain, cookie.path }) catch return ToolError.InternalError;
-        if (cookie.secure) writer.writeAll("; Secure") catch return ToolError.InternalError;
-        if (cookie.http_only) writer.writeAll("; HttpOnly") catch return ToolError.InternalError;
-        writer.writeAll("\n") catch return ToolError.InternalError;
+        switch (format) {
+            .text => {
+                writer.print("{s}={s}", .{ cookie.name, cookie.value }) catch return ToolError.InternalError;
+                writer.print("; domain={s}; path={s}", .{ cookie.domain, cookie.path }) catch return ToolError.InternalError;
+                if (cookie.secure) writer.writeAll("; Secure") catch return ToolError.InternalError;
+                if (cookie.http_only) writer.writeAll("; HttpOnly") catch return ToolError.InternalError;
+                writer.writeAll("\n") catch return ToolError.InternalError;
+            },
+            .json => {
+                if (count > 0) writer.writeByte(',') catch return ToolError.InternalError;
+                lp.cookies.writeCookieJson(cookie, writer) catch return ToolError.InternalError;
+            },
+        }
         count += 1;
     }
-    if (count == 0) {
-        const label = filter_url orelse "(unfiltered)";
-        return arena.print("No cookies for {s}.", .{label}) catch ToolError.InternalError;
+    switch (format) {
+        .text => if (count == 0) {
+            const label = filter_url orelse "(unfiltered)";
+            return arena.print("No cookies for {s}.", .{label}) catch ToolError.InternalError;
+        },
+        .json => writer.writeByte(']') catch return ToolError.InternalError,
     }
     return aw.written();
 }
