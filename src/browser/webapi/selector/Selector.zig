@@ -117,7 +117,7 @@ fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame:
 
     if (selectors.len == 1) {
         try List.collect(arena.allocator(), root, selectors[0], &nodes, &nth, frame);
-    } else {
+    } else if (selectors.len != 0) {
         try List.collectAny(arena.allocator(), root, selectors, &nodes, &nth, frame);
     }
 
@@ -579,6 +579,11 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
     var nth: List.NthCache = .{ .allocator = frame.local_arena };
     defer nth.deinit();
 
+    if (selectors.len == 0) {
+        // we have a valid selector, but the parser already decided it couldn't
+        // match anything
+        return null;
+    }
     if (selectors.len != 1) {
         const node = List.initOneAny(root, selectors, &nth, frame) orelse return null;
         return node.is(Node.Element);
