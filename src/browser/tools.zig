@@ -1511,12 +1511,7 @@ fn finishEvaluate(
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => null,
     };
-    if (postlude_result) |pr| if (!pr.is_error) {
-        bridgeSync(app_allocator, &session.bridge_store, pr.text) catch |err| switch (err) {
-            error.OutOfMemory => return ToolError.OutOfMemory,
-            else => {},
-        };
-    };
+    if (postlude_result) |pr| if (!pr.is_error) try bridgeSync(app_allocator, &session.bridge_store, pr.text);
 
     // Silence on save= success so stdout pipes stay clean. Objects/arrays
     // already render as JSON; a bare string (or other non-JSON text) is
@@ -1822,9 +1817,14 @@ const BridgeStore = std.StringHashMapUnmanaged([]const u8);
 
 /// Stored values are already JSON; splice them straight into the literal
 /// instead of round-tripping through json.Value.
+///
+/// A page can have an evaluate still in flight when another one starts, so
+/// `lp` isn't simply replaced: what the page changed since its last sync is
+/// carried over the fresh copy of the store, and `__lp_base` remembers the
+/// store as this page last saw it, for `bridge_postlude` to diff against.
 fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    try aw.writer.writeAll("globalThis.lp = {");
+    try aw.writer.writeAll("(() => { const store = {");
     var it = store.iterator();
     var first = true;
     while (it.next()) |kv| {
@@ -1834,39 +1834,68 @@ fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const
         try aw.writer.writeByte(':');
         try aw.writer.writeAll(kv.value_ptr.*);
     }
-    try aw.writer.writeAll("};");
+    try aw.writer.writeAll(
+        \\};
+        \\const seen = {};
+        \\for (const k of Object.keys(store)) seen[k] = JSON.stringify(store[k]);
+        \\const base = globalThis.__lp_base, cur = globalThis.lp;
+        \\if (base && cur && typeof cur === "object") {
+        \\  for (const k of Object.keys(cur)) {
+        \\    const v = JSON.stringify(cur[k]);
+        \\    if (v !== undefined && v !== base[k]) store[k] = cur[k];
+        \\  }
+        \\  for (const k of Object.keys(base)) if (!Object.hasOwn(cur, k)) delete store[k];
+        \\}
+        \\globalThis.lp = store;
+        \\Object.defineProperty(globalThis, "__lp_base", { value: seen, writable: true, configurable: true });
+        \\})();
+    );
     return arena.dupeSentinel(u8, aw.written(), 0);
 }
 
-const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
+/// What the page changed in `lp` since its last sync, as `{set, del}`: keys
+/// with their new value as JSON text, and keys it deleted. A diff, not the
+/// whole object, so a page can't undo what another page stored meanwhile.
+const bridge_postlude: [:0]const u8 =
+    \\(() => {
+    \\  const cur = globalThis.lp, base = globalThis.__lp_base || {};
+    \\  const set = {}, del = [];
+    \\  if (!cur || typeof cur !== "object") return JSON.stringify({ set, del });
+    \\  const now = {};
+    \\  for (const k of Object.keys(cur)) {
+    \\    const v = JSON.stringify(cur[k]);
+    \\    if (v === undefined) continue;
+    \\    now[k] = v;
+    \\    if (v !== base[k]) set[k] = v;
+    \\  }
+    \\  for (const k of Object.keys(base)) if (!Object.hasOwn(now, k)) del.push(k);
+    \\  globalThis.__lp_base = now;
+    \\  return JSON.stringify({ set, del });
+    \\})()
+;
 
-/// Drops keys missing from the postlude so `delete lp.foo` propagates.
 fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: []const u8) !void {
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, postlude_json, .{}) catch return;
+    const Diff = struct { set: std.json.ArrayHashMap([]const u8) = .{}, del: []const []const u8 = &.{} };
+    var parsed = std.json.parseFromSlice(Diff, allocator, postlude_json, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return,
+    };
     defer parsed.deinit();
-    if (parsed.value != .object) return;
-    const new_obj = parsed.value.object;
 
-    var to_remove: std.ArrayList([]const u8) = .empty;
-    defer to_remove.deinit(allocator);
-    var key_it = store.keyIterator();
-    while (key_it.next()) |k| {
-        if (!new_obj.contains(k.*)) try to_remove.append(allocator, k.*);
-    }
-    for (to_remove.items) |k| {
-        if (store.fetchRemove(k)) |kv| {
+    for (parsed.value.del) |key| {
+        if (store.fetchRemove(key)) |kv| {
             allocator.free(kv.key);
             allocator.free(kv.value);
         }
     }
-
-    var it = new_obj.iterator();
+    var it = parsed.value.set.map.iterator();
     while (it.next()) |entry| {
-        var val_aw: std.Io.Writer.Allocating = .init(allocator);
-        defer val_aw.deinit();
-        try std.json.Stringify.value(entry.value_ptr.*, .{}, &val_aw.writer);
-        // Trusted JSON path: value was just stringified from a parsed Value.
-        try bridgeStorePut(allocator, store, entry.key_ptr.*, val_aw.written());
+        // Validated: the page wrote this text, and the next prelude splices it
+        // into another page as code.
+        bridgeStoreSet(allocator, store, entry.key_ptr.*, entry.value_ptr.*) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidJson => {},
+        };
     }
 }
 

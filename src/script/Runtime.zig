@@ -1648,16 +1648,66 @@ test "agent script runtime: evaluates awaited together overlap their fetches" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    // Four 150 ms responses: one after the other they take 600 ms.
+    // Each counts how many are in flight at once: one after the other, the
+    // most would be 1.
     try runTestScript(runtime,
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\const slow = (n) => page.evaluate(`fetch("/goto_timeout/script.js?delay_ms=150&n=${n}").then((r) => r.status + ":" + ${n})`);
-        \\const started = Date.now();
-        \\const got = await Promise.all([slow(1), slow(2), slow(3), slow(4)]);
-        \\const elapsed = Date.now() - started;
-        \\if (got.join() !== "200:1,200:2,200:3,200:4") throw new Error("results: " + got.join());
-        \\if (elapsed >= 450) throw new Error("evaluates ran one after the other: " + elapsed + " ms");
+        \\const one = () => page.evaluate(`
+        \\  window.inFlight = (window.inFlight || 0) + 1;
+        \\  window.most = Math.max(window.most || 0, window.inFlight);
+        \\  const response = await fetch(location.href);
+        \\  window.inFlight--;
+        \\  return response.status + ":" + window.most;
+        \\`);
+        \\const got = await Promise.all([one(), one(), one(), one()]);
+        \\if (got.join() !== "200:4,200:4,200:4,200:4") throw new Error("evaluates did not overlap: " + got.join());
+    );
+}
+
+test "agent script runtime: concurrent evaluates keep each other's lp keys" {
+    defer testing.test_session.closeAllPages();
+    defer {
+        const store = &testing.test_session.bridge_store;
+        var it = store.iterator();
+        while (it.next()) |kv| {
+            testing.test_app.allocator.free(kv.key_ptr.*);
+            testing.test_app.allocator.free(kv.value_ptr.*);
+        }
+        store.clearRetainingCapacity();
+    }
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const a = new Page();
+        \\const b = new Page();
+        \\await Promise.all([
+        \\  a.goto("http://localhost:9582/src/browser/tests/mcp_actions.html"),
+        \\  b.goto("http://localhost:9582/src/browser/tests/runner/runner1.html"),
+        \\]);
+        \\await a.evaluate("lp.kept = 1; lp.dropped = 1");
+        \\const wait = (ms) => `await new Promise((resolve) => setTimeout(resolve, ${ms}));`;
+        \\
+        \\// Both start from the same store; b finishes last, without a's keys.
+        \\await Promise.all([
+        \\  a.evaluate(`lp.from_a = "a"; delete lp.dropped; ${wait(5)}`),
+        \\  b.evaluate(`lp.from_b = "b"; ${wait(20)}`),
+        \\]);
+        \\const across = JSON.parse(await a.evaluate("JSON.stringify(lp)"));
+        \\if (across.kept !== 1 || across.from_a !== "a" || across.from_b !== "b" || "dropped" in across) throw new Error("across pages: " + JSON.stringify(across));
+        \\
+        \\// On one page, the second evaluate must not reset what the first wrote.
+        \\await Promise.all([
+        \\  a.evaluate(`lp.first = 1; ${wait(10)} lp.late = 1;`),
+        \\  a.evaluate(`lp.second = 2;`),
+        \\]);
+        \\const lp = JSON.parse(await b.evaluate("JSON.stringify(lp)"));
+        \\if (lp.first !== 1 || lp.late !== 1 || lp.second !== 2 || lp.kept !== 1 || "dropped" in lp) throw new Error("one page: " + JSON.stringify(lp));
     );
 }
 
