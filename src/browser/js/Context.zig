@@ -100,8 +100,9 @@ origin: *Origin,
 // identity while isolated worlds have separate identity tracking.
 identity: *js.Identity,
 
-// Allocator to use for identity map operations. For main world contexts this is
-// page.arena, for isolated worlds it's the isolated world's arena.
+// For wrapper-side allocations that live as long as the identity map (e.g.
+// TaggedOpaque, by-value instances): page.arena for frames, else the worker's
+// or isolated world's arena.
 identity_arena: Allocator,
 
 // Unlike other v8 types, like functions or objects, modules are not shared
@@ -315,7 +316,7 @@ const IdentityResult = struct {
 };
 
 pub fn addIdentity(self: *Context, ptr: usize) !IdentityResult {
-    const gop = try self.identity.identity_map.getOrPut(self.identity_arena, ptr);
+    const gop = try self.identity.identity_map.getOrPut(self.identity.allocator, ptr);
     return .{
         .value_ptr = gop.value_ptr,
         .found_existing = gop.found_existing,

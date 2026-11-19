@@ -401,7 +401,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const identity_key = if (comptime is_frame) js.Identity.keyOf(global.window) else switch (global._type) {
         inline else => |scope| js.Identity.keyOf(scope),
     };
-    const gop = try params.identity.identity_map.getOrPut(params.identity_arena, identity_key);
+    const gop = try params.identity.identity_map.getOrPut(params.identity.allocator, identity_key);
     if (gop.found_existing == false) {
         var global_global: v8.Global = undefined;
         v8.v8__Global__New(isolate.handle, global_obj, &global_global);

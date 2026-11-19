@@ -375,6 +375,7 @@ pub fn createIsolatedWorld(self: *Target, world_name: []const u8, grant_universa
     world.* = .{
         .arena = arena,
         .browser = browser,
+        .identity = .{ .allocator = browser.allocator },
         .name = try arena.dupe(u8, world_name),
         .grant_universal_access = grant_universal_access,
     };

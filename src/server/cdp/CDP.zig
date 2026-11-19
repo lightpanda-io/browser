@@ -894,7 +894,7 @@ pub const IsolatedWorld = struct {
     // Identity tracking for this isolated world (separate from main world).
     // Shared by all of the world's frame contexts, like the main world shares
     // Page.identity across frames, and reset with them on root teardown.
-    identity: js.Identity = .{},
+    identity: js.Identity,
 
     const FrameContext = struct {
         frame: *const Frame,
@@ -983,7 +983,6 @@ pub const IsolatedWorld = struct {
         // The page's objects are going away with the root frame; wrappers
         // keyed by their addresses must not survive to alias a new page's.
         self.identity.deinit();
-        self.identity = .{};
     }
 
     fn destroyFrameContext(self: *IsolatedWorld, fc: FrameContext) void {
