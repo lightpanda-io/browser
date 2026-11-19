@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const uuidv4 = @import("../../id.zig").uuidv4;
+const Notification = @import("../../Notification.zig");
 const js = @import("../../browser/js/js.zig");
 const Frame = @import("../../browser/Frame.zig");
 
@@ -34,12 +36,16 @@ pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
         evaluate,
         callFunction,
         disown,
+        addPreloadScript,
+        removePreloadScript,
     }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .evaluate => return evaluate(cmd),
         .callFunction => return callFunction(cmd),
         .disown => return disown(cmd),
+        .addPreloadScript => return addPreloadScript(cmd),
+        .removePreloadScript => return removePreloadScript(cmd),
     }
 }
 
@@ -122,7 +128,7 @@ fn callFunction(cmd: *BiDi.Command) !void {
     if (declaration.isFunction() == false) {
         return cmd.sendError("invalid argument", "functionDeclaration is not a function");
     }
-    const function = js.Function{ .local = &ls.local, .handle = @ptrCast(declaration.handle) };
+    const function = declaration.toFunction();
 
     const arguments = try arena.alloc(js.Value, p.arguments.len);
     for (p.arguments, arguments) |argument, *js_argument| {
@@ -156,6 +162,165 @@ fn disown(cmd: *BiDi.Command) !void {
     }
 
     return cmd.sendResult(struct {}{});
+}
+
+// A script.addPreloadScript registration. It runs in every new document of
+// the navigables it targets, before the document's own scripts.
+pub const PreloadScript = struct {
+    id: [36]u8,
+
+    // The functionDeclaration, parenthesized so that evaluating it gives the
+    // function (see callFunction).
+    source: []const u8,
+
+    // At most one of these is set. Neither means every navigable.
+    context: ?[36]u8,
+    user_context: ?BiDi.UserContext.Id,
+
+    // A preload script targeting a navigable also runs in its descendants.
+    fn appliesTo(self: *const PreloadScript, bidi: *BiDi, frame: *const Frame) bool {
+        if (self.user_context) |user_context| {
+            return std.mem.eql(u8, user_context.slice(), bidi.user_context.id());
+        }
+        const context = self.context orelse return true;
+        const ctx = bidi.browsing_context orelse return false;
+        if (std.mem.eql(u8, &ctx.id, &context) == false) {
+            return false;
+        }
+        var root = frame;
+        while (root.parent) |parent| {
+            root = parent;
+        }
+        return root._frame_id == ctx.frame_id;
+    }
+};
+
+fn addPreloadScript(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        functionDeclaration: []const u8,
+        arguments: []const std.json.Value = &.{},
+        contexts: ?[]const []const u8 = null,
+        userContexts: ?[]const []const u8 = null,
+        sandbox: ?[]const u8 = null,
+    });
+
+    if (p.sandbox != null) {
+        return cmd.sendError("unsupported operation", "sandboxes are not supported");
+    }
+    // The arguments can only be channels, and we don't send script.message.
+    if (p.arguments.len > 0) {
+        return cmd.sendError("unsupported operation", "channels are not supported");
+    }
+    if (p.contexts != null and p.userContexts != null) {
+        return cmd.sendError("invalid argument", "contexts and userContexts are mutually exclusive");
+    }
+
+    var context: ?[36]u8 = null;
+    if (p.contexts) |contexts| {
+        if (contexts.len == 0) {
+            return cmd.sendError("invalid argument", "contexts is empty");
+        }
+        // There's only one navigable, and it's top-level.
+        for (contexts) |id| {
+            const ctx = (try browsing_context.requireContext(cmd, id)) orelse return;
+            context = ctx.id;
+        }
+    }
+
+    // In the session arena, so a removed script isn't freed until the session ends.
+    const bidi = cmd.bidi;
+    const allocator = bidi.session_arena.allocator();
+
+    var user_context: ?BiDi.UserContext.Id = null;
+    if (p.userContexts) |user_contexts| {
+        if (user_contexts.len == 0) {
+            return cmd.sendError("invalid argument", "userContexts is empty");
+        }
+        // "default" always exists, even while another user context is active.
+        for (user_contexts) |id| {
+            if (std.mem.eql(u8, id, "default") == false and std.mem.eql(u8, id, bidi.user_context.id()) == false) {
+                return cmd.sendError("no such user context", "unknown user context");
+            }
+        }
+        // Only "default" and the active one exist, so two different ids are
+        // every user context.
+        user_context = for (user_contexts[1..]) |id| {
+            if (std.mem.eql(u8, id, user_contexts[0]) == false) {
+                break null;
+            }
+        } else .init(user_contexts[0]);
+    }
+
+    // \n in case the functionDeclaration ends with a comment.
+    const source = try std.fmt.allocPrint(allocator, "({s}\n)", .{p.functionDeclaration});
+
+    var preload: PreloadScript = .{
+        .id = undefined,
+        .source = source,
+        .context = context,
+        .user_context = user_context,
+    };
+    uuidv4(&preload.id);
+    try bidi.preload_scripts.append(allocator, preload);
+
+    return cmd.sendResult(.{ .script = &preload.id });
+}
+
+fn removePreloadScript(cmd: *BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        script: []const u8,
+    });
+
+    const bidi = cmd.bidi;
+    for (bidi.preload_scripts.items, 0..) |*preload, i| {
+        if (std.mem.eql(u8, &preload.id, p.script)) {
+            _ = bidi.preload_scripts.orderedRemove(i);
+            return cmd.sendResult(struct {}{});
+        }
+    }
+    return cmd.sendError("no such script", "unknown preload script");
+}
+
+pub fn registerNotifications(bidi: *BiDi) !void {
+    try bidi.notification.register(.frame_navigated, bidi, onFrameNavigated);
+}
+
+// The new document's context exists, but its own scripts haven't run yet:
+// the body isn't parsed.
+fn onFrameNavigated(ptr: *anyopaque, msg: *const Notification.FrameNavigated) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    if (bidi.preload_scripts.items.len == 0) {
+        return;
+    }
+    const frame = bidi.user_context.session.findFrameByFrameId(msg.frame_id) orelse return;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    for (bidi.preload_scripts.items) |*preload| {
+        if (preload.appliesTo(bidi, frame) == false) {
+            continue;
+        }
+
+        var try_catch: js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const declaration = ls.local.exec(preload.source, "bidi.preloadScript") catch |err| {
+            log.debug(.bidi, "preload script", .{ .id = &preload.id, .caught = try_catch.caughtOrError(bidi.message_arena.allocator(), err) });
+            continue;
+        };
+        if (declaration.isFunction() == false) {
+            log.debug(.bidi, "preload script not a function", .{ .id = &preload.id });
+            continue;
+        }
+        const function = declaration.toFunction();
+        // A throw is reported on the window, like any script's.
+        function.callWithThisReport({}, .{}) catch |err| {
+            log.debug(.bidi, "preload script", .{ .id = &preload.id, .err = err });
+        };
+    }
 }
 
 // What answering a command takes, so the same code serves both an immediate
@@ -1393,4 +1558,178 @@ test "bidi.script: commands need a session" {
     try ctx.startSession();
     try ctx.processMessage(.{ .id = 3, .method = "script.nope" });
     try ctx.expectSentError("unknown command", "script.nope", .{ .id = 3 });
+}
+
+test "bidi.script: addPreloadScript runs before the document's scripts" {
+    testing.expectLog(&.{ .page_error, .page_error, .page_error, .page_error });
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+
+    // A throw doesn't stop the next preload script.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => { throw new Error('nope'); }" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.addPreloadScript",
+        .params = .{
+            .functionDeclaration = "() => { window.preloaded = (window.preloaded || 0) + 1; } // comment",
+            .contexts = .{context_id},
+        },
+    });
+    const script_id = try testing.arena.dupe(u8, &ctx.bidi().preload_scripts.items[1].id);
+    try ctx.expectSentResult(.{ .script = script_id }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/preload.html", .wait = "complete" },
+    });
+    try ctx.wait();
+
+    // Ran once in the top document, before its inline script; the iframe has
+    // its own window.
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "[window.seen, window.preloaded, frames[0].preloaded]",
+            .target = .{ .context = context_id },
+        },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "array", .value = .{
+        .{ .type = "number", .value = 1 },
+        .{ .type = "number", .value = 1 },
+        .{ .type = "number", .value = 1 },
+    } } }, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "script.removePreloadScript",
+        .params = .{ .script = script_id },
+    });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.removePreloadScript",
+        .params = .{ .script = script_id },
+    });
+    try ctx.expectSentError("no such script", null, .{ .id = 6 });
+
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "browsingContext.reload",
+        .params = .{ .context = context_id, .wait = "complete" },
+    });
+    try ctx.wait();
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "script.evaluate",
+        .params = .{ .expression = "window.preloaded", .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "undefined" } }, .{ .id = 8 });
+}
+
+test "bidi.script: addPreloadScript validation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{});
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .contexts = .{"00000000-0000-0000-0000-000000000000"} },
+    });
+    try ctx.expectSentError("no such frame", "unknown context", .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .contexts = .{context_id}, .userContexts = .{"default"} },
+    });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .contexts = .{} },
+    });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 3 });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .userContexts = .{"nope"} },
+    });
+    try ctx.expectSentError("no such user context", null, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .sandbox = "mine" },
+    });
+    try ctx.expectSentError("unsupported operation", null, .{ .id = 5 });
+
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => {}", .userContexts = .{"default"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+}
+
+test "bidi.script: addPreloadScript userContexts" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.startSession();
+    try ctx.processMessage(.{ .id = 1, .method = "browser.createUserContext", .params = struct {}{} });
+    const user_context = try testing.arena.dupe(u8, ctx.bidi().user_context.id());
+
+    // "default" still exists while another user context is active.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => { window.preloaded = 'default'; }", .userContexts = .{"default"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual("default", ctx.bidi().preload_scripts.items[0].user_context.?.slice());
+
+    // Both user contexts: every one.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "script.addPreloadScript",
+        .params = .{ .functionDeclaration = "() => { window.both = true; }", .userContexts = .{ "default", user_context } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(null, ctx.bidi().preload_scripts.items[1].user_context);
+
+    // Only the "both" script runs in the active user context.
+    try ctx.processMessage(.{ .id = 4, .method = "browsingContext.create", .params = .{ .type = "tab", .userContext = user_context } });
+    const context_id = try testing.arena.dupe(u8, &(ctx.bidi().browsing_context orelse return error.NoBrowsingContext).id);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/values.html", .wait = "complete" },
+    });
+    try ctx.wait();
+
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.evaluate",
+        .params = .{ .expression = "[window.preloaded, window.both]", .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "array", .value = .{
+        .{ .type = "undefined" },
+        .{ .type = "boolean", .value = true },
+    } } }, .{ .id = 6 });
 }

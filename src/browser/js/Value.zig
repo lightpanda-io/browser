@@ -792,6 +792,17 @@ pub fn toArray(self: Value) js.Array {
     };
 }
 
+pub fn toFunction(self: Value) js.Function {
+    if (comptime lp.IS_DEBUG) {
+        std.debug.assert(self.isFunction());
+    }
+
+    return .{
+        .local = self.local,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
 pub fn toBigInt(self: Value) js.BigInt {
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.isBigInt());
