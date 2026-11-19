@@ -18,7 +18,7 @@ const LIMITS = {
 };
 
 // PRs opened before this date are never touched.
-const ROLLOUT_DATE = "2026-11-18";
+const ROLLOUT_DATE = "2026-11-19";
 
 const LABEL_LARGE = "needs-discussion";
 const LABEL_MEDIUM = "triage:medium";
