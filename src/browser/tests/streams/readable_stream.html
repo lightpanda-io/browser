@@ -641,6 +641,17 @@
   const error = new Error('boom');
   const thrown = await new ReadableStream({ cancel() { throw error; } }).cancel().catch((e) => e);
   const rejected = await new ReadableStream({ cancel() { return Promise.reject(error); } }).cancel().catch((e) => e);
+
+  // The stream is closed as soon as cancel() runs: a second cancel() resolves
+  // right away, without waiting on (or sharing) the first one's outcome.
+  let reject_first;
+  const pending = new ReadableStream({
+    cancel() { return new Promise((_, r) => { reject_first = r; }); },
+  });
+  const first = pending.cancel().catch((e) => e);
+  const second = await pending.cancel();
+  reject_first(error);
+  const first_value = await first;
   state.resolve();
 
   await state.done(() => {
@@ -648,6 +659,8 @@
     testing.expectEqual(undefined, value);
     testing.expectEqual(true, thrown === error);
     testing.expectEqual(true, rejected === error);
+    testing.expectEqual(undefined, second);
+    testing.expectEqual(true, first_value === error);
   });
 </script>
 
@@ -768,5 +781,25 @@
   await state.done(() => {
     testing.expectEqual(true, self_iter);
     testing.expectEqual(['a', 'b'], out);
+  });
+</script>
+
+<script id=settles_with_undefined type=module>
+  const state = await testing.async();
+
+  // Promises that only signal completion resolve with undefined.
+  const writer = new WritableStream().getWriter();
+  const values = [
+    await writer.ready,
+    await writer.write('a'),
+    await writer.close(),
+    await writer.closed,
+  ];
+  const closed_stream = new ReadableStream({ start(c) { c.close(); } });
+  values.push(await closed_stream.cancel());
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual([undefined, undefined, undefined, undefined, undefined], values);
   });
 </script>

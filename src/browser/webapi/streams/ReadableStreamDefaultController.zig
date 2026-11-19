@@ -329,7 +329,6 @@ test "ReadableStreamDefaultController: chunks and pending reads release their gl
         \\new Response('native chunk').body.getReader().read();
     , null);
 
-    // cancel() keeps its own resolver so a repeated cancel returns the same
-    // promise, and each errored stream keeps what it errored with.
-    try testing.expectEqual(base + 3, tracker.list.items.len);
+    // each errored stream keeps what it errored with.
+    try testing.expectEqual(base + 2, tracker.list.items.len);
 }
