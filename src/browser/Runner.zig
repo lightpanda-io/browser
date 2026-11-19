@@ -28,6 +28,7 @@ const HttpClient = @import("../network/HttpClient.zig");
 
 const Node = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
+const SelectorParser = @import("webapi/selector/Parser.zig");
 
 const log = lp.log;
 
@@ -419,12 +420,18 @@ pub fn waitUntil(self: *Runner, frame_id: u32, timeout_ms: u32, condition: anyty
 }
 
 pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+
     const arena = try self.session.getArena(.small, "Runner.waitForSelector");
     defer arena.release();
 
-    const selector = try Selector.parseLeaky(arena.allocator(), input);
+    const selector = try SelectorParser.parseAll(arena.allocator(), input);
     for (selector) |s| {
-        if (!s.hasPseudoElement()) break;
+        if (s.hasPseudoElement() == false) {
+            break;
+        }
     } else return error.InvalidSelector;
 
     var match: SelectorMatch = .{ .session = self.session, .frame_id = frame_id, .selector = selector };
