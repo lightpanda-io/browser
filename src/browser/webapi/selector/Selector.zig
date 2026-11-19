@@ -501,8 +501,18 @@ pub const Compound = struct {
 
 // A segment represents a compound selector with the combinator that precedes it
 pub const Segment = struct {
-    compound: Compound,
+    _parts: [*]const Part,
+    _len: u16,
     combinator: Combinator,
+
+    pub fn init(combinator: Combinator, c: Compound) Segment {
+        // parser already enforced that c.parts.len <= Selector.max_len
+        return .{ ._parts = c.parts.ptr, ._len = @intCast(c.parts.len), .combinator = combinator };
+    }
+
+    pub fn compound(self: Segment) Compound {
+        return .{ .parts = self._parts[0..self._len] };
+    }
 
     pub fn format(self: Segment, writer: *std.Io.Writer) !void {
         switch (self.combinator) {
@@ -511,21 +521,44 @@ pub const Segment = struct {
             .next_sibling => try writer.writeAll(" + "),
             .subsequent_sibling => try writer.writeAll(" ~ "),
         }
-        return self.compound.format(writer);
+        return self.compound().format(writer);
     }
 };
 
 // A full selector is the first compound plus subsequent segments
 //   "div > p + span" -> { first: [tag(div)], segments: [{child, [tag(p)]}, {next_sibling, [tag(span)]}] }
 pub const Selector = struct {
-    first: Compound,
-    segments: []const Segment,
+    _first: [*]const Part,
+    _segments: [*]const Segment,
+    _first_len: u16,
+    _segments_len: u16,
+
+    /// The most parts a compound and segments a selector can hold
+    pub const max_len = std.math.maxInt(u16);
+
+    pub fn init(first_compound: Compound, following: []const Segment) Selector {
+        // The parser enforces that the inputs are <= max_len
+        return .{
+            ._first = first_compound.parts.ptr,
+            ._segments = following.ptr,
+            ._first_len = @intCast(first_compound.parts.len),
+            ._segments_len = @intCast(following.len),
+        };
+    }
+
+    pub fn first(self: Selector) Compound {
+        return .{ .parts = self._first[0..self._first_len] };
+    }
+
+    pub fn segments(self: Selector) []const Segment {
+        return self._segments[0..self._segments_len];
+    }
 
     pub fn rightmost(self: Selector) Compound {
-        if (self.segments.len == 0) {
-            return self.first;
+        if (self._segments_len == 0) {
+            return self.first();
         }
-        return self.segments[self.segments.len - 1].compound;
+        return self._segments[self._segments_len - 1].compound();
     }
 
     /// Such a selector matches no element.
@@ -535,8 +568,8 @@ pub const Selector = struct {
     }
 
     pub fn format(self: Selector, writer: *std.Io.Writer) !void {
-        try self.first.format(writer);
-        for (self.segments) |segment| {
+        try self.first().format(writer);
+        for (self.segments()) |segment| {
             try segment.format(writer);
         }
     }
@@ -554,8 +587,8 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
     const selector = selectors[0];
     // Fast path: single compound with only an ID selector. With
     // duplicate ids, the general walk below finds the first one under root.
-    if (selector.segments.len == 0 and selector.first.parts.len == 1) {
-        const first = selector.first.parts[0];
+    if (selector.segments().len == 0 and selector.first().parts.len == 1) {
+        const first = selector.first().parts[0];
         if (first == .id) {
             switch (Frame.getUniqueElementByIdFromNode(root, first.id)) {
                 .none => return null,

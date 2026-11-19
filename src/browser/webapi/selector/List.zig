@@ -155,7 +155,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
     if (id_node == root or !root.contains(id_node)) {
         // When the id is in the rightmost compound, the only possible match
         // is id_node itself, and it isn't a descendant of root.
-        const id_is_subject = if (segment_index) |i| i + 1 == selector.segments.len else selector.segments.len == 0;
+        const id_is_subject = if (segment_index) |i| i + 1 == selector.segments().len else selector.segments().len == 0;
         if (id_is_subject) {
             return null;
         }
@@ -171,20 +171,17 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
     // If the ID is in the first compound
     if (segment_index == null) {
         // Check if there are any segments after the ID
-        if (selector.segments.len == 0) {
+        if (selector.segments().len == 0) {
             // Just '#id', return the node itself
             return .{
                 .root = id_node,
-                .selector = .{
-                    .first = selector.first,
-                    .segments = selector.segments,
-                },
+                .selector = selector.*,
                 .exclude_root = false,
             };
         }
 
         // Check the combinator of the first segment
-        const first_combinator = selector.segments[0].combinator;
+        const first_combinator = selector.segments()[0].combinator;
         if (first_combinator == .next_sibling or first_combinator == .subsequent_sibling) {
             // Cannot optimize: matches are siblings, not descendants of the ID node
             // Fall back to searching the entire tree
@@ -198,10 +195,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
         // Safe to optimize for descendant/child combinators
         return .{
             .root = id_node,
-            .selector = .{
-                .first = selector.first,
-                .segments = selector.segments,
-            },
+            .selector = selector.*,
             .exclude_root = true,
         };
     }
@@ -210,9 +204,9 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
     const seg_idx = segment_index.?;
 
     // Check if there are segments after the ID
-    if (seg_idx + 1 < selector.segments.len) {
+    if (seg_idx + 1 < selector.segments().len) {
         // Check the combinator of the segment after the ID
-        const next_combinator = selector.segments[seg_idx + 1].combinator;
+        const next_combinator = selector.segments()[seg_idx + 1].combinator;
         if (next_combinator == .next_sibling or next_combinator == .subsequent_sibling) {
             // Cannot optimize: matches are siblings, not descendants
             return .{
@@ -225,10 +219,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
 
     // If there's a prefix selector, we need to verify that the id_node's
     // ancestors match it. We construct a selector up to and including the ID segment.
-    const prefix_selector = Selector.Selector{
-        .first = selector.first,
-        .segments = selector.segments[0 .. seg_idx + 1],
-    };
+    const prefix_selector: Selector.Selector = .init(selector.first(), selector.segments()[0 .. seg_idx + 1]);
 
     if (!matches(id_node, prefix_selector, id_node, nth, frame)) {
         return null;
@@ -237,10 +228,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, nth: *NthCa
     // Return a selector starting from the segments after the ID
     return .{
         .root = id_node,
-        .selector = .{
-            .first = selector.segments[seg_idx].compound,
-            .segments = selector.segments[seg_idx + 1 ..],
-        },
+        .selector = .init(selector.segments()[seg_idx].compound(), selector.segments()[seg_idx + 1 ..]),
         .exclude_root = false,
     };
 }
@@ -285,10 +273,10 @@ const IdAnchor = struct {
 // Rightmost (last) is best because it minimizes the subtree we need to search
 fn findIdSelector(selector: *const Selector.Selector) ?IdAnchor {
     // Check segments from right to left
-    var i = selector.segments.len;
+    var i = selector.segments().len;
     while (i > 0) {
         i -= 1;
-        const compound = selector.segments[i].compound.parts;
+        const compound = selector.segments()[i].compound().parts;
         if (compound.len != 1) {
             continue;
         }
@@ -299,8 +287,8 @@ fn findIdSelector(selector: *const Selector.Selector) ?IdAnchor {
     }
 
     // Check the first compound
-    if (selector.first.parts.len == 1) {
-        const part = selector.first.parts[0];
+    if (selector.first().parts.len == 1) {
+        const part = selector.first().parts[0];
         if (part == .id) {
             return .{ .id = part.id, .segment_index = null };
         }
@@ -315,20 +303,20 @@ pub fn matches(node: *Node, selector: Selector.Selector, scope: *Node, nth: ?*Nt
     if (!matchesCompound(el, selector.rightmost(), scope, nth, frame)) {
         return false;
     }
-    if (selector.segments.len == 0) {
+    if (selector.segments().len == 0) {
         return true;
     }
 
-    return matchSegments(node, selector, selector.segments.len - 1, null, scope, nth, frame);
+    return matchSegments(node, selector, selector.segments().len - 1, null, scope, nth, frame);
 }
 
 // Match segments backward, with support for backtracking on subsequent_sibling
 fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize, root: ?*Node, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
-    const segment = selector.segments[segment_index];
+    const segment = selector.segments()[segment_index];
     const target_compound = if (segment_index == 0)
-        selector.first
+        selector.first()
     else
-        selector.segments[segment_index - 1].compound;
+        selector.segments()[segment_index - 1].compound();
 
     const matched: ?*Node = switch (segment.combinator) {
         .descendant => matchDescendant(node, target_compound, root, scope, nth, frame),
@@ -346,7 +334,7 @@ fn matchSegments(node: *Node, selector: Selector.Selector, segment_index: usize,
                 if (segment_index == 0) {
                     break :blk true;
                 }
-                break :blk selector.segments[segment_index - 1].combinator != .next_sibling;
+                break :blk selector.segments()[segment_index - 1].combinator != .next_sibling;
             };
             var sibling = node.previousSibling();
             while (sibling) |s| {
@@ -880,7 +868,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             // live: sibling combinators anchor them in the parent's subtree,
             // descendant/child in this element's own subtree.
             for (selectors) |selector| {
-                const search_root = switch (selector.segments[0].combinator) {
+                const search_root = switch (selector.segments()[0].combinator) {
                     .next_sibling, .subsequent_sibling => node.parentNode() orelse continue,
                     .descendant, .child => node,
                 };
