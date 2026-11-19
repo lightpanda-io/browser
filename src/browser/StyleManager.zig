@@ -84,6 +84,9 @@ nth_version: usize = 0,
 // Document.hitTest's prune, see HitBands
 hit_bands: HitBands = .{},
 
+// Skips rules whose ancestor classes, ids or tags el's ancestors lack, see AncestorFilter
+ancestors: AncestorFilter = .{},
+
 // Where Element.horizontalPosition stopped on a line, see LineResume
 line_resume: ?LineResume = null,
 origin_memo: ?OriginMemo = null,
@@ -230,6 +233,24 @@ fn claimSlot(self: *StyleManager, el: *Element) ?u32 {
     el._style_slot = index;
     page.next_style_slot = index + 1;
     return index;
+}
+
+fn ancestorFilter(self: *StyleManager, el: *Element) AncestorFilter.Bits {
+    return self.ancestors.of(self, el);
+}
+
+/// `node` was inserted (see AncestorFilter.moved)
+pub fn ancestorsMoved(self: *StyleManager, node: *Node) void {
+    self.ancestors.moved(node);
+}
+
+/// el's class or id attribute changed (see AncestorFilter.tokensAdded)
+pub fn ancestorTokensChanged(self: *StyleManager, el: *Element, name: String, old: ?[]const u8, new: ?[]const u8) void {
+    if (name.eql(comptime .wrap("class"))) {
+        self.ancestors.tokensAdded(el, .class, old, new);
+    } else if (name.eql(comptime .wrap("id"))) {
+        self.ancestors.tokensAdded(el, .id, old, new);
+    }
 }
 
 /// The values for one group, by Element._style_slot. Chunked in groups of 256
@@ -745,6 +766,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
     const priority = rank_and_order | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT);
     const important_priority = IMPORTANT_BIT | (priority & ~RANK_MASK);
     const parent_needs = if (parentCompound(matched)) |compound| KeyBits.needed(compound) else 0;
+    const ancestor_needs = try self.ancestors.needed(self.arena.allocator(), matched);
     inline for (group_fields) |field| {
         inline for (.{ @field(props, field), @field(important, field) }, .{ priority, important_priority }) |declared, p| {
             if (declaresAny(declared)) {
@@ -753,6 +775,7 @@ fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: *cons
                     .selector = matched,
                     .priority = p,
                     .parent_needs = parent_needs,
+                    .ancestor_needs = ancestor_needs,
                 });
             }
         }
@@ -2671,6 +2694,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.nth = .{ .allocator = self.arena.allocator(), .walk_only = true };
     self.layout_memo = .{};
     self.hit_bands = .{};
+    self.ancestors = .{};
     self.line_resume = null;
     self.origin_memo = null;
 
@@ -3976,6 +4000,9 @@ fn Group(comptime Spec: type) type {
 
             // What the selector's `>` asks of the subject's parent, 0 for nothing
             parent_needs: u64,
+
+            // What the selector asks of the subject's ancestors, 0 for nothing
+            ancestor_needs: AncestorFilter.Bits,
         };
 
         const RuleList = std.MultiArrayList(Rule);
@@ -4039,11 +4066,11 @@ fn Group(comptime Spec: type) type {
 
             // Checks the rules filed under `keyed`'s id, classes and tag
             // against `el`: the same element, or its parent.
-            fn apply(self: *const Buckets, keyed: *Element, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, parent_has: *?u64, frame: *Frame) void {
+            fn apply(self: *const Buckets, keyed: *Element, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, has: *ElementHas, frame: *Frame) void {
                 if (keyed.getId()) |id| {
                     count(.probes);
                     if (self.id.get(id)) |rules| {
-                        checkRules(&rules, p, priorities, el, parent_has, frame);
+                        checkRules(&rules, p, priorities, el, has, frame);
                     }
                 }
 
@@ -4052,14 +4079,14 @@ fn Group(comptime Spec: type) type {
                     while (it.next()) |class| {
                         count(.probes);
                         if (self.class.get(class)) |rules| {
-                            checkRules(&rules, p, priorities, el, parent_has, frame);
+                            checkRules(&rules, p, priorities, el, has, frame);
                         }
                     }
                 }
 
                 count(.probes);
                 if (self.tag.get(keyed.getTag())) |rules| {
-                    checkRules(&rules, p, priorities, el, parent_has, frame);
+                    checkRules(&rules, p, priorities, el, has, frame);
                 }
             }
         };
@@ -4299,21 +4326,20 @@ fn Group(comptime Spec: type) type {
         // checkRules keeps the strongest rule per property, so the order the
         // lists are walked in doesn't change the result.
         fn applyRules(self: *const Self, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, frame: *Frame) void {
-            // The parent's keys, hashed on the first rule that asks for them
-            var parent_has: ?u64 = null;
-            self.subject.apply(el, p, priorities, el, &parent_has, frame);
+            var has: ElementHas = .{};
+            self.subject.apply(el, p, priorities, el, &has, frame);
 
             if (self.parent.isEmpty() == false) {
                 // The DOM parent, as `>` matches: a shadow root's children have
                 // none, and no parent-keyed rule can match them.
                 if (el.asNode()._parent) |parent| {
                     if (parent.is(Element)) |parent_el| {
-                        self.parent.apply(parent_el, p, priorities, el, &parent_has, frame);
+                        self.parent.apply(parent_el, p, priorities, el, &has, frame);
                     }
                 }
             }
 
-            checkRules(&self.other_rules, p, priorities, el, &parent_has, frame);
+            checkRules(&self.other_rules, p, priorities, el, &has, frame);
         }
 
         inline fn count(comptime field: std.meta.FieldEnum(Work)) void {
@@ -4322,18 +4348,32 @@ fn Group(comptime Spec: type) type {
             }
         }
 
-        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, parent_has: *?u64, frame: *Frame) void {
+        fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, has: *ElementHas, frame: *Frame) void {
             const nth = frame._style_manager.nthCache();
-            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs)) |priority, *rule, selector, parent_needs| {
+            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs), rules.items(.ancestor_needs)) |priority, *rule, selector, parent_needs, ancestor_needs| {
                 if (parent_needs != 0) {
-                    const has = parent_has.* orelse blk: {
-                        const has = KeyBits.ofParent(el);
-                        parent_has.* = has;
-                        break :blk has;
+                    const parent = has.parent orelse blk: {
+                        const parent = KeyBits.ofParent(el);
+                        has.parent = parent;
+                        break :blk parent;
                     };
                     // A parent without one of them fails the `>`, whatever
                     // the rest of the selector says.
-                    if (parent_needs & ~has != 0) {
+                    if (parent_needs & ~parent != 0) {
+                        continue;
+                    }
+                }
+                if (ancestor_needs != 0) {
+                    const ancestors = has.ancestors orelse blk: {
+                        const ancestors = frame._style_manager.ancestorFilter(el);
+                        has.ancestors = ancestors;
+                        break :blk ancestors;
+                    };
+                    // No ancestor carries one of the tokens the selector needs
+                    if (ancestor_needs & ~ancestors != 0) {
+                        if (comptime lp.IS_DEBUG) {
+                            std.debug.assert(matchesSelector(el, selector, nth, frame) == false);
+                        }
                         continue;
                     }
                 }
@@ -4542,17 +4582,244 @@ fn placeSelector(selector: Selector.Selector) ?Placement {
 /// The compound a `>` requires the subject's parent to match, looking past
 /// any `+`/`~` chain (siblings share the parent).
 fn parentCompound(selector: Selector.Selector) ?Selector.Compound {
+    const i = parentSegment(selector) orelse return null;
+    return if (i == 0) selector.first() else selector.segments()[i - 1].compound();
+}
+
+// The `>` whose left compound is the subject's parent: the subject's own,
+// or a sibling's before it (same parent)
+fn parentSegment(selector: Selector.Selector) ?usize {
     var i = selector.segments().len;
     while (i > 0) {
         i -= 1;
         switch (selector.segments()[i].combinator) {
             .next_sibling, .subsequent_sibling => {},
-            .child => return if (i == 0) selector.first() else selector.segments()[i - 1].compound(),
+            .child => return i,
             .descendant => return null,
         }
     }
     return null;
 }
+
+/// What checkRules learned about the element, computed on the first rule that asks.
+const ElementHas = struct {
+    parent: ?u64 = null,
+    ancestors: ?AncestorFilter.Bits = null,
+};
+
+/// A Bloom filter, per element, of the classes, ids and tags its
+/// ancestors carry, limited to those some selector needs on an ancestor of its
+/// subject. A rule needing one the filter lacks can't match, so checkRules
+/// skips it without walking up the tree. A false positive only means a full
+/// match. Valid while neither the tree nor anything a selector reads changes:
+/// keyed on dom_version + style_version, like nthCache.
+const AncestorFilter = struct {
+    const Bits = u64;
+
+    // Every token some selector needs on an ancestor, by hash
+    tokens: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    // An element's filter, kept until something adds a bit it lacks: a token
+    // to an ancestor (tokensAdded), the element to other ancestors (moved),
+    // a token to the set (needed). A bit too many only rejects less, so a
+    // removal keeps them. An element has one only if its ancestors do.
+    memo: Records(Bits) = .{},
+    // of()'s scratch: the ancestors without a memoized filter, nearest first
+    path: std.ArrayList(*Element) = .empty,
+
+    fn bits(hash: u64) Bits {
+        const one: Bits = 1;
+        return (one << @as(u6, @truncate(hash))) | (one << @as(u6, @truncate(hash >> 6)));
+    }
+
+    fn tagHash(tag: Tag) u64 {
+        return std.hash.int(@as(u64, @backingInt(tag)));
+    }
+
+    fn nameHash(name: []const u8) u64 {
+        return std.hash.Wyhash.hash(0, name);
+    }
+
+    // The compounds left of a `>` or ` ` are ancestors of the subject. One
+    // left of `+`/`~` is a sibling of the compound to its right, which is the
+    // subject, an ancestor of it, or a sibling of either: same parent.
+    fn needed(self: *AncestorFilter, allocator: Allocator, selector: Selector.Selector) Allocator.Error!Bits {
+        // The parent's compound is parent_needs': this filter can't reject
+        // what that doesn't already
+        const parent = parentSegment(selector);
+        var needs: Bits = 0;
+        for (selector.segments(), 0..) |segment, i| {
+            switch (segment.combinator) {
+                .descendant, .child => {},
+                .next_sibling, .subsequent_sibling => continue,
+            }
+            if (i == parent) {
+                continue;
+            }
+            const compound = if (i == 0) selector.first() else selector.segments()[i - 1].compound();
+            for (compound.parts) |part| {
+                const hash = switch (part) {
+                    .tag => |tag| tagHash(tag),
+                    .id => |id| nameHash(id),
+                    .class => |class| nameHash(class),
+                    else => continue,
+                };
+                const entry = try self.tokens.getOrPut(allocator, hash);
+                if (entry.found_existing == false) {
+                    // An ancestor carrying it has a filter without its bits
+                    self.memo.clear();
+                }
+                needs |= bits(hash);
+            }
+        }
+        return needs;
+    }
+
+    // el's own tokens, as a filter of its descendants sees them
+    fn own(self: *const AncestorFilter, el: *Element) Bits {
+        var b: Bits = 0;
+        const tag = el.getTag();
+        if (tag == .unknown) {
+            // A tag selector matches it by name (matchesPart)
+            var buf: [32]u8 = undefined;
+            const name = el.getLocalName();
+            if (name.len <= buf.len) {
+                if (std.meta.stringToEnum(Tag, std.ascii.lowerString(&buf, name))) |named| {
+                    b |= self.add(tagHash(named));
+                }
+            }
+        } else {
+            b |= self.add(tagHash(tag));
+        }
+        if (el.getAttributeInterned("id")) |id| {
+            b |= self.add(nameHash(id));
+        }
+        if (el.getAttributeInterned("class")) |class_attr| {
+            var it = std.mem.tokenizeAny(u8, class_attr, &.{ '\t', '\n', 0x0C, '\r', ' ' });
+            while (it.next()) |class| {
+                b |= self.add(nameHash(class));
+            }
+        }
+        return b;
+    }
+
+    fn add(self: *const AncestorFilter, hash: u64) Bits {
+        return if (self.tokens.contains(hash)) bits(hash) else 0;
+    }
+
+    // The nearest element up the `_parent` chain matchDescendant walks
+    fn parentElement(el: *Element) ?*Element {
+        var node = el.asNode()._parent;
+        while (node) |n| : (node = n._parent) {
+            if (n.is(Element)) |parent| {
+                return parent;
+            }
+        }
+        return null;
+    }
+
+    fn of(self: *AncestorFilter, sm: *StyleManager, el: *Element) Bits {
+        if (self.memo.get(el)) |b| {
+            return b;
+        }
+
+        const allocator = sm.arena.allocator();
+        self.path.clearRetainingCapacity();
+        var above: Bits = 0;
+        var current: ?*Element = el;
+        while (current) |e| : (current = parentElement(e)) {
+            if (self.memo.get(e)) |b| {
+                // e's filter is its ancestors'; the path below e sees e too
+                above = b | self.own(e);
+                break;
+            }
+            self.path.append(allocator, e) catch {
+                // Saturated: rejects nothing
+                return std.math.maxInt(Bits);
+            };
+        }
+
+        // Down from the topmost unmemoized ancestor: each one's filter is its
+        // parent's plus the parent's own tokens.
+        var kept = true;
+        var i = self.path.items.len;
+        while (i > 0) {
+            i -= 1;
+            const e = self.path.items[i];
+            if (sm.claimSlot(e)) |index| {
+                self.memo.put(allocator, index, above) catch {
+                    kept = false;
+                };
+            } else {
+                kept = false;
+            }
+            if (i > 0) {
+                above |= self.own(e);
+            }
+        }
+        if (kept == false) {
+            // A hole in the path would let a descendant keep an entry its
+            // ancestor no longer has, which moved() relies on
+            self.memo.clear();
+        }
+        return above;
+    }
+
+    // `node` was inserted: a subtree carrying filters from where it was before
+    // drops them. A fresh one has none.
+    fn moved(self: *AncestorFilter, node: *Node) void {
+        const el = node.is(Element) orelse return;
+        if (self.memo.contains(el) == false) {
+            // Nor does anything under it (see memo)
+            return;
+        }
+        var tw = TreeWalker.Full.init(node, .{});
+        while (tw.next()) |n| {
+            const e = n.is(Element) orelse continue;
+            if (self.memo.remove(e) == false) {
+                tw.skipChildren();
+            }
+        }
+    }
+
+    // el's class or id went from `old` to `new`: its descendants' filters
+    // lack the bits of a token it gained that some rule needs. Its own
+    // filter is its ancestors'.
+    fn tokensAdded(self: *AncestorFilter, el: *Element, comptime kind: enum { class, id }, old: ?[]const u8, new: ?[]const u8) void {
+        if (self.memo.count() == 0 or el.firstElementChild() == null) {
+            return;
+        }
+        if (kind == .id) {
+            // One token, as own() reads it
+            const id = new orelse return;
+            if (old) |o| {
+                if (std.mem.eql(u8, o, id)) {
+                    return;
+                }
+            }
+            if (self.tokens.contains(nameHash(id))) {
+                self.memo.clear();
+            }
+            return;
+        }
+        var it = std.mem.tokenizeAny(u8, new orelse return, &.{ '\t', '\n', 0x0C, '\r', ' ' });
+        while (it.next()) |token| {
+            if (self.tokens.contains(nameHash(token)) == false) {
+                continue;
+            }
+            if (old) |o| {
+                var was = std.mem.tokenizeAny(u8, o, &.{ '\t', '\n', 0x0C, '\r', ' ' });
+                const had = while (was.next()) |w| {
+                    if (std.mem.eql(u8, w, token)) break true;
+                } else false;
+                if (had) {
+                    continue;
+                }
+            }
+            self.memo.clear();
+            return;
+        }
+    }
+};
 
 /// A tag, id or class as one of 64 bits: an element's set holds every bit a
 /// compound's tags, ids and classes need, or the compound can't match it.
@@ -10326,6 +10593,110 @@ test "StyleManager: work: a `>` rule is skipped when the parent lacks its keys" 
     // the one under #top its own, the one under a plain div none, and the li
     // of a list without the class none.
     try testing.expectEqual(3 + 3 + 1 + 1 + 0 + 1 + 0, work.matches);
+}
+
+// A descendant rule whose ancestor compounds no ancestor's tag, id or classes
+// can satisfy is skipped without a walk up the tree. The filters are dropped
+// on every tree or class change, so a move or a new class is seen.
+test "StyleManager: work: a descendant rule is skipped when no ancestor has its keys" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+    const GeometryGroup = @TypeOf(sm.geometry);
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body,
+        \\<div class="outer"><div class="inner"><span></span></div></div><div class="inner"><span></span></div><div><span></span></div><section id="app"><p><span></span></p></section>
+    );
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.outer .inner span { width: 5px }
+        \\#app p > span { height: 2px }
+    , frame);
+    _ = try body.insertBefore(style_el.asNode(), body.firstChild(), frame);
+
+    const outer = style_el.asNode().nextSibling().?;
+    const lone_inner = outer.nextSibling().?;
+    const plain = lone_inner.nextSibling().?;
+    const app = plain.nextSibling().?;
+    const spans = [_]*Element{
+        outer.firstChild().?.firstChild().?.as(Element),
+        lone_inner.firstChild().?.as(Element),
+        plain.firstChild().?.as(Element),
+        app.firstChild().?.firstChild().?.as(Element),
+    };
+
+    try sm.rebuildIfDirty();
+    GeometryGroup.work = .{};
+    for (spans) |el| {
+        _ = sm.geometryProps(el);
+    }
+    const work = GeometryGroup.work;
+
+    try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(spans[0]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[1]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[2]).width);
+    try testing.expectEqual(Length{ .value = 2, .unit = .px }, sm.geometryProps(spans[3]).height);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[3]).width);
+
+    // Without the filter each span matched both its tag's rules: 4 * 2 = 8.
+    // Now only the first span matches the .outer rule, and only the last the
+    // #app one (the second span's .inner isn't enough).
+    try testing.expectEqual(2, work.matches);
+
+    // Moved under .outer .inner
+    _ = try outer.firstChild().?.appendChild(spans[2].asNode(), frame);
+    try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(spans[2]).width);
+
+    // An ancestor gaining the missing class
+    try body.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("outer"), frame);
+    try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(spans[1]).width);
+
+    // and losing it
+    try body.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("other"), frame);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[1]).width);
+    try outer.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("other"), frame);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[0]).width);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[2]).width);
+
+    // An id
+    try app.as(Element).setAttribute(comptime .wrap("id"), comptime .wrap("gone"), frame);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[3]).height);
+    try plain.as(Element).setAttribute(comptime .wrap("id"), comptime .wrap("app"), frame);
+    _ = try plain.appendChild(app.firstChild().?, frame);
+    try testing.expectEqual(Length{ .value = 2, .unit = .px }, sm.geometryProps(spans[3]).height);
+
+    // An ancestor gaining the id, nothing moving
+    const p_el = plain.firstChild().?;
+    try testing.expectEqual(spans[3].asNode(), p_el.firstChild().?);
+    try plain.as(Element).setAttribute(comptime .wrap("id"), comptime .wrap("gone"), frame);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[3]).height);
+    try plain.as(Element).setAttribute(comptime .wrap("id"), comptime .wrap("app"), frame);
+    try testing.expectEqual(Length{ .value = 2, .unit = .px }, sm.geometryProps(spans[3]).height);
+
+    // Filtered under one tree, then through a detached one into another
+    try outer.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("outer"), frame);
+    const holder = (try doc.createElement("div", null, frame)).asNode();
+    const inner = outer.firstChild().?;
+    try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(spans[0]).width);
+    _ = try lone_inner.appendChild(spans[0].asNode(), frame);
+    try testing.expectEqual(Length{}, sm.geometryProps(spans[0]).width);
+    _ = try holder.appendChild(spans[0].asNode(), frame);
+    _ = try inner.appendChild(holder, frame);
+    try testing.expectEqual(Length{ .value = 5, .unit = .px }, sm.geometryProps(spans[0]).width);
+
+    // What can't add a bit to a filter keeps them all
+    const kept = sm.ancestors.memo.count();
+    try testing.expect(kept != 0);
+    try spans[1].setAttribute(comptime .wrap("style"), comptime .wrap("color: red"), frame);
+    try body.as(Element).setAttribute(comptime .wrap("class"), comptime .wrap("other unused"), frame);
+    _ = try body.appendChild((try doc.createElement("div", null, frame)).asNode(), frame);
+    _ = try body.removeChild(plain, frame);
+    try testing.expectEqual(kept, sm.ancestors.memo.count());
 }
 
 test "StyleManager: parent-keyed and :where rules keep their priority" {
