@@ -38,6 +38,3 @@ jobs:
         run: node .github/scripts/pr-triage.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Unless this repository variable is "true", the workflow only
-          # labels and reports in the job summary, without commenting.
-          PR_TRIAGE_COMMENT: ${{ vars.PR_TRIAGE_COMMENT }}

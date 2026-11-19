@@ -24,7 +24,6 @@ const LABEL_LARGE = "needs-discussion";
 const LABEL_MEDIUM = "triage:medium";
 const LABEL_OVERRIDE = "triage-override";
 const LABEL_ACCEPTED = "accepted";
-const COMMENT_MARKER = "<!-- pr-triage -->";
 
 const TEST_PATH = /(^|\/)(tests?|fixtures?|testdata)\//;
 const UNCOUNTED = /\.(md|lock|html?|xhtml)$/;
@@ -172,28 +171,6 @@ async function acceptedIssue(gh, repo, number) {
   return hit ? hit.number : null;
 }
 
-function commentBody(repo, login, result) {
-  const contributing = `https://github.com/${repo}/blob/main/CONTRIBUTING.md#discuss-large-changes-first`;
-  return `${COMMENT_MARKER}
-Thanks for the contribution, @${login}.
-
-We ask that larger changes are [discussed in an issue first](${contributing}), and this pull request counts as one:
-
-${result.rules.map((r) => `- ${r.detail}`).join("\n")}
-
-I've labeled it \`${LABEL_LARGE}\`. It will likely not be reviewed as it stands, and a maintainer may close it. This is about how we take on large changes, not a judgment of the code.
-
-To move it forward:
-
-1. Open an issue describing what you want to change, why, and how you intend to implement it. A real-world example (a site or library that breaks) helps a lot.
-2. A maintainer will discuss the approach with you there. If you work with a coding agent, that discussion is the right input for it.
-3. Once the issue is labeled \`${LABEL_ACCEPTED}\`, add \`Fixes #<issue>\` to this pull request's description.
-
-Bug fixes and small, self-contained improvements don't need any of this.
-
-<sub>This is an automated check. Maintainers can override it with the \`${LABEL_OVERRIDE}\` label.</sub>`;
-}
-
 async function setLabel(gh, repo, pr, label, want) {
   const has = pr.labels.some((l) => l.name === label);
   if (want && !has) {
@@ -207,7 +184,6 @@ async function run() {
   const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
   const pr = event.pull_request;
   const repo = process.env.GITHUB_REPOSITORY;
-  const comment = process.env.PR_TRIAGE_COMMENT === "true";
   const gh = client(process.env.GITHUB_TOKEN);
   const login = pr.user.login;
 
@@ -238,17 +214,7 @@ async function run() {
   }
 
   await setLabel(gh, repo, pr, LABEL_LARGE, true);
-  summary(`**large** (${comment ? "labeled and commented" : "labeled only"})\n\n${result.rules.map((r) => `- \`${r.id}\`: ${r.detail}`).join("\n")}`);
-  if (!comment) return;
-
-  const body = commentBody(repo, login, result);
-  const comments = await gh.paginate(`/repos/${repo}/issues/${pr.number}/comments`);
-  const previous = comments.find((c) => c.user.type === "Bot" && c.body.startsWith(COMMENT_MARKER));
-  if (previous) {
-    await gh.call("PATCH", `/repos/${repo}/issues/comments/${previous.id}`, { body });
-  } else {
-    await gh.call("POST", `/repos/${repo}/issues/${pr.number}/comments`, { body });
-  }
+  summary(`**large**\n\n${result.rules.map((r) => `- \`${r.id}\`: ${r.detail}`).join("\n")}`);
 }
 
 async function backtest(count) {
@@ -268,7 +234,7 @@ async function backtest(count) {
   }
 }
 
-module.exports = { classify, codeLines, parseAllowlist, client, hasWriteAccess, acceptedIssue, commentBody, LIMITS };
+module.exports = { classify, codeLines, parseAllowlist, client, hasWriteAccess, acceptedIssue, LIMITS };
 
 if (require.main === module) {
   const [mode, arg] = process.argv.slice(2);
