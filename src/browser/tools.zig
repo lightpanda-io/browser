@@ -1223,7 +1223,7 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const root_node = (try resolveOptionalNode(registry, args.backendNodeId)) orelse page.document.asNode();
-    const st = lp.SemanticTree.init(arena, root_node, registry, page, .{
+    const st = lp.SemanticTree.init(arena, root_node, .{ .persisted = registry }, page, .{
         .max_depth = args.maxDepth orelse std.math.maxInt(u32) - 1,
         .max_bytes = args.maxBytes,
     }) catch return ToolError.NodeNotFound;
@@ -1357,7 +1357,7 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const node = registry.lookup_by_id.get(args.backendNodeId) orelse
         return ToolError.NodeNotFound;
-    const st = lp.SemanticTree.init(arena, node.dom, registry, page, .{}) catch return ToolError.NodeNotFound;
+    const st = lp.SemanticTree.init(arena, node.dom, .{ .persisted = registry }, page, .{}) catch return ToolError.NodeNotFound;
     const details = st.nodeDetails() catch return ToolError.InternalError;
     return renderJson(arena, &details, .{});
 }
