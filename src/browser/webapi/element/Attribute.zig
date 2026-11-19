@@ -306,16 +306,10 @@ pub const List = struct {
     // unique. We know the Element is detached (and thus, don't need to check
     // for `id`).
     pub fn cloneFrom(self: *List, other: *const List, frame: *Frame) !void {
-        try self.ensureTotalCapacity(other._len, frame);
-        for (other.entries()) |*e| {
-            const len = self._len;
-            // re-canonicalize: `other` can belong to a different frame
-            self._entries[len] = .init(
-                try canonicalizeName(e.name(), frame),
-                try frame.dupeString(e.value()),
-            );
-            self._len = len + 1;
-        }
+        try self.ensureTotalCapacity(self._len + other._len, frame);
+        // names are page-canonical and values immutable + page_arena-owned: share them
+        @memcpy(self._entries[self._len..][0..other._len], other.entries());
+        self._len += other._len;
     }
 
     // not efficient, won't be called often (if ever!)
