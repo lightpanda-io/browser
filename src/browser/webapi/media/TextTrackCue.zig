@@ -56,10 +56,6 @@ fn setId(self: *TextTrackCue, value: []const u8, frame: *Frame) !void {
     self._id = try frame.dupeString(value);
 }
 
-pub fn getStartTime(self: *const TextTrackCue) f64 {
-    return self._start_time;
-}
-
 fn setStartTime(self: *TextTrackCue, value: f64, frame: *Frame) !void {
     if (std.math.isFinite(value) == false) {
         return error.TypeError;
@@ -70,19 +66,11 @@ fn setStartTime(self: *TextTrackCue, value: f64, frame: *Frame) !void {
     }
 }
 
-fn getEndTime(self: *const TextTrackCue) f64 {
-    return self._end_time;
-}
-
 fn setEndTime(self: *TextTrackCue, value: f64, frame: *Frame) !void {
     self._end_time = value;
     if (self._track) |track| {
         try track.reorder(self, frame);
     }
-}
-
-fn getPauseOnExit(self: *const TextTrackCue) bool {
-    return self._pause_on_exit;
 }
 
 fn setPauseOnExit(self: *TextTrackCue, value: bool) void {
@@ -102,9 +90,9 @@ pub const JsApi = struct {
 
     pub const track = bridge.accessor(TextTrackCue.getTrack, null, .{});
     pub const id = bridge.accessor(TextTrackCue.getId, TextTrackCue.setId, .{});
-    pub const startTime = bridge.accessor(TextTrackCue.getStartTime, TextTrackCue.setStartTime, .{});
-    pub const endTime = bridge.accessor(TextTrackCue.getEndTime, TextTrackCue.setEndTime, .{});
-    pub const pauseOnExit = bridge.accessor(TextTrackCue.getPauseOnExit, TextTrackCue.setPauseOnExit, .{});
+    pub const startTime = bridge.accessor("_start_time", TextTrackCue.setStartTime, .{});
+    pub const endTime = bridge.accessor("_end_time", TextTrackCue.setEndTime, .{});
+    pub const pauseOnExit = bridge.accessor("_pause_on_exit", TextTrackCue.setPauseOnExit, .{});
     pub const onenter = EventTarget.handlerAccessor(TextTrackCue, "enter");
     pub const onexit = EventTarget.handlerAccessor(TextTrackCue, "exit");
 };

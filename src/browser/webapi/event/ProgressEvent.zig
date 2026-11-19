@@ -82,10 +82,6 @@ fn getLoaded(self: *const ProgressEvent) usize {
     return self._loaded;
 }
 
-fn getLengthComputable(self: *const ProgressEvent) bool {
-    return self._length_computable;
-}
-
 pub const JsApi = struct {
     const js = @import("../../js/js.zig");
     pub const bridge = js.Bridge(ProgressEvent);
@@ -98,5 +94,5 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(ProgressEvent.init, .{});
     pub const total = bridge.accessor(ProgressEvent.getTotal, null, .{});
     pub const loaded = bridge.accessor(ProgressEvent.getLoaded, null, .{});
-    pub const lengthComputable = bridge.accessor(ProgressEvent.getLengthComputable, null, .{});
+    pub const lengthComputable = bridge.accessor("_length_computable", null, .{});
 };

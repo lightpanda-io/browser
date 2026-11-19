@@ -143,18 +143,6 @@ fn getDestination(self: *const NavigateEvent) *NavigationDestination {
     return self._destination;
 }
 
-fn getCanIntercept(self: *const NavigateEvent) bool {
-    return self._can_intercept;
-}
-
-fn getUserInitiated(self: *const NavigateEvent) bool {
-    return self._user_initiated;
-}
-
-fn getHashChange(self: *const NavigateEvent) bool {
-    return self._hash_change;
-}
-
 fn getSignal(self: *const NavigateEvent) *AbortSignal {
     return self._signal;
 }
@@ -172,10 +160,6 @@ const InfoReturn = union(enum) { value: js.Value.Global, undefined: void };
 fn getInfo(self: *const NavigateEvent) InfoReturn {
     const info = self._info orelse return .undefined;
     return .{ .value = info };
-}
-
-fn getHasUAVisualTransition(self: *const NavigateEvent) bool {
-    return self._has_ua_visual_transition;
 }
 
 fn getSourceElement(self: *const NavigateEvent) ?*Element {
@@ -296,14 +280,14 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(NavigateEvent.init, .{});
     pub const navigationType = bridge.accessor(NavigateEvent.getNavigationType, null, .{});
     pub const destination = bridge.accessor(NavigateEvent.getDestination, null, .{});
-    pub const canIntercept = bridge.accessor(NavigateEvent.getCanIntercept, null, .{});
-    pub const userInitiated = bridge.accessor(NavigateEvent.getUserInitiated, null, .{});
-    pub const hashChange = bridge.accessor(NavigateEvent.getHashChange, null, .{});
+    pub const canIntercept = bridge.accessor("_can_intercept", null, .{});
+    pub const userInitiated = bridge.accessor("_user_initiated", null, .{});
+    pub const hashChange = bridge.accessor("_hash_change", null, .{});
     pub const signal = bridge.accessor(NavigateEvent.getSignal, null, .{});
     pub const formData = bridge.accessor(NavigateEvent.getFormData, null, .{});
     pub const downloadRequest = bridge.accessor(NavigateEvent.getDownloadRequest, null, .{});
     pub const info = bridge.accessor(NavigateEvent.getInfo, null, .{});
-    pub const hasUAVisualTransition = bridge.accessor(NavigateEvent.getHasUAVisualTransition, null, .{});
+    pub const hasUAVisualTransition = bridge.accessor("_has_ua_visual_transition", null, .{});
     pub const sourceElement = bridge.accessor(NavigateEvent.getSourceElement, null, .{});
     pub const intercept = bridge.function(NavigateEvent.intercept, .{});
     pub const scroll = bridge.function(NavigateEvent.scroll, .{});

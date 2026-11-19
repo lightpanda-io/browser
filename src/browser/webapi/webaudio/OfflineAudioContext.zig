@@ -113,10 +113,6 @@ pub fn asEventTarget(self: *OfflineAudioContext) *EventTarget {
     return self._proto._proto;
 }
 
-fn getLength(self: *const OfflineAudioContext) u32 {
-    return self._length;
-}
-
 fn startRendering(self: *OfflineAudioContext, frame: *Frame) !js.Promise {
     const base = self._proto;
     if (base._state == .closed or self._started) {
@@ -350,7 +346,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(OfflineAudioContext.constructor, .{});
-    pub const length = bridge.accessor(OfflineAudioContext.getLength, null, .{});
+    pub const length = bridge.accessor("_length", null, .{});
     pub const oncomplete = EventTarget.handlerAccessor(OfflineAudioContext, "complete");
     pub const startRendering = bridge.function(OfflineAudioContext.startRendering, .{});
     pub const @"suspend" = bridge.function(OfflineAudioContext.suspendContext, .{});

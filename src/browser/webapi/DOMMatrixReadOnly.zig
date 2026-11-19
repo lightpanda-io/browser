@@ -648,10 +648,6 @@ fn getF(self: *const DOMMatrixReadOnly) f64 {
     return self._m[13];
 }
 
-fn getIs2D(self: *const DOMMatrixReadOnly) bool {
-    return self._is_2d;
-}
-
 fn getIsIdentity(self: *const DOMMatrixReadOnly) bool {
     const id = identity();
     for (0..16) |i| {
@@ -1004,7 +1000,7 @@ pub const JsApi = struct {
     pub const m43 = bridge.accessor(getM(14), null, .{});
     pub const m44 = bridge.accessor(getM(15), null, .{});
 
-    pub const is2D = bridge.accessor(DOMMatrixReadOnly.getIs2D, null, .{});
+    pub const is2D = bridge.accessor("_is_2d", null, .{});
     pub const isIdentity = bridge.accessor(DOMMatrixReadOnly.getIsIdentity, null, .{});
 
     pub const translate = bridge.function(DOMMatrixReadOnly.translate, .{});

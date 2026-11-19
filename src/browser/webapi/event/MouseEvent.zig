@@ -136,10 +136,6 @@ pub fn is(self: *MouseEvent, comptime T: type) ?*T {
     return null;
 }
 
-pub fn getAltKey(self: *const MouseEvent) bool {
-    return self._alt_key;
-}
-
 pub fn getButton(self: *const MouseEvent) i16 {
     return self._button;
 }
@@ -174,14 +170,6 @@ fn getClientY(self: *const MouseEvent) f64 {
     return self.compatCoordinate(self._client_y);
 }
 
-pub fn getCtrlKey(self: *const MouseEvent) bool {
-    return self._ctrl_key;
-}
-
-pub fn getMetaKey(self: *const MouseEvent) bool {
-    return self._meta_key;
-}
-
 fn getPageX(self: *const MouseEvent) f64 {
     // this should be clientX + window.scrollX
     return self.compatCoordinate(self._client_x);
@@ -202,10 +190,6 @@ fn getScreenX(self: *const MouseEvent) f64 {
 
 fn getScreenY(self: *const MouseEvent) f64 {
     return self.compatCoordinate(self._screen_y);
-}
-
-pub fn getShiftKey(self: *const MouseEvent) bool {
-    return self._shift_key;
 }
 
 // Deprecated: tracks the same value as offsetX/clientX in the absence of layout.
@@ -278,13 +262,13 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(MouseEvent.init, .{});
-    pub const altKey = bridge.accessor(getAltKey, null, .{});
+    pub const altKey = bridge.accessor("_alt_key", null, .{});
     pub const button = bridge.accessor(getButton, null, .{});
     pub const buttons = bridge.accessor(getButtons, null, .{});
     pub const clientX = bridge.accessor(getClientX, null, .{});
     pub const clientY = bridge.accessor(getClientY, null, .{});
-    pub const ctrlKey = bridge.accessor(getCtrlKey, null, .{});
-    pub const metaKey = bridge.accessor(getMetaKey, null, .{});
+    pub const ctrlKey = bridge.accessor("_ctrl_key", null, .{});
+    pub const metaKey = bridge.accessor("_meta_key", null, .{});
     pub const offsetX = bridge.property(0.0, .{ .template = false });
     pub const offsetY = bridge.property(0.0, .{ .template = false });
     pub const pageX = bridge.accessor(getPageX, null, .{});
@@ -292,7 +276,7 @@ pub const JsApi = struct {
     pub const relatedTarget = bridge.accessor(getRelatedTarget, null, .{});
     pub const screenX = bridge.accessor(getScreenX, null, .{});
     pub const screenY = bridge.accessor(getScreenY, null, .{});
-    pub const shiftKey = bridge.accessor(getShiftKey, null, .{});
+    pub const shiftKey = bridge.accessor("_shift_key", null, .{});
     pub const layerX = bridge.accessor(getLayerX, null, .{});
     pub const layerY = bridge.accessor(getLayerY, null, .{});
     pub const x = bridge.accessor(getClientX, null, .{});

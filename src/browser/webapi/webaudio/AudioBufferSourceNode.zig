@@ -148,25 +148,13 @@ fn getDetune(self: *const AudioBufferSourceNode) *AudioParam {
     return self._detune;
 }
 
-fn getLoop(self: *const AudioBufferSourceNode) bool {
-    return self._loop;
-}
-
 fn setLoop(self: *AudioBufferSourceNode, loop: bool) void {
     self._loop = loop;
-}
-
-fn getLoopStart(self: *const AudioBufferSourceNode) f64 {
-    return self._loop_start;
 }
 
 fn setLoopStart(self: *AudioBufferSourceNode, value: f64) !void {
     if (std.math.isFinite(value) == false) return error.TypeError;
     self._loop_start = value;
-}
-
-fn getLoopEnd(self: *const AudioBufferSourceNode) f64 {
-    return self._loop_end;
 }
 
 fn setLoopEnd(self: *AudioBufferSourceNode, value: f64) !void {
@@ -332,8 +320,8 @@ pub const JsApi = struct {
     pub const buffer = bridge.accessor(AudioBufferSourceNode.getBuffer, AudioBufferSourceNode.setBuffer, .{});
     pub const playbackRate = bridge.accessor(AudioBufferSourceNode.getPlaybackRate, null, .{});
     pub const detune = bridge.accessor(AudioBufferSourceNode.getDetune, null, .{});
-    pub const loop = bridge.accessor(AudioBufferSourceNode.getLoop, AudioBufferSourceNode.setLoop, .{});
-    pub const loopStart = bridge.accessor(AudioBufferSourceNode.getLoopStart, AudioBufferSourceNode.setLoopStart, .{});
-    pub const loopEnd = bridge.accessor(AudioBufferSourceNode.getLoopEnd, AudioBufferSourceNode.setLoopEnd, .{});
+    pub const loop = bridge.accessor("_loop", AudioBufferSourceNode.setLoop, .{});
+    pub const loopStart = bridge.accessor("_loop_start", AudioBufferSourceNode.setLoopStart, .{});
+    pub const loopEnd = bridge.accessor("_loop_end", AudioBufferSourceNode.setLoopEnd, .{});
     pub const start = bridge.function(AudioBufferSourceNode.start, .{});
 };

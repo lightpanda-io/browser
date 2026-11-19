@@ -282,10 +282,6 @@ fn getDestination(self: *const BaseAudioContext) *AudioDestinationNode {
     return self._destination;
 }
 
-fn getSampleRate(self: *const BaseAudioContext) f32 {
-    return self._sample_rate;
-}
-
 fn getCurrentTime(self: *const BaseAudioContext) f64 {
     return self.currentTime();
 }
@@ -482,7 +478,7 @@ pub const JsApi = struct {
     };
 
     pub const destination = bridge.accessor(BaseAudioContext.getDestination, null, .{});
-    pub const sampleRate = bridge.accessor(BaseAudioContext.getSampleRate, null, .{});
+    pub const sampleRate = bridge.accessor("_sample_rate", null, .{});
     pub const currentTime = bridge.accessor(BaseAudioContext.getCurrentTime, null, .{});
     pub const state = bridge.accessor(BaseAudioContext.getState, null, .{});
     pub const onstatechange = EventTarget.handlerAccessor(BaseAudioContext, "statechange");

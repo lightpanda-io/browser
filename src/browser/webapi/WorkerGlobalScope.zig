@@ -312,10 +312,6 @@ pub fn performance(self: *WorkerGlobalScope) *Performance {
     return self._performance;
 }
 
-fn getIsSecureContext(self: *const WorkerGlobalScope) bool {
-    return self._secure_context;
-}
-
 pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
     return &self._location;
 }
@@ -576,5 +572,5 @@ pub const JsApi = struct {
     pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
     pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
 
-    pub const isSecureContext = bridge.accessor(WorkerGlobalScope.getIsSecureContext, null, .{});
+    pub const isSecureContext = bridge.accessor("_secure_context", null, .{});
 };

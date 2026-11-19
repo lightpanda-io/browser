@@ -82,10 +82,6 @@ fn getReason(self: *const CloseEvent) []const u8 {
     return self._reason;
 }
 
-fn getWasClean(self: *const CloseEvent) bool {
-    return self._was_clean;
-}
-
 pub const JsApi = struct {
     const js = @import("../../js/js.zig");
     pub const bridge = js.Bridge(CloseEvent);
@@ -98,5 +94,5 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(CloseEvent.init, .{});
     pub const code = bridge.accessor(CloseEvent.getCode, null, .{});
     pub const reason = bridge.accessor(CloseEvent.getReason, null, .{});
-    pub const wasClean = bridge.accessor(CloseEvent.getWasClean, null, .{});
+    pub const wasClean = bridge.accessor("_was_clean", null, .{});
 };

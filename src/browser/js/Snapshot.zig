@@ -421,10 +421,10 @@ fn hasGatedMember(comptime JsApi: type) bool {
 
 fn memberExposed(value: anytype) Caller.Function.Opts.Exposed {
     const T = @TypeOf(value);
-    if (T == bridge.Accessor or T == bridge.Function) {
-        return value.exposed;
-    }
-    return .both;
+    return switch (T) {
+        bridge.Accessor, bridge.Function => value.exposed,
+        else => .both,
+    };
 }
 
 fn countExternalReferences() comptime_int {
@@ -467,6 +467,9 @@ fn countExternalReferences() comptime_int {
                 if (value.setter != null) {
                     count += 1;
                 }
+                // v8.CFunction, for each side that has a fast variant
+                if (value.fast_getter != null) count += 1;
+                if (value.fast_setter != null) count += 1;
             } else if (T == bridge.Function) {
                 if (value.wpt_only and wpt_extensions_enabled == false) {
                     continue;
@@ -557,6 +560,16 @@ fn collectExternalReferences() *const ExternalReferences {
                 idx += 1;
                 if (value.setter) |setter| {
                     references[idx] = @bitCast(@intFromPtr(setter));
+                    idx += 1;
+                }
+                // V8 stores a pointer to the v8.CFunction itself (not its
+                // .address) as a Foreign in the template's C function overloads.
+                if (value.fast_getter) |fast_getter| {
+                    references[idx] = @bitCast(@intFromPtr(fast_getter));
+                    idx += 1;
+                }
+                if (value.fast_setter) |fast_setter| {
+                    references[idx] = @bitCast(@intFromPtr(fast_setter));
                     idx += 1;
                 }
             } else if (T == bridge.Function) {
@@ -1039,6 +1052,7 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, i
     const getter_callback = v8.v8__FunctionTemplate__New__Config(isolate, &.{
         .callback = value.getter,
         .signature = getter_signature,
+        .c_function = value.fast_getter,
     }).?;
     // WebIDL: getter function's .name should be "get X"
     const getter_name_str = "get " ++ name;
@@ -1050,6 +1064,7 @@ fn attachAccessorProperty(comptime name: [:0]const u8, value: bridge.Accessor, i
             .callback = setter,
             .signature = getter_signature,
             .length = 1,
+            .c_function = value.fast_setter,
         }).?;
         const setter_name_str = "set " ++ name;
         const setter_name_v8 = v8.v8__String__NewFromUtf8(isolate, setter_name_str.ptr, v8.kNormal, @intCast(setter_name_str.len));

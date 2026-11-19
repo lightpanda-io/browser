@@ -32,10 +32,6 @@ pub fn init(init_: Init, exec: *const Execution) !*ByteLengthQueuingStrategy {
     return exec._factory.create(ByteLengthQueuingStrategy{ ._high_water_mark = init_.highWaterMark });
 }
 
-fn getHighWaterMark(self: *const ByteLengthQueuingStrategy) f64 {
-    return self._high_water_mark;
-}
-
 // GetV(chunk, "byteLength"): objects report their byteLength (or undefined
 // without one), other primitives have no such property, null/undefined throw.
 const Chunk = union(enum) {
@@ -59,6 +55,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(ByteLengthQueuingStrategy.init, .{});
-    pub const highWaterMark = bridge.accessor(ByteLengthQueuingStrategy.getHighWaterMark, null, .{});
+    pub const highWaterMark = bridge.accessor("_high_water_mark", null, .{});
     pub const size = bridge.function(ByteLengthQueuingStrategy.size, .{ .null_as_undefined = true });
 };

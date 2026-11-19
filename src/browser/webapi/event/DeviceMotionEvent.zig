@@ -75,10 +75,6 @@ fn getRotationRate(_: *const DeviceMotionEvent) ?bool {
     return null;
 }
 
-fn getInterval(self: *const DeviceMotionEvent) f64 {
-    return self._interval;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DeviceMotionEvent);
 
@@ -91,5 +87,5 @@ pub const JsApi = struct {
     pub const acceleration = bridge.accessor(DeviceMotionEvent.getAcceleration, null, .{});
     pub const accelerationIncludingGravity = bridge.accessor(DeviceMotionEvent.getAccelerationIncludingGravity, null, .{});
     pub const rotationRate = bridge.accessor(DeviceMotionEvent.getRotationRate, null, .{});
-    pub const interval = bridge.accessor(DeviceMotionEvent.getInterval, null, .{});
+    pub const interval = bridge.accessor("_interval", null, .{});
 };

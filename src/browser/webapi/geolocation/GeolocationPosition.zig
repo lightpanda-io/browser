@@ -70,10 +70,6 @@ fn getCoords(self: *const GeolocationPosition) *GeolocationCoordinates {
     return self._coords;
 }
 
-fn getTimestamp(self: *const GeolocationPosition) f64 {
-    return self._timestamp;
-}
-
 pub fn toJSON(self: *const GeolocationPosition) struct {
     coords: GeolocationCoordinates.Json,
     timestamp: f64,
@@ -93,6 +89,6 @@ pub const JsApi = struct {
     };
 
     pub const coords = bridge.accessor(GeolocationPosition.getCoords, null, .{});
-    pub const timestamp = bridge.accessor(GeolocationPosition.getTimestamp, null, .{});
+    pub const timestamp = bridge.accessor("_timestamp", null, .{});
     pub const toJSON = bridge.function(GeolocationPosition.toJSON, .{});
 };

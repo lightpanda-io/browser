@@ -70,10 +70,6 @@ pub fn asEvent(self: *IDBVersionChangeEvent) *Event {
     return self._proto;
 }
 
-fn getOldVersion(self: *const IDBVersionChangeEvent) u64 {
-    return self._old_version;
-}
-
 fn getNewVersion(self: *const IDBVersionChangeEvent) ?u64 {
     return self._new_version;
 }
@@ -87,6 +83,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(IDBVersionChangeEvent.init, .{});
-    pub const oldVersion = bridge.accessor(IDBVersionChangeEvent.getOldVersion, null, .{});
+    pub const oldVersion = bridge.accessor("_old_version", null, .{});
     pub const newVersion = bridge.accessor(IDBVersionChangeEvent.getNewVersion, null, .{ .null_as_undefined = true });
 };

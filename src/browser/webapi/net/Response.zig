@@ -306,10 +306,6 @@ pub fn getURL(self: *const Response) []const u8 {
     return self._url;
 }
 
-fn isRedirected(self: *const Response) bool {
-    return self._is_redirected;
-}
-
 pub fn getHeaders(self: *const Response) *Headers {
     return self._headers;
 }
@@ -713,7 +709,7 @@ pub const JsApi = struct {
     pub const body = bridge.accessor(Response.getBody, null, .{});
     pub const bodyUsed = bridge.accessor(Response.getBodyUsed, null, .{});
     pub const url = bridge.accessor(Response.getURL, null, .{});
-    pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
+    pub const redirected = bridge.accessor("_is_redirected", null, .{});
     pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
     pub const blob = bridge.function(Response.blob, .{});
     pub const bytes = bridge.function(Response.bytes, .{});

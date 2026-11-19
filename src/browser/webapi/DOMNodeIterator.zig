@@ -114,14 +114,6 @@ fn getReferenceNode(self: *const DOMNodeIterator) *Node {
     return self._reference_node;
 }
 
-fn getPointerBeforeReferenceNode(self: *const DOMNodeIterator) bool {
-    return self._pointer_before_reference_node;
-}
-
-fn getWhatToShow(self: *const DOMNodeIterator) u32 {
-    return self._what_to_show;
-}
-
 fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
     return self._filter._opts;
 }
@@ -257,8 +249,8 @@ pub const JsApi = struct {
 
     pub const root = bridge.accessor(DOMNodeIterator.getRoot, null, .{});
     pub const referenceNode = bridge.accessor(DOMNodeIterator.getReferenceNode, null, .{});
-    pub const pointerBeforeReferenceNode = bridge.accessor(DOMNodeIterator.getPointerBeforeReferenceNode, null, .{});
-    pub const whatToShow = bridge.accessor(DOMNodeIterator.getWhatToShow, null, .{});
+    pub const pointerBeforeReferenceNode = bridge.accessor("_pointer_before_reference_node", null, .{});
+    pub const whatToShow = bridge.accessor("_what_to_show", null, .{});
     pub const filter = bridge.accessor(DOMNodeIterator.getFilter, null, .{});
 
     pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{});

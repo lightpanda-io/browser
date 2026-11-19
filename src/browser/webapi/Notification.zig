@@ -130,15 +130,6 @@ fn getLang(self: *const Notification) []const u8 {
 fn getDir(self: *const Notification) []const u8 {
     return self._dir;
 }
-fn getSilent(self: *const Notification) bool {
-    return self._silent;
-}
-fn getRequireInteraction(self: *const Notification) bool {
-    return self._require_interaction;
-}
-fn getRenotify(self: *const Notification) bool {
-    return self._renotify;
-}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Notification);
@@ -164,9 +155,9 @@ pub const JsApi = struct {
     pub const tag = bridge.accessor(getTag, null, .{});
     pub const lang = bridge.accessor(getLang, null, .{});
     pub const dir = bridge.accessor(getDir, null, .{});
-    pub const silent = bridge.accessor(getSilent, null, .{});
-    pub const requireInteraction = bridge.accessor(getRequireInteraction, null, .{});
-    pub const renotify = bridge.accessor(getRenotify, null, .{});
+    pub const silent = bridge.accessor("_silent", null, .{});
+    pub const requireInteraction = bridge.accessor("_require_interaction", null, .{});
+    pub const renotify = bridge.accessor("_renotify", null, .{});
 };
 
 const testing = @import("../../testing.zig");

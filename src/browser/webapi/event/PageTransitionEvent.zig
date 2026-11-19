@@ -72,10 +72,6 @@ pub fn asEvent(self: *PageTransitionEvent) *Event {
     return self._proto;
 }
 
-fn getPersisted(self: *PageTransitionEvent) bool {
-    return self._persisted;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(PageTransitionEvent);
 
@@ -85,5 +81,5 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(PageTransitionEvent.init, .{});
-    pub const persisted = bridge.accessor(PageTransitionEvent.getPersisted, null, .{});
+    pub const persisted = bridge.accessor("_persisted", null, .{});
 };

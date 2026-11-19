@@ -102,22 +102,6 @@ pub fn asEvent(self: *WheelEvent) *Event {
     return self._proto.asEvent();
 }
 
-fn getDeltaX(self: *const WheelEvent) f64 {
-    return self._delta_x;
-}
-
-fn getDeltaY(self: *const WheelEvent) f64 {
-    return self._delta_y;
-}
-
-fn getDeltaZ(self: *const WheelEvent) f64 {
-    return self._delta_z;
-}
-
-fn getDeltaMode(self: *const WheelEvent) u32 {
-    return self._delta_mode;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(WheelEvent);
 
@@ -127,10 +111,10 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(WheelEvent.init, .{});
-    pub const deltaX = bridge.accessor(WheelEvent.getDeltaX, null, .{});
-    pub const deltaY = bridge.accessor(WheelEvent.getDeltaY, null, .{});
-    pub const deltaZ = bridge.accessor(WheelEvent.getDeltaZ, null, .{});
-    pub const deltaMode = bridge.accessor(WheelEvent.getDeltaMode, null, .{});
+    pub const deltaX = bridge.accessor("_delta_x", null, .{});
+    pub const deltaY = bridge.accessor("_delta_y", null, .{});
+    pub const deltaZ = bridge.accessor("_delta_z", null, .{});
+    pub const deltaMode = bridge.accessor("_delta_mode", null, .{});
     pub const DOM_DELTA_PIXEL = bridge.property(WheelEvent.DOM_DELTA_PIXEL, .{ .template = true });
     pub const DOM_DELTA_LINE = bridge.property(WheelEvent.DOM_DELTA_LINE, .{ .template = true });
     pub const DOM_DELTA_PAGE = bridge.property(WheelEvent.DOM_DELTA_PAGE, .{ .template = true });

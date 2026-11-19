@@ -153,14 +153,6 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*ImageD
     });
 }
 
-pub fn getWidth(self: *const ImageData) u32 {
-    return self._width;
-}
-
-pub fn getHeight(self: *const ImageData) u32 {
-    return self._height;
-}
-
 pub fn getData(self: *const ImageData) js.ArrayBufferRef(.uint8_clamped).Global {
     return self._data;
 }
@@ -207,8 +199,8 @@ pub const JsApi = struct {
     pub const pixelFormat = bridge.property("rgba-unorm8", .{ .template = false, .readonly = true });
 
     pub const data = bridge.accessor(ImageData.getData, null, .{});
-    pub const width = bridge.accessor(ImageData.getWidth, null, .{});
-    pub const height = bridge.accessor(ImageData.getHeight, null, .{});
+    pub const width = bridge.accessor("_width", null, .{});
+    pub const height = bridge.accessor("_height", null, .{});
 };
 
 const testing = @import("../../testing.zig");

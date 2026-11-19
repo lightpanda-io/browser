@@ -62,10 +62,6 @@ fn getRoot(self: *const DOMTreeWalker) *Node {
     return self._root;
 }
 
-fn getWhatToShow(self: *const DOMTreeWalker) u32 {
-    return self._what_to_show;
-}
-
 fn getFilter(self: *const DOMTreeWalker) ?FilterOpts {
     return self._filter._opts;
 }
@@ -394,7 +390,7 @@ pub const JsApi = struct {
     };
 
     pub const root = bridge.accessor(DOMTreeWalker.getRoot, null, .{});
-    pub const whatToShow = bridge.accessor(DOMTreeWalker.getWhatToShow, null, .{});
+    pub const whatToShow = bridge.accessor("_what_to_show", null, .{});
     pub const filter = bridge.accessor(DOMTreeWalker.getFilter, null, .{});
     pub const currentNode = bridge.accessor(DOMTreeWalker.getCurrentNode, DOMTreeWalker.setCurrentNode, .{});
 

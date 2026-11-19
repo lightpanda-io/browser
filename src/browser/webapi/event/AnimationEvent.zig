@@ -82,10 +82,6 @@ fn getAnimationName(self: *const AnimationEvent) []const u8 {
     return self._animation_name;
 }
 
-fn getElapsedTime(self: *const AnimationEvent) f64 {
-    return self._elapsed_time;
-}
-
 fn getPseudoElement(self: *const AnimationEvent) []const u8 {
     return self._pseudo_element;
 }
@@ -100,6 +96,6 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(AnimationEvent.init, .{});
     pub const animationName = bridge.accessor(AnimationEvent.getAnimationName, null, .{});
-    pub const elapsedTime = bridge.accessor(AnimationEvent.getElapsedTime, null, .{});
+    pub const elapsedTime = bridge.accessor("_elapsed_time", null, .{});
     pub const pseudoElement = bridge.accessor(AnimationEvent.getPseudoElement, null, .{});
 };

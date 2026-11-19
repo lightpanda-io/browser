@@ -66,10 +66,6 @@ pub fn asNode(self: *AudioDestinationNode) *AudioNode {
     return self._proto;
 }
 
-fn getMaxChannelCount(self: *const AudioDestinationNode) u32 {
-    return self._max_channel_count;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(AudioDestinationNode);
 
@@ -78,5 +74,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const maxChannelCount = bridge.accessor(AudioDestinationNode.getMaxChannelCount, null, .{});
+    pub const maxChannelCount = bridge.accessor("_max_channel_count", null, .{});
 };

@@ -266,10 +266,6 @@ pub fn getType(self: *const CryptoKey) Kind {
     return self._kind;
 }
 
-fn getExtractable(self: *const CryptoKey) bool {
-    return self._extractable;
-}
-
 /// The shape of the `.algorithm` dictionary depends on the algorithm. AES and
 /// HMAC expose a `length` in bits (AES's from the key material, HMAC's as
 /// stored, since it needn't fill the last byte); HMAC also exposes a nested
@@ -346,7 +342,7 @@ pub const JsApi = struct {
     };
 
     pub const @"type" = bridge.accessor(CryptoKey.getType, null, .{});
-    pub const extractable = bridge.accessor(CryptoKey.getExtractable, null, .{});
+    pub const extractable = bridge.accessor("_extractable", null, .{});
     // Each returns its cached object: the same one on every read, as the
     // spec's [[algorithm_cached]] and [[usages_cached]] slots are.
     pub const algorithm = bridge.accessor(CryptoKey.getAlgorithm, null, .{ .cache = .{ .private = "crypto_key_algorithm" } });
