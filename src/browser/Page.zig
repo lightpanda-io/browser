@@ -305,6 +305,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .event_listeners = .init(arena.allocator()),
         .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
+    errdefer self.identity.deinit();
     self.recycling = self._recycling.allocator();
     self.factory = Factory.init(self, arena.allocator(), &session.browser.documents);
     self.queued_navigation = &self.queued_navigation_1;

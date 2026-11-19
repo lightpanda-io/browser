@@ -180,6 +180,7 @@ pub fn init(
         leaf_value,
     });
     const self = leaf._proto;
+    errdefer self._identity.deinit();
     self._type = @unionInit(Type, @tagName(tag), leaf);
 
     self._http_owner = GlobalScope.initHttpOwner(.{ .worker = self });
