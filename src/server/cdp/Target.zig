@@ -271,6 +271,10 @@ pub fn close(self: *Target) !void {
             try cdp.sendEvent("Inspector.detached", .{
                 .reason = "Render process gone.",
             }, .{ .session_id = session.id });
+            if (session.page_socket) {
+                // it never heard of its session: its socket just closes
+                continue;
+            }
             const detached = .{
                 .targetId = target_id,
                 .sessionId = session.id,

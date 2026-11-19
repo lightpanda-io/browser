@@ -278,8 +278,15 @@ fn createTarget(cmd: *CDP.Command) !void {
     });
 
     // attach to the target only if auto attach is set.
-    if (cmd.cdp.currentClient().target_auto_attach) {
+    const creator = cmd.cdp.currentClient();
+    if (creator.target_auto_attach) {
         try doAttachtoTarget(cmd, target);
+    }
+    var clients = cmd.cdp.allClients();
+    while (clients.next()) |client| {
+        if (client != creator and client.target_auto_attach) {
+            try autoAttachClient(client, target);
+        }
     }
 
     if (URL.isAboutBlank(params.url) == false) {
@@ -494,7 +501,18 @@ fn setDiscoverTargets(cmd: *CDP.Command) !void {
         filter: ?[]const TargetFilter = null,
     })) orelse return error.InvalidParams;
 
-    cmd.cdp.currentClient().target_discover = params.discover and filterIncludesPage(params.filter);
+    const client = cmd.cdp.currentClient();
+    client.target_discover = params.discover and filterIncludesPage(params.filter);
+    if (client.target_discover) {
+        // As in Chrome, the targets that already exist are reported: that's
+        // how a connection that joined a running browser learns of its pages.
+        if (cmd.browser_context) |bc| {
+            for (bc.targets.items) |target| {
+                const info = targetInfo(target) orelse continue;
+                try CDP.sendEventTo(client, "Target.targetCreated", .{ .targetInfo = info });
+            }
+        }
+    }
     return cmd.sendResult(null, .{});
 }
 
@@ -564,6 +582,10 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
     if (cmd.browser_context) |bc| {
         for (bc.targets.items) |target| {
             if (target.target_id != null) {
+                // Whatever the filter: Puppeteer excludes pages (it expects
+                // them under tab targets, which we don't have) and still
+                // needs the session, as it gets one for a page it creates.
+                try autoAttachClient(client, target);
                 continue;
             }
             if (target.mainFrame()) |frame| {
@@ -618,6 +640,23 @@ fn doAttachtoTarget(cmd: *CDP.Command, target: *CDP.Target) !void {
         .sessionId = target.session_id.?,
         .targetInfo = targetInfo(target).?,
     }, .{ .session_id = parent_id });
+}
+
+// Gives `client` a session of its own on a page it has none on, and tells it:
+// Chrome attaches every auto-attaching connection to a page, whoever opened it.
+fn autoAttachClient(client: *CDP.Client, target: *CDP.Target) !void {
+    const bc = target.bc;
+    for (bc.attached_sessions.values()) |attached| {
+        if (attached.target == target and attached.client == client) return;
+    }
+    const attached = try bc.attachSession(target, target.cdp.session_id_gen.next(), null, client);
+    if (target.session_id == null) {
+        target.session_id = attached.id;
+    }
+    try CDP.sendEventTo(client, "Target.attachedToTarget", AttachToTarget{
+        .sessionId = attached.id,
+        .targetInfo = targetInfo(target).?,
+    });
 }
 
 const AttachToTarget = struct {

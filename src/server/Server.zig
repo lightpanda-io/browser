@@ -3667,6 +3667,185 @@ fn consoleHandle(messages: []const []const u8, session_id: []const u8) ![]const 
     return error.EventNotSent;
 }
 
+test "server: cdp closing a page tells each connection about its own session" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    const browser = try cdpCommand(&a, 3, "Target.getTargetInfo", "{}", null, null);
+    const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
+
+    var b = try createTestClient();
+    defer b.deinit();
+    try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+    const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+
+    var c = try createTestClient();
+    defer c.deinit();
+    try c.handshake(try arena.print("/devtools/page/{s}", .{target_id}));
+    _ = try cdpCommand(&c, 1, "Runtime.evaluate", "{\"expression\":\"1\"}", null, null);
+
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&a, 4, "Target.closeTarget", try arena.print("{{\"targetId\":\"{s}\"}}", .{target_id}), null, &seen_by_a);
+    _ = try cdpCommand(&a, 5, "Target.getTargets", "{}", null, &seen_by_a);
+    var seen_by_b: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&b, 2, "Target.getTargets", "{}", null, &seen_by_b);
+
+    try expectSessionEvent(seen_by_a.items, "Target.detachedFromTarget", session_a);
+    try expectSessionEvent(seen_by_a.items, "Inspector.detached", session_a);
+    try expectSessionEvent(seen_by_b.items, "Target.detachedFromTarget", session_b);
+    try expectSessionEvent(seen_by_b.items, "Inspector.detached", session_b);
+    for (seen_by_a.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, session_b) == null);
+    }
+    for (seen_by_b.items) |raw| {
+        try testing.expect(std.mem.find(u8, raw, session_a) == null);
+    }
+
+    // The page's own socket closes with it, and is told nothing about sessions.
+    while (true) {
+        const msg = c.readWebsocketMessage() catch |err| switch (err) {
+            error.Closed => break,
+            else => return err,
+        } orelse return error.NoMessage;
+        if (msg.type == .close) {
+            break;
+        }
+        try testing.expect(std.mem.find(u8, msg.data, "sessionId") == null);
+        if (msg.cleanup_fragment) {
+            c.reader.cleanup();
+        }
+    }
+}
+
+test "server: cdp several guests on one page" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    const browser = try cdpCommand(&a, 3, "Target.getTargetInfo", "{}", null, null);
+    const join = try arena.print("/devtools/browser/{s}", .{browser.get("targetInfo").?.object.get("targetId").?.string});
+
+    var guests: [3]TestClient = undefined;
+    var sessions: [3][]const u8 = undefined;
+    var joined: usize = 0;
+    defer for (guests[0..joined]) |*guest| guest.deinit();
+    for (&guests, &sessions) |*guest, *session| {
+        guest.* = try createTestClient();
+        joined += 1;
+        try guest.handshake(join);
+        session.* = (try cdpCommand(guest, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    }
+
+    const first = "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}";
+    _ = try cdpCommand(&a, 4, "Page.navigate", first, session_a, null);
+    _ = try cdpCommand(&a, 5, "Runtime.evaluate", "{\"expression\":\"window.shared = 7\"}", session_a, null);
+
+    // Each guest heard of the navigation on its own session, and nobody else's.
+    for (&guests, sessions, 0..) |*guest, session, i| {
+        var seen: std.ArrayList([]const u8) = .empty;
+        const read = try cdpCommand(guest, 2, "Runtime.evaluate", "{\"expression\":\"window.shared\",\"returnByValue\":true}", session, &seen);
+        try testing.expectEqual(7, read.get("result").?.object.get("value").?.integer);
+        try expectSessionEvent(seen.items, "Page.frameNavigated", session);
+        for (seen.items) |raw| {
+            try testing.expect(std.mem.find(u8, raw, session_a) == null);
+            for (sessions, 0..) |other, j| {
+                if (i != j) try testing.expect(std.mem.find(u8, raw, other) == null);
+            }
+        }
+    }
+
+    // One leaves; another navigates. The rest follow, the reply goes to the asker.
+    try sys_net.writeAll(guests[1].socket, &.{ 136, 128, 0, 0, 0, 0 });
+    {
+        const close = try guests[1].readWebsocketMessage() orelse return error.NoMessage;
+        try testing.expectEqual(.close, close.type);
+    }
+
+    var seen_by_asker: std.ArrayList([]const u8) = .empty;
+    const second = "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html\"}";
+    _ = try cdpCommand(&guests[0], 9001, "Page.navigate", second, sessions[0], &seen_by_asker);
+    _ = try cdpCommand(&guests[0], 9002, "LP.waitUntil", "{\"until\":\"load\",\"timeout\":3000}", sessions[0], &seen_by_asker);
+    try expectSessionEvent(seen_by_asker.items, "Page.frameNavigated", sessions[0]);
+
+    var seen_by_a: std.ArrayList([]const u8) = .empty;
+    const href_a = try cdpCommand(&a, 6, "Runtime.evaluate", "{\"expression\":\"location.href\",\"returnByValue\":true}", session_a, &seen_by_a);
+    try testing.expect(std.mem.endsWith(u8, href_a.get("result").?.object.get("value").?.string, "elements.html"));
+    try expectSessionEvent(seen_by_a.items, "Page.frameNavigated", session_a);
+
+    var seen_by_last: std.ArrayList([]const u8) = .empty;
+    const href_last = try cdpCommand(&guests[2], 3, "Runtime.evaluate", "{\"expression\":\"location.href\",\"returnByValue\":true}", sessions[2], &seen_by_last);
+    try testing.expect(std.mem.endsWith(u8, href_last.get("result").?.object.get("value").?.string, "elements.html"));
+    try expectSessionEvent(seen_by_last.items, "Page.frameNavigated", sessions[2]);
+
+    for (seen_by_a.items) |raw| try testing.expect(std.mem.find(u8, raw, "\"id\":9001") == null);
+    for (seen_by_last.items) |raw| try testing.expect(std.mem.find(u8, raw, "\"id\":9001") == null);
+}
+
+test "server: cdp a guest discovers and auto-attaches to the pages already open" {
+    const arena = testing.arena_allocator;
+    var a = try createTestClient();
+    defer a.deinit();
+    try a.handshake("/");
+    const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const target_id = created.get("targetId").?.string;
+    const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
+    const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+    _ = try cdpCommand(&a, 3, "Runtime.evaluate", "{\"expression\":\"window.shared = 5\"}", session_a, null);
+    const browser = try cdpCommand(&a, 4, "Target.getTargetInfo", "{}", null, null);
+    const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
+
+    // What Puppeteer sends when it connects.
+    var b = try createTestClient();
+    defer b.deinit();
+    try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+    var seen: std.ArrayList([]const u8) = .empty;
+    _ = try cdpCommand(&b, 1, "Target.setDiscoverTargets", "{\"discover\":true,\"filter\":[{}]}", null, &seen);
+    try expectSessionEvent(seen.items, "Target.targetCreated", target_id);
+
+    seen.clearRetainingCapacity();
+    _ = try cdpCommand(&b, 2, "Target.setAutoAttach", "{\"waitForDebuggerOnStart\":true,\"flatten\":true,\"autoAttach\":true,\"filter\":[{\"type\":\"page\",\"exclude\":true},{}]}", null, &seen);
+    const session_b = try attachedSessionId(seen.items, target_id);
+    try testing.expect(std.mem.eql(u8, session_a, session_b) == false);
+    const read = try cdpCommand(&b, 3, "Runtime.evaluate", "{\"expression\":\"window.shared\",\"returnByValue\":true}", session_b, null);
+    try testing.expectEqual(5, read.get("result").?.object.get("value").?.integer);
+
+    // asking again doesn't attach it twice
+    seen.clearRetainingCapacity();
+    _ = try cdpCommand(&b, 4, "Target.setAutoAttach", "{\"waitForDebuggerOnStart\":true,\"flatten\":true,\"autoAttach\":true}", null, &seen);
+    try testing.expectError(error.EventNotSent, attachedSessionId(seen.items, target_id));
+
+    // A page the first connection opens later reaches the guest too.
+    const second = try cdpCommand(&a, 5, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
+    const second_id = second.get("targetId").?.string;
+    _ = try cdpCommand(&a, 6, "Target.getTargets", "{}", null, null);
+    seen.clearRetainingCapacity();
+    _ = try cdpCommand(&b, 5, "Target.getTargets", "{}", null, &seen);
+    try expectSessionEvent(seen.items, "Target.targetCreated", second_id);
+    const second_session = try attachedSessionId(seen.items, second_id);
+    const one = try cdpCommand(&b, 6, "Runtime.evaluate", "{\"expression\":\"1\",\"returnByValue\":true}", second_session, null);
+    try testing.expectEqual(1, one.get("result").?.object.get("value").?.integer);
+}
+
+// The sessionId of the Target.attachedToTarget received for `target_id`.
+fn attachedSessionId(messages: []const []const u8, target_id: []const u8) ![]const u8 {
+    for (messages) |raw| {
+        if (std.mem.find(u8, raw, "Target.attachedToTarget") == null) continue;
+        if (std.mem.find(u8, raw, target_id) == null) continue;
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, raw, .{});
+        return value.object.get("params").?.object.get("sessionId").?.string;
+    }
+    return error.EventNotSent;
+}
+
 fn expectSessionEvent(messages: []const []const u8, method: []const u8, session_id: []const u8) !void {
     for (messages) |raw| {
         if (std.mem.find(u8, raw, method) != null and std.mem.find(u8, raw, session_id) != null) {
