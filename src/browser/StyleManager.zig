@@ -4410,6 +4410,20 @@ const BucketKey = union(enum) {
     tag: Tag,
     id: []const u8,
     class: []const u8,
+
+    fn rank(self: BucketKey) u2 {
+        return switch (self) {
+            .other => 0,
+            .tag => 1,
+            .class => 2,
+            .id => 3,
+        };
+    }
+
+    // On a tie the later one wins
+    fn orBetter(self: BucketKey, candidate: BucketKey) BucketKey {
+        return if (candidate.rank() >= self.rank()) candidate else self;
+    }
 };
 
 /// Where a group files a rule.
@@ -4504,7 +4518,10 @@ const KeyBits = struct {
 /// Optimization. A lone `:where(X)` matches exactly what X does. What changes
 /// is its priority (it has zero specificity). So we need to remain aware of
 /// the :where with respect to the priority, but we can unwrap so that it
-/// hopefully doesn't land in the .other list.
+/// hopefully doesn't land in the .other list. getBucketKey already has some
+/// optimization for :where(...), but unwrapping simple cases provides even
+/// greater optimization benefits, e.g. `:where(.gap > :not(:last-child))` is
+/// keyed by its parent.
 fn unwrapWhere(selector: Selector.Selector) Selector.Selector {
     if (selector.segments.len != 0 or selector.first.parts.len != 1) {
         return selector;
@@ -4531,19 +4548,9 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
 
     for (compound.parts) |part| {
         switch (part) {
-            .id => |id| {
-                best_key = .{ .id = id };
-            },
-            .class => |class| {
-                if (best_key != .id) {
-                    best_key = .{ .class = class };
-                }
-            },
-            .tag => |tag| {
-                if (best_key == .other) {
-                    best_key = .{ .tag = tag };
-                }
-            },
+            .id => |id| best_key = best_key.orBetter(.{ .id = id }),
+            .class => |class| best_key = best_key.orBetter(.{ .class = class }),
+            .tag => |tag| best_key = best_key.orBetter(.{ .tag = tag }),
             .tag_name => {
                 // Custom tag - put in other bucket (can't efficiently look up)
                 // Keep current best_key if we have something better
@@ -4553,6 +4560,15 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                 switch (pc) {
                     .hover, .active, .focus, .focus_within, .focus_visible, .visited, .target => {
                         return null; // Skip this selector entirely
+                    },
+                    // The element _has_ to match the argument, so we can key
+                    // this to whatever the argument's subject requires. A list
+                    // (`:where(.a, .b)`) doesn't have to match any, so that
+                    // always lands in .other
+                    .where, .is => |list| if (list.len == 1) {
+                        // An argument we'd skip (`:where(.a:hover)`) gives no key
+                        const inner = getBucketKey(list[0].rightmost()) orelse continue;
+                        best_key = best_key.orBetter(inner);
                     },
                     else => {},
                 }
@@ -7259,6 +7275,36 @@ test "StyleManager: computeSpecificity: :where() has zero specificity" {
         .segments = &.{},
     };
     try testing.expectEqual(0, computeSpecificity(selector));
+}
+
+test "StyleManager: placeSelector: keys inside a single-argument :where/:is" {
+    const arena = testing.arena_allocator;
+    const Case = struct { []const u8, Placement };
+    const cases = [_]Case{
+        .{ ":where(.a)", .{ .subject = .{ .class = "a" } } },
+        .{ ".btn :where(.label)", .{ .subject = .{ .class = "label" } } },
+        .{ ":where(.label):where([data-size=small])", .{ .subject = .{ .class = "label" } } },
+        .{ ".x :where(.a .b)", .{ .subject = .{ .class = "b" } } },
+        .{ ":is(div)", .{ .subject = .{ .tag = .div } } },
+        .{ "div:where(#main)", .{ .subject = .{ .id = "main" } } },
+        .{ "#main:where(.a)", .{ .subject = .{ .id = "main" } } },
+        .{ ":where(:where(.a))", .{ .subject = .{ .class = "a" } } },
+        .{ ":where(.a) > [x]", .{ .parent = .{ .class = "a" } } },
+        // unwrapped: the argument's own `>` gives the parent key
+        .{ ":where(.gap > :not(:last-child))", .{ .parent = .{ .class = "gap" } } },
+        .{ ":where([data-x])", .other },
+        .{ ":where(.a, .b)", .other },
+        .{ ":not(.a)", .other },
+        .{ ":where(.a:hover)", .other },
+    };
+    for (cases) |case| {
+        const selectors = try SelectorParser.parseList(arena, case[0]);
+        try testing.expectEqual(case[1], placeSelector(unwrapWhere(selectors[0])).?);
+    }
+
+    // a dynamic pseudo-class outside the argument still skips the rule
+    const hover = try SelectorParser.parseList(arena, ":where(.a):hover");
+    try testing.expectEqual(null, placeSelector(unwrapWhere(hover[0])));
 }
 
 test "StyleManager: computeSpecificity: :not() takes inner specificity" {
