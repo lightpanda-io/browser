@@ -367,7 +367,7 @@ fn navigate(cmd: *CDP.Command) !void {
 
     const opts: Frame.NavigateOpts = .{
         .reason = .address_bar,
-        .cdp_id = cmd.input.id,
+        .cdp = pendingCommand(cmd, target),
         .kind = .{ .push = null },
         .referer = if (params.referrer) |source| try referrer.compute(frame.call_arena, policy, source, encoded_url) else null,
         .referrer_policy = policy,
@@ -464,7 +464,7 @@ fn doReload(cmd: *CDP.Command) !void {
 
     try session.initiateRootNavigation(frame._frame_id, reload_url, .{
         .reason = .address_bar,
-        .cdp_id = cmd.input.id,
+        .cdp = pendingCommand(cmd, target),
         .kind = .reload,
         .force = if (params) |p| p.ignoreCache orelse false else false,
         .method = if (prev_nav) |p| p.method else .GET,
@@ -557,7 +557,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
 
     const opts = Frame.NavigateOpts{
         .reason = .history,
-        .cdp_id = cmd.input.id,
+        .cdp = pendingCommand(cmd, target),
         .kind = .{ .traverse = idx },
     };
 
@@ -568,10 +568,20 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     try session.initiateRootNavigation(frame._frame_id, url, opts);
 }
 
+// A navigation command, answered once the navigation commits or fails, on the
+// session it came through. The id is the browser context's copy, which
+// outlives the command. Callers have checked that the target is attached.
+fn pendingCommand(cmd: *const CDP.Command, target: *const CDP.Target) ?Frame.CdpCommand {
+    return .{
+        .id = cmd.input.id orelse return null,
+        .session_id = if (cmd.attachedSession()) |attached| attached.id else target.session_id.?,
+    };
+}
+
 pub fn frameNavigate(target: *CDP.Target, event: *const Notification.FrameNavigate) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
 
     // Child-frame navigations must not invalidate node IDs owned by other
     // frames. A pending root keeps its old page addressable until frameRemove;
@@ -586,7 +596,6 @@ pub fn frameNavigate(target: *CDP.Target, event: *const Notification.FrameNaviga
     const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.loader_id);
 
-    var cdp = target.cdp;
     const reason_: ?[]const u8 = switch (event.opts.reason) {
         .anchor => "anchorClick",
         .script, .history, .navigation => "scriptInitiated",
@@ -600,33 +609,33 @@ pub fn frameNavigate(target: *CDP.Target, event: *const Notification.FrameNaviga
     };
     if (reason_) |reason| {
         if (event.opts.reason != .initialFrameNavigation) {
-            try cdp.sendEvent("Page.frameScheduledNavigation", .{
+            try target.sendEvent("Page.frameScheduledNavigation", .{
                 .frameId = frame_id,
                 .delay = 0,
                 .reason = reason,
                 .url = event.url,
-            }, .{ .session_id = session_id });
+            });
         }
-        try cdp.sendEvent("Page.frameRequestedNavigation", .{
+        try target.sendEvent("Page.frameRequestedNavigation", .{
             .frameId = frame_id,
             .reason = reason,
             .url = event.url,
             .disposition = "currentTab",
-        }, .{ .session_id = session_id });
+        });
     }
 
     // frameStartedNavigating event
-    try cdp.sendEvent("Page.frameStartedNavigating", .{
+    try target.sendEvent("Page.frameStartedNavigating", .{
         .frameId = frame_id,
         .url = event.url,
         .loaderId = loader_id,
         .navigationType = "differentDocument",
-    }, .{ .session_id = session_id });
+    });
 
     // frameStartedLoading event
-    try cdp.sendEvent("Page.frameStartedLoading", .{
+    try target.sendEvent("Page.frameStartedLoading", .{
         .frameId = frame_id,
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn frameRemove(target: *CDP.Target) void {
@@ -679,18 +688,12 @@ pub fn frameCreated(target: *CDP.Target) !void {
 // an errorText (Chrome semantics: "present if and only if navigation has
 // failed") so the client isn't left waiting on the command id forever.
 pub fn frameNavigateFailed(target: *CDP.Target, event: *const Notification.FrameNavigateFailed) !void {
-    const session_id = target.session_id orelse return;
-
-    const input_id = event.opts.cdp_id orelse return;
-    try target.cdp.sendJSON(.{
-        .id = input_id,
-        .result = .{
-            .frameId = &id.toFrameId(event.frame_id),
-            .loaderId = &id.toLoaderId(event.loader_id),
-            .errorText = network.errorText(event.err),
-        },
-        .sessionId = session_id,
-    }, .{});
+    const command = event.opts.cdp orelse return;
+    try target.cdp.sendDeferredResult(command, .{
+        .frameId = &id.toFrameId(event.frame_id),
+        .loaderId = &id.toLoaderId(event.loader_id),
+        .errorText = network.errorText(event.err),
+    });
 }
 
 // Fired from Frame.deinit while the frame's JS is still alive.
@@ -701,67 +704,57 @@ pub fn frameDestroyed(target: *CDP.Target, frame: *const Frame) void {
 }
 
 pub fn frameChildFrameCreated(target: *CDP.Target, event: *const Notification.FrameChildFrameCreated) !void {
-    const session_id = target.session_id orelse return;
-
-    const cdp = target.cdp;
     const frame_id = &id.toFrameId(event.frame_id);
 
-    try cdp.sendEvent("Page.frameAttached", .{
+    try target.sendEvent("Page.frameAttached", .{
         .frameId = frame_id,
         .parentFrameId = &id.toFrameId(event.parent_id),
-    }, .{ .session_id = session_id });
+    });
 
     if (target.page_life_cycle_events) {
-        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+        try target.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
             .frameId = frame_id,
             .loaderId = &id.toLoaderId(event.loader_id),
             .timestamp = event.timestamp,
-        }, .{ .session_id = session_id });
+        });
     }
 }
 
 pub fn frameChildFrameDetached(target: *CDP.Target, event: *const Notification.FrameChildFrameDetached) !void {
-    const session_id = target.session_id orelse return;
-    try target.cdp.sendEvent("Page.frameDetached", .{
+    try target.sendEvent("Page.frameDetached", .{
         .frameId = &id.toFrameId(event.frame_id),
         .reason = "remove",
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notification.FrameNavigated) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
 
     const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.loader_id);
-
-    var cdp = target.cdp;
 
     // Drivers are sensitive to the order of events. Some more than others.
     // The result for the Page.navigate seems like it _must_ come after
     // the frameStartedLoading, but before any lifecycleEvent. So we
     // unfortunately have to put the input_id ito the NavigateOpts which gets
     // passed back into the notification.
-    if (event.opts.cdp_id) |input_id| {
-        try cdp.sendJSON(.{
-            .id = input_id,
-            .result = .{
-                .frameId = frame_id,
-                .loaderId = loader_id,
-            },
-            .sessionId = session_id,
-        }, .{});
+    if (event.opts.cdp) |command| {
+        try target.cdp.sendDeferredResult(command, .{
+            .frameId = frame_id,
+            .loaderId = loader_id,
+        });
     }
 
     if (target.page_life_cycle_events) {
-        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+        try target.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
             .frameId = frame_id,
             .loaderId = loader_id,
             .timestamp = event.timestamp,
-        }, .{ .session_id = session_id });
+        });
     }
 
     const reason_: ?[]const u8 = switch (event.opts.reason) {
@@ -777,9 +770,9 @@ pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notif
     };
 
     if (reason_ != null) {
-        try cdp.sendEvent("Page.frameClearedScheduledNavigation", .{
+        try target.sendEvent("Page.frameClearedScheduledNavigation", .{
             .frameId = frame_id,
-        }, .{ .session_id = session_id });
+        });
     }
 
     const root_frame = target.mainFrame() orelse return error.FrameNotLoaded;
@@ -795,7 +788,7 @@ pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notif
     // context, causing Puppeteer's frame.evaluate()/frame.content() to hang
     // forever.
     if (is_root_frame) {
-        try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+        try target.sendEvent("Runtime.executionContextsCleared", null);
     }
 
     // Look up the actual navigated frame. For main frame navigations this is
@@ -806,10 +799,10 @@ pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notif
     const frame = target.session.findFrameByFrameId(event.frame_id) orelse return error.FrameNotFound;
 
     // frameNavigated event
-    try cdp.sendEvent("Page.frameNavigated", .{
+    try target.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
         .frame = FrameWriter{ .target = target, .frame = frame },
-    }, .{ .session_id = session_id });
+    });
     try target_domain.sendTargetInfoChanged(target, event.frame_id);
 
     {
@@ -894,11 +887,11 @@ pub fn frameNavigated(arena: Allocator, target: *CDP.Target, event: *const Notif
     // The DOM.documentUpdated event must be send after the frameNavigated one.
     // chromedp client expects to receive the events is this order.
     // see https://github.com/chromedp/chromedp/issues/1558
-    try cdp.sendEvent("DOM.documentUpdated", null, .{ .session_id = session_id });
+    try target.sendEvent("DOM.documentUpdated", null);
 }
 
 pub fn frameNavigatedWithinDocument(target: *CDP.Target, event: *const Notification.FrameNavigatedWithinDocument) !void {
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
     const frame_id = &id.toFrameId(event.frame_id);
 
     // Same-document navigation (pushState / replaceState / fragment). The
@@ -906,65 +899,54 @@ pub fn frameNavigatedWithinDocument(target: *CDP.Target, event: *const Notificat
     // frameNavigated — we deliberately do NOT send Runtime.executionContextsCleared
     // or DOM.documentUpdated; doing so would invalidate the client's live
     // execution context ids and break Puppeteer's frame.evaluate().
-    try target.cdp.sendEvent("Page.navigatedWithinDocument", .{
+    try target.sendEvent("Page.navigatedWithinDocument", .{
         .frameId = frame_id,
         .url = event.url,
         .navigationType = @tagName(event.navigation_type),
-    }, .{ .session_id = session_id });
+    });
     try target_domain.sendTargetInfoChanged(target, event.frame_id);
 }
 
 pub fn frameDOMContentLoaded(target: *CDP.Target, event: *const Notification.FrameDOMContentLoaded) !void {
-    const session_id = target.session_id orelse return;
     const timestamp = event.timestamp;
-    var cdp = target.cdp;
 
-    try cdp.sendEvent(
-        "Page.domContentEventFired",
-        .{ .timestamp = timestamp },
-        .{ .session_id = session_id },
-    );
+    try target.sendEvent("Page.domContentEventFired", .{ .timestamp = timestamp });
 
     if (target.page_life_cycle_events) {
         const frame_id = &id.toFrameId(event.frame_id);
         const loader_id = &id.toLoaderId(event.loader_id);
-        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+        try target.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "DOMContentLoaded",
             .frameId = frame_id,
             .loaderId = loader_id,
-        }, .{ .session_id = session_id });
+        });
     }
 }
 
 pub fn frameLoaded(target: *CDP.Target, event: *const Notification.FrameLoaded) !void {
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
     const timestamp = event.timestamp;
-    var cdp = target.cdp;
 
     const frame_id = &id.toFrameId(event.frame_id);
 
-    try cdp.sendEvent(
-        "Page.loadEventFired",
-        .{ .timestamp = timestamp },
-        .{ .session_id = session_id },
-    );
+    try target.sendEvent("Page.loadEventFired", .{ .timestamp = timestamp });
     // The title is usually known by now, not at navigation.
     try target_domain.sendTargetInfoChanged(target, event.frame_id);
 
     if (target.page_life_cycle_events) {
         const loader_id = &id.toLoaderId(event.loader_id);
-        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+        try target.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "load",
             .frameId = frame_id,
             .loaderId = loader_id,
-        }, .{ .session_id = session_id });
+        });
     }
 
-    return cdp.sendEvent("Page.frameStoppedLoading", .{
+    return target.sendEvent("Page.frameStoppedLoading", .{
         .frameId = frame_id,
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn frameNetworkIdle(target: *CDP.Target, event: *const Notification.FrameNetworkIdle) !void {
@@ -982,16 +964,12 @@ pub fn frameSettled(target: *CDP.Target, event: *const Notification.FrameSettled
 }
 
 fn sendPageLifecycle(target: *CDP.Target, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
-    // detachTarget could be called, in which case, we still have a frame doing
-    // things, but no session.
-    const session_id = target.session_id orelse return;
-
-    return target.cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+    return target.sendEvent("Page.lifecycleEvent", LifecycleEvent{
         .name = name,
         .frameId = frame_id,
         .loaderId = loader_id,
         .timestamp = timestamp,
-    }, .{ .session_id = session_id });
+    });
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-handleJavaScriptDialog
@@ -1021,16 +999,13 @@ pub fn javascriptDialogOpening(target: *CDP.Target, event: *const Notification.J
         target.pending_dialog_response = null;
     }
 
-    const session_id = target.session_id orelse return;
-    var cdp = target.cdp;
-
-    try cdp.sendEvent("Page.javascriptDialogOpening", .{
+    try target.sendEvent("Page.javascriptDialogOpening", .{
         .url = event.url,
         .message = event.message,
         .type = event.dialog_type,
         .hasBrowserHandler = false,
         .defaultPrompt = "",
-    }, .{ .session_id = session_id });
+    });
 }
 
 const FrameWriter = struct {

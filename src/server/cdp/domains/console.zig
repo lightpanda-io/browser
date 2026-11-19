@@ -59,7 +59,7 @@ const ConsoleMessage = struct {
 };
 
 pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notification.ConsoleMessage) !void {
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
 
     // format values
     var aw: std.Io.Writer.Allocating = .init(arena);
@@ -69,9 +69,9 @@ pub fn consoleMessage(arena: Allocator, target: *CDP.Target, event: *const Notif
         try v.format(w);
     }
 
-    return target.cdp.sendEvent("Console.messageAdded", ConsoleMessage{
+    return target.sendEvent("Console.messageAdded", ConsoleMessage{
         .source = @tagName(event.source),
         .level = @tagName(event.type),
         .text = aw.written(),
-    }, .{ .session_id = session_id });
+    });
 }

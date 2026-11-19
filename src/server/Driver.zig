@@ -126,14 +126,10 @@ pub fn onLink(self: *const Driver, l: *Link) void {
 // Worker Thread. A CDP connection joining this worker's browser.
 pub fn onGuest(self: *const Driver, guest: Inbox.Message.Guest) void {
     switch (self.impl) {
-        .cdp => |cdp| cdp.addGuest(guest.link, guest.target_id) catch |err| {
-            log.err(self.scope, "guest", .{ .err = err });
-        },
-        .bidi => {
-            // the loop only hands guests to CDP workers
-            log.err(self.scope, "unexpected guest", .{});
-            guest.link.destroy();
-        },
+        .cdp => |cdp| cdp.addGuest(guest.client, guest.target_id),
+        // the loop only hands guests to CDP workers, and it is still reading
+        // this one's link, which is not ours to destroy
+        .bidi => lp.assert(false, "Driver.onGuest bidi", .{}),
     }
 }
 
@@ -148,10 +144,7 @@ pub fn onGuestPing(_: *const Driver, ping: Inbox.Message.GuestPing) void {
 pub fn onGuestGone(self: *const Driver, gone: Inbox.Message.GuestGone) void {
     switch (self.impl) {
         .cdp => |cdp| cdp.removeGuest(gone.link, gone.reply_close),
-        .bidi => {
-            // onGuest already destroyed it
-            log.err(self.scope, "unexpected guest", .{});
-        },
+        .bidi => lp.assert(false, "Driver.onGuestGone bidi", .{}),
     }
 }
 

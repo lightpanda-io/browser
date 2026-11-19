@@ -43,10 +43,10 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 // The Log domain is per session, as in Chrome: entries go to the sessions
 // that enabled it. Without a page target there is nothing to report.
 fn attachedSession(cmd: *CDP.Command) ?*CDP.BrowserContext.AttachedSession {
+    if (cmd.attachedSession()) |attached| return attached;
     const bc = cmd.browser_context orelse return null;
     const target = cmd.target() catch return null;
-    const session_id = cmd.routing_session_id orelse target.session_id orelse return null;
-    return bc.attached_sessions.get(session_id);
+    return bc.attached_sessions.get(target.session_id orelse return null);
 }
 
 fn enable(cmd: *CDP.Command) !void {

@@ -103,7 +103,8 @@ pub fn sendTargetInfoChanged(target: *const CDP.Target, frame_id: u32) !void {
         info = targetInfo(target) orelse return;
         pages.update(pageOf(info.?)) catch |err| log.err(.cdp, "publish pages", .{ .err = err });
     }
-    for (target.cdp.clients.items) |client| {
+    var it = target.cdp.allClients();
+    while (it.next()) |client| {
         if (client.target_discover == false) continue;
         if (info == null) info = targetInfo(target) orelse return;
         try CDP.sendEventTo(client, "Target.targetInfoChanged", .{ .targetInfo = info.? });
@@ -318,8 +319,7 @@ fn attachToTarget(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const target = try resolveTarget(bc, params.targetId);
 
-    // The first attach becomes the page's primary session, which all
-    // Page/Network/... events are emitted to. Later attaches — e.g.
+    // The first attach becomes the page's primary session. Later attaches — e.g.
     // Playwright's browserContext.newCDPSession(page), sent through its
     // browser session while the page session is live — get a distinct
     // auxiliary session so they don't collide with the primary one.

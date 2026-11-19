@@ -188,7 +188,7 @@ fn finishSearch(cmd: *CDP.Command, target: *CDP.Target, nodes: []const *DOMNode)
 fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
     const arena = cmd.arena;
     const target = try cmd.target();
-    const session_id = target.session_id orelse return error.SessionIdNotLoaded;
+    if (target.session_id == null) return error.SessionIdNotLoaded;
 
     var parents: std.ArrayList(*NodeRegistry.Node) = .empty;
     for (dom_nodes) |dom_node| {
@@ -230,11 +230,9 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
         // Retrieve the parent from the registry.
         const parent_node = try target.node_registry.register(dom_parent);
 
-        try cmd.sendEvent("DOM.setChildNodes", .{
+        try target.sendEvent("DOM.setChildNodes", .{
             .parentId = parent_node.id,
             .nodes = .{try target.nodeWriter(node, .{})},
-        }, .{
-            .session_id = session_id,
         });
     }
 }
@@ -623,16 +621,14 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
 
     if (params.depth == 0) return error.InvalidParams;
     const target = try cmd.target();
-    const session_id = target.session_id orelse return error.SessionIdNotLoaded;
+    if (target.session_id == null) return error.SessionIdNotLoaded;
     const node = target.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return error.InvalidNode;
     };
 
-    try cmd.sendEvent("DOM.setChildNodes", .{
+    try target.sendEvent("DOM.setChildNodes", .{
         .parentId = node.id,
         .nodes = try target.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true, .pierce = params.pierce }),
-    }, .{
-        .session_id = session_id,
     });
 
     return cmd.sendResult(null, .{});

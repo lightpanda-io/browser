@@ -479,7 +479,7 @@ pub fn httpRequestFail(target: *CDP.Target, msg: *const Notification.RequestFail
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, target.session_id will be cleared
     // already, and we can skip sending these messages to the client.
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
 
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a frame.
@@ -489,7 +489,7 @@ pub fn httpRequestFail(target: *CDP.Target, msg: *const Notification.RequestFail
     const canceled = msg.err == error.TransferCanceled;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try target.cdp.sendEvent("Network.loadingFailed", .{
+    try target.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
@@ -497,13 +497,13 @@ pub fn httpRequestFail(target: *CDP.Target, msg: *const Notification.RequestFail
         .errorText = errorText(msg.err),
         .canceled = canceled,
         .blockedReason = msg.blocked_reason,
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn httpRequestStart(arena: Allocator, target: *CDP.Target, msg: *const Notification.RequestStart) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
 
     const transfer = msg.transfer;
     const req = &transfer.req;
@@ -518,7 +518,7 @@ pub fn httpRequestStart(arena: Allocator, target: *CDP.Target, msg: *const Notif
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
-    try target.cdp.sendEvent("Network.requestWillBeSent", .{
+    try target.sendEvent("Network.requestWillBeSent", .{
         .frameId = &id.toFrameId(frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
@@ -534,19 +534,19 @@ pub fn httpRequestStart(arena: Allocator, target: *CDP.Target, msg: *const Notif
         .hasUserGesture = false,
         .timestamp = lp.datetime.timestamp(.boot),
         .wallTime = lp.datetime.timestamp(.real),
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn httpResponseHeaderDone(arena: Allocator, target: *CDP.Target, msg: *const Notification.ResponseHeaderDone) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
-    const session_id = target.session_id orelse return;
+    if (target.session_id == null) return;
 
     const transfer = msg.transfer;
     const req = &transfer.req;
 
     // We're missing a bunch of fields, but, for now, this seems like enough
-    try target.cdp.sendEvent("Network.responseReceived", .{
+    try target.sendEvent("Network.responseReceived", .{
         .frameId = &id.toFrameId(req.document_frame_id orelse req.frame_id),
         .requestId = &id.toRequestId(transfer),
         .loaderId = &id.toLoaderId(req.loader_id),
@@ -554,27 +554,23 @@ pub fn httpResponseHeaderDone(arena: Allocator, target: *CDP.Target, msg: *const
         .type = req.resource_type.string(),
         .response = ResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn httpRequestDone(target: *CDP.Target, msg: *const Notification.RequestDone) !void {
-    // detachTarget could be called, in which case, we still have a frame doing
-    // things, but no session.
-    const session_id = target.session_id orelse return;
-    try target.cdp.sendEvent("Network.loadingFinished", .{
+    try target.sendEvent("Network.loadingFinished", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
         .encodedDataLength = msg.encoded_data_length,
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub fn httpServedFromCache(target: *CDP.Target, msg: *const Notification.RequestServedFromCache) !void {
-    const session_id = target.session_id orelse return;
     const transfer = msg.transfer;
 
-    try target.cdp.sendEvent("Network.requestServedFromCache", .{
+    try target.sendEvent("Network.requestServedFromCache", .{
         .requestId = &id.toRequestId(transfer),
-    }, .{ .session_id = session_id });
+    });
 }
 
 pub const RequestWriter = struct {

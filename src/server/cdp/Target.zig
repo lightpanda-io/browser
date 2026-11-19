@@ -609,6 +609,11 @@ pub fn webmcpDisable(self: *Target) void {
     notification.unregister(.model_context_tool_removed, self);
 }
 
+/// An event of this page, sent to every session attached to it.
+pub fn sendEvent(self: *const Target, method: []const u8, p: anytype) !void {
+    return self.bc.sendTargetEvent(self, method, p);
+}
+
 /// The first session attached to the target.
 pub fn attachPrimarySession(self: *Target, session_id: []const u8) !*BrowserContext.AttachedSession {
     lp.assert(self.session_id == null, "CDP.Target.attachPrimarySession already attached", .{});

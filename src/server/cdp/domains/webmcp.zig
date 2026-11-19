@@ -70,7 +70,7 @@ fn enable(cmd: *CDP.Command) !void {
                 .frame_id = id.toFrameId(frame._frame_id),
                 .tools = tools,
             };
-            try target.cdp.sendEvent("WebMCP.toolsAdded", .{ .tools = writer }, .{ .session_id = target.session_id });
+            try target.sendEvent("WebMCP.toolsAdded", .{ .tools = writer });
         }
     }
 
@@ -119,13 +119,12 @@ fn invokeTool(cmd: *CDP.Command) !void {
 
     // Send toolInvoked event before we run the JS, so the client sees
     // them in order even if the tool resolves synchronously.
-    const session_id = target.session_id;
-    try cmd.sendEvent("WebMCP.toolInvoked", .{
+    try target.sendEvent("WebMCP.toolInvoked", .{
         .toolName = tool.name,
         .frameId = id.toFrameId(frame_id),
         .invocationId = &inv_id_str,
         .input = input_str,
-    }, .{ .session_id = session_id });
+    });
 
     // Enter the frame's V8 context to invoke the stored callback.
     var ls: js.Local.Scope = undefined;
@@ -175,10 +174,10 @@ fn cancelInvocation(cmd: *CDP.Command) !void {
     const entry = bc.webmcp_invocations.fetchRemove(inv_id) orelse return error.NotFound;
     const invocation = entry.value;
 
-    try cmd.cdp.sendEvent("WebMCP.toolResponded", .{
+    try target.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(inv_id),
         .status = "Canceled",
-    }, .{ .session_id = target.session_id });
+    });
 
     if (target.session.findFrameByLoaderId(invocation.loader_id)) |frame| {
         invocation.signal.abort(null, &frame.js.execution) catch |err| {
@@ -203,10 +202,10 @@ pub fn cancelAllPending(target: *CDP.Target) void {
         if (invocation.root_frame_id != target.frame_id) {
             continue;
         }
-        target.cdp.sendEvent("WebMCP.toolResponded", .{
+        target.sendEvent("WebMCP.toolResponded", .{
             .invocationId = &id.toInvocationId(invocation.id),
             .status = "Canceled",
-        }, .{ .session_id = target.session_id }) catch |err| {
+        }) catch |err| {
             log.debug(.cdp, "WebMCP cancelAllPending", .{ .err = err });
         };
         bc.webmcp_invocations.removeByPtr(entry.key_ptr);
@@ -240,11 +239,11 @@ fn respondCompleted(
     }
 
     const target = bc.findTargetByRootFrameId(invocation.root_frame_id) orelse return;
-    try bc.cdp.sendEvent("WebMCP.toolResponded", .{
+    try target.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Completed",
         .output = value,
-    }, .{ .session_id = target.session_id });
+    });
 }
 
 fn respondError(
@@ -257,11 +256,11 @@ fn respondError(
     }
 
     const target = bc.findTargetByRootFrameId(invocation.root_frame_id) orelse return;
-    try bc.cdp.sendEvent("WebMCP.toolResponded", .{
+    try target.sendEvent("WebMCP.toolResponded", .{
         .invocationId = &id.toInvocationId(invocation.id),
         .status = "Error",
         .errorText = err_text,
-    }, .{ .session_id = target.session_id });
+    });
 }
 
 pub fn onToolAdded(
@@ -272,9 +271,9 @@ pub fn onToolAdded(
         .frame_id = id.toFrameId(event.exec.frameId()),
         .tools = &.{event.tool},
     };
-    try target.cdp.sendEvent("WebMCP.toolsAdded", .{
+    try target.sendEvent("WebMCP.toolsAdded", .{
         .tools = writer,
-    }, .{ .session_id = target.session_id });
+    });
 }
 
 pub fn onToolRemoved(
@@ -282,11 +281,11 @@ pub fn onToolRemoved(
     event: *const Notification.ModelContextToolEvent,
 ) !void {
     const frame_id = event.exec.frameId();
-    try target.cdp.sendEvent("WebMCP.toolsRemoved", .{
+    try target.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
             .{ .name = event.tool.name, .frameId = id.toFrameId(frame_id) },
         },
-    }, .{ .session_id = target.session_id });
+    });
 }
 
 const testing = @import("../testing.zig");

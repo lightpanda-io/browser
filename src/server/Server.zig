@@ -621,9 +621,20 @@ pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection, target_id:
     link.guest = true;
     guest.* = .{ .worker = worker, .link = link };
 
+    // The worker's side of the guest. Allocated here, before the loop reads
+    // the link, so that the worker can't fail to adopt it: from then on the
+    // link is only destroyed once the loop let go of it.
+    const client = self.app.allocator.create(CDP.Client) catch |err| {
+        log.err(.serve, "guest client create", .{ .err = err });
+        link.destroy();
+        self.app.allocator.destroy(guest);
+        return;
+    };
+    client.* = .{ .link = link };
+
     self.io_engine.monitorGuest(guest) catch |err| {
         log.err(.serve, "guest monitor", .{ .err = err });
-        link.destroy();
+        client.destroy();
         self.app.allocator.destroy(guest);
         return;
     };
@@ -631,7 +642,7 @@ pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection, target_id:
     self.guest_count += 1;
 
     // precedes anything read off the socket (the loop reads it later)
-    self.push(worker, .{ .guest = .{ .link = link, .target_id = target_id } });
+    self.push(worker, .{ .guest = .{ .client = client, .target_id = target_id } });
 }
 
 fn processGuestEvent(self: *Server, guest: *Guest, rw: IOEvent.ReadWrite) void {
@@ -3385,6 +3396,24 @@ test "server: cdp join a browser" {
         try testing.expect(std.mem.find(u8, raw, session_b) == null);
     }
 
+    {
+        // A navigation is answered on the session that asked for it, and
+        // every session on the page hears about it.
+        var seen_by_b: std.ArrayList([]const u8) = .empty;
+        const navigated = try cdpCommand(&b, 7001, "Page.navigate", "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}", session_b, &seen_by_b);
+        try testing.expectEqual(target_id, navigated.get("frameId").?.string);
+        _ = try cdpCommand(&b, 7002, "Runtime.evaluate", "{\"expression\":\"1\"}", session_b, &seen_by_b);
+        try expectSessionEvent(seen_by_b.items, "Page.frameNavigated", session_b);
+
+        var after: std.ArrayList([]const u8) = .empty;
+        _ = try cdpCommand(&a, 7, "Runtime.evaluate", "{\"expression\":\"window.shared = 42\"}", session_a, &after);
+        try expectSessionEvent(after.items, "Page.frameNavigated", session_a);
+        for (after.items) |raw| {
+            try testing.expect(std.mem.find(u8, raw, "\"id\":7001") == null);
+            try testing.expect(std.mem.find(u8, raw, session_b) == null);
+        }
+    }
+
     // The guest leaves; the browser carries on.
     try sys_net.writeAll(b.socket, &.{ 136, 128, 0, 0, 0, 0 });
     {
@@ -3441,6 +3470,16 @@ test "server: cdp join a browser" {
             break;
         }
     }
+}
+
+fn expectSessionEvent(messages: []const []const u8, method: []const u8, session_id: []const u8) !void {
+    for (messages) |raw| {
+        if (std.mem.find(u8, raw, method) != null and std.mem.find(u8, raw, session_id) != null) {
+            return;
+        }
+    }
+    std.debug.print("no {s} on session {s}\n", .{ method, session_id });
+    return error.EventNotSent;
 }
 
 // Sends a CDP command and returns its result. The messages read before the

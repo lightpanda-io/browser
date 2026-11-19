@@ -66,10 +66,10 @@ allocator: Allocator,
 // goes, the worker ends.
 primary: Client,
 
-// Every connection on this browser: the primary first, then the guests that
-// joined it (/devtools/browser/{id} or /devtools/page/{id}). Each has its own
-// sessions and target settings; see Client.
-clients: std.ArrayList(*Client) = .empty,
+// Every connection on this browser (Client.node): the primary first, then the
+// guests that joined it (/devtools/browser/{id} or /devtools/page/{id}). Each
+// has its own sessions and target settings; see Client.
+clients: std.DoublyLinkedList = .{},
 
 // The client whose message is being dispatched. Responses go back to it, as
 // do events that carry no sessionId. null outside a dispatch.
@@ -136,8 +136,7 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox, opts: 
     try self.link.init(app, socket, .cdp, inbox);
     errdefer self.link.deinit();
 
-    try self.clients.append(allocator, &self.primary);
-    errdefer self.clients.deinit(allocator);
+    self.clients.append(&self.primary.node);
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true }, .frame_ids = opts.frame_ids });
 }
@@ -153,13 +152,12 @@ pub fn deinit(self: *CDP) void {
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
     self.streams.deinit();
-    for (self.clients.items[1..]) |guest| {
+    var it = self.guests();
+    while (it.next()) |guest| {
         // the browser they joined is gone
         guest.link.send(&WS.CLOSE_GOING_AWAY) catch {};
-        guest.link.destroy();
-        self.allocator.destroy(guest);
+        guest.destroy();
     }
-    self.clients.deinit(self.allocator);
     self.link.deinit();
 }
 
@@ -185,7 +183,35 @@ pub const Client = struct {
     // carry no sessionId, and go through this session, attached when it
     // joined. null for every other client, and once the page is gone.
     page_session: ?[]const u8 = null,
+
+    // threads CDP.clients
+    node: std.DoublyLinkedList.Node = .{},
+
+    /// A guest and its link, both allocated by the server loop (attachGuest).
+    pub fn destroy(self: *Client) void {
+        const allocator = self.link.allocator;
+        self.link.destroy();
+        allocator.destroy(self);
+    }
+
+    pub const Iterator = struct {
+        node: ?*std.DoublyLinkedList.Node,
+
+        pub fn next(self: *Iterator) ?*Client {
+            const node = self.node orelse return null;
+            self.node = node.next;
+            return @fieldParentPtr("node", node);
+        }
+    };
 };
+
+pub fn allClients(self: *const CDP) Client.Iterator {
+    return .{ .node = self.clients.first };
+}
+
+fn guests(self: *const CDP) Client.Iterator {
+    return .{ .node = self.primary.node.next };
+}
 
 /// The client a command or an event without a sessionId belongs to.
 pub fn currentClient(self: *CDP) *Client {
@@ -195,7 +221,8 @@ pub fn currentClient(self: *CDP) *Client {
 // The client a message came in on; null (internal messages) is the primary.
 fn findClient(self: *CDP, link: ?*Link) *Client {
     const l = link orelse return &self.primary;
-    for (self.clients.items) |client| {
+    var it = self.allClients();
+    while (it.next()) |client| {
         if (client.link == l) {
             return client;
         }
@@ -204,7 +231,8 @@ fn findClient(self: *CDP, link: ?*Link) *Client {
 }
 
 fn clientForBrowserSession(self: *const CDP, session_id: []const u8) ?*Client {
-    for (self.clients.items) |client| {
+    var it = self.allClients();
+    while (it.next()) |client| {
         const browser_session_id = client.browser_session_id orelse continue;
         if (std.mem.eql(u8, browser_session_id, session_id)) {
             return client;
@@ -214,21 +242,20 @@ fn clientForBrowserSession(self: *const CDP, session_id: []const u8) ?*Client {
 }
 
 /// Worker thread. A connection joined the running browser, or one of its pages
-/// (`target_id`).
-pub fn addGuest(self: *CDP, link: *Link, target_id: ?[14]u8) !void {
-    errdefer link.destroy();
-    const guest = try self.allocator.create(Client);
-    errdefer self.allocator.destroy(guest);
-    guest.* = .{ .link = link };
-    try self.clients.append(self.allocator, guest);
-    log.info(.cdp, "guest connected", .{ .guests = self.clients.items.len - 1 });
+/// (`target_id`). The server loop is reading the guest's link, so adopting it
+/// can't fail: it is only destroyed once the loop let go of it (removeGuest),
+/// or of the whole worker (deinit).
+pub fn addGuest(self: *CDP, guest: *Client, target_id: ?[14]u8) void {
+    self.clients.append(&guest.node);
+    log.info(.cdp, "guest connected", .{});
 
     const tid = target_id orelse return;
     self.attachPageGuest(guest, &tid) catch |err| {
-        // the page closed since the loop looked it up: like Chrome's socket for
-        // a closed page, this one closes (and leaves on its close reply)
+        // the page closed since the loop looked it up (or we're out of
+        // memory): like Chrome's socket for a closed page, this one closes
+        // (and leaves on its close reply)
         log.info(.cdp, "page guest", .{ .err = err });
-        link.send(&WS.CLOSE_GOING_AWAY) catch {};
+        guest.link.send(&WS.CLOSE_GOING_AWAY) catch {};
     };
 }
 
@@ -245,13 +272,13 @@ fn attachPageGuest(self: *CDP, guest: *Client, target_id: []const u8) !void {
 /// it sent a close frame we owe an answer to). Its sessions are detached and
 /// the link destroyed; the browser and the other clients carry on.
 pub fn removeGuest(self: *CDP, link: *Link, reply_close: bool) void {
-    const index = for (self.clients.items[1..], 1..) |guest, i| {
-        if (guest.link == link) break i;
+    var it = self.guests();
+    const guest = while (it.next()) |guest| {
+        if (guest.link == link) break guest;
     } else {
-        // never adopted: the loop dropped it before we saw it
-        return;
+        lp.assert(false, "CDP.removeGuest unknown link", .{});
     };
-    const guest = self.clients.orderedRemove(index);
+    self.clients.remove(&guest.node);
     if (self.browser_context) |*bc| {
         bc.detachClientSessions(guest);
     }
@@ -261,9 +288,8 @@ pub fn removeGuest(self: *CDP, link: *Link, reply_close: bool) void {
             log.debug(.cdp, "guest close reply", .{ .err = err });
         };
     }
-    link.destroy();
-    self.allocator.destroy(guest);
-    log.info(.cdp, "guest disconnected", .{ .guests = self.clients.items.len - 1 });
+    guest.destroy();
+    log.info(.cdp, "guest disconnected", .{});
 }
 
 // The link a message with this sessionId goes out on: the client that owns
@@ -538,6 +564,19 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
         .method = method,
         .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
         .sessionId = opts.session_id,
+    }, .{});
+}
+
+/// Answers a command after its dispatch returned (Page.navigate, whose
+/// result waits for the navigation), on the session it was sent through.
+/// Dropped when that session has detached since.
+pub fn sendDeferredResult(self: *CDP, command: Frame.CdpCommand, result: anytype) !void {
+    const bc = &(self.browser_context orelse return);
+    const attached = bc.attached_sessions.get(command.session_id) orelse return;
+    return sendJSONTo(attached.client.link, .{
+        .id = command.id,
+        .result = result,
+        .sessionId = attached.stampedId(),
     }, .{});
 }
 
@@ -969,6 +1008,38 @@ pub const BrowserContext = struct {
         target.session_id = null;
     }
 
+    /// An event of `target`'s page, for every session attached to it: each
+    /// gets it under its own sessionId, on its own connection.
+    pub fn sendTargetEvent(self: *BrowserContext, target: *const Target, method: []const u8, p: anytype) !void {
+        const arena = self.acquireNotificationArena();
+        defer self.releaseNotificationArena();
+
+        // Written once, on the first session: some params are writers that
+        // shouldn't run twice. The first 10 bytes are the websocket header's.
+        var buf: std.ArrayList(u8) = .empty;
+        var unstamped: usize = 0;
+        for (self.attached_sessions.values()) |attached| {
+            if (attached.target != target) continue;
+            if (unstamped == 0) {
+                var aw: std.Io.Writer.Allocating = try .initCapacity(arena, 512);
+                try aw.writer.writeAll(&@as([10]u8, @splat(0)));
+                try std.json.Stringify.value(.{
+                    .method = method,
+                    .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
+                }, .{ .emit_null_optional_fields = false }, &aw.writer);
+                buf = aw.toArrayList();
+                unstamped = buf.items.len;
+            }
+            buf.shrinkRetainingCapacity(unstamped);
+            if (attached.stampedId()) |session_id| {
+                // over the closing brace
+                buf.items.len -= 1;
+                try buf.print(arena, ",\"sessionId\":\"{s}\"}}", .{session_id});
+            }
+            try attached.client.link.sendJSONRaw(buf);
+        }
+    }
+
     /// Detaches every session `client` attached, when it leaves.
     pub fn detachClientSessions(self: *BrowserContext, client: *const Client) void {
         var i: usize = 0;
@@ -1241,12 +1312,16 @@ pub const Command = struct {
     // no session.
     pub fn target(self: *const Command) !*Target {
         const bc = self.browser_context orelse return error.BrowserContextNotLoaded;
-        if (self.routing_session_id) |session_id| {
-            if (bc.attached_sessions.get(session_id)) |attached| {
-                return attached.target;
-            }
+        if (self.attachedSession()) |attached| {
+            return attached.target;
         }
         return if (bc.targets.items.len > 0) bc.targets.items[0] else error.TargetNotLoaded;
+    }
+
+    /// The page session the command was sent through, if any.
+    pub fn attachedSession(self: *const Command) ?*BrowserContext.AttachedSession {
+        const bc = self.browser_context orelse return null;
+        return bc.attached_sessions.get(self.routing_session_id orelse return null);
     }
 
     pub fn createBrowserContext(self: *Command) !*BrowserContext {

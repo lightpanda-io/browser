@@ -205,7 +205,8 @@ pub const Message = struct {
     };
 
     pub const Guest = struct {
-        link: *Link,
+        // owns its link; the consumer adopts it
+        client: *CDP.Client,
         // set when the connection joined one page (/devtools/page/{id})
         target_id: ?[14]u8,
     };
@@ -231,7 +232,7 @@ pub const Message = struct {
             // an adopted guest is the consumer's to destroy (and its .guest
             // came first, so an unadopted one went with that message)
             .link => |link| link.destroy(),
-            .guest => |guest| guest.link.destroy(),
+            .guest => |guest| guest.client.destroy(),
             else => {},
         }
         self.deinit();

@@ -878,7 +878,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
             .opts = .{
-                .cdp_id = opts.cdp_id,
+                .cdp = opts.cdp,
                 .reason = opts.reason,
                 .method = opts.method,
             },
@@ -917,7 +917,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self.origin = try URL.getOrigin(self.page_arena, self.url);
 
     self._navigated_options = .{
-        .cdp_id = opts.cdp_id,
+        .cdp = opts.cdp,
         .reason = opts.reason,
         .method = opts.method,
         .body = if (opts.body) |b| try self.page_arena.dupe(u8, b) else null,
@@ -2174,7 +2174,7 @@ fn errorPageNavigated(self: *Frame) !void {
 
     var opts = self._navigated_options orelse return;
     // frame_navigate_failed already answered the Page.navigate command.
-    opts.cdp_id = null;
+    opts.cdp = null;
     self._session.notification.dispatch(.frame_navigated, &.{
         .opts = opts,
         .url = self.url,
@@ -3936,8 +3936,15 @@ const NavigateReason = enum {
     initialFrameNavigation,
 };
 
+// The CDP command (Page.navigate, ...) a navigation answers once it commits
+// or fails, and the session it came through.
+pub const CdpCommand = struct {
+    id: i64,
+    session_id: []const u8,
+};
+
 pub const NavigateOpts = struct {
-    cdp_id: ?i64 = null,
+    cdp: ?CdpCommand = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
@@ -3968,7 +3975,7 @@ pub const NavigateOpts = struct {
 };
 
 pub const NavigatedOpts = struct {
-    cdp_id: ?i64 = null,
+    cdp: ?CdpCommand = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
     // Retained on the frame's arena so Page.reload can replay the prior
