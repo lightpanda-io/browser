@@ -33,8 +33,12 @@ const reflect = @import("../reflect.zig");
 const Factory = @import("../Factory.zig");
 
 const v8 = js.v8;
+const Allocator = std.mem.Allocator;
 
 const Identity = @This();
+
+// not an arena, it can grow a lot, and we want to free the old space when it does
+allocator: Allocator,
 
 // Maps Zig instance pointers to their v8::Global(Object) wrappers.
 identity_map: std.HashMapUnmanaged(usize, v8.Global, PtrContext, std.hash_map.default_max_load_percentage) = .empty,
@@ -69,4 +73,8 @@ pub fn deinit(self: *Identity) void {
     while (it.next()) |global| {
         v8.v8__Global__Reset(global);
     }
+    self.identity_map.deinit(self.allocator);
+    // Left usable: Page.deinit's finalizer cleanup still looks entries up, and
+    // a CDP isolated world reuses its Identity for the next page.
+    self.identity_map = .empty;
 }

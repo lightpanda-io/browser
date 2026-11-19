@@ -179,7 +179,7 @@ _file_lists: std.ArrayList(*FileList) = .empty,
 
 // Identity tracking for the main world. All main-world contexts in this Page
 // share this, ensuring object identity works across same-origin frames.
-identity: js.Identity = .{},
+identity: js.Identity,
 
 // Finalizer callbacks for Zig instances exposed to v8 in this Page. Keyed by
 // Zig instance ptr. The backing FinalizerCallback.Identity structs come from
@@ -301,6 +301,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .arena = arena.allocator(),
         ._recycling = .init(arena.allocator()),
         .globals = .init(session.browser.app.allocator),
+        .identity = .{ .allocator = session.browser.app.allocator },
         .event_listeners = .init(arena.allocator()),
         .log_context = .{ .id = log.nextPageId(), .url = &self.frame.url },
     };
@@ -397,7 +398,6 @@ pub fn deinit(self: *Page) void {
     defer session.browser.env.memoryPressureNotification(.moderate);
 
     self.identity.deinit();
-    self.identity = .{};
 
     // Force cleanup all remaining finalized objects.
     {
