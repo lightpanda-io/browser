@@ -129,7 +129,7 @@ pub fn scriptReturns(tool: BrowserTool) ?[]const u8 {
         .goto => "A promise of the page object it was called on",
         .download => "`saved <bytes> bytes (<content type>) to <absolute path>`",
         .screenshot => "`Saved <width>x<height> PNG to <path>`",
-        .evaluate => "The script's value as a string, JSON-encoded when it is an object or array. Empty when `save` is set or an async script returns nothing",
+        .evaluate => "A promise of the script's value as a string, JSON-encoded when it is an object or array. Empty when `save` is set or an async script returns nothing",
         .extract => "An object or an array, shaped by the schema",
         .classify => "The category that fits, or an object keyed by question name",
         .click => "A status line starting `Clicked element (<target>)`, with a caveat when the element is disabled or hidden" ++ page_state,

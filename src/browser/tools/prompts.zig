@@ -184,9 +184,9 @@ pub const save_synthesis_prompt =
 pub const save_script_rules =
     \\Script rules:
     \\- `Page` is the only global. `new Page()` makes a page; `await page.goto(url)`
-    \\  navigates it (async — always `await`). Every other builtin is a synchronous
-    \\  method on that page: `const data = page.extract({...})`, never `await
-    \\  page.extract`. The file runs as an async script, so top-level `await` is
+    \\  navigates it. `goto` and `evaluate` are async — always `await` them. Every
+    \\  other builtin is a synchronous method on that page: `const data =
+    \\  page.extract({...})`, never `await page.extract`. The file runs as an async script, so top-level `await` is
     \\  allowed.
     \\- Read pages with page.extract(schema); all processing of the returned
     \\  strings (trim, split, parse, merge, loops, cross-page aggregation)

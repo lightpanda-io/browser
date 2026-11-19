@@ -187,13 +187,14 @@ pub const Tool = enum {
     }
 
     /// Whether the tool's script form returns a Promise and so is recorded with
-    /// `await`. Only `goto` (navigation) is async; every other page method is
-    /// synchronous. Exhaustive like the sibling predicates so adding an async
-    /// tool is a compile error until it makes an explicit choice here.
+    /// `await`. `goto` (navigation) and `evaluate` (page code that may wait on
+    /// fetches or timers) are async; every other page method is synchronous.
+    /// Exhaustive like the sibling predicates so adding an async tool is a
+    /// compile error until it makes an explicit choice here.
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
-            .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
+            .goto, .evaluate => true,
+            .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .popups, .download, .pageTools, .callPageTool, .classify, .acceptCookies, .login => false,
         };
     }
 
@@ -577,13 +578,27 @@ pub fn call(
     const start = lp.datetime.milliTimestamp(.awake);
     const maybe_tool = std.meta.stringToEnum(Tool, tool_name);
     const result = callInner(arena, session, registry, maybe_tool, tool_name, arguments, opts);
+    reportCall(session, maybe_tool, tool_name, arguments, opts.source, result, start);
+    return result;
+}
+
+/// Telemetry and the session's observer for one finished call. `call` does
+/// this itself; a caller that settles a call outside it reports here.
+pub fn reportCall(
+    session: *lp.Session,
+    maybe_tool: ?Tool,
+    tool_name: []const u8,
+    arguments: ?std.json.Value,
+    source: TelemetryTool.Source,
+    result: ToolError!ToolResult,
+    start: u64,
+) void {
     const id: u8 = if (maybe_tool) |t| t.telemetryId() else 0;
-    session.browser.app.telemetry.recordTool(id, opts.source, telemetryOutcome(result), start);
+    session.browser.app.telemetry.recordTool(id, source, telemetryOutcome(result), start);
     if (session.tool_observer) |observer| {
         const reported: ToolResult = result catch |err| .{ .text = errorMessage(err), .is_error = true };
         observer.onCall(observer.context, tool_name, arguments, &reported, lp.datetime.milliTimestamp(.awake) -| start, session.currentFrame());
     }
-    return result;
 }
 
 fn telemetryOutcome(result: ToolError!ToolResult) TelemetryTool.Outcome {
@@ -606,6 +621,56 @@ pub fn errorOutcome(err: ToolError) TelemetryTool.Outcome {
     };
 }
 
+const PreparedArgs = union(enum) {
+    ok: struct {
+        /// Before `$LP_*` substitution, so a diagnostic can't echo a secret.
+        normalized: ?std.json.Value,
+        substituted: ?std.json.Value,
+    },
+    /// The in-band diagnostic to answer with.
+    invalid: ToolResult,
+};
+
+/// What every call's arguments go through before dispatch.
+fn prepareArgs(arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ToolError!PreparedArgs {
+    if (diagnoseArgs(arena, arguments)) |msg|
+        return .{ .invalid = .invalidParams(msg) };
+    // Must run before substituteStringArgs so the `key=="value"` secret-
+    // redaction check there still triggers on PascalCase keys.
+    const normalized = normalizeArgs(arena, tool, arguments) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateField => return error.InvalidParams,
+    };
+    // After normalizeArgs so a PascalCase `Script` or a `null` isn't missed.
+    if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
+        return .{ .invalid = .invalidParams(msg) };
+    return .{ .ok = .{ .normalized = normalized, .substituted = try substituteStringArgs(arena, tool, normalized) } };
+}
+
+fn ParsedArgs(comptime T: type) type {
+    return union(enum) {
+        ok: T,
+        /// The in-band diagnostic to answer with.
+        invalid: ToolResult,
+    };
+}
+
+/// `prepareArgs` then `parseArgs`, for the paths that bypass `call`.
+fn parsePreparedArgs(comptime T: type, arena: std.mem.Allocator, tool: Tool, arguments: ?std.json.Value) ToolError!ParsedArgs(T) {
+    const prepared = switch (try prepareArgs(arena, tool, arguments)) {
+        .invalid => |result| return .{ .invalid = result },
+        .ok => |args| args,
+    };
+    const parsed = parseArgs(T, arena, prepared.substituted) catch |err| {
+        if (err == error.InvalidParams) {
+            if (diagnoseArgTypes(arena, tool, prepared.normalized)) |msg|
+                return .{ .invalid = .invalidParams(msg) };
+        }
+        return err;
+    };
+    return .{ .ok = parsed };
+}
+
 fn callInner(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -622,18 +687,12 @@ fn callInner(
         .text = try arena.print("Unknown tool: {s}", .{tool_name}),
         .is_error = true,
     };
-    if (diagnoseArgs(arena, arguments)) |msg|
-        return .invalidParams(msg);
-    // Must run before substituteStringArgs so the `key=="value"` secret-
-    // redaction check there still triggers on PascalCase keys.
-    const normalized = normalizeArgs(arena, tool, arguments) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.DuplicateField => return error.InvalidParams,
+    const prepared = switch (try prepareArgs(arena, tool, arguments)) {
+        .invalid => |result| return result,
+        .ok => |args| args,
     };
-    // After normalizeArgs so a PascalCase `Script` or a `null` isn't missed.
-    if (diagnoseMissingRequired(arena, tool, normalized)) |msg|
-        return .invalidParams(msg);
-    const substituted = try substituteStringArgs(arena, tool, normalized);
+    const normalized = prepared.normalized;
+    const substituted = prepared.substituted;
 
     // Before dispatch, because a navigation takes the node with it. Gated on
     // `isRecorded` because `SelectorPath.build` is the expensive part of a tool
@@ -776,7 +835,7 @@ pub fn evalScript(
 ) ToolError!ToolResult {
     const z = try arena.dupeSentinel(u8, script, 0);
     const page = try ensurePage(session, registry, null, null);
-    return runEval(arena, page, z, null);
+    return runEval(arena, page, z, null, null);
 }
 
 /// Schema-driven extraction. The schema is parsed in Zig so a syntax error
@@ -795,7 +854,7 @@ pub fn extract(
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
     const page = try ensurePage(session, registry, null, null);
-    var result = try runEval(arena, page, script, null);
+    var result = try runEval(arena, page, script, null, null);
     // Checked here, on the full text: callers cap what they pass on.
     if (!result.is_error) result.no_data = isEmptyJson(arena, result.text);
     return result;
@@ -1334,19 +1393,95 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *No
     return renderJson(arena, forms_data, .{});
 }
 
+const EvaluateParams = struct {
+    script: [:0]const u8,
+    url: ?[:0]const u8 = null,
+    timeout: ?u32 = null,
+    save: ?[]const u8 = null,
+};
+
 fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
-    const Params = struct {
-        script: [:0]const u8,
-        url: ?[:0]const u8 = null,
-        timeout: ?u32 = null,
-        save: ?[]const u8 = null,
+    return (try beginEvaluate(arena, session, registry, try parseArgs(EvaluateParams, arena, arguments), .wait)).done;
+}
+
+/// A page promise `startEvaluate` left pending, for `pollEvaluate`.
+pub const EvaluateHandle = struct {
+    frame_id: u32,
+    /// The document the promise belongs to. Once it is gone, so is `promise`.
+    loader_id: u32,
+    promise: lp.js.Promise.Global,
+    save: ?[]const u8,
+};
+
+pub const StartedEvaluate = union(enum) {
+    done: ToolResult,
+    pending: EvaluateHandle,
+};
+
+/// Run an `evaluate` without waiting on the promise it may return, so the
+/// agent script Runtime can keep several in flight. `arena` must outlive the
+/// pending handle.
+pub fn startEvaluate(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    arguments: ?std.json.Value,
+) ToolError!StartedEvaluate {
+    const args = switch (try parsePreparedArgs(EvaluateParams, arena, .evaluate, arguments)) {
+        .invalid => |result| return .{ .done = result },
+        .ok => |args| args,
     };
-    const args = try parseArgs(Params, arena, arguments);
+    return beginEvaluate(arena, session, registry, args, .hand_back);
+}
+
+/// The result once the promise settled or its document went away, null while
+/// it is still pending. A non-null return has released the handle.
+pub fn pollEvaluate(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    pending: *const EvaluateHandle,
+) ToolError!?ToolResult {
+    const page = session.findFrameByLoaderId(pending.loader_id) orelse
+        return .{ .text = "promise: the page navigated or closed before it settled", .is_error = true };
+
+    const result = blk: {
+        var ls: lp.js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        const promise = pending.promise.local(&ls.local);
+        if (promise.state() == .pending) return null;
+        // Before the result is read: finishing can navigate, and the page
+        // takes its handles with it.
+        defer pending.promise.release();
+
+        var try_catch: lp.js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+        break :blk try settledResult(arena, promise, &try_catch);
+    };
+    return try finishEvaluate(arena, session, registry, page, pending.save, result);
+}
+
+/// Drop a handle nothing will poll again.
+pub fn abandonEvaluate(session: *lp.Session, pending: *const EvaluateHandle) void {
+    if (session.findFrameByLoaderId(pending.loader_id) != null) pending.promise.release();
+}
+
+/// `.wait` always returns `.done`; `.hand_back` returns a promise that is
+/// still pending as `.pending` instead of waiting on it.
+fn beginEvaluate(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    args: EvaluateParams,
+    on_pending: enum { wait, hand_back },
+) ToolError!StartedEvaluate {
     const page = try ensurePage(session, registry, args.url, args.timeout);
-    const app_allocator = session.browser.app.allocator;
 
     const prelude = bridgePrelude(arena, &session.bridge_store) catch return ToolError.OutOfMemory;
-    _ = try runEval(arena, page, prelude, null);
+    _ = try runEval(arena, page, prelude, null, null);
 
     // Block scope preserves a trailing expression's value and keeps top-level
     // `let`/`const` from leaking; top-level `await`/`return` need the async IIFE.
@@ -1360,25 +1495,38 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         .{args.script},
         0,
     ) catch return ToolError.OutOfMemory;
-    var result = try runEval(arena, page, block_script, iife_script);
+
+    var promise: ?lp.js.Promise.Global = null;
+    const result = try runEval(arena, page, block_script, iife_script, if (on_pending == .hand_back) &promise else null);
+    if (promise) |p| return .{ .pending = .{ .frame_id = page._frame_id, .loader_id = page._loader_id, .promise = p, .save = args.save } };
+    return .{ .done = try finishEvaluate(arena, session, registry, page, args.save, result) };
+}
+
+/// What follows the script's own result: the `lp` bridge, `save=`, and any
+/// navigation the script queued.
+fn finishEvaluate(
+    arena: std.mem.Allocator,
+    session: *lp.Session,
+    registry: *NodeRegistry,
+    page: *lp.Frame,
+    save: ?[]const u8,
+    script_result: ToolResult,
+) ToolError!ToolResult {
+    var result = script_result;
     if (result.is_error) return result;
+    const app_allocator = session.browser.app.allocator;
 
     // Sync lp.* before any queued navigation tears down this JS context.
-    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude, null) catch |err| switch (err) {
+    const postlude_result: ?ToolResult = runEval(arena, page, bridge_postlude, null, null) catch |err| switch (err) {
         error.OutOfMemory => return ToolError.OutOfMemory,
         else => null,
     };
-    if (postlude_result) |pr| if (!pr.is_error) {
-        bridgeSync(app_allocator, &session.bridge_store, pr.text) catch |err| switch (err) {
-            error.OutOfMemory => return ToolError.OutOfMemory,
-            else => {},
-        };
-    };
+    if (postlude_result) |pr| if (!pr.is_error) try bridgeSync(app_allocator, &session.bridge_store, pr.text);
 
     // Silence on save= success so stdout pipes stay clean. Objects/arrays
     // already render as JSON; a bare string (or other non-JSON text) is
     // JSON-encoded so it round-trips to `lp.<name>`.
-    if (args.save) |name| {
+    if (save) |name| {
         const json_value = if (std.json.validate(arena, result.text) catch false)
             result.text
         else
@@ -1430,7 +1578,7 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRe
     return result;
 }
 
-const eval_promise_timeout_ms: u32 = 30_000;
+pub const eval_promise_timeout_ms: u32 = 30_000;
 
 fn execPageTools(arena: std.mem.Allocator, session: *lp.Session) ToolError![]const u8 {
     const page = try requireFrame(session);
@@ -1585,7 +1733,15 @@ fn pageToolResult(arena: std.mem.Allocator, value: lp.js.Value) !ToolResult {
 
 /// Runs `fallback` only if `script` fails to *compile* — a compile failure ran
 /// nothing, so retrying is safe; a runtime throw keeps `script`'s error.
-fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fallback: ?[:0]const u8) ToolError!ToolResult {
+/// With `pending_out`, a promise still pending is persisted there instead of
+/// waited on, and the returned result is a placeholder.
+fn runEval(
+    arena: std.mem.Allocator,
+    page: *lp.Frame,
+    script: [:0]const u8,
+    fallback: ?[:0]const u8,
+    pending_out: ?*?lp.js.Promise.Global,
+) ToolError!ToolResult {
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();
@@ -1595,23 +1751,19 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
     defer try_catch.deinit();
 
     const js_result = ls.local.compileAndRun(script, null) catch |err| {
-        if (err == error.CompilationError) if (fallback) |fb| return runEval(arena, page, fb, null);
+        if (err == error.CompilationError) if (fallback) |fb| return runEval(arena, page, fb, null, pending_out);
         return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true };
     };
 
     if (js_result.isPromise()) {
         const promise = js_result.toPromise();
-        if (waitForPromise(page, promise)) |failed| return failed;
-
-        const settled = promise.result();
-        const rejected = promise.state() == .rejected;
-        // No-return async IIFE → undefined → silence, so pipes stay clean.
-        if (!rejected and settled.isUndefined()) return .{ .text = "" };
-        const text = (if (rejected) settled.toStringSliceWithAlloc(arena) else evalResultText(arena, settled)) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
+        if (pending_out) |out| if (promise.state() == .pending) {
+            promise.markAsHandled();
+            out.* = promise.persist() catch return ToolError.OutOfMemory;
+            return .{ .text = "" };
         };
-        return .{ .text = text, .is_error = rejected };
+        if (waitForPromise(page, promise)) |failed| return failed;
+        return settledResult(arena, promise, &try_catch);
     }
 
     const text = evalResultText(arena, js_result) catch |err| switch (err) {
@@ -1619,6 +1771,18 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
         else => return .{ .text = try formatJsError(arena, &try_catch, err), .is_error = true },
     };
     return .{ .text = text };
+}
+
+fn settledResult(arena: std.mem.Allocator, promise: lp.js.Promise, try_catch: *lp.js.TryCatch) error{OutOfMemory}!ToolResult {
+    const settled = promise.result();
+    const rejected = promise.state() == .rejected;
+    // No-return async IIFE → undefined → silence, so pipes stay clean.
+    if (!rejected and settled.isUndefined()) return .{ .text = "" };
+    const text = (if (rejected) settled.toStringSliceWithAlloc(arena) else evalResultText(arena, settled)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .{ .text = try formatJsError(arena, try_catch, err), .is_error = true },
+    };
+    return .{ .text = text, .is_error = rejected };
 }
 
 /// Runs `page` until `promise` settles. Returns the error result when it
@@ -1663,9 +1827,14 @@ const BridgeStore = std.StringHashMapUnmanaged([]const u8);
 
 /// Stored values are already JSON; splice them straight into the literal
 /// instead of round-tripping through json.Value.
+///
+/// A page can have an evaluate still in flight when another one starts, so
+/// `lp` isn't simply replaced: what the page changed since its last sync is
+/// carried over the fresh copy of the store, and `__lp_base` remembers the
+/// store as this page last saw it, for `bridge_postlude` to diff against.
 fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    try aw.writer.writeAll("globalThis.lp = {");
+    try aw.writer.writeAll("(() => { const store = {");
     var it = store.iterator();
     var first = true;
     while (it.next()) |kv| {
@@ -1675,39 +1844,68 @@ fn bridgePrelude(arena: std.mem.Allocator, store: *const BridgeStore) ![:0]const
         try aw.writer.writeByte(':');
         try aw.writer.writeAll(kv.value_ptr.*);
     }
-    try aw.writer.writeAll("};");
+    try aw.writer.writeAll(
+        \\};
+        \\const seen = {};
+        \\for (const k of Object.keys(store)) seen[k] = JSON.stringify(store[k]);
+        \\const base = globalThis.__lp_base, cur = globalThis.lp;
+        \\if (base && cur && typeof cur === "object") {
+        \\  for (const k of Object.keys(cur)) {
+        \\    const v = JSON.stringify(cur[k]);
+        \\    if (v !== undefined && v !== base[k]) store[k] = cur[k];
+        \\  }
+        \\  for (const k of Object.keys(base)) if (!Object.hasOwn(cur, k)) delete store[k];
+        \\}
+        \\globalThis.lp = store;
+        \\Object.defineProperty(globalThis, "__lp_base", { value: seen, writable: true, configurable: true });
+        \\})();
+    );
     return arena.dupeSentinel(u8, aw.written(), 0);
 }
 
-const bridge_postlude: [:0]const u8 = "JSON.stringify(globalThis.lp)";
+/// What the page changed in `lp` since its last sync, as `{set, del}`: keys
+/// with their new value as JSON text, and keys it deleted. A diff, not the
+/// whole object, so a page can't undo what another page stored meanwhile.
+const bridge_postlude: [:0]const u8 =
+    \\(() => {
+    \\  const cur = globalThis.lp, base = globalThis.__lp_base || {};
+    \\  const set = {}, del = [];
+    \\  if (!cur || typeof cur !== "object") return JSON.stringify({ set, del });
+    \\  const now = {};
+    \\  for (const k of Object.keys(cur)) {
+    \\    const v = JSON.stringify(cur[k]);
+    \\    if (v === undefined) continue;
+    \\    now[k] = v;
+    \\    if (v !== base[k]) set[k] = v;
+    \\  }
+    \\  for (const k of Object.keys(base)) if (!Object.hasOwn(now, k)) del.push(k);
+    \\  globalThis.__lp_base = now;
+    \\  return JSON.stringify({ set, del });
+    \\})()
+;
 
-/// Drops keys missing from the postlude so `delete lp.foo` propagates.
 fn bridgeSync(allocator: std.mem.Allocator, store: *BridgeStore, postlude_json: []const u8) !void {
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, postlude_json, .{}) catch return;
+    const Diff = struct { set: std.json.ArrayHashMap([]const u8) = .{}, del: []const []const u8 = &.{} };
+    var parsed = std.json.parseFromSlice(Diff, allocator, postlude_json, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return,
+    };
     defer parsed.deinit();
-    if (parsed.value != .object) return;
-    const new_obj = parsed.value.object;
 
-    var to_remove: std.ArrayList([]const u8) = .empty;
-    defer to_remove.deinit(allocator);
-    var key_it = store.keyIterator();
-    while (key_it.next()) |k| {
-        if (!new_obj.contains(k.*)) try to_remove.append(allocator, k.*);
-    }
-    for (to_remove.items) |k| {
-        if (store.fetchRemove(k)) |kv| {
+    for (parsed.value.del) |key| {
+        if (store.fetchRemove(key)) |kv| {
             allocator.free(kv.key);
             allocator.free(kv.value);
         }
     }
-
-    var it = new_obj.iterator();
+    var it = parsed.value.set.map.iterator();
     while (it.next()) |entry| {
-        var val_aw: std.Io.Writer.Allocating = .init(allocator);
-        defer val_aw.deinit();
-        try std.json.Stringify.value(entry.value_ptr.*, .{}, &val_aw.writer);
-        // Trusted JSON path: value was just stringified from a parsed Value.
-        try bridgeStorePut(allocator, store, entry.key_ptr.*, val_aw.written());
+        // Validated: the page wrote this text, and the next prelude splices it
+        // into another page as code.
+        bridgeStoreSet(allocator, store, entry.key_ptr.*, entry.value_ptr.*) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidJson => {},
+        };
     }
 }
 
@@ -2511,10 +2709,14 @@ fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8,
 const default_nav_wait: lp.Config.WaitUntil = .load;
 const default_nav_timeout_ms: u32 = 10000;
 
-pub const StartedGoto = struct {
-    frame_id: u32,
-    timeout_ms: u32,
-    until: lp.Config.WaitUntil,
+pub const StartedGoto = union(enum) {
+    started: struct {
+        frame_id: u32,
+        timeout_ms: u32,
+        until: lp.Config.WaitUntil,
+    },
+    /// What is wrong with the arguments; nothing was navigated.
+    invalid: []const u8,
 };
 
 /// Open a fresh top-level page and start its navigation. The frame is non-null
@@ -2576,15 +2778,17 @@ pub fn startGoto(
     arguments: ?std.json.Value,
     receiver_frame_id: ?u32,
 ) ToolError!StartedGoto {
-    // This path bypasses `call`, so it needs its own `$LP_*` substitution pass.
-    const args = try parseArgs(GotoParams, arena, try substituteStringArgs(arena, .goto, arguments));
+    const args = switch (try parsePreparedArgs(GotoParams, arena, .goto, arguments)) {
+        .invalid => |result| return .{ .invalid = result.text },
+        .ok => |args| args,
+    };
     if (receiver_frame_id) |fid| closePage(session, registry, fid);
     const page = try openPage(session, args.url);
-    return .{
+    return .{ .started = .{
         .frame_id = page.frame_id,
         .timeout_ms = args.timeout orelse default_nav_timeout_ms,
         .until = args.waitUntil,
-    };
+    } };
 }
 
 const PerformGotoOpts = struct {

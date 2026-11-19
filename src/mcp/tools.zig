@@ -128,7 +128,7 @@ pub const extra_tools = [_]McpTool{
         .name = "run",
         .title = "Run an agent script",
         .annotations = .{},
-        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. Pass the source as `script`, or the `path` of a file `save` wrote. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. To read several URLs, make one `new Page()` per URL and `await Promise.all(pages.map((p, i) => p.goto(urls[i])))` so they load in parallel, then read each with `page.extract` or `page.evaluate`. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
+        .description = "Run a Lightpanda agent script in this session, as `lightpanda run` does, and return its console output followed by the value it returns. Pass the source as `script`, or the `path` of a file `save` wrote. The script drives pages through `const page = new Page(); await page.goto(url);` and the builtins as methods on `page`; `$LP_*` placeholders are resolved. To read several URLs, make one `new Page()` per URL and `await Promise.all(pages.map((p, i) => p.goto(urls[i])))` so they load in parallel, then read each with `page.extract` or `await page.evaluate`. Pages the script opens are closed when it ends; cookies and storage stay in the session, so a login carries over to the next call. Script variables do not carry over. A thrown error, a failed step or the timeout ends the script and is reported as an error after the output so far.",
         .inputSchema = run_schema,
     },
     .{
@@ -1714,7 +1714,7 @@ test "MCP - run: a script drives the session and returns its output" {
     defer server.deinit();
 
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('btn:', page.evaluate(\"document.getElementById('btn').textContent\"));\nreturn page.extract({ btn: '#btn' });"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nconsole.log('btn:', await page.evaluate(\"document.getElementById('btn').textContent\"));\nreturn page.extract({ btn: '#btn' });"}}}
     );
     var lines = std.mem.splitScalar(u8, out.written(), '\n');
     try testing.expectJson(.{
@@ -1770,7 +1770,7 @@ test "MCP - run: closes the pages it opened, keeps cookies and earlier pages" {
 
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate(\"document.cookie = 'login=1'\");\nthrow new Error('stop');"}}}
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.evaluate(\"document.cookie = 'login=1'\");\nthrow new Error('stop');"}}}
     );
     try testing.expect(std.mem.find(u8, out.written(), "\"isError\":true") != null);
     try testing.expectEqual(1, session.pages.items.len);
@@ -1843,7 +1843,7 @@ test "MCP - run: a script that outlives its timeout is stopped" {
 
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate('while (true) {}');"}}}
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"timeout":300,"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.evaluate('while (true) {}');"}}}
     );
     try testing.expect(std.mem.find(u8, out.written(), "script timed out after 300 ms") != null);
     try testing.expectEqual(0, server.active_session.session.pages.items.len);
@@ -1927,10 +1927,10 @@ test "MCP - run: acts on the caller's session only" {
     defer b.deinit();
 
     const set_cookie =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\npage.evaluate(\"document.cookie = 'who=a'\");"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nawait page.evaluate(\"document.cookie = 'who=a'\");"}}}
     ;
     const read_cookie =
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn page.evaluate('document.cookie') || '(none)';"}}}
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"script":"const page = new Page();\nawait page.goto('http://localhost:9582/src/browser/tests/mcp_actions.html');\nreturn (await page.evaluate('document.cookie')) || '(none)';"}}}
     ;
     try router.handleMessage(a, aa, set_cookie);
     try testing.expect(std.mem.find(u8, out_a.written(), "\"isError\":false") != null);
