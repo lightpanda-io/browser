@@ -51,11 +51,13 @@ pub const object_types = [_]type{
 };
 
 /// Globals the flag adds: Env.hideWebGL deletes them when it's off.
-pub const global_names = [_][:0]const u8{
-    "WebGL2RenderingContext", "WebGLBuffer",  "WebGLFramebuffer", "WebGLProgram",
-    "WebGLRenderbuffer",      "WebGLShader",  "WebGLTexture",     "WebGLUniformLocation",
-    "WebGLQuery",             "WebGLSampler", "WebGLSync",        "WebGLTransformFeedback",
-    "WebGLVertexArrayObject",
+pub const global_names = blk: {
+    var names: [object_types.len + 1][:0]const u8 = undefined;
+    names[0] = "WebGL2RenderingContext";
+    for (object_types, names[1..]) |T, *name| {
+        name.* = T.JsApi.Meta.name;
+    }
+    break :blk names;
 };
 
 fn Object(comptime class_name: [:0]const u8) type {
@@ -211,18 +213,6 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
             return .{};
         }
 
-        pub fn isContextLost(_: *const Self) bool {
-            return false;
-        }
-
-        pub fn getSupportedExtensions(_: *const Self) []const []const u8 {
-            return &.{};
-        }
-
-        pub fn getExtension(_: *const Self, _: []const u8) ?bool {
-            return null;
-        }
-
         pub fn getParameter(self: *const Self, pname: u32, exec: *const js.Execution) !Value {
             switch (pname) {
                 0x1F00, 0x9245 => return .{ .string = vendor }, // VENDOR, UNMASKED_VENDOR_WEBGL
@@ -250,16 +240,8 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
             return .{ .int = 0 };
         }
 
-        pub fn getError(_: *const Self) u32 {
-            return 0;
-        }
-
         pub fn checkFramebufferStatus(_: *const Self) u32 {
             return 0x8CD5; // FRAMEBUFFER_COMPLETE
-        }
-
-        pub fn isEnabled(_: *const Self) bool {
-            return false;
         }
 
         pub fn isObject(_: *const Self, object: ?js.Value) bool {
@@ -281,6 +263,10 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
 
         pub fn none(_: *const Self) ?bool {
             return null;
+        }
+
+        pub fn no(_: *const Self) bool {
+            return false;
         }
 
         pub fn getShaderParameter(_: *const Self, _: js.Value, pname: u32) Value {
@@ -337,41 +323,12 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
             return 0x911A; // ALREADY_SIGNALED
         }
 
-        pub fn createBuffer(_: *const Self, exec: *const js.Execution) !*WebGLBuffer {
-            return exec._factory.create(WebGLBuffer{});
-        }
-        pub fn createFramebuffer(_: *const Self, exec: *const js.Execution) !*WebGLFramebuffer {
-            return exec._factory.create(WebGLFramebuffer{});
-        }
-        pub fn createProgram(_: *const Self, exec: *const js.Execution) !*WebGLProgram {
-            return exec._factory.create(WebGLProgram{});
-        }
-        pub fn createRenderbuffer(_: *const Self, exec: *const js.Execution) !*WebGLRenderbuffer {
-            return exec._factory.create(WebGLRenderbuffer{});
-        }
-        pub fn createShader(_: *const Self, exec: *const js.Execution) !*WebGLShader {
-            return exec._factory.create(WebGLShader{});
-        }
-        pub fn createTexture(_: *const Self, exec: *const js.Execution) !*WebGLTexture {
-            return exec._factory.create(WebGLTexture{});
-        }
-        pub fn getUniformLocation(_: *const Self, exec: *const js.Execution) !*WebGLUniformLocation {
-            return exec._factory.create(WebGLUniformLocation{});
-        }
-        pub fn createQuery(_: *const Self, exec: *const js.Execution) !*WebGLQuery {
-            return exec._factory.create(WebGLQuery{});
-        }
-        pub fn createSampler(_: *const Self, exec: *const js.Execution) !*WebGLSampler {
-            return exec._factory.create(WebGLSampler{});
-        }
-        pub fn fenceSync(_: *const Self, exec: *const js.Execution) !*WebGLSync {
-            return exec._factory.create(WebGLSync{});
-        }
-        pub fn createTransformFeedback(_: *const Self, exec: *const js.Execution) !*WebGLTransformFeedback {
-            return exec._factory.create(WebGLTransformFeedback{});
-        }
-        pub fn createVertexArray(_: *const Self, exec: *const js.Execution) !*WebGLVertexArrayObject {
-            return exec._factory.create(WebGLVertexArrayObject{});
+        pub fn create(comptime T: type) fn (*const Self, *const js.Execution) anyerror!*T {
+            return struct {
+                fn create(_: *const Self, exec: *const js.Execution) !*T {
+                    return exec._factory.create(T{});
+                }
+            }.create;
         }
     };
 }

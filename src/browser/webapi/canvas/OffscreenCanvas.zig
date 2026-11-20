@@ -79,7 +79,7 @@ fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution
         return self._cached;
     }
 
-    if (Canvas.isWebGL(context_type)) {
+    if (Canvas.webglVersion(context_type) != null) {
         exec.page.status.noteUnsupported(.webgl);
     }
     return null;
