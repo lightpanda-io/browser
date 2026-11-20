@@ -1724,7 +1724,7 @@ pub fn treeChanged(self: *StyleManager, parent: *Node, child: *Node, previous: ?
             return false;
         }
         const reach = self.movedReach(child) orelse return false;
-        root = movedRoot(parent, reach, self.has.depth);
+        root = movedRoot(parent, reach);
     }
 
     // Past the budget, dropping costs more than recomputing what's cached.
@@ -2142,8 +2142,10 @@ fn holdsFocus(self: *const StyleManager, child: *Node) bool {
 const MovedReach = struct {
     // A form control: the forms, fieldsets and selects around read it
     form: bool = false,
-    // A :has() subject: the anchors above, up to HasKeys.depth
-    has: bool = false,
+    // A :has() subject: how many ancestors of the moved subtree can anchor
+    // on it. One HasKeys.depth or deeper inside has all its anchors moving
+    // with it.
+    has: usize = 0,
 };
 
 // What outside `child`'s subtree its insertion or removal can change. Null
@@ -2173,7 +2175,12 @@ fn movedReach(self: *const StyleManager, child: *Node) ?MovedReach {
             if (self.has.unbounded) {
                 return null;
             }
-            reach.has = true;
+            var inside: usize = 0;
+            var node = el.asNode();
+            while (node != child and inside < self.has.depth) : (inside += 1) {
+                node = node._parent orelse break;
+            }
+            reach.has = @max(reach.has, self.has.depth - inside);
         }
     }
     return reach;
@@ -2181,12 +2188,12 @@ fn movedReach(self: *const StyleManager, child: *Node) ?MovedReach {
 
 // The subtree to drop for `reach` around `parent`: the parent of the highest
 // element whose match can change, as it can reach its later siblings.
-fn movedRoot(parent: *Node, reach: MovedReach, has_depth: usize) *Node {
+fn movedRoot(parent: *Node, reach: MovedReach) *Node {
     var highest: ?*Node = null;
-    if (reach.has) {
+    if (reach.has != 0) {
         // The moved subject's anchors: parent, and so on up
         var anchor = parent;
-        for (1..has_depth) |_| {
+        for (1..reach.has) |_| {
             anchor = anchor._parent orelse break;
         }
         highest = anchor;
@@ -7763,11 +7770,18 @@ test "StyleManager: memo: form controls and :has() subjects widen a tree change"
     try testing.expectEqual(false, sm.has.unbounded);
     const version = frame.page.style_version;
 
-    // A row with a control and an image, outside any form: ul's parent's
-    // subtree (the image's anchor is ul), p untouched
+    // A row with a control and an image, outside any form: the image's
+    // anchor is the row, which moves with it, so nothing above is touched
     const li = try doc.createElement("li", null, frame);
     try Frame.parse.htmlAsChildren(frame, li.asNode(), "<input class=ctl required><img>");
     _ = try ul.appendChild(li.asNode(), frame);
+    try testing.expectEqual(version, frame.page.style_version);
+    try testing.expectEqual(true, sm.visibility.memo.contains(p));
+    try testing.expectEqual(true, sm.visibility.memo.contains(main.as(Element)));
+
+    // An image on its own: ul anchors on it, so ul's parent's subtree
+    const img = try doc.createElement("img", null, frame);
+    _ = try ul.appendChild(img.asNode(), frame);
     try testing.expectEqual(version, frame.page.style_version);
     try testing.expectEqual(true, sm.visibility.memo.contains(p));
     try testing.expectEqual(false, sm.visibility.memo.contains(main.as(Element)));
