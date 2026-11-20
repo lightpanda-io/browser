@@ -330,6 +330,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 log.debug(.http, "script adopt", .{ .url = remote_url, .ctx = ctx, .state = if (pre.complete) "done" else "loading" });
             }
             pre.extra = frame_extra;
+            // The preload/prescan hint doesn't necessarily know this element's
+            // final `crossorigin` attribute, so recompute `muted` against the
+            // actual consuming <script> now.
+            const settings = corsSettings(element, kind == .module);
+            pre.muted = settings.request_mode == .no_cors and !frame.isSameOrigin(remote_url);
 
             // The adopted Script has its own arena; ours held only the URL
             // resolution, which nothing below needs.
