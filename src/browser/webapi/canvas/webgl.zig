@@ -28,6 +28,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Canvas = @import("../element/html/Canvas.zig");
+const OffscreenCanvas = @import("OffscreenCanvas.zig");
 
 const js = lp.js;
 
@@ -79,6 +80,24 @@ fn Object(comptime class_name: [:0]const u8) type {
 }
 
 pub const Version = enum { webgl1, webgl2 };
+
+/// The canvas a context draws to, the `canvas` attribute
+pub const Owner = union(enum) {
+    canvas: *Canvas,
+    offscreen: *OffscreenCanvas,
+
+    fn width(self: Owner) u32 {
+        return switch (self) {
+            inline else => |c| c.getWidth(),
+        };
+    }
+
+    fn height(self: Owner) u32 {
+        return switch (self) {
+            inline else => |c| c.getHeight(),
+        };
+    }
+};
 
 pub const Value = union(enum) {
     null: ?bool,
@@ -187,16 +206,16 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
 
         pub fn noop(_: *const Self) void {}
 
-        pub fn getCanvas(self: *const Self) *Canvas {
+        pub fn getCanvas(self: *const Self) Owner {
             return self._canvas;
         }
 
         pub fn getDrawingBufferWidth(self: *const Self) u32 {
-            return self._canvas.getWidth();
+            return self._canvas.width();
         }
 
         pub fn getDrawingBufferHeight(self: *const Self) u32 {
-            return self._canvas.getHeight();
+            return self._canvas.height();
         }
 
         pub fn getDrawingBufferFormat(_: *const Self) u32 {
@@ -221,7 +240,7 @@ pub fn Methods(comptime Self: type, comptime version: Version) type {
                 0x8B8C => return .{ .string = glsl_version },
                 0x0D3A => return .{ .int32 = .{ .values = &.{ 16384, 16384 } } }, // MAX_VIEWPORT_DIMS
                 0x0BA2, 0x0C10 => { // VIEWPORT, SCISSOR_BOX
-                    const box = try exec.local_arena.dupe(i32, &.{ 0, 0, @intCast(self._canvas.getWidth()), @intCast(self._canvas.getHeight()) });
+                    const box = try exec.local_arena.dupe(i32, &.{ 0, 0, @intCast(self._canvas.width()), @intCast(self._canvas.height()) });
                     return .{ .int32 = .{ .values = box } };
                 },
                 0x846D, 0x846E => return .{ .float32 = .{ .values = &.{ 1, 1 } } }, // ALIASED_POINT_SIZE_RANGE, ALIASED_LINE_WIDTH_RANGE
