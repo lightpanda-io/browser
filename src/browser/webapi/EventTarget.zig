@@ -28,6 +28,7 @@ const EventManager = @import("../EventManager.zig");
 const Node = @import("Node.zig");
 const Event = @import("Event.zig");
 const Screen = @import("Screen.zig");
+const OffscreenCanvas = @import("canvas/OffscreenCanvas.zig");
 const Worker = @import("Worker.zig");
 const Window = @import("Window.zig");
 const FileReader = @import("FileReader.zig");
@@ -106,6 +107,7 @@ pub const Type = enum(u8) {
     navigation_history_entry,
     node,
     notification,
+    offscreen_canvas,
     payment_request,
     payment_response,
     performance,
@@ -155,6 +157,7 @@ pub fn Subtype(comptime tag: Type) type {
         .navigation_history_entry => NavigationHistoryEntry,
         .node => Node,
         .notification => Notification,
+        .offscreen_canvas => OffscreenCanvas,
         .payment_request => PaymentRequest,
         .payment_response => PaymentResponse,
         .performance => Performance,
@@ -431,6 +434,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .idb_database => writer.writeAll("<IDBDatabase>"),
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
+        .offscreen_canvas => writer.writeAll("<OffscreenCanvas>"),
         .payment_request => writer.writeAll("<PaymentRequest>"),
         .payment_response => writer.writeAll("<PaymentResponse>"),
         .permission_status => writer.writeAll("<PermissionStatus>"),
@@ -462,6 +466,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .navigation_history_entry => return "[object NavigationHistoryEntry]",
         .node => return "[object Node]",
         .notification => return "[object Notification]",
+        .offscreen_canvas => return "[object OffscreenCanvas]",
         .payment_request => return "[object PaymentRequest]",
         .payment_response => return "[object PaymentResponse]",
         .performance => return "[object Performance]",
