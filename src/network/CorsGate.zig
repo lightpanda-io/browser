@@ -381,7 +381,8 @@ const CorsPreflightContext = struct {
 
             for (self.request_headers) |name| {
                 const is_authorization = std.ascii.eqlIgnoreCase(name, "authorization");
-                if (headers_wildcard and !is_authorization) continue;
+                const covers_authorization = self.gate.network.cors_store.wildcard_authorization;
+                if (headers_wildcard and (covers_authorization or !is_authorization)) continue;
 
                 if (!headerAllowed(allow_headers, name)) {
                     log.debug(.cors, "preflight blocked", .{
