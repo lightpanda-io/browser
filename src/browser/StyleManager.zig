@@ -4257,7 +4257,7 @@ fn Group(comptime Spec: type) type {
 
         fn checkRules(rules: *const RuleList, p: *Cascaded, priorities: *Priorities(Declared), el: *Element, parent_has: *?u64, frame: *Frame) void {
             const nth = frame._style_manager.nthCache();
-            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs)) |priority, rule, selector, parent_needs| {
+            rules: for (rules.items(.priority), rules.items(.props), rules.items(.selector), rules.items(.parent_needs)) |priority, *rule, selector, parent_needs| {
                 if (parent_needs != 0) {
                     const has = parent_has.* orelse blk: {
                         const has = KeyBits.ofParent(el);
@@ -4271,21 +4271,25 @@ fn Group(comptime Spec: type) type {
                     }
                 }
                 var matched = false;
-                inline for (fields) |field| {
-                    const f = @field(Field, field);
+                // Only the properties the rule sets: one or two, of many
+                var set = rule.set.iterator();
+                while (set.next()) |f| {
                     // Only a rule that sets a property nothing stronger has set
                     // yet is worth matching, once.
-                    if (rule.set.contains(f) and priority > priorities.get(f)) {
-                        if (matched == false) {
-                            count(.matches);
-                            if (matchesSelector(el, selector, nth, frame) == false) {
-                                continue :rules;
-                            }
-                            matched = true;
-                        }
-                        @field(p, field) = @field(rule.values, field);
-                        priorities.set(f, priority);
+                    if (priority <= priorities.getPtrConst(f).*) {
+                        continue;
                     }
+                    if (matched == false) {
+                        count(.matches);
+                        if (matchesSelector(el, selector, nth, frame) == false) {
+                            continue :rules;
+                        }
+                        matched = true;
+                    }
+                    switch (f) {
+                        inline else => |field| @field(p, @tagName(field)) = @field(rule.values, @tagName(field)),
+                    }
+                    priorities.set(f, priority);
                 }
             }
         }
