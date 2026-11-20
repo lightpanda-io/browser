@@ -28,6 +28,8 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 
+const Frame = @import("../Frame.zig");
+
 const EventTarget = @import("EventTarget.zig");
 const MessagePort = @import("MessagePort.zig");
 const Worker = @import("Worker.zig");
@@ -50,7 +52,7 @@ _closed: bool = false,
 // after the initial script has been evaluated.
 _pending_messages: std.ArrayList(MessagePort.Message) = .empty,
 
-pub fn init(worker: *Worker, url: [:0]const u8) !*DedicatedWorkerGlobalScope {
+pub fn init(worker: *Worker, url: [:0]const u8, frame: *Frame) !*DedicatedWorkerGlobalScope {
     return WorkerGlobalScope.init(
         worker._arena.allocator(),
         url,
@@ -62,7 +64,7 @@ pub fn init(worker: *Worker, url: [:0]const u8) !*DedicatedWorkerGlobalScope {
         worker._type == .module,
         worker._frame_id,
         worker._loader_id,
-        worker._frame,
+        frame,
     );
 }
 
