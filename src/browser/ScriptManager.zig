@@ -330,6 +330,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 log.debug(.http, "script adopt", .{ .url = remote_url, .ctx = ctx, .state = if (pre.complete) "done" else "loading" });
             }
             pre.extra = frame_extra;
+            // The preload/prescan hint doesn't necessarily know this element's
+            // final `crossorigin` attribute, so recompute `muted` against the
+            // actual consuming <script> now.
+            const settings = corsSettings(element, kind == .module);
+            pre.muted = settings.request_mode == .no_cors and !frame.isSameOrigin(remote_url);
 
             // The adopted Script has its own arena; ours held only the URL
             // resolution, which nothing below needs.
@@ -355,6 +360,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
     }
 
+    const settings = corsSettings(element, kind == .module);
+
     const script = try arena.create(Script);
     script.* = .{
         .node = .{},
@@ -364,6 +371,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .complete = false,
         .url = remote_url,
         .extra = frame_extra,
+        .muted = settings.request_mode == .no_cors and !frame.isSameOrigin(remote_url),
     };
 
     if (mode == .normal) {
@@ -392,8 +400,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.status = pre.status;
                 script.complete = true;
             } else {
-                const settings = corsSettings(script_element.asElement(), kind == .module);
-
                 const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
@@ -443,8 +449,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
     const transfer = blk: {
         errdefer self.base.scriptList(script).remove(&script.node);
-
-        const settings = corsSettings(script_element.asElement(), kind == .module);
 
         const transfer = try frame.newRequest(.{
             .ctx = script,
@@ -831,4 +835,71 @@ test "ScriptManager: a failed preload is consumed, not refetched" {
         \\window.classic_error && window.module_error && window.import_error &&
         \\!window.failed_classic_ran && !window.failed_module_ran
     , 2000);
+}
+
+// https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+// A classic script fetched cross-origin without a `crossorigin` attribute
+// is fetched in no-cors mode: its response is opaque, so an uncaught
+// exception must be reported to window.onerror as "Script error." with no
+// location, stack, or error object.
+test "ScriptManager: a cross-origin classic script's exceptions are muted" {
+    testing.silenceLog(&.{.page_error});
+
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\window.caught = null;
+        \\window.addEventListener('error', (e) => {
+        \\  window.caught = { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, error: e.error };
+        \\});
+        \\const s = document.createElement('script');
+        \\s.src = 'http://localhost:9582/src/browser/tests/throws.js';
+        \\document.head.appendChild(s);
+    , null);
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id, "window.caught !== null", 2000);
+
+    const caught = try ls.local.exec("JSON.stringify({ ...window.caught, error: window.caught.error == null })", null);
+    try testing.expectEqual(
+        "{\"message\":\"Script error.\",\"filename\":\"\",\"lineno\":0,\"colno\":0,\"error\":true}",
+        try caught.toStringSlice(),
+    );
+}
+
+test "ScriptManager: a same-origin classic script's exceptions are not muted" {
+    testing.silenceLog(&.{.page_error});
+
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\window.caught = null;
+        \\window.addEventListener('error', (e) => {
+        \\  window.caught = { message: e.message, filename: e.filename, error: e.error };
+        \\});
+        \\const s = document.createElement('script');
+        \\s.src = 'http://127.0.0.1:9582/src/browser/tests/throws.js';
+        \\document.head.appendChild(s);
+    , null);
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForScript(page.frame_id, "window.caught !== null", 2000);
+
+    const caught = try ls.local.exec("JSON.stringify({ ...window.caught, error: window.caught.error == null })", null);
+    try testing.expectEqual(
+        "{\"message\":\"Error: boom\",\"filename\":\"http://127.0.0.1:9582/src/browser/tests/throws.js\",\"error\":false}",
+        try caught.toStringSlice(),
+    );
 }
