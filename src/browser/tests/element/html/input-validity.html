@@ -383,8 +383,10 @@
     testing.expectEqual(true, odd.validity.stepMismatch);
     testing.expectEqual(false, odd.validity.valid);
     testing.expectEqual(false, odd.checkValidity());
+    testing.expectEqual('Please enter a value that matches the step.', odd.validationMessage);
     odd.value = '4';
     testing.expectEqual(false, odd.validity.stepMismatch);
+    testing.expectEqual('', odd.validationMessage);
 
     const fraction = input('number', {});
     fraction.value = '1.5';

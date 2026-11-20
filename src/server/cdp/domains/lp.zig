@@ -352,6 +352,8 @@ fn getPageStatus(cmd: anytype) !void {
 }
 
 fn detectForms(cmd: anytype) !void {
+    const Params = struct { includeValidation: bool = false };
+    const params = (try cmd.params(Params)) orelse Params{};
     const target = try cmd.target();
     const frame = target.mainFrame() orelse return error.FrameNotLoaded;
 
@@ -359,6 +361,7 @@ fn detectForms(cmd: anytype) !void {
         cmd.arena,
         frame.document.asNode(),
         frame,
+        params.includeValidation,
     );
 
     try lp.forms.registerNodes(forms_data, &target.node_registry);
@@ -821,6 +824,28 @@ test "cdp.lp: getContentSignal" {
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expectEqual(false, result.get("available").?.bool);
     try testing.expect(result.get("contentSignals") != null);
+}
+
+test "cdp.lp: detectForms reports validationMessage only when asked" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .url = "mcp_form_validation.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "LP.detectForms" });
+    const plain = (try dumpReply(&ctx, 1)).get("result").?.object.get("forms").?.array.items;
+    try testing.expectEqual(1, plain.len);
+    for (plain[0].object.get("fields").?.array.items) |field| {
+        try testing.expect(field.object.get("validationMessage") == null);
+    }
+
+    try ctx.processMessage(.{ .id = 2, .method = "LP.detectForms", .params = .{ .includeValidation = true } });
+    const forms = (try dumpReply(&ctx, 2)).get("result").?.object.get("forms").?.array.items;
+    const fields = forms[0].object.get("fields").?.array.items;
+    try testing.expectEqual(6, fields.len);
+    try testing.expectEqual("Outside delivery area", fields[0].object.get("validationMessage").?.string);
+    try testing.expect(fields[3].object.get("validationMessage") == null);
+    try testing.expectEqual("Please fill out this field.", fields[5].object.get("validationMessage").?.string);
 }
 
 test "cdp.lp: getPageStatus" {

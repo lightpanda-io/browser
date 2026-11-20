@@ -217,7 +217,7 @@ fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
     return v;
 }
 
-fn getValidationMessage(self: *const TextArea) []const u8 {
+pub fn getValidationMessage(self: *const TextArea) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please fill out this field.";

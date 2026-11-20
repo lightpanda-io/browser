@@ -1383,10 +1383,15 @@ fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: 
 }
 
 fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
+    const Params = struct {
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+        includeValidation: bool = false,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page) catch
+    const forms_data = lp.forms.collectForms(arena, page.document.asNode(), page, args.includeValidation) catch
         return ToolError.InternalError;
     lp.forms.registerNodes(forms_data, registry) catch
         return ToolError.InternalError;

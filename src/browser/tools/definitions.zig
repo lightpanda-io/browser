@@ -294,9 +294,18 @@ pub fn of(tool: Tool) Definition {
             .input_schema = url_params_schema,
         },
         .detectForms => .{
-            .description = "List the forms on the page as JSON: each form's `backendNodeId`, `action`, `method` and `fields`, where each field has `backendNodeId`, `tagName`, `name`, `inputType`, `required`, `disabled`, and when present `value`, `placeholder` and select `options`. Use it before filling a form to see every field it expects. It returns no CSS selectors; get one per field with `nodeDetails` so the fill calls stay replayable. If a url is provided, it navigates there first.",
+            .description = "List the forms on the page as JSON: each form's `backendNodeId`, `action`, `method` and `fields`, where each field has `backendNodeId`, `tagName`, `name`, `inputType`, `required`, `disabled`, and when present `value`, `placeholder` and select `options`. Use it before filling a form to see every field it expects. Pass `includeValidation` to also get each field's `validationMessage`, e.g. when a submit stays on the same page. It returns no CSS selectors; get one per field with `nodeDetails` so the fill calls stay replayable. If a url is provided, it navigates there first.",
             .summary = "List forms and their fields",
-            .input_schema = url_params_schema,
+            .input_schema = minify(
+                \\{
+                \\  "type": "object",
+                \\  "properties": {
+                \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing. An empty string is treated as omitted." },
+                \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                \\    "includeValidation": { "type": "boolean", "description": "Include non-empty validationMessage. Custom password messages use a generic error. Defaults to false." }
+                \\  }
+                \\}
+            ),
         },
         .click => .{
             .description = "Click on an interactive element. Provide either a CSS selector (preferred for reproducibility) or a backendNodeId. Returns the current page URL and title after the click.",
