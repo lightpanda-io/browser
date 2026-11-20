@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<!--
+An object can outlive the document it was created for: the parent keeps it
+while the iframe navigates. It must not start acting on the next document,
+which lives in the same frame.
+-->
+
+<script id=navigated_realm_objects type=module>
+  const state = await testing.async();
+
+  const iframe = document.createElement('iframe');
+  const onceLoad = (f) => new Promise((r) => { f.onload = () => r(); });
+  const tick = () => new Promise((r) => setTimeout(r, 50));
+
+  let loaded = onceLoad(iframe);
+  iframe.src = 'support/win_a.html';
+  document.body.appendChild(iframe);
+  await loaded;
+
+  const old_location = iframe.contentWindow.location;
+  const old_parser = new iframe.contentWindow.DOMParser();
+  const old_query = iframe.contentWindow.matchMedia('(min-width: 1px)');
+  const before = { matches: old_query.matches };
+
+  // A frame nested in the document that is about to go away.
+  const inner = iframe.contentDocument.createElement('iframe');
+  iframe.contentDocument.body.appendChild(inner);
+  const inner_history = inner.contentWindow.history;
+  const inner_location = inner.contentWindow.location;
+  before.inner_length = inner_history.length > 0;
+
+  loaded = onceLoad(iframe);
+  iframe.src = 'support/win_b.html';
+  await loaded;
+
+  // Navigating a document that isn't active anymore does nothing.
+  old_location.reload();
+  old_location.replace('support/page.html');
+  old_location.assign('support/page.html');
+  inner_location.assign('support/page.html');
+  await tick();
+  const after_stale_navigations = iframe.contentWindow.location.href;
+
+  // Chrome parses it as the old document would; we refuse. Either way it
+  // isn't the new document's.
+  let parsed_url = null;
+  try {
+    parsed_url = old_parser.parseFromString('<p>hi</p>', 'text/html').URL;
+  } catch (e) {}
+
+  let inner_history_error = null;
+  try {
+    inner_history.length;
+  } catch (e) {
+    inner_history_error = e.name;
+  }
+
+  const after = { matches: old_query.matches };
+
+  // The new document is unaffected, and still navigates.
+  const new_location = iframe.contentWindow.location;
+  loaded = onceLoad(iframe);
+  new_location.assign('support/win_a.html');
+  await loaded;
+  const after_live_navigation = iframe.contentWindow.location.href;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, before.matches);
+    testing.expectEqual(true, before.inner_length);
+
+    testing.expectEqual(true, after_stale_navigations.endsWith('support/win_b.html'));
+    testing.expectEqual(false, parsed_url !== null && parsed_url.endsWith('support/win_b.html'));
+    testing.expectEqual('SecurityError', inner_history_error);
+    testing.expectEqual(false, after.matches);
+
+    testing.expectEqual(true, after_live_navigation.endsWith('support/win_a.html'));
+  });
+</script>
+</body>
