@@ -33,6 +33,7 @@ const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
 const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
 const LockManager = @import("LockManager.zig");
+const Clipboard = @import("Clipboard.zig");
 
 const Execution = js.Execution;
 const resource_load = Frame.resource_load;
@@ -56,6 +57,7 @@ _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
 _service_worker: ?*ServiceWorkerContainer = null,
 _locks: ?*LockManager = null,
+_clipboard: ?*Clipboard = null,
 _beacon_bytes: ?*usize = null,
 
 pub const init: Navigator = .{};
@@ -239,6 +241,17 @@ fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
     return sw;
 }
 
+/// Removed at runtime when the frame isn't a secure context
+/// (Env.hideSecureContextInterfaces).
+fn getClipboard(self: *Navigator, exec: *Execution) !*Clipboard {
+    if (self._clipboard) |c| {
+        return c;
+    }
+    const c = try exec._factory.eventTarget(Clipboard{ ._proto = undefined });
+    self._clipboard = c;
+    return c;
+}
+
 fn getLocks(self: *Navigator, exec: *Execution) !*LockManager {
     if (self._locks) |l| {
         return l;
@@ -356,6 +369,7 @@ pub const JsApi = struct {
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{});
     pub const locks = bridge.accessor(Navigator.getLocks, null, .{});
+    pub const clipboard = bridge.accessor(Navigator.getClipboard, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{});

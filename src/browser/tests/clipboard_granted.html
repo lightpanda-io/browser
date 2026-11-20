@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<meta name=lp-mode content="skipped: needs clipboard-read granted (the Zig test sets it), and writes without clipboard-write, which Chrome allows only after a click">
+<script src="./testing.js"></script>
+
+<script id=round_trip type=module>
+  {
+    const state = await testing.async();
+    const empty = await navigator.clipboard.readText();
+    const written = await navigator.clipboard.writeText('hello');
+    const text = await navigator.clipboard.readText();
+    await navigator.clipboard.writeText(42);
+    const number = await navigator.clipboard.readText();
+    const permission = await navigator.permissions.query({ name: 'clipboard-read' });
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('', empty);
+      testing.expectEqual(undefined, written);
+      testing.expectEqual('hello', text);
+      testing.expectEqual('42', number);
+      testing.expectEqual('granted', permission.state);
+    });
+  }
+</script>

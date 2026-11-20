@@ -67,6 +67,11 @@ last_js_heap_sample_ms: u64 = 0,
 // browser context. Keys are owned by `allocator`; values are enum tags.
 permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 
+// What navigator.clipboard.writeText last wrote, owned by `allocator`. Never
+// the system clipboard: each Browser (a CDP connection, an MCP session) has
+// its own, kept across navigations.
+clipboard: []const u8 = "",
+
 // Runtime viewport override
 viewport_override: ?Viewport = null,
 
@@ -176,6 +181,7 @@ pub fn deinit(self: *Browser) void {
     if (self.renderer) |r| r.deinit();
     self.clearPermissions();
     self.permissions.deinit(allocator);
+    allocator.free(self.clipboard);
     self.selector_cache.deinit();
 }
 
