@@ -204,6 +204,25 @@ pub fn build(b: *Build) !void {
     addGenerator(b, exe_config, "docs", "Generate reference partials for the docs site (zig-out/docs/*.mdx)");
 
     {
+        // The WebGL contexts are checked in: this rewrites them from the IDL
+        const exe = b.addExecutable(.{
+            .name = "lightpanda-webgl",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_webgl.zig"),
+                .target = b.graph.host,
+            }),
+        });
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.addFileArg(b.path("src/browser/webapi/canvas/webgl1.idl"));
+        run_cmd.addFileArg(b.path("src/browser/webapi/canvas/webgl2.idl"));
+        const update = b.addUpdateSourceFiles();
+        inline for (.{ "WebGLRenderingContext.zig", "WebGL2RenderingContext.zig" }) |name| {
+            update.addCopyFileToSource(run_cmd.addOutputFileArg(name), "src/browser/webapi/canvas/" ++ name);
+        }
+        b.step("webgl", "Regenerate src/browser/webapi/canvas/WebGL{,2}RenderingContext.zig from the IDL").dependOn(&update.step);
+    }
+
+    {
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
