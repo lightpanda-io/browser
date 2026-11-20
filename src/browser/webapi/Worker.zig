@@ -49,7 +49,7 @@ _frame_id: u32,
 _loader_id: u32,
 
 _proto: *EventTarget,
-_frame: *Frame,
+_exec: *js.Execution,
 _arena: *lp.Arena,
 _worker_scope: *DedicatedWorkerGlobalScope,
 
@@ -80,7 +80,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     const self = try frame._factory.eventTarget(Worker{
         ._arena = arena,
         ._proto = undefined,
-        ._frame = frame,
+        ._exec = &frame.main_js.execution,
         ._url = resolved_url,
         ._type = if (options) |o| o.type else .classic,
         ._worker_scope = undefined,
@@ -89,7 +89,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     });
     errdefer frame._factory.destroy(self);
 
-    const dedicated_worker = try DedicatedWorkerGlobalScope.init(self, resolved_url);
+    const dedicated_worker = try DedicatedWorkerGlobalScope.init(self, resolved_url, frame);
     errdefer dedicated_worker.deinit();
 
     self._worker_scope = dedicated_worker;
@@ -148,7 +148,7 @@ pub fn deinit(self: *Worker) void {
     }
     self.releaseScriptArena();
     self._worker_scope.deinit();
-    self._frame.page.event_listeners.removeTarget(self.asEventTarget());
+    self._exec.page.event_listeners.removeTarget(self.asEventTarget());
     self._arena.release();
 }
 
@@ -302,10 +302,10 @@ fn fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Glo
 }
 
 fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Global) !void {
-    const frame = self._frame;
+    const exec = self._exec;
     const target = self.asEventTarget();
     // Check if there are any listeners
-    if (!frame._event_manager.hasDirectListeners(target, "error")) {
+    if (!exec.hasDirectListeners(target, "error")) {
         if (error_value) |ev| ev.release();
         return;
     }
@@ -316,9 +316,9 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
         .filename = self._url,
         .bubbles = false,
         .cancelable = true,
-    }, frame.page);
+    }, exec.page);
 
-    try frame._event_manager.dispatchDirect(target, error_event.asEvent(), .{
+    try exec.dispatch(target, error_event.asEvent(), .{
         .context = "Worker.onerror",
     });
 }
@@ -349,13 +349,13 @@ pub fn postMessage(self: *Worker, data: js.Value, transfer: ?js.Value, exec: *js
 
 // Called internally by DedicatedWorkerGlobalScope when it wants to post a message to us
 pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessagePort) !void {
-    const frame = self._frame;
+    const exec = self._exec;
 
     // clones from where it currently is (the Worker context) to our Page's context
-    const message = try MessagePort.cloneMessage(data, transfer, &frame.js.execution);
+    const message = try MessagePort.cloneMessage(data, transfer, exec);
     errdefer message.release();
 
-    const message_arena = try frame.getArena(.tiny, "Worker.receiveMessage");
+    const message_arena = try exec.session.getArena(.tiny, "Worker.receiveMessage");
     errdefer message_arena.release();
 
     const callback = try message_arena.create(ReceiveMessageCallback);
@@ -365,7 +365,7 @@ pub fn receiveMessage(self: *Worker, data: js.Value, transfer: []const *MessageP
         .arena = message_arena,
     };
 
-    try frame.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
+    try exec._scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "Worker.receiveMessage",
         .kind = .message,
         .parent = message.task,
@@ -394,25 +394,25 @@ const ReceiveMessageCallback = struct {
         defer self.message.releasePorts();
 
         const worker = self.worker;
-        const frame = worker._frame;
+        const exec = worker._exec;
         const target = worker.asEventTarget();
 
         // If data is null, deserialization failed - fire messageerror
         const data = self.message.data orelse {
-            if (!frame._event_manager.hasDirectListeners(target, "messageerror")) {
+            if (!exec.hasDirectListeners(target, "messageerror")) {
                 return null;
             }
             const event = (try MessageEvent.initTrusted(comptime .wrap("messageerror"), .{
                 .ports = self.message.ports,
                 .bubbles = false,
                 .cancelable = false,
-            }, frame.page)).asEvent();
-            try frame._event_manager.dispatchDirect(target, event, .{ .context = "Worker.messageerror" });
+            }, exec.page)).asEvent();
+            try exec.dispatch(target, event, .{ .context = "Worker.messageerror" });
             return null;
         };
 
         // Check if there are any listeners before creating the event
-        if (!frame._event_manager.hasDirectListeners(target, "message")) {
+        if (!exec.hasDirectListeners(target, "message")) {
             data.release();
             return null;
         }
@@ -422,9 +422,9 @@ const ReceiveMessageCallback = struct {
             .ports = self.message.ports,
             .bubbles = false,
             .cancelable = false,
-        }, frame.page)).asEvent();
+        }, exec.page)).asEvent();
 
-        try frame._event_manager.dispatchDirect(target, event, .{ .context = "Worker.receiveMessage" });
+        try exec.dispatch(target, event, .{ .context = "Worker.receiveMessage" });
 
         return null;
     }
