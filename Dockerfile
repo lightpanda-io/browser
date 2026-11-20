@@ -5,6 +5,10 @@ ARG MINISIG=0.12
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG V8=15.5.35.13
 ARG ZIG_V8=v0.6.2
+# SHA-256 of the zig-v8-fork release asset, matching the V8/ARCH pair below.
+# Bump together with V8 / ZIG_V8.
+ARG V8_SHA256_LINUX_X86_64=0ac4bf50f87cf0885c66d1049ae30289fbe6264e408b3245b348213f7097001f
+ARG V8_SHA256_LINUX_AARCH64=647ec2dc4ddbd035dd6c76f423afe1de74b875554f2212588af21b63093bb9ad
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
@@ -47,7 +51,12 @@ RUN case $TARGETPLATFORM in \
     "linux/arm64") ARCH="aarch64" ;; \
     *) ARCH="x86_64" ;; \
     esac && \
+    case $ARCH in \
+      aarch64) V8_SHA256=$V8_SHA256_LINUX_AARCH64 ;; \
+      *) V8_SHA256=$V8_SHA256_LINUX_X86_64 ;; \
+    esac && \
     curl --fail -L --retry 3 --retry-delay 2 -o libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${ZIG_V8}/libc_v8_${V8}_linux_${ARCH}.a && \
+    echo "${V8_SHA256}  libc_v8.a" | sha256sum -c - && \
     mkdir -p v8/ && \
     mv libc_v8.a v8/libc_v8.a
 
