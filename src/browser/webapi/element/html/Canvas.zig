@@ -29,6 +29,7 @@ const Element = @import("../../Element.zig");
 const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
 const WebGL2RenderingContext = @import("../../canvas/WebGL2RenderingContext.zig");
+const webgl = @import("../../canvas/webgl.zig");
 const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
 
 const HtmlElement = @import("../Html.zig");
@@ -76,8 +77,8 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
-            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
-            .webgl2 => std.mem.eql(u8, context_type, "webgl2"),
+            .webgl => webglVersion(context_type) == .webgl1,
+            .webgl2 => webglVersion(context_type) == .webgl2,
         };
         return if (matches) cached else null;
     }
@@ -94,30 +95,28 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
         // reset, re-render, and loop forever. The webgl experimental feature
         // gives a complete context that draws nothing, for renderers with no
         // fallback (Compose for Web).
-        if (isWebGL(context_type) == false) {
-            return null;
-        }
+        const version = webglVersion(context_type) orelse return null;
         // Counted either way: nothing is drawn
         frame.page.status.noteUnsupported(.webgl);
         if (frame._session.experimental_features.webgl == false) {
             return null;
         }
-        if (std.mem.eql(u8, context_type, "webgl2")) {
-            break :blk .{ .webgl2 = try frame._factory.create(WebGL2RenderingContext{ ._canvas = self }) };
-        }
-        break :blk .{ .webgl = try frame._factory.create(WebGLRenderingContext{ ._canvas = self }) };
+        break :blk switch (version) {
+            .webgl1 => .{ .webgl = try frame._factory.create(WebGLRenderingContext{ ._canvas = self }) },
+            .webgl2 => .{ .webgl2 = try frame._factory.create(WebGL2RenderingContext{ ._canvas = self }) },
+        };
     };
     self._cached = drawing_context;
     return drawing_context;
 }
 
-pub fn isWebGL(context_type: []const u8) bool {
-    inline for (&.{ "webgl", "webgl2", "experimental-webgl" }) |needle| {
-        if (std.mem.eql(u8, context_type, needle)) {
-            return true;
-        }
-    }
-    return false;
+pub fn webglVersion(context_type: []const u8) ?webgl.Version {
+    const versions = std.StaticStringMap(webgl.Version).initComptime(.{
+        .{ "webgl", .webgl1 },
+        .{ "experimental-webgl", .webgl1 },
+        .{ "webgl2", .webgl2 },
+    });
+    return versions.get(context_type);
 }
 
 fn hasBitmap(self: *const Canvas) bool {
