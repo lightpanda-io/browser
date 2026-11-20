@@ -665,6 +665,12 @@ pub const Script = struct {
     // Where a parser-inserted inline script is in its document.
     text_position: js.Local.SourcePosition = .{},
 
+    // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+    // Set for classic scripts fetched cross-origin in "no-cors" mode: their
+    // response is opaque, so uncaught exceptions are reported to window.onerror
+    // as "Script error." with no location/stack/error object.
+    muted: bool = false,
+
     pub const Source = union(enum) {
         @"inline": []const u8,
         // Taken from the transfer (Transfer.takeBody), freed in deinit.
@@ -1033,7 +1039,7 @@ pub const Script = struct {
         // Report before caughtOrError: reading the exception's stack drops
         // the frames reportError needs for the error's location.
         if (try_catch.exceptionValue()) |exc| {
-            frame.window.reportError(exc, frame) catch |err| {
+            frame.window.reportErrorMuted(exc, frame, self.muted) catch |err| {
                 log.debug(.js, "eval script report error", .{ .url = url, .err = err });
             };
         }

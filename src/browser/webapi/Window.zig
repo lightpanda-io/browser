@@ -498,6 +498,15 @@ fn cancelIdleCallback(self: *Window, id: u32) void {
 }
 
 pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
+    return self.reportErrorMuted(err, frame, false);
+}
+
+// https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+// `muted` is true when the exception came from a classic script fetched
+// cross-origin without CORS: the page only ever sees "Script error." with
+// no location/stack/error object, same as other browsers. Our own logging
+// and the CDP notification still get the real details.
+pub fn reportErrorMuted(self: *Window, err: js.Value, frame: *Frame, muted: bool) !void {
     // Per spec's "in error reporting mode": an exception thrown while an
     // error is being reported (e.g. by an "error" listener) is not reported
     // again, which would otherwise recurse without bound.
@@ -532,7 +541,15 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     self._reporting_error = true;
     defer self._reporting_error = false;
 
-    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
+    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), if (muted) .{
+        .@"error" = null,
+        .message = "Script error.",
+        .filename = "",
+        .lineno = 0,
+        .colno = 0,
+        .bubbles = false,
+        .cancelable = true,
+    } else .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .filename = location.url,
