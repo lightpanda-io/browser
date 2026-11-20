@@ -32,12 +32,12 @@ const Event = @import("../../Event.zig");
 const reflection = @import("../reflection.zig");
 
 const HtmlElement = @import("../Html.zig");
-const Source = @import("Source.zig");
 const wav = @import("../../webaudio/dsp/wav.zig");
 const MediaError = @import("../../media/MediaError.zig");
 const TextTrack = @import("../../media/TextTrack.zig");
 const TextTrackList = @import("../../media/TextTrackList.zig");
 
+const Source = @import("Source.zig");
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
 
@@ -103,7 +103,8 @@ _duration: f64 = std.math.nan(f64),
 _seeking: bool = false,
 // When the position started advancing, on the scheduler's clock.
 _clock_started: ?u64 = null,
-_clock: ?*Clock = null,
+// While the clock's scheduler entry is queued
+_clock: ?*Frame = null,
 // bumped by each load. Drops the pending tasks of the previous one
 _generation: u32 = 0,
 _volume: f64 = 1.0,
@@ -421,7 +422,18 @@ fn startClock(self: *Media, frame: *Frame) !void {
     // Time stops with the element's frame.
     const owner = self.taskFrame(frame) orelse return;
     self._clock_started = lp.datetime.milliTimestamp(.boot);
-    try Clock.schedule(self, owner);
+    if (self._clock != null) {
+        // Something was already queued, we'll re-use that scheduled task. This
+        // does mean our timing will probably be off, but the spec is flexible here
+        return;
+    }
+    try owner.js.scheduler.add(self, Clock.run, self.msToNextTick(), .{
+        .name = "Media.clock",
+        .cut = true,
+        .blocks_done = false,
+        .finalizer = Clock.finalizer,
+    });
+    self._clock = owner;
 }
 
 // "timeupdate [...] at least every 250ms"
@@ -455,57 +467,36 @@ fn tick(self: *Media, frame: *Frame) !void {
     try self.dispatchEvent("ended", frame);
 }
 
-// The task that moves a playing element along its timeline. `currentTime` is
-// computed when read, so the task is only here for the events.
+// The task that moves a playing element along its timeline, its context the
+// element itself. `currentTime` is computed when read, so the task is only here
+// for the events.
 const Clock = struct {
-    // null once another clock took over
-    media: ?*Media,
-    frame: *Frame,
-
-    fn schedule(media: *Media, frame: *Frame) !void {
-        const self = try frame._factory.create(Clock{ .media = media, .frame = frame });
-        errdefer frame._factory.destroy(self);
-        // A page isn't done only once its media has played out.
-        try frame.js.scheduler.add(self, Clock.run, media.msToNextTick(), .{
-            .name = "Media.clock",
-            .blocks_done = false,
-            .finalizer = Clock.finalizer,
-        });
-        if (media._clock) |previous| {
-            previous.media = null;
-        }
-        media._clock = self;
-    }
-
     fn run(ctx: *anyopaque) !?u32 {
-        const self: *Clock = @ptrCast(@alignCast(ctx));
-        const frame = self.frame;
-        if (self.media) |media| {
-            media.tick(frame) catch |err| {
-                log.warn(.frame, "media clock", .{ .err = err });
-            };
+        const media: *Media = @ptrCast(@alignCast(ctx));
+        const frame = media._clock.?;
+        if (frame.isGoingAway()) {
+            // as the finalizer would, which isn't called for a task that ran
+            finalizer(ctx);
+            return null;
         }
+        media.tick(frame) catch |err| {
+            log.warn(.frame, "media clock", .{ .err = err });
+        };
 
         // The listeners can have paused the element, or restarted its clock.
-        if (self.media) |media| {
-            if (media._clock_started != null) {
-                return media.msToNextTick();
-            }
-            media._clock = null;
+        if (media._clock_started != null) {
+            return media.msToNextTick();
         }
-        frame._factory.destroy(self);
+        media._clock = null;
         return null;
     }
 
     // The frame is going away. The element can outlive it: a script of
     // another frame may still hold it.
     fn finalizer(ctx: *anyopaque) void {
-        const self: *Clock = @ptrCast(@alignCast(ctx));
-        if (self.media) |media| {
-            media.stopClock();
-            media._clock = null;
-        }
-        self.frame._factory.destroy(self);
+        const media: *Media = @ptrCast(@alignCast(ctx));
+        media.stopClock();
+        media._clock = null;
     }
 };
 
@@ -865,4 +856,30 @@ test "WebApi: Media" {
 
 test "WebApi: Media clock" {
     try testing.htmlRunner("element/html/media_clock.html", .{});
+}
+
+test "WebApi: Media clock doesn't hold settled" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // A 50ms clip, played from load work: the clock's first tick is a short
+    // delay, which a tracked task would hold settled for.
+    const attribution = frame.js.attribution;
+    const task_scope = attribution.enter(attribution.begin(.script, .{ .root = true }));
+    _ = try ls.local.exec(
+        \\const audio = new Audio('data:audio/wav;base64,UklGRlYAAABXQVZFZm10IBAAAAABAAEA6AMAAOgDAAABAAgAZGF0YTIAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==');
+        \\audio.loop = true;
+        \\audio.play();
+    , null);
+    task_scope.exit();
+    // reading the source is load work
+    try testing.expectEqual(1, frame.page.settle.pending);
+
+    try frame.js.scheduler.run();
+    try testing.expectEqual(true, (try ls.local.exec("audio.duration === 0.05", null)).toBool());
+    try testing.expectEqual(0, frame.page.settle.pending);
 }

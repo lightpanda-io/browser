@@ -83,32 +83,45 @@
 
 <script id="playback" type=module>
   const state = await testing.async();
-  const audio = new Audio(wav(0.8));
-  const events = record(audio, ['pause', 'ended']);
-  let updates = 0;
-  let last = 0;
+  const audio = new Audio(wav(10));
+  // so that the clock starts with play()
+  await once(audio, 'loadedmetadata');
+  await audio.play();
+  await sleep(20);
+  const midway = audio.currentTime;
+  const ended_midway = audio.ended;
+  audio.pause();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, midway > 0 && midway < 10);
+    testing.expectEqual(false, ended_midway);
+  });
+</script>
+
+<script id="play_to_end" type=module>
+  // From 0.1s before the end, so that it doesn't take long.
+  const state = await testing.async();
+  const audio = new Audio(wav(10));
+  await once(audio, 'loadedmetadata');
+  audio.currentTime = 9.9;
+  await once(audio, 'seeked');
+
+  const events = record(audio, ['timeupdate', 'pause', 'ended']);
+  let last = audio.currentTime;
   let backwards = false;
   audio.addEventListener('timeupdate', () => {
-    updates += 1;
     backwards ||= audio.currentTime < last;
     last = audio.currentTime;
   });
-
   await audio.play();
-  await sleep(150);
-  const midway = audio.currentTime;
-  const ended_midway = audio.ended;
   await once(audio, 'ended');
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(true, midway > 0 && midway < 0.8);
-    testing.expectEqual(false, ended_midway);
-    // along the way, and at the end
-    testing.expectEqual(true, updates > 1);
     testing.expectEqual(false, backwards);
-    testing.expectEqual('pause,ended', events.join(','));
-    testing.expectEqual(0.8, audio.currentTime);
+    testing.expectEqual('timeupdate,pause,ended', events.slice(-3).join(','));
+    testing.expectEqual(10, audio.currentTime);
     testing.expectEqual(true, audio.ended);
     testing.expectEqual(true, audio.paused);
   });
@@ -117,11 +130,12 @@
 <script id="pause_holds_position" type=module>
   const state = await testing.async();
   const audio = new Audio(wav(5));
+  await once(audio, 'loadedmetadata');
   await audio.play();
-  await sleep(100);
+  await sleep(20);
   audio.pause();
   const paused_at = audio.currentTime;
-  await sleep(100);
+  await sleep(20);
 
   state.resolve();
   await state.done(() => {
@@ -184,25 +198,28 @@
 
 <script id="playback_rate" type=module>
   const state = await testing.async();
-  const audio = new Audio(wav(3));
+  const audio = new Audio(wav(10));
+  await once(audio, 'loadedmetadata');
   audio.playbackRate = 10;
-  const start = performance.now();
   await audio.play();
-  await once(audio, 'ended');
-  const elapsed = performance.now() - start;
+  await sleep(20);
+  const position = audio.currentTime;
+  audio.pause();
 
   state.resolve();
   await state.done(() => {
-    // 300ms at this rate
-    testing.expectEqual(true, elapsed < 1500);
-    testing.expectEqual(3, audio.currentTime);
+    // at least 20ms, at 10x
+    testing.expectEqual(true, position >= 0.19 && position < 10);
   });
 </script>
 
 <script id="loop" type=module>
   const state = await testing.async();
-  const audio = new Audio(wav(0.2));
+  const audio = new Audio(wav(10));
   audio.loop = true;
+  await once(audio, 'loadedmetadata');
+  audio.currentTime = 9.95;
+  await once(audio, 'seeked');
   const events = record(audio, ['ended']);
   // wraps around
   const wrapped = once(audio, 'seeked');
@@ -217,7 +234,7 @@
   await state.done(() => {
     testing.expectEqual(false, paused);
     testing.expectEqual(false, ended);
-    testing.expectEqual(true, position < 0.2);
+    testing.expectEqual(true, position < 9);
     testing.expectEqual('', events.join(','));
   });
 </script>
@@ -272,20 +289,21 @@
   const state = await testing.async();
   const audio = new Audio(wav(5));
   document.body.append(audio);
+  await once(audio, 'loadedmetadata');
   const moved = record(audio, ['pause']);
   await audio.play();
 
   // still in a document once the task runs
   const div = document.body.appendChild(document.createElement('div'));
   div.append(audio);
-  await sleep(50);
+  await sleep(10);
   const paused_moved = audio.paused;
 
   const paused = once(audio, 'pause');
   div.remove();
   await paused;
   const position = audio.currentTime;
-  await sleep(100);
+  await sleep(20);
 
   state.resolve();
   await state.done(() => {
@@ -303,14 +321,14 @@
   const audio = new iframe.contentWindow.Audio(wav(5));
   await once(audio, 'loadedmetadata');
   await audio.play();
-  await sleep(50);
+  await sleep(20);
   iframe.remove();
 
   const stopped_at = audio.currentTime;
-  await sleep(100);
+  await sleep(20);
   const later = audio.currentTime;
   audio.currentTime = 1;
-  await sleep(100);
+  await sleep(20);
 
   state.resolve();
   await state.done(() => {
@@ -328,7 +346,7 @@
   const audio = new Audio('data:audio/wav;base64,AAAA');
   let resolved = false;
   await audio.play().then(() => { resolved = true; }, () => {});
-  await sleep(50);
+  await sleep(10);
 
   state.resolve();
   await state.done(() => {
@@ -351,7 +369,7 @@
   const source_set = video.networkState;
   await video.play().catch(() => {});
   video.src = 'other.mp4';
-  await sleep(50);
+  await sleep(10);
   testing.endBrowserLog();
 
   state.resolve();
