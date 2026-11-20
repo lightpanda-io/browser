@@ -355,6 +355,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
     }
 
+    const settings = corsSettings(element, kind == .module);
+
     const script = try arena.create(Script);
     script.* = .{
         .node = .{},
@@ -364,6 +366,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .complete = false,
         .url = remote_url,
         .extra = frame_extra,
+        .muted = settings.request_mode == .no_cors and !frame.isSameOrigin(remote_url),
     };
 
     if (mode == .normal) {
@@ -392,8 +395,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.status = pre.status;
                 script.complete = true;
             } else {
-                const settings = corsSettings(script_element.asElement(), kind == .module);
-
                 const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
@@ -443,8 +444,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
 
     const transfer = blk: {
         errdefer self.base.scriptList(script).remove(&script.node);
-
-        const settings = corsSettings(script_element.asElement(), kind == .module);
 
         const transfer = try frame.newRequest(.{
             .ctx = script,
