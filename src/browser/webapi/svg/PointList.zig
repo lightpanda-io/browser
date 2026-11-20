@@ -29,7 +29,7 @@ const reflected_list = @import("reflected_list.zig");
 
 const PointList = @This();
 
-_frame: *Frame,
+_exec: *js.Execution,
 _element: *Element,
 _read_only: bool,
 _synced: bool = false,
@@ -66,7 +66,7 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*PointList {
     if (!gop.found_existing) {
         errdefer _ = page._svg_point_lists.remove(key);
         gop.value_ptr.* = try frame._factory.create(PointList{
-            ._frame = frame,
+            ._exec = &frame.main_js.execution,
             ._element = element,
             ._read_only = kind == .animated,
         });
@@ -122,7 +122,12 @@ fn mutatePoint(
     value: f64,
 ) anyerror!void {
     const self: *PointList = @ptrCast(@alignCast(context));
-    const frame = self._frame;
+    const frame = self._exec.frame() orelse {
+        // The point still changes, the attribute it reflected is no longer
+        // kept in sync.
+        point.setCoordinateRaw(coordinate, value);
+        return;
+    };
     try M.sync(self, frame);
 
     // An external attribute mutation detaches the old item during sync. The

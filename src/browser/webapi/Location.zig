@@ -29,7 +29,7 @@ const NavigationKind = @import("navigation/root.zig").NavigationKind;
 const Location = @This();
 
 _url: *URL,
-_frame: *Frame,
+_exec: *js.Execution,
 _rc: lp.RC = .{},
 
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
@@ -39,7 +39,7 @@ pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
 
     return frame._factory.create(Location{
         ._url = url,
-        ._frame = frame,
+        ._exec = &frame.main_js.execution,
     });
 }
 
@@ -95,8 +95,14 @@ pub fn historyHandling(target: *const Frame) NavigationKind {
     return .{ .replace = null };
 }
 
+// The frame to navigate, unless it was destroyed: navigating a document that
+// isn't active anymore does nothing.
+fn liveFrame(self: *const Location) ?*Frame {
+    return self._exec.frame();
+}
+
 pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     const new_url = try U.setPathname(target.url, pathname, frame.call_arena);
     return target.scheduleNavigation(new_url, .{
         .reason = .script,
@@ -105,7 +111,7 @@ pub fn setPathname(self: *const Location, pathname: []const u8, frame: *Frame) !
 }
 
 fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     const new_url = try U.setSearch(target.url, search, frame.call_arena);
     return target.scheduleNavigation(new_url, .{
         .reason = .script,
@@ -114,7 +120,7 @@ fn setSearch(self: *const Location, search: []const u8, frame: *Frame) !void {
 }
 
 fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     const old_url = target.url;
     const base_end = std.mem.findScalar(u8, old_url, '#') orelse old_url.len;
     // Includes the leading '#'; empty when the URL has no fragment.
@@ -154,26 +160,28 @@ fn setHash(self: *const Location, hash: []const u8, frame: *Frame) !void {
 // document when a script navigates another same-origin window, as in
 // iframe.contentWindow.location.href = "page.html". V8 only exposes the
 // incumbent context, which is the entry one for a call made by a script.
-fn parseFromCaller(self: *const Location, url: [:0]const u8, frame: *Frame) !?[]const u8 {
+fn parseFromCaller(target: *const Frame, url: [:0]const u8, frame: *Frame) !?[]const u8 {
     const caller = frame.js.getIncumbent() orelse return null;
-    if (caller == self._frame) {
+    if (caller == target) {
         return url;
     }
     return try U.resolve(frame.call_arena, caller.navigationBase(), url, .{ .encoding = caller.charset });
 }
 
 pub fn assign(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    const target_url = try self.parseFromCaller(url, frame) orelse return;
-    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(self._frame) }, .{ .script = self._frame });
+    const target = self.liveFrame() orelse return;
+    const target_url = try parseFromCaller(target, url, frame) orelse return;
+    return target.scheduleNavigation(target_url, .{ .reason = .script, .kind = historyHandling(target) }, .{ .script = target });
 }
 
 pub fn replace(self: *const Location, url: [:0]const u8, frame: *Frame) !void {
-    const target_url = try self.parseFromCaller(url, frame) orelse return;
-    return self._frame.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = self._frame });
+    const target = self.liveFrame() orelse return;
+    const target_url = try parseFromCaller(target, url, frame) orelse return;
+    return target.scheduleNavigation(target_url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = target });
 }
 
 pub fn reload(self: *const Location) !void {
-    const target = self._frame;
+    const target = self.liveFrame() orelse return;
     return target.scheduleNavigation(target.url, .{ .reason = .script, .kind = .reload }, .{ .script = target });
 }
 

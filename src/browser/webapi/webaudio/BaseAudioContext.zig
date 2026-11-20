@@ -62,7 +62,7 @@ _type: Type,
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 // where tasks run and events dispatch
-_frame: *Frame,
+_exec: *js.Execution,
 // for releasing refs: teardown can outlive the frame
 _page: *Page,
 _sample_rate: f32,
@@ -105,7 +105,7 @@ pub fn init(typ: Type, arena: *lp.Arena, sample_rate: f32, frame: *Frame) BaseAu
         ._proto = undefined,
         ._type = typ,
         ._arena = arena,
-        ._frame = frame,
+        ._exec = &frame.main_js.execution,
         ._page = frame.page,
         ._sample_rate = sample_rate,
     };
@@ -207,18 +207,18 @@ pub fn renderQuantum(self: *BaseAudioContext, local: *const js.Local) !*const Bu
 
 // Listeners run script, so the list is re-read after each one.
 pub fn dispatchEnded(self: *BaseAudioContext) void {
-    const frame = self._frame;
+    const exec = self._exec;
     while (self._finished.items.len > 0) {
         const source = self._finished.orderedRemove(0);
         const target = source.asEventTarget();
-        if (frame._event_manager.hasDirectListeners(target, "ended") == false) {
+        if (exec.hasDirectListeners(target, "ended") == false) {
             continue;
         }
-        const event = Event.initTrusted(comptime .wrap("ended"), .{}, frame.page) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("ended"), .{}, self._page) catch |err| {
             log.warn(.js, "AudioScheduledSourceNode ended", .{ .err = err });
             continue;
         };
-        frame._event_manager.dispatchDirect(target, event, .{ .context = "AudioScheduledSourceNode ended" }) catch |err| {
+        exec.dispatch(target, event, .{ .context = "AudioScheduledSourceNode ended" }) catch |err| {
             log.debug(.js, "AudioScheduledSourceNode ended", .{ .err = err });
         };
     }
@@ -243,12 +243,12 @@ const StateChangeTask = struct {
     context: *BaseAudioContext,
 
     fn queue(context: *BaseAudioContext) !void {
-        const frame = context._frame;
-        const task = try frame._factory.create(StateChangeTask{ .context = context });
-        errdefer frame._factory.destroy(task);
+        const exec = context._exec;
+        const task = try exec._factory.create(StateChangeTask{ .context = context });
+        errdefer exec._factory.destroy(task);
         context.acquireRef();
-        errdefer context.releaseRef(frame.page);
-        try frame.js.scheduler.add(task, run, 0, .{
+        errdefer context.releaseRef(context._page);
+        try exec._scheduler.add(task, run, 0, .{
             .name = "AudioContext.statechange",
             .finalizer = cancelled,
         });
@@ -257,14 +257,14 @@ const StateChangeTask = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const task: *StateChangeTask = @ptrCast(@alignCast(ctx));
         const context = task.context;
-        const frame = context._frame;
-        frame._factory.destroy(task);
-        defer context.releaseRef(frame.page);
+        const exec = context._exec;
+        exec._factory.destroy(task);
+        defer context.releaseRef(context._page);
 
         const target = context.asEventTarget();
-        if (frame._event_manager.hasDirectListeners(target, "statechange")) {
-            const event = try Event.initTrusted(comptime .wrap("statechange"), .{}, frame.page);
-            try frame._event_manager.dispatchDirect(target, event, .{ .context = "AudioContext statechange" });
+        if (exec.hasDirectListeners(target, "statechange")) {
+            const event = try Event.initTrusted(comptime .wrap("statechange"), .{}, context._page);
+            try exec.dispatch(target, event, .{ .context = "AudioContext statechange" });
         }
         return null;
     }
@@ -272,9 +272,8 @@ const StateChangeTask = struct {
     fn cancelled(ctx: *anyopaque) void {
         const task: *StateChangeTask = @ptrCast(@alignCast(ctx));
         const context = task.context;
-        const frame = context._frame;
-        frame._factory.destroy(task);
-        context.releaseRef(frame.page);
+        context._exec._factory.destroy(task);
+        context.releaseRef(context._page);
     }
 };
 
@@ -402,14 +401,14 @@ const DecodeTask = struct {
     // Once queued, the task owns the handles and the buffer ref.
     fn queue(task: DecodeTask) !void {
         const context = task.context;
-        const frame = context._frame;
-        const created = try frame._factory.create(task);
-        errdefer frame._factory.destroy(created);
+        const exec = context._exec;
+        const created = try exec._factory.create(task);
+        errdefer exec._factory.destroy(created);
 
         context.acquireRef();
-        errdefer context.releaseRef(frame.page);
+        errdefer context.releaseRef(context._page);
 
-        try frame.js.scheduler.add(created, run, 0, .{
+        try exec._scheduler.add(created, run, 0, .{
             .name = "BaseAudioContext.decodeAudioData",
             .finalizer = cancelled,
         });
@@ -421,7 +420,7 @@ const DecodeTask = struct {
         const context = task.context;
 
         var ls: js.Local.Scope = undefined;
-        context._frame.js.localScope(&ls);
+        context._exec.js.localScope(&ls);
         defer ls.deinit();
         const local = &ls.local;
         const resolver = task.resolver.local(local);
@@ -453,7 +452,6 @@ const DecodeTask = struct {
 
     fn destroy(task: *DecodeTask) void {
         const context = task.context;
-        const frame = context._frame;
         task.resolver.release();
 
         if (task.success) |f| {
@@ -465,11 +463,11 @@ const DecodeTask = struct {
         }
 
         if (task.buffer) |b| {
-            b.releaseRef(frame.page);
+            b.releaseRef(context._page);
         }
 
-        frame._factory.destroy(task);
-        context.releaseRef(frame.page);
+        context._exec._factory.destroy(task);
+        context.releaseRef(context._page);
     }
 };
 
