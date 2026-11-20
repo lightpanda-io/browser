@@ -254,13 +254,12 @@ fn generate(arena: Allocator, idl: *const Interfaces, context: Context) ![]const
         \\const lp = @import("lightpanda");
         \\
         \\const webgl = @import("webgl.zig");
-        \\const Canvas = @import("../element/html/Canvas.zig");
         \\
         \\const js = lp.js;
         \\
         \\const {s} = @This();
         \\
-        \\_canvas: *Canvas,
+        \\_canvas: webgl.Owner,
         \\
         \\
     , .{ license, context.idl, context.name });

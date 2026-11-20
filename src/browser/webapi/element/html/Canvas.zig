@@ -102,8 +102,8 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
             return null;
         }
         break :blk switch (version) {
-            .webgl1 => .{ .webgl = try frame._factory.create(WebGLRenderingContext{ ._canvas = self }) },
-            .webgl2 => .{ .webgl2 = try frame._factory.create(WebGL2RenderingContext{ ._canvas = self }) },
+            .webgl1 => .{ .webgl = try frame._factory.create(WebGLRenderingContext{ ._canvas = .{ .canvas = self } }) },
+            .webgl2 => .{ .webgl2 = try frame._factory.create(WebGL2RenderingContext{ ._canvas = .{ .canvas = self } }) },
         };
     };
     self._cached = drawing_context;

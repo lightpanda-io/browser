@@ -9,6 +9,10 @@
   testing.expectEqual(null, el.getContext('webgl2'));
   testing.expectEqual(null, el.getContext('experimental-webgl'));
   testing.expectTrue(el.getContext('2d') !== null);
+
+  const offscreen = new OffscreenCanvas(1, 1);
+  testing.expectEqual(null, offscreen.getContext('webgl'));
+  testing.expectEqual(null, offscreen.getContext('webgl2'));
 }
 </script>
 

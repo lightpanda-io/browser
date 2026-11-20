@@ -22,13 +22,12 @@
 const lp = @import("lightpanda");
 
 const webgl = @import("webgl.zig");
-const Canvas = @import("../element/html/Canvas.zig");
 
 const js = lp.js;
 
 const WebGLRenderingContext = @This();
 
-_canvas: *Canvas,
+_canvas: webgl.Owner,
 
 pub fn registerTypes() []const type {
     return &([_]type{WebGLRenderingContext} ++ webgl.object_types);

@@ -24,6 +24,19 @@
 }
 </script>
 
+<script id=offscreen>
+{
+  const canvas = new OffscreenCanvas(64, 32);
+  const gl = canvas.getContext('webgl2');
+  testing.expectTrue(gl instanceof WebGL2RenderingContext);
+  testing.expectTrue(gl === canvas.getContext('webgl2'));
+  testing.expectEqual(null, canvas.getContext('webgl'));
+  testing.expectTrue(gl.canvas === canvas);
+  testing.expectEqual(64, gl.drawingBufferWidth);
+  testing.expectEqual('0,0,64,32', gl.getParameter(gl.VIEWPORT).join());
+}
+</script>
+
 <script id=constants>
 {
   const gl = document.createElement('canvas').getContext('webgl');
