@@ -36,3 +36,15 @@ Mirror the patterns in neighboring files. In particular:
 
 - `@import` alias case follows the imported file's basename (`const Frame = @import("Frame.zig")`, `const ast = @import("ast.zig")`).
 - Prefer struct-init type inference (`.{ ... }`) where the expected type is known from the function signature or variable annotation.
+
+## Object lifetimes
+
+A realm (`js.Context`) is torn down when its frame navigates or is removed, but another frame can still hold objects that were created in it. A navigation re-initializes the `Frame` struct in place, so a `*Frame` kept from before it names the next document.
+
+- A web API object doesn't keep a `*Frame`. It keeps its realm, `_exec: *js.Execution`, taken from `&frame.main_js.execution` (during a call `frame.js` is the calling world's context, and an isolated world can go before its frame does).
+- It reaches the frame through `exec.frame()`, which is null once the realm is gone. Decide what the API does then, check it against Chrome, and add the case to `src/browser/tests/frames/navigated_realm_objects.html`.
+- `*Frame` as a parameter is fine: the bridge passes the frame of the realm that is running.
+- Once a realm is gone, `Execution`'s event methods (`dispatch`, `registerListener`, `setHandler`, ...) do nothing and `Scheduler.add` fails with `error.SchedulerClosed`. Its other methods still forward to the frame.
+- A scheduler task's finalizer runs after the realm is marked gone, so it releases through `_exec.page` and `_exec._factory`.
+
+What still keeps a `*Frame`: `Window` (one per frame, re-initialized with it), `Document._frame` (set by `Frame.init`, cleared by `Frame.deinit`), `WorkerGlobalScope._frame` (the frame that owns the worker), and task or walker structs that belong to a frame's scheduler or to a single call.
