@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  `@supports` in the cascade: the rules of a block whose condition holds apply
+  as if they lived where the block does, the others are dropped. The condition
+  is the one CSS.supports() answers. Every hidden-element assertion here is
+  uncontested (no competing rule).
+-->
+
+<style>
+  /* A supported declaration: the inner rules join the cascade. */
+  @supports (display: grid) {
+    #hidden-by-supports { display: none; }
+  }
+  /* An unknown property: the block is dropped. */
+  @supports (not-a-real-property: 1) {
+    #not-hidden-unknown { display: none; }
+  }
+  /* `not` */
+  @supports not (not-a-real-property: 1) {
+    #hidden-by-not { display: none; }
+  }
+  @supports not (display: grid) {
+    #not-hidden-not { display: none; }
+  }
+  /* `and` / `or` */
+  @supports (display: grid) and (not (not-a-real-property: 1)) {
+    #hidden-by-and { display: none; }
+  }
+  @supports (display: grid) and (not-a-real-property: 1) {
+    #not-hidden-and { display: none; }
+  }
+  @supports (not-a-real-property: 1) or (display: flex) {
+    #hidden-by-or { display: none; }
+  }
+  /* selector() */
+  @supports selector(:has(a)) {
+    #hidden-by-selector { display: none; }
+  }
+  @supports selector(:not-a-real-pseudo) {
+    #not-hidden-selector { display: none; }
+  }
+  /* A custom property is always supported. */
+  @supports (--x: 1) {
+    #hidden-by-custom { display: none; }
+  }
+  /* The keyword is case-insensitive. */
+  @SUPPORTS (display: grid) {
+    #hidden-by-uppercase { display: none; }
+  }
+  /* Not a condition: a declaration needs its parentheses, and `and` can't
+     mix with `or`. The rule is invalid, and the rest of the sheet still
+     parses. */
+  @supports display: grid {
+    #not-hidden-bare { display: none; }
+  }
+  @supports (display: grid) and (display: flex) or (display: block) {
+    #not-hidden-mixed { display: none; }
+  }
+  #hidden-after-invalid { display: none; }
+  /* Nesting with the other grouping rules, both ways. */
+  @media screen {
+    @supports (display: grid) {
+      #hidden-supports-in-media { display: none; }
+    }
+  }
+  @supports (display: grid) {
+    @media screen {
+      #hidden-media-in-supports { display: none; }
+    }
+    @media print {
+      #not-hidden-print-in-supports { display: none; }
+    }
+  }
+  @layer utilities {
+    @supports (display: grid) {
+      #hidden-supports-in-layer { display: none; }
+    }
+  }
+  @supports (display: grid) {
+    @supports (display: flex) {
+      #hidden-nested-supports { display: none; }
+    }
+    @supports (not-a-real-property: 1) {
+      #not-hidden-nested-supports { display: none; }
+    }
+  }
+  /* Nested in a style rule: the declarations are that rule's. */
+  #hidden-nested-in-style {
+    @supports (display: grid) { display: none; }
+  }
+  #not-hidden-nested-in-style {
+    @supports (not-a-real-property: 1) { display: none; }
+  }
+  .parent {
+    @supports (display: grid) {
+      .child { display: none; }
+    }
+  }
+  /* Other properties the cascade reads. */
+  @supports (display: grid) {
+    #supports-important { display: none !important; }
+    #supports-visibility { visibility: hidden; }
+    #supports-uppercase { text-transform: uppercase; }
+  }
+  #supports-important { display: block; }
+</style>
+
+<body>
+  <div id="hidden-by-supports">x</div>
+  <div id="not-hidden-unknown">x</div>
+  <div id="hidden-by-not">x</div>
+  <div id="not-hidden-not">x</div>
+  <div id="hidden-by-and">x</div>
+  <div id="not-hidden-and">x</div>
+  <div id="hidden-by-or">x</div>
+  <div id="hidden-by-selector">x</div>
+  <div id="not-hidden-selector">x</div>
+  <div id="hidden-by-custom">x</div>
+  <div id="hidden-by-uppercase">x</div>
+  <div id="not-hidden-bare">x</div>
+  <div id="not-hidden-mixed">x</div>
+  <div id="hidden-after-invalid">x</div>
+  <div id="hidden-supports-in-media">x</div>
+  <div id="hidden-media-in-supports">x</div>
+  <div id="not-hidden-print-in-supports">x</div>
+  <div id="hidden-supports-in-layer">x</div>
+  <div id="hidden-nested-supports">x</div>
+  <div id="not-hidden-nested-supports">x</div>
+  <div id="hidden-nested-in-style">x</div>
+  <div id="not-hidden-nested-in-style">x</div>
+  <div class="parent"><div class="child" id="hidden-nested-child">x</div></div>
+  <div id="supports-important">x</div>
+  <div id="supports-visibility">x</div>
+  <div id="supports-uppercase">hello</div>
+  <div id="dyn-target">x</div>
+  <style id="dyn"></style>
+</body>
+
+<script id=supports_declaration>
+{
+  testing.expectFalse($('#hidden-by-supports').checkVisibility());
+  // getComputedStyle consumes the same cascade.
+  testing.expectEqual('none', getComputedStyle($('#hidden-by-supports')).display);
+  testing.expectTrue($('#not-hidden-unknown').checkVisibility());
+  testing.expectEqual('block', getComputedStyle($('#not-hidden-unknown')).display);
+}
+</script>
+
+<script id=supports_not>
+{
+  testing.expectFalse($('#hidden-by-not').checkVisibility());
+  testing.expectTrue($('#not-hidden-not').checkVisibility());
+}
+</script>
+
+<script id=supports_and_or>
+{
+  testing.expectFalse($('#hidden-by-and').checkVisibility());
+  testing.expectTrue($('#not-hidden-and').checkVisibility());
+  testing.expectFalse($('#hidden-by-or').checkVisibility());
+}
+</script>
+
+<script id=supports_selector>
+{
+  testing.expectFalse($('#hidden-by-selector').checkVisibility());
+  testing.expectTrue($('#not-hidden-selector').checkVisibility());
+}
+</script>
+
+<script id=supports_custom_property>
+{
+  testing.expectFalse($('#hidden-by-custom').checkVisibility());
+}
+</script>
+
+<script id=supports_keyword_case>
+{
+  testing.expectFalse($('#hidden-by-uppercase').checkVisibility());
+}
+</script>
+
+<script id=supports_invalid_condition>
+{
+  // An invalid condition drops its block, and only its block.
+  testing.expectTrue($('#not-hidden-bare').checkVisibility());
+  testing.expectTrue($('#not-hidden-mixed').checkVisibility());
+  testing.expectFalse($('#hidden-after-invalid').checkVisibility());
+}
+</script>
+
+<script id=supports_with_media>
+{
+  testing.expectFalse($('#hidden-supports-in-media').checkVisibility());
+  testing.expectFalse($('#hidden-media-in-supports').checkVisibility());
+  testing.expectTrue($('#not-hidden-print-in-supports').checkVisibility());
+}
+</script>
+
+<script id=supports_in_layer>
+{
+  testing.expectFalse($('#hidden-supports-in-layer').checkVisibility());
+}
+</script>
+
+<script id=supports_nested_supports>
+{
+  // Both conditions must hold.
+  testing.expectFalse($('#hidden-nested-supports').checkVisibility());
+  testing.expectTrue($('#not-hidden-nested-supports').checkVisibility());
+}
+</script>
+
+<script id=supports_nested_in_style_rule>
+{
+  testing.expectFalse($('#hidden-nested-in-style').checkVisibility());
+  testing.expectTrue($('#not-hidden-nested-in-style').checkVisibility());
+  testing.expectFalse($('#hidden-nested-child').checkVisibility());
+}
+</script>
+
+<script id=supports_important_declaration>
+{
+  // Stays !important: the later normal `display: block` doesn't win.
+  testing.expectFalse($('#supports-important').checkVisibility());
+}
+</script>
+
+<script id=supports_visibility_hidden>
+{
+  const el = $('#supports-visibility');
+  testing.expectTrue(el.checkVisibility());
+  testing.expectFalse(el.checkVisibility({ visibilityProperty: true }));
+  testing.expectEqual('hidden', getComputedStyle(el).visibility);
+}
+</script>
+
+<script id=supports_text_transform>
+{
+  const el = $('#supports-uppercase');
+  testing.expectEqual('uppercase', getComputedStyle(el).textTransform);
+  testing.expectEqual('HELLO', el.innerText);
+}
+</script>
+
+<script id=supports_dynamic_rules>
+{
+  // The CSSOM paths feed the same cascade.
+  const target = $('#dyn-target');
+  const sheet = $('#dyn').sheet;
+  testing.expectTrue(target.checkVisibility());
+
+  sheet.insertRule('@supports (display: grid) { #dyn-target { display: none } }');
+  testing.expectFalse(target.checkVisibility());
+  sheet.deleteRule(0);
+  testing.expectTrue(target.checkVisibility());
+
+  sheet.insertRule('@supports (not-a-real-property: 1) { #dyn-target { display: none } }');
+  testing.expectTrue(target.checkVisibility());
+  sheet.deleteRule(0);
+
+  $('#dyn').textContent = '@supports (display: grid) { #dyn-target { display: none } }';
+  testing.expectFalse(target.checkVisibility());
+  $('#dyn').textContent = '';
+  testing.expectTrue(target.checkVisibility());
+}
+</script>
