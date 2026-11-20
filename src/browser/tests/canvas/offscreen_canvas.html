@@ -10,6 +10,22 @@
 }
 </script>
 
+<script id=OffscreenCanvas#EventTarget>
+{
+  // Flutter's CanvasKit listens for webglcontextlost on its OffscreenCanvas
+  const canvas = new OffscreenCanvas(1, 1);
+  testing.expectTrue(canvas instanceof EventTarget);
+  testing.expectEqual('[object OffscreenCanvas]', Object.prototype.toString.call(canvas));
+  let fired = 0;
+  canvas.addEventListener('webglcontextlost', (e) => {
+    fired += 1;
+    testing.expectTrue(e.target === canvas);
+  });
+  canvas.dispatchEvent(new Event('webglcontextlost'));
+  testing.expectEqual(1, fired);
+}
+</script>
+
 <script id=OffscreenCanvas#width>
 {
   const canvas = new OffscreenCanvas(100, 200);

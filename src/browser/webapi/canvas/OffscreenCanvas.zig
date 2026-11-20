@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
+const EventTarget = @import("../EventTarget.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
 
@@ -28,8 +29,9 @@ const Execution = js.Execution;
 /// https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
 const OffscreenCanvas = @This();
 
-pub const _prototype_root = true;
+pub const Proto = EventTarget;
 
+_proto: *EventTarget,
 _width: u32,
 _height: u32,
 _cached: ?DrawingContext = null,
@@ -41,7 +43,8 @@ const DrawingContext = union(enum) {
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
-    return exec._factory.create(OffscreenCanvas{
+    return exec._factory.eventTarget(OffscreenCanvas{
+        ._proto = undefined,
         ._width = width,
         ._height = height,
     });
