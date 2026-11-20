@@ -64,13 +64,21 @@ pub const ErrorLocation = struct {
     url: []const u8 = "",
     line: u32 = 0,
     column: u32 = 0,
+    // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
+    // Set when the exception's underlying script was compiled with
+    // resource_is_opaque (see js.Local.compileWithCache's `muted` param):
+    // a classic script fetched cross-origin without CORS. V8 tracks this per
+    // script and propagates it to every closure compiled from it, so this
+    // reflects the flag even for exceptions thrown later from a timer or
+    // event listener defined by that script, not just its top-level body.
+    muted: bool = false,
 };
 
 pub fn errorLocation(self: Value, allocator: Allocator) !ErrorLocation {
     const l = self.local;
     const message = v8.v8__Exception__CreateMessage(l.isolate.handle, self.handle) orelse return .{};
 
-    var location: ErrorLocation = .{};
+    var location: ErrorLocation = .{ .muted = v8.v8__Message__IsOpaque(message) };
     const line = v8.v8__Message__GetLineNumber(message, l.handle);
     if (line > 0) {
         location.line = @intCast(line);

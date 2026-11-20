@@ -497,16 +497,13 @@ fn cancelIdleCallback(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
-    return self.reportErrorMuted(err, frame, false);
-}
-
 // https://html.spec.whatwg.org/multipage/webappapis.html#muted-errors
-// `muted` is true when the exception came from a classic script fetched
-// cross-origin without CORS: the page only ever sees "Script error." with
-// no location/stack/error object, same as other browsers. Our own logging
-// and the CDP notification still get the real details.
-pub fn reportErrorMuted(self: *Window, err: js.Value, frame: *Frame, muted: bool) !void {
+// When `location.muted` (set by V8 from the originating script's opaque
+// origin — see js.Local.compileWithCache's `muted` param), the page only
+// ever sees "Script error." with no location/stack/error object, same as
+// other browsers. Our own logging and the CDP notification still get the
+// real details.
+pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     // Per spec's "in error reporting mode": an exception thrown while an
     // error is being reported (e.g. by an "error" listener) is not reported
     // again, which would otherwise recurse without bound.
@@ -541,7 +538,7 @@ pub fn reportErrorMuted(self: *Window, err: js.Value, frame: *Frame, muted: bool
     self._reporting_error = true;
     defer self._reporting_error = false;
 
-    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), if (muted) .{
+    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), if (location.muted) .{
         .@"error" = null,
         .message = "Script error.",
         .filename = "",
