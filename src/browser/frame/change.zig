@@ -69,6 +69,7 @@ fn attributeChanged(element: *Element, name: String, old: ?[]const u8, new: ?[]c
     // A frameless document (DOMParser, XHR) has no styles
     const owner = element.ownerFrame(frame) orelse return;
     owner._style_manager.hitInputWritten();
+    owner._style_manager.ancestorTokensChanged(element, name, old, new);
     if (owner._style_manager.readsAttribute(name.str()) == false) {
         // no selector reads it, and neither does the engine
         return;
@@ -103,6 +104,13 @@ pub fn childRemoved(parent: *Node, child: *Node, previous_sibling: ?*Node, next_
 
 fn treeChanged(parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: StyleManager.TreeChange, frame: *Frame) void {
     frame.page.dom_version += 1;
+    if (op == .inserted) {
+        // Attached or not: a subtree moved into a detached one is one more
+        // move away from being inserted back
+        if (parent.ownerFrame(frame)) |owner| {
+            owner._style_manager.ancestorsMoved(child);
+        }
+    }
     if (detachedHandled(parent, frame)) {
         // A removed child takes its entries along, out of parent's tree
         if (op == .inserted or detachedHandled(child, frame)) {
@@ -125,6 +133,8 @@ fn treeChanged(parent: *Node, child: *Node, previous: ?*Node, next: ?*Node, op: 
 /// parser's root memo stays valid (an insertion never changes an existing
 /// node's root).
 pub fn parserInserted(parent: *Node, child: *Node, frame: *Frame) void {
+    // The adoption agency moves elements the parser already inserted
+    frame._style_manager.ancestorsMoved(child);
     // During a parse insert, only a fragment can be detached.
     if (frame._parse_mode == .fragment) {
         if (detachedHandled(parent, frame)) {
