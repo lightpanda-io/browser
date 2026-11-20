@@ -67,6 +67,11 @@ last_js_heap_sample_ms: u64 = 0,
 // browser context. Keys are owned by `allocator`; values are enum tags.
 permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 
+// What navigator.clipboard.writeText last wrote, owned by `allocator`. Never
+// the system clipboard: each Browser (a CDP connection, an MCP session) has
+// its own, kept across navigations.
+clipboard: std.ArrayList(u8) = .empty,
+
 // Runtime viewport override
 viewport_override: ?Viewport = null,
 
@@ -176,6 +181,7 @@ pub fn deinit(self: *Browser) void {
     if (self.renderer) |r| r.deinit();
     self.clearPermissions();
     self.permissions.deinit(allocator);
+    self.clipboard.deinit(allocator);
     self.selector_cache.deinit();
 }
 
@@ -215,6 +221,25 @@ pub fn setPermission(self: *Browser, name: []const u8, state: PermissionState) !
         };
     }
     gop.value_ptr.* = state;
+}
+
+/// A permission's state by its web name ("clipboard-read"), "prompt" when
+/// unset. Browser.grantPermissions names some differently: Playwright and
+/// Puppeteer grant "clipboard-read" as clipboardReadWrite.
+pub fn getPermission(self: *const Browser, name: []const u8) PermissionState {
+    if (self.permissions.get(name)) |state| {
+        return state;
+    }
+    const aliases = std.StaticStringMap([]const []const u8).initComptime(.{
+        .{ "clipboard-read", &.{"clipboardReadWrite"} },
+        .{ "clipboard-write", &.{ "clipboardReadWrite", "clipboardSanitizedWrite" } },
+    });
+    for (aliases.get(name) orelse &.{}) |alias| {
+        if (self.permissions.get(alias)) |state| {
+            return state;
+        }
+    }
+    return .prompt;
 }
 
 // Clear all stored permissions, freeing the keys. Used by CDP

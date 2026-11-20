@@ -444,9 +444,10 @@ pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: 
 // origin must not see. Like serviceWorker, they're baked into the snapshot, so
 // they're deleted per context rather than never added.
 pub fn hideSecureContextInterfaces(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
-    inline for (.{ "payment_request", "payment_response", "payment_request_update_event", "payment_method_change_event" }) |name| {
+    inline for (.{ "payment_request", "payment_response", "payment_request_update_event", "payment_method_change_event", "clipboard_interface" }) |name| {
         self.deleteGlobal(v8_context, global_obj, name);
     }
+    self.deletePrototypeMember(v8_context, global_obj, "navigator", "clipboard");
 }
 
 fn deleteGlobal(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime name: []const u8) void {
@@ -1003,6 +1004,8 @@ const DisabledApiNames = struct {
     payment_response: v8.Eternal,
     payment_request_update_event: v8.Eternal,
     payment_method_change_event: v8.Eternal,
+    clipboard: v8.Eternal,
+    clipboard_interface: v8.Eternal,
 
     fn init(isolate: *v8.Isolate) DisabledApiNames {
         var self: DisabledApiNames = undefined;
@@ -1016,6 +1019,8 @@ const DisabledApiNames = struct {
         intern(isolate, &self.payment_response, "PaymentResponse");
         intern(isolate, &self.payment_request_update_event, "PaymentRequestUpdateEvent");
         intern(isolate, &self.payment_method_change_event, "PaymentMethodChangeEvent");
+        intern(isolate, &self.clipboard, "clipboard");
+        intern(isolate, &self.clipboard_interface, "Clipboard");
         return self;
     }
 

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<meta name=lp-mode content=test>
+<script src="./testing.js"></script>
+
+<script id=shape>
+  testing.expectTrue('clipboard' in navigator);
+  testing.expectTrue(navigator.clipboard === navigator.clipboard);
+  testing.expectTrue(navigator.clipboard instanceof Clipboard);
+  testing.expectTrue(navigator.clipboard instanceof EventTarget);
+  testing.expectEqual('[object Clipboard]', Object.prototype.toString.call(navigator.clipboard));
+  testing.expectEqual(1, Clipboard.prototype.writeText.length);
+  testing.expectEqual(0, Clipboard.prototype.readText.length);
+  testing.expectError('TypeError', () => new Clipboard());
+</script>
+
+<script id=read_without_grant type=module>
+  {
+    // Only CDP grants clipboard-read
+    const state = await testing.async();
+    const p = navigator.clipboard.readText();
+    testing.expectTrue(p instanceof Promise);
+    let error = null;
+    try { await p; } catch (e) { error = e; }
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(error instanceof DOMException);
+      testing.expectEqual('NotAllowedError', error.name);
+    });
+  }
+</script>
+
+<script id=write_without_argument type=module>
+  {
+    const state = await testing.async();
+    let error = null;
+    try { await navigator.clipboard.writeText(); } catch (e) { error = e; }
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(error instanceof TypeError);
+    });
+  }
+</script>
