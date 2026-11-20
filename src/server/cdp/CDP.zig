@@ -274,7 +274,26 @@ fn dispatchStartupCommand(command: *Command, method: []const u8) !void {
     // The placeholder session has no page behind it: an empty
     // result would look like success while nothing happened.
     // Say so, and point at the way to get a real target.
-    if (std.mem.eql(u8, method, "Page.navigate")) {
+    const page_needed = blk: {
+        if (std.mem.eql(u8, method, "Page.navigate")) {
+            break :blk true;
+        }
+
+        const i = std.mem.findScalar(u8, method, '.') orelse break :blk false;
+        const action = method[i + 1 ..];
+        if (std.mem.eql(u8, action, "enable") or std.mem.eql(u8, action, "disable")) {
+            break :blk false;
+        }
+        const startup_page_domains = std.StaticStringMap(void).initComptime(.{
+            .{ "DOM", {} },
+            .{ "CSS", {} },
+            .{ "Accessibility", {} },
+            .{ "Input", {} },
+        });
+        break :blk startup_page_domains.has(method[0..i]);
+    };
+
+    if (page_needed) {
         return command.sendError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{});
     }
 
@@ -1248,6 +1267,26 @@ test "cdp: Page.navigate on the STARTUP session returns -32000" {
         .params = .{ .url = "https://example.com" },
     });
     try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1 });
+}
+
+test "cdp: page-only domains on the STARTUP session return -32000" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // #4682: patchright dereferences DOM.getDocument's `root`; an error
+    // takes its `_sendMayFail` early return instead.
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.getDocument", .sessionId = "STARTUP" });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchMouseEvent", .sessionId = "STARTUP" });
+    try ctx.expectSentError(-32000, "No page on the STARTUP session; create a real target with Target.createTarget", .{ .id = 2 });
+
+    // enable/disable still succeed so attaching to the placeholder works.
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.enable", .sessionId = "STARTUP" });
+    try ctx.expectSentResult(null, .{ .id = 3, .session_id = "STARTUP" });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Runtime.enable", .sessionId = "STARTUP" });
+    try ctx.expectSentResult(null, .{ .id = 4, .session_id = "STARTUP" });
 }
 
 test "cdp: disconnect latches so the worker keeps exiting" {
