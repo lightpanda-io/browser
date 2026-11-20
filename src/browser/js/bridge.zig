@@ -1285,6 +1285,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/navigation/NavigationDestination.zig"),
     @import("../webapi/canvas/CanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
+    @import("../webapi/canvas/WebGL2RenderingContext.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/TextMetrics.zig"),

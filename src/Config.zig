@@ -243,11 +243,12 @@ pub const LoadResources = packed struct(u6) {
     none: bool = false,
 };
 
-pub const ExperimentalFeatures = packed struct(u4) {
+pub const ExperimentalFeatures = packed struct(u5) {
     cors: bool = false, // ignored, kept only for backward compatibility.
     serviceworker: bool = false,
     privatecache: bool = false,
     animation: bool = false,
+    webgl: bool = false,
 };
 
 const DisabledFeatures = packed struct(u1) {

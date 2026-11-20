@@ -28,6 +28,7 @@ const Element = @import("../../Element.zig");
 
 const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
+const WebGL2RenderingContext = @import("../../canvas/WebGL2RenderingContext.zig");
 const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
 
 const HtmlElement = @import("../Html.zig");
@@ -68,6 +69,7 @@ pub fn getHeight(self: *const Canvas) u32 {
 const DrawingContext = union(enum) {
     @"2d": *CanvasRenderingContext2D,
     webgl: *WebGLRenderingContext,
+    webgl2: *WebGL2RenderingContext,
 };
 
 fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingContext {
@@ -75,6 +77,7 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
             .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
+            .webgl2 => std.mem.eql(u8, context_type, "webgl2"),
         };
         return if (matches) cached else null;
     }
@@ -85,19 +88,24 @@ fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingC
             break :blk .{ .@"2d" = ctx };
         }
 
-        // We only stub a tiny slice of the WebGL API (getParameter,
-        // getExtension, getSupportedExtensions). Real WebGL consumers like
-        // Three.js immediately call createTexture/createBuffer/etc. and
-        // throw `TypeError: e.createTexture is not a function`. Pretending
-        // WebGL works until the first non-stubbed call is the worst of both
-        // worlds: pages that have an error boundary above the WebGL widget
-        // catch the throw, reset, re-render, and loop forever.
-        // Spec-correct signal for "no WebGL" is null, so apps that check
-        // (Three.js does) can degrade gracefully.
-        if (isWebGL(context_type)) {
-            frame.page.status.noteUnsupported(.webgl);
+        // Null is the spec's "no WebGL", and apps that check (Three.js does)
+        // fall back. A context that only partly works is worse: pages with an
+        // error boundary above the WebGL widget catch the first missing call,
+        // reset, re-render, and loop forever. The webgl experimental feature
+        // gives a complete context that draws nothing, for renderers with no
+        // fallback (Compose for Web).
+        if (isWebGL(context_type) == false) {
+            return null;
         }
-        return null;
+        // Counted either way: nothing is drawn
+        frame.page.status.noteUnsupported(.webgl);
+        if (frame._session.experimental_features.webgl == false) {
+            return null;
+        }
+        if (std.mem.eql(u8, context_type, "webgl2")) {
+            break :blk .{ .webgl2 = try frame._factory.create(WebGL2RenderingContext{ ._canvas = self }) };
+        }
+        break :blk .{ .webgl = try frame._factory.create(WebGLRenderingContext{ ._canvas = self }) };
     };
     self._cached = drawing_context;
     return drawing_context;

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<meta name=lp-mode content="skipped: Lightpanda without --experimental-features webgl">
+<script src="../testing.js"></script>
+
+<script id=no_context>
+{
+  const el = document.createElement('canvas');
+  testing.expectEqual(null, el.getContext('webgl'));
+  testing.expectEqual(null, el.getContext('webgl2'));
+  testing.expectEqual(null, el.getContext('experimental-webgl'));
+  testing.expectTrue(el.getContext('2d') !== null);
+}
+</script>
+
+<script id=no_new_globals>
+{
+  testing.expectEqual('undefined', typeof WebGL2RenderingContext);
+  testing.expectEqual('undefined', typeof WebGLBuffer);
+  testing.expectEqual('undefined', typeof WebGLVertexArrayObject);
+  testing.expectEqual('function', typeof WebGLRenderingContext);
+}
+</script>
