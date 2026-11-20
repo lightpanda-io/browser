@@ -1151,6 +1151,8 @@ const HitLevel = struct {
     row: bool,
     top: f64,
     left: ?f64,
+    // How far inside it its children start: its left padding
+    content_left: ?f64 = null,
     up: u32, // the level of element's own parent
     cursor: ?Element.LineCursor = null,
     // When recording: element's box and those of its subtree walked so far
@@ -1194,6 +1196,11 @@ const HitLevel = struct {
 
         const level = &levels[index];
         const parent = level.element orelse return x;
+        x += level.content_left orelse blk: {
+            const start = layout.contentStart(parent, .width, owner);
+            level.content_left = start;
+            break :blk start;
+        };
         if (level.facts.grid and facts.position != .absolute and facts.position != .fixed) {
             // StyleManager.gridOf: in one of its parent's columns
             return x + layout.gridItemLeft(element, parent, owner) + leftOfLevel(levels, index, owner, frame);

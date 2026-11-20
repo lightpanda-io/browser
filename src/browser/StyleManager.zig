@@ -3129,6 +3129,27 @@ pub fn boxEdges(self: *StyleManager, el: *Element, comptime axis: Element.Axis) 
     return edges;
 }
 
+/// el's padding on an axis's start side (left, top): how far its content box
+/// sits inside its border box. A percentage is of the containing block's
+/// width, on both axes.
+pub fn paddingStart(self: *StyleManager, el: *Element, comptime axis: Element.Axis) Percent {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{ .fraction = 0 };
+    const field = switch (axis) {
+        .width => "padding_left",
+        .height => "padding_top",
+    };
+    // One value: a position walk reads this for every box it passes
+    const start = self.geometry.ownProp(self.arena.allocator(), el, field, self.frame);
+    if (start.isNone()) {
+        return .{ .fraction = 0 };
+    }
+    if (start.percentage()) |percent| {
+        return percent;
+    }
+    return .{ .fraction = 0, .px = @max(0, start.resolve(self, el) orelse 0) };
+}
+
 /// The nearest element to el that generates a box, or `el` itself it it does
 pub fn boxElement(self: *StyleManager, el: *Element) ?*Element {
     self.assertOwns(el);
@@ -4139,6 +4160,17 @@ fn Group(comptime Spec: type) type {
                 self.detached = true;
             }
             return computed;
+        }
+
+        /// One of ownProps' values, for a caller that reads one: ownProps
+        /// copies them all.
+        fn ownProp(self: *Self, allocator: Allocator, el: *Element, comptime field: []const u8, frame: *Frame) @FieldType(Computed, field) {
+            if (Stored == Computed) {
+                if (self.freshMemo(frame).getPtr(el)) |cached| {
+                    return @field(cached, field);
+                }
+            }
+            return @field(self.ownProps(allocator, el, frame), field);
         }
 
         /// Resolves the path up to the first memoized ancestor, so each

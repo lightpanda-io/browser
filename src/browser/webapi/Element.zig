@@ -2052,6 +2052,9 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         }
         const parent = current.flatParent(frame) orelse return x;
         if (current.is(Element)) |el| {
+            if (parent.is(Element)) |parent_el| {
+                x += layout.contentStart(parent_el, .width, owner);
+            }
             const alongside = owner._style_manager.alongside(el);
             if (alongside == .grid) {
                 x += layout.gridItemLeft(el, parent.as(Element), owner);

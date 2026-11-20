@@ -85,8 +85,8 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
 
 // The padding on an axis's two sides together, and the box a declared size
 // is. Borders aren't modelled, so the padding is all there is between a
-// content box and its border box. Every size here is a border box's, and
-// the content isn't moved by the padding: the box only grows around it.
+// content box and its border box. Every size here is a border box's: the
+// content sits inside it at contentStart.
 const Edges = struct {
     padding: f64,
     border_box: bool,
@@ -122,6 +122,24 @@ const Edges = struct {
 /// its text wraps.
 pub fn innerWidth(self: *Element, owner: *Frame) f64 {
     return Edges.of(self, .width, true, owner).inner(boxWidth(self, owner));
+}
+
+/// How far the box's children start from its left (.width) or top (.height)
+/// edge: its padding on that side. One with no box (display: contents) has
+/// no padding to put them in.
+pub fn contentStart(self: *Element, comptime axis: Element.Axis, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    const padding = style_manager.paddingStart(self, axis);
+    if (padding.fraction == 0 and padding.px == 0) {
+        return 0;
+    }
+    if (style_manager.boxElement(self) != self) {
+        return 0;
+    }
+    if (padding.fraction == 0) {
+        return padding.px;
+    }
+    return @max(0, padding.of(containingBlockWidth(self, owner)));
 }
 
 /// The box's size as getComputedStyle resolves it: the box `box-sizing` names.
@@ -593,6 +611,7 @@ fn originStep(el: *Element, self: *Element, owner: *Frame, frame: *Frame) Origin
 
     const parent = el.asNode().flatTreeParentElement(owner) orelse return .{ .delta = delta, .up = null };
     delta.y += boxOffset(el, parent, owner);
+    delta.x += contentStart(parent, .width, owner);
     const alongside = style_manager.alongside(el);
     if (alongside == .grid) {
         delta.x += gridItemLeft(el, parent, owner);
@@ -700,9 +719,11 @@ fn boxSize(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
     };
 }
 
-// The box's top, from its parent's top. Caches every sibling's up to it: an
-// offset needs only the heights before it, and going on would measure self's
-// subtree and everything after it (for body, the whole document).
+// The box's top, from its parent's top: inside the parent's padding, where
+// the flow puts it. Caches every sibling's up to it: an offset needs only the
+// heights before it, and going on would measure self's subtree and everything
+// after it (for body, the whole document). What's cached includes the
+// padding, which a padding change drops along with the offsets.
 fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     if (style_manager.getCachedOffset(self, parent)) |offset| {
@@ -711,11 +732,12 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
+    const start = contentStart(parent, .height, owner);
     var flow: Flow = .of(parent, owner);
     if (flow.mode == .row) {
-        // A row's children all sit at its top (see Flow.at): nothing to
-        // stack, so nothing to cache.
-        return 0;
+        // A row's children all sit at its content's top (see Flow.at):
+        // nothing to stack, so nothing to cache.
+        return start;
     }
 
     var next = parent.asNode().flatFirstChild(owner);
@@ -728,7 +750,8 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
         else => resumePoint(self, parent, owner),
     };
     if (resume_point) |point| {
-        flow.offset = point.offset;
+        // From cached offsets, which include the padding
+        flow.offset = point.offset - start;
         next = point.next;
         position = point.position;
         // The siblings replayed up to there keep the offsets they have
@@ -742,7 +765,7 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
             style_manager.offset_steps += 1;
         }
         const role = style_manager.flowRole(el);
-        const offset = flow.at(el, role, owner);
+        const offset = start + flow.at(el, role, owner);
         if (placed == position) {
             const cached = style_manager.setCacheOffset(el, position, offset, flow.columnOf(el));
             if (cached) {
