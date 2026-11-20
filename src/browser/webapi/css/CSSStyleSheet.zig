@@ -511,7 +511,7 @@ test "CSSStyleSheet: a rule write or delete the cascade doesn't read skips the r
 
     try style.setProperty("color", "green", null, frame);
     _ = try style.removeProperty("color", frame);
-    try style.setProperty("padding", "1px", null, frame);
+    try style.setProperty("outline-width", "1px", null, frame);
     try testing.expectEqual(false, sm.dirty);
     try testing.expectEqual(true, sm.isHidden(a, .{}));
 

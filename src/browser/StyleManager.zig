@@ -3094,6 +3094,41 @@ fn inlineSum(self: *StyleManager, el: *Element, left: Length, right: Length, con
     return total;
 }
 
+/// What separates el's content box from its border box on an axis: the
+/// padding on its two sides together (borders aren't modelled), and which of
+/// the two boxes a declared size is. A percentage is of the containing
+/// block's width, on both axes.
+pub const BoxEdges = struct {
+    padding: Percent = .{ .fraction = 0 },
+    border_box: bool = false,
+};
+
+pub fn boxEdges(self: *StyleManager, el: *Element, comptime axis: Element.Axis) BoxEdges {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return .{};
+    const geometry = self.geometryProps(el);
+    const start, const end = switch (axis) {
+        .width => .{ geometry.padding_left, geometry.padding_right },
+        .height => .{ geometry.padding_top, geometry.padding_bottom },
+    };
+    if (start.isNone() and end.isNone()) {
+        // box-sizing only matters to a box with padding
+        return .{};
+    }
+    var edges: BoxEdges = .{ .border_box = geometry.border_box };
+    for ([_]Length{ start, end }) |length| {
+        if (length.percentage()) |percent| {
+            // A negative padding is invalid, a calc() below 0 is 0: the
+            // sum is clamped where the percentage resolves
+            edges.padding.fraction += percent.fraction;
+            edges.padding.px += percent.px;
+        } else {
+            edges.padding.px += @max(0, length.resolve(self, el) orelse 0);
+        }
+    }
+    return edges;
+}
+
 /// The nearest element to el that generates a box, or `el` itself it it does
 pub fn boxElement(self: *StyleManager, el: *Element) ?*Element {
     self.assertOwns(el);
@@ -5061,6 +5096,11 @@ pub const Length = packed struct(u36) {
         return std.ascii.startsWithIgnoreCase(text, "fit-content(");
     }
 
+    // auto, or a reset's 0
+    fn isNone(self: Length) bool {
+        return self.unit == .auto or (self.unit == .px and self.value == 0);
+    }
+
     // Whether resolve() gives a value
     fn resolves(self: Length) bool {
         return switch (self.unit) {
@@ -5490,7 +5530,7 @@ const Visibility = struct {
 /// An element's box: its size and how it scrolls.
 const Geometry = struct {
     const Declared = struct {
-        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "min-height", "max-height", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index" };
+        const names = [_][]const u8{ "overflow-x", "overflow-y", "overscroll-behavior-x", "overscroll-behavior-y", "width", "height", "min-width", "max-width", "min-height", "max-height", "flex", "flex-grow", "flex-shrink", "margin", "margin-inline", "margin-left", "margin-right", "margin-inline-start", "margin-inline-end", "inset", "inset-inline", "left", "right", "inset-inline-start", "inset-inline-end", "inset-block", "top", "bottom", "inset-block-start", "inset-block-end", "z-index", "padding", "padding-inline", "padding-block", "padding-top", "padding-right", "padding-bottom", "padding-left", "padding-inline-start", "padding-inline-end", "padding-block-start", "padding-block-end", "box-sizing" };
 
         overflow_x_scrolls: ?bool = null,
         overflow_x_clips: ?bool = null,
@@ -5500,6 +5540,7 @@ const Geometry = struct {
         overscroll_x_contains: ?bool = null,
         overscroll_y_contains: ?bool = null,
         z_negative: ?bool = null,
+        border_box: ?bool = null,
         width: ?Length = null,
         height: ?Length = null,
         min_width: ?Length = null,
@@ -5512,6 +5553,10 @@ const Geometry = struct {
         right: ?Length = null,
         top: ?Length = null,
         bottom: ?Length = null,
+        padding_top: ?Length = null,
+        padding_right: ?Length = null,
+        padding_bottom: ?Length = null,
+        padding_left: ?Length = null,
 
         fn apply(self: *Declared, id: properties.Id, value: []const u8) void {
             switch (id) {
@@ -5608,6 +5653,38 @@ const Geometry = struct {
                         self.z_negative = negative;
                     }
                 },
+                .padding => {
+                    const sides = boxSides(value) orelse return;
+                    self.padding_top = sides.top;
+                    self.padding_right = sides.right;
+                    self.padding_bottom = sides.bottom;
+                    self.padding_left = sides.left;
+                },
+                .@"padding-inline" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.padding_left = sides.left;
+                    self.padding_right = sides.right;
+                },
+                .@"padding-block" => {
+                    const sides = inlineSides(value) orelse return;
+                    self.padding_top = sides.left;
+                    self.padding_bottom = sides.right;
+                },
+                .@"padding-top", .@"padding-block-start" => {
+                    self.padding_top = Length.parseMargin(value);
+                },
+                .@"padding-right", .@"padding-inline-end" => {
+                    self.padding_right = Length.parseMargin(value);
+                },
+                .@"padding-bottom", .@"padding-block-end" => {
+                    self.padding_bottom = Length.parseMargin(value);
+                },
+                .@"padding-left", .@"padding-inline-start" => {
+                    self.padding_left = Length.parseMargin(value);
+                },
+                .@"box-sizing" => {
+                    self.border_box = std.ascii.eqlIgnoreCase(value, "border-box");
+                },
                 else => {},
             }
         }
@@ -5616,7 +5693,7 @@ const Geometry = struct {
         const Sides = struct { left: Length, right: Length, top: Length = .{}, bottom: Length = .{} };
 
         // The sides of a `top [right [bottom [left]]]` shorthand (margin,
-        // inset).
+        // inset, padding).
         fn boxSides(value: []const u8) ?Sides {
             var count: usize = 0;
             var tokens: [4][]const u8 = undefined;
@@ -5639,7 +5716,8 @@ const Geometry = struct {
             };
         }
 
-        // `start [end]` (margin-inline, inset-inline), in a left-to-right flow
+        // `start [end]` (margin-inline, inset-inline, padding-inline), in a
+        // left-to-right flow
         fn inlineSides(value: []const u8) ?Sides {
             var it: Components = .{ .value = value };
             const start = it.next() orelse return null;
@@ -5790,7 +5868,7 @@ const Geometry = struct {
         return .{ .value = value, .unit = if (percent) .percent else .px };
     }
 
-    const Computed = packed struct(u440) {
+    const Computed = packed struct(u585) {
         overflow_x_scrolls: bool = false,
         overflow_x_clips: bool = false,
         flex_grow: bool = false,
@@ -5799,6 +5877,8 @@ const Geometry = struct {
         overscroll_x_contains: bool = false,
         overscroll_y_contains: bool = false,
         z_negative: bool = false,
+        // box-sizing: width and height are the border box's
+        border_box: bool = false,
         width: Length = .{},
         height: Length = .{},
         // auto, none and the intrinsic keywords don't limit
@@ -5814,6 +5894,12 @@ const Geometry = struct {
         right: Length = .{},
         top: Length = .{},
         bottom: Length = .{},
+        // Values that need layout are 0, and so is a negative one once
+        // resolved (see boxEdges)
+        padding_top: Length = .{},
+        padding_right: Length = .{},
+        padding_bottom: Length = .{},
+        padding_left: Length = .{},
     };
 
     // Memory optimization. We usedto store each value as a
@@ -5825,15 +5911,16 @@ const Geometry = struct {
         // each length's unit, two per byte, then the bools: bytes, so
         // neither needs a u64, which would pad the record
         units: [(length_count + 1) / 2]u8,
-        flags: u8,
+        flags: Flags,
 
         const names = @typeInfo(Computed).@"struct".field_names;
         const types = @typeInfo(Computed).@"struct".field_types;
         const length_count = std.mem.count(type, types, &.{Length});
+        const Flags = u16;
 
         comptime {
             std.debug.assert(@bitSizeOf(Length.Unit) == 4);
-            std.debug.assert(names.len - length_count <= 8);
+            std.debug.assert(names.len - length_count <= @bitSizeOf(Flags));
         }
 
         fn pack(computed: Computed) Stored {
@@ -5847,7 +5934,7 @@ const Geometry = struct {
                     stored.units[length / 2] |= @as(u8, @backingInt(value.unit)) << (length % 2 * 4);
                     length += 1;
                 } else {
-                    stored.flags |= @as(u8, @intFromBool(value)) << flag;
+                    stored.flags |= @as(Flags, @intFromBool(value)) << flag;
                     flag += 1;
                 }
             }
@@ -9007,7 +9094,7 @@ test "StyleManager: records: a group allocates the chunks it reaches" {
 }
 
 test "StyleManager: records: geometry packs its lengths' units with the flags" {
-    try testing.expectEqual(60, @sizeOf(Records(Geometry.Stored).Entry));
+    try testing.expectEqual(80, @sizeOf(Records(Geometry.Stored).Entry));
 
     // Each field apart from its neighbours
     const names = Geometry.Stored.names;

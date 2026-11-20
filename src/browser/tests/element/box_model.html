@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<meta name=lp-mode content=test>
+<script src="../testing.js"></script>
+
+<style>
+  .bmBorderBox { box-sizing: border-box; }
+  .bmPadded { padding: 10px; }
+  .bmLonghand { padding: 10px; padding-bottom: 30px; }
+</style>
+
+<div id="bm-hit" style="width: 0; height: 0; padding: 6px"></div>
+
+<script id="declaredSizes">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // content-box adds the padding to the declared size, border-box holds it
+  wrap.innerHTML = '<div id="bm-content" style="width: 100px; height: 40px; padding: 5px 6px"></div><div id="bm-border" class="bmBorderBox" style="width: 100px; height: 40px; padding: 5px 6px"></div>';
+  testing.expectEqual(112, rect('bm-content').width);
+  testing.expectEqual(50, rect('bm-content').height);
+  testing.expectEqual(112, $('#bm-content').offsetWidth);
+  testing.expectEqual(50, $('#bm-content').clientHeight);
+  testing.expectEqual('100px', getComputedStyle($('#bm-content')).width);
+  testing.expectEqual('40px', getComputedStyle($('#bm-content')).height);
+  testing.expectEqual(100, rect('bm-border').width);
+  testing.expectEqual(40, rect('bm-border').height);
+  testing.expectEqual('100px', getComputedStyle($('#bm-border')).width);
+  testing.expectEqual(rect('bm-content').top + 50, rect('bm-border').top);
+
+  // A box with no size of its own is still as large as its padding
+  wrap.innerHTML = '<div id="bm-zero" style="width: 0; height: 0; padding: 4px"></div><div id="bm-zero-border" class="bmBorderBox" style="width: 0; height: 0; padding: 4px 6px"></div>';
+  testing.expectEqual(8, rect('bm-zero').width);
+  testing.expectEqual(8, rect('bm-zero').height);
+  testing.expectEqual(12, rect('bm-zero-border').width);
+  testing.expectEqual(8, rect('bm-zero-border').height);
+
+  wrap.remove();
+}
+</script>
+
+<script id="contentSizes">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const block = '<div style="height: 30px"></div>';
+
+  // Padding grows a box around its content, and moves what comes after it
+  wrap.innerHTML = `<div id="bm-auto" style="padding: 10px 0 20px">${block}</div><div id="bm-after" style="height: 10px"></div>`;
+  testing.expectEqual(60, rect('bm-auto').height);
+  testing.expectEqual(rect('bm-auto').top + 60, rect('bm-after').top);
+  const auto = $('#bm-auto');
+  const style = getComputedStyle(auto);
+  testing.expectEqual(30, auto.offsetHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom));
+  // The computed height is the content box's
+  testing.expectEqual('30px', style.height);
+
+  // From a sheet, a longhand over its shorthand, an inline one over both
+  wrap.innerHTML = `<div id="bm-sheet" class="bmPadded">${block}</div><div id="bm-longhand" class="bmLonghand">${block}</div><div id="bm-inline" class="bmLonghand" style="padding-top: 0">${block}</div>`;
+  testing.expectEqual(50, rect('bm-sheet').height);
+  testing.expectEqual(70, rect('bm-longhand').height);
+  testing.expectEqual(60, rect('bm-inline').height);
+
+  // Logical sides, and font-relative lengths
+  wrap.innerHTML = `<div id="bm-logical" style="padding-block: 5px 15px">${block}</div><div id="bm-em" style="font-size: 10px; padding-block-start: 2em">${block}</div>`;
+  testing.expectEqual(50, rect('bm-logical').height);
+  testing.expectEqual(50, rect('bm-em').height);
+
+  // A box sized by its content is wider by its padding
+  wrap.innerHTML = '<div id="bm-shrink" style="display: inline-block; padding: 0 24px"><div style="width: 50px; height: 10px"></div></div>';
+  testing.expectEqual(98, rect('bm-shrink').width);
+
+  wrap.remove();
+}
+</script>
+
+<script id="percentPadding">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // A percentage is of the containing block's width, on both axes: the
+  // aspect-ratio box
+  wrap.innerHTML = '<div id="bm-ratio" style="height: 0; padding-bottom: 50%"></div><div id="bm-ratio-after" style="height: 10px"></div>';
+  testing.expectEqual(300, rect('bm-ratio').height);
+  testing.expectEqual(rect('bm-ratio').top + 300, rect('bm-ratio-after').top);
+
+  // and follows that width
+  wrap.style.width = '400px';
+  testing.expectEqual(200, rect('bm-ratio').height);
+  testing.expectEqual(rect('bm-ratio').top + 200, rect('bm-ratio-after').top);
+
+  wrap.remove();
+}
+</script>
+
+<script id="innerWidth">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  // Children fill the content box
+  wrap.innerHTML = '<div style="width: 200px; padding: 0 20px"><div id="bm-fill" style="height: 10px"></div></div><div class="bmBorderBox" style="width: 200px; padding: 0 20px"><div id="bm-fill-border" style="height: 10px"></div><div id="bm-half" style="width: 50%; height: 10px"></div></div>';
+  testing.expectEqual(200, rect('bm-fill').width);
+  testing.expectEqual(160, rect('bm-fill-border').width);
+  testing.expectEqual(80, rect('bm-half').width);
+
+  // A block fills its container, padding included
+  wrap.innerHTML = '<div id="bm-block" style="padding: 0 30px"><div id="bm-block-child" style="height: 10px"></div></div>';
+  testing.expectEqual(600, rect('bm-block').width);
+  testing.expectEqual(540, rect('bm-block-child').width);
+
+  // A flex row shares its content box
+  wrap.innerHTML = '<div class="bmBorderBox" style="display: flex; width: 300px; padding: 0 50px"><div id="bm-grow-a" style="flex: 1; height: 10px"></div><div id="bm-grow-b" style="flex: 1; height: 10px"></div></div>';
+  testing.expectEqual(100, rect('bm-grow-a').width);
+  testing.expectEqual(100, rect('bm-grow-b').width);
+
+  wrap.remove();
+}
+</script>
+
+<script id="limits">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+  const block = '<div style="height: 100px"></div>';
+
+  // The limits are of the box that box-sizing names
+  wrap.innerHTML = `<div id="bm-max" style="max-height: 10px; padding: 20px 0">${block}</div><div id="bm-max-border" class="bmBorderBox" style="max-height: 10px; padding: 20px 0">${block}</div><div id="bm-min" class="bmBorderBox" style="min-height: 150px; padding: 20px 0">${block}</div>`;
+  testing.expectEqual(50, rect('bm-max').height);
+  testing.expectEqual(40, rect('bm-max-border').height);
+  testing.expectEqual(150, rect('bm-min').height);
+
+  wrap.innerHTML = '<div id="bm-max-width" style="width: 300px; max-width: 100px; padding: 0 10px; height: 10px"></div><div id="bm-min-width" class="bmBorderBox" style="width: 10px; min-width: 100px; padding: 0 10px; height: 10px"></div>';
+  testing.expectEqual(120, rect('bm-max-width').width);
+  testing.expectEqual(100, rect('bm-min-width').width);
+
+  wrap.remove();
+}
+</script>
+
+<script id="writes">
+{
+  const wrap = document.createElement('div');
+  wrap.style.width = '600px';
+  document.body.appendChild(wrap);
+  const rect = (id) => $('#' + id).getBoundingClientRect();
+
+  wrap.innerHTML = '<div id="bm-write" style="width: 100px"><div style="height: 30px"></div></div><div id="bm-write-after" style="height: 10px"></div>';
+  const el = $('#bm-write');
+  testing.expectEqual(30, rect('bm-write').height);
+  const after = rect('bm-write-after').top;
+
+  el.style.padding = '10px';
+  testing.expectEqual(50, rect('bm-write').height);
+  testing.expectEqual(120, rect('bm-write').width);
+  testing.expectEqual(after + 20, rect('bm-write-after').top);
+
+  el.style.boxSizing = 'border-box';
+  testing.expectEqual(100, rect('bm-write').width);
+
+  el.style.paddingBottom = '0';
+  testing.expectEqual(40, rect('bm-write').height);
+
+  el.style.padding = '';
+  testing.expectEqual(30, rect('bm-write').height);
+  testing.expectEqual(after, rect('bm-write-after').top);
+
+  el.className = 'bmPadded';
+  testing.expectEqual(50, rect('bm-write').height);
+
+  wrap.remove();
+}
+</script>
+
+<script id="hitTest">
+{
+  // A box that is all padding takes a click
+  const el = $('#bm-hit');
+  const r = el.getBoundingClientRect();
+  testing.expectEqual(12, r.width);
+  testing.expectEqual(el, document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+}
+</script>
