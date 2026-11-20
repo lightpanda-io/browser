@@ -50,6 +50,8 @@ pub fn init(allocator: Allocator, path: [:0]const u8) !Pool {
         conns[i] = try Sqlite.Conn.open(path);
         initialized += 1;
         try conns[i].busyTimeout(1000);
+        try conns[i].exec("pragma synchronous=normal", .{});
+        try conns[i].exec("pragma temp_store=memory", .{});
     }
 
     return .{
