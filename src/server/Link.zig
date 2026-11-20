@@ -63,6 +63,9 @@ send_depth: u32,
 send_timeout_ms: i32,
 max_inbox_backlog: usize,
 peer_closed: bool,
+// A CDP connection that joined a page of another connection's worker. Its
+// messages carry it, and it only takes itself down.
+guest: ?*CDP.Guest = null,
 
 pub fn init(
     self: *Link,
@@ -298,11 +301,16 @@ fn handleMessage(self: *Link, msg: WS.Message, pushed: *bool) !bool {
         .ping => {
             const arena = try self.arena_pool.acquire(.tiny, "ws ping");
             errdefer arena.release();
-            self.inbox.push(arena, .{ .ping = try arena.dupe(u8, msg.data) });
+            const body = try arena.dupe(u8, msg.data);
+            self.inbox.push(arena, if (self.guest != null) .{ .guest_ping = .{ .link = self, .body = body } } else .{ .ping = body });
             pushed.* = true;
             return true;
         },
         .close => {
+            if (self.guest != null) {
+                // answered when the loop drops it (CDP.removeGuest)
+                return true;
+            }
             const arena = try self.arena_pool.acquire(.tiny, "ws close");
             self.inbox.push(arena, .close);
             pushed.* = true;
@@ -324,12 +332,16 @@ fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     const input = json_input.parseLeaky(CDP.InputMessage, arena.allocator(), &raw, .{
         .ignore_unknown_fields = true,
     }) catch {
+        if (self.guest != null) {
+            arena.release();
+            return false;
+        }
         self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
         pushed.* = true;
         return false;
     };
 
-    self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input } });
+    self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input, .guest = self.guest } });
     pushed.* = true;
     return true;
 }

@@ -884,6 +884,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .loader_id = self._loader_id,
             .opts = .{
                 .cdp_id = opts.cdp_id,
+                .cdp_guest_session_id = opts.cdp_guest_session_id,
                 .reason = opts.reason,
                 .method = opts.method,
             },
@@ -923,6 +924,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     self._navigated_options = .{
         .cdp_id = opts.cdp_id,
+        .cdp_guest_session_id = opts.cdp_guest_session_id,
         .reason = opts.reason,
         .method = opts.method,
         .body = if (opts.body) |b| try self.page_arena.dupe(u8, b) else null,
@@ -3987,6 +3989,8 @@ const NavigateReason = enum {
 
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
+    // the session of the CDP guest that sent cdp_id, see CDP.sendNavigateResult
+    cdp_guest_session_id: ?[]const u8 = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
@@ -4018,6 +4022,7 @@ pub const NavigateOpts = struct {
 
 pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
+    cdp_guest_session_id: ?[]const u8 = null,
     reason: NavigateReason = .address_bar,
     method: HttpClient.Method = .GET,
     // Retained on the frame's arena so Page.reload can replay the prior
