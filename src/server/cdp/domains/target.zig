@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
+const Pages = @import("../../Pages.zig");
 
 const URL = @import("../../../browser/URL.zig");
 const js = @import("../../../browser/js/js.zig");
@@ -91,12 +92,36 @@ fn targetInfo(target: *const CDP.Target) ?TargetInfo {
 
 /// Clients such as Browser Use track a tab's URL and title only through this
 /// event, as Chrome sends it whenever either changes.
+/// Also republishes the pages for the server loop (see publishPages).
 pub fn sendTargetInfoChanged(target: *const CDP.Target, frame_id: u32) !void {
-    if (!target.cdp.target_discover) return;
+    const cdp = target.cdp;
+    if (!cdp.target_discover and cdp.pages == null) return;
     const main = target.mainFrame() orelse return;
     if (main._frame_id != frame_id) return;
+    publishPages(cdp);
+    if (!cdp.target_discover) return;
     const info = targetInfo(target) orelse return;
-    try target.cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+    try cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+}
+
+/// serve: tells the server loop which pages this browser has, for /json/list
+/// and /page/{browser_id}/{page_id}. Called when a target gets its id,
+/// changes URL or title, or closes.
+pub fn publishPages(cdp: *CDP) void {
+    const pages = cdp.pages orelse return;
+    var list: std.ArrayList(Pages.Page) = .empty;
+    defer list.deinit(cdp.allocator);
+    if (cdp.browser_context) |*bc| {
+        for (bc.targets.items) |target| {
+            const info = targetInfo(target) orelse continue;
+            list.append(cdp.allocator, pageOf(info)) catch |err| return log.err(.cdp, "publish pages", .{ .err = err });
+        }
+    }
+    pages.publish(list.items) catch |err| log.err(.cdp, "publish pages", .{ .err = err });
+}
+
+fn pageOf(info: TargetInfo) Pages.Page {
+    return .{ .id = info.targetId[0..14].*, .url = info.url, .title = info.title };
 }
 
 fn getBrowserContexts(cmd: *CDP.Command) !void {
@@ -210,6 +235,7 @@ fn createTarget(cmd: *CDP.Command) !void {
     // the target_id == the frame_id of the "root" frame
     target.target_id = id.toFrameId(page.frame_id);
     const target_id = &target.target_id.?;
+    publishPages(cmd.cdp);
     {
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
@@ -549,6 +575,7 @@ fn setAutoAttach(cmd: *CDP.Command) !void {
                 try doAttachtoTarget(cmd, target);
             }
         }
+        publishPages(cmd.cdp);
         try cmd.sendResult(null, .{});
         return;
     }

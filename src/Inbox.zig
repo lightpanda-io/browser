@@ -173,13 +173,26 @@ pub const Message = struct {
         // parked on the Server.Worker until the consumer responds.
         bidi_http: http_command.Command,
 
+        // A CDP connection joining one page of the worker's running browser
+        // (/page/{browser_id}/{page_id}). The worker's own link stays; this
+        // one is extra, and leaving doesn't end the worker.
+        guest: Guest,
+
+        // A ping on a guest's connection; the pong goes back on that link.
+        guest_ping: GuestPing,
+
+        // A guest's connection is gone. The loop has stopped reading it, so
+        // the consumer owns the link and destroys it.
+        guest_gone: GuestGone,
+
         pub fn size(self: Payload) usize {
             return switch (self) {
                 .cdp => |c| c.raw.len,
                 .bidi, .ping => |b| b.len,
+                .guest_ping => |p| p.body.len,
                 // one at a time, it never backs up
                 .bidi_http => 0,
-                .close, .disconnect, .link, .quit => 0,
+                .close, .disconnect, .link, .quit, .guest, .guest_gone => 0,
             };
         }
     };
@@ -187,6 +200,25 @@ pub const Message = struct {
     pub const Cdp = struct {
         raw: []const u8,
         input: CDP.InputMessage,
+        // The guest's connection it came in on; null is the worker's own link.
+        link: ?*Link = null,
+    };
+
+    pub const Guest = struct {
+        // owns its link; the consumer adopts it
+        guest: *CDP.Guest,
+        target_id: [14]u8,
+    };
+
+    pub const GuestPing = struct {
+        link: *Link,
+        body: []u8,
+    };
+
+    pub const GuestGone = struct {
+        link: *Link,
+        // it sent a close frame, which wants one back
+        reply_close: bool,
     };
 
     pub fn deinit(self: *const Message) void {
@@ -196,7 +228,10 @@ pub const Message = struct {
     // For messages that never reached the consumer (Inbox.deinit).
     fn discard(self: *const Message) void {
         switch (self.payload) {
+            // an adopted guest is the consumer's to destroy (and its .guest
+            // came first, so an unadopted one went with that message)
             .link => |link| link.destroy(),
+            .guest => |guest| guest.guest.destroy(),
             else => {},
         }
         self.deinit();
