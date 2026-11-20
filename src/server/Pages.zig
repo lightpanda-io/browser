@@ -67,6 +67,27 @@ pub fn publish(self: *Pages, pages: []const Page) !void {
     old.deinit(self.allocator);
 }
 
+/// Worker thread. Updates a listed page's URL and title. Only the worker
+/// changes the list, so it reads it without the lock.
+pub fn update(self: *Pages, page: Page) !void {
+    const entry = for (self.list.items) |*entry| {
+        if (std.mem.eql(u8, &entry.id, &page.id)) break entry;
+    } else return;
+    if (std.mem.eql(u8, entry.url, page.url) and std.mem.eql(u8, entry.title, page.title)) {
+        return;
+    }
+    const url = try self.allocator.dupe(u8, page.url);
+    errdefer self.allocator.free(url);
+    const title = try self.allocator.dupe(u8, page.title);
+
+    const old = entry.*;
+    self.mutex.lockUncancelable(lp.io);
+    entry.url = url;
+    entry.title = title;
+    self.mutex.unlock(lp.io);
+    self.freePage(old);
+}
+
 /// Server loop. Whether a page with this target id is listed.
 pub fn contains(self: *Pages, id: []const u8) bool {
     self.mutex.lockUncancelable(lp.io);
@@ -116,5 +137,11 @@ test "Pages: publish replaces the list" {
     try pages.publish(&.{.{ .id = "FID-0000000003".*, .url = "http://c/", .title = "" }});
     try testing.expect(!pages.contains("FID-0000000001"));
     try testing.expect(pages.contains("FID-0000000003"));
+    try testing.expectEqual(1, pages.list.items.len);
+    try pages.update(.{ .id = "FID-0000000003".*, .url = "http://d/", .title = "D" });
+    try testing.expectEqualStrings("http://d/", pages.list.items[0].url);
+    try testing.expectEqualStrings("D", pages.list.items[0].title);
+    // not listed: ignored
+    try pages.update(.{ .id = "FID-0000000009".*, .url = "http://e/", .title = "" });
     try testing.expectEqual(1, pages.list.items.len);
 }

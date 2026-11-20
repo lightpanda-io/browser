@@ -554,34 +554,15 @@ pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Prot
 /// The CDP browser `id` names, if a connection can still join it (not when
 /// it's ending with the connection that started it).
 pub fn findBrowser(self: *Server, id: []const u8) ?*Worker {
-    var it = self.joinableBrowsers();
-    while (it.next()) |worker| {
-        if (std.mem.eql(u8, &worker.browser_id.?, id)) {
+    var node = self.workers.first;
+    while (node) |n| : (node = n.next) {
+        const worker: *Worker = @fieldParentPtr("node", n);
+        if (worker.joinable() and std.mem.eql(u8, &worker.browser_id, id)) {
             return worker;
         }
     }
     return null;
 }
-
-/// The CDP browsers a connection can join (see Worker.joinable).
-pub fn joinableBrowsers(self: *Server) BrowserIterator {
-    return .{ .node = self.workers.first };
-}
-
-pub const BrowserIterator = struct {
-    node: ?*DoublyLinkedList.Node,
-
-    pub fn next(self: *BrowserIterator) ?*Worker {
-        while (self.node) |n| {
-            self.node = n.next;
-            const worker: *Worker = @fieldParentPtr("node", n);
-            if (worker.browser_id != null and worker.joinable()) {
-                return worker;
-            }
-        }
-        return null;
-    }
-};
 
 pub fn guestsFull(self: *const Server) bool {
     return self.guest_count >= self.app.config.maxConnections();
@@ -603,8 +584,6 @@ pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection, target_id:
         self.app.allocator.destroy(guest);
         return;
     };
-    link.guest = true;
-    guest.* = .{ .worker = worker, .link = link };
 
     // The worker's side of the guest. Allocated here, before the loop reads
     // the link, so that the worker can't fail to adopt it: from then on the
@@ -615,7 +594,9 @@ pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection, target_id:
         self.app.allocator.destroy(guest);
         return;
     };
-    cdp_guest.* = .{ .link = link };
+    cdp_guest.* = .{ .link = link, .target_id = target_id };
+    link.guest = cdp_guest;
+    guest.* = .{ .worker = worker, .guest = cdp_guest };
 
     self.io_engine.monitorGuest(guest) catch |err| {
         log.err(.serve, "guest monitor", .{ .err = err });
@@ -627,12 +608,12 @@ pub fn attachGuest(self: *Server, worker: *Worker, conn: *Connection, target_id:
     self.guest_count += 1;
 
     // precedes anything read off the socket (the loop reads it later)
-    self.push(worker, .{ .guest = .{ .guest = cdp_guest, .target_id = target_id } });
+    self.push(worker, .{ .guest = cdp_guest });
 }
 
 fn processGuestEvent(self: *Server, guest: *Guest, rw: IOEvent.ReadWrite) void {
     if (rw.readable) {
-        const read = guest.link.readAvailable(WS_READ_BUDGET) catch {
+        const read = guest.guest.link.readAvailable(WS_READ_BUDGET) catch {
             // EOF, a read error or bad framing: only this guest goes
             return self.dropGuest(guest);
         };
@@ -654,9 +635,9 @@ fn processGuestEvent(self: *Server, guest: *Guest, rw: IOEvent.ReadWrite) void {
 /// (closing its socket): only once the socket is out of the poll set.
 fn dropGuest(self: *Server, guest: *Guest) void {
     const worker = guest.worker;
-    const link = guest.link;
+    const cdp_guest = guest.guest;
     self.forgetGuest(guest);
-    self.push(worker, .{ .guest_gone = .{ .link = link, .reply_close = link.guest_closed } });
+    self.push(worker, .{ .guest_gone = cdp_guest });
     self.slotFreed();
 }
 
@@ -669,7 +650,7 @@ fn releaseGuests(self: *Server, worker: *Worker) void {
 }
 
 fn forgetGuest(self: *Server, guest: *Guest) void {
-    self.io_engine.remove(guest.link.socket);
+    self.io_engine.remove(guest.guest.link.socket);
     guest.worker.guests.remove(&guest.node);
     self.app.allocator.destroy(guest);
     self.guest_count -= 1;
@@ -717,13 +698,9 @@ pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Orig
             .socket => null,
             .session => |session| session.id,
         },
-        .browser_id = if (protocol == .cdp) blk: {
-            var id: [36]u8 = undefined;
-            uuidv4(&id);
-            break :blk id;
-        } else null,
         .pages = .init(self.app.allocator),
     };
+    uuidv4(&worker.browser_id);
     self.workers.append(&worker.node);
     if (origin == .session) {
         lp.assert(self.protocols.webdriver, "spawnWorker session without webdriver", .{});
@@ -1182,7 +1159,7 @@ const EPoll = struct {
     }
 
     fn monitorGuest(self: *const EPoll, guest: *Guest) !void {
-        return self.monitorRead(guest.link.socket, @intFromPtr(guest) | GUEST_TAG);
+        return self.monitorRead(guest.guest.link.socket, @intFromPtr(guest) | GUEST_TAG);
     }
 
     fn monitorRead(self: *const EPoll, socket: posix.socket_t, data: usize) !void {
@@ -1333,7 +1310,7 @@ const KQueue = struct {
     }
 
     fn monitorGuest(self: *const KQueue, guest: *Guest) !void {
-        return self.monitor(guest.link.socket, EVFILT.READ, @intFromPtr(guest) | GUEST_TAG);
+        return self.monitor(guest.guest.link.socket, EVFILT.READ, @intFromPtr(guest) | GUEST_TAG);
     }
 
     // A socket only ever has one of the two filters registered, so flipping is
@@ -1487,10 +1464,10 @@ pub const Worker = struct {
     // CDP connections that joined one of this worker's pages (Guest.node)
     guests: DoublyLinkedList = .{},
 
-    // CDP only: the id /page/{browser_id}/{page_id} names this browser by,
-    // and its pages, which /json/list and /page/... use. Set at spawn; the
-    // worker publishes the pages (see target.publishPages).
-    browser_id: ?[36]u8 = null,
+    // The id /page/{browser_id}/{page_id} names this browser by (CDP only),
+    // and its pages, which /json/list and /page/... use. The worker
+    // publishes the pages (see target.publishPages).
+    browser_id: [36]u8 = undefined,
     pages: Pages,
 
     // HTTP WebDriver session id, null for cdp and bidi-only workers.
@@ -1560,8 +1537,8 @@ pub const Worker = struct {
 
     /// Whether a CDP connection can join this worker's browser: not when it's
     /// ending with its first connection, or the server is shutting down.
-    fn joinable(self: *const Worker) bool {
-        return self.link != null and self.linkDropping() == false and self.server.shutdown_begun == false;
+    pub fn joinable(self: *const Worker) bool {
+        return self.protocol == .cdp and self.link != null and self.linkDropping() == false and self.server.shutdown_begun == false;
     }
 
     pub fn linkDropping(self: *const Worker) bool {
@@ -1598,7 +1575,7 @@ pub const Worker = struct {
                 };
                 const cdp = try allocator.create(CDP);
                 defer allocator.destroy(cdp);
-                try cdp.init(server.app, socket, &self.inbox, .{ .pages = &self.pages });
+                try cdp.init(server.app, socket, &self.inbox, &self.pages);
                 defer cdp.deinit();
                 self.run(.init(.{ .cdp = cdp }, &self.inbox), &cdp.link);
             },
@@ -1669,7 +1646,7 @@ pub const Worker = struct {
 // answers on it and destroys it.
 pub const Guest = struct {
     worker: *Worker,
-    link: *Link,
+    guest: *CDP.Guest,
     // threads Worker.guests
     node: DoublyLinkedList.Node = .{},
 };
@@ -3528,6 +3505,10 @@ test "server: cdp join a page" {
     const read = try cdpCommand(&c, 1, "Runtime.evaluate", "{\"expression\":\"window.shared\",\"returnByValue\":true}", null, &seen_by_c);
     try testing.expectEqual(42, read.get("result").?.object.get("value").?.integer);
     _ = try cdpCommand(&c, 2, "Runtime.enable", "{}", null, &seen_by_c);
+    // events its commands raise are its own
+    _ = try cdpCommand(&c, 5, "DOM.getDocument", "{}", null, &seen_by_c);
+    _ = try cdpCommand(&c, 6, "DOM.requestChildNodes", "{\"nodeId\":1,\"depth\":-1}", null, &seen_by_c);
+    try testing.expect(try countEvents(seen_by_c.items, "DOM.setChildNodes", null) > 0);
     for (seen_by_c.items) |raw| {
         try testing.expect(std.mem.find(u8, raw, "\"sessionId\"") == null);
     }
@@ -3587,10 +3568,10 @@ test "server: cdp several guests on one page" {
     _ = try cdpCommand(&guests[1], 2, "Runtime.evaluate", "{\"expression\":\"1\"}", null, &seen[1]);
     _ = try cdpCommand(&a, 4, "Runtime.evaluate", "{\"expression\":\"1\"}", page.session_id, &seen[2]);
     for ([_][]const u8{ "Page.frameNavigated", "Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished" }) |method| {
-        const count = countEvents(seen[2].items, method, page.session_id);
+        const count = try countEvents(seen[2].items, method, page.session_id);
         try testing.expect(count > 0);
-        try testing.expectEqual(count, countEvents(seen[0].items, method, null));
-        try testing.expectEqual(count, countEvents(seen[1].items, method, null));
+        try testing.expectEqual(count, try countEvents(seen[0].items, method, null));
+        try testing.expectEqual(count, try countEvents(seen[1].items, method, null));
     }
     // the result went to the guest that asked only
     for (seen[1..]) |others| {
@@ -3602,6 +3583,10 @@ test "server: cdp several guests on one page" {
     // a failed navigation is answered too
     const failed = try cdpCommand(&guests[1], 3, "Page.navigate", "{\"url\":\"http://127.0.0.1:1/\"}", null, null);
     try testing.expect(failed.get("errorText") != null);
+
+    // they go with the starter's session on the page
+    _ = try cdpCommand(&a, 5, "Target.detachFromTarget", try testing.arena_allocator.print("{{\"sessionId\":\"{s}\"}}", .{page.session_id}), null, null);
+    for (&guests) |*g| try expectClose(g);
 }
 
 test "server: cdp page guest gets what it enabled for itself" {
@@ -3658,8 +3643,7 @@ fn pagePath(target_id: []const u8) ![]const u8 {
     var l = try createTestClient();
     defer l.deinit();
     const res = try l.httpRequest("GET /json/list HTTP/1.1\r\n\r\n");
-    const body = res[(std.mem.find(u8, res, "\r\n\r\n") orelse return error.NoBody) + 4 ..];
-    const list = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+    const list = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, responseBody(res), .{});
     const origin = try testing.arena_allocator.print("ws://127.0.0.1:{d}", .{testing.test_cdp_port});
     for (list.array.items) |entry| {
         if (std.mem.eql(u8, entry.object.get("id").?.string, target_id)) {
@@ -3670,16 +3654,14 @@ fn pagePath(target_id: []const u8) ![]const u8 {
     return error.PageNotListed;
 }
 
-// How many of `messages` are `method` events for `session_id`.
-fn countEvents(messages: []const []const u8, method: []const u8, session_id: ?[]const u8) usize {
+// How many of `messages` are `method` events for `session_id` (null: none).
+fn countEvents(messages: []const []const u8, method: []const u8, session_id: ?[]const u8) !usize {
+    const name = try testing.arena_allocator.print("\"method\":\"{s}\"", .{method});
     var count: usize = 0;
     for (messages) |raw| {
-        const value = std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, raw, .{}) catch continue;
-        const m = value.object.get("method") orelse continue;
-        const sid = if (value.object.get("sessionId")) |s| s.string else "";
-        if (std.mem.eql(u8, m.string, method) and std.mem.eql(u8, sid, session_id orelse "")) {
-            count += 1;
-        }
+        if (std.mem.find(u8, raw, name) == null) continue;
+        const sid = if (session_id) |id| std.mem.find(u8, raw, id) != null else std.mem.find(u8, raw, "\"sessionId\"") == null;
+        count += @intFromBool(sid);
     }
     return count;
 }

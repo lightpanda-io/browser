@@ -107,11 +107,7 @@ guests: std.DoublyLinkedList = .{},
 // (/json/list, /page/{browser_id}/{page_id}).
 pages: ?*Pages = null,
 
-pub const InitOpts = struct {
-    pages: ?*Pages = null,
-};
-
-pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox, opts: InitOpts) !void {
+pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox, pages: ?*Pages) !void {
     const allocator = app.allocator;
     {
         // this is documentation, and future-proofing, to show exactly where
@@ -128,7 +124,7 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox, opts: 
             .notification_arena = std.heap.ArenaAllocator.init(allocator),
             .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
             .streams = .{ .allocator = allocator },
-            .pages = opts.pages,
+            .pages = pages,
         };
     }
 
@@ -163,16 +159,15 @@ pub fn deinit(self: *CDP) void {
 }
 
 /// A connection that joined one of this browser's pages
-/// (/page/{browser_id}/{page_id}), next to the one that started the browser.
-/// As on Chrome's page socket, its messages carry no sessionId: they go
-/// through a session of its own, which it lives and dies with. Its replies
-/// and that session's inspector messages go to it alone; it also gets a copy
-/// of the page's events (see isPageEvent). Everything else stays the
-/// starter's: the Target domain, and the enable state of the page's domains
-/// (Page, Network, ...), which is the page's, not the session's, so a guest's
-/// Network.disable turns it off for the starter too.
+/// (/page/{browser_id}/{page_id}). As on Chrome's page socket, its messages
+/// carry no sessionId: they go through a session of its own, which it lives
+/// and dies with, and whatever that session gets goes to it alone. It also
+/// gets a copy of the page's events (see isPageEvent). The Target domain
+/// stays the starter's, and the enable state of the page's domains is the
+/// page's, so a guest's Network.disable turns it off for the starter too.
 pub const Guest = struct {
     link: *Link,
+    target_id: [14]u8,
     // null until it's attached, and once its session is gone
     session: ?*BrowserContext.AttachedSession = null,
     // threads CDP.guests
@@ -186,13 +181,12 @@ pub const Guest = struct {
     }
 };
 
-/// Worker thread. A connection joined the page `target_id`. The server loop
-/// is reading the guest's link, so adopting it can't fail: it is only
-/// destroyed once the loop let go of it (removeGuest), or of the whole worker
-/// (deinit).
-pub fn addGuest(self: *CDP, guest: *Guest, target_id: [14]u8) void {
+/// Worker thread. The server loop is reading the guest's link, so adopting it
+/// can't fail: it is only destroyed once the loop let go of it (removeGuest),
+/// or of the whole worker (deinit).
+pub fn addGuest(self: *CDP, guest: *Guest) void {
     self.guests.append(&guest.node);
-    self.attachGuestSession(guest, &target_id) catch |err| {
+    self.attachGuestSession(guest, &guest.target_id) catch |err| {
         // the page closed since the loop looked it up (or we're out of
         // memory): like Chrome's socket for a closed page, this one closes
         // (and leaves on its close reply)
@@ -213,40 +207,23 @@ fn attachGuestSession(self: *CDP, guest: *Guest, target_id: []const u8) !void {
     guest.session = attached;
 }
 
-/// Worker thread. A guest's connection is gone (or going: `reply_close` when
-/// it sent a close frame we owe an answer to). Its session is detached and
-/// its link destroyed; the browser and its starter carry on.
-pub fn removeGuest(self: *CDP, link: *Link, reply_close: bool) void {
-    const guest = self.findGuest(link);
+/// Worker thread. A guest's connection is gone, or going: it sent a close
+/// frame or hung up. Its session is detached and its link destroyed; the
+/// browser and its starter carry on.
+pub fn removeGuest(self: *CDP, guest: *Guest) void {
     self.guests.remove(&guest.node);
     if (guest.session) |attached| {
         attached.guest = null;
         attached.target.fetchDisableForSession(attached.id);
         _ = self.browser_context.?.detachSession(attached.id);
-    }
-    if (reply_close) {
-        link.send(&WS.CLOSE_NORMAL) catch |err| {
-            log.debug(.cdp, "guest close reply", .{ .err = err });
-        };
+        // Answers its close frame (unread after a hang up). Without a session,
+        // we already sent ours.
+        guest.link.send(&WS.CLOSE_NORMAL) catch {};
     }
     guest.destroy();
 }
 
-fn findGuest(self: *const CDP, link: *const Link) *Guest {
-    var node = self.guests.first;
-    while (node) |n| : (node = n.next) {
-        const guest: *Guest = @fieldParentPtr("node", n);
-        if (guest.link == link) {
-            return guest;
-        }
-    }
-    // the loop only hands over messages of the guests it gave us
-    lp.assert(false, "CDP.findGuest unknown link", .{});
-    unreachable;
-}
-
-fn onGuestMessage(self: *CDP, link: *const Link, c: *Inbox.Message.Cdp) !void {
-    const guest = self.findGuest(link);
+fn onGuestMessage(self: *CDP, guest: *Guest, c: *Inbox.Message.Cdp) !void {
     // its page is gone and its socket closing
     const attached = guest.session orelse return;
 
@@ -288,7 +265,20 @@ fn sendGuestError(guest: *const Guest, id: ?i64, code: i32, message: []const u8)
 fn isPageEvent(method: []const u8) bool {
     return std.mem.startsWith(u8, method, "Page.") or
         std.mem.startsWith(u8, method, "Network.") or
-        std.mem.eql(u8, method, "DOM.documentUpdated");
+        std.mem.eql(u8, method, "DOM.documentUpdated") or
+        std.mem.eql(u8, method, "Runtime.executionContextsCleared");
+}
+
+fn hasGuest(self: *const CDP, target: *const Target) bool {
+    var node = self.guests.first;
+    while (node) |n| : (node = n.next) {
+        const guest: *Guest = @fieldParentPtr("node", n);
+        const attached = guest.session orelse continue;
+        if (attached.target == target) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Called by the Server run loop when readable bytes arrive on the CDP
@@ -308,8 +298,8 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
     if (self.browser.env.terminatePending()) {
         return;
     }
-    if (c.link) |link| {
-        return self.onGuestMessage(link, c);
+    if (c.guest) |guest| {
+        return self.onGuestMessage(guest, c);
     }
 
     const arena = &self.message_arena;
@@ -550,16 +540,17 @@ const SendEventOpts = struct {
     session_id: ?[]const u8 = null,
 };
 pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts) !void {
+    const params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p;
     if (self.guests.first != null) {
         if (opts.session_id) |session_id| {
-            if (try self.sendGuestEvent(method, p, session_id)) {
+            if (try self.sendGuestEvent(method, params, session_id)) {
                 return;
             }
         }
     }
     return self.sendJSON(.{
         .method = method,
-        .params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p,
+        .params = params,
         .sessionId = opts.session_id,
     }, .{});
 }
@@ -568,17 +559,20 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
 // session of, or to the starter and a copy to the guests of its page (see
 // isPageEvent). Returns false when it's neither, for sendEvent to send as
 // usual.
-fn sendGuestEvent(self: *CDP, method: []const u8, p: anytype, session_id: []const u8) !bool {
+// A guest that can't keep up only loses its own copy.
+fn sendGuestEvent(self: *CDP, method: []const u8, params: anytype, session_id: []const u8) !bool {
     const bc = &(self.browser_context orelse return false);
     const attached = bc.attached_sessions.get(session_id) orelse return false;
-    const params = if (comptime @typeInfo(@TypeOf(p)) == .null) struct {}{} else p;
     if (attached.guest) |guest| {
-        try sendJSONTo(guest.link, .{ .method = method, .params = params }, .{});
+        sendJSONTo(guest.link, .{ .method = method, .params = params }, .{}) catch |err| {
+            log.debug(.cdp, "guest event", .{ .err = err });
+        };
         return true;
     }
     if (isPageEvent(method) == false) return false;
     const page_session_id = attached.target.session_id orelse return false;
     if (std.mem.eql(u8, page_session_id, session_id) == false) return false;
+    if (self.hasGuest(attached.target) == false) return false;
 
     // Written once: some params are writers that shouldn't run twice.
     const arena = bc.acquireNotificationArena();
@@ -593,7 +587,9 @@ fn sendGuestEvent(self: *CDP, method: []const u8, p: anytype, session_id: []cons
         const guest: *Guest = @fieldParentPtr("node", n);
         const guest_session = guest.session orelse continue;
         if (guest_session.target == attached.target) {
-            try BrowserContext.sendInspectorMessage(guest.link, msg, null);
+            BrowserContext.sendInspectorMessage(guest.link, msg, null) catch |err| {
+                log.debug(.cdp, "guest event", .{ .err = err });
+            };
         }
     }
     return true;
@@ -1016,10 +1012,29 @@ pub const BrowserContext = struct {
         if (target.session_id) |primary| {
             if (std.mem.eql(u8, primary, session_id)) {
                 target.session_id = null;
+                if (self.cdp.guests.first != null) {
+                    self.detachGuests(target);
+                }
             }
         }
         self.destroySession(kv.value);
         return true;
+    }
+
+    // Guests get their page events as copies of the page's session: without
+    // it, they go (destroySession closes their sockets).
+    fn detachGuests(self: *BrowserContext, target: *Target) void {
+        var i: usize = 0;
+        while (i < self.attached_sessions.count()) {
+            const attached = self.attached_sessions.values()[i];
+            if (attached.target != target or attached.guest == null) {
+                i += 1;
+                continue;
+            }
+            target.fetchDisableForSession(attached.id);
+            self.attached_sessions.orderedRemoveAt(i);
+            self.destroySession(attached);
+        }
     }
 
     // Detaches every session attached to `target`.
@@ -1329,7 +1344,11 @@ pub const Command = struct {
     }
 
     pub fn sendEvent(self: *Command, method: []const u8, p: anytype, opts: SendEventOpts) !void {
-        // Events ALWAYS go to the client. self.sender should not be used
+        // Events ALWAYS go to the client. self.sender should not be used,
+        // but a guest's command raises them for the guest.
+        if (self.sender == .guest) {
+            return self.cdp.sendEvent(method, p, .{ .session_id = self.routing_session_id });
+        }
         return self.cdp.sendEvent(method, p, opts);
     }
 

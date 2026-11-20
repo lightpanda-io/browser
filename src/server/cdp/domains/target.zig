@@ -92,21 +92,24 @@ fn targetInfo(target: *const CDP.Target) ?TargetInfo {
 
 /// Clients such as Browser Use track a tab's URL and title only through this
 /// event, as Chrome sends it whenever either changes.
-/// Also republishes the pages for the server loop (see publishPages).
+/// Also updates the page's entry for the server loop (see publishPages).
 pub fn sendTargetInfoChanged(target: *const CDP.Target, frame_id: u32) !void {
     const cdp = target.cdp;
     if (!cdp.target_discover and cdp.pages == null) return;
     const main = target.mainFrame() orelse return;
     if (main._frame_id != frame_id) return;
-    publishPages(cdp);
-    if (!cdp.target_discover) return;
     const info = targetInfo(target) orelse return;
-    try cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+    if (cdp.pages) |pages| {
+        pages.update(pageOf(info)) catch |err| log.err(.cdp, "publish pages", .{ .err = err });
+    }
+    if (cdp.target_discover) {
+        try cdp.sendEvent("Target.targetInfoChanged", .{ .targetInfo = info }, .{});
+    }
 }
 
 /// serve: tells the server loop which pages this browser has, for /json/list
-/// and /page/{browser_id}/{page_id}. Called when a target gets its id,
-/// changes URL or title, or closes.
+/// and /page/{browser_id}/{page_id}. Called when a target gets its id or
+/// closes; sendTargetInfoChanged updates a page's URL and title.
 pub fn publishPages(cdp: *CDP) void {
     const pages = cdp.pages orelse return;
     var list: std.ArrayList(Pages.Page) = .empty;

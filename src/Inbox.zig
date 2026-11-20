@@ -176,14 +176,15 @@ pub const Message = struct {
         // A CDP connection joining one page of the worker's running browser
         // (/page/{browser_id}/{page_id}). The worker's own link stays; this
         // one is extra, and leaving doesn't end the worker.
-        guest: Guest,
+        // Owns its link; the consumer adopts it.
+        guest: *CDP.Guest,
 
         // A ping on a guest's connection; the pong goes back on that link.
         guest_ping: GuestPing,
 
         // A guest's connection is gone. The loop has stopped reading it, so
         // the consumer owns the link and destroys it.
-        guest_gone: GuestGone,
+        guest_gone: *CDP.Guest,
 
         pub fn size(self: Payload) usize {
             return switch (self) {
@@ -200,25 +201,13 @@ pub const Message = struct {
     pub const Cdp = struct {
         raw: []const u8,
         input: CDP.InputMessage,
-        // The guest's connection it came in on; null is the worker's own link.
-        link: ?*Link = null,
-    };
-
-    pub const Guest = struct {
-        // owns its link; the consumer adopts it
-        guest: *CDP.Guest,
-        target_id: [14]u8,
+        // The guest it came from; null is the worker's own link.
+        guest: ?*CDP.Guest = null,
     };
 
     pub const GuestPing = struct {
         link: *Link,
         body: []u8,
-    };
-
-    pub const GuestGone = struct {
-        link: *Link,
-        // it sent a close frame, which wants one back
-        reply_close: bool,
     };
 
     pub fn deinit(self: *const Message) void {
@@ -231,7 +220,7 @@ pub const Message = struct {
             // an adopted guest is the consumer's to destroy (and its .guest
             // came first, so an unadopted one went with that message)
             .link => |link| link.destroy(),
-            .guest => |guest| guest.guest.destroy(),
+            .guest => |guest| guest.destroy(),
             else => {},
         }
         self.deinit();

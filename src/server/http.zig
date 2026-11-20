@@ -802,9 +802,12 @@ fn serveJSONList(server: *Server, conn: *Connection, req: *Connection.Request) !
     const writer = try beginBody(server);
     var stringify: std.json.Stringify = .{ .writer = writer };
     try stringify.beginArray();
-    var it = server.joinableBrowsers();
-    while (it.next()) |worker| {
-        try worker.pages.writeJSON(&stringify, server.page_url, &worker.browser_id.?);
+    var node = server.workers.first;
+    while (node) |n| : (node = n.next) {
+        const worker: *Server.Worker = @fieldParentPtr("node", n);
+        if (worker.joinable()) {
+            try worker.pages.writeJSON(&stringify, server.page_url, &worker.browser_id);
+        }
     }
     try stringify.endArray();
     return serveDynamicHTTPResponse(server, conn, req, .ok, JSON_CONTENT_TYPE);
