@@ -211,11 +211,22 @@ fn grantPermissions(cmd: *CDP.Command) !void {
 
     const browser = &cmd.cdp.browser;
     for (params.permissions) |name| {
-        try browser.setPermission(name, .granted);
+        // The rest are named like their web permission (geolocation, notifications)
+        for (web_permissions.get(name) orelse &.{name}) |web_name| {
+            try browser.setPermission(web_name, .granted);
+        }
     }
 
     return cmd.sendResult(null, .{});
 }
+
+// Browser.grantPermissions takes PermissionType names, which the Browser stores
+// as the web permissions pages ask for. Playwright and Puppeteer grant
+// clipboard-read as clipboardReadWrite.
+const web_permissions = std.StaticStringMap([]const []const u8).initComptime(.{
+    .{ "clipboardReadWrite", &.{ "clipboard-read", "clipboard-write" } },
+    .{ "clipboardSanitizedWrite", &.{"clipboard-write"} },
+});
 
 // Set a single permission to an explicit state ("granted", "denied" or
 // "prompt"), reflected by navigator.permissions.query().
@@ -314,6 +325,17 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
     // page is replaced.
     try testing.expectEqual(.granted, browser.permissions.get("geolocation").?);
     try testing.expectEqual(.granted, browser.permissions.get("notifications").?);
+
+    // PermissionType names differing from the web permission are stored as it
+    try ctx.processMessage(.{
+        .id = 43,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"clipboardReadWrite"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 43, .session_id = null });
+    try testing.expectEqual(.granted, browser.permissions.get("clipboard-read").?);
+    try testing.expectEqual(.granted, browser.permissions.get("clipboard-write").?);
+    try testing.expectEqual(null, browser.permissions.get("clipboardReadWrite"));
 
     // setPermission: override a single permission to an explicit state.
     try ctx.processMessage(.{

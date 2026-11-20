@@ -4,8 +4,8 @@
 
 <script id=shape>
   testing.expectTrue('clipboard' in navigator);
-  testing.expectTrue(navigator.clipboard === navigator.clipboard);
   testing.expectTrue(navigator.clipboard instanceof Clipboard);
+  testing.expectTrue(navigator.clipboard === navigator.clipboard);
   testing.expectTrue(navigator.clipboard instanceof EventTarget);
   testing.expectEqual('[object Clipboard]', Object.prototype.toString.call(navigator.clipboard));
   testing.expectEqual(1, Clipboard.prototype.writeText.length);

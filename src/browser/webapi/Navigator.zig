@@ -241,13 +241,13 @@ fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
     return sw;
 }
 
-// Removed at runtime when the frame isn't a secure context
-// (Env.hideSecureContextInterfaces).
+/// Removed at runtime when the frame isn't a secure context
+/// (Env.hideSecureContextInterfaces).
 fn getClipboard(self: *Navigator, exec: *Execution) !*Clipboard {
     if (self._clipboard) |c| {
         return c;
     }
-    const c = try Clipboard.init(exec);
+    const c = try exec._factory.eventTarget(Clipboard{ ._proto = undefined });
     self._clipboard = c;
     return c;
 }
