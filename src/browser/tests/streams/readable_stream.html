@@ -975,3 +975,167 @@
     testing.expectEqual([1, 2, 3], b);
   });
 </script>
+
+<script id=reader_closed type=module>
+  const state = await testing.async();
+
+  // the same promise every time; a closed stream is done once its last chunk
+  // is read
+  let c;
+  const reader = new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader();
+  const closed = reader.closed;
+  let settled = false;
+  closed.then(() => { settled = true; });
+  c.enqueue('a');
+  c.close();
+  await new Promise((r) => setTimeout(r, 0));
+  const before_read = settled;
+  await reader.read();
+  const value = await closed;
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(true, closed === reader.closed);
+    testing.expectEqual(false, before_read);
+    testing.expectEqual(undefined, value);
+  });
+</script>
+
+<script id=reader_closed_errored type=module>
+  const state = await testing.async();
+
+  // rejects with what the stream errored with, and isn't reported as an
+  // unhandled rejection when nothing waits on it
+  const e = new Error('boom');
+  let c;
+  const reader = new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader();
+  const closed = reader.closed;
+  c.error(e);
+  const reason = await closed.catch((x) => x);
+
+  let c2;
+  new ReadableStream({ start(ctrl) { c2 = ctrl; } }).getReader().closed;
+  c2.error(e);
+  await new Promise((r) => setTimeout(r, 0));
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(e, reason);
+  });
+</script>
+
+<script id=reader_closed_already_settled type=module>
+  const state = await testing.async();
+
+  const e = new Error('boom');
+  const closed = new ReadableStream({ start(c) { c.close(); } }).getReader().closed;
+  const errored = new ReadableStream({ start(c) { c.error(e); } }).getReader().closed;
+  const results = [await closed, await errored.catch((x) => x)];
+
+  // closed with a chunk still queued: done once that chunk is read
+  const queued = new ReadableStream({ start(c) { c.enqueue('a'); c.close(); } }).getReader();
+  let settled = false;
+  queued.closed.then(() => { settled = true; });
+  await new Promise((r) => setTimeout(r, 0));
+  const before_read = settled;
+  await queued.read();
+  await queued.closed;
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([undefined, e], results);
+    testing.expectEqual(false, before_read);
+  });
+</script>
+
+<script id=reader_closed_cancel type=module>
+  const state = await testing.async();
+
+  // the reader keeps its lock: closed resolves and reads are done
+  const stream = new ReadableStream();
+  const reader = stream.getReader();
+  const closed = reader.closed;
+  await reader.cancel();
+  const value = await closed;
+  const { done } = await reader.read();
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(undefined, value);
+    testing.expectEqual(true, stream.locked);
+    testing.expectEqual(true, done);
+  });
+</script>
+
+<script id=reader_closed_release type=module>
+  const state = await testing.async();
+
+  // releaseLock() rejects a pending closed with a TypeError; a settled one is
+  // replaced by a rejected one
+  const pending = new ReadableStream().getReader();
+  const first = pending.closed;
+  pending.releaseLock();
+  const first_reason = await first.catch((x) => x.name);
+
+  const done = new ReadableStream({ start(c) { c.close(); } }).getReader();
+  const second = done.closed;
+  await second;
+  done.releaseLock();
+  const second_reason = await done.closed.catch((x) => x.name);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['TypeError', true], [first_reason, first === pending.closed]);
+    testing.expectEqual(['TypeError', false], [second_reason, second === done.closed]);
+  });
+</script>
+
+<script id=reader_closed_response_body type=module>
+  const state = await testing.async();
+
+  // the shape HuggingChat uses: watch closed while reading a decoded body
+  const reader = new Response('hello').body.pipeThrough(new TextDecoderStream()).getReader();
+  let closed = false;
+  reader.closed.then(() => { closed = true; });
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    text += value;
+  }
+  await reader.closed;
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('hello', text);
+    testing.expectEqual(true, closed);
+  });
+</script>
+
+<script id=reader_closed_order type=module>
+  const state = await testing.async();
+
+  // closed settles before a waiting read, on close, error and cancel
+  const order = async (end) => {
+    const log = [];
+    let c;
+    const reader = new ReadableStream({ start(ctrl) { c = ctrl; } }).getReader();
+    reader.closed.then(() => log.push('closed'), () => log.push('closed'));
+    reader.read().then(() => log.push('read'), () => log.push('read'));
+    end(c, reader);
+    await new Promise((r) => setTimeout(r, 0));
+    return log;
+  };
+  const on_close = await order((c) => c.close());
+  const on_error = await order((c) => c.error(new Error('boom')));
+  const on_cancel = await order((c, reader) => reader.cancel());
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['closed', 'read'], on_close);
+    testing.expectEqual(['closed', 'read'], on_error);
+    testing.expectEqual(['closed', 'read'], on_cancel);
+  });
+</script>

@@ -293,6 +293,7 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
     // closed before the source's cancel runs
     self._state = .closed;
     self._controller.clearQueue();
+    if (self._reader) |reader| reader.streamClosed();
 
     const result = ReadableStreamDefaultReader.ReadResult{
         .done = true,
