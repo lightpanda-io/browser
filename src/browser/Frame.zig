@@ -423,7 +423,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         ._proto = undefined,
         ._document = self.document,
         ._location = undefined,
-        ._history = .{ ._frame = self },
+        ._history = .{ ._exec = undefined },
         ._performance = try .init(factory, page_arena),
         ._screen = screen,
         ._visual_viewport = visual_viewport,
@@ -458,6 +458,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     errdefer browser.env.destroyContext(self.js);
     self.main_js = self.js;
     self.window._performance.attach(self.js);
+    self.window._history._exec = &self.main_js.execution;
 
     const location = try Location.init("about:blank", self);
     // We're holding a reference in Zig-side.
@@ -603,10 +604,6 @@ pub fn viewportChanged(self: *Frame) void {
     while (i < self.child_frames.items.len) : (i += 1) {
         self.child_frames.items[i].viewportChanged();
     }
-}
-
-pub inline fn isLive(self: *const Frame) bool {
-    return !self.js.destroyed;
 }
 
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {

@@ -29,16 +29,14 @@ const History = @This();
 
 const ScrollRestoration = enum { auto, manual };
 
-_frame: *Frame,
+// Set by Frame.init, once the context exists.
+_exec: *js.Execution,
 _scroll_restoration: ScrollRestoration = .auto,
 
 // The frame this history belongs to. Like Chrome, a History whose document
 // isn't active anymore (its frame was destroyed) throws a SecurityError.
 fn liveFrame(self: *const History) !*Frame {
-    if (!self._frame.isLive()) {
-        return error.SecurityError;
-    }
-    return self._frame;
+    return self._exec.frame() orelse error.SecurityError;
 }
 
 pub fn getLength(self: *const History) !u32 {
@@ -192,7 +190,7 @@ pub fn firePopState(frame: *Frame, state: ?[]const u8) !void {
     }
 }
 
-// Traversals still act on the injected frame, not self._frame.
+// Traversals still act on the injected frame, not this History's.
 pub fn back(_: *History, frame: *Frame) !void {
     try goInner(-1, frame);
 }
