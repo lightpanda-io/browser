@@ -280,7 +280,11 @@ pub fn cancel(self: *ReadableStream, reason: ?js.Value, exec: *const Execution) 
 
     switch (self._state) {
         .readable => {},
-        .closed => return local.resolvePromise({}),
+        // Chunks still queued: the spec still sees it as readable, so cancel
+        // drops them and settles the reader's `closed`.
+        .closed => if (self._controller._queue.items.len == 0) {
+            return local.resolvePromise({});
+        },
         .errored => {
             const resolver = local.createPromiseResolver();
             resolver.reject("ReadableStream.cancel", self._stored_error.?);

@@ -1067,6 +1067,35 @@
   });
 </script>
 
+<script id=reader_closed_cancel_queued type=module>
+  const state = await testing.async();
+
+  // closed with a chunk still queued: cancel drops it and resolves closed
+  let cancelled = false;
+  const stream = new ReadableStream({
+    start(c) { c.enqueue('a'); c.close(); },
+    cancel() { cancelled = true; },
+  });
+  const reader = stream.getReader();
+  await reader.cancel();
+  const value = await reader.closed;
+  const { done } = await reader.read();
+
+  // same through a Response body, which is built closed with its text queued
+  const body = new Response('hello').body.getReader();
+  await body.cancel();
+  await body.closed;
+  const body_read = await body.read();
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(undefined, value);
+    testing.expectEqual(true, done);
+    testing.expectEqual(true, cancelled);
+    testing.expectEqual(true, body_read.done);
+  });
+</script>
+
 <script id=reader_closed_release type=module>
   const state = await testing.async();
 
