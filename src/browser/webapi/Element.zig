@@ -1684,7 +1684,7 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
     }
 
     // Presentational attributes lose to CSS sizes.
-    if (tag == .img or tag == .iframe) {
+    if (tag == .img or tag == .iframe or tag == .canvas or tag == .video) {
         if (self.getAttributeSafe(comptime .wrap(@tagName(axis)))) |attr| {
             if (std.fmt.parseFloat(f64, attr)) |parsed| {
                 return .{ .value = parsed, .explicit = true };
@@ -1692,9 +1692,9 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
         }
     }
 
-    // An iframe without a size is 300x150, like any replaced element without
-    // an intrinsic size. Its content is hit-tested inside this box.
-    if (tag == .iframe) {
+    // Replaced elements without an intrinsic size are 300x150. An iframe's
+    // content is hit-tested inside this box.
+    if (tag == .iframe or tag == .canvas or tag == .video) {
         return .{ .value = switch (axis) {
             .width => 300.0,
             .height => 150.0,

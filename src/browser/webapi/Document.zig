@@ -517,7 +517,9 @@ pub fn extent(self: *Document) Extent {
     const html_body = if (self.is(HTMLDocument) != null) self.getBody() else null;
     if (html_body) |b| {
         const body = b.asElement();
-        size.height = @max(layout.contentHeight(body, frame), style_manager.inlineSize(body, .height) orelse 0);
+        // Only grows it: positions laid out past a shorter one must still fit
+        const declared = @max(style_manager.rootHeight(body) orelse 0, if (self.getDocumentElement()) |html| style_manager.rootHeight(html) orelse 0 else 0);
+        size.height = @max(layout.contentHeight(body, frame), declared);
         size.width = style_manager.inlineSize(body, .width) orelse 0;
         var children: TreeWalker.FlatChildren = .init(body.asNode(), .{ .frame = frame });
         while (children.next()) |node| {

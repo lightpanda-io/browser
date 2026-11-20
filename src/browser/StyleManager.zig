@@ -2969,6 +2969,25 @@ pub fn declaredSize(self: *StyleManager, el: *Element, comptime axis: Element.Ax
     return @max(0, length.resolve(self, el) orelse return null);
 }
 
+/// A root container's declared height. html's percentage is of the viewport,
+/// body's of html's declared height (none if html has none).
+pub fn rootHeight(self: *StyleManager, el: *Element) ?f64 {
+    self.assertOwns(el);
+    self.rebuildIfDirty() catch return null;
+    const length = self.geometryProps(el).height;
+    if (length.percentage()) |percent| {
+        const base: f64 = switch (el.getTag()) {
+            .html => @floatFromInt(self.frame.page.getViewport().height),
+            else => blk: {
+                const html = el.asNode().parentNode().?.is(Element) orelse return null;
+                break :blk self.rootHeight(html) orelse return null;
+            },
+        };
+        return @max(0, percent.of(base));
+    }
+    return @max(0, length.resolve(self, el) orelse return null);
+}
+
 /// Like declaredSize, but only the inline style counts.
 pub fn inlineSize(self: *StyleManager, el: *Element, comptime axis: Element.Axis) ?f64 {
     self.assertOwns(el);

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<style>html, body { margin: 0; height: 100%; }</style>
+<script src="../testing.js"></script>
+
+<canvas id="plain"></canvas>
+<canvas id="sized" width="200" height="40"></canvas>
+<video id="video"></video>
+
+<script id="percentOfViewport">
+{
+  testing.expectEqual(innerHeight, document.documentElement.offsetHeight);
+  testing.expectEqual(innerHeight, document.body.offsetHeight);
+  testing.expectEqual(innerHeight, document.body.clientHeight);
+  testing.expectEqual(innerHeight, document.body.getBoundingClientRect().height);
+  testing.expectEqual(innerHeight + 'px', getComputedStyle(document.body).height);
+}
+</script>
+
+<script id="replacedDefaults">
+{
+  const plain = $('#plain');
+  testing.expectEqual(300, plain.clientWidth);
+  testing.expectEqual(150, plain.clientHeight);
+
+  const video = $('#video');
+  testing.expectEqual(300, video.clientWidth);
+  testing.expectEqual(150, video.clientHeight);
+
+  const sized = $('#sized');
+  testing.expectEqual(200, sized.clientWidth);
+  testing.expectEqual(40, sized.clientHeight);
+  sized.height = 60;
+  testing.expectEqual(60, sized.clientHeight);
+
+  sized.style.height = '10px';
+  testing.expectEqual(10, sized.clientHeight);
+}
+</script>
