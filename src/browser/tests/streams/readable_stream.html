@@ -1168,3 +1168,153 @@
     testing.expectEqual(['closed', 'read'], on_cancel);
   });
 </script>
+
+<script id=readable_stream_start_async type=module>
+  const state = await testing.async();
+
+  // pull waits for what start returned
+  const log = [];
+  new ReadableStream({
+    async start() {
+      await new Promise((r) => setTimeout(r, 10));
+      log.push('start done');
+    },
+    pull(c) { log.push('pull'); c.close(); },
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['start done', 'pull'], log);
+  });
+</script>
+
+<script id=readable_stream_start_promise_timing type=module>
+  const state = await testing.async();
+
+  // start's own promise is waited on, so the first pull and a rejection
+  // don't fall behind other microtasks
+  const microtasks = (log) => {
+    Promise.resolve()
+      .then(() => log.push('m1'))
+      .then(() => log.push('m2'))
+      .then(() => log.push('m3'));
+  };
+  const fulfilled = [];
+  new ReadableStream({ start() { return Promise.resolve(); }, pull() { fulfilled.push('pull'); } });
+  microtasks(fulfilled);
+  const rejected = [];
+  new ReadableStream({ start() { return Promise.reject(new Error('boom')); } })
+    .getReader().closed.catch(() => rejected.push('closed'));
+  microtasks(rejected);
+  await new Promise((r) => setTimeout(r, 10));
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['pull', 'm1', 'm2', 'm3'], fulfilled);
+    testing.expectEqual(['m1', 'closed', 'm2', 'm3'], rejected);
+  });
+</script>
+
+<script id=readable_stream_start_pending_read type=module>
+  const state = await testing.async();
+
+  // a read while start is pending gets its chunk once start settles
+  const log = [];
+  let started;
+  const stream = new ReadableStream({
+    start() { return new Promise((r) => { started = r; }); },
+    pull(c) { log.push('pull'); c.enqueue('x'); c.close(); },
+  });
+  const read = stream.getReader().read().then(({ value }) => log.push(value));
+  await new Promise((r) => setTimeout(r, 10));
+  log.push('started');
+  started();
+  await read;
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['started', 'pull', 'x'], log);
+  });
+</script>
+
+<script id=readable_stream_start_rejects type=module>
+  const state = await testing.async();
+
+  // a rejected start errors the stream, without an unhandled rejection
+  const e = new Error('boom');
+  let pulled = false;
+  const reader = new ReadableStream({
+    start() { return Promise.reject(e); },
+    pull() { pulled = true; },
+  }).getReader();
+  const reason = await reader.read().catch((x) => x);
+  const closed_reason = await reader.closed.catch((x) => x);
+  await new Promise((r) => setTimeout(r, 0));
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(e, reason);
+    testing.expectEqual(e, closed_reason);
+    testing.expectEqual(false, pulled);
+  });
+</script>
+
+<script id=readable_stream_start_sets_up_pull type=module>
+  const state = await testing.async();
+
+  // the shape Proton Pass uses to read a file from IndexedDB: start looks up
+  // how many chunks there are, pull reads them
+  const db = {
+    async get(store, key) {
+      return store === 'metadata' ? { totalChunks: 2 } : 'chunk ' + key;
+    },
+  };
+  let current = 0;
+  let total = 0;
+  const stream = new ReadableStream({
+    async start() {
+      total = (await db.get('metadata', 'file')).totalChunks;
+    },
+    async pull(c) {
+      if (current >= total) {
+        c.close();
+        return;
+      }
+      c.enqueue(await db.get('files', current));
+      current++;
+    },
+  });
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['chunk 0', 'chunk 1'], chunks);
+  });
+</script>
+
+<script id=readable_stream_pull_only_body type=module>
+  const state = await testing.async();
+
+  // a body written only by pull is still read right away by Request and clone()
+  const body = (start) => new ReadableStream({
+    start,
+    pull(c) {
+      c.enqueue(new TextEncoder().encode('hi'));
+      c.close();
+    },
+  });
+  const request = await new Request('https://example.com/', { method: 'POST', body: body(), duplex: 'half' }).text();
+  const cloned = await new Response(body()).clone().text();
+  const sync_start = await new Response(body(() => {})).clone().text();
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('hi', request);
+    testing.expectEqual('hi', cloned);
+    testing.expectEqual('hi', sync_start);
+  });
+</script>
