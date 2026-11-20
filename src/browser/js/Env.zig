@@ -37,6 +37,7 @@ const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 const SharedWorkerGlobalScope = @import("../webapi/SharedWorkerGlobalScope.zig");
 const ServiceWorkerGlobalScope = @import("../webapi/ServiceWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
+const webgl = @import("../webapi/canvas/webgl.zig");
 
 const v8 = js.v8;
 const log = lp.log;
@@ -343,6 +344,9 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     if (global._session.experimental_features.serviceworker == false) {
         self.hideServiceWorker(is_frame, v8_context, global_obj);
     }
+    if (global._session.experimental_features.webgl == false) {
+        self.hideWebGL(v8_context, global_obj);
+    }
 
     // Store our TAO inside the internal field of the global object. This
     // maps the v8::Object -> Zig instance.
@@ -446,6 +450,18 @@ pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: 
 pub fn hideSecureContextInterfaces(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
     inline for (.{ "payment_request", "payment_response", "payment_request_update_event", "payment_method_change_event" }) |name| {
         self.deleteGlobal(v8_context, global_obj, name);
+    }
+}
+
+// WebGL2RenderingContext and the WebGL object interfaces, which only the
+// webgl experimental feature hands out. Without it a page sees what it saw
+// before they existed, and an uncaught ReferenceError on
+// WebGL2RenderingContext still counts as a WebGL use (see PageStatus).
+pub fn hideWebGL(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    for (&self.disabled_api_names.webgl) |*eternal| {
+        const name = v8.v8__Eternal__Get(@constCast(eternal), self.isolate.handle).?;
+        var deleted: v8.MaybeBool = undefined;
+        v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(name), &deleted);
     }
 }
 
@@ -1003,6 +1019,7 @@ const DisabledApiNames = struct {
     payment_response: v8.Eternal,
     payment_request_update_event: v8.Eternal,
     payment_method_change_event: v8.Eternal,
+    webgl: [webgl.global_names.len]v8.Eternal,
 
     fn init(isolate: *v8.Isolate) DisabledApiNames {
         var self: DisabledApiNames = undefined;
@@ -1016,6 +1033,9 @@ const DisabledApiNames = struct {
         intern(isolate, &self.payment_response, "PaymentResponse");
         intern(isolate, &self.payment_request_update_event, "PaymentRequestUpdateEvent");
         intern(isolate, &self.payment_method_change_event, "PaymentMethodChangeEvent");
+        inline for (webgl.global_names, &self.webgl) |name, *out| {
+            intern(isolate, out, name);
+        }
         return self;
     }
 

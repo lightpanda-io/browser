@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<meta name=lp-mode content="skipped: Lightpanda's no-op WebGL, behind --experimental-features webgl">
+<script src="../testing.js"></script>
+
+<script id=contexts>
+{
+  const el = document.createElement('canvas');
+  const gl = el.getContext('webgl');
+  testing.expectTrue(gl instanceof WebGLRenderingContext);
+  testing.expectTrue(gl === el.getContext('webgl'));
+  testing.expectTrue(gl === el.getContext('experimental-webgl'));
+  testing.expectEqual(null, el.getContext('webgl2'));
+  testing.expectEqual(null, el.getContext('2d'));
+  testing.expectTrue(gl.canvas === el);
+  testing.expectEqual(300, gl.drawingBufferWidth);
+  testing.expectEqual(150, gl.drawingBufferHeight);
+  testing.expectFalse(gl.isContextLost());
+
+  const gl2 = document.createElement('canvas').getContext('webgl2');
+  testing.expectTrue(gl2 instanceof WebGL2RenderingContext);
+  testing.expectFalse(gl2 instanceof WebGLRenderingContext);
+  testing.expectEqual('function', typeof gl2.texImage3D);
+  testing.expectEqual('undefined', typeof gl.texImage3D);
+}
+</script>
+
+<script id=constants>
+{
+  const gl = document.createElement('canvas').getContext('webgl');
+  testing.expectEqual(0x4000, WebGLRenderingContext.COLOR_BUFFER_BIT);
+  testing.expectEqual(0x0DE1, gl.TEXTURE_2D);
+  testing.expectEqual(0x8C2F, WebGL2RenderingContext.ANY_SAMPLES_PASSED);
+  testing.expectEqual(-1, WebGL2RenderingContext.TIMEOUT_IGNORED);
+}
+</script>
+
+<script id=pipeline>
+{
+  const gl = document.createElement('canvas').getContext('webgl2');
+  const shader = gl.createShader(gl.VERTEX_SHADER);
+  testing.expectTrue(shader instanceof WebGLShader);
+  gl.shaderSource(shader, 'void main() {}');
+  gl.compileShader(shader);
+  testing.expectEqual(true, gl.getShaderParameter(shader, gl.COMPILE_STATUS));
+  testing.expectEqual('', gl.getShaderInfoLog(shader));
+
+  const program = gl.createProgram();
+  gl.attachShader(program, shader);
+  gl.linkProgram(program);
+  testing.expectEqual(true, gl.getProgramParameter(program, gl.LINK_STATUS));
+  testing.expectEqual(0, gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS));
+  testing.expectTrue(gl.getUniformLocation(program, 'u') instanceof WebGLUniformLocation);
+
+  const buffer = gl.createBuffer();
+  testing.expectTrue(buffer instanceof WebGLBuffer);
+  testing.expectTrue(gl.isBuffer(buffer));
+  testing.expectFalse(gl.isBuffer(null));
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(6), gl.STATIC_DRAW);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  testing.expectEqual(gl.FRAMEBUFFER_COMPLETE, gl.checkFramebufferStatus(gl.FRAMEBUFFER));
+  testing.expectEqual(gl.NO_ERROR, gl.getError());
+  testing.expectEqual(gl.ALREADY_SIGNALED, gl.clientWaitSync(gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0), 0, 0));
+}
+</script>
+
+<script id=parameters>
+{
+  const gl = document.createElement('canvas').getContext('webgl');
+  testing.expectEqual('WebGL 1.0 (Lightpanda no-op)', gl.getParameter(gl.VERSION));
+  testing.expectEqual('Lightpanda', gl.getParameter(gl.VENDOR));
+  testing.expectEqual(16384, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  testing.expectEqual('0,0,300,150', gl.getParameter(gl.VIEWPORT).join());
+  testing.expectTrue(gl.getParameter(gl.VIEWPORT) instanceof Int32Array);
+  testing.expectEqual(null, gl.getParameter(gl.ARRAY_BUFFER_BINDING));
+  testing.expectEqual(23, gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT).precision);
+  testing.expectEqual(0, gl.getSupportedExtensions().length);
+  testing.expectEqual(null, gl.getExtension('WEBGL_debug_renderer_info'));
+  testing.expectEqual(true, gl.getContextAttributes().alpha);
+
+  const gl2 = document.createElement('canvas').getContext('webgl2');
+  testing.expectEqual('WebGL 2.0 (Lightpanda no-op)', gl2.getParameter(gl2.VERSION));
+}
+</script>

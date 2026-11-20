@@ -519,6 +519,10 @@
     \\                           have different lifetimes and are shared
     \\                           differently, so a cached response without its
     \\                           Set-Cookie can make later requests fail.
+    \\             webgl         getContext returns a WebGL context that draws
+    \\                           nothing, instead of null. Renderers without a
+    \\                           fallback (Compose, Flutter) then run, and their
+    \\                           accessibility tree holds the page's content.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to stylesheet for mcp and agent, and to none of them
