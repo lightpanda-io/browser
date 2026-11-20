@@ -567,11 +567,14 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     });
 
     if (!event._prevent_default) {
+        // Logged from err/location, not error_event: for a muted script the
+        // event's fields are sanitized to "Script error.", but our own log
+        // and the CDP notification should still show the real details.
         log.warn(.page_error, "uncaught exception", .{
-            .message = error_event._message,
-            .url = error_event._filename,
-            .line = error_event._line_number,
-            .column = error_event._column_number,
+            .message = err.toStringSlice() catch "Unknown error",
+            .url = location.url,
+            .line = location.line,
+            .column = location.column,
         });
         notifyExceptionThrown(err, location, .exception, frame);
     }
