@@ -33,6 +33,7 @@ const Function = @import("Function.zig");
 const Context = @import("Context.zig");
 const Scheduler = @import("Scheduler.zig");
 const Page = @import("../Page.zig");
+const Frame = @import("../Frame.zig");
 const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
@@ -70,9 +71,20 @@ url: *[:0]const u8,
 // Pointer to the charset field of the global (Page or WorkerGlobalScope).
 charset: *[]const u8,
 
-/// Whether this `Execution`'s `Context` was destroyed.
-pub inline fn isLive(self: *const Execution) bool {
+pub fn isLive(self: *const Execution) bool {
     return !self.js.destroyed;
+}
+
+/// The frame of this realm, an object that outlives its realm must reach its
+/// frame through here rather than keep a `*Frame`.
+pub fn frame(self: *const Execution) ?*Frame {
+    if (self.js.destroyed) {
+        return null;
+    }
+    return switch (self.js.global) {
+        .frame => |f| f,
+        .worker => null,
+    };
 }
 
 pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
@@ -162,6 +174,9 @@ pub fn registerListener(
     callback: EventManagerBase.Callback,
     opts: EventManagerBase.RegisterOptions,
 ) !void {
+    if (self.js.destroyed) {
+        return;
+    }
     return self.js.global.registerListener(target, typ, callback, opts);
 }
 
@@ -172,6 +187,9 @@ pub fn removeListener(
     callback: EventManagerBase.Callback,
     use_capture: bool,
 ) void {
+    if (self.js.destroyed) {
+        return;
+    }
     self.js.global.removeListener(target, typ, callback, use_capture);
 }
 
@@ -181,23 +199,42 @@ pub fn dispatch(
     event: *Event,
     comptime opts: EventManagerBase.DispatchDirectOptions,
 ) !void {
+    if (self.js.destroyed) {
+        // Still consumed, as a dispatch would.
+        event.acquireRef();
+        _ = event.releaseRef(self.page);
+        return;
+    }
     return self.js.global.dispatch(target, event, opts);
 }
 
 pub fn reportError(self: *const Execution, err: Value) !void {
+    if (self.js.destroyed) {
+        return;
+    }
     return self.js.global.reportError(err);
 }
 
 pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []const u8) bool {
+    if (self.js.destroyed) {
+        return false;
+    }
     return self.js.global.hasDirectListeners(target, typ);
 }
 
 /// Sets (or, with null, clears) the target's `on<typ>` event handler.
 pub fn setHandler(self: *const Execution, target: *EventTarget, typ: []const u8, handler: ?Function.Global) !void {
+    if (self.js.destroyed) {
+        if (handler) |h| h.release();
+        return;
+    }
     return self.js.global.setHandler(target, typ, handler);
 }
 
 pub fn getHandler(self: *const Execution, target: *EventTarget, typ: []const u8) ?Function.Global {
+    if (self.js.destroyed) {
+        return null;
+    }
     return self.js.global.getHandler(target, typ);
 }
 

@@ -196,12 +196,12 @@ fn scheduleRender(self: *OfflineAudioContext) !void {
         return;
     }
     const base = self._proto;
-    const frame = base._frame;
-    const task = try frame._factory.create(RenderTask{ .context = self });
-    errdefer frame._factory.destroy(task);
+    const exec = base._exec;
+    const task = try exec._factory.create(RenderTask{ .context = self });
+    errdefer exec._factory.destroy(task);
     base.acquireRef();
-    errdefer base.releaseRef(frame.page);
-    try frame.js.scheduler.add(task, RenderTask.run, 0, .{
+    errdefer base.releaseRef(base._page);
+    try exec._scheduler.add(task, RenderTask.run, 0, .{
         .name = "OfflineAudioContext.render",
         .finalizer = RenderTask.cancelled,
     });
@@ -215,9 +215,8 @@ const RenderTask = struct {
         const task: *RenderTask = @ptrCast(@alignCast(ctx));
         const self = task.context;
         const base = self._proto;
-        const frame = base._frame;
-        frame._factory.destroy(task);
-        defer base.releaseRef(frame.page);
+        base._exec._factory.destroy(task);
+        defer base.releaseRef(base._page);
 
         self._render_scheduled = false;
         if (base._state != .running) {
@@ -242,10 +241,9 @@ const RenderTask = struct {
         const task: *RenderTask = @ptrCast(@alignCast(ctx));
         const self = task.context;
         const base = self._proto;
-        const frame = base._frame;
-        frame._factory.destroy(task);
+        base._exec._factory.destroy(task);
         self._render_scheduled = false;
-        base.releaseRef(frame.page);
+        base.releaseRef(base._page);
     }
 };
 
@@ -254,7 +252,7 @@ const Outcome = enum { more, suspended, done };
 fn renderSome(self: *OfflineAudioContext) !Outcome {
     const base = self._proto;
     var ls: js.Local.Scope = undefined;
-    base._frame.js.localScope(&ls);
+    base._exec.js.localScope(&ls);
     defer ls.deinit();
     const local = &ls.local;
 
@@ -293,7 +291,7 @@ fn suspendNow(self: *OfflineAudioContext) void {
     defer s.resolver.release();
 
     var ls: js.Local.Scope = undefined;
-    base._frame.js.localScope(&ls);
+    base._exec.js.localScope(&ls);
     defer ls.deinit();
     s.resolver.local(&ls.local).resolve("OfflineAudioContext.suspend", js.Undefined{});
 }
@@ -301,17 +299,17 @@ fn suspendNow(self: *OfflineAudioContext) void {
 // The context closes, `complete` fires, then the promise resolves.
 fn complete(self: *OfflineAudioContext) void {
     const base = self._proto;
-    const frame = base._frame;
+    const exec = base._exec;
     base.setState(.closed);
 
     const buffer = self._rendered.?;
     const target = base.asEventTarget();
-    if (frame._event_manager.hasDirectListeners(target, "complete")) blk: {
-        const event = OfflineAudioCompletionEvent.initTrusted(buffer, frame.page) catch |err| {
+    if (exec.hasDirectListeners(target, "complete")) blk: {
+        const event = OfflineAudioCompletionEvent.initTrusted(buffer, base._page) catch |err| {
             log.warn(.js, "OfflineAudioContext complete", .{ .err = err });
             break :blk;
         };
-        frame._event_manager.dispatchDirect(target, event.asEvent(), .{ .context = "OfflineAudioContext complete" }) catch |err| {
+        exec.dispatch(target, event.asEvent(), .{ .context = "OfflineAudioContext complete" }) catch |err| {
             log.debug(.js, "OfflineAudioContext complete", .{ .err = err });
         };
     }
@@ -321,7 +319,7 @@ fn complete(self: *OfflineAudioContext) void {
     defer resolver.release();
 
     var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
+    exec.js.localScope(&ls);
     defer ls.deinit();
     resolver.local(&ls.local).resolve("OfflineAudioContext.startRendering", buffer);
 }
@@ -335,7 +333,7 @@ fn fail(self: *OfflineAudioContext, err: anyerror) void {
     defer resolver.release();
 
     var ls: js.Local.Scope = undefined;
-    base._frame.js.localScope(&ls);
+    base._exec.js.localScope(&ls);
     defer ls.deinit();
     const rejection: anyerror = if (err == error.OutOfMemory) error.NotSupported else error.InvalidStateError;
     resolver.local(&ls.local).rejectError("OfflineAudioContext.startRendering", .{ .dom_exception = .{ .err = rejection } });

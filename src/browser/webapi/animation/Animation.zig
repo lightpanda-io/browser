@@ -40,7 +40,7 @@ const PlayState = enum {
 
 _rc: lp.RC = .{},
 _proto: *EventTarget,
-_frame: *Frame,
+_exec: *js.Execution,
 _arena: *lp.Arena,
 
 _effect: ?js.Object.Global = null,
@@ -61,7 +61,7 @@ pub fn init(frame: *Frame) !*Animation {
 
     return frame._factory.eventTargetWithAllocator(arena.allocator(), Animation{
         ._proto = undefined,
-        ._frame = frame,
+        ._exec = &frame.main_js.execution,
         ._arena = arena,
     });
 }
@@ -105,7 +105,7 @@ pub fn play(self: *Animation, frame: *Frame) !void {
 // The scheduler drops pending tasks when the context is torn down.
 fn cancelled(ctx: *anyopaque) void {
     const self: *Animation = @ptrCast(@alignCast(ctx));
-    self.releaseRef(self._frame.page);
+    self.releaseRef(self._exec.page);
 }
 
 pub fn pause(self: *Animation) void {
@@ -151,11 +151,11 @@ const PlaybackEventType = enum { finish, cancel };
 
 fn queuePlaybackEvent(self: *Animation, comptime typ: PlaybackEventType) !void {
     self.acquireRef();
-    errdefer self.releaseRef(self._frame.page);
-    try self._frame.js.scheduler.add(self, struct {
+    errdefer self.releaseRef(self._exec.page);
+    try self._exec._scheduler.add(self, struct {
         fn run(ctx: *anyopaque) !?u32 {
             const animation: *Animation = @ptrCast(@alignCast(ctx));
-            defer animation.releaseRef(animation._frame.page);
+            defer animation.releaseRef(animation._exec.page);
             try animation.dispatchPlaybackEvent(comptime .wrap(@tagName(typ)));
             return null;
         }
@@ -163,7 +163,7 @@ fn queuePlaybackEvent(self: *Animation, comptime typ: PlaybackEventType) !void {
 }
 
 fn dispatchPlaybackEvent(self: *Animation, typ: lp.String) !void {
-    const frame = self._frame;
+    const frame = self._exec.frame() orelse return;
     const target = self.asEventTarget();
     if (frame.hasDirectListeners(target, typ.str()) == false) {
         return;
@@ -230,7 +230,7 @@ fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
 // callback function transitioning from a state to another
 fn update(ctx: *anyopaque) !?u32 {
     const self: *Animation = @ptrCast(@alignCast(ctx));
-    defer self.releaseRef(self._frame.page);
+    defer self.releaseRef(self._exec.page);
 
     switch (self._playState) {
         .running => {
@@ -238,7 +238,7 @@ fn update(ctx: *anyopaque) !?u32 {
             self._playState = .finished;
 
             var ls: js.Local.Scope = undefined;
-            self._frame.js.localScope(&ls);
+            self._exec.js.localScope(&ls);
             defer ls.deinit();
 
             // resolve finished

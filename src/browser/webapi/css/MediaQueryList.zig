@@ -31,7 +31,7 @@ const MediaQueryList = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
-_frame: *Frame,
+_exec: *js.Execution,
 _media: []const u8,
 // What listeners last observed; `change` fires when the viewport flips it.
 _matches: bool,
@@ -41,7 +41,7 @@ pub fn init(query: []const u8, frame: *Frame) !*MediaQueryList {
     const self = try frame._factory.eventTarget(MediaQueryList{
         ._proto = undefined,
         ._media = media,
-        ._frame = frame,
+        ._exec = &frame.main_js.execution,
         ._matches = MediaQuery.matches(media, frame.page.getViewport()),
     });
     try frame._media_query_lists.append(frame.page_arena, self);
@@ -61,7 +61,9 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
 /// from the page (overridable via Emulation.setDeviceMetricsOverride),
 /// matching `Window.innerWidth` / `innerHeight`.
 fn getMatches(self: *const MediaQueryList) bool {
-    return MediaQuery.matches(self._media, self._frame.page.getViewport());
+    // A query of a document that is gone matches nothing.
+    const frame = self._exec.frame() orelse return false;
+    return MediaQuery.matches(self._media, frame.page.getViewport());
 }
 
 pub fn viewportChanged(self: *MediaQueryList) void {
@@ -69,7 +71,7 @@ pub fn viewportChanged(self: *MediaQueryList) void {
     if (matches == self._matches) return;
     self._matches = matches;
 
-    const frame = self._frame;
+    const frame = self._exec.frame() orelse return;
     if (!frame.hasDirectListeners(self.asEventTarget(), "change")) return;
     self.dispatchChange(matches) catch |err| {
         log.debug(.browser, "matchMedia change", .{ .err = err, .media = self._media });
@@ -77,7 +79,7 @@ pub fn viewportChanged(self: *MediaQueryList) void {
 }
 
 fn dispatchChange(self: *MediaQueryList, matches: bool) !void {
-    const frame = self._frame;
+    const frame = self._exec.frame() orelse return;
     const event = try MediaQueryListEvent.initTrusted(comptime .wrap("change"), .{
         .matches = matches,
         .media = self._media,
