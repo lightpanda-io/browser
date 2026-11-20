@@ -105,16 +105,10 @@ fc_identity_pool: std.heap.MemoryPool(js.FinalizerCallback.Identity),
 // #2472).
 frame_id_gen: u32 = 0,
 
-// When set, frame ids come from this counter instead, which other browsers
-// share: serve makes CDP target ids (FID-...) unique across connections, so
-// /devtools/page/{id} names one page.
-shared_frame_ids: ?*std.atomic.Value(u32) = null,
-
 foreground_task_posted: std.atomic.Value(bool) = .init(false),
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
-    frame_ids: ?*std.atomic.Value(u32) = null,
 };
 
 // Allocate the next frame ID. Wrapping `+%` keeps this safe past 2^32
@@ -123,9 +117,6 @@ const InitOpts = struct {
 // before that). Callers must format with `FID-{d:0>10}` to match the
 // existing CDP target-ID encoding (`src/cdp/id.zig`).
 pub fn nextFrameId(self: *Browser) u32 {
-    if (self.shared_frame_ids) |ids| {
-        return ids.fetchAdd(1, .monotonic) +% 1;
-    }
     const id = self.frame_id_gen +% 1;
     self.frame_id_gen = id;
     return id;
@@ -149,7 +140,6 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
         .fc_identity_pool = .empty,
         .selector_cache = .init(allocator),
         .watchdog_entry = undefined,
-        .shared_frame_ids = opts.frame_ids,
     };
     self.env.protectHeapLimit();
     try self.http_client.init(app);

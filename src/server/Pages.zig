@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
 
 // A CDP browser's page targets as the server loop sees them, for /json/list
-// and /devtools/page/{id}. The worker publishes; the loop reads.
+// and /page/{browser_id}/{page_id}. The worker publishes; the loop reads.
 const Pages = @This();
 
 pub const Page = struct {
@@ -100,9 +100,9 @@ pub fn contains(self: *Pages, id: []const u8) bool {
     return false;
 }
 
-/// Server loop. Writes each page as a /json/list entry; `devtools_url` is
-/// ws://host:port/devtools/.
-pub fn writeJSON(self: *Pages, stringify: *std.json.Stringify, devtools_url: []const u8) !void {
+/// Server loop. Writes each page as a /json/list entry; `page_url` is
+/// ws://host:port/page/.
+pub fn writeJSON(self: *Pages, stringify: *std.json.Stringify, page_url: []const u8, browser_id: []const u8) !void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
     for (self.list.items) |*page| {
@@ -113,7 +113,7 @@ pub fn writeJSON(self: *Pages, stringify: *std.json.Stringify, devtools_url: []c
             .title = page.title,
             .type = "page",
             .url = page.url,
-            .webSocketDebuggerUrl = try std.mem.print(&url_buf, "{s}page/{s}", .{ devtools_url, &page.id }),
+            .webSocketDebuggerUrl = try std.mem.print(&url_buf, "{s}{s}/{s}", .{ page_url, browser_id, &page.id }),
         });
     }
 }

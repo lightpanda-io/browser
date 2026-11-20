@@ -86,10 +86,6 @@ http_connection_pool: Connection.Pool,
 workers: DoublyLinkedList,
 worker_pool: Worker.Pool,
 
-// Frame ids across every CDP browser, so a target id (FID-...) names one page
-// in the whole server: /devtools/page/{id} finds its worker by it.
-frame_ids: std.atomic.Value(u32) = .init(0),
-
 // Guests across all workers. Each holds a socket, so they count towards
 // max_connections, and --cdp-max-connections caps them.
 guest_count: usize = 0,
@@ -132,8 +128,8 @@ request_arena: std.heap.ArenaAllocator,
 // ws://host:port/session/ — what POST /session advertises, the id goes on the end
 bidi_session_url: []const u8,
 
-// ws://host:port/devtools/ — /json/list's page urls go on the end
-devtools_url: []const u8,
+// ws://host:port/page/ — /json/list's page urls, {browser_id}/{page_id} goes on the end
+page_url: []const u8,
 
 json_version_response: []const u8,
 
@@ -176,8 +172,8 @@ pub fn init(app: *App, address: Address) !*Server {
     const bidi_session_url = try allocator.print("{s}session/", .{ws_url});
     errdefer allocator.free(bidi_session_url);
 
-    const devtools_url = try allocator.print("{s}devtools/", .{ws_url});
-    errdefer allocator.free(devtools_url);
+    const page_url = try allocator.print("{s}page/", .{ws_url});
+    errdefer allocator.free(page_url);
 
     switch (address) {
         .ip => log.note(.note, "server running", .{
@@ -234,7 +230,7 @@ pub fn init(app: *App, address: Address) !*Server {
         .http_connection_pool = http_connection_pool,
         .json_version_response = json_version_response,
         .bidi_session_url = bidi_session_url,
-        .devtools_url = devtools_url,
+        .page_url = page_url,
         .max_connections = max_connections,
         .workers = .{},
         .worker_pool = worker_pool,
@@ -317,7 +313,7 @@ pub fn deinit(self: *Server) void {
     self.http_connection_pool.deinit();
     allocator.free(self.json_version_response);
     allocator.free(self.bidi_session_url);
-    allocator.free(self.devtools_url);
+    allocator.free(self.page_url);
     closeListener(self.listener, self.unix_path);
     self.io_engine.deinit();
     allocator.destroy(self);
@@ -555,23 +551,12 @@ pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Prot
     };
 }
 
-/// The CDP browser /devtools/browser/{id} names, if a connection can still join
+/// The CDP browser /browser/{id} names, if a connection can still join
 /// it (not when it's ending with the connection that started it).
 pub fn findBrowser(self: *Server, id: []const u8) ?*Worker {
     var it = self.joinableBrowsers();
     while (it.next()) |worker| {
         if (std.mem.eql(u8, &worker.browser_id.?, id)) {
-            return worker;
-        }
-    }
-    return null;
-}
-
-/// The CDP browser that has the page /devtools/page/{id} names.
-pub fn findPage(self: *Server, target_id: []const u8) ?*Worker {
-    var it = self.joinableBrowsers();
-    while (it.next()) |worker| {
-        if (worker.pages.contains(target_id)) {
             return worker;
         }
     }
@@ -1502,8 +1487,8 @@ pub const Worker = struct {
     // CDP connections that joined this worker's browser (Guest.node)
     guests: DoublyLinkedList = .{},
 
-    // CDP only: the id /devtools/browser/{id} joins this browser by, and its
-    // pages, which /json/list and /devtools/page/{id} use. Set at spawn; the
+    // CDP only: the id /browser/{id} and /page/{id}/... join this browser by,
+    // and its pages, which /json/list and /page/{id}/{page_id} use. Set at spawn; the
     // worker publishes the pages (see CDP.publishPages).
     browser_id: ?[36]u8 = null,
     pages: Pages,
@@ -1611,7 +1596,6 @@ pub const Worker = struct {
                 try cdp.init(server.app, socket, &self.inbox, .{
                     .browser_id = &self.browser_id.?,
                     .pages = &self.pages,
-                    .frame_ids = &server.frame_ids,
                 });
                 defer cdp.deinit();
                 self.run(.init(.{ .cdp = cdp }, &self.inbox), &cdp.link);
@@ -1674,7 +1658,7 @@ pub const Worker = struct {
 };
 
 // The loop's side of a CDP connection that joined another connection's worker
-// (/devtools/browser/{id} or /devtools/page/{id}). The loop reads its socket into the worker's inbox;
+// (/browser/{browser_id} or /page/{browser_id}/{page_id}). The loop reads its socket into the worker's inbox;
 // the worker owns the link, answers on it and destroys it.
 pub const Guest = struct {
     worker: *Worker,
@@ -3345,7 +3329,7 @@ test "server: cdp join a browser" {
     const session_a = attached_a.get("sessionId").?.string;
     _ = try cdpCommand(&a, 3, "Runtime.evaluate", "{\"expression\":\"window.shared = 42\"}", session_a, null);
 
-    // the browser target's id is what /devtools/browser/{id} joins it by
+    // the browser target's id is what /browser/{id} joins it by
     const browser = try cdpCommand(&a, 4, "Target.getTargetInfo", "{}", null, null);
     const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
     try testing.expectEqual(36, browser_id.len);
@@ -3355,7 +3339,7 @@ test "server: cdp join a browser" {
         var l = try createTestClient();
         defer l.deinit();
         const res = try l.httpRequest("GET /json/list HTTP/1.1\r\n\r\n");
-        const ws_url = try testing.arena_allocator.print("\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{d}/devtools/page/{s}\"", .{ testing.test_cdp_port, target_id });
+        const ws_url = try testing.arena_allocator.print("\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{d}/page/{s}/{s}\"", .{ testing.test_cdp_port, browser_id, target_id });
         try testing.expect(std.mem.find(u8, res, ws_url) != null);
     }
 
@@ -3363,7 +3347,7 @@ test "server: cdp join a browser" {
     // session of its own on it.
     var b = try createTestClient();
     defer b.deinit();
-    try b.handshake(try testing.arena_allocator.print("/devtools/browser/{s}", .{browser_id}));
+    try b.handshake(try testing.arena_allocator.print("/browser/{s}", .{browser_id}));
 
     const targets = try cdpCommand(&b, 1, "Target.getTargets", "{}", null, null);
     const infos = targets.get("targetInfos").?.array.items;
@@ -3425,7 +3409,7 @@ test "server: cdp join a browser" {
     // A connection to the page talks to it without a session, as in Chrome.
     var c = try createTestClient();
     defer c.deinit();
-    try c.handshake(try testing.arena_allocator.print("/devtools/page/{s}", .{target_id}));
+    try c.handshake(try testing.arena_allocator.print("/page/{s}/{s}", .{ browser_id, target_id }));
     {
         var seen_by_c: std.ArrayList([]const u8) = .empty;
         const read_c = try cdpCommand(&c, 1, "Runtime.evaluate", "{\"expression\":\"window.shared\",\"returnByValue\":true}", null, &seen_by_c);
@@ -3442,12 +3426,16 @@ test "server: cdp join a browser" {
         // unknown ids, answered like Chrome does
         var u = try createTestClient();
         defer u.deinit();
-        const res = try u.upgradeRequest("/devtools/browser/00000000-0000-0000-0000-000000000000");
+        const res = try u.upgradeRequest("/browser/00000000-0000-0000-0000-000000000000");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 "));
         var v = try createTestClient();
         defer v.deinit();
-        const res2 = try v.upgradeRequest("/devtools/page/FID-9999999999");
+        const res2 = try v.upgradeRequest(try testing.arena_allocator.print("/page/{s}/FID-9999999999", .{browser_id}));
         try testing.expect(std.mem.startsWith(u8, res2, "HTTP/1.1 500 "));
+        var w = try createTestClient();
+        defer w.deinit();
+        const res3 = try w.upgradeRequest(try testing.arena_allocator.print("/page/00000000-0000-0000-0000-000000000000/{s}", .{target_id}));
+        try testing.expect(std.mem.startsWith(u8, res3, "HTTP/1.1 500 "));
     }
 
     {
@@ -3486,7 +3474,7 @@ test "server: cdp guest keeps its page when the first session detaches" {
 
     var b = try createTestClient();
     defer b.deinit();
-    try b.handshake(try testing.arena_allocator.print("/devtools/browser/{s}", .{browser_id}));
+    try b.handshake(try testing.arena_allocator.print("/browser/{s}", .{browser_id}));
     const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
 
     _ = try cdpCommand(&a, 4, "Target.detachFromTarget", try testing.arena_allocator.print("{{\"sessionId\":\"{s}\"}}", .{session_a}), null, null);
@@ -3501,7 +3489,7 @@ test "server: cdp guest keeps its page when the first session detaches" {
     _ = try cdpCommand(&b, 4, "Target.detachFromTarget", try testing.arena_allocator.print("{{\"sessionId\":\"{s}\"}}", .{session_b}), null, null);
     var c = try createTestClient();
     defer c.deinit();
-    try c.handshake(try testing.arena_allocator.print("/devtools/page/{s}", .{target_id}));
+    try c.handshake(try testing.arena_allocator.print("/page/{s}/{s}", .{ browser_id, target_id }));
     var seen_by_c: std.ArrayList([]const u8) = .empty;
     _ = try cdpCommand(&c, 1, "Page.navigate", navigate, null, &seen_by_c);
     _ = try cdpCommand(&c, 2, "Runtime.evaluate", "{\"expression\":\"1\"}", null, &seen_by_c);
@@ -3528,7 +3516,7 @@ test "server: cdp guest gets its own console handles and target events" {
 
     var b = try createTestClient();
     defer b.deinit();
-    try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+    try b.handshake(try arena.print("/browser/{s}", .{browser_id}));
     const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
     _ = try cdpCommand(&b, 2, "Target.setDiscoverTargets", "{\"discover\":true}", null, null);
     _ = try cdpCommand(&b, 3, "Runtime.enable", "{}", session_b, null);
@@ -3568,10 +3556,12 @@ test "server: cdp page socket gets its events without a session" {
     try a.handshake("/");
     const created = try cdpCommand(&a, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null);
     const target_id = created.get("targetId").?.string;
+    const browser = try cdpCommand(&a, 2, "Target.getTargetInfo", "{}", null, null);
+    const browser_id = browser.get("targetInfo").?.object.get("targetId").?.string;
 
     var c = try createTestClient();
     defer c.deinit();
-    try c.handshake(try arena.print("/devtools/page/{s}", .{target_id}));
+    try c.handshake(try arena.print("/page/{s}/{s}", .{ browser_id, target_id }));
 
     var seen: std.ArrayList([]const u8) = .empty;
     _ = try cdpCommand(&c, 1, "Log.enable", "{}", null, &seen);
@@ -3634,7 +3624,7 @@ test "server: cdp guest leaves in the middle of its navigation" {
     {
         var b = try createTestClient();
         defer b.deinit();
-        try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+        try b.handshake(try arena.print("/browser/{s}", .{browser_id}));
         const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
         try b.bidiCommand(try arena.print("{{\"id\":2,\"method\":\"Page.navigate\",\"params\":{{\"url\":\"http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html\"}},\"sessionId\":\"{s}\"}}", .{session_b}));
     }
@@ -3681,12 +3671,12 @@ test "server: cdp closing a page tells each connection about its own session" {
 
     var b = try createTestClient();
     defer b.deinit();
-    try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+    try b.handshake(try arena.print("/browser/{s}", .{browser_id}));
     const session_b = (try cdpCommand(&b, 1, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
 
     var c = try createTestClient();
     defer c.deinit();
-    try c.handshake(try arena.print("/devtools/page/{s}", .{target_id}));
+    try c.handshake(try arena.print("/page/{s}/{s}", .{ browser_id, target_id }));
     _ = try cdpCommand(&c, 1, "Runtime.evaluate", "{\"expression\":\"1\"}", null, null);
 
     var seen_by_a: std.ArrayList([]const u8) = .empty;
@@ -3732,7 +3722,7 @@ test "server: cdp several guests on one page" {
     const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id});
     const session_a = (try cdpCommand(&a, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
     const browser = try cdpCommand(&a, 3, "Target.getTargetInfo", "{}", null, null);
-    const join = try arena.print("/devtools/browser/{s}", .{browser.get("targetInfo").?.object.get("targetId").?.string});
+    const join = try arena.print("/browser/{s}", .{browser.get("targetInfo").?.object.get("targetId").?.string});
 
     var guests: [3]TestClient = undefined;
     var sessions: [3][]const u8 = undefined;
@@ -3806,7 +3796,7 @@ test "server: cdp a guest discovers and auto-attaches to the pages already open"
     // What Puppeteer sends when it connects.
     var b = try createTestClient();
     defer b.deinit();
-    try b.handshake(try arena.print("/devtools/browser/{s}", .{browser_id}));
+    try b.handshake(try arena.print("/browser/{s}", .{browser_id}));
     var seen: std.ArrayList([]const u8) = .empty;
     _ = try cdpCommand(&b, 1, "Target.setDiscoverTargets", "{\"discover\":true,\"filter\":[{}]}", null, &seen);
     try expectSessionEvent(seen.items, "Target.targetCreated", target_id);
@@ -3844,6 +3834,47 @@ fn attachedSessionId(messages: []const []const u8, target_id: []const u8) ![]con
         return value.object.get("params").?.object.get("sessionId").?.string;
     }
     return error.EventNotSent;
+}
+
+test "server: cdp pages of two browsers can share an id" {
+    const arena = testing.arena_allocator;
+    var browsers: [2]TestClient = undefined;
+    var browser_ids: [2][]const u8 = undefined;
+    var target_ids: [2][]const u8 = undefined;
+    var started: usize = 0;
+    defer for (browsers[0..started]) |*b| b.deinit();
+    for (&browsers, &browser_ids, &target_ids, 0..) |*b, *browser_id, *target_id, i| {
+        b.* = try createTestClient();
+        started += 1;
+        try b.handshake("/");
+        target_id.* = (try cdpCommand(b, 1, "Target.createTarget", "{\"url\":\"about:blank\"}", null, null)).get("targetId").?.string;
+        const attach = try arena.print("{{\"targetId\":\"{s}\",\"flatten\":true}}", .{target_id.*});
+        const session_id = (try cdpCommand(b, 2, "Target.attachToTarget", attach, null, null)).get("sessionId").?.string;
+        _ = try cdpCommand(b, 3, "Runtime.evaluate", try arena.print("{{\"expression\":\"window.which = {d}\"}}", .{i}), session_id, null);
+        const info = try cdpCommand(b, 4, "Target.getTargetInfo", "{}", null, null);
+        browser_id.* = info.get("targetInfo").?.object.get("targetId").?.string;
+    }
+    // target ids are per browser
+    try testing.expectEqual(target_ids[0], target_ids[1]);
+
+    {
+        var l = try createTestClient();
+        defer l.deinit();
+        const res = try l.httpRequest("GET /json/list HTTP/1.1\r\n\r\n");
+        for (browser_ids, target_ids) |browser_id, target_id| {
+            const ws_url = try arena.print("\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{d}/page/{s}/{s}\"", .{ testing.test_cdp_port, browser_id, target_id });
+            try testing.expect(std.mem.find(u8, res, ws_url) != null);
+        }
+    }
+
+    // each page url reaches its own browser's page
+    for (browser_ids, target_ids, 0..) |browser_id, target_id, i| {
+        var c = try createTestClient();
+        defer c.deinit();
+        try c.handshake(try arena.print("/page/{s}/{s}", .{ browser_id, target_id }));
+        const read = try cdpCommand(&c, 1, "Runtime.evaluate", "{\"expression\":\"window.which\",\"returnByValue\":true}", null, null);
+        try testing.expectEqual(@as(i64, @intCast(i)), read.get("result").?.object.get("value").?.integer);
+    }
 }
 
 fn expectSessionEvent(messages: []const []const u8, method: []const u8, session_id: []const u8) !void {

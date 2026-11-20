@@ -112,7 +112,7 @@ pub fn sendTargetInfoChanged(target: *const CDP.Target, frame_id: u32) !void {
 }
 
 /// serve: tells the server loop which pages this browser has, for /json/list
-/// and /devtools/page/{id}. Called when a target gets its id or closes;
+/// and /page/{browser_id}/{page_id}. Called when a target gets its id or closes;
 /// sendTargetInfoChanged updates a page's URL and title.
 pub fn publishPages(cdp: *CDP) void {
     const pages = cdp.pages orelse return;
@@ -403,7 +403,7 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
     }
 
     if (cmd.routing_session_id) |session_id| {
-        // sent through a page session (or a /devtools/page/{id} connection):
+        // sent through a page session (or a /page/{browser_id}/{page_id} connection):
         // its target is the page, as in Chrome
         if (cmd.browser_context) |bc| {
             if (bc.attached_sessions.get(session_id)) |attached| {
@@ -414,7 +414,7 @@ fn getTargetInfo(cmd: *CDP.Command) !void {
 
     return cmd.sendResult(.{
         .targetInfo = TargetInfo{
-            // what /devtools/browser/{id} joins this browser by
+            // what /browser/{id} joins this browser by
             .targetId = if (cmd.cdp.browser_id) |browser_id| browser_id else "TID-STARTUP",
             .type = "browser",
             .title = "",

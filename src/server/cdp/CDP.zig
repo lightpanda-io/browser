@@ -67,7 +67,7 @@ allocator: Allocator,
 primary: Client,
 
 // Every connection on this browser (Client.node): the primary first, then the
-// guests that joined it (/devtools/browser/{id} or /devtools/page/{id}). Each
+// guests that joined it (/browser/{browser_id} or /page/{browser_id}/{page_id}). Each
 // has its own sessions and target settings; see Client.
 clients: std.DoublyLinkedList = .{},
 
@@ -105,8 +105,6 @@ pages: ?*Pages = null,
 pub const InitOpts = struct {
     browser_id: ?*const [36]u8 = null,
     pages: ?*Pages = null,
-    // see Browser.shared_frame_ids
-    frame_ids: ?*std.atomic.Value(u32) = null,
 };
 
 pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox, opts: InitOpts) !void {
@@ -138,7 +136,7 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox, opts: 
 
     self.clients.append(&self.primary.node);
 
-    try self.browser.init(app, .{ .env = .{ .with_inspector = true }, .frame_ids = opts.frame_ids });
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
 }
 
 pub fn deinit(self: *CDP) void {
@@ -179,7 +177,7 @@ pub const Client = struct {
     // outlives any browser context.
     browser_session_id: ?[]const u8 = null,
 
-    // A connection to /devtools/page/{id} talks to that page: its messages
+    // A connection to /page/{browser_id}/{page_id} talks to that page: its messages
     // carry no sessionId, and go through this session, attached when it
     // joined. null for every other client, and once the page is gone.
     page_session: ?[]const u8 = null,
@@ -618,7 +616,7 @@ pub const BrowserContext = struct {
         target: *Target,
         // the connection that attached it, where its messages go
         client: *Client,
-        // the session of a /devtools/page/{id} connection (Client.page_session)
+        // the session of a /page/{browser_id}/{page_id} connection (Client.page_session)
         page_socket: bool = false,
         inspector_session: js.Inspector.Session,
 

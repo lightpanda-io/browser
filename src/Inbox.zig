@@ -174,7 +174,7 @@ pub const Message = struct {
         bidi_http: http_command.Command,
 
         // A CDP connection joining the worker's running browser
-        // (/devtools/browser/{id} or /devtools/page/{id}). The worker's own
+        // (/browser/{browser_id} or /page/{browser_id}/{page_id}). The worker's own
         // link stays; this one is extra, and leaving doesn't end the worker.
         guest: Guest,
 
@@ -207,7 +207,7 @@ pub const Message = struct {
     pub const Guest = struct {
         // owns its link; the consumer adopts it
         client: *CDP.Client,
-        // set when the connection joined one page (/devtools/page/{id})
+        // set when the connection joined one page (/page/{browser_id}/{page_id})
         target_id: ?[14]u8,
     };
 

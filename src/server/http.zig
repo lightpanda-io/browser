@@ -561,7 +561,8 @@ const SESSION_PREFIX = "/session/";
 
 const SESSION_ID_LEN = 36;
 
-const DEVTOOLS_PREFIX = "/devtools/";
+const BROWSER_PREFIX = "/browser/";
+const PAGE_PREFIX = "/page/";
 
 fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     var path = req.path;
@@ -583,8 +584,8 @@ fn serveHTTP(server: *Server, conn: *Connection, req: *Connection.Request) !Serv
         }
         return serveSessionCommand(server, conn, req, tail);
     }
-    if (std.mem.startsWith(u8, path, DEVTOOLS_PREFIX) and server.protocols.cdp) {
-        return upgradeDevTools(server, conn, req, path[DEVTOOLS_PREFIX.len..]);
+    if (server.protocols.cdp and (std.mem.startsWith(u8, path, BROWSER_PREFIX) or std.mem.startsWith(u8, path, PAGE_PREFIX))) {
+        return upgradeJoin(server, conn, req, path);
     }
     return dispatch(server, &routes, conn, req, path);
 }
@@ -722,29 +723,26 @@ fn upgradeCDP(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     return upgradeSpawn(server, conn, req, .cdp);
 }
 
-// GET /devtools/browser/{id} and /devtools/page/{id} (cdp): join a running
-// browser, the way Chrome's endpoints of the same name do. `rest` is the path
-// after /devtools/.
-fn upgradeDevTools(server: *Server, conn: *Connection, req: *Connection.Request, rest: []const u8) !Served {
+// GET /browser/{browser_id} and /page/{browser_id}/{page_id} (cdp): join a
+// running browser, or one of its pages. Chrome's endpoints of the same name
+// sit under /devtools/ and name a page by its id alone; target ids here are
+// per browser, so a page url carries its browser's.
+fn upgradeJoin(server: *Server, conn: *Connection, req: *Connection.Request, path: []const u8) !Served {
     if (req.method != .GET) {
         return serveMethodNotAllowed(server, conn, req);
     }
     const join: Join = blk: {
-        if (std.mem.startsWith(u8, rest, "browser/")) {
-            const worker = server.findBrowser(rest["browser/".len..]) orelse {
+        if (std.mem.startsWith(u8, path, BROWSER_PREFIX)) {
+            const worker = server.findBrowser(path[BROWSER_PREFIX.len..]) orelse {
                 return serveNotFound(server, conn, req);
             };
             break :blk .{ .worker = worker, .target_id = null };
         }
-        if (std.mem.startsWith(u8, rest, "page/")) {
-            const target_id = rest["page/".len..];
-            const worker = (if (target_id.len == 14) server.findPage(target_id) else null) orelse {
-                // Chrome's answer for a page it doesn't have
-                return serveHTTPResponse(server, conn, req, .{ .static = internal_error_response });
-            };
-            break :blk .{ .worker = worker, .target_id = target_id[0..14].* };
-        }
-        return serveNotFound(server, conn, req);
+        const page = pageOf(server, path[PAGE_PREFIX.len..]) orelse {
+            // Chrome's answer for a page it doesn't have
+            return serveHTTPResponse(server, conn, req, .{ .static = internal_error_response });
+        };
+        break :blk page;
     };
     if (server.guestsFull()) {
         lp.metrics.serve_connection_limit.incr();
@@ -753,20 +751,32 @@ fn upgradeDevTools(server: *Server, conn: *Connection, req: *Connection.Request,
     return upgrade(server, conn, req, .{ .guest = join });
 }
 
+// `rest` is {browser_id}/{page_id}.
+fn pageOf(server: *Server, rest: []const u8) ?Join {
+    const slash = std.mem.findScalar(u8, rest, '/') orelse return null;
+    const worker = server.findBrowser(rest[0..slash]) orelse return null;
+    const target_id = rest[slash + 1 ..];
+    if (target_id.len != 14 or worker.pages.contains(target_id) == false) {
+        return null;
+    }
+    return .{ .worker = worker, .target_id = target_id[0..14].* };
+}
+
 // GET /json/version (cdp)
 fn serveJSONVersion(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     return serveHTTPResponse(server, conn, req, .{ .static = server.json_version_response });
 }
 
 // GET /json/list or GET /json (cdp): the pages of every browser a connection
-// can join, each with the /devtools/page/{id} url that does.
+// can join, each with the /page/{browser_id}/{page_id} url that does. Two
+// browsers' pages can share an id; their urls differ.
 fn serveJSONList(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     const writer = try beginBody(server);
     var stringify: std.json.Stringify = .{ .writer = writer };
     try stringify.beginArray();
     var it = server.joinableBrowsers();
     while (it.next()) |worker| {
-        try worker.pages.writeJSON(&stringify, server.devtools_url);
+        try worker.pages.writeJSON(&stringify, server.page_url, &worker.browser_id.?);
     }
     try stringify.endArray();
     return serveDynamicHTTPResponse(server, conn, req, .ok, JSON_CONTENT_TYPE);
@@ -1114,7 +1124,7 @@ const Upgrade = union(enum) {
 
 const Join = struct {
     worker: *Server.Worker,
-    // joining one page (/devtools/page/{id}) rather than the whole browser
+    // joining one page (/page/{browser_id}/{page_id}) rather than the whole browser
     target_id: ?[14]u8,
 };
 

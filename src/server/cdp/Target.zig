@@ -247,7 +247,7 @@ pub fn close(self: *Target) !void {
     defer {
         for (bc.attached_sessions.values()) |session| {
             if (session.target == self and session.page_socket) {
-                // a /devtools/page/{id} connection closes with its page, as in
+                // a /page/{browser_id}/{page_id} connection closes with its page, as in
                 // Chrome; it leaves on its close reply
                 session.client.page_session = null;
                 session.client.link.send(&WS.CLOSE_GOING_AWAY) catch |err| {
