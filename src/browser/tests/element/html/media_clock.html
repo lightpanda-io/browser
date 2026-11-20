@@ -94,7 +94,11 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(true, midway > 0 && midway < 10);
+    testing.expectEqual(true, midway < 10);
+    // Chrome's clock starts with the audio output, which takes a while
+    if (testing.IS_TEST_RUNNER) {
+      testing.expectEqual(true, midway > 0);
+    }
     testing.expectEqual(false, ended_midway);
   });
 </script>
@@ -139,7 +143,10 @@
 
   state.resolve();
   await state.done(() => {
-    testing.expectEqual(true, paused_at > 0 && paused_at < 5);
+    testing.expectEqual(true, paused_at < 5);
+    if (testing.IS_TEST_RUNNER) {
+      testing.expectEqual(true, paused_at > 0);
+    }
     testing.expectEqual(paused_at, audio.currentTime);
   });
 </script>
@@ -208,8 +215,12 @@
 
   state.resolve();
   await state.done(() => {
-    // at least 20ms, at 10x
-    testing.expectEqual(true, position >= 0.19 && position < 10);
+    testing.expectEqual(true, position < 10);
+    // At least 20ms, at 10x. Chrome's clock starts with the audio output,
+    // which takes a while.
+    if (testing.IS_TEST_RUNNER) {
+      testing.expectEqual(true, position >= 0.19);
+    }
   });
 </script>
 
