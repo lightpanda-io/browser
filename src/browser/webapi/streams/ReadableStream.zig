@@ -204,8 +204,6 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         return;
     }
 
-    self._pulling = true;
-
     const exec = self._execution;
     if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
@@ -214,34 +212,48 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
         }
     }
 
-    {
-        const func = self._pull_fn orelse return;
+    const func = self._pull_fn orelse return;
+    self._pulling = true;
+    errdefer self._pulling = false;
 
-        var ls: js.Local.Scope = undefined;
-        exec.js.localScope(&ls);
-        defer ls.deinit();
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
 
-        var try_catch: js.TryCatch = undefined;
-        try_catch.init(&ls.local);
-        defer try_catch.deinit();
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
 
-        // Call the pull function
-        // Note: In a complete implementation, we'd handle the promise returned by pull
-        // and set _pulling = false when it resolves
-        ls.toLocal(func).callRethrow(void, .{self._controller}) catch |err| {
-            if (err != error.TryCatchRethrow) return err;
-            const exc = try_catch.exceptionValue() orelse return err;
-            try self._controller.fail(&ls.local, exc);
-        };
-    }
+    const result = local.toLocal(func).callRethrow(js.Value, .{self._controller}) catch |err| {
+        if (err != error.TryCatchRethrow) return err;
+        const exc = try_catch.exceptionValue() orelse return err;
+        return self._controller.fail(local, exc);
+    };
 
+    // As in the spec, `_pulling` stays set until what pull() returned settles,
+    // so an async pull never overlaps itself. A pull asked for meanwhile runs
+    // once it settles.
+    const settled = try local.resolvePromise(result);
+    const then_fn = local.newCallback(onPullFulfilled, self);
+    const catch_fn = local.newCallback(onPullRejected, self);
+    _ = try settled.thenAndCatch(then_fn, catch_fn);
+}
+
+fn onPullFulfilled(self: *ReadableStream) void {
     self._pulling = false;
-
-    // If pull was requested again while we were pulling, pull again
     if (self._pull_again) {
         self._pull_again = false;
-        try self.callPullIfNeeded();
+        self.callPullIfNeeded() catch |err| {
+            log.warn(.js, "stream pull", .{ .err = err });
+        };
     }
+}
+
+fn onPullRejected(self: *ReadableStream, reason: js.Value) void {
+    self._controller.fail(reason.local, reason) catch |err| {
+        log.warn(.js, "stream pull rejected", .{ .err = err });
+    };
 }
 
 fn shouldCallPull(self: *const ReadableStream) bool {
@@ -251,6 +263,11 @@ fn shouldCallPull(self: *const ReadableStream) bool {
 
     if (self._pull_fn == null) {
         return false;
+    }
+
+    // a waiting read wants a chunk, even with a highWaterMark of 0
+    if (self._controller._pending_reads.items.len > 0) {
+        return true;
     }
 
     const desired_size = self._controller.getDesiredSize() orelse return false;
@@ -557,7 +574,6 @@ const TeeState = struct {
         for (&self.branches) |*branch| {
             if (branch.cancelled) continue;
             branch.stream._controller.enqueueValue(data.value) catch {};
-            branch.stream.callPullIfNeeded() catch {};
         }
         self.reading = false;
 

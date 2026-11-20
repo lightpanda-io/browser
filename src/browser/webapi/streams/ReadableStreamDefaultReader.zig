@@ -75,8 +75,10 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
         return local.resolvePromise(result);
     }
 
-    // No data, but not closed. We need to queue the read for any future data
-    return stream._controller.addPendingRead(local);
+    // No data, but not closed: queue the read and ask the source for a chunk.
+    const promise = try stream._controller.addPendingRead(local);
+    try stream.callPullIfNeeded();
+    return promise;
 }
 
 pub fn releaseLock(self: *ReadableStreamDefaultReader) void {

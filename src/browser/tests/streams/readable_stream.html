@@ -306,6 +306,150 @@
   });
 </script>
 
+<script id=readable_stream_async_pull type=module>
+  const state = await testing.async();
+
+  // pull() enqueues once its promise resolves
+  let pulls = 0;
+  const reader = new ReadableStream({
+    pull(c) {
+      pulls += 1;
+      const n = pulls;
+      return Promise.resolve().then(() => c.enqueue(n));
+    },
+  }).getReader();
+  const values = [];
+  for (let i = 0; i < 3; i++) {
+    values.push((await reader.read()).value);
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([1, 2, 3], values);
+  });
+</script>
+
+<script id=readable_stream_async_iterator_source type=module>
+  const state = await testing.async();
+
+  // the usual way to turn an async iterator into a stream
+  async function* letters() {
+    yield 'a';
+    await new Promise((r) => setTimeout(r, 0));
+    yield 'b';
+    yield 'c';
+  }
+  const it = letters();
+  const stream = new ReadableStream({
+    async pull(c) {
+      const { value, done } = await it.next();
+      if (done) {
+        c.close();
+      } else {
+        c.enqueue(value);
+      }
+    },
+  });
+  const out = [];
+  for await (const chunk of stream) {
+    out.push(chunk);
+  }
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(['a', 'b', 'c'], out);
+  });
+</script>
+
+<script id=readable_stream_async_pull_fills_queue type=module>
+  const state = await testing.async();
+
+  // with no reader, pull() keeps going until the queue reaches the
+  // highWaterMark, then stops; a read makes room for one more
+  let pulls = 0;
+  const stream = new ReadableStream({
+    pull(c) {
+      pulls += 1;
+      const n = pulls;
+      return Promise.resolve().then(() => c.enqueue(n));
+    },
+  }, { highWaterMark: 3 });
+  await new Promise((r) => setTimeout(r, 0));
+  const filled = pulls;
+  const { value } = await stream.getReader().read();
+  await new Promise((r) => setTimeout(r, 0));
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(3, filled);
+    testing.expectEqual(1, value);
+    testing.expectEqual(4, pulls);
+  });
+</script>
+
+<script id=readable_stream_pull_does_not_overlap type=module>
+  const state = await testing.async();
+
+  // three reads at once: pull() is called again only after the previous
+  // call's promise settles
+  let active = 0;
+  let max_active = 0;
+  let pulls = 0;
+  const reader = new ReadableStream({
+    pull(c) {
+      active += 1;
+      max_active = Math.max(max_active, active);
+      pulls += 1;
+      const n = pulls;
+      return new Promise((r) => setTimeout(r, 0)).then(() => {
+        active -= 1;
+        c.enqueue(n);
+      });
+    },
+  }).getReader();
+  const values = (await Promise.all([reader.read(), reader.read(), reader.read()])).map((r) => r.value);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([1, 2, 3], values);
+    testing.expectEqual(1, max_active);
+  });
+</script>
+
+<script id=readable_stream_pull_rejects type=module>
+  const state = await testing.async();
+
+  const e = new Error('pull failed');
+  const reader = new ReadableStream({ pull() { return Promise.reject(e); } }).getReader();
+  const reason = await reader.read().catch((x) => x);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(e, reason);
+  });
+</script>
+
+<script id=readable_stream_pull_high_water_mark_zero type=module>
+  const state = await testing.async();
+
+  // with no room to fill ahead, pull() only runs once a read waits for it
+  let pulls = 0;
+  const stream = new ReadableStream({
+    pull(c) {
+      pulls += 1;
+      c.enqueue(pulls);
+    },
+  }, { highWaterMark: 0 });
+  const before_read = pulls;
+  const { value } = await stream.getReader().read();
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual(0, before_read);
+    testing.expectEqual(1, value);
+  });
+</script>
+
 <script id=enqueue_preserves_number type=module>
   const state = await testing.async();
 
@@ -801,5 +945,33 @@
   state.resolve();
   await state.done(() => {
     testing.expectEqual([undefined, undefined, undefined, undefined, undefined], values);
+  });
+</script>
+
+<script id=readable_stream_tee_async_pull type=module>
+  const state = await testing.async();
+
+  let pulls = 0;
+  const source = new ReadableStream({
+    pull(c) {
+      pulls += 1;
+      const n = pulls;
+      return Promise.resolve().then(() => (n > 3 ? c.close() : c.enqueue(n)));
+    },
+  });
+  const [b1, b2] = source.tee();
+  const read = async (stream) => {
+    const out = [];
+    for await (const chunk of stream) {
+      out.push(chunk);
+    }
+    return out;
+  };
+  const [a, b] = await Promise.all([read(b1), read(b2)]);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([1, 2, 3], a);
+    testing.expectEqual([1, 2, 3], b);
   });
 </script>
