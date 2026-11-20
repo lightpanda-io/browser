@@ -2702,9 +2702,9 @@ test "MCP - detectForms explains a rejected field without triggering validation"
     try testing.expectEqual(6, fields.len);
     try testing.expectEqual("Outside delivery area", fields[0].validationMessage.?);
     try testing.expectEqual("Please enter a valid value.", fields[1].validationMessage.?);
-    try testing.expect(fields[2].validationMessage != null);
+    try testing.expectEqual("Please enter a value that matches the step.", fields[2].validationMessage.?);
     try testing.expectEqual(null, fields[3].validationMessage);
-    try testing.expect(fields[4].validationMessage != null);
+    try testing.expectEqual("Please select an item in the list.", fields[4].validationMessage.?);
     try testing.expectEqual("Please fill out this field.", fields[5].validationMessage.?);
     out.clearRetainingCapacity();
     try router.handleMessage(server, aa,
