@@ -154,7 +154,7 @@ const Evaluator = struct {
     }
 
     fn supportsSelector(self: *Evaluator, text: []const u8) bool {
-        const selectors = SelectorParser.parseList(self.arena, text) catch return false;
+        const selectors = SelectorParser.parseAll(self.arena, text) catch return false;
         // A single complex selector, not a list.
         return selectors.len == 1;
     }

@@ -73,7 +73,18 @@ fn preprocessInput(arena: Allocator, input: []const u8) ![]const u8 {
     return result.items;
 }
 
+/// The selectors of a list that can match an element. Given `a:hover, b` we
+/// only get `b` back (the parser knows we don't support :hover, so it drops it)
+/// This isn't an error, it's an optimization.
 pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selector.Selector {
+    return parseSelectors(arena, input, false);
+}
+
+pub fn parseAll(arena: Allocator, input: []const u8) ParseError![]const Selector.Selector {
+    return parseSelectors(arena, input, true);
+}
+
+fn parseSelectors(arena: Allocator, input: []const u8, keep_never_matching: bool) ParseError![]const Selector.Selector {
     // Preprocess input to normalize line endings
     const preprocessed = try preprocessInput(arena, input);
 
@@ -147,14 +158,14 @@ pub fn parseList(arena: Allocator, input: []const u8) ParseError![]const Selecto
             return error.InvalidSelector;
         }
         const selector = try parse(arena, selector_input);
-        try selectors.append(arena, selector);
+        // Only here: an argument of :is(), :not() or :has() still counts
+        // toward the specificity
+        if (keep_never_matching or neverMatches(selector) == false) {
+            try selectors.append(arena, selector);
+        }
 
         if (comma_pos >= trimmed.len) break;
         remaining = trimmed[comma_pos + 1 ..];
-    }
-
-    if (selectors.items.len == 0) {
-        return error.InvalidSelector;
     }
 
     return selectors.items;
@@ -174,6 +185,46 @@ fn parse(arena: Allocator, input: []const u8) ParseError!Selector.Selector {
     }
 
     return .init(first, segments.items);
+}
+
+// Whether no element can match the selector: one of its compounds has a part
+// List.matchesPart always fails.
+fn neverMatches(selector: Selector.Selector) bool {
+    if (compoundNeverMatches(selector.first())) {
+        return true;
+    }
+    for (selector.segments()) |segment| {
+        if (compoundNeverMatches(segment.compound())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn compoundNeverMatches(compound: Selector.Compound) bool {
+    for (compound.parts) |part| {
+        switch (part) {
+            .never => return true,
+            .pseudo_class => |pseudo| switch (pseudo) {
+                // No pointer, no keyboard, no history
+                .hover, .active, .focus_visible, .visited => return true,
+                // One argument has to match. Not :not(): it matches when
+                // its arguments don't.
+                .is, .where, .has => |list| {
+                    for (list) |argument| {
+                        if (neverMatches(argument) == false) {
+                            break;
+                        }
+                    } else {
+                        return true;
+                    }
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 // Parts written with no whitespace between them ("div.a#b") form a compound.
@@ -2245,4 +2296,62 @@ test "Selector: Parser caps parts and segments at Selector.max_len" {
         const has = try std.mem.concat(arena, u8, &.{ "div:has(", longest, ")" });
         try testing.expectError(error.InvalidSelector, parse(arena, has));
     }
+}
+
+test "Selector: Parser flags a selector no element can match" {
+    const arena = testing.arena_allocator;
+    const cases = [_]struct { []const u8, bool }{
+        .{ "a:hover", true },
+        .{ ".a:active", true },
+        .{ ":focus-visible", true },
+        .{ "a:visited", true },
+        // in any compound
+        .{ ".menu:hover .item", true },
+        .{ ".a:hover > .b", true },
+        .{ ".a:hover + .b ~ .c", true },
+        // an :is(), :where() or :has() whose every argument is one
+        .{ ":where(.a:hover)", true },
+        .{ ":is(.a:hover, .b:active) .c", true },
+        .{ ".a:has(.b:hover)", true },
+        .{ ".a:has(> .b:hover, ~ .c:active)", true },
+        .{ ":where(:is(.a:hover))", true },
+        .{ ":where(.a, .b:hover)", false },
+        .{ ":is(.a:hover, .a:focus-within) .b", false },
+        .{ ".a:has(.b:hover, .c)", false },
+        // :not() matches when its argument doesn't
+        .{ ".a:not(:hover)", false },
+        .{ ":not(:where(.a:hover))", false },
+        // these do match
+        .{ "input:focus", false },
+        .{ ".a:focus-within .b", false },
+        .{ ":target", false },
+        .{ "a:link", false },
+        .{ ".a .b > .c", false },
+    };
+    for (cases) |case| {
+        const all = try parseAll(arena, case[0]);
+        const matchable = try parseList(arena, case[0]);
+        errdefer std.debug.print("\nselector: {s}\n", .{case[0]});
+        try testing.expectEqual(1, all.len);
+        try testing.expectEqual(case[1], neverMatches(all[0]));
+        try testing.expectEqual(@intFromBool(case[1] == false), matchable.len);
+    }
+
+    // an attribute value that can't match
+    try testing.expectEqual(0, (try parseList(arena, "a[href^=\"\"] b")).len);
+
+    // parseList keeps the selectors of a list that can match, in order
+    const list = try parseList(arena, "a:hover, b, .c:active .d, i");
+    try testing.expectEqual(2, list.len);
+    try testing.expectEqual(.b, list[0].first().parts[0].tag);
+    try testing.expectEqual(.i, list[1].first().parts[0].tag);
+    try testing.expectEqual(4, (try parseAll(arena, "a:hover, b, .c:active .d, i")).len);
+
+    // an argument stays, for the specificity
+    const nested = try parseList(arena, ":is(.a, #b:hover)");
+    try testing.expectEqual(2, nested[0].first().parts[0].pseudo_class.is.len);
+
+    // dropped, not forgiven
+    try testing.expectError(error.InvalidSelector, parseList(arena, "a:hover,"));
+    try testing.expectError(error.InvalidSelector, parseList(arena, "a:hover, ,b"));
 }

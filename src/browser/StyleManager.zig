@@ -4541,7 +4541,8 @@ fn unwrapWhere(selector: Selector.Selector) Selector.Selector {
 }
 
 /// Returns the best bucket key for a compound selector, or null if it contains
-/// a dynamic pseudo-class we should skip (hover, active, focus, etc.)
+/// a dynamic pseudo-class we should skip (focus, target, etc.). The parser
+/// already dropped the ones that can never match (hover, active, etc.)
 /// Priority: id > class > tag > other
 fn getBucketKey(compound: Selector.Compound) ?BucketKey {
     var best_key: BucketKey = .other;
@@ -4558,7 +4559,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
             .pseudo_class => |pc| {
                 // Skip dynamic pseudo-classes - they depend on interaction state
                 switch (pc) {
-                    .hover, .active, .focus, .focus_within, .focus_visible, .visited, .target => {
+                    .focus, .focus_within, .target => {
                         return null; // Skip this selector entirely
                     },
                     // The element _has_ to match the argument, so we can key
@@ -4566,7 +4567,7 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
                     // (`:where(.a, .b)`) doesn't have to match any, so that
                     // always lands in .other
                     .where, .is => |list| if (list.len == 1) {
-                        // An argument we'd skip (`:where(.a:hover)`) gives no key
+                        // An argument we'd skip (`:where(.a:focus)`) gives no key
                         const inner = getBucketKey(list[0].rightmost()) orelse continue;
                         best_key = best_key.orBetter(inner);
                     },
@@ -7268,7 +7269,7 @@ test "StyleManager: placeSelector: keys inside a single-argument :where/:is" {
         .{ ":where([data-x])", .other },
         .{ ":where(.a, .b)", .other },
         .{ ":not(.a)", .other },
-        .{ ":where(.a:hover)", .other },
+        .{ ":where(.a:focus)", .other },
     };
     for (cases) |case| {
         const selectors = try SelectorParser.parseList(arena, case[0]);
@@ -7276,8 +7277,8 @@ test "StyleManager: placeSelector: keys inside a single-argument :where/:is" {
     }
 
     // a dynamic pseudo-class outside the argument still skips the rule
-    const hover = try SelectorParser.parseList(arena, ":where(.a):hover");
-    try testing.expectEqual(null, placeSelector(unwrapWhere(hover[0])));
+    const focus = try SelectorParser.parseList(arena, ":where(.a):focus");
+    try testing.expectEqual(null, placeSelector(unwrapWhere(focus[0])));
 }
 
 test "StyleManager: computeSpecificity: :not() takes inner specificity" {
@@ -7842,6 +7843,42 @@ test "StyleManager: memo: a class change drops what its selectors reach" {
     // In a :has() argument: everything
     try i.setAttribute(comptime .wrap("class"), comptime .wrap("k"), frame);
     try testing.expect(frame.page.style_version != version);
+}
+
+test "StyleManager: a selector no element can match isn't tracked" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class='menu live' data-open><p class=item></p><b class=y></b></div>");
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(
+        \\.menu:hover .item { display: none }
+        \\[data-open]:active > .item { display: none }
+        \\:is(.menu:hover, .menu:focus-visible) ~ p { display: none }
+        \\.live:not(:hover) .y { display: none }
+    , frame);
+    _ = try body.appendChild(style_el.asNode(), frame);
+    const div = body.firstChild().?;
+    const item = div.firstChild().?.as(Element);
+    const y = item.asNode().nextSibling().?.as(Element);
+
+    try testing.expectEqual(false, sm.hasDisplayNone(item));
+    try testing.expectEqual(true, sm.hasDisplayNone(y));
+
+    // Only the last rule is filed, and only what it reads is watched
+    try testing.expectEqual(true, sm.visibility.parent.isEmpty());
+    try testing.expectEqual(0, sm.visibility.other_rules.len);
+    try testing.expectEqual(null, sm.class_reach.get("menu"));
+    try testing.expectEqual(null, sm.class_reach.get("item"));
+    try testing.expectEqual(false, sm.attribute_names.contains("data-open"));
+    try testing.expectEqual(false, sm.siblings.following.any);
+    try testing.expectEqual(ClassReach.subtree, sm.class_reach.get("live").?.reach);
 }
 
 test "StyleManager: memo: a focus move drops what :focus and :focus-within reach" {
@@ -10158,7 +10195,7 @@ test "StyleManager: parent-keyed and :where rules keep their priority" {
     const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
     // `div > *` (0,0,1) beats the later :where (0,0,0); the :where beats
     // the earlier `*` (0,0,0) on document order; `.a > .x + *` keys on
-    // `.a` past the `+`; `.a:hover > *` can't be keyed, and stays in other.
+    // `.a` past the `+`; `.a:hover > *` can't match, and isn't filed.
     try style_el.asNode().setTextContent(
         \\* { width: 30px }
         \\div > * { width: 20px }
@@ -10182,8 +10219,8 @@ test "StyleManager: parent-keyed and :where rules keep their priority" {
     try testing.expectEqual(Length{}, sm.geometryProps(after_x.asNode().nextSibling().?.as(Element)).margin_left);
     try testing.expectEqual(Length{}, sm.geometryProps(after_x).margin_right);
 
-    // `*` and `.a:hover > *`
-    try testing.expectEqual(2, sm.geometry.other_rules.len);
+    // `*`
+    try testing.expectEqual(1, sm.geometry.other_rules.len);
     try testing.expectEqual(1, sm.geometry.parent.tag.count());
     try testing.expectEqual(1, sm.geometry.parent.class.count());
     try testing.expectEqual(2, sm.geometry.parent.class.get("a").?.len);

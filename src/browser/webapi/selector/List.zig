@@ -454,6 +454,7 @@ fn matchesCompound(el: *Node.Element, compound: Selector.Compound, scope: *Node,
     return true;
 }
 
+/// As this changes, we need to review Parser.neverMatches to make sure it's still in sync.
 fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     switch (part) {
         .id => |id| {
