@@ -1286,7 +1286,9 @@ fn createHtmlMediaElementT(document: *const Node.Document, comptime E: type, nam
     const element = media_element.asElement();
     element._namespace = namespace;
     try populateElementAttributes(frame, element, attribute_iterator);
-    return element.asNode();
+    const node = element.asNode();
+    try Element.Html.Media.Build.created(node, frame);
+    return node;
 }
 
 fn createSvgElementT(document: *const Node.Document, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
