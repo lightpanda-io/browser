@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const layout = @import("../layout.zig");
 const text_measure = @import("../text_measure.zig");
 
 const Node = @import("Node.zig");
@@ -991,10 +992,11 @@ fn measureText(parent: *Node.Element, text: []const u8, frame: *Frame) ?DOMRect.
         return null;
     }
 
+    // The text starts inside its box's padding
     const origin = box.clientOrigin(frame);
     return .{
-        .x = origin.x,
-        .y = origin.y,
+        .x = origin.x + layout.contentStart(box, .width, owner),
+        .y = origin.y + layout.contentStart(box, .height, owner),
         .width = lines.width,
         .height = lines.height(font_size),
     };
@@ -1004,7 +1006,7 @@ fn lineWidth(box: *Node.Element, owner: *Frame) f64 {
     const block = owner._style_manager.blockContainer(box) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
-    return block.boxAxis(owner, .width);
+    return layout.innerWidth(block, owner);
 }
 
 fn getContainerElement(self: *const Range, frame: *Frame) ?*Node.Element {

@@ -1771,6 +1771,13 @@ pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     };
 }
 
+// The used width or height, as getComputedStyle reports it: the content box's
+// unless box-sizing says otherwise. Caller must have made sure self is visible.
+pub fn computedAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
+    const owner = self.ownerFrame(frame) orelse return self.getElementAxis(frame, axis).value;
+    return layout.declaredBoxSize(self, axis, owner);
+}
+
 /// The box's top-left in document coordinates, as every API reporting it
 /// reads it (one sum, so they agree to the bit).
 fn documentOrigin(self: *Element, frame: *Frame) layout.Origin {
@@ -2045,6 +2052,9 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         }
         const parent = current.flatParent(frame) orelse return x;
         if (current.is(Element)) |el| {
+            if (parent.is(Element)) |parent_el| {
+                x += layout.contentStart(parent_el, .width, owner);
+            }
             const alongside = owner._style_manager.alongside(el);
             if (alongside == .grid) {
                 x += layout.gridItemLeft(el, parent.as(Element), owner);

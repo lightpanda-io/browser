@@ -48,38 +48,111 @@ pub fn boxWidth(self: *Element, owner: *Frame) f64 {
         if (sizing == .contents) {
             break :blk 0;
         }
+        const edges: Edges = .of(self, .width, true, owner);
         if (style_manager.gridOf(self)) |grid| {
-            const width = if (own.explicit) own.value else gridItemWidth(self, grid, owner);
-            break :blk clampWidth(self, width, .box, owner);
+            const width = if (own.explicit) edges.outer(own.value) else gridItemWidth(self, grid, owner);
+            break :blk clampWidth(self, width, .box, edges, owner);
         }
         if (style_manager.isFlexRowItem(self)) {
             const row = style_manager.boxParent(self).?;
             // The row's items size each other
             style_manager.setSizesOthers(row);
-            const item = flexBase(self, boxWidth(row, owner), owner);
+            const item = flexBase(self, innerWidth(row, owner), owner);
             // Snapped to Chrome's 1/64px layout unit, past the float error
             const shrunk = @round(item.base * (1 - rowShrinkRatio(row, owner)) * 64) / 64;
             var width = @max(item.floor, shrunk);
             if (sizing == .grow and own.explicit == false) {
                 width = @max(width, growShare(self, owner));
             }
-            break :blk clampWidth(self, width, .box, owner);
+            break :blk clampWidth(self, width, .box, edges, owner);
         }
-        const width = if (own.explicit) own.value else switch (sizing) {
-            .fixed => |width| width,
-            .percent => |percent| @max(0, percent.of(containingBlockWidth(self, owner))),
+        const width = if (own.explicit) edges.outer(own.value) else switch (sizing) {
+            .fixed => |width| edges.outer(width),
+            .percent => |percent| edges.outer(@max(0, percent.of(containingBlockWidth(self, owner)))),
             .fill => fillWidth(self, owner),
             .grow, .shrink => shrunk: {
                 // The boxes inside it take their width from its content's
                 style_manager.setSizesOthers(self);
-                break :shrunk @max(own.value, contentWidth(self, .clipped, owner));
+                break :shrunk @max(own.value, contentWidth(self, .clipped, owner) + edges.padding);
             },
             .contents => unreachable,
         };
-        break :blk clampWidth(self, width, .box, owner);
+        break :blk clampWidth(self, width, .box, edges, owner);
     };
     style_manager.setCacheLayout(self, .box_width, width);
     return width;
+}
+
+// The padding on an axis's two sides together, and the box a declared size
+// is. Borders aren't modelled, so the padding is all there is between a
+// content box and its border box. Every size here is a border box's: the
+// content sits inside it at contentStart.
+const Edges = struct {
+    padding: f64,
+    border_box: bool,
+
+    // A percentage is of the containing block's width. A box's contribution
+    // to that width can't read it: the percentage is 0 there.
+    fn of(el: *Element, comptime axis: Element.Axis, resolve_percent: bool, owner: *Frame) Edges {
+        const style_manager = &owner._style_manager;
+        const edges = style_manager.boxEdges(el, axis);
+        var padding = edges.padding.px;
+        if (resolve_percent and edges.padding.fraction != 0) {
+            if (axis == .height) {
+                style_manager.setHeightReadsWidth(el);
+            }
+            padding = edges.padding.of(containingBlockWidth(el, owner));
+        }
+        return .{ .padding = @max(0, padding), .border_box = edges.border_box };
+    }
+
+    // A declared size, as the border box's: one narrower than its padding
+    // is all padding
+    fn outer(self: Edges, size: f64) f64 {
+        return if (self.border_box) @max(size, self.padding) else size + self.padding;
+    }
+
+    // A border box's size, as the content box's
+    fn inner(self: Edges, size: f64) f64 {
+        return @max(0, size - self.padding);
+    }
+};
+
+/// The width of the box's content box: what its children fill, and where
+/// its text wraps.
+pub fn innerWidth(self: *Element, owner: *Frame) f64 {
+    return Edges.of(self, .width, true, owner).inner(boxWidth(self, owner));
+}
+
+/// How far the box's children start from its left (.width) or top (.height)
+/// edge: its padding on that side. One with no box (display: contents) has
+/// no padding to put them in.
+pub fn contentStart(self: *Element, comptime axis: Element.Axis, owner: *Frame) f64 {
+    const style_manager = &owner._style_manager;
+    const padding = style_manager.paddingStart(self, axis);
+    if (padding.fraction == 0 and padding.px == 0) {
+        return 0;
+    }
+    if (style_manager.boxElement(self) != self) {
+        return 0;
+    }
+    if (padding.fraction == 0) {
+        return padding.px;
+    }
+    return @max(0, padding.of(containingBlockWidth(self, owner)));
+}
+
+/// The box's size as getComputedStyle resolves it: the box `box-sizing` names.
+pub fn declaredBoxSize(self: *Element, comptime axis: Element.Axis, owner: *Frame) f64 {
+    const size = switch (axis) {
+        .width => boxWidth(self, owner),
+        .height => boxHeight(self, owner),
+    };
+    if (self.isRootContainer()) {
+        return size;
+    }
+    const edges: Edges = .of(self, axis, true, owner);
+    return if (edges.border_box) size else edges.inner(size);
 }
 
 // How a box that clips its overflow counts toward its ancestors' content.
@@ -99,13 +172,18 @@ pub const ContentMode = enum {
 fn widthContribution(self: *Element, comptime mode: ContentMode, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
-        .shrink, .grow => @max(own.value, contentWidth(self, mode, owner)),
-        .percent, .fill => if (mode != .full and style_manager.clipsOverflowX(self)) 0 else contentWidth(self, mode, owner),
-        .contents => return contentWidth(self, mode, owner),
+    const sizing = style_manager.widthSizing(self);
+    if (own.explicit == false and sizing == .contents) {
+        return contentWidth(self, mode, owner);
+    }
+    const edges: Edges = .of(self, .width, false, owner);
+    const width = if (own.explicit) edges.outer(own.value) else switch (sizing) {
+        .fixed => |width| edges.outer(width),
+        .shrink, .grow => @max(own.value, contentWidth(self, mode, owner) + edges.padding),
+        .percent, .fill => edges.padding + if (mode != .full and style_manager.clipsOverflowX(self)) 0 else contentWidth(self, mode, owner),
+        .contents => unreachable,
     };
-    return clampWidth(self, width, .contribution, owner) + style_manager.inlineMargins(self, null);
+    return clampWidth(self, width, .contribution, edges, owner) + style_manager.inlineMargins(self, null);
 }
 
 const FlexBase = struct {
@@ -120,37 +198,42 @@ fn flexBase(self: *Element, row_width: f64, owner: *Frame) FlexBase {
     // Its content decides how the row's other items shrink and grow
     style_manager.setSizesOthers(self);
     const own = self.getElementAxis(owner, .width);
-    const width = if (own.explicit) own.value else switch (style_manager.widthSizing(self)) {
-        .fixed => |width| width,
-        .percent => |percent| @max(0, percent.of(row_width)),
-        .shrink, .grow, .fill => @max(own.value, contentWidth(self, .full, owner)),
-        .contents => return .{
+    const sizing = style_manager.widthSizing(self);
+    if (own.explicit == false and sizing == .contents) {
+        return .{
             .base = widthContribution(self, .full, owner),
             .floor = widthContribution(self, .min, owner),
-        },
+        };
+    }
+    const edges: Edges = .of(self, .width, true, owner);
+    const width = if (own.explicit) edges.outer(own.value) else switch (sizing) {
+        .fixed => |width| edges.outer(width),
+        .percent => |percent| edges.outer(@max(0, percent.of(row_width))),
+        .shrink, .grow, .fill => @max(own.value, contentWidth(self, .full, owner) + edges.padding),
+        .contents => unreachable,
     };
-    const base = clampWidth(self, width, .box, owner);
+    const base = clampWidth(self, width, .box, edges, owner);
     if (style_manager.flexShrinks(self) == false) {
         return .{ .base = base, .floor = base };
     }
-    return .{ .base = base, .floor = flexMinWidth(self, base, owner) };
+    return .{ .base = base, .floor = flexMinWidth(self, base, edges.padding, owner) };
 }
 
 // min-width: auto on a flex item: no narrower than its content, or than its
 // width if that's narrower; 0 if it clips its overflow (CSS Flexbox §4.5).
 // Content its descendants clip doesn't count. A declared min-width replaces
-// it, and clampWidth applies that one.
-fn flexMinWidth(self: *Element, base: f64, owner: *Frame) f64 {
+// it, and clampWidth applies that one. Its padding never shrinks.
+fn flexMinWidth(self: *Element, base: f64, padding: f64, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     if (style_manager.widthLimits(self).min != null or style_manager.clipsOverflowX(self)) {
-        return 0;
+        return @min(base, padding);
     }
     if (self.getTag().isReplacedOrControl()) {
         // Its intrinsic width is unknown
         return base;
     }
     const own = self.getElementAxis(owner, .width);
-    const content = contentWidth(self, .min, owner);
+    const content = contentWidth(self, .min, owner) + padding;
     // An auto width's fallback stands in for an empty box
     return @min(base, if (own.explicit) content else @max(own.value, content));
 }
@@ -172,7 +255,7 @@ fn rowShrinkRatio(self: *Element, owner: *Frame) f64 {
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
-    const row_width = boxWidth(self, owner);
+    const row_width = innerWidth(self, owner);
     var total: f64 = 0;
     var items: TreeWalker.FlatChildren = .init(self.asNode(), .{ .frame = owner });
     while (nextFlexItem(&items, style_manager)) |el| {
@@ -234,25 +317,26 @@ fn flexItemMargins(el: *Element, row_width: f64, style_manager: *StyleManager) f
     return style_manager.inlineMargins(el, row_width);
 }
 
-// max-width caps the width, min-width wins over both.
-fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, owner: *Frame) f64 {
+// max-width caps the width, min-width wins over both. Like the width, they
+// limit the box `box-sizing` names.
+fn clampWidth(self: *Element, width: f64, comptime of: enum { box, contribution }, edges: Edges, owner: *Frame) f64 {
     const limits = owner._style_manager.widthLimits(self);
     var clamped = width;
     if (limits.max) |max| {
-        clamped = @min(clamped, resolveWidthLimit(self, max, of == .box, owner) orelse clamped);
+        clamped = @min(clamped, resolveWidthLimit(self, max, of == .box, edges, owner) orelse clamped);
     }
     if (limits.min) |min| {
-        clamped = @max(clamped, resolveWidthLimit(self, min, of == .box, owner) orelse clamped);
+        clamped = @max(clamped, resolveWidthLimit(self, min, of == .box, edges, owner) orelse clamped);
     }
     return clamped;
 }
 
-fn resolveWidthLimit(self: *Element, limit: StyleManager.BoxLength, resolve_percent: bool, owner: *Frame) ?f64 {
-    return switch (limit) {
+fn resolveWidthLimit(self: *Element, limit: StyleManager.BoxLength, resolve_percent: bool, edges: Edges, owner: *Frame) ?f64 {
+    return edges.outer(switch (limit) {
         // a calc() can go below 0, a limit can't
         .px => |px| @max(0, px),
-        .percent => |percent| if (resolve_percent) @max(0, percent.of(containingBlockWidth(self, owner))) else null,
-    };
+        .percent => |percent| if (resolve_percent) @max(0, percent.of(containingBlockWidth(self, owner))) else return null,
+    });
 }
 
 // A block in normal flow fills its containing block, less its margins; a
@@ -265,10 +349,15 @@ fn fillWidth(self: *Element, owner: *Frame) f64 {
 
 /// The width of the containing block; the viewport above the root.
 fn containingBlockWidth(self: *Element, owner: *Frame) f64 {
-    const parent = owner._style_manager.containingBlock(self) orelse {
+    const style_manager = &owner._style_manager;
+    const parent = style_manager.containingBlock(self) orelse {
         return @floatFromInt(owner.page.getViewport().width);
     };
-    return boxWidth(parent, owner);
+    if (style_manager.position(self) == .absolute) {
+        // Its padding box, which without borders is the whole box
+        return boxWidth(parent, owner);
+    }
+    return innerWidth(parent, owner);
 }
 
 /// A growing flex item's share: the row's free space, after the siblings
@@ -277,7 +366,7 @@ fn growShare(self: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     const parent = style_manager.boxParent(self) orelse return 0;
     style_manager.setSizesOthers(parent);
-    const row_width = boxWidth(parent, owner);
+    const row_width = innerWidth(parent, owner);
     var taken: f64 = 0;
     var growers: f64 = 0;
     var items: TreeWalker.FlatChildren = .init(parent.asNode(), .{ .frame = owner });
@@ -362,7 +451,7 @@ fn textLineWidth(self: *Element, comptime mode: ContentMode, white_space: text_m
             const block = owner._style_manager.blockContainer(self) orelse {
                 return @floatFromInt(owner.page.getViewport().width);
             };
-            return boxWidth(block, owner);
+            return innerWidth(block, owner);
         },
     };
 }
@@ -522,6 +611,7 @@ fn originStep(el: *Element, self: *Element, owner: *Frame, frame: *Frame) Origin
 
     const parent = el.asNode().flatTreeParentElement(owner) orelse return .{ .delta = delta, .up = null };
     delta.y += boxOffset(el, parent, owner);
+    delta.x += contentStart(parent, .width, owner);
     const alongside = style_manager.alongside(el);
     if (alongside == .grid) {
         delta.x += gridItemLeft(el, parent, owner);
@@ -629,9 +719,11 @@ fn boxSize(el: *Element, comptime axis: Axis, owner: *Frame) f64 {
     };
 }
 
-// The box's top, from its parent's top. Caches every sibling's up to it: an
-// offset needs only the heights before it, and going on would measure self's
-// subtree and everything after it (for body, the whole document).
+// The box's top, from its parent's top: inside the parent's padding, where
+// the flow puts it. Caches every sibling's up to it: an offset needs only the
+// heights before it, and going on would measure self's subtree and everything
+// after it (for body, the whole document). What's cached includes the
+// padding, which a padding change drops along with the offsets.
 fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const style_manager = &owner._style_manager;
     if (style_manager.getCachedOffset(self, parent)) |offset| {
@@ -640,11 +732,12 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
     const fill = StyleManager.fill_check.enter(style_manager);
     defer StyleManager.fill_check.exit(fill);
 
+    const start = contentStart(parent, .height, owner);
     var flow: Flow = .of(parent, owner);
     if (flow.mode == .row) {
-        // A row's children all sit at its top (see Flow.at): nothing to
-        // stack, so nothing to cache.
-        return 0;
+        // A row's children all sit at its content's top (see Flow.at):
+        // nothing to stack, so nothing to cache.
+        return start;
     }
 
     var next = parent.asNode().flatFirstChild(owner);
@@ -657,7 +750,8 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
         else => resumePoint(self, parent, owner),
     };
     if (resume_point) |point| {
-        flow.offset = point.offset;
+        // From cached offsets, which include the padding
+        flow.offset = point.offset - start;
         next = point.next;
         position = point.position;
         // The siblings replayed up to there keep the offsets they have
@@ -671,7 +765,7 @@ fn boxOffset(self: *Element, parent: *Element, owner: *Frame) f64 {
             style_manager.offset_steps += 1;
         }
         const role = style_manager.flowRole(el);
-        const offset = flow.at(el, role, owner);
+        const offset = start + flow.at(el, role, owner);
         if (placed == position) {
             const cached = style_manager.setCacheOffset(el, position, offset, flow.columnOf(el));
             if (cached) {
@@ -786,27 +880,30 @@ pub fn boxHeight(self: *Element, owner: *Frame) f64 {
         style_manager.setCacheLayout(self, .box_height, own.value);
         return own.value;
     }
+    const edges: Edges = .of(self, .height, true, owner);
     if (own.explicit) {
-        const height = clampHeight(self, own.value, owner);
+        const height = clampHeight(self, edges.outer(own.value), edges, owner);
         style_manager.setCacheLayout(self, .box_height, height);
         return height;
     }
     const content = cached.content orelse measureContentHeight(self, owner);
-    const height = clampHeight(self, @max(own.value, content), owner);
+    // The fallback stands in for an empty box, padding included
+    const height = clampHeight(self, @max(own.value, content + edges.padding), edges, owner);
     style_manager.setCacheHeights(self, content, height);
     return height;
 }
 
-fn clampHeight(self: *Element, height: f64, owner: *Frame) f64 {
+// Like the height, the limits are of the box `box-sizing` names
+fn clampHeight(self: *Element, height: f64, edges: Edges, owner: *Frame) f64 {
     const limits = owner._style_manager.heightLimits(self);
     var clamped = height;
     if (limits.max) |max| {
         // max-height clamps the height
-        clamped = @min(clamped, max);
+        clamped = @min(clamped, edges.outer(max));
     }
     if (limits.min) |min| {
         // min-height has the final say
-        clamped = @max(clamped, min);
+        clamped = @max(clamped, edges.outer(min));
     }
     return clamped;
 }
@@ -859,8 +956,11 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
             declared_read = true;
             const width = self.getElementAxis(owner, .width);
             if (width.explicit) {
+                // A percentage padding isn't read: the height would follow
+                // the containing block's width
+                const edges: Edges = .of(self, .width, false, owner);
                 wrap = .{
-                    .line_width = width.value,
+                    .line_width = if (edges.border_box) edges.inner(width.value) else width.value,
                     .font_size = style_manager.computedFontSize(self),
                     .white_space = style_manager.whiteSpace(self),
                 };
@@ -887,7 +987,7 @@ fn measureContentHeight(self: *Element, owner: *Frame) f64 {
         if (at_box) {
             style_manager.setHeightReadsWidth(self);
             wrap = .{
-                .line_width = boxWidth(self, owner),
+                .line_width = innerWidth(self, owner),
                 .font_size = style_manager.computedFontSize(self),
                 .white_space = style_manager.whiteSpace(self),
             };
@@ -1045,7 +1145,7 @@ const Flow = struct {
 fn gridItemWidth(item: *Element, grid: *Element, owner: *Frame) f64 {
     const tracks = gridTrackCount(grid, owner);
     const span = Flow.gridSpan(owner._style_manager.gridColumn(item), tracks);
-    const area = boxWidth(grid, owner) * @as(f64, @floatFromInt(span)) / @as(f64, @floatFromInt(tracks));
+    const area = innerWidth(grid, owner) * @as(f64, @floatFromInt(span)) / @as(f64, @floatFromInt(tracks));
     return @max(0, area - owner._style_manager.inlineMargins(item, area));
 }
 
@@ -1059,7 +1159,7 @@ pub fn gridItemLeft(item: *Element, grid: *Element, owner: *Frame) f64 {
     };
     _ = boxOffset(item, grid, owner);
     const column = if (style_manager.getCachedPlacement(item, grid)) |placement| placement.column else gridColumnByWalk(item, grid, tracks, owner);
-    return boxWidth(grid, owner) * @as(f64, @floatFromInt(column)) / @as(f64, @floatFromInt(tracks));
+    return innerWidth(grid, owner) * @as(f64, @floatFromInt(column)) / @as(f64, @floatFromInt(tracks));
 }
 
 // The item's column without the cache: the row replayed from its first item
@@ -1092,7 +1192,7 @@ fn gridTrackCount(grid: *Element, owner: *Frame) u32 {
     var count: u32 = tracks.tracks;
     if (tracks.fill_px > 0) {
         const fill: f64 = @floatFromInt(tracks.fill_px);
-        count += @intFromFloat(@max(1, @floor(boxWidth(grid, owner) / fill)));
+        count += @intFromFloat(@max(1, @floor(innerWidth(grid, owner) / fill)));
     }
     return @max(count, 1);
 }

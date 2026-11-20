@@ -549,8 +549,7 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
         return "auto";
     }
     const value = switch (dimension) {
-        .width => element.boxAxis(frame, .width),
-        .height => element.boxAxis(frame, .height),
+        inline else => |d| element.computedAxis(frame, @field(Element.Axis, @tagName(d))),
     };
     return frame.local_arena.print("{d}px", .{value}) catch "auto";
 }
