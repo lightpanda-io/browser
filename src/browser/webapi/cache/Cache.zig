@@ -34,16 +34,16 @@ const log = lp.log;
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
-// Entries are matched on their url alone: no Vary, and only GET is ever stored.
+// Entries are matched on their url and Vary: only GET is ever stored.
 const Cache = @This();
 
 _origin: *Store.Origin,
 _bucket: *Store.Bucket,
 
-const QueryOptions = struct {
-    ignoreMethod: bool = false, // TODO
+pub const QueryOptions = struct {
+    ignoreMethod: bool = false,
     ignoreSearch: bool = false,
-    ignoreVary: bool = false, // TODO
+    ignoreVary: bool = false,
 };
 
 pub fn init(origin: *Store.Origin, bucket: *Store.Bucket, exec: *const Execution) !*Cache {
@@ -52,15 +52,15 @@ pub fn init(origin: *Store.Origin, bucket: *Store.Bucket, exec: *const Execution
 
 fn match(self: *Cache, input: Request.Input, opts_: ?QueryOptions, exec: *const Execution) !js.Promise {
     const opts = opts_ orelse QueryOptions{};
-    return matchIn(&.{self._bucket}, input, opts.ignoreSearch, exec);
+    return matchIn(&.{self._bucket}, input, opts, exec);
 }
 
-pub fn matchIn(buckets: []const *Store.Bucket, input: Request.Input, ignore_search: bool, exec: *const Execution) !js.Promise {
+pub fn matchIn(buckets: []const *Store.Bucket, input: Request.Input, opts: QueryOptions, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
     const key = try Key.init(input, exec);
-    if (key.method == .GET) {
+    if (key.method == .GET or opts.ignoreMethod) {
         for (buckets) |bucket| {
-            const entry = bucket.match(key.url, ignore_search) orelse continue;
+            const entry = bucket.match(key.url, opts.ignoreSearch, key.headers, opts.ignoreVary) orelse continue;
             const response = try toResponse(entry, exec);
             response.acquireRef();
             defer response.releaseRef(exec.page); // safely transfered to v8, release
@@ -84,7 +84,7 @@ fn put(self: *Cache, input: Request.Input, response: *Response, exec: *const Exe
     const body = try response.consumeBytes(exec);
 
     const allocator = self._origin.allocator;
-    const entry = try toEntry(allocator, key.url, response, body);
+    const entry = try toEntry(allocator, key.url, key.headers, response, body);
     errdefer entry.deinit();
 
     try self._bucket.put(allocator, entry);
@@ -95,8 +95,8 @@ fn delete(self: *Cache, input: Request.Input, opts_: ?QueryOptions, exec: *const
     const opts = opts_ orelse QueryOptions{};
     const key = try Key.init(input, exec);
     var deleted = false;
-    if (key.method == .GET) {
-        deleted = self._bucket.delete(key.url, opts.ignoreSearch);
+    if (key.method == .GET or opts.ignoreMethod) {
+        deleted = self._bucket.delete(key.url, opts.ignoreSearch, key.headers, opts.ignoreVary);
     }
     return exec.js.local.?.resolvePromise(deleted);
 }
@@ -177,6 +177,8 @@ const Batch = struct {
     const Slot = struct {
         batch: *Batch,
         url: []const u8,
+        // captured for the entry's Vary matching
+        headers: []const [2][]const u8,
     };
 
     fn init(cache: *const Cache, resolver: js.PromiseResolver.Global, requests: []const *Request, exec: *const Execution) !*Batch {
@@ -194,7 +196,11 @@ const Batch = struct {
             .staged = try .initCapacity(arena.allocator(), requests.len),
         };
         for (requests, self.slots) |request, *slot| {
-            slot.* = .{ .batch = self, .url = try arena.dupe(u8, request._url) };
+            slot.* = .{
+                .batch = self,
+                .url = try arena.dupe(u8, request._url),
+                .headers = try requestHeaders(request, arena),
+            };
         }
         return self;
     }
@@ -207,7 +213,7 @@ const Batch = struct {
 
         switch (result) {
             .done => |response| if (self.outcome == .ok) {
-                self.stage(slot.url, response) catch {
+                self.stage(slot, response) catch {
                     self.outcome = .failed;
                 };
             },
@@ -218,11 +224,11 @@ const Batch = struct {
         }
     }
 
-    fn stage(self: *Batch, url: []const u8, response: *const Response) !void {
+    fn stage(self: *Batch, slot: *const Slot, response: *const Response) !void {
         if (response._status < 200 or response._status > 299 or unstorable(response) != null) {
             return error.Unstorable;
         }
-        const entry = try toEntry(self.origin.allocator, url, response, response._body.bytes);
+        const entry = try toEntry(self.origin.allocator, slot.url, slot.headers, response, response._body.bytes);
         self.staged.appendAssumeCapacity(entry);
     }
 
@@ -272,10 +278,17 @@ const Batch = struct {
 const Key = struct {
     url: [:0]const u8,
     method: http.Method,
+    // The request's headers, so a stored entry's Vary can be matched. Empty
+    // for lookups made from a plain url string.
+    headers: []const [2][]const u8 = &.{},
 
     fn init(input: Request.Input, exec: *const Execution) !Key {
         return switch (input) {
-            .request => |r| .{ .url = r._url, .method = r._method },
+            .request => |r| .{
+                .url = r._url,
+                .method = r._method,
+                .headers = try requestHeaders(r, exec.call_arena),
+            },
             .url => |u| .{
                 .url = try URL.resolve(exec.call_arena, exec.base(), u, .{ .encoding = exec.charset.* }),
                 .method = .GET,
@@ -290,6 +303,18 @@ const Key = struct {
         return std.mem.startsWith(u8, self.url, "http://") or std.mem.startsWith(u8, self.url, "https://");
     }
 };
+
+// Flatten the request's headers for Vary matching. A Request may carry no
+// header list (e.g. when constructed from a url string).
+fn requestHeaders(request: *Request, arena: std.mem.Allocator) ![]const [2][]const u8 {
+    const headers = request._headers orelse return &.{};
+    const entries = headers._list._entries.items;
+    const flat = try arena.alloc([2][]const u8, entries.len);
+    for (entries, flat) |*entry, *kv| {
+        kv.* = .{ try arena.dupe(u8, entry.name.str()), try arena.dupe(u8, entry.value.str()) };
+    }
+    return flat;
+}
 
 // Why this response can't be stored, if it can't.
 fn unstorable(response: *const Response) ?[]const u8 {
@@ -316,7 +341,13 @@ fn unstorable(response: *const Response) ?[]const u8 {
     return null;
 }
 
-fn toEntry(allocator: Allocator, url: []const u8, response: *const Response, body: []const u8) !*Store.Entry {
+fn toEntry(
+    allocator: Allocator,
+    url: []const u8,
+    request_headers: []const [2][]const u8,
+    response: *const Response,
+    body: []const u8,
+) !*Store.Entry {
     const entry = try Store.Entry.create(allocator, url);
     errdefer entry.deinit();
 
@@ -333,6 +364,7 @@ fn toEntry(allocator: Allocator, url: []const u8, response: *const Response, bod
     entry.response_type = response._type;
     entry.is_redirected = response._is_redirected;
     entry.headers = headers;
+    entry.vary_headers = try Store.captureVaryHeaders(arena, headers, request_headers);
     entry.body = try arena.dupe(u8, body);
     return entry;
 }

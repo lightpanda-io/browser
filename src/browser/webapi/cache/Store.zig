@@ -125,21 +125,41 @@ pub const Bucket = struct {
         self.entries.clearAndFree(allocator);
     }
 
-    pub fn match(self: *const Bucket, url: []const u8, ignore_search: bool) ?*const Entry {
+    pub fn match(
+        self: *const Bucket,
+        url: []const u8,
+        ignore_search: bool,
+        request_headers: []const [2][]const u8,
+        ignore_vary: bool,
+    ) ?*const Entry {
         const idx = self.indexOf(url, ignore_search, 0) orelse return null;
-        return self.entries.values()[idx];
+        const entry = self.entries.values()[idx];
+        if (ignore_vary == false and varyMatches(entry, request_headers) == false) {
+            return null;
+        }
+        return entry;
     }
 
     pub fn put(self: *Bucket, allocator: Allocator, entry: *Entry) !void {
         try self.entries.ensureUnusedCapacity(allocator, 1);
-        // remove and add, so that it gets placed at the end
-        _ = self.delete(entry.url, false);
+        // remove and add, so that it gets placed at the end; put replaces by
+        // url regardless of any Vary the old entry was stored under
+        _ = self.delete(entry.url, false, &.{}, true);
         self.entries.putAssumeCapacity(entry.url, entry);
     }
 
-    pub fn delete(self: *Bucket, url: []const u8, ignore_search: bool) bool {
+    pub fn delete(
+        self: *Bucket,
+        url: []const u8,
+        ignore_search: bool,
+        request_headers: []const [2][]const u8,
+        ignore_vary: bool,
+    ) bool {
         if (ignore_search == false) {
             const idx = self.indexOf(url, ignore_search, 0) orelse return false;
+            if (ignore_vary == false and varyMatches(self.entries.values()[idx], request_headers) == false) {
+                return false;
+            }
             self.deleteAtIndex(idx);
             return true;
         }
@@ -150,9 +170,14 @@ pub const Bucket = struct {
         var deleted = false;
         var last_index: usize = 0;
         while (self.indexOf(url, ignore_search, last_index)) |idx| {
-            self.deleteAtIndex(idx);
-            deleted = true;
-            last_index = idx;
+            if (ignore_vary or varyMatches(self.entries.values()[idx], request_headers)) {
+                self.deleteAtIndex(idx);
+                deleted = true;
+                // the next match slides into this slot after the removal
+                last_index = idx;
+            } else {
+                last_index = idx + 1;
+            }
         }
         return deleted;
     }
@@ -181,8 +206,9 @@ fn withoutSearch(url: []const u8) []const u8 {
     return url[0 .. std.mem.findAny(u8, url, "?#") orelse url.len];
 }
 
-// A stored request/response pair. Only the request's url is kept: entries are
-// always GET and Vary isn't considered.
+// A stored request/response pair. Entries are always GET; the request headers
+// named by the response's Vary are captured at put time so lookups can match
+// them.
 pub const Entry = struct {
     arena: std.heap.ArenaAllocator,
     status: u16,
@@ -193,6 +219,8 @@ pub const Entry = struct {
     response_url: [:0]const u8,
     response_type: Response.Type,
     headers: []const [2][]const u8,
+    // The request headers named by the response's Vary, captured at put time.
+    vary_headers: []const VaryHeader = &.{},
     body: []const u8,
 
     pub fn create(allocator: Allocator, url: []const u8) !*Entry {
@@ -220,6 +248,98 @@ pub const Entry = struct {
         self.arena.deinit();
     }
 };
+
+// A request header named by the stored response's Vary. `value` is null when
+// the storing request didn't have the header; two lookups which both lack the
+// header still match.
+pub const VaryHeader = struct {
+    name: []const u8,
+    value: ?[]const u8,
+};
+
+// Whether the entry's Vary matches the requesting headers: every field name
+// in the stored Vary must be absent from both sides, or present with a
+// matching (byte-case-insensitive) value on both sides.
+fn varyMatches(entry: *const Entry, request_headers: []const [2][]const u8) bool {
+    for (entry.headers) |header| {
+        if (std.ascii.eqlIgnoreCase(header[0], "vary") == false) {
+            continue;
+        }
+        var it = std.mem.splitScalar(u8, header[1], ',');
+        while (it.next()) |field| {
+            const name = std.mem.trim(u8, field, " \t");
+            if (name.len == 0) {
+                continue;
+            }
+            // An entry stored with `Vary: *` would never match; store-time
+            // rejects it, but stay defensive.
+            if (std.mem.eql(u8, name, "*")) {
+                return false;
+            }
+            const stored = varyValue(entry.vary_headers, name) orelse return false;
+            const actual = headerValue(request_headers, name);
+            if (stored) |stored_value| {
+                const actual_value = actual orelse return false;
+                if (std.ascii.eqlIgnoreCase(stored_value, actual_value) == false) {
+                    return false;
+                }
+            } else if (actual != null) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+fn varyValue(vary_headers: []const VaryHeader, name: []const u8) ??[]const u8 {
+    for (vary_headers) |*vary| {
+        if (std.ascii.eqlIgnoreCase(vary.name, name)) {
+            return vary.value;
+        }
+    }
+    return null;
+}
+
+fn headerValue(headers: []const [2][]const u8, name: []const u8) ?[]const u8 {
+    for (headers) |kv| {
+        if (std.ascii.eqlIgnoreCase(kv[0], name)) {
+            return kv[1];
+        }
+    }
+    return null;
+}
+
+// The request headers named by the response's Vary, captured at put time so
+// that lookups can compare them. A name the request doesn't carry is stored
+// with a null value.
+pub fn captureVaryHeaders(
+    allocator: Allocator,
+    response_headers: []const [2][]const u8,
+    request_headers: []const [2][]const u8,
+) ![]const VaryHeader {
+    var vary: std.ArrayList(VaryHeader) = .empty;
+    for (response_headers) |header| {
+        if (std.ascii.eqlIgnoreCase(header[0], "vary") == false) {
+            continue;
+        }
+        var it = std.mem.splitScalar(u8, header[1], ',');
+        while (it.next()) |field| {
+            const name = std.mem.trim(u8, field, " \t");
+            if (name.len == 0 or std.mem.eql(u8, name, "*")) {
+                // `Vary: *` is rejected at store time.
+                continue;
+            }
+            try vary.append(allocator, .{
+                .name = try allocator.dupe(u8, name),
+                .value = if (headerValue(request_headers, name)) |value|
+                    try allocator.dupe(u8, value)
+                else
+                    null,
+            });
+        }
+    }
+    return vary.items;
+}
 
 const testing = @import("../../../testing.zig");
 test "Cache - Store: origins and buckets" {
@@ -257,12 +377,12 @@ test "Cache - Store: put, match, delete" {
     try bucket.put(origin.allocator, try testEntry("https://a.com/x?a=1", "three"));
     try testing.expectEqual(2, bucket.entries.count());
 
-    try testing.expectEqual("three", bucket.match("https://a.com/x?a=1#frag", false).?.body);
-    try testing.expectEqual(null, bucket.match("https://a.com/x", false));
-    try testing.expectEqual("two", bucket.match("https://a.com/x", true).?.body);
+    try testing.expectEqual("three", bucket.match("https://a.com/x?a=1#frag", false, &.{}, false).?.body);
+    try testing.expectEqual(null, bucket.match("https://a.com/x", false, &.{}, false));
+    try testing.expectEqual("two", bucket.match("https://a.com/x", true, &.{}, false).?.body);
 
-    try testing.expectEqual(false, bucket.delete("https://a.com/x", false));
-    try testing.expectEqual(true, bucket.delete("https://a.com/x?b=3", true));
+    try testing.expectEqual(false, bucket.delete("https://a.com/x", false, &.{}, false));
+    try testing.expectEqual(true, bucket.delete("https://a.com/x?b=3", true, &.{}, false));
     try testing.expectEqual(0, bucket.entries.count());
 }
 
@@ -280,11 +400,85 @@ test "Cache - Store: ignoreSearch delete removes every match" {
     try bucket.put(origin.allocator, try testEntry("https://a.com/xy?a=1", "5"));
     try bucket.put(origin.allocator, try testEntry("https://a.com/x?a=3#frag", "6"));
 
-    try testing.expectEqual(true, bucket.delete("https://a.com/x?b=1#f", true));
+    try testing.expectEqual(true, bucket.delete("https://a.com/x?b=1#f", true, &.{}, false));
     try testing.expectEqual(2, bucket.entries.count());
-    try testing.expectEqual("3", bucket.match("https://a.com/other", false).?.body);
-    try testing.expectEqual("5", bucket.match("https://a.com/xy", true).?.body);
-    try testing.expectEqual(false, bucket.delete("https://a.com/x", true));
+    try testing.expectEqual("3", bucket.match("https://a.com/other", false, &.{}, false).?.body);
+    try testing.expectEqual("5", bucket.match("https://a.com/xy", true, &.{}, false).?.body);
+    try testing.expectEqual(false, bucket.delete("https://a.com/x", true, &.{}, false));
+}
+
+test "Cache - Store: match honours Vary" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    const origin = try store.forOrigin("https://a.com");
+    const bucket = try origin.open("v1");
+
+    const entry = try testEntry("https://a.com/x", "one");
+    entry.headers = try entry.arena.allocator().dupe([2][]const u8, &.{.{ "vary", "Accept-Language" }});
+    entry.vary_headers = try entry.arena.allocator().dupe(VaryHeader, &.{.{ .name = "Accept-Language", .value = "fr" }});
+    try bucket.put(origin.allocator, entry);
+
+    const fr = [2][]const u8{ "Accept-Language", "fr" };
+    const en = [2][]const u8{ "accept-language", "en" };
+
+    // same value (name compared case-insensitively) matches
+    try testing.expectEqual("one", bucket.match("https://a.com/x", false, &.{fr}, false).?.body);
+    // a different value doesn't
+    try testing.expectEqual(null, bucket.match("https://a.com/x", false, &.{en}, false));
+    // a request without the header doesn't
+    try testing.expectEqual(null, bucket.match("https://a.com/x", false, &.{}, false));
+    // ...unless the lookup ignores Vary
+    try testing.expectEqual("one", bucket.match("https://a.com/x", false, &.{en}, true).?.body);
+
+    // delete honours Vary too
+    try testing.expectEqual(false, bucket.delete("https://a.com/x", false, &.{en}, false));
+    try testing.expectEqual(true, bucket.delete("https://a.com/x", false, &.{fr}, false));
+    try testing.expectEqual(0, bucket.entries.count());
+}
+
+test "Cache - Store: match honours every Vary field name" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    const origin = try store.forOrigin("https://a.com");
+    const bucket = try origin.open("v1");
+
+    const entry = try testEntry("https://a.com/x", "one");
+    entry.headers = try entry.arena.allocator().dupe([2][]const u8, &.{.{ "vary", "Accept-Language, User-Agent" }});
+    entry.vary_headers = try entry.arena.allocator().dupe(VaryHeader, &.{
+        .{ .name = "Accept-Language", .value = "fr" },
+        .{ .name = "User-Agent", .value = "agent/1" },
+    });
+    try bucket.put(origin.allocator, entry);
+
+    // Accept-Language matches case-insensitively, but the lookup is missing
+    // the second Vary'd header, so it still doesn't match.
+    const both = [2][]const u8{ "accept-language", "FR" };
+    try testing.expectEqual(null, bucket.match("https://a.com/x", false, &.{both}, false));
+
+    const both_ok = [_][2][]const u8{ .{ "accept-language", "fr" }, .{ "user-agent", "agent/1" } };
+    try testing.expectEqual("one", bucket.match("https://a.com/x", false, &.{ both_ok[0], both_ok[1] }, false).?.body);
+}
+
+test "Cache - Store: match when both requests lack the Vary header" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    const origin = try store.forOrigin("https://a.com");
+    const bucket = try origin.open("v1");
+
+    // The storing request didn't carry the Vary'd header either.
+    const entry = try testEntry("https://a.com/x", "one");
+    entry.headers = try entry.arena.allocator().dupe([2][]const u8, &.{.{ "vary", "Accept-Language" }});
+    entry.vary_headers = try entry.arena.allocator().dupe(VaryHeader, &.{.{ .name = "Accept-Language", .value = null }});
+    try bucket.put(origin.allocator, entry);
+
+    // A lookup without the header matches (both sides lack it)...
+    try testing.expectEqual("one", bucket.match("https://a.com/x", false, &.{}, false).?.body);
+    // ...but a lookup that does carry it doesn't.
+    const fr = [2][]const u8{ "Accept-Language", "fr" };
+    try testing.expectEqual(null, bucket.match("https://a.com/x", false, &.{fr}, false));
 }
 
 fn testEntry(url: []const u8, body: []const u8) !*Entry {
