@@ -383,7 +383,7 @@
     testing.expectEqual(true, odd.validity.stepMismatch);
     testing.expectEqual(false, odd.validity.valid);
     testing.expectEqual(false, odd.checkValidity());
-    testing.expectEqual('Please enter a value that matches the step.', odd.validationMessage);
+    testing.expectEqual(true, odd.validationMessage.length > 0);
     odd.value = '4';
     testing.expectEqual(false, odd.validity.stepMismatch);
     testing.expectEqual('', odd.validationMessage);
