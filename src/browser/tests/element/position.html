@@ -283,6 +283,19 @@
   row.innerHTML = '<div style="width: 100px"></div><div style="width: 100px"></div>';
   document.body.appendChild(row);
   testing.expectEqual(100, row.lastElementChild.offsetLeft - row.firstElementChild.offsetLeft);
+
+  // A run of text is an item of its own, as wide as the same text in an
+  // element; whitespace between items is none (a blog index's
+  // <a>Title<b>date</b></a>)
+  row.innerHTML = '\n  <div style="width: 100px"></div>\n  <div style="width: 100px"></div>\n';
+  testing.expectEqual(100, row.lastElementChild.offsetLeft - row.firstElementChild.offsetLeft);
+  row.innerHTML = '<span>Some title</span><b>Jan 20 2011</b>';
+  const wrapped = row.lastElementChild.offsetLeft - row.offsetLeft;
+  testing.expectTrue(wrapped > 0);
+  row.innerHTML = 'Some title<b>Jan 20 2011</b>';
+  testing.expectEqual(wrapped, row.lastElementChild.offsetLeft - row.offsetLeft);
+  row.innerHTML = 'Some <i style="display: none"></i>title<b>Jan 20 2011</b>';
+  testing.expectEqual(wrapped, row.lastElementChild.offsetLeft - row.offsetLeft);
   row.remove();
 }
 </script>
