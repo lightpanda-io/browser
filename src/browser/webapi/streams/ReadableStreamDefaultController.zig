@@ -40,7 +40,7 @@ _stream: *ReadableStream,
 /// stay pending.
 _execution: js.ExecutionHandle,
 _arena: std.mem.Allocator,
-_queue: std.ArrayList(js.Value.Global),
+_queue: std.Deque(js.Value.Global),
 _pending_reads: std.ArrayList(js.PromiseResolver.Global),
 _high_water_mark: u32,
 
@@ -92,9 +92,9 @@ pub fn fulfillPendingReads(self: *ReadableStreamDefaultController) void {
     // Each resolve runs microtasks, so page JS can read, cancel or error the
     // stream (or re-enter the producer) between iterations; both lists are
     // re-checked every time.
-    while (self._pending_reads.items.len > 0 and self._queue.items.len > 0) {
+    while (self._pending_reads.items.len > 0) {
+        const chunk = self._queue.popFront() orelse break;
         const resolver = self._pending_reads.orderedRemove(0);
-        const chunk = self._queue.orderedRemove(0);
 
         var ls: js.Local.Scope = undefined;
         exec.js.localScope(&ls);
@@ -158,7 +158,7 @@ fn enqueueLocal(self: *ReadableStreamDefaultController, local: *const js.Local, 
 fn queueValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
     const persisted = try value.persist();
     errdefer persisted.release();
-    try self._queue.append(self._arena, persisted);
+    try self._queue.pushBack(self._arena, persisted);
 }
 
 fn chunkToJs(local: *const js.Local, chunk: Chunk) !js.Value {
@@ -177,10 +177,9 @@ fn resolveRead(local: *const js.Local, resolver: js.PromiseResolver.Global, valu
 }
 
 pub fn clearQueue(self: *ReadableStreamDefaultController) void {
-    for (self._queue.items) |chunk| {
+    while (self._queue.popFront()) |chunk| {
         chunk.release();
     }
-    self._queue.clearRetainingCapacity();
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
@@ -193,7 +192,7 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 
     // As in the spec, `closed` settles before pending reads. With chunks
     // still queued, dequeue() does it once they're read.
-    if (self._queue.items.len == 0) {
+    if (self._queue.len == 0) {
         if (self._stream._reader) |reader| reader.streamClosed();
     }
 
@@ -264,13 +263,10 @@ pub fn fail(self: *ReadableStreamDefaultController, local: *const js.Local, reas
 
 /// The caller owns the returned global and must release it.
 pub fn dequeue(self: *ReadableStreamDefaultController) ?js.Value.Global {
-    if (self._queue.items.len == 0) {
-        return null;
-    }
-    const chunk = self._queue.orderedRemove(0);
+    const chunk = self._queue.popFront() orelse return null;
 
     // a closed stream is done once its last chunk is read
-    if (self._stream._state == .closed and self._queue.items.len == 0) {
+    if (self._stream._state == .closed and self._queue.len == 0) {
         if (self._stream._reader) |reader| reader.streamClosed();
     }
 
@@ -285,7 +281,7 @@ pub fn getDesiredSize(self: *const ReadableStreamDefaultController) ?i32 {
         .errored => return null,
         .closed => return 0,
         .readable => {
-            const queue_size: i32 = @intCast(self._queue.items.len);
+            const queue_size: i32 = @intCast(self._queue.len);
             const hwm: i32 = @intCast(self._high_water_mark);
             return hwm - queue_size;
         },

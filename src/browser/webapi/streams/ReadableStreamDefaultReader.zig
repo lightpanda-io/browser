@@ -125,7 +125,7 @@ pub fn getClosed(self: *ReadableStreamDefaultReader, exec: *const Execution) !js
     if (self._stream) |stream| {
         switch (stream._state) {
             .readable => {},
-            .closed => if (stream._controller._queue.items.len == 0) {
+            .closed => if (stream._controller._queue.len == 0) {
                 resolver.resolve("ReadableStreamDefaultReader.closed", {});
             },
             .errored => rejectClosed(resolver, local.toLocal(stream._stored_error.?)),
